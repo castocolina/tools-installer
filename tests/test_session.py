@@ -236,9 +236,7 @@ def test_exit_code_retained_and_ran_anything_are_pure_views_of_the_list(result: 
     failures = {"failed", "mismatch", "dependency_failed", "not_attempted", "crashed"}
     assert exit_code([outcome]) == (1 if result in failures else 0)
     assert retained([outcome]) == ({"rg"} if result in failures | {"blocked", "manual"} else set())
-    assert ran_anything([outcome]) is (
-        result in {"done", "failed", "mismatch", "crashed", "manual"}
-    )
+    assert ran_anything([outcome]) is (result in {"done", "failed", "mismatch", "crashed"})
 
 
 def test_blocked_plus_done_exits_zero_and_failed_exits_one():
@@ -1099,6 +1097,55 @@ def test_pnpm_group_install_reports_the_executors_own_refusal(
         _run_context(recorder, catalog={"superpowers": tool, "b": _tool("b")}),
     )
     assert [result for result in (o.result for o in following)] == ["failed", "done"]
+
+
+def test_a_raising_terminal_sync_step_fails_its_row_and_the_batch_continues() -> None:
+    recorder = RunRecorder()
+    first = _reconfigure_row("a", ConfigStep("point iTerm2 at zsh", "terminal_sync"))
+    second = _reconfigure_row(
+        "b", ConfigStep("run follow-up", "skill_install", "codex", ("touch", "done"))
+    )
+
+    def fail_sync() -> str | None:
+        raise PermissionError(13, "Permission denied")
+
+    outcomes = execute_plan(
+        [first, second],
+        replace(
+            _run_context(recorder, catalog={"a": _tool("a"), "b": _tool("b")}),
+            terminal_sync=fail_sync,
+        ),
+    )
+
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].detail.startswith("point iTerm2 at zsh: ")
+    assert "Permission denied" in outcomes[0].detail
+    assert outcomes[1].result == "done"
+    assert recorder.argv == [["touch", "done"]]
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [
+        (
+            (
+                ConfigStep("run command", "skill_install", "codex", ("run",)),
+                ConfigStep("handoff", "skill_install", "codex"),
+            ),
+            True,
+        ),
+        ((ConfigStep("handoff", "skill_install", "codex"),), False),
+    ],
+)
+def test_a_manual_reconfigure_row_ran_only_when_it_had_a_command_step(
+    steps: tuple[ConfigStep, ...], expected: bool
+) -> None:
+    outcome = RowOutcome(
+        _reconfigure_row("manual", *steps),
+        "manual",
+        install=InstallOutcome("manual", InstallStatus.MANUAL_REQUIRED, handoff=("do it",)),
+    )
+    assert ran_anything([outcome]) is expected
 
 
 @pytest.mark.parametrize(

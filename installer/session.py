@@ -249,7 +249,9 @@ def review_counts(rows: Sequence[PlanRow]) -> str:
 
 _FAILURE = frozenset({"failed", "mismatch", "dependency_failed", "not_attempted", "crashed"})
 _KEEP = _FAILURE | {"blocked", "manual"}
-_RAN = frozenset({"done", "failed", "mismatch", "crashed", "manual"})
+# These results represent executed work; manual counts only for a reconfigure row
+# whose reviewed steps include an actual command.
+_RAN = frozenset({"done", "failed", "mismatch", "crashed"})
 
 
 def exit_code(outcomes: Iterable[RowOutcome]) -> int:
@@ -260,8 +262,20 @@ def retained(outcomes: Sequence[RowOutcome]) -> set[str]:
     return {outcome.row.tool_id for outcome in outcomes if outcome.result in _KEEP}
 
 
+def _step_runs_command(step: ConfigStep) -> bool:
+    return bool(step.argv) or step.kind in {"terminal_sync", "pnpm_group_install"}
+
+
 def ran_anything(outcomes: Sequence[RowOutcome]) -> bool:
-    return any(outcome.result in _RAN for outcome in outcomes)
+    return any(
+        outcome.result in _RAN
+        or (
+            outcome.result == "manual"
+            and outcome.row.disposition is Disposition.RECONFIGURE
+            and any(_step_runs_command(step) for step in outcome.row.steps)
+        )
+        for outcome in outcomes
+    )
 
 
 def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
@@ -388,7 +402,10 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
     if step.kind == "terminal_sync":
         if ctx.terminal_sync is None:
             return _StepResult(failed="no terminal synchronizer bound")
-        return _StepResult(warning=ctx.terminal_sync())
+        try:
+            return _StepResult(warning=ctx.terminal_sync())
+        except Exception as exc:
+            return _StepResult(failed=_first_line(exc))
     if step.kind == "pnpm_group_install":
         method = next((m for m in tool.methods if m.kind == "node"), None)
         if method is None:
