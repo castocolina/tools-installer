@@ -2994,16 +2994,19 @@ class UnifiedApp(App[list[str] | None]):
         # _execute_worker's finally, before the user closes the screen), so
         # the first moment a catalog status line is visible again is the
         # close callback.
-        if self._version_refresh is not None:
+        if self._version_refresh is not None and ran_anything(message.outcomes):
             try:
                 self._version_refresh.invalidate(reason="install run finished")
             except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, reported below
                 self._invalidate_warning = f"version cache invalidation failed: {exc}"
         for outcome in message.outcomes:
             self._record(outcome)
-        for error in (message.run_error, message.path_error, message.verify_error):
-            if error:
-                self.run_errors.append(error)
+        if ran_anything(message.outcomes) or message.run_error:
+            self.run_errors = [
+                error
+                for error in (message.run_error, message.path_error, message.verify_error)
+                if error
+            ]
 
     def on_tool_updated(self, message: ToolUpdated) -> None:
         """opencode H3: a failed DIRECT update (a `u` press on the catalog)
@@ -3015,11 +3018,15 @@ class UnifiedApp(App[list[str] | None]):
         failed = message.error is not None or (
             message.outcome is not None and message.outcome.status == "failed"
         )
-        if not failed:
-            return
-        detail = message.error or (message.outcome.detail if message.outcome is not None else "")
-        row = PlanRow(message.tool_id, Disposition.UPDATE, "")
-        self._record(RowOutcome(row, "failed", detail=detail))
+        if failed:
+            detail = message.error or (
+                message.outcome.detail if message.outcome is not None else ""
+            )
+            row = PlanRow(message.tool_id, Disposition.UPDATE, "")
+            self._record(RowOutcome(row, "failed", detail=detail))
+        elif message.outcome is not None and message.outcome.status == "updated":
+            row = PlanRow(message.tool_id, Disposition.UPDATE, "")
+            self._record(RowOutcome(row, "done"))
 
     def _record(self, outcome: RowOutcome) -> None:
         """Latest outcome per tool id wins (cancel-then-retry, D-09)."""

@@ -5974,10 +5974,11 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         read_outdated_fn=_empty_outdated,
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
+        present=lambda _tool: False,
     )
     execute = _execute_inputs(
         [tool],
-        present=lambda _t: True,
+        present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
         version_refresh=service,
@@ -6093,7 +6094,9 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
     on top.
     """
     tool = _gh_tool("codegraph", tier="system")
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    service = _macos_service(
+        tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda _tool: False
+    )
 
     def _refuse(*, reason: str) -> int:
         raise RuntimeError(f"cache write refused ({reason})")
@@ -6101,7 +6104,7 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
     monkeypatch.setattr(service, "invalidate", _refuse)
     execute = _execute_inputs(
         [tool],
-        present=lambda _t: True,
+        present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
         version_refresh=service,
@@ -6262,7 +6265,7 @@ def _sweep_app(
     def _service_present(tool: Tool) -> bool:
         del tool
         assert release.wait(timeout=10)
-        return True
+        return False
 
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=_service_present)
     execute = _execute_inputs(
@@ -8205,6 +8208,75 @@ async def test_terminal_sync_runs_only_when_a_row_ran() -> None:
         app._install_closed([_outcome_for("rg", "done")])  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
         assert calls == ["sync"]
+
+
+async def test_a_run_that_rewires_path_replaces_an_earlier_run_error() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.on_install_run_finished(
+            InstallRunFinished(
+                [_outcome_for("rg", "done")], None, "", "", "PATH wiring failed", None
+            )
+        )
+        assert app.run_errors == ["PATH wiring failed"]
+        app.on_install_run_finished(
+            InstallRunFinished([_outcome_for("fd", "done")], None, "wired", "audited")
+        )
+        await pilot.pause()
+        assert app.run_errors == []
+
+
+async def test_a_run_that_ran_nothing_keeps_an_earlier_run_error() -> None:
+    app = _app()
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.on_install_run_finished(
+            InstallRunFinished(
+                [_outcome_for("rg", "done")], None, "", "", "PATH wiring failed", None
+            )
+        )
+        app.on_install_run_finished(
+            InstallRunFinished([_outcome_for("fd", "skipped")], None, "", "")
+        )
+        await pilot.pause()
+        assert app.run_errors == ["PATH wiring failed"]
+
+
+async def test_a_successful_u_after_a_failed_u_clears_the_failure() -> None:
+    from installer.catalog_tui import ToolUpdated
+    from installer.update import UpdateOutcome
+
+    app = _app()
+    app.on_tool_updated(ToolUpdated("rg", UpdateOutcome("rg", "failed", "brew", "failed"), None, 0))
+    app.on_tool_updated(ToolUpdated("rg", UpdateOutcome("rg", "updated", "brew"), None, 0))
+    assert app.outcomes is not None
+    assert app.outcomes["rg"].result == "done"
+
+
+async def test_a_run_where_nothing_ran_does_not_invalidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalidations: list[str] = []
+    service = presence_service(
+        [_tool("rg"), _tool("fd")],
+        present=set(),
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+    )
+
+    def invalidate(**_kwargs: object) -> None:
+        invalidations.append("invalidated")
+
+    monkeypatch.setattr(service, "invalidate", invalidate)
+    app = _app()
+    monkeypatch.setattr(app, "_version_refresh", service)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.on_install_run_finished(
+            InstallRunFinished([_outcome_for("rg", "skipped")], None, "", "")
+        )
+        await pilot.pause()
+        assert invalidations == []
+        app.on_install_run_finished(InstallRunFinished([_outcome_for("rg", "done")], None, "", ""))
+        await pilot.pause()
+        assert invalidations == ["invalidated"]
 
 
 async def test_cancel_then_retry_leaves_the_latest_outcome_and_exits_clean() -> None:
