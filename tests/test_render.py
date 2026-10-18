@@ -800,6 +800,31 @@ def test_render_plan_reconfigure_row_lists_its_steps_at_the_word_column() -> Non
     assert len(continuation) - len(continuation.lstrip()) == 8
 
 
+@pytest.mark.parametrize(
+    ("prefix", "column", "width", "max_lines", "continuation_room"),
+    (
+        ("x" * 85, 10, 80, 3, 20),
+        ("x" * 10, 25, 30, 20, 5),
+    ),
+)
+def test_fold_reason_keeps_a_readable_width_after_a_full_first_line(
+    prefix: str, column: int, width: int, max_lines: int, continuation_room: int
+) -> None:
+    from rich.text import Text
+
+    from installer.render import fold_reason
+
+    text = fold_reason(
+        Text(prefix), "needs Homebrew, which is not on PATH", column=column, width=width
+    ).plain
+    lines = text.splitlines()
+
+    assert len(lines) <= max_lines
+    for line in lines[1:]:
+        assert line.startswith(" " * column)
+        assert len(line) - column <= continuation_room
+
+
 def test_render_plan_folds_a_long_reason_with_a_hanging_indent() -> None:
     from installer.render import render_plan
 

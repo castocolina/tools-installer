@@ -67,7 +67,7 @@ def fold_reason(prefix: Text, body: str, column: int, width: int) -> Text:
     first_line = prefix.plain.rsplit("\n", 1)[-1]
     first_room = max(1, width - cell_len(first_line))
     continuation_room = max(1, width - column)
-    room = min(first_room, continuation_room)
+    room = max(min(first_room, continuation_room), min(20, continuation_room))
     chunks = [line.plain for line in Text(body).wrap(Console(width=room), room)]
     if not chunks:
         return prefix
