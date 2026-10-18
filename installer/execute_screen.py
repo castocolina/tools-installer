@@ -556,18 +556,31 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
 
     @work(thread=True, exclusive=True, group="execute-wait", exit_on_error=False)
     def _wait_worker(self, token: int) -> None:
-        _result, error = run_live(
-            lambda: self._inputs.version_refresh.refresh(self._inputs.catalog)
-        )
-        self.post_message(StateSettled(token, error))
+        """Join the version and skill checks; always settle so Enter can retry."""
+        error: str | None = "state check did not complete"
+        try:
+            _result, live_error = run_live(
+                lambda: (
+                    self._inputs.version_refresh.refresh(self._inputs.catalog),
+                    self._inputs.version_refresh.refresh_skills(self._inputs.catalog),
+                )
+            )
+            error = live_error
+        except Exception as exc:
+            lines = str(exc).splitlines()
+            error = lines[0] if lines and lines[0] else type(exc).__name__
+        finally:
+            self.post_message(StateSettled(token, error))
 
     def on_state_settled(self, message: StateSettled) -> None:
         if message.token != self._wait_token:
             return
         self._waiting = False
+        if self.started or self.finished:
+            return
         if message.error is not None:
             self._start_requested = False
-            detail = Text(message.error)
+            detail = Text(message.error.splitlines()[0])
             detail.truncate(_STATE_CHECK_ERROR_BUDGET, overflow="ellipsis")
             self.status.set(_STATE_CHECK_FAILED.format(error=detail.plain), "error")
             self.query_one("#execute-keys", Static).update(_KEYS_RETRY)

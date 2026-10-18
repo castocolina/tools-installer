@@ -75,6 +75,7 @@ from tests.state_doubles import (
     pass_state,
     plan_state,
     presence_service,
+    skill_pack_tool,
 )
 
 
@@ -3811,6 +3812,121 @@ async def test_a_late_publication_after_esc_starts_nothing(tmp_path: Path) -> No
         finally:
             service.release.set()
     assert dismissed == []
+
+
+async def test_enter_settles_a_pack_selected_before_its_host_check(tmp_path: Path) -> None:
+    captured: list[str] = []
+    pack = skill_pack_tool("superpowers")
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+
+    def skill_probe(_argv: list[str]) -> str:
+        probe_started.set()
+        release_probe.wait(timeout=10)
+        return "not json"
+
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: None,
+        skill_probe=skill_probe,
+        present=lambda _tool: False,
+    )
+    inputs = _inputs(tools=[pack], install=_install_with_output(captured), version_refresh=service)
+    app = _host(inputs, [pack])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([pack.id], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        for _ in range(40):
+            if probe_started.is_set():
+                break
+            await pilot.pause()
+        assert probe_started.is_set()
+        assert _plan_prompts(screen) == ["… superpowers  checking…"]
+        await pilot.press("enter")
+        release_probe.set()
+        await _settle_execute(screen, pilot)
+        assert "State check failed" not in screen.status.text
+        assert captured == ["superpowers"]
+        assert _head_text(screen).startswith("Summary —")
+        assert all(outcome.result != "not_attempted" for outcome in screen.outcomes or ())
+
+
+async def test_a_refresh_raising_value_error_settles_with_the_error_and_enter_retries(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    service = held_service(
+        tmp_path / "state", [plan_state(rg, health=Health.MISSING)], raising=ValueError("bad cache")
+    )
+    inputs = _inputs(tools=[rg], version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _wait_for_refresh_calls(service, pilot)
+        service.release.set()
+        await _wait_for_status(screen, "State check failed:", pilot)
+        assert screen.status.text == "State check failed: bad cache. enter retries · esc closes."
+        assert screen.status.severity == Severity.ERROR
+        assert screen.started is False
+        await pilot.press("enter")
+        await _wait_for_refresh_calls(service, pilot, count=2)
+        assert len(service.calls) == 2
+        service.release.set()
+
+
+async def test_a_late_settle_never_repaints_a_finished_run(tmp_path: Path) -> None:
+    captured: list[str] = []
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
+    inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        service.publish([plan_state(rg, health=Health.MISSING)])
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+        assert _head_text(screen) == "Summary — 1 installed"
+        assert "✓ rg  installed" in _plan_prompts(screen)[0]
+        service.release.set()
+        await pilot.pause()
+        assert _head_text(screen) == "Summary — 1 installed"
+        keys = screen.query_one("#execute-keys", Static)
+        assert keys.content == "enter / esc return to catalog"
+
+
+async def test_a_multi_line_state_check_error_shows_its_first_line_only(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    service = held_service(
+        tmp_path / "state",
+        [plan_state(rg, health=Health.MISSING)],
+        raising=OSError("line one\nline two"),
+    )
+    inputs = _inputs(tools=[rg], version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        await _wait_for_refresh_calls(service, pilot)
+        service.release.set()
+        await _wait_for_status(screen, "State check failed:", pilot)
+        assert screen.status.text == "State check failed: line one. enter retries · esc closes."
+        assert "\n" not in screen.status.text
 
 
 async def test_a_failing_refresh_reports_and_enter_retries(tmp_path: Path) -> None:
