@@ -2,13 +2,13 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 20
-current_phase_name: Install plan with dispositions
+current_phase: 21
+current_phase_name: One screen family
 status: executing
-stopped_at: "Phase 20 planned: 19 plans / 10 waves, plan-checker passed (iteration 2); next: cross-AI plan review cycle 1"
+stopped_at: "Phase 20 verified (passed 9/9), 31 plans, SECURITY 52/52, UAT 9/9; next: plan Phase 21"
 last_updated: "2026-10-17T16:23:09.133Z"
-last_activity: 2026-10-15
-last_activity_desc: Phase 19 closed; Phase 20 next
+last_activity: 2026-10-18
+last_activity_desc: Phase 20 closed; Phase 21 next
 state_head: bb7780ff61ca28031fc41ebc5a71901e17c44847
 progress:
   total_phases: 11
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 20 — Install plan with dispositions
+**Current focus:** Phase 21 — One screen family
 
 ## Current Position
 
-Phase: 20 (Install plan with dispositions) — PLANNED (cross-AI plan review pending)
-Plan: 19 plans, 10 waves
-Status: Ready to execute
-Last activity: 2026-10-17 — Phase 20 planned (19 plans), plan-checker passed on iteration 2
+Phase: 21 (One screen family) — NOT PLANNED
+Plan: none yet
+Status: Ready to plan
+Last activity: 2026-10-18 — Phase 20 closed: 31 plans, verifier passed 9/9, SECURITY 52/52, UAT 9/9
 
 Progress: [░░░░░░░░░░] 0%
 
