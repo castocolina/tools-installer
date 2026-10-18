@@ -54,6 +54,7 @@ from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
     Disposition,
     PlanRow,
+    Result,
     RowOutcome,
     RunContext,
     SensitiveInstall,
@@ -3289,6 +3290,186 @@ async def test_r_hint_is_omitted_from_the_keys_line_when_no_row_is_eligible() ->
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
         assert _keys_text(screen) == "enter start · up/down move · esc cancel"
+
+
+def _wide_plan_inputs(count: int) -> tuple[list[Tool], ExecuteInputs]:
+    tools = [_tool(f"wide-{index:02d}-abcdefghijklmnop") for index in range(count)]
+    long_reason = "the deliberately long reason folds at 80 columns but fits at 120 columns"
+    states = [
+        plan_state(
+            tool,
+            health=Health.BROKEN if index % 2 == 0 else Health.MISSING,
+            reasons=(long_reason,) if index % 2 == 0 else (),
+        )
+        for index, tool in enumerate(tools)
+    ]
+    return tools, _inputs(tools=tools, states=states)
+
+
+async def test_layout_pins_status_and_keys_to_the_last_two_rows_with_25_rows() -> None:
+    tools, inputs = _wide_plan_inputs(25)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([tool.id for tool in tools], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert screen.get_widget_at(2, 18)[0] is screen.status
+        assert screen.get_widget_at(2, 19)[0].id == "execute-keys"
+        assert screen.query_one("#plan-rows").region.height >= 15
+        assert any("\n" in prompt for prompt in _plan_prompts(screen))
+
+
+async def test_layout_holds_with_the_worst_case_finished_head() -> None:
+    categories: tuple[tuple[Disposition, Result], ...] = (
+        (Disposition.INSTALL, "done"),
+        (Disposition.UPDATE, "done"),
+        (Disposition.REPAIR, "done"),
+        (Disposition.RECONFIGURE, "done"),
+        (Disposition.REINSTALL, "done"),
+        (Disposition.SKIP, "skipped"),
+        (Disposition.BLOCKED, "blocked"),
+        (Disposition.INSTALL, "manual"),
+        (Disposition.INSTALL, "failed"),
+        (Disposition.INSTALL, "mismatch"),
+        (Disposition.INSTALL, "dependency_failed"),
+        (Disposition.INSTALL, "not_attempted"),
+        (Disposition.INSTALL, "crashed"),
+    )
+    tools = [_tool(f"worst-{index:03d}") for index in range(130)]
+    inputs = _inputs(
+        tools=tools, states=[plan_state(tool, health=Health.MISSING) for tool in tools]
+    )
+    app = _host(inputs, tools)
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([tool.id for tool in tools], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        outcomes = [
+            RowOutcome(
+                PlanRow(tools[index * 10 + item].id, disposition, ""),
+                result,
+            )
+            for index, (disposition, result) in enumerate(categories)
+            for item in range(10)
+        ]
+        screen.on_install_run_finished(InstallRunFinished(outcomes, None, "", ""))
+        await pilot.pause()
+        assert screen.query_one("#execute-head").region.height <= 3
+        assert screen.get_widget_at(2, 18)[0] is screen.status
+        assert screen.get_widget_at(2, 19)[0].id == "execute-keys"
+
+
+async def test_running_layout_gives_the_log_at_least_six_rows() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+
+    def held_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action, repair
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, InstallStatus.INSTALLED)
+
+    inputs = _inputs(
+        tools=[rg], install=held_install, states=[plan_state(rg, health=Health.MISSING)]
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen([rg.id], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await pilot.press("enter")
+            for _ in range(400):
+                if started.is_set():
+                    break
+                await pilot.pause()
+            assert started.is_set()
+            log = screen.query_one("#execute-log")
+            rows = screen.query_one("#plan-rows", OptionList)
+            assert log.region.height >= 6
+            assert rows.region.height <= 8
+            assert rows.can_focus is False
+        finally:
+            release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_no_plan_row_line_exceeds_78_cells() -> None:
+    tools, inputs = _wide_plan_inputs(25)
+    app = _host(inputs, tools)
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([tool.id for tool in tools], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompts = _plan_prompts(screen)
+        assert any("\n" in prompt for prompt in prompts)
+        assert all(cell_len(line) <= 78 for prompt in prompts for line in prompt.splitlines())
+
+
+async def test_resize_refolds_rows_and_keeps_the_cursor() -> None:
+    tools, inputs = _wide_plan_inputs(3)
+    target_id = tools[2].id
+    app = _host(inputs, tools)
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([tool.id for tool in tools], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        index = options.get_option_index(target_id)
+        assert index is not None
+        options.highlighted = index
+        before = str(options.get_option_at_index(options.highlighted).prompt)
+        assert "\n" in before
+
+        await pilot.resize_terminal(120, 30)
+        await pilot.pause()
+        options = screen.query_one("#plan-rows", OptionList)
+        highlighted = options.highlighted
+        assert highlighted is not None
+        after = str(options.get_option_at_index(highlighted).prompt)
+        assert "\n" not in after
+        assert options.get_option_at_index(highlighted).id == target_id
+
+        outcomes = [
+            RowOutcome(
+                PlanRow(tool.id, Disposition.INSTALL, ""),
+                "crashed",
+                detail="the deliberately long reason folds at 80 columns but fits at 120 columns",
+            )
+            for tool in tools
+        ]
+        screen.on_install_run_finished(InstallRunFinished(outcomes, None, "", ""))
+        await pilot.pause()
+        options = screen.query_one("#plan-rows", OptionList)
+        highlighted = options.highlighted
+        assert highlighted is not None
+        finished_before = str(options.get_option_at_index(highlighted).prompt)
+        assert "\n" not in finished_before
+
+        await pilot.resize_terminal(80, 20)
+        await pilot.pause()
+        options = screen.query_one("#plan-rows", OptionList)
+        highlighted = options.highlighted
+        assert highlighted is not None
+        finished_after = str(options.get_option_at_index(highlighted).prompt)
+        assert "\n" in finished_after
+        assert options.get_option_at_index(highlighted).id == target_id
 
 
 async def test_escape_before_start_dismisses_with_none() -> None:

@@ -22,6 +22,7 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.events import Resize
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.timer import Timer
@@ -423,6 +424,28 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             self._await_state()
         if self._inputs.unattended:
             self.action_start()
+
+    def on_resize(self, _event: Resize) -> None:
+        options = self.query_one("#plan-rows", OptionList)
+        if self.finished:
+            idw = id_width(self._rows)
+            width = self._fold_width()
+            for outcome in self.outcomes or ():
+                options.replace_option_prompt(
+                    outcome.row.tool_id, outcome_row_text(outcome, idw, width)
+                )
+            return
+        if self.started:
+            return
+        highlighted_id = None
+        if options.highlighted is not None:
+            highlighted_id = options.get_option_at_index(options.highlighted).id
+        self._paint_review()
+        if highlighted_id is not None:
+            options = self.query_one("#plan-rows", OptionList)
+            options.highlighted = options.get_option_index(highlighted_id)
+        if self._start_requested:
+            self.query_one("#execute-keys", Static).update(_KEYS_WAITING)
 
     def _platform(self) -> Platform:
         """The live platform: the service's own (D-14)."""
@@ -835,6 +858,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._clear_in_flight()
         self.outcomes = list(message.outcomes)
         options = self.query_one("#plan-rows", OptionList)
+        options.can_focus = True
         idw = id_width(self._rows)
         width = self._fold_width()
         for outcome in message.outcomes:
