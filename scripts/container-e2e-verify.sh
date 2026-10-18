@@ -243,13 +243,15 @@ SUMMARY_RE='^Summary — (nothing selected|[0-9]+ (installed|updated|repaired|re
 
 # Parse render_run_summary's stable Summary — line into PARSE_* globals.
 parse_summary_line() {
-  local line="$1" name category item
+  local line="$1" name category item regex
   [[ "$line" == "Summary — "* ]] || return 1
   for item in "INSTALLED:installed" "UPDATED:updated" "REPAIRED:repaired" "RECONFIGURED:reconfigured" "REINSTALLED:reinstalled" "SKIPPED:skipped" "BLOCKED:blocked" "MANUAL:manual" "FAILED:failed" "MISMATCHED:checksum mismatch" "DEP_FAILED:dependency failed" "NOT_ATTEMPTED:not attempted" "CRASHED:crashed"; do
     name="${item%%:*}"; category="${item#*:}"
-    printf -v "PARSE_${name}" '%s' "$(
-      printf '%s' "$line" | sed -n "s/.*\\b\\([0-9][0-9]*\\) ${category}\\b.*/\\1/p; t; s/.*/0/p"
-    )"
+    printf -v "PARSE_${name}" '%s' 0
+    regex="(— |, )([0-9]+) ${category}(,|$)"
+    if [[ "$line" =~ $regex ]]; then
+      printf -v "PARSE_${name}" '%s' "${BASH_REMATCH[2]}"
+    fi
   done
   return 0
 }
@@ -334,12 +336,9 @@ uv run --isolated --no-dev python -c 'import sys; from installer import receipts
 
 run_setup_as_tester() {
   local args="$1"
-  # COLUMNS is forced wide so Rich's non-tty Console (default width 80) never
-  # wraps a one-line transcript output across two physical lines —
-  # accumulate_summaries parses render_run_summary's Summary — line; its
-  # dependency-failure and manual outcome-row captures also require each line
-  # intact. 2000 gives real headroom over the ~90-tool catalog's longest joined
-  # tool-id list, not just the summary line that surfaced this.
+  # COLUMNS is forced wide so Rich's non-tty Console (default width 80) does
+  # not wrap ordinary transcript output. Outcome rows can still fold at the
+  # renderer's 100-cell budget; accumulate_summaries joins their continuations.
   exec_tester "set -euo pipefail
 eval \"\$(${BREW_BIN} shellenv)\"
 export PATH=\"\$HOME/.local/bin:\$PATH\"
@@ -382,9 +381,24 @@ accumulate_summaries() {
     ACC_NOT_ATTEMPTED=$((ACC_NOT_ATTEMPTED + PARSE_NOT_ATTEMPTED))
     ACC_CRASHED=$((ACC_CRASHED + PARSE_CRASHED))
   fi
-  # Keep dependency-failed outcome rows in ACC_DEP_LINES_FILE for the
-  # explanation check, since a chunked (--categories) run overwrites $file.
-  grep -E ' dependency failed — ' "$file" >>"$ACC_DEP_LINES_FILE" || true
+  # Keep complete dependency-failed outcome rows across chunked runs. Only
+  # outcome continuations (4+ spaces) join; two-space report lines end a row.
+  local line dep_row="" continuation
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == *" dependency failed — "* ]]; then
+      if [[ -n "$dep_row" ]]; then
+        printf '%s\n' "$dep_row" >>"$ACC_DEP_LINES_FILE"
+      fi
+      dep_row="$line"
+    elif [[ "$line" =~ ^[[:space:]]{4,} ]] && [[ -n "$dep_row" ]]; then
+      continuation="${line#"${line%%[![:space:]]*}"}"
+      dep_row="$dep_row $continuation"
+    elif [[ -n "$dep_row" ]]; then
+      printf '%s\n' "$dep_row" >>"$ACC_DEP_LINES_FILE"
+      dep_row=""
+    fi
+  done <"$file"
+  [[ -z "$dep_row" ]] || printf '%s\n' "$dep_row" >>"$ACC_DEP_LINES_FILE"
   sed -nE 's/^[^ ]+ +([^ ]+) +manual — see the setup steps in the log$/\1/p' \
     "$file" >>"$ACC_MANUAL_NAMES_FILE" || true
 }

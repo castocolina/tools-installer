@@ -166,9 +166,11 @@ def _summary_run(
     return _run(script + f"\n{invocation}\n{state}\n", scratch)
 
 
-def _run(script: str, scratch: Path) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: str, scratch: Path, *, path: str = "/usr/bin:/bin"
+) -> subprocess.CompletedProcess[str]:
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": path,
         "HOME": str(scratch),
         "SCRATCH": str(scratch),
         "CALLS": str(scratch / "calls"),
@@ -286,6 +288,96 @@ def test_install_step_gate(
         f"accumulate_summaries $TRANSCRIPT; install_step_ok {setup_exit}",
     )
     assert result.returncode == expected, result.stdout + result.stderr
+
+
+def test_parse_summary_line_needs_no_external_tool(tmp_path: Path) -> None:
+    harness = _summary_harness("parse_summary_line")
+    names = (
+        "INSTALLED",
+        "UPDATED",
+        "REPAIRED",
+        "RECONFIGURED",
+        "REINSTALLED",
+        "SKIPPED",
+        "BLOCKED",
+        "MANUAL",
+        "FAILED",
+        "MISMATCHED",
+        "DEP_FAILED",
+        "NOT_ATTEMPTED",
+        "CRASHED",
+    )
+    variables = " ".join(f'"$PARSE_{name}"' for name in names)
+    categories = (
+        "1 installed, 2 updated, 3 repaired, 4 reconfigured, 5 reinstalled, "
+        "6 skipped, 7 blocked, 8 manual, 9 failed, 10 checksum mismatch, "
+        "11 dependency failed, 12 not attempted, 13 crashed"
+    )
+    format_string = " ".join(["%s"] * len(names)) + "\\n"
+    command = (
+        f'parse_summary_line "Summary — {categories}"; printf "{format_string}" {variables}; '
+        f'parse_summary_line "Summary — nothing selected"; printf "{format_string}" {variables}'
+    )
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    result = _run(harness + "\n" + command, tmp_path, path="")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "1 2 3 4 5 6 7 8 9 10 11 12 13",
+        "0 0 0 0 0 0 0 0 0 0 0 0 0",
+    ]
+
+
+def test_a_folded_dependency_failed_row_is_read_whole(tmp_path: Path) -> None:
+    harness = _summary_harness(
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+    )
+    transcript = "\n".join(
+        (
+            "Summary — 1 installed, 3 manual, 1 dependency failed",
+            "✖ mmdc  dependency failed — pi, node,",
+            "                         java",
+            "○ pi  manual — see the setup steps in the log",
+            "○ node  manual — see the setup steps in the log",
+            "○ java  manual — see the setup steps in the log",
+        )
+    )
+    result = _summary_run(
+        harness,
+        tmp_path,
+        transcript,
+        "accumulate_summaries $TRANSCRIPT; install_step_ok 1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "dependency-lines").read_text(encoding="utf-8") == (
+        "✖ mmdc  dependency failed — pi, node, java\n"
+    )
+
+
+def test_a_two_space_report_line_is_not_joined_to_a_row(tmp_path: Path) -> None:
+    harness = _summary_harness(
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+    )
+    transcript = "\n".join(
+        (
+            "Summary — 1 installed, 1 manual, 1 dependency failed",
+            "✖ x  dependency failed — pi",
+            "  rg: sha256 ✓",
+            "○ pi  manual — see the setup steps in the log",
+        )
+    )
+    result = _summary_run(
+        harness,
+        tmp_path,
+        transcript,
+        "accumulate_summaries $TRANSCRIPT; install_step_ok 1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_every_install_step_uses_the_one_gate() -> None:
