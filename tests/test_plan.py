@@ -321,6 +321,44 @@ def test_broken_tool_owned_by_a_native_manager_is_blocked_never_repaired(owner: 
     )
 
 
+def test_a_present_dependency_blocked_for_its_own_reason_does_not_block_its_dependent():
+    pnpm = _tool("pnpm")
+    mmdc = _tool("mmdc", requires=("pnpm",))
+    catalog = [pnpm, mmdc]
+    states = {
+        "pnpm": plan_state(
+            pnpm,
+            health=Health.MISCONFIGURED,
+            reasons=("project pack: no repo detected",),
+        ),
+        "mmdc": plan_state(mmdc, health=Health.MISSING, present=False),
+    }
+
+    direct_rows = build_plan(
+        ["pnpm", "mmdc"], catalog, _state_of(states), MACOS, reinstall=frozenset()
+    )
+    dragged_rows = build_plan(["mmdc"], catalog, _state_of(states), MACOS, reinstall=frozenset())
+
+    direct = {row.tool_id: row for row in direct_rows}
+    dragged = {row.tool_id: row for row in dragged_rows}
+    assert (direct["pnpm"].disposition, direct["pnpm"].reason) == (
+        Disposition.BLOCKED,
+        "project pack: no repo detected",
+    )
+    assert (direct["mmdc"].disposition, direct["mmdc"].reason) == (
+        Disposition.INSTALL,
+        "not installed",
+    )
+    assert (dragged["pnpm"].disposition, dragged["pnpm"].reason) == (
+        Disposition.SKIP,
+        "already present; project pack: no repo detected",
+    )
+    assert (dragged["mmdc"].disposition, dragged["mmdc"].reason) == (
+        Disposition.INSTALL,
+        "not installed",
+    )
+
+
 def test_dependent_of_a_plan_time_blocked_dependency_is_blocked_needs_it():
     node = _tool("node")
     mmdc = _tool("mmdc", requires=("node",))

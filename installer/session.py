@@ -846,7 +846,11 @@ def build_plan(
         _blocked_row(item, state_of(item.tool_id), requester=res.requested_by.get(item.tool_id))
         for item in res.blocked
     )
-    blocked = {row.tool_id for row in rows if row.disposition is Disposition.BLOCKED}
+    blocked = {
+        row.tool_id
+        for row in rows
+        if row.disposition is Disposition.BLOCKED and not _settled(state_of(row.tool_id))
+    }
     runnable = {
         Disposition.INSTALL,
         Disposition.UPDATE,
@@ -860,5 +864,6 @@ def build_plan(
         dependency = next((dep for dep in by_id[row.tool_id].requires if dep in blocked), None)
         if dependency is not None:
             rows[index] = _needs_row(row, dependency)
-            blocked.add(row.tool_id)
+            if not _settled(state_of(row.tool_id)):
+                blocked.add(row.tool_id)
     return rows
