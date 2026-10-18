@@ -9,10 +9,10 @@ import shutil
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import fields, replace
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 from textual import work
@@ -54,10 +54,16 @@ from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import SensitiveInstall, summarize
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import VersionRefreshService, VersionStatus
+from installer.version_status import ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
-from tests.state_doubles import FrozenStateService, frozen_service, offline_service, pass_state
+from tests.state_doubles import (
+    FrozenStateService,
+    frozen_service,
+    offline_service,
+    pass_state,
+    presence_service,
+)
 
 
 class _AskModal(ModalScreen[str | None]):
@@ -221,7 +227,8 @@ def _inputs(
     install: SensitiveInstall | None = None,
     wire_path: Callable[[], str] | None = None,
     verify: Callable[[], str] | None = None,
-    installed: Callable[[Tool], bool] | None = None,
+    present: Collection[str] = (),
+    states: Iterable[ToolState] = (),
     unattended: bool = False,
     version_refresh: VersionRefreshService | None = None,
     updates: UpdateService | None = None,
@@ -233,13 +240,54 @@ def _inputs(
         platform=_PLATFORM,
         wire_path=wire_path if wire_path is not None else (lambda: "PATH wired"),
         verify=verify if verify is not None else (lambda: "PATH verified"),
-        installed=installed if installed is not None else (lambda _tool: False),
         install=install if install is not None else _install_with_output([]),
         unattended=unattended,
-        version_refresh=version_refresh,
+        version_refresh=presence_service(
+            catalog,
+            present=present,
+            states=states,
+            platform=_PLATFORM,
+            service=version_refresh,
+        ),
         updates=updates,
         now=now,
     )
+
+
+def test_execute_inputs_requires_a_version_refresh_service() -> None:
+    # Built through a dict: the removed and the missing shape are exactly what
+    # the type checker refuses, and the runtime error is the behaviour under test.
+    base: dict[str, Any] = {
+        "catalog": [],
+        "platform": _PLATFORM,
+        "wire_path": lambda: "",
+        "verify": lambda: "",
+    }
+    with pytest.raises(TypeError):
+        ExecuteInputs(**base)
+    served: dict[str, Any] = {**base, "version_refresh": presence_service([])}
+    ExecuteInputs(**served)
+
+    def installed(_tool: Tool) -> bool:
+        return False
+
+    stale: dict[str, Any] = {**served, "installed": installed}
+    with pytest.raises(TypeError):
+        ExecuteInputs(**stale)
+    names = {field.name: field for field in fields(ExecuteInputs)}
+    assert "installed" not in names
+    assert names["terminal_sync"].default is None
+
+
+def test_inputs_helper_publishes_presence_into_a_frozen_service() -> None:
+    inputs = _inputs(present=("rg",))
+    rg = inputs.version_refresh.state_of("rg")
+    fd = inputs.version_refresh.state_of("fd")
+    assert rg is not None
+    assert rg.present is True
+    assert fd is not None
+    assert fd.present is False
+    assert inputs.version_refresh.is_present(_tool("rg")) is True
 
 
 class _FakeClock:
@@ -1574,7 +1622,7 @@ async def test_outdated_installed_selected_tool_is_dispatched_through_update_ser
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1595,7 +1643,7 @@ async def test_confirmed_current_tool_is_not_dispatched_as_outdated(tmp_path: Pa
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1616,7 +1664,7 @@ async def test_missing_version_status_still_dispatches_an_outdated_update(tmp_pa
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1638,7 +1686,7 @@ async def test_missing_ownership_snapshot_refreshes_then_dispatches_outdated_upd
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1668,7 +1716,7 @@ async def test_refresh_failure_on_missing_ownership_reports_error_not_a_clean_ru
     inputs = _inputs(
         tools=[rg],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1698,7 +1746,7 @@ async def test_only_outdated_selection_still_starts_and_dispatches(tmp_path: Pat
     inputs = _inputs(
         tools=[rg],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1721,7 +1769,7 @@ async def test_in_flight_latch_skips_outdated_update_and_keeps_the_holder(tmp_pa
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1758,7 +1806,7 @@ async def test_in_flight_latch_skip_is_a_failure_on_neither_signal(tmp_path: Pat
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1797,7 +1845,7 @@ async def test_a_completed_update_stays_done_when_the_version_refresh_crashes(
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1862,7 +1910,7 @@ async def test_nothing_updates_before_the_confirm_keypress(tmp_path: Path) -> No
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1885,7 +1933,7 @@ async def test_confirm_keypress_dispatches_exactly_one_outdated_update(tmp_path:
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1902,7 +1950,7 @@ async def test_unattended_confirm_still_dispatches_outdated_update(tmp_path: Pat
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
         unattended=True,
@@ -1959,7 +2007,7 @@ async def test_preflight_head_names_install_and_outdated_update_counts_before_an
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -1996,7 +2044,7 @@ async def test_update_only_outdated_preflight_does_not_read_as_zero_work(tmp_pat
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2045,7 +2093,7 @@ async def test_queued_outdated_update_progress_row_leaves_pending_when_update_re
     updates = _GatedUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda _tool: True,
+        present=("rg", "fd"),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2094,7 +2142,7 @@ async def test_undisturbed_outdated_run_dispatches_exactly_the_disclosed_update_
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda _tool: True,
+        present=("rg", "fd"),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2144,7 +2192,7 @@ async def test_cancel_mid_update_tail_sweeps_unreached_outdated_row_to_skipped(
     updates = _GatedUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda _tool: True,
+        present=("rg", "fd"),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2186,7 +2234,7 @@ async def test_latch_refused_outdated_update_row_is_swept_to_skipped(tmp_path: P
     assert updates.begin("other") is True
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2232,7 +2280,7 @@ async def test_error_before_outdated_update_tail_sweeps_pending_update_rows(
     inputs = _inputs(
         tools=[rg, fd],
         install=boom,
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2284,7 +2332,7 @@ async def test_blocked_update_reason_reaches_the_post_run_log(tmp_path: Path) ->
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2314,7 +2362,7 @@ async def test_blocked_update_without_detail_falls_back_to_no_manager_claimed(
     updates = _BlockedUpdateService(detail="")
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2349,7 +2397,7 @@ async def test_blocked_update_reason_is_absent_from_the_log_until_the_run_finish
     updates = _GatedBlocked()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2381,7 +2429,7 @@ async def test_blocked_update_error_from_run_live_is_reported(tmp_path: Path) ->
     updates = _RaisingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2411,7 +2459,7 @@ async def test_blocked_update_latch_refusal_reuses_the_in_flight_sentence(tmp_pa
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2495,7 +2543,7 @@ async def test_successful_outdated_update_is_named_in_the_post_run_log(tmp_path:
     updates = _SuccessUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2521,7 +2569,7 @@ async def test_successful_outdated_update_without_a_new_version_still_reports(
     updates = _SuccessUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2550,7 +2598,7 @@ async def test_successful_outdated_update_line_carries_outcome_extras(tmp_path: 
     )
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2577,7 +2625,7 @@ async def test_blocked_update_does_not_reprobe_the_version_cache(tmp_path: Path)
     updates = _BlockedUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2605,7 +2653,7 @@ async def test_refresh_oserror_after_outdated_update_still_produces_the_report(
     updates = _SuccessUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -2635,7 +2683,7 @@ async def test_update_section_is_silent_when_no_outdated_updates_were_queued(
     inputs = _inputs(
         tools=[rg, fd],
         install=_install_with_output(captured),
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -3396,7 +3444,7 @@ async def test_silent_update_establishes_in_flight_tool_via_marker(tmp_path: Pat
     updates = _BlockingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda _tool: True,
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
         now=clock,
@@ -3459,7 +3507,7 @@ async def test_stale_update_terminal_message_for_another_tool_does_not_clear_in_
     updates = _SecondUpdateBlocks()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda _tool: True,
+        present=("rg", "fd"),
         version_refresh=refresh,
         updates=updates,
         now=clock,
@@ -3757,7 +3805,7 @@ async def test_current_only_selection_says_already_current_not_install_zero(
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[wezterm],
-        installed=lambda tool: tool.id == "wezterm",
+        present=("wezterm",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -3780,7 +3828,7 @@ async def test_outdated_selected_tool_stays_an_update_target(tmp_path: Path) -> 
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[wezterm],
-        installed=lambda tool: tool.id == "wezterm",
+        present=("wezterm",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -3802,7 +3850,7 @@ async def test_mixed_install_and_current_names_already_current(tmp_path: Path) -
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[wezterm, fd],
-        installed=lambda tool: tool.id == "wezterm",
+        present=("wezterm",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -3851,7 +3899,7 @@ async def test_explicit_current_selection_reapplies_post_install_once(
     )
     inputs = _inputs(
         tools=[shelltool],
-        installed=lambda tool: tool.id == "shelltool",
+        present=("shelltool",),
         version_refresh=refresh,
         updates=_RecordingUpdateService(),
     )
@@ -3885,7 +3933,7 @@ async def test_explicit_outdated_selection_reapplies_post_install_once(
     )
     inputs = _inputs(
         tools=[shelltool],
-        installed=lambda tool: tool.id == "shelltool",
+        present=("shelltool",),
         version_refresh=refresh,
         updates=_RecordingUpdateService(),
     )
@@ -3921,7 +3969,7 @@ async def test_cancel_stops_reapply_before_any_dispatch(
 
     inputs = _inputs(
         tools=[rg, shelltool],
-        installed=lambda _tool: True,
+        present=("rg", "shelltool"),
         version_refresh=refresh,
         updates=_GatedUpdateService(),
     )
@@ -3960,7 +4008,7 @@ async def test_installed_drag_in_is_not_reapplied(
     )
     inputs = _inputs(
         tools=[parent, shelltool],
-        installed=lambda tool: tool.id == "shelltool",
+        present=("shelltool",),
         version_refresh=refresh,
         updates=_RecordingUpdateService(),
     )
@@ -4043,7 +4091,7 @@ async def test_broken_selection_is_installed_with_repair(tmp_path: Path) -> None
     inputs = _inputs(
         tools=[mmdc, fd],
         install=_repair_install(calls),
-        installed=lambda tool: tool.id == "mmdc",
+        present=("mmdc",),
         version_refresh=refresh,
         updates=_RecordingUpdateService(),
     )
@@ -4072,7 +4120,7 @@ async def test_non_broken_install_omits_the_repair_kwarg(tmp_path: Path) -> None
     inputs = _inputs(
         tools=[mmdc, fd],
         install=_repair_install(calls),
-        installed=lambda tool: tool.id == "mmdc",
+        present=("mmdc",),
         version_refresh=refresh,
         updates=_RecordingUpdateService(),
     )
@@ -4091,7 +4139,7 @@ async def test_broken_and_outdated_repairs_instead_of_updating(tmp_path: Path) -
     inputs = _inputs(
         tools=[mmdc],
         install=_repair_install(calls),
-        installed=lambda tool: tool.id == "mmdc",
+        present=("mmdc",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -4110,7 +4158,7 @@ async def test_broken_tool_preflight_counts_as_install(tmp_path: Path) -> None:
     _mark_broken(refresh, mmdc)
     inputs = _inputs(
         tools=[mmdc],
-        installed=lambda tool: tool.id == "mmdc",
+        present=("mmdc",),
         version_refresh=refresh,
         updates=_RecordingUpdateService(),
     )
@@ -4208,7 +4256,7 @@ async def test_failed_update_status_marks_the_run_failed(tmp_path: Path) -> None
     updates = _FailingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda _tool: True,
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -4235,7 +4283,7 @@ async def test_raised_update_error_marks_the_run_failed(tmp_path: Path) -> None:
     updates = _CommandErrorUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda _tool: True,
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -4268,7 +4316,7 @@ async def test_completed_updates_survive_a_later_crash(
 
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
         wire_path=wire_path,
@@ -4309,7 +4357,7 @@ async def test_cancel_mid_updates_keeps_completed_updates_and_reports_the_rest_n
     updates = _GatedUpdateService()
     inputs = _inputs(
         tools=[rg, fd],
-        installed=lambda _tool: True,
+        present=("rg", "fd"),
         version_refresh=refresh,
         updates=updates,
     )
@@ -4341,7 +4389,7 @@ async def test_cancel_mid_updates_keeps_completed_updates_and_reports_the_rest_n
 
 
 async def test_all_skipped_run_is_done_and_green() -> None:
-    inputs = _inputs(tools=[_tool("rg")], installed=lambda _tool: True)
+    inputs = _inputs(tools=[_tool("rg")], present=("rg",))
     app = _host(inputs, [_tool("rg")])
     async with app.run_test(size=(100, 30)) as pilot:
         app.push_screen(ExecuteScreen(["rg"], inputs))
@@ -4469,7 +4517,7 @@ async def test_classify_reads_the_state(tmp_path: Path) -> None:
     tools = [shim, ok, old, drifted]
     inputs = _inputs(
         tools=tools,
-        installed=lambda _tool: True,
+        present=("shim", "ok", "old", "drifted"),
         version_refresh=service,
         updates=_RecordingUpdateService(),
     )
@@ -4506,7 +4554,7 @@ async def test_run_updates_reads_ownership_and_version_from_state(tmp_path: Path
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[rg],
-        installed=lambda tool: tool.id == "rg",
+        present=("rg",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -4599,7 +4647,7 @@ async def test_drifted_receipt_update_is_refused_per_tool(
     )
     inputs = _inputs(
         tools=[yq],
-        installed=lambda _tool: True,
+        present=("yq",),
         version_refresh=refresh,
         updates=updates,
     )
@@ -4644,7 +4692,7 @@ async def test_drifted_tool_is_refused_before_the_run_starts(tmp_path: Path) -> 
     updates = _RecordingUpdateService()
     inputs = _inputs(
         tools=[old, drifted],
-        installed=lambda _tool: True,
+        present=("old", "drifted"),
         version_refresh=service,
         updates=updates,
     )
@@ -4691,7 +4739,7 @@ async def test_broken_tool_with_no_reason_is_still_refused(tmp_path: Path) -> No
     service.publish([empty])
     inputs = _inputs(
         tools=[bare],
-        installed=lambda _tool: True,
+        present=("bare",),
         version_refresh=service,
         updates=_RecordingUpdateService(),
     )

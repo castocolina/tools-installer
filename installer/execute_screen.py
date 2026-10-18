@@ -60,7 +60,6 @@ from installer.session import (
     summarize,
     with_sensitive_confirm,
 )
-from installer.status import is_installed
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, VersionRefreshService
@@ -401,6 +400,9 @@ class InstallRunStarted(Message):
 class ExecuteInputs:
     """Everything ExecuteScreen needs, bound by the composition root.
 
+    Presence is read from `version_refresh` alone (L-20-09): there is no second
+    predicate that could disagree with the published state. `terminal_sync` is
+    the terminal synchronizer the composition root wires; None runs none.
     Optional closures default so a test can construct one without setup.py.
     """
 
@@ -408,13 +410,13 @@ class ExecuteInputs:
     platform: Platform
     wire_path: Callable[[], str]
     verify: Callable[[], str]
-    installed: Callable[[Tool], bool] = is_installed
+    version_refresh: VersionRefreshService
     resolve_tag: TagResolver = resolve_github_tag
     install: SensitiveInstall = install_tool
     unattended: bool = False
-    version_refresh: VersionRefreshService | None = None
     updates: UpdateService | None = None
     now: Callable[[], float] = time.monotonic
+    terminal_sync: Callable[[], str | None] | None = None
 
 
 class ExecuteScreen(ModalScreen[None]):
@@ -502,7 +504,7 @@ class ExecuteScreen(ModalScreen[None]):
         self._classify_selection(selected)
 
         def installed_for_order(tool: Tool) -> bool:
-            return self._inputs.installed(tool) and tool.id not in self._repair_ids
+            return self._inputs.version_refresh.is_present(tool) and tool.id not in self._repair_ids
 
         resolved = resolve_dependencies(
             order_for_install(selected),
@@ -530,32 +532,30 @@ class ExecuteScreen(ModalScreen[None]):
             self.action_start()
 
     def _platform(self) -> Platform:
-        """The live platform when a service is bound (D-14), else the launch one."""
-        refresh = self._inputs.version_refresh
-        return refresh.platform if refresh is not None else self._inputs.platform
+        """The live platform: the service's own (D-14)."""
+        return self._inputs.version_refresh.platform
 
     def _classify_selection(self, selected: list[Tool]) -> None:
         refresh = self._inputs.version_refresh
         repair: list[Tool] = []
         current: list[Tool] = []
         refused: list[tuple[Tool, str]] = []
-        if refresh is not None:
-            for tool in selected:
-                if not self._inputs.installed(tool):
-                    continue
-                state = refresh.state_of(tool.id)
-                if state is None:
-                    continue
-                # Repair is the pnpm-shim case only, never receipt drift (Pitfall 10).
-                if state.ownership.broken:
-                    repair.append(tool)
-                # Receipt drift: the update gate would refuse it, so the
-                # preview never promises it (IN2-03).
-                elif state.health is Health.BROKEN:
-                    reason = state.reasons[0] if state.reasons else ""
-                    refused.append((tool, reason))
-                elif state.version is not None and state.version.outdated is False:
-                    current.append(tool)
+        for tool in selected:
+            if not refresh.is_present(tool):
+                continue
+            state = refresh.state_of(tool.id)
+            if state is None:
+                continue
+            # Repair is the pnpm-shim case only, never receipt drift (Pitfall 10).
+            if state.ownership.broken:
+                repair.append(tool)
+            # Receipt drift: the update gate would refuse it, so the
+            # preview never promises it (IN2-03).
+            elif state.health is Health.BROKEN:
+                reason = state.reasons[0] if state.reasons else ""
+                refused.append((tool, reason))
+            elif state.version is not None and state.version.outdated is False:
+                current.append(tool)
         repair_ids = {tool.id for tool in repair}
         self._repair = repair
         self._repair_ids = frozenset(repair_ids)
@@ -570,17 +570,17 @@ class ExecuteScreen(ModalScreen[None]):
             if tool.id in eligible
             and tool.id not in repair_ids
             and tool.post_install
-            and self._inputs.installed(tool)
+            and self._inputs.version_refresh.is_present(tool)
         ]
 
     def _update_targets(self, selected: list[Tool]) -> list[Tool]:
         refresh = self._inputs.version_refresh
         updates = self._inputs.updates
-        if refresh is None or updates is None:
+        if updates is None:
             return []
         targets: list[Tool] = []
         for tool in selected:
-            if not self._inputs.installed(tool):
+            if not refresh.is_present(tool):
                 continue
             state = refresh.state_of(tool.id)
             if state is not None and state.version is not None and state.version.outdated is False:
@@ -756,7 +756,7 @@ class ExecuteScreen(ModalScreen[None]):
         """
         refresh = self._inputs.version_refresh
         updates = self._inputs.updates
-        if refresh is None or updates is None:
+        if updates is None:
             return
         for tool in self._to_update:
             if not self._should_continue():

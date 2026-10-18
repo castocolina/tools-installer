@@ -1174,6 +1174,7 @@ def _build_app(
         link_mode=_current_link_mode,
         unattended=unattended,
         disk_pressure=disk_pressure,
+        version_refresh=version_refresh,
     )
 
     def _install(
@@ -1186,10 +1187,9 @@ def _build_app(
 
     execute = replace(
         execute,
-        installed=version_refresh.is_present,
         install=_install,
-        version_refresh=version_refresh,
         updates=updates,
+        terminal_sync=_sync_omz_terminals,
     )
 
     return UnifiedApp(
@@ -1230,6 +1230,7 @@ def _execute_inputs(
     link_mode: str | Callable[[], str],
     unattended: bool,
     disk_pressure: Callable[[], DiskPressure],
+    version_refresh: VersionRefreshService,
 ) -> ExecuteInputs:
     def current_mode() -> str:
         return link_mode() if callable(link_mode) else link_mode
@@ -1267,6 +1268,7 @@ def _execute_inputs(
         platform=platform,
         wire_path=wire_path,
         verify=verify,
+        version_refresh=version_refresh,
         unattended=unattended,
     )
 

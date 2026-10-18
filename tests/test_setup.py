@@ -46,7 +46,13 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
-from tests.state_doubles import FrozenStateService, empty_inventory, empty_outdated, pass_state
+from tests.state_doubles import (
+    FrozenStateService,
+    empty_inventory,
+    empty_outdated,
+    pass_state,
+    presence_service,
+)
 
 # Aliased once, matching tests/test_daemon.py's convention for pinning a
 # private composition-root function under test.
@@ -605,6 +611,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
         link_mode: str | Callable[[], str],
         unattended: bool,
         disk_pressure: Callable[[], DiskPressure],
+        version_refresh: VersionRefreshService,
     ) -> ExecuteInputs:
         inputs = real_inputs(
             tools,
@@ -612,6 +619,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
             link_mode=link_mode,
             unattended=unattended,
             disk_pressure=disk_pressure,
+            version_refresh=version_refresh,
         )
 
         def _pinned_tag(_repo: str) -> str:
@@ -2249,6 +2257,7 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
         link_mode="single",
         unattended=True,
         disk_pressure=_unused_probe,
+        version_refresh=presence_service([]),
     )
     text = inputs.wire_path()
     assert "PATH configured" in text
@@ -2282,6 +2291,7 @@ def test_execute_inputs_verify_calls_run_doctor_and_returns_captured_text(
         link_mode="centralized",
         unattended=False,
         disk_pressure=_unused_probe,
+        version_refresh=presence_service([]),
     )
     text = inputs.verify()
     assert "PATH audit" in text
@@ -3345,6 +3355,7 @@ def test_every_configure_path_call_site_passes_a_shellrc_path(
         link_mode="single",
         unattended=True,
         disk_pressure=_unused_probe,
+        version_refresh=presence_service([]),
     )
     inputs.wire_path()
     app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
@@ -3791,12 +3802,12 @@ def test_execute_inputs_presence_is_the_state(
     execute = _wired(monkeypatch, [tool])["execute"]
     assert isinstance(execute, ExecuteInputs)
     service = built[0]
-    assert execute.installed == service.is_present
+    assert execute.version_refresh is service
     service.publish([pass_state(tool, platform=service.platform, present=False)])
     state = service.state_of("rg")
     assert state is not None
     assert state.health is Health.MISSING
-    assert execute.installed(tool) is False
+    assert execute.version_refresh.is_present(tool) is False
 
 
 def test_install_binding_passes_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

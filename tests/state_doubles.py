@@ -214,6 +214,14 @@ class FrozenStateService(VersionRefreshService):
             stamped = {state.tool_id: replace(state, generation=self._epoch) for state in states}
             self._states = {**self._states, **stamped}
 
+    def assume_present(self, answer: Callable[[Tool], bool]) -> None:
+        """Answer presence from the probe for a tool with no published state.
+
+        A published state still wins, so a missing ownership snapshot stays
+        missing (the worker refreshes it) while presence answers `answer`.
+        """
+        self._present = answer
+
     def refresh(self, tools: Sequence[Tool]) -> None:
         del tools
         self.publish(list(self._states.values()))
@@ -360,3 +368,50 @@ def plan_state(
         misconfigured=misconfigured,
         notes=notes,
     )
+
+
+Presence = Collection[str] | Callable[[Tool], bool]
+
+
+def presence_service(
+    catalog: Iterable[Tool],
+    *,
+    present: Presence = (),
+    states: Iterable[ToolState] = (),
+    platform: Platform | None = None,
+    service: VersionRefreshService | None = None,
+) -> VersionRefreshService:
+    """The service a screen test reads presence from.
+
+    `present` is a set of ids or a live predicate. Ids: without a `service`, a
+    frozen one under `Path.home()` (the conftest sandbox points that at a
+    scratch HOME) publishes OK for each catalog tool in `present` and MISSING
+    for the rest. A predicate is only probed, never published, so a test that
+    flips its answer mid-run is seen at the next read. A `service` the test built
+    keeps its own published states, so a deliberately missing ownership snapshot
+    stays missing. Only a frozen service has a probe, so any other service
+    passes through unchanged and must not be given presence.
+    """
+    if service is None:
+        target = frozen_service(Path.home() / "state", platform=platform)
+    elif isinstance(service, FrozenStateService):
+        target = service
+    else:
+        assert not present and not states, "presence needs a FrozenStateService"
+        return service
+    if callable(present):
+        target.assume_present(present)
+        published: list[ToolState] = []
+    else:
+        ids = present
+        target.assume_present(lambda tool: tool.id in ids)
+        published = (
+            []
+            if service is not None
+            else [
+                plan_state(tool, health=Health.OK if tool.id in ids else Health.MISSING)
+                for tool in catalog
+            ]
+        )
+    target.publish([*published, *states])
+    return target
