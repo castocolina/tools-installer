@@ -1,4 +1,4 @@
-"""Render the pre-flight audit and the post-install summary to a Console."""
+"""Render install plans, run summaries, and reports to a Console."""
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -6,11 +6,9 @@ from pathlib import Path
 from rich.cells import cell_len
 from rich.console import Console
 from rich.markup import escape
-from rich.table import Table
 from rich.text import Text
 
 from installer.apps import APP_KINDS
-from installer.audit import ToolStatus
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.download import DOWNLOAD_KINDS
@@ -33,69 +31,12 @@ from installer.session import (
     Disposition,
     PlanRow,
     RowOutcome,
-    Summary,
     review_counts,
     summary_counts,
 )
 from installer.systemd_daemon import CompetingUnit
 from installer.ui_common import SEVERITY_STYLE
 from installer.version_status import HEALTH_MARKS, Health
-
-
-def render_dependency_notice(
-    dragged_in: tuple[str, ...],
-    warnings: tuple[str, ...],
-    console: Console,
-) -> None:
-    """Announce auto-added dependencies and any skip warnings. Silent when both
-    are empty so the common no-dependency case prints nothing."""
-    if dragged_in:
-        console.print(
-            f"[cyan]Added dependencies:[/] {', '.join(dragged_in)} (required by your selection)."
-        )
-    for warning in warnings:
-        console.print(f"[yellow]⚠ {warning}[/]")
-
-
-def render_audit(statuses: list[ToolStatus], console: Console) -> None:
-    """Print a table of each selected tool, its category, and installed/missing."""
-    table = Table(title="Pre-flight audit")
-    table.add_column("Tool")
-    table.add_column("Category")
-    table.add_column("State")
-    for status in statuses:
-        if status.installed:
-            state = "installed"
-        elif status.reason:
-            state = f"missing ({escape(status.reason)})"
-        else:
-            state = "missing"
-        table.add_row(status.tool.id, status.tool.category, state)
-    console.print(table)
-
-
-def render_summary(summary: Summary, console: Console) -> None:
-    """Print install counts and the tool ids in each bucket."""
-    console.print(
-        f"Installed: {len(summary.installed)}  "
-        f"Already: {len(summary.already)}  "
-        f"Failed: {len(summary.failed)}  "
-        f"Dependency failed: {len(summary.dependency_failed)}  "
-        f"Checksum mismatch: {len(summary.mismatched)}  "
-        f"No method: {len(summary.no_method)}  "
-        f"Manual setup required: {len(summary.manual_required)}"
-    )
-    for label, ids in (
-        ("installed", summary.installed),
-        ("already installed", summary.already),
-        ("failed", summary.failed),
-        ("dependency failed", summary.dependency_failed),
-        ("checksum mismatch", summary.mismatched),
-        ("no method", summary.no_method),
-        ("manual setup required", summary.manual_required),
-    ):
-        if ids:
-            console.print(f"  {label}: {', '.join(ids)}")
 
 
 def id_width(rows: Sequence[PlanRow]) -> int:
@@ -307,12 +248,11 @@ def render_plan(
 
 
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:
-    """Print why each FAILED tool failed — its last ladder method's error.
+    """Print the last ladder-method error for each failed tool.
 
-    render_summary only counts and names failed tools; this is where the
-    actual exception lives (mirrors CHECKSUM_MISMATCH's existing detail line
-    in render_checksum_verification), so a bare "failed" is never the last
-    word an operator sees. Silent when nothing failed.
+    ``render_run_summary`` reports each result; this renderer supplies the
+    actual exception, mirroring the checksum detail in
+    ``render_checksum_verification``. Silent when nothing failed.
     """
     for outcome in outcomes:
         if outcome.status is not InstallStatus.FAILED:
@@ -329,9 +269,8 @@ def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> 
 def render_skipped(outcomes: list[InstallOutcome], console: Console) -> None:
     """Name every tool the run deliberately did not attempt and why.
 
-    Silent when nothing was skipped (the common case prints nothing,
-    matching render_dependency_notice). Counts live in render_summary;
-    reasons live here.
+    Silent when no dependency failed. The run summary carries counts; reasons
+    live here.
     """
     for outcome in outcomes:
         if outcome.status is not InstallStatus.DEPENDENCY_FAILED:
@@ -358,11 +297,9 @@ def render_postinstall_warnings(outcomes: list[InstallOutcome], console: Console
 def render_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
     """Print each MANUAL_REQUIRED tool's reviewed setup instructions, in full.
 
-    render_summary only counts and names these tools ("Manual setup
-    required: 1  pi"); this is where the actual steps the user must run
-    after the installer releases the terminal live. Silent when nothing
-    needs a handoff, matching render_skipped's and
-    render_postinstall_warnings' restraint.
+    This is where the actual steps the user must run after the installer
+    releases the terminal live. Silent when nothing needs a handoff, matching
+    render_skipped's and render_postinstall_warnings' restraint.
     """
     for outcome in outcomes:
         if outcome.status is not InstallStatus.MANUAL_REQUIRED or not outcome.handoff:
@@ -538,5 +475,5 @@ def render_verification(outcomes: list[InstallOutcome], console: Console) -> Non
         elif outcome.status == InstallStatus.CHECKSUM_MISMATCH:
             # The engine always carries the ChecksumMismatch in errors[0] for
             # this status; a malformed outcome should fail loudly here rather
-            # than print a vague line (same philosophy as session.summarize).
+            # than print a vague line (the same fail-closed principle as the session outcome fold).
             console.print(f"  {outcome.tool_id}: {escape(str(outcome.errors[0]))}")

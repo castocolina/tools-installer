@@ -7,16 +7,12 @@ from rich.cells import cell_len
 from rich.console import Console
 
 import installer.executors as executors
-from installer.audit import ToolStatus
 from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
 from installer.executors import ExecutorError
-from installer.model import Method, Tool
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
     outcome_row_text,
-    render_audit,
-    render_dependency_notice,
     render_failure_details,
     render_guard,
     render_guard_status,
@@ -27,96 +23,19 @@ from installer.render import (
     render_remove_yourself,
     render_run_summary,
     render_skipped,
-    render_summary,
     render_uninstall,
     render_verification,
     running_row_text,
     summary_head,
 )
 from installer.run import CommandError
-from installer.session import WORDS, Disposition, PlanRow, Result, RowOutcome, Summary
+from installer.session import WORDS, Disposition, PlanRow, Result, RowOutcome
 from installer.version_status import Health
-
-
-def _tool(tool_id: str, category: str = "search") -> Tool:
-    return Tool(
-        id=tool_id,
-        name=tool_id,
-        category=category,
-        cmd=tool_id,
-        methods=(Method(kind="brew", params={"formula": tool_id}),),
-    )
 
 
 def _console() -> tuple[Console, io.StringIO]:
     buf = io.StringIO()
     return Console(file=buf, width=100, no_color=True), buf
-
-
-def test_render_audit_lists_each_tool_and_its_state() -> None:
-    statuses = [
-        ToolStatus(tool=_tool("rg"), installed=True),
-        ToolStatus(tool=_tool("fd"), installed=False),
-    ]
-    console, buf = _console()
-    render_audit(statuses, console)
-    out = buf.getvalue()
-    assert "rg" in out and "fd" in out
-    assert "installed" in out and "missing" in out
-
-
-def test_render_summary_reports_counts_and_ids() -> None:
-    summary = Summary(installed=("rg",), already=("jq",), failed=("fd",), no_method=())
-    console, buf = _console()
-    render_summary(summary, console)
-    out = buf.getvalue()
-    assert "Installed: 1" in out
-    assert "rg" in out and "jq" in out and "fd" in out
-
-
-def test_render_summary_handles_empty() -> None:
-    console, buf = _console()
-    render_summary(Summary(installed=(), already=(), failed=(), no_method=()), console)
-    out = buf.getvalue()
-    assert "Installed: 0" in out
-
-
-def test_render_summary_counts_and_lists_dependency_failed() -> None:
-    summary = Summary(
-        installed=("rg",),
-        already=(),
-        failed=("sdkman",),
-        no_method=(),
-        dependency_failed=("java", "gradle"),
-    )
-    console, buf = _console()
-    render_summary(summary, console)
-    out = buf.getvalue()
-    assert "Dependency failed: 2" in out
-    assert "java" in out and "gradle" in out
-    assert "Installed:" in out
-    assert "Failed:" in out
-
-
-def test_render_summary_counts_and_lists_manual_required() -> None:
-    summary = Summary(
-        installed=(),
-        already=(),
-        failed=(),
-        no_method=(),
-        manual_required=("pi",),
-    )
-    console, buf = _console()
-    render_summary(summary, console)
-    out = buf.getvalue()
-    assert "Manual setup required: 1" in out
-    assert "pi" in out
-
-
-def test_render_summary_still_reports_zero_when_nothing_was_skipped() -> None:
-    console, buf = _console()
-    render_summary(Summary(installed=(), already=(), failed=(), no_method=()), console)
-    assert "Dependency failed: 0" in buf.getvalue()
 
 
 def test_render_failure_details_prints_the_error() -> None:
@@ -387,15 +306,6 @@ def test_render_verification_escapes_bracketed_mismatch_error() -> None:
     assert "[rate-limited]" in text
 
 
-def test_render_summary_includes_mismatch_bucket():
-    console = Console(record=True)
-    summary = Summary(installed=("rg",), already=(), failed=(), no_method=(), mismatched=("fd",))
-    render_summary(summary, console)
-    text = console.export_text()
-    assert "Checksum mismatch: 1" in text
-    assert "checksum mismatch: fd" in text
-
-
 def test_render_verification_covers_app_outcomes() -> None:
     console = Console(record=True)
     outcomes = [
@@ -509,22 +419,6 @@ def test_render_guard_status_includes_reload_next_step():
     render_guard_status({"npx": True}, None, console)
     out = buf.getvalue()
     assert "hash -r" in out
-
-
-def test_render_dependency_notice_shows_dragged_in_and_warnings() -> None:
-    console, buf = _console()
-    render_dependency_notice(
-        ("pnpm",), ("foo is not available on this platform — skipped",), console
-    )
-    out = buf.getvalue()
-    assert "pnpm" in out
-    assert "not available" in out
-
-
-def test_render_dependency_notice_silent_when_nothing_to_say() -> None:
-    console, buf = _console()
-    render_dependency_notice((), (), console)
-    assert buf.getvalue().strip() == ""
 
 
 def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> None:
