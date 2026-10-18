@@ -46,6 +46,7 @@ from installer.render import (
 from installer.run import StreamingRunner
 from installer.sanitize import sanitize_log_line
 from installer.session import (
+    RUNNABLE,
     Disposition,
     MismatchChoice,
     PlanRow,
@@ -67,16 +68,6 @@ _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
 _SENSITIVE_CHOICES: frozenset[str] = frozenset({"yes", "no"})
 _DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
 _DISMISSAL_SENSITIVE = "{tool_id}: sensitive-action prompt dismissed; the answer was therefore no."
-# The rows the worker runs; SKIP and BLOCKED rows never reach an engine.
-_RUNNABLE: frozenset[Disposition] = frozenset(
-    {
-        Disposition.INSTALL,
-        Disposition.UPDATE,
-        Disposition.REPAIR,
-        Disposition.RECONFIGURE,
-        Disposition.REINSTALL,
-    }
-)
 # UI-SPEC Interaction contract: one keys line per screen state.
 _KEYS_EMPTY = "esc close"
 _KEYS_RUNNING = "c stop after this tool · ctrl+c aborts and can leave a tool half-installed"
@@ -484,7 +475,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         keys.update(self._idle_keys())
 
     def _idle_keys(self) -> str:
-        runnable = any(row.disposition in _RUNNABLE for row in self._rows)
+        runnable = any(row.disposition in RUNNABLE for row in self._rows)
         parts = ["enter start" if runnable else "enter continue"]
         if any(row.can_reinstall for row in self._rows):
             parts.append("r reinstall")

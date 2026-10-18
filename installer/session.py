@@ -104,6 +104,17 @@ Result = Literal[
     "manual",
 ]
 
+# The dispositions an engine runs; SKIP, BLOCKED and WAIT never reach one.
+RUNNABLE: frozenset[Disposition] = frozenset(
+    {
+        Disposition.INSTALL,
+        Disposition.UPDATE,
+        Disposition.REPAIR,
+        Disposition.RECONFIGURE,
+        Disposition.REINSTALL,
+    }
+)
+
 
 @dataclass(frozen=True)
 class Words:
@@ -822,15 +833,8 @@ def build_plan(
         for row in rows
         if row.disposition is Disposition.BLOCKED and not _settled(state_of(row.tool_id))
     }
-    runnable = {
-        Disposition.INSTALL,
-        Disposition.UPDATE,
-        Disposition.REPAIR,
-        Disposition.RECONFIGURE,
-        Disposition.REINSTALL,
-    }
     for index, row in enumerate(rows):
-        if row.disposition not in runnable:
+        if row.disposition not in RUNNABLE:
             continue
         dependency = next((dep for dep in by_id[row.tool_id].requires if dep in unsatisfied), None)
         if dependency is not None:
@@ -839,7 +843,7 @@ def build_plan(
                 unsatisfied.add(row.tool_id)
     for index in range(len(rows) - 1, -1, -1):
         row = rows[index]
-        if row.disposition not in runnable or row.requested_by is None:
+        if row.disposition not in RUNNABLE or row.requested_by is None:
             continue
         requiring_rows = [
             candidate for candidate in rows if row.tool_id in by_id[candidate.tool_id].requires

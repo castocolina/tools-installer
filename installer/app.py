@@ -56,6 +56,7 @@ from installer.render import (
 )
 from installer.run import CommandError, Runner, run_command
 from installer.session import (
+    RUNNABLE,
     Disposition,
     OnMismatch,
     RowOutcome,
@@ -140,9 +141,7 @@ def run_wizard(
         return outcomes
 
     render_plan(rows, console)
-    has_runnable_row = any(
-        row.disposition not in {Disposition.SKIP, Disposition.BLOCKED} for row in rows
-    )
+    has_runnable_row = any(row.disposition in RUNNABLE for row in rows)
     if not options.yes and has_runnable_row and not prompter.confirm("Run this plan?"):
         console.print("Cancelled; nothing was changed.")
         return None

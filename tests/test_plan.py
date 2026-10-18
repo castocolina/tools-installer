@@ -14,6 +14,7 @@ from installer.platform import Platform
 from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.session import (
     RESULT_WORDS,
+    RUNNABLE,
     WORDS,
     Disposition,
     PlanRow,
@@ -983,3 +984,19 @@ def test_wait_rows_count_as_checking_in_review_counts():
     ]
 
     assert review_counts(rows) == "1 will install, 1 checking…"
+
+
+def test_runnable_is_every_disposition_an_engine_runs():
+    assert (
+        frozenset(
+            {
+                Disposition.INSTALL,
+                Disposition.UPDATE,
+                Disposition.REPAIR,
+                Disposition.RECONFIGURE,
+                Disposition.REINSTALL,
+            }
+        )
+        == RUNNABLE
+    )
+    assert not RUNNABLE & {Disposition.SKIP, Disposition.BLOCKED, Disposition.WAIT}
