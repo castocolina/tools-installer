@@ -333,21 +333,6 @@ def adopt(
         return receipt
 
 
-def commit_adoption(receipt: Receipt) -> bool:
-    """Persist a deferred adoption after repeating its receipt and fingerprint checks."""
-    with _WRITE_LOCK:
-        if receipt_exists(receipt.tool):
-            return False
-        if len(receipt.artifacts) != 1:
-            return False
-        artifact = receipt.artifacts[0]
-        fresh = fingerprint(artifact.path, artifact.type, rehash=True)
-        if fresh is None or fresh != artifact:
-            return False
-        _write_unlocked(receipt)
-        return True
-
-
 def delete(tool_id: str) -> None:
     """Remove the receipt for `tool_id` when it exists."""
     receipt_path(tool_id).unlink(missing_ok=True)

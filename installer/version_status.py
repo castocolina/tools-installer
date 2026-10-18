@@ -932,7 +932,7 @@ class VersionRefreshService:
         self._terminal_drift = terminal_drift
         self._lock = threading.Lock()
         self._writes_held = False
-        self._pending_writes: list[Callable[[], None]] = []
+        self._pending_writes: list[Callable[[], str | None]] = []
         # The one per-tool record (D-03): a seq-gated snapshot, never mutated
         # after assignment. Each commit assigns a new dict under `_lock`, so
         # `state_of`, an unlocked read from the UI thread, holds either the
@@ -965,17 +965,22 @@ class VersionRefreshService:
             self._writes_held = True
             self._pending_writes.clear()
 
-    def commit_writes(self) -> None:
-        """Commit writes held for the headless run after the user consents."""
+    def commit_writes(self) -> list[str]:
+        """Commit held writes and return adoption failures for the headless run."""
         with self._lock:
             pending = self._pending_writes
             self._pending_writes = []
             self._writes_held = False
+        failures: list[str] = []
         for write in pending:
             try:
-                write()
+                message = write()
             except OSError as exc:
                 self._warning = f"version cache not saved: {exc}"
+            else:
+                if message is not None:
+                    failures.append(message)
+        return failures
 
     def _write_or_queue(self, write: Callable[[], None]) -> None:
         if self._writes_held:
@@ -1383,12 +1388,17 @@ class VersionRefreshService:
             )
             if receipt is not None and self._writes_held:
 
-                def commit_adoption() -> None:
+                def commit_adoption() -> str | None:
                     try:
-                        receipts.commit_adoption(receipt)
-                    except OSError:
-                        # Adoption is best effort; failure leaves no receipt.
-                        return
+                        committed = receipts.adopt(tool, method, artifact, package=None)
+                    except OSError as exc:
+                        return f"{tool.id} was not adopted: {exc}"
+                    if committed is None:
+                        return (
+                            f"{tool.id} was not adopted: its file or receipt changed "
+                            "after the plan was printed"
+                        )
+                    return None
 
                 self._pending_writes.append(commit_adoption)
             return receipt

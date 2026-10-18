@@ -146,7 +146,8 @@ def run_wizard(
         console.print("Cancelled; nothing was changed.")
         return None
     if options.yes or has_runnable_row:
-        refresh.commit_writes()
+        for line in refresh.commit_writes():
+            console.print(line, markup=False, highlight=False, soft_wrap=True)
 
     def confirm_sensitive(tool_id: str, _action: str) -> bool:
         return prompter.confirm(

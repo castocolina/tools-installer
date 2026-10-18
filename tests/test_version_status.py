@@ -4192,10 +4192,11 @@ def test_a_consented_headless_plan_commits_the_adoption_before_it_runs(
         observed.append(receipts.receipt_exists("yq"))
         return InstallOutcome(tool.id, "installed", method_kind="brew")
 
+    output = io.StringIO()
     result = run_wizard(
         [_yq(), missing],
         AcceptingPrompter(),
-        Console(file=io.StringIO(), width=100, no_color=True),
+        Console(file=output, width=100, no_color=True),
         Options(all=True, categories=(), yes=False),
         refresh=service,
         updates=ScriptedUpdates({}),
@@ -4203,8 +4204,51 @@ def test_a_consented_headless_plan_commits_the_adoption_before_it_runs(
     )
     assert result is not None
     state = service.state_of("yq")
-    assert state is not None and state.receipt == receipts.read("yq")
+    assert state is not None and state.receipt is not None
     assert observed and observed[0]
+    candidate = state.receipt
+    assert candidate is not None
+    on_disk = receipts.read("yq")
+    assert on_disk is not None
+    assert replace(on_disk, at=candidate.at) == candidate
+
+
+def test_a_held_adoption_whose_file_changed_before_consent_is_printed_not_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    from rich.console import Console
+
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+
+    class EditingPrompter:
+        def confirm(self, message: str) -> bool:
+            assert message == "Run this plan?"
+            placed.write_bytes(_YQ_BYTES + b"changed")
+            return True
+
+    def install(tool: Tool, *_args: object, **_kwargs: object) -> InstallOutcome:
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    output = io.StringIO()
+    result = run_wizard(
+        [_yq(), _rg_archive()],
+        EditingPrompter(),
+        Console(file=output, width=100, no_color=True),
+        Options(all=True, categories=(), yes=False),
+        refresh=service,
+        updates=ScriptedUpdates({}),
+        install=install,
+    )
+
+    message = "yq was not adopted: its file or receipt changed after the plan was printed"
+    text = output.getvalue()
+    assert result is not None
+    assert text.count(message) == 1
+    assert text.index(message) < text.index("Summary — ")
+    assert not receipts.receipt_exists("yq")
 
 
 def test_pass_adopts_a_raw_binary_by_cached_digest(
@@ -5454,11 +5498,11 @@ def test_held_adoption_write_failure_does_not_abort_commit(
     state = _settled(service, _yq())
     assert state.receipt is not None
 
-    def fail(_receipt: Receipt) -> bool:
+    def fail(_receipt: Receipt) -> None:
         raise OSError("read-only receipts directory")
 
-    monkeypatch.setattr(receipts, "commit_adoption", fail)
-    service.commit_writes()
+    monkeypatch.setattr(receipts, "_write_unlocked", fail)
+    assert service.commit_writes() == ["yq was not adopted: read-only receipts directory"]
     assert not receipts.receipt_exists("yq")
 
 

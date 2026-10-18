@@ -263,9 +263,9 @@ def test_run_wizard_commits_held_writes_only_after_consent(tmp_path: Path, scena
             events.append("refresh_skills")
             return super().refresh_skills(tools)
 
-        def commit_writes(self) -> None:
+        def commit_writes(self) -> list[str]:
             events.append("commit")
-            super().commit_writes()
+            return super().commit_writes()
 
     service = RecordingService(
         platform=_platform(),
