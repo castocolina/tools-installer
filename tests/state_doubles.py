@@ -5,6 +5,7 @@ Every service built here is a real `VersionRefreshService` with offline fakes.
 test-built service reads the developer's home (checker W5).
 """
 
+import threading
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
@@ -235,6 +236,48 @@ class FrozenStateService(VersionRefreshService):
         }
 
 
+class HeldRefreshService(FrozenStateService):
+    """A frozen service whose refresh waits until the test releases it."""
+
+    def __init__(
+        self,
+        home: Path,
+        pending: Iterable[ToolState],
+        *,
+        raising: Exception | None = None,
+        platform: Platform | None = None,
+    ) -> None:
+        super().__init__(
+            platform=platform or _MACOS,
+            cache_path=home / "versions.json",
+            resolve_tag=_no_release,
+            probe_output=_no_version,
+            managed_bin_dir=home / ".local" / "bin",
+            which=lambda _cmd: None,
+            artifacts_for=lambda _tool: [],
+            read_inventory_fn=empty_inventory,
+            read_outdated_fn=empty_outdated,
+            pnpm_packages=lambda: (),
+            query=lambda *_a, **_k: "",
+            native_probe=_probe_nothing,
+            skill_probe=_probe_nothing,
+            skill_home=home,
+            present=lambda _tool: False,
+        )
+        self.pending = tuple(pending)
+        self.raising = raising
+        self.release = threading.Event()
+        self.calls: list[frozenset[str]] = []
+
+    def refresh(self, tools: Sequence[Tool]) -> None:
+        self.calls.append(frozenset(tool.id for tool in tools))
+        self.release.wait()
+        error = self.raising
+        if error is not None:
+            raise error
+        self.publish(self.pending)
+
+
 def _probe_nothing(argv: list[str]) -> str:
     raise OSError(f"frozen test double: no probe for {argv}")
 
@@ -258,6 +301,16 @@ def frozen_service(home: Path, *, platform: Platform | None = None) -> FrozenSta
         skill_home=home,
         present=lambda _tool: False,
     )
+
+
+def held_service(
+    home: Path,
+    pending: Iterable[ToolState],
+    *,
+    raising: Exception | None = None,
+    platform: Platform | None = None,
+) -> HeldRefreshService:
+    return HeldRefreshService(home, pending, raising=raising, platform=platform)
 
 
 def unknown_ownership(tool: Tool) -> ManagerOwnership:

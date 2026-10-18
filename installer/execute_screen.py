@@ -86,6 +86,7 @@ _KEYS_EMPTY = "esc close"
 _KEYS_RUNNING = "c stop after this tool · ctrl+c aborts and can leave a tool half-installed"
 _KEYS_FINISHED = "enter / esc return to catalog"
 _KEYS_WAITING = "waiting for the state check · esc cancels the wait"
+_KEYS_RETRY = "enter retries · esc closes"
 _STATUS_WAITING = "Waiting for the state check; nothing starts until it finishes. esc cancels."
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
@@ -255,6 +256,15 @@ class RowFinished(Message):
         super().__init__()
 
 
+class StateSettled(Message):
+    """The refresh joined by the review screen has finished."""
+
+    def __init__(self, token: int, error: str | None) -> None:
+        self.token = token
+        self.error = error
+        super().__init__()
+
+
 class InstallRunFinished(Message):
     """The worker finished; `outcomes` holds exactly one outcome per plan row.
 
@@ -373,6 +383,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._rows: list[PlanRow] = []
         self._reinstall: set[str] = set()
         self._start_requested = False
+        self._wait_token = 0
+        self._waiting = False
         self._waiting_prompt: str | None = None
         self._in_flight: str | None = None
         self._last_tool_id: str | None = None
@@ -400,6 +412,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
 
     def on_mount(self) -> None:
         self._replan()
+        if any(row.disposition is Disposition.WAIT for row in self._rows):
+            self._await_state()
         if self._inputs.unattended:
             self.action_start()
 
@@ -462,11 +476,53 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         if not self._rows:
             return
         if any(row.disposition is Disposition.WAIT for row in self._rows):
+            if self._start_requested:
+                return
             self._start_requested = True
             self.status.set(_STATUS_WAITING, "warn")
             self.query_one("#execute-keys", Static).update(_KEYS_WAITING)
+            self._await_state()
             return
         self._begin_run()
+
+    def _await_state(self) -> None:
+        if self._waiting:
+            return
+        self._waiting = True
+        token = self._wait_token
+        self._wait_worker(token)
+
+    @work(thread=True, exclusive=True, group="execute-wait", exit_on_error=False)
+    def _wait_worker(self, token: int) -> None:
+        _result, error = run_live(
+            lambda: self._inputs.version_refresh.refresh(self._inputs.catalog)
+        )
+        self.post_message(StateSettled(token, error))
+
+    def on_state_settled(self, message: StateSettled) -> None:
+        if message.token != self._wait_token:
+            return
+        self._waiting = False
+        if message.error is not None:
+            self._start_requested = False
+            self.status.set(
+                f"State check failed: {message.error}. enter retries · esc closes.", "error"
+            )
+            self.query_one("#execute-keys", Static).update(_KEYS_RETRY)
+            return
+        self._replan()
+        if not self._start_requested:
+            return
+        if not any(row.disposition is Disposition.WAIT for row in self._rows):
+            self._start_requested = False
+            self._begin_run()
+            return
+        ids = ", ".join(row.tool_id for row in self._rows if row.disposition is Disposition.WAIT)
+        self._start_requested = False
+        self.status.set(
+            f"State check failed: no state for {ids}. enter retries · esc closes.", "error"
+        )
+        self.query_one("#execute-keys", Static).update(_KEYS_RETRY)
 
     def _begin_run(self) -> None:
         self.started = True

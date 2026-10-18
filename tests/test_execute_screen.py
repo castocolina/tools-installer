@@ -58,7 +58,9 @@ from installer.versions import TagResolver
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.state_doubles import (
     FrozenStateService,
+    HeldRefreshService,
     frozen_service,
+    held_service,
     offline_service,
     pass_state,
     plan_state,
@@ -3144,26 +3146,171 @@ async def test_enter_rebuilds_the_plan_from_the_latest_publication(tmp_path: Pat
         assert _plan_prompts(screen)[0] == "✓ rg  skipped — already current"
 
 
-async def test_checking_rows_render_dim_and_enter_waits(tmp_path: Path) -> None:
+async def _wait_for_refresh_calls(
+    service: HeldRefreshService, pilot: Pilot[Any], count: int = 1
+) -> None:
+    for _ in range(40):
+        if len(service.calls) >= count:
+            return
+        await pilot.pause()
+
+
+async def _wait_for_started(screen: ExecuteScreen, pilot: Pilot[Any]) -> None:
+    for _ in range(400):
+        if screen.started:
+            return
+        await pilot.pause()
+
+
+async def test_enter_with_a_held_refresh_waits_and_starts_nothing(tmp_path: Path) -> None:
     captured: list[str] = []
     rg = _tool("rg")
-    service = frozen_service(tmp_path / "state")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
     inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
     app = _host(inputs, [rg])
     async with app.run_test(size=(80, 20)) as pilot:
-        app.push_screen(ExecuteScreen(["rg"], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        assert _plan_prompts(screen) == ["… rg  checking…"]
-        await pilot.press("enter")
-        await pilot.pause()
-        assert screen.started is False
-        assert screen.status.text == (
-            "Waiting for the state check; nothing starts until it finishes. esc cancels."
-        )
-        assert screen.status.severity == Severity.WARN
-        assert _keys_text(screen) == "waiting for the state check · esc cancels the wait"
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            assert _plan_prompts(screen) == ["… rg  checking…"]
+            await pilot.press("enter")
+            await _wait_for_refresh_calls(service, pilot)
+            assert _plan_prompts(screen) == ["… rg  checking…"]
+            assert screen.status.text == (
+                "Waiting for the state check; nothing starts until it finishes. esc cancels."
+            )
+            assert screen.status.severity == Severity.WARN
+            assert _keys_text(screen) == "waiting for the state check · esc cancels the wait"
+            assert screen.started is False
+            assert captured == []
+            assert service.calls == [frozenset({"rg"})]
+            await pilot.press("enter")
+            await pilot.pause()
+            assert service.calls == [frozenset({"rg"})]
+        finally:
+            service.release.set()
+
+
+async def test_releasing_the_refresh_rebuilds_the_plan_and_starts_the_run(tmp_path: Path) -> None:
+    captured: list[str] = []
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
+    inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await pilot.press("enter")
+            await _wait_for_refresh_calls(service, pilot)
+            assert screen.started is False
+            assert captured == []
+            service.release.set()
+            await _wait_for_started(screen, pilot)
+            assert screen.started is True
+            await _settle_execute(screen, pilot)
+            assert captured == ["rg"]
+            assert screen.outcomes is not None
+            assert screen.outcomes[0].row.disposition is Disposition.INSTALL
+            assert screen.outcomes[0].row.reason == "not installed"
+            assert _head_text(screen) == "Summary — 1 installed"
+        finally:
+            service.release.set()
+
+
+async def test_mount_with_checking_rows_joins_the_flight_without_starting(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
+    inputs = _inputs(tools=[rg], version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            assert _plan_prompts(screen) == ["… rg  checking…"]
+            await _wait_for_refresh_calls(service, pilot)
+            assert service.calls == [frozenset({"rg"})]
+            service.release.set()
+            for _ in range(400):
+                if _plan_prompts(screen) == ["○ rg  will install — not installed"]:
+                    break
+                await pilot.pause()
+            assert _plan_prompts(screen) == ["○ rg  will install — not installed"]
+            assert screen.started is False
+            assert _keys_text(screen) == "enter start · up/down move · esc cancel"
+        finally:
+            service.release.set()
+
+
+async def test_unattended_auto_start_waits_like_enter(tmp_path: Path) -> None:
+    captured: list[str] = []
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
+    inputs = _inputs(
+        tools=[rg], install=_install_with_output(captured), unattended=True, version_refresh=service
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await _wait_for_refresh_calls(service, pilot)
+            assert screen.status.text == (
+                "Waiting for the state check; nothing starts until it finishes. esc cancels."
+            )
+            assert screen.started is False
+            assert captured == []
+            assert service.calls == [frozenset({"rg"})]
+            service.release.set()
+            await _wait_for_started(screen, pilot)
+            assert screen.started is True
+            await _settle_execute(screen, pilot)
+            assert captured == ["rg"]
+        finally:
+            service.release.set()
+
+
+async def test_checking_rows_render_dim_and_enter_waits(tmp_path: Path) -> None:
+    captured: list[str] = []
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [])
+    inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            assert _plan_prompts(screen) == ["… rg  checking…"]
+            await pilot.press("enter")
+            await _wait_for_refresh_calls(service, pilot)
+            assert screen.started is False
+            assert screen.status.text == (
+                "Waiting for the state check; nothing starts until it finishes. esc cancels."
+            )
+            assert screen.status.severity == Severity.WARN
+            assert _keys_text(screen) == "waiting for the state check · esc cancels the wait"
+            service.release.set()
+            for _ in range(400):
+                if screen.status.text.startswith("State check failed:"):
+                    break
+                await pilot.pause()
+            assert _plan_prompts(screen) == ["… rg  checking…"]
+            assert screen.status.text == (
+                "State check failed: no state for rg. enter retries · esc closes."
+            )
+            assert screen.started is False
+        finally:
+            service.release.set()
     assert captured == []
 
 
