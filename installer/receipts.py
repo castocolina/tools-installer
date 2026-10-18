@@ -302,7 +302,12 @@ def record(
 
 
 def adopt(
-    tool: Tool, method: Method, artifact: ReceiptArtifact, *, package: str | None
+    tool: Tool,
+    method: Method,
+    artifact: ReceiptArtifact,
+    *,
+    package: str | None,
+    write: bool = True,
 ) -> Receipt | None:
     """Write a receipt for a file installed before receipts existed (D-09).
 
@@ -312,7 +317,10 @@ def adopt(
     differs from it; the receipt then records that verified fingerprint, so
     bytes swapped after it read as drift, never as proof (review C2-H1). It
     writes through `_write_unlocked`: the
-    lock is not reentrant and `write` would hang here (review H1)."""
+    lock is not reentrant and `write` would hang here (review H1). With
+    `write=False`, returns a validated candidate without persisting it; callers
+    must not treat that candidate as an on-disk receipt.
+    """
     with _WRITE_LOCK:
         if receipt_exists(tool.id):
             return None
@@ -320,8 +328,24 @@ def adopt(
         if fresh is None or fresh != artifact:
             return None
         receipt = _build_receipt(tool, method, (fresh,), package=package, smoke=None)
-        _write_unlocked(receipt)
+        if write:
+            _write_unlocked(receipt)
         return receipt
+
+
+def commit_adoption(receipt: Receipt) -> bool:
+    """Persist a deferred adoption after repeating its receipt and fingerprint checks."""
+    with _WRITE_LOCK:
+        if receipt_exists(receipt.tool):
+            return False
+        if len(receipt.artifacts) != 1:
+            return False
+        artifact = receipt.artifacts[0]
+        fresh = fingerprint(artifact.path, artifact.type, rehash=True)
+        if fresh is None or fresh != artifact:
+            return False
+        _write_unlocked(receipt)
+        return True
 
 
 def delete(tool_id: str) -> None:

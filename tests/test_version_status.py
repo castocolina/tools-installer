@@ -17,6 +17,8 @@ from typing import Literal, cast
 import pytest
 
 from installer import download, executors, receipts, uninstall, version_status
+from installer.app import run_wizard
+from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus
 from installer.guards import REDIRECT_SENTINEL
@@ -75,6 +77,7 @@ from installer.version_status import (
     version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
+from tests.state_doubles import ScriptedUpdates
 from tests.test_download import fixture_runner
 from tests.test_registry import REGISTRY
 
@@ -4091,6 +4094,83 @@ def _adoption_service(
     placed.write_bytes(_YQ_BYTES)
     _cache_digests(tmp_path, "yq", digests)
     return _receipt_service(tmp_path, bin_dir, resolve_tag=_offline([])), placed
+
+
+def test_a_declined_headless_plan_adopts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    from rich.console import Console
+
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    missing = _rg_archive()
+
+    class DecliningPrompter:
+        def confirm(self, message: str) -> bool:
+            assert message == "Run this plan?"
+            return False
+
+    installed: list[str] = []
+
+    def install(tool: Tool, *_args: object, **_kwargs: object) -> InstallOutcome:
+        installed.append(tool.id)
+        raise AssertionError("declined plan must not install")
+
+    output = io.StringIO()
+    result = run_wizard(
+        [_yq(), missing],
+        _LINUX,
+        DecliningPrompter(),
+        Console(file=output, width=100, no_color=True),
+        Options(all=True, categories=(), yes=False),
+        refresh=service,
+        updates=ScriptedUpdates({}),
+        install=install,
+    )
+    assert result is None
+    assert output.getvalue().count("Cancelled; nothing was changed.") == 1
+    assert not receipts.receipt_exists("yq")
+    assert installed == []
+
+
+def test_a_consented_headless_plan_commits_the_adoption_before_it_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    from rich.console import Console
+
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    service, _placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
+    missing = _rg_archive()
+
+    class AcceptingPrompter:
+        def confirm(self, message: str) -> bool:
+            del message
+            return True
+
+    observed: list[bool] = []
+
+    def install(tool: Tool, *_args: object, **_kwargs: object) -> InstallOutcome:
+        observed.append(receipts.receipt_exists("yq"))
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    result = run_wizard(
+        [_yq(), missing],
+        _LINUX,
+        AcceptingPrompter(),
+        Console(file=io.StringIO(), width=100, no_color=True),
+        Options(all=True, categories=(), yes=False),
+        refresh=service,
+        updates=ScriptedUpdates({}),
+        install=install,
+    )
+    assert result is not None
+    state = service.state_of("yq")
+    assert state is not None and state.receipt == receipts.read("yq")
+    assert observed and observed[0]
 
 
 def test_pass_adopts_a_raw_binary_by_cached_digest(

@@ -1,7 +1,7 @@
 import io
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict
 
@@ -33,6 +33,7 @@ from installer.update import UpdateOutcome
 from installer.version_status import Health
 from installer.versions import TagResolver
 from tests.state_doubles import (
+    FrozenStateService,
     ScriptedUpdates,
     offline_service,
     plan_state,
@@ -245,6 +246,73 @@ def test_all_current_without_yes_prints_the_plan_and_summary_without_asking():
     assert installed == []
     assert isinstance(outcomes, list)
     assert all(outcome.result == "skipped" for outcome in outcomes)
+
+
+@pytest.mark.parametrize("scenario", ["decline", "yes", "current", "failure"])
+def test_run_wizard_commits_held_writes_only_after_consent(tmp_path: Path, scenario: str) -> None:
+    events: list[str] = []
+    tools = [_tool("rg", "search")]
+
+    class RecordingService(FrozenStateService):
+        def hold_writes(self) -> None:
+            events.append("hold")
+            super().hold_writes()
+
+        def refresh(self, tools: Sequence[Tool]) -> None:
+            events.append("refresh")
+            if scenario == "failure":
+                raise OSError("state check failed")
+            super().refresh(tools)
+
+        def refresh_skills(self, tools: Sequence[Tool]):
+            events.append("refresh_skills")
+            return super().refresh_skills(tools)
+
+        def commit_writes(self) -> None:
+            events.append("commit")
+            super().commit_writes()
+
+    service = RecordingService(
+        platform=_platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=_resolve_tag,
+        probe_output=lambda _argv: None,
+        managed_bin_dir=tmp_path / "bin",
+        which=lambda _cmd: None,
+        artifacts_for=lambda _tool: [],
+        present=lambda _tool: scenario != "yes",
+    )
+    health = Health.MISSING if scenario in {"decline", "yes"} else Health.OK
+    service.publish([plan_state(tools[0], health=health)])
+    installed: list[str] = []
+
+    def install(tool: Tool, *_args: object, **_kwargs: object) -> InstallOutcome:
+        events.append(f"install:{tool.id}")
+        installed.append(tool.id)
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    prompter = FakePrompter(confirm=scenario != "decline")
+    result = run_wizard(
+        tools,
+        _platform(),
+        prompter,
+        _console()[0],
+        Options(all=True, categories=(), yes=scenario == "yes"),
+        refresh=service,
+        updates=ScriptedUpdates({}),
+        install=install,
+    )
+    if scenario == "decline":
+        assert events.index("hold") < events.index("refresh")
+        assert "commit" not in events
+    elif scenario == "yes":
+        assert events.count("commit") == 1
+        assert events.index("commit") < events.index("install:rg")
+    elif scenario == "current":
+        assert "commit" not in events and prompter.confirmed == 0
+    else:
+        assert "commit" not in events
+        assert isinstance(result, list)
 
 
 def test_headless_uses_the_same_plan_order_as_the_tui():

@@ -116,9 +116,11 @@ def run_wizard(
 ) -> list[RowOutcome] | None:
     """Print and execute a fresh plan, or return None when confirmation is declined.
 
-    The synchronous pass covers version state and skill-pack host answers.
+    The synchronous pass covers version state and skill-pack host answers. Held
+    bookkeeping writes commit only after consent, before execution starts.
     """
     selected = _choose_tools(tools, options)
+    refresh.hold_writes()
     try:
         refresh.refresh(tools)
         refresh.refresh_skills(tools)
@@ -150,6 +152,8 @@ def run_wizard(
     if not options.yes and has_runnable_row and not prompter.confirm("Run this plan?"):
         console.print("Cancelled; nothing was changed.")
         return None
+    if options.yes or has_runnable_row:
+        refresh.commit_writes()
 
     def confirm_sensitive(tool_id: str, _action: str) -> bool:
         return prompter.confirm(

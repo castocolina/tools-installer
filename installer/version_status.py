@@ -931,6 +931,8 @@ class VersionRefreshService:
         # D-16: a dry run only; production passes `sync_terminal_shells(write=False)`.
         self._terminal_drift = terminal_drift
         self._lock = threading.Lock()
+        self._writes_held = False
+        self._pending_writes: list[Callable[[], None]] = []
         # The one per-tool record (D-03): a seq-gated snapshot, never mutated
         # after assignment. Each commit assigns a new dict under `_lock`, so
         # `state_of`, an unlocked read from the UI thread, holds either the
@@ -951,6 +953,33 @@ class VersionRefreshService:
         self._warning: str | None = None
         # D-09 non-match memo: (path, size, mtime_ns, asset, expected digest).
         self._adopt_misses: set[tuple[str, int | None, int | None, str, str]] = set()
+
+    def hold_writes(self) -> None:
+        """Hold refresh bookkeeping writes until headless user consent.
+
+        The headless route holds writes through its state check and commits
+        only after consent; the TUI never holds writes. This is one-thread
+        orchestration state, not a general transaction.
+        """
+        with self._lock:
+            self._writes_held = True
+            self._pending_writes.clear()
+
+    def commit_writes(self) -> None:
+        """Commit writes held for the headless run after the user consents."""
+        with self._lock:
+            pending = self._pending_writes
+            self._pending_writes = []
+            self._writes_held = False
+        for write in pending:
+            write()
+
+    def _write_or_queue(self, write: Callable[[], None]) -> None:
+        with self._lock:
+            if self._writes_held:
+                self._pending_writes.append(write)
+                return
+        write()
 
     @property
     def platform(self) -> Platform:
@@ -1330,7 +1359,16 @@ class VersionRefreshService:
                     (str(files[0]), artifact.size, artifact.mtime_ns, asset, expected)
                 )
                 return None
-            return receipts.adopt(tool, method, artifact, package=None)
+            receipt = receipts.adopt(
+                tool, method, artifact, package=None, write=not self._writes_held
+            )
+            if receipt is not None and self._writes_held:
+
+                def commit_adoption() -> None:
+                    receipts.commit_adoption(receipt)
+
+                self._pending_writes.append(commit_adoption)
+            return receipt
         except (ExecutorError, OSError):
             return None
 
