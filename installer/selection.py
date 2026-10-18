@@ -1,32 +1,8 @@
-"""Turn the tool catalog into selectable choices, and back to tools."""
+"""Select catalog tools and offer their unstaged recommendations."""
 
 from collections.abc import Container, Mapping
-from dataclasses import dataclass, field
 
 from installer.model import Tool
-
-
-@dataclass(frozen=True)
-class Choice:
-    id: str
-    label: str
-    checked: bool
-    tag: str = field(default="")  # short status suffix (state/count), colored at the IO boundary
-    description: str = field(default="")  # hover text for the highlighted row
-
-
-def categories(tools: list[Tool]) -> list[str]:
-    """Distinct categories in first-seen order."""
-    seen: list[str] = []
-    for tool in tools:
-        if tool.category not in seen:
-            seen.append(tool.category)
-    return seen
-
-
-def tools_in(tools: list[Tool], category: str) -> list[Tool]:
-    """Tools belonging to one category, in catalog order."""
-    return [tool for tool in tools if tool.category == category]
 
 
 def select_tools(tools: list[Tool], ids: list[str]) -> list[Tool]:

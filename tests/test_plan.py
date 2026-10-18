@@ -930,6 +930,30 @@ def test_installer_owned_current_without_a_receipt_is_still_reinstall_eligible()
     assert row.can_reinstall is True
 
 
+def test_an_outdated_off_policy_row_names_both_owners():
+    rg = _tool(
+        "rg",
+        methods=(
+            Method(kind="github_release", params={"repo": "x/y", "asset": "x"}),
+            _BREW,
+        ),
+    )
+    state = plan_state(
+        rg,
+        health=Health.OUTDATED,
+        owner="dnf",
+        off_policy=True,
+        reasons=("outdated",),
+    )
+
+    row = build_plan(["rg"], [rg], _state_of({"rg": state}), MACOS, reinstall=frozenset())[0]
+
+    assert (row.disposition, row.reason) == (
+        Disposition.SKIP,
+        "managed by dnf; the catalog installs it via GitHub release",
+    )
+
+
 def test_off_policy_current_row_names_both_owners(monkeypatch: pytest.MonkeyPatch):
     import installer.session as session
 

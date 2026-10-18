@@ -603,6 +603,16 @@ def _already_present_reason(state: ToolState) -> str:
     return f"already present; {_first_clause(state)}"
 
 
+def _off_policy_reason(tool: Tool, ownership: ManagerOwnership, platform: Platform) -> str:
+    """Name the actual owner and, when different, the catalog's declared manager."""
+    real = owner_label(ownership) or ownership.owner
+    declared = declared_manager_label(tool, platform)
+    reason = f"managed by {real}"
+    if declared is not None and declared != real:
+        reason += f"; the catalog installs it via {declared}"
+    return reason
+
+
 def _row(
     tool: Tool,
     state: ToolState | None,
@@ -614,123 +624,67 @@ def _row(
 ) -> PlanRow:
     if state is None or state.health is Health.CHECKING:
         return PlanRow(tool.id, Disposition.WAIT, "", requested_by=requester)
-    if state.health is Health.MISSING:
-        reason = "not installed" if requester is None else f"needed by {requester}"
+
+    def make(
+        disposition: Disposition,
+        reason: str,
+        *,
+        can_reinstall: bool = False,
+        steps: tuple[ConfigStep, ...] = (),
+    ) -> PlanRow:
         return PlanRow(
             tool.id,
-            Disposition.INSTALL,
+            disposition,
             reason,
             requested_by=requester,
             health=state.health,
             ownership=state.ownership,
+            can_reinstall=can_reinstall,
+            steps=steps,
         )
+
+    if state.health is Health.MISSING:
+        reason = "not installed" if requester is None else f"needed by {requester}"
+        return make(Disposition.INSTALL, reason)
     if state.health is Health.BROKEN:
         if state.ownership.owner in UNMANAGEABLE_OWNERS:
             label = owner_label(state.ownership) or state.ownership.owner
-            return PlanRow(
-                tool.id,
+            return make(
                 Disposition.BLOCKED,
                 f"{label} owns it; repair needs sudo (never run here)",
-                requested_by=requester,
-                health=state.health,
-                ownership=state.ownership,
             )
         reason = _broken_reason(state)
         if requester is not None:
             reason += f"; needed by {requester}"
-        return PlanRow(
-            tool.id,
-            Disposition.REPAIR,
-            reason,
-            requested_by=requester,
-            health=state.health,
-            ownership=state.ownership,
-        )
+        return make(Disposition.REPAIR, reason)
     if state.health is Health.MISCONFIGURED:
         if not direct:
-            return PlanRow(
-                tool.id,
-                Disposition.SKIP,
-                _already_present_reason(state),
-                requested_by=requester,
-                health=state.health,
-                ownership=state.ownership,
-            )
+            return make(Disposition.SKIP, _already_present_reason(state))
         if state.unconfigured:
-            return PlanRow(
-                tool.id,
+            return make(
                 Disposition.RECONFIGURE,
                 _first_clause(state),
                 steps=state.unconfigured,
-                health=state.health,
-                ownership=state.ownership,
             )
-        return PlanRow(
-            tool.id,
-            Disposition.BLOCKED,
-            _first_clause(state),
-            health=state.health,
-            ownership=state.ownership,
-        )
+        return make(Disposition.BLOCKED, _first_clause(state))
     if state.health is Health.OUTDATED:
         if not direct:
-            return PlanRow(
-                tool.id,
-                Disposition.SKIP,
-                _already_present_reason(state),
-                requested_by=requester,
-                health=state.health,
-                ownership=state.ownership,
-            )
+            return make(Disposition.SKIP, _already_present_reason(state))
         refusal = update_refusal(tool, state.ownership)
         if refusal is None:
-            return PlanRow(
-                tool.id,
-                Disposition.UPDATE,
-                _version_arrow(state),
-                health=state.health,
-                ownership=state.ownership,
-            )
+            return make(Disposition.UPDATE, _version_arrow(state))
         if state.ownership.off_policy:
-            real = owner_label(state.ownership) or state.ownership.owner
-            declared = declared_manager_label(tool, platform)
-            reason = f"managed by {real}"
-            if declared is not None and declared != real:
-                reason += f"; the catalog installs it via {declared}"
+            reason = _off_policy_reason(tool, state.ownership, platform)
         else:
             label = owner_label(state.ownership)
             reason = f"managed by {label}" if label is not None else "no update source"
-        return PlanRow(
-            tool.id,
-            Disposition.SKIP,
-            reason,
-            health=state.health,
-            ownership=state.ownership,
-        )
+        return make(Disposition.SKIP, reason)
     if requester is not None and state.health is Health.OK:
-        return PlanRow(
-            tool.id,
-            Disposition.SKIP,
-            "already present",
-            requested_by=requester,
-            health=state.health,
-            ownership=state.ownership,
-        )
+        return make(Disposition.SKIP, "already present")
     if direct and state.health is Health.OK:
         ownership = state.ownership
         if ownership.off_policy:
-            real = owner_label(ownership) or ownership.owner
-            declared = declared_manager_label(tool, platform)
-            reason = f"managed by {real}"
-            if declared is not None and declared != real:
-                reason += f"; the catalog installs it via {declared}"
-            return PlanRow(
-                tool.id,
-                Disposition.SKIP,
-                reason,
-                health=state.health,
-                ownership=ownership,
-            )
+            return make(Disposition.SKIP, _off_policy_reason(tool, ownership, platform))
         if ownership.owner == "installer":
             disposition = Disposition.REINSTALL if tool.id in reinstall else Disposition.SKIP
             reason = (
@@ -738,33 +692,13 @@ def _row(
                 if tool.id in reinstall
                 else "already current"
             )
-            return PlanRow(
-                tool.id,
-                disposition,
-                reason,
-                health=state.health,
-                can_reinstall=True,
-                ownership=ownership,
-            )
+            return make(disposition, reason, can_reinstall=True)
         if ownership.owner == "unknown":
             reason = "already current; owner unknown"
         else:
             reason = f"managed by {owner_label(ownership) or ownership.owner}"
-        return PlanRow(
-            tool.id,
-            Disposition.SKIP,
-            reason,
-            health=state.health,
-            ownership=ownership,
-        )
-    return PlanRow(
-        tool.id,
-        Disposition.SKIP,
-        _first_clause(state),
-        requested_by=requester,
-        health=state.health,
-        ownership=state.ownership,
-    )
+        return make(Disposition.SKIP, reason)
+    return make(Disposition.SKIP, _first_clause(state))
 
 
 def _blocked_row(

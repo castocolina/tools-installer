@@ -1,11 +1,5 @@
 from installer.model import Method, Tool
-from installer.selection import (
-    Choice,
-    categories,
-    select_tools,
-    tools_in,
-    unstaged_recommends,
-)
+from installer.selection import select_tools, unstaged_recommends
 
 
 def _tool(tool_id: str, category: str, desc: str = "", *, recommends: tuple[str, ...] = ()) -> Tool:
@@ -18,26 +12,6 @@ def _tool(tool_id: str, category: str, desc: str = "", *, recommends: tuple[str,
         desc=desc,
         recommends=recommends,
     )
-
-
-def test_categories_are_unique_in_first_seen_order() -> None:
-    tools = [_tool("rg", "search"), _tool("jq", "data"), _tool("fd", "search")]
-    assert categories(tools) == ["search", "data"]
-
-
-def test_tools_in_filters_by_category() -> None:
-    tools = [_tool("rg", "search"), _tool("jq", "data"), _tool("fd", "search")]
-    assert [t.id for t in tools_in(tools, "search")] == ["rg", "fd"]
-
-
-def test_tools_in_unknown_category_is_empty() -> None:
-    assert tools_in([_tool("rg", "search")], "ghost") == []
-
-
-def test_choice_tag_and_description_default_empty() -> None:
-    choice = Choice(id="x", label="x", checked=False)
-    assert choice.tag == ""
-    assert choice.description == ""
 
 
 def test_select_tools_keeps_catalog_order_and_ignores_unknown_ids() -> None:
