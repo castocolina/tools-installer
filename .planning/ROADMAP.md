@@ -209,7 +209,7 @@ Plans (W = execution wave):
   4. Headless `--all --yes` uses the same plan and engine: on a host with an outdated tool it updates it and exits 0, and a failed row exits 1.
   5. No screen promises an off-policy migration ("moving it there") that does not exist.
 
-**Plans:** 29 plans (19 + 10 gap closure)
+**Plans:** 31 plans (19 + 12 gap closure)
 
 Plans (W = execution wave):
 - [ ] 20-01-PLAN.md — `Resolution.closure`/`blocked`/`requested_by`: the resolver exposes present tools, blocked reasons and first requesters as data (W1)
@@ -243,6 +243,10 @@ Gap closure from 20-REVIEW-CONSOLIDATED.md (GW = gap execution wave):
 - [ ] 20-27-PLAN.md — J10: dim unchanged finished marks, one statement per fact, cursor on row 1, running keys pinned (GW5)
 - [ ] 20-28-PLAN.md — J12: dead install wrapper, resolver outputs, `run_wizard(platform)`, unused styles (GW6)
 - [ ] 20-29-PLAN.md — J12: one runnable set, `_row` maker, dead selection helpers, fold-width floor (GW7)
+
+Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
+- [ ] 20-30-PLAN.md — K1, K4: the e2e gate fails a step that printed a PATH error; a held adoption commits through the one adoption check and reports a refusal (GW1)
+- [ ] 20-31-PLAN.md — K2, K3, K5, K6: every runnable row waits for its prerequisites; a present tool stays resolved; reconfiguration warnings reach the report; crash detail via `_first_line` (GW1)
 
 **UI hint**: yes
 

@@ -224,12 +224,14 @@ The word and color follow the Words tables. The text after the word:
 | `mismatch` | `checksum mismatch` |
 | `dependency_failed` | `dependency failed — {blocked_by ids, comma-joined}`; `dependency failed — an earlier failure` when empty |
 | `not_attempted` | `not attempted` |
-| `crashed` | `crashed — {exception type}: {message first line, sanitized}` |
+| `crashed` | `crashed — {exception type}: {message first line, sanitized}`; an exception with no message reads `crashed — {exception type} failed` (gap plan 20-31) |
 | `manual` | `manual — see the setup steps in the log` ; a reinstall/repair of a present tool whose installer refuses to run over an existing install (gap plan 20-26, L-20-11) also ends `manual`, and the log carries `{id}: its installer refuses to run over an existing install, so it was not re-run.` before its post-install handoff |
 | `skipped` | `skipped — {plan reason}` (without the `(r: reinstall)` suffix); an engine race (`ALREADY_INSTALLED`) reads `skipped — became present before it ran` |
 | `blocked` | `blocked — {plan reason}`; engine `NO_METHOD` reads `blocked — no install method for this platform`; an update refused at run time reads `blocked — {outcome detail}` |
 
-The end-of-run reports keep their current renderers and run after the summary line in `#execute-log` (`render_failure_details`, `render_skipped`, `render_handoff`, `render_post_install_handoff`, `render_postinstall_warnings`, `render_verification`, the PATH wiring and audit blocks). Only `render_summary` is replaced by `render_run_summary`, whose first line is the finished-head text (`Summary — …`) so a plain-text capture, the headless output and the e2e parser all see one stable line (see the e2e note in Auto-decided A11).
+The end-of-run reports run after the summary rows, from the one `render_run_report` both routes call, in this order: `render_failure_details`, `render_handoff`, `render_post_install_handoff`, `render_postinstall_warnings`, `render_done_notes`, `render_verification`; the PATH wiring and audit blocks follow. `render_summary` was replaced by `render_run_summary`, whose first line is the finished-head text (`Summary — …`) so a plain-text capture, the headless output and the e2e parser all see one stable line (see the e2e note in Auto-decided A11). (Amended for gap plan 20-31: `render_skipped` was deleted by 20-27, `render_done_notes` is 20-25's update-notes renderer widened to reconfigurations.)
+
+**Done notes** (gap plans 20-25, 20-31). A `done` row's own text stays `{done word}` alone. What a successful update or reconfiguration reported prints once, on its own line after the rows: `{id} {done word} — {notes joined by "; "}`. An update's notes are its replayed globals (`replayed {ids}`), cleanup warnings, postinstall warning and detail, in that order; a reconfiguration's note is its step warning (today only the terminal synchronizer's), e.g. `kitty reconfigured — Terminal shell synchronization warning: …`. A done row with no notes prints no line; a failed, blocked or skipped row prints none here (its row already carries the reason). Lines are sanitized and printed literally. The post-run terminal synchronizer (D-01, D-11) still reports its own warning separately after a run that ran something (headless after the PATH blocks, TUI on the catalog status line), exactly as it already does after an update.
 
 ---
 
@@ -301,6 +303,7 @@ Run this plan?
 - Mark column and word column are exactly as in the TUI; the `(r: reinstall)` suffix is **not** printed headless (there is no `r`).
 - Order is `build_plan` execution order grouped by requester, identical to the TUI for the same selection and state.
 - Without `--yes`: print the plan, then ask `Run this plan?` through the existing prompter (default No). On No, print `Cancelled; nothing was changed.` and keep today's declined-run behavior. With `--yes`: print the plan and run without asking.
+- After consent (or with `--yes`) the held bookkeeping writes commit before the first row runs (L-20-10). An adoption the commit cannot record prints one line there, before the run, and changes no row and no exit code: `{id} was not adopted: its file or receipt changed after the plan was printed`, or `{id} was not adopted: {error}` when the receipt write fails (gap plan 20-30).
 - When no row is runnable, do not ask: print the plan, then `Summary — 3 skipped` (or the counts), and exit 0 (R6 all-current host).
 - After the run: `Summary — {counts by done word}` as its first line, then the existing report renderers. The exit code is `exit_code(outcomes)`; skipped and blocked rows never change it. A plan that still contains a `checking…` row after the synchronous pass is a failure to report (`State check failed: …`), not a plan to run.
 - Width: fold at `min(console.width, 100)`, 80 when undetected. The 78-cell test reuses the existing `Console(width=80)` capture and the `len(plain) <= 78` assertion style (D-16).
@@ -371,6 +374,7 @@ Accent reserved for: nothing on this screen. (The 60/30/10 split is satisfied by
 | `r` refused | status `{id}: r needs a current tool this installer owns.` |
 | Destructive confirmation | None in this phase. No row removes anything. The consent points are: Enter on the review (which lists every `will repair` with its reason, including `changed since install; the file is replaced`), and the unchanged mid-run prompts (checksum mismatch, sensitive action). A repair or update that would need sudo is `blocked`, never escalated |
 | Headless prompt | `Run this plan?` (replaces `Install the selected tools?`); decline → `Cancelled; nothing was changed.` |
+| Headless adoption not recorded at commit (gap plan 20-30) | `{id} was not adopted: its file or receipt changed after the plan was printed`; a receipt write error reads `{id} was not adopted: {error}` |
 | PLAN-08, catalog `u` line (`catalog_tui.py:821-824`) | `… — {real} owns this copy; the catalog installs it via {declared}` (the clause `, and moving it there is not available yet` is removed; the `declared`/`real` computation is untouched) |
 | PLAN-08, update detail (`update.py:307-311`) | `{real} owns this copy; the catalog installs {tool_id} via {declared}, so it was updated through {real}` |
 | PLAN-08 guard | A literal grep test finds no `moving it there` anywhere in `installer/`; an off-policy reason still names both owners; with an unknown declared manager only the real owner is named |
