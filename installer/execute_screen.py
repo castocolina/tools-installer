@@ -91,6 +91,7 @@ _KEYS_RETRY = "enter retries · esc closes"
 _STATUS_WAITING = "Waiting for the state check; nothing starts until it finishes. esc cancels."
 _WAIT_CANCELLED = "Wait cancelled; nothing started. enter waits again · esc closes."
 _STATE_CHECK_FAILED = "State check failed: {error}. enter retries · esc closes."
+_R_REFUSED = "{tool_id}: r needs a current tool this installer owns."
 _STATE_CHECK_ERROR_BUDGET = 78 - cell_len(_STATE_CHECK_FAILED.format(error=""))
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
@@ -359,6 +360,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "start", "start", show=True, priority=True),
+        Binding("r", "toggle_reinstall", "reinstall", show=False),
         Binding("escape", "close", "close", show=True),
         Binding("c", "cancel_run", "cancel", show=True),
     ]
@@ -454,7 +456,12 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         width = self._fold_width()
         idw = id_width(self._rows)
         for row in display_order(self._rows):
-            options.add_option(Option(plan_row_text(row, idw, width, hint=True), id=row.tool_id))
+            options.add_option(
+                Option(
+                    plan_row_text(row, idw, width, hint=row.disposition is Disposition.SKIP),
+                    id=row.tool_id,
+                )
+            )
         head.update(plan_head(self._rows))
         keys.update(self._idle_keys())
 
@@ -468,6 +475,28 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
 
     def _row_for(self, tool_id: str) -> PlanRow | None:
         return next((row for row in self._rows if row.tool_id == tool_id), None)
+
+    def action_toggle_reinstall(self) -> None:
+        if self.started or self.finished or self._start_requested:
+            return
+        options = self.query_one("#plan-rows", OptionList)
+        if options.highlighted is None:
+            return
+        option = options.get_option_at_index(options.highlighted)
+        tool_id = option.id
+        if tool_id is None:
+            return
+        row = self._row_for(tool_id)
+        if row is None:
+            return
+        if not (row.can_reinstall or tool_id in self._reinstall):
+            self.status.set(_R_REFUSED.format(tool_id=tool_id), "warn")
+            return
+        self._reinstall ^= {tool_id}
+        self.status.clear()
+        self._replan()
+        options = self.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index(tool_id)
 
     def action_start(self) -> None:
         if self.finished:

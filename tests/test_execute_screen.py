@@ -51,7 +51,14 @@ from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
-from installer.session import Disposition, PlanRow, RowOutcome, RunContext, SensitiveInstall
+from installer.session import (
+    Disposition,
+    PlanRow,
+    RowOutcome,
+    RunContext,
+    SensitiveInstall,
+    ran_anything,
+)
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
@@ -3058,6 +3065,230 @@ async def test_enter_runs_the_plan_and_finishes_with_the_summary_head() -> None:
     assert isinstance(value, list)
     assert len(value) == 2
     assert all(isinstance(outcome, RowOutcome) for outcome in value)
+
+
+async def test_r_toggles_an_installer_owned_current_row_both_ways() -> None:
+    rg = _tool("rg")
+    inputs = _inputs(tools=[rg], states=[plan_state(rg, health=Health.OK)])
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("rg")
+        assert options.get_option_at_index(options.highlighted).id == "rg"
+
+        await pilot.press("r")
+        assert _plan_prompts(screen) == [
+            "✓ rg  will be reinstalled — reinstall requested; r again to undo"
+        ]
+        assert _head_text(screen) == "Install plan — 1 will be reinstalled"
+        assert options.get_option_at_index(options.highlighted).id == "rg"
+
+        await pilot.press("r")
+        assert _plan_prompts(screen) == ["✓ rg  skipped — already current (r: reinstall)"]
+        assert _head_text(screen) == "Install plan — 1 skipped"
+        assert options.get_option_at_index(options.highlighted).id == "rg"
+
+
+async def test_r_then_enter_reinstalls_with_repair() -> None:
+    calls: list[tuple[str, bool]] = []
+    dismissed: list[list[RowOutcome] | None] = []
+    rg = _tool("rg")
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        calls.append((tool.id, repair))
+        return InstallOutcome(tool.id, InstallStatus.INSTALLED)
+
+    inputs = _inputs(tools=[rg], install=install, states=[plan_state(rg, health=Health.OK)])
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs), dismissed.append)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        screen.query_one("#plan-rows", OptionList).highlighted = 0
+        await pilot.press("r", "enter")
+        await _settle_execute(screen, pilot)
+        assert calls == [("rg", True)]
+        assert _head_text(screen) == "Summary — 1 reinstalled"
+        await pilot.press("enter")
+        await pilot.pause()
+
+    value = dismissed[0]
+    assert isinstance(value, list)
+    assert ran_anything(value)
+
+
+async def test_r_on_a_dnf_owned_row_changes_nothing_and_warns() -> None:
+    rg = _tool("rg")
+    inputs = _inputs(tools=[rg], states=[plan_state(rg, health=Health.OK, owner="dnf")])
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("rg")
+        before = _plan_prompts(screen)
+        await pilot.press("r")
+        assert _plan_prompts(screen) == before == ["✓ rg  skipped — managed by dnf"]
+        assert screen.status.text == "rg: r needs a current tool this installer owns."
+        assert screen.status.severity == Severity.WARN
+
+
+async def test_r_on_a_dragged_row_changes_nothing() -> None:
+    node = _tool("node")
+    mmdc = _tool("mmdc", requires=("node",))
+    inputs = _inputs(
+        tools=[mmdc, node],
+        states=[
+            plan_state(mmdc, health=Health.MISSING),
+            plan_state(node, health=Health.OK),
+        ],
+    )
+    app = _host(inputs, [mmdc, node])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["mmdc"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("node")
+        before = _plan_prompts(screen)
+        assert any("node" in prompt and "already present" in prompt for prompt in before)
+        await pilot.press("r")
+        assert _plan_prompts(screen) == before
+        assert screen.status.text == "node: r needs a current tool this installer owns."
+        assert screen.status.severity == Severity.WARN
+
+
+async def test_r_is_inert_while_waiting_running_and_finished(tmp_path: Path) -> None:
+    waiting_tool = _tool("rg")
+    service = held_service(tmp_path / "waiting", [plan_state(waiting_tool, health=Health.MISSING)])
+    waiting_inputs = _inputs(tools=[waiting_tool], version_refresh=service)
+    waiting_app = _host(waiting_inputs, [waiting_tool])
+    async with waiting_app.run_test(size=(80, 20)) as pilot:
+        try:
+            waiting_app.push_screen(ExecuteScreen(["rg"], waiting_inputs))
+            await pilot.pause()
+            waiting_screen = waiting_app.screen
+            assert isinstance(waiting_screen, ExecuteScreen)
+            await pilot.press("enter")
+            await _wait_for_refresh_calls(service, pilot)
+            waiting_before = (
+                _plan_prompts(waiting_screen),
+                _head_text(waiting_screen),
+                waiting_screen.status.text,
+                _keys_text(waiting_screen),
+            )
+            await pilot.press("r")
+            assert (
+                _plan_prompts(waiting_screen),
+                _head_text(waiting_screen),
+                waiting_screen.status.text,
+                _keys_text(waiting_screen),
+            ) == waiting_before
+        finally:
+            service.release.set()
+
+    running_started = threading.Event()
+    running_release = threading.Event()
+    running_calls: list[tuple[str, bool]] = []
+    running_tool = _tool("rg")
+
+    def held_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        running_calls.append((tool.id, repair))
+        running_started.set()
+        assert running_release.wait(timeout=5)
+        return InstallOutcome(tool.id, InstallStatus.INSTALLED)
+
+    running_inputs = _inputs(
+        tools=[running_tool],
+        install=held_install,
+        states=[plan_state(running_tool, health=Health.MISSING)],
+    )
+    running_app = _host(running_inputs, [running_tool])
+    async with running_app.run_test(size=(80, 20)) as pilot:
+        try:
+            running_app.push_screen(ExecuteScreen(["rg"], running_inputs))
+            await pilot.pause()
+            running_screen = running_app.screen
+            assert isinstance(running_screen, ExecuteScreen)
+            await pilot.press("enter")
+            for _ in range(400):
+                if running_started.is_set():
+                    break
+                await pilot.pause()
+            assert running_started.is_set()
+            running_before = (
+                _plan_prompts(running_screen),
+                _head_text(running_screen),
+                running_screen.status.text,
+                _keys_text(running_screen),
+            )
+            await pilot.press("r")
+            assert (
+                _plan_prompts(running_screen),
+                _head_text(running_screen),
+                running_screen.status.text,
+                _keys_text(running_screen),
+            ) == running_before
+            assert running_calls == [("rg", False)]
+        finally:
+            running_release.set()
+        await _settle_execute(running_screen, pilot)
+        finished_before = (
+            _plan_prompts(running_screen),
+            _head_text(running_screen),
+            running_screen.status.text,
+            _keys_text(running_screen),
+        )
+        await pilot.press("r")
+        assert (
+            _plan_prompts(running_screen),
+            _head_text(running_screen),
+            running_screen.status.text,
+            _keys_text(running_screen),
+        ) == finished_before
+        assert running_calls == [("rg", False)]
+
+
+async def test_r_hint_is_omitted_from_the_keys_line_when_no_row_is_eligible() -> None:
+    rg = _tool("rg")
+    inputs = _inputs(tools=[rg], states=[plan_state(rg, health=Health.MISSING)])
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _keys_text(screen) == "enter start · up/down move · esc cancel"
 
 
 async def test_escape_before_start_dismisses_with_none() -> None:
