@@ -87,7 +87,7 @@ from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_bloc
 from installer.status import is_installed
 from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import BUNDLES, applicable_bundles
-from installer.ui_common import BASE_VIEW
+from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import (
     SweepResult,
     ToolRow,
@@ -113,6 +113,7 @@ _SHELLRC = Path.home() / ".shellrc"
 _ZSHRC = zshrc_path(Path.home(), os.environ)
 _RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")
+Install = Callable[..., InstallOutcome]
 # WR-05: a dedicated stderr console, separate from the monkeypatch-able
 # `Console` the routes build, so headless routes can announce the settings
 # warning without a test double rerouting it.
@@ -719,7 +720,7 @@ def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
 
 def _build_services(
     tools: list[Tool], platform: Platform
-) -> tuple[VersionRefreshService, UpdateService, pnpm_globals.NodeInstallPolicy]:
+) -> tuple[VersionRefreshService, UpdateService, pnpm_globals.NodeInstallPolicy, Install]:
     """The one refresh service, the one update service and the one node-globals
     policy that every route shares (Phase 20 D-12, RESEARCH Pitfall 7): the TUI
     composition root and the headless `--all --yes` route both build their
@@ -777,7 +778,17 @@ def _build_services(
         # end in the one shared synchronizer, never two.
         terminal_follow_up=_terminal_follow_up,
     )
-    return version_refresh, updates, policy
+
+    def _install(
+        tool: Tool, platform: Platform, runner: Runner, resolve_tag: TagResolver, **options: object
+    ) -> InstallOutcome:
+        # D-04: the engine's already-installed short-circuit reads the same
+        # published state that build_plan used to choose the row disposition.
+        return install_tool(
+            tool, platform, runner, resolve_tag, present=version_refresh.is_present, **options
+        )
+
+    return version_refresh, updates, policy, _install
 
 
 def _build_app(
@@ -913,7 +924,7 @@ def _build_app(
     # it must exist before that construction. A pure construction with no
     # dependency on anything declared between here and its old position
     # below -- this is a reordering and nothing else.
-    version_refresh, updates, policy = _build_services(tools, platform)
+    version_refresh, updates, policy, _install = _build_services(tools, platform)
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
@@ -1132,14 +1143,6 @@ def _build_app(
         disk_pressure=disk_pressure,
         version_refresh=version_refresh,
     )
-
-    def _install(
-        tool: Tool, platform: Platform, runner: Runner, resolve_tag: TagResolver, **options: object
-    ) -> InstallOutcome:
-        # D-04: the engine's already-installed short-circuit reads the state too.
-        return install_tool(
-            tool, platform, runner, resolve_tag, present=version_refresh.is_present, **options
-        )
 
     execute = replace(
         execute,
@@ -1510,7 +1513,7 @@ def main(argv: list[str]) -> int:
             settings=store,
             prompt_link_mode=needs_choice,
         )
-    refresh, updates, _ = _build_services(tools, platform)
+    refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(
         tools,
         platform,
@@ -1519,26 +1522,36 @@ def main(argv: list[str]) -> int:
         options,
         refresh=refresh,
         updates=updates,
+        install=install,
         terminal_sync=lambda: _sync_terminals(platform),
         on_mismatch=_ask_mismatch,
     )
     if outcomes is None:
-        console.print("Aborted.")
         return 0
+    path_error: str | None = None
+    verify_error: str | None = None
     if ran_anything(outcomes):
-        configure_path(
-            tools,
-            console,
-            platform=platform,
-            default_bin_dir=_DEFAULT_BIN_DIR,
-            myshellrc_path=_MYSHELLRC,
-            shellrc_path=_SHELLRC,
-            rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
-            link_mode=store.link_mode,
+        _, path_error = run_live(
+            lambda: configure_path(
+                tools,
+                console,
+                platform=platform,
+                default_bin_dir=_DEFAULT_BIN_DIR,
+                myshellrc_path=_MYSHELLRC,
+                shellrc_path=_SHELLRC,
+                rc_paths=rc_paths_for_mode(store.link_mode, _SHELL),
+                link_mode=store.link_mode,
+            )
         )
-        _verify_and_clean(console, tools, platform, assume_yes=options.yes)
+        if path_error:
+            console.print(f"PATH wiring could not be completed: {path_error}")
+        _, verify_error = run_live(
+            lambda: _verify_and_clean(console, tools, platform, assume_yes=options.yes)
+        )
+        if verify_error:
+            console.print(f"PATH audit could not be completed: {verify_error}")
         _sync_terminals_and_report(console, platform)
-    code = exit_code(outcomes)
+    code = 1 if path_error or verify_error else exit_code(outcomes)
     if code:
         render_troubleshooting(console)
     return code

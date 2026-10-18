@@ -1406,11 +1406,13 @@ def _headless_main_fixture(
     outcome_batches: Sequence[list[RowOutcome] | None],
 ) -> tuple[
     list[dict[str, object]],
-    list[tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]],
+    list[tuple[VersionRefreshService, UpdateService, NodeInstallPolicy, object]],
     list[str],
 ]:
     run_calls: list[dict[str, object]] = []
-    built_services: list[tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]] = []
+    built_services: list[
+        tuple[VersionRefreshService, UpdateService, NodeInstallPolicy, object]
+    ] = []
     side_effects: list[str] = []
 
     def fake_load_tools(_registry: object) -> list[Tool]:
@@ -1421,16 +1423,20 @@ def _headless_main_fixture(
 
     def fake_build_services(
         tools: list[Tool], platform: Platform
-    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]:
+    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy, object]:
         refresh = presence_service(tools, platform=platform)
         updates = ScriptedUpdates({})
         policy = pnpm_globals.node_install_policy(tools)
-        built_services.append((refresh, updates, policy))
-        return refresh, updates, policy
+        install = object()
+        built_services.append((refresh, updates, policy, install))
+        return refresh, updates, policy, install
 
     def fake_run_wizard(*_args: object, **kwargs: object) -> list[RowOutcome] | None:
         run_calls.append(kwargs)
-        return outcome_batches[len(run_calls) - 1]
+        outcomes = outcome_batches[len(run_calls) - 1]
+        if outcomes is None:
+            Console(file=buffer, width=100, no_color=True).print("Cancelled; nothing was changed.")
+        return outcomes
 
     def configure(*_args: object, **_kwargs: object) -> None:
         side_effects.append("configure")
@@ -1478,11 +1484,45 @@ def test_headless_main_builds_services_once_and_exits_on_outcomes(
     assert setup.main(["--all", "--yes"]) == 0
     assert setup.main(["--all", "--yes"]) == 1
     assert len(built_services) == len(run_calls) == 2
-    for kwargs, (refresh, updates, _policy) in zip(run_calls, built_services, strict=True):
+    for kwargs, (refresh, updates, _policy, install) in zip(run_calls, built_services, strict=True):
         assert kwargs["refresh"] is refresh
         assert kwargs["updates"] is updates
         assert callable(kwargs["terminal_sync"])
+        assert kwargs["install"] is install
     assert side_effects == ["configure", "verify", "sync"] * 2
+    assert "Troubleshooting help" in buffer.getvalue()
+
+
+def test_headless_main_passes_the_shared_install_to_run_wizard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    run_calls, _built_services, _side_effects = _headless_main_fixture(monkeypatch, buffer, [[]])
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert run_calls[0]["install"] is _built_services[0][3]
+
+
+@pytest.mark.parametrize(
+    ("failing_step", "expected"),
+    [
+        ("configure_path", "PATH wiring could not be completed: read-only rc"),
+        ("_verify_and_clean", "PATH audit could not be completed: audit failed"),
+    ],
+)
+def test_headless_post_run_failure_exits_1_with_the_reason(
+    monkeypatch: pytest.MonkeyPatch, failing_step: str, expected: str
+) -> None:
+    buffer = io.StringIO()
+    outcome = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [outcome])
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise OSError(expected.rsplit(": ", 1)[-1])
+
+    monkeypatch.setattr(setup, failing_step, fail)
+    assert setup.main(["--all", "--yes"]) == 1
+    assert expected in buffer.getvalue()
     assert "Troubleshooting help" in buffer.getvalue()
 
 
@@ -1509,7 +1549,8 @@ def test_headless_main_prints_aborted_when_the_run_is_declined(
     _run_calls, _built_services, side_effects = _headless_main_fixture(monkeypatch, buffer, [None])
 
     assert setup.main(["--all"]) == 0
-    assert "Aborted." in buffer.getvalue()
+    assert buffer.getvalue().splitlines().count("Cancelled; nothing was changed.") == 1
+    assert "Aborted." not in buffer.getvalue()
     assert side_effects == []
 
 
@@ -1694,14 +1735,14 @@ def test_build_app_takes_its_services_from_build_services(
         tuple[
             list[Tool],
             Platform,
-            tuple[VersionRefreshService, UpdateService, NodeInstallPolicy],
+            tuple[VersionRefreshService, UpdateService, NodeInstallPolicy, object],
         ]
     ] = []
     real_build_services = setup._build_services  # pyright: ignore[reportPrivateUsage]
 
     def recording_build_services(
         seen_tools: list[Tool], seen_platform: Platform
-    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]:
+    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy, object]:
         services = real_build_services(seen_tools, seen_platform)
         recorded.append((seen_tools, seen_platform, services))
         return services
@@ -1710,12 +1751,13 @@ def test_build_app_takes_its_services_from_build_services(
     app = setup._build_app(tools, platform)  # pyright: ignore[reportPrivateUsage]
     assert len(recorded) == 1
     seen_tools, seen_platform, services = recorded[0]
-    refresh, updates, _policy = services
+    refresh, updates, _policy, install = services
     assert seen_tools is tools
     assert seen_platform is platform
     assert app.catalog._version_refresh is refresh  # pyright: ignore[reportPrivateUsage]
     assert app._execute is not None  # pyright: ignore[reportPrivateUsage]
     assert app._execute.updates is updates  # pyright: ignore[reportPrivateUsage]
+    assert app._execute.install is install  # pyright: ignore[reportPrivateUsage]
 
 
 def test_build_services_binds_the_update_service_to_the_refresh_service(
@@ -1724,7 +1766,7 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
     _sandbox(monkeypatch, tmp_path)
     platform = _platform()
     tools: list[Tool] = []
-    refresh, updates, policy = setup._build_services(  # pyright: ignore[reportPrivateUsage]
+    refresh, updates, policy, install = setup._build_services(  # pyright: ignore[reportPrivateUsage]
         tools, platform
     )
     assert isinstance(refresh, VersionRefreshService)
@@ -1732,6 +1774,7 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
     assert updates.platform is platform
     assert updates._invalidate == refresh.invalidate  # pyright: ignore[reportPrivateUsage]
     assert updates._reresolve_ownership == refresh.resolve_owner  # pyright: ignore[reportPrivateUsage]
+    assert callable(install)
 
     terminal_calls: list[Platform] = []
 
@@ -1757,6 +1800,25 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
     assert replayed == [policy]
     assert replayed[0] is policy
 
+    def absent(_tool: Tool) -> bool:
+        return False
+
+    def installed(_tool: Tool, **_kwargs: object) -> bool:
+        return True
+
+    monkeypatch.setattr(refresh, "is_present", absent)
+    monkeypatch.setattr("installer.engine.is_installed", installed)
+    tool = Tool(
+        id="unavailable",
+        name="Unavailable",
+        category="test",
+        cmd="unavailable",
+        methods=(),
+        tier="user",
+    )
+    outcome = install(tool, platform, setup.run_captured, setup.resolve_github_tag)
+    assert outcome.status.value == "no-method"
+
 
 # -- D-01/15.6-06 Task 2: unattended installation and the command-line
 # uninstall route both reuse the exact same terminal synchronizer Plans
@@ -1777,11 +1839,12 @@ def _noninteractive_all_fixture(
 
     def fake_build_services(
         tools: list[Tool], platform: Platform
-    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy]:
+    ) -> tuple[VersionRefreshService, UpdateService, NodeInstallPolicy, object]:
         return (
             presence_service(tools, platform=platform),
             ScriptedUpdates({}),
             pnpm_globals.node_install_policy(tools),
+            setup.install_tool,
         )
 
     def fake_run_wizard(*_args: object, **_kwargs: object) -> list[RowOutcome]:
