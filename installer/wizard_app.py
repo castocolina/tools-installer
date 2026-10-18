@@ -3013,8 +3013,8 @@ class UnifiedApp(App[list[str] | None]):
         never reaches an ExecuteScreen, so nothing else would record it and
         the process would exit 0 after a failed update. The failure is folded
         here as a plan-shaped outcome, so _session_exit_code needs no second
-        rule. Non-failed outcomes (and unknown-owner/unsupported refusals,
-        which are skips) are not failures and change nothing."""
+        rule. Successful updates record `done`, allowing latest-wins to clear
+        an earlier failure; unknown-owner/unsupported refusals record nothing."""
         failed = message.error is not None or (
             message.outcome is not None and message.outcome.status == "failed"
         )
