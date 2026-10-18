@@ -80,7 +80,13 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
-from tests.state_doubles import FrozenStateService, frozen_service, pass_state, presence_service
+from tests.state_doubles import (
+    FrozenStateService,
+    Presence,
+    frozen_service,
+    pass_state,
+    presence_service,
+)
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -5667,15 +5673,11 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
         probed[installed_tool.id] = "1.3.0"
 
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.3.0", probe_output=probe_output)
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5704,15 +5706,11 @@ async def test_install_closed_refreshes_the_non_base_tier_it_ran_from(
     show_view-style base/non-base branch."""
     tool = _gh_tool("user-tool", tier="user")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5741,15 +5739,11 @@ async def test_install_closed_refreshes_even_when_the_run_never_started(
     run is ever started still bumps the active tier's generation."""
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.3.0")
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5791,15 +5785,11 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         probe_output=probe_output,
         present=lambda t: presence[t.id],
     )
-    execute = ExecuteInputs(
-        catalog=[tool_a, tool_b],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool_a, tool_b], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool_a, tool_b],
+        present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
+        platform=_install_closed_platform(),
     )
     app = _version_app(
         [tool_a, tool_b],
@@ -5838,15 +5828,11 @@ async def test_returning_from_another_view_rereads_presence_through_the_pass(
     service = _macos_service(
         tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda t: presence[t.id]
     )
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda t: presence[t.id],
         install=_tracking_install(lambda installed_tool: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5869,15 +5855,11 @@ async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropp
     system_tool = _gh_tool("sys-tool", tier="system")
     user_tool = _gh_tool("usr-tool", tier="user")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    execute = ExecuteInputs(
-        catalog=[system_tool, user_tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [system_tool, user_tool], present=lambda t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [system_tool, user_tool],
+        present=lambda t: True,
         install=_tracking_install(lambda installed_tool: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([system_tool, user_tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5929,15 +5911,11 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
         probe_output=lambda argv: None,
         present=lambda t: presence[t.id],
     )
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -5987,15 +5965,11 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
     )
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6035,15 +6009,11 @@ async def test_install_close_survives_a_presence_predicate_that_fails_after_the_
             raise OSError("stale file handle: /Volumes/nfs/bin")
         return True
 
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=_presence, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=_presence,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6073,15 +6043,11 @@ async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tie
     """
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -6120,15 +6086,11 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
         raise RuntimeError(f"cache write refused ({reason})")
 
     monkeypatch.setattr(service, "invalidate", _refuse)
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6184,15 +6146,11 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
             )
         ]
 
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
+        platform=_install_closed_platform(),
     )
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
     app = _version_app(
@@ -6235,15 +6193,11 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
     service = _macos_service(
         tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda t: presence[t.id]
     )
-    execute = ExecuteInputs(
-        catalog=[pnpm, mmdc],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [pnpm, mmdc], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [pnpm, mmdc],
+        present=lambda t: presence[t.id],
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([pnpm, mmdc], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6288,15 +6242,11 @@ def _sweep_app(
         return True
 
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=_service_present)
-    execute = ExecuteInputs(
-        catalog=tools,
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            tools, present=_predicate, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        tools,
+        present=_predicate,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     return _version_app(tools, service, execute=execute), tools, calls
 
@@ -6382,15 +6332,11 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
         calls.append("installed-sweep")
         return False
 
-    execute = ExecuteInputs(
-        catalog=tools,
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            tools, present=_installed, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        tools,
+        present=_installed,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app(
         tools,
@@ -6435,19 +6381,15 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
     def _boom() -> str | None:
         raise OSError("EACCES: ~/.config/kitty/kitty.conf")
 
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
+    execute = _execute_inputs(
+        [tool],
         # WR-07: False, not True -- resolve_dependencies' own is_installed
         # gate excludes an already-True tool from the run entirely, leaving
         # Summary.installed empty and never satisfying the state-change gate
         # this test's terminal-sync assertion depends on.
-        version_refresh=presence_service(
-            [tool], present=lambda _t: False, platform=_install_closed_platform()
-        ),
+        present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_boom)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6478,15 +6420,11 @@ async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_do
     def _warns() -> str | None:
         return "Terminal shell synchronization warning: wezterm configuration is user-owned"
 
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_warns)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -6516,15 +6454,11 @@ async def test_install_closed_with_no_terminal_sync_wired_is_unaffected(
     status warning, and the run still closes normally."""
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute)
     assert app._terminal_sync is None  # pyright: ignore[reportPrivateUsage]
@@ -6559,17 +6493,13 @@ async def test_install_closed_skips_the_terminal_synchronizer_when_nothing_was_i
 
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
+    execute = _execute_inputs(
+        [tool],
         # Already installed -- resolve_dependencies excludes it from the run
         # entirely, so _tracking_install is never even called.
-        version_refresh=presence_service(
-            [tool], present=lambda _t: True, platform=_install_closed_platform()
-        ),
+        present=lambda _t: True,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_terminal_sync)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6599,15 +6529,11 @@ async def test_install_closed_flushes_a_previously_queued_warning_even_with_no_n
     returns None) still drains and renders a warning queued earlier."""
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda _t: False, platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
+        platform=_install_closed_platform(),
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=lambda: None)
     async with app.run_test(size=(120, 30)) as pilot:
@@ -7344,9 +7270,24 @@ async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Pat
 
 
 def _execute_inputs(
+    catalog: list[Tool] | None = None,
     *,
+    present: Presence = (),
     install: SensitiveInstall | None = None,
+    platform: Platform | None = None,
 ) -> ExecuteInputs:
+    """A run over `catalog` (rg and fd by default) whose presence is `present`.
+
+    The one place a wizard test builds its ExecuteInputs; the presence answer
+    and platform reach the screen through the same frozen service.
+    """
+    tools = catalog if catalog is not None else [_tool("rg"), _tool("fd")]
+    host = (
+        platform
+        if platform is not None
+        else Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    )
+
     def _ok_install(
         tool: Tool,
         platform: Platform,
@@ -7361,15 +7302,11 @@ def _execute_inputs(
         return InstallOutcome(tool.id, "installed")
 
     return ExecuteInputs(
-        catalog=[_tool("rg"), _tool("fd")],
-        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        wire_path=lambda: "PATH wired",
-        verify=lambda: "PATH verified",
-        version_refresh=presence_service(
-            [_tool("rg"), _tool("fd")],
-            present=lambda _tool: False,
-            platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
-        ),
+        catalog=tools,
+        platform=host,
+        wire_path=lambda: "",
+        verify=lambda: "",
+        version_refresh=presence_service(tools, present=present, platform=host),
         install=install if install is not None else _ok_install,
     )
 
@@ -7819,15 +7756,11 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
             owner_label_hint=owner_label_hint,
         )
 
-    execute = ExecuteInputs(
-        catalog=[tool],
-        platform=_install_closed_platform(),
-        wire_path=lambda: "",
-        verify=lambda: "",
-        version_refresh=presence_service(
-            [tool], present=lambda t: presence[t.id], platform=_install_closed_platform()
-        ),
+    execute = _execute_inputs(
+        [tool],
+        present=lambda t: presence[t.id],
         install=_tracking_install(on_install),
+        platform=_install_closed_platform(),
     )
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
     app = _version_app(
