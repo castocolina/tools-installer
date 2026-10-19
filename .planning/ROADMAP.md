@@ -276,13 +276,13 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 21-06-PLAN.md — One app-level coalescing refresh owner; per-tier refresh workers deleted
-- [ ] 21-08-PLAN.md — Pure Uninstall projections over `ToolState`: group, label, detail
 - [ ] 21-09-PLAN.md — `perform_uninstall` reports removed / remove-failed per tool
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 21-07-PLAN.md — Uninstall re-renders on publish, `OwnershipRefreshed` deleted, a refused `u` still requests one pass
 
 **Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 21-08-PLAN.md — Pure Uninstall projections over `ToolState`: group, label, detail; the health-detail words move to `version_status` (after the last earlier catalog writer, 21-07)
 - [ ] 21-10-PLAN.md — Execute screen waits on the app's publication; `execute-wait` deleted
 
 **Wave 5** *(blocked on Wave 4 completion)*
