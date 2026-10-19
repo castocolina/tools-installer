@@ -286,35 +286,37 @@ Plans:
 - [ ] 21-10-PLAN.md — Execute screen waits on the app's publication; `execute-wait` deleted
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 21-11-PLAN.md — Uninstall renders from the published state; the rows seam deleted
+- [ ] 21-11-PLAN.md — Uninstall rendering prerequisites that delete nothing: the state-fed Health column and the `pass_state` proof fixtures
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 21-12-PLAN.md — `classify_tools`/`ToolRow`/owner hints and the script-install special case deleted
-- [ ] 21-13-PLAN.md — Removal on a worker under the app mutation lock (`MutationHolder`, one refusal template)
+- [ ] 21-12-PLAN.md — Uninstall renders from the published state, and every fork the switch-over makes unreferenced is deleted in the same plan (D-16): the rows seam, `classify_tools`/`ToolRow`/owner hints and `_own_script_install`
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 21-14-PLAN.md — Per-tool removal outcomes, retry, the unconditional follow-up pass, quit-wait
+- [ ] 21-13-PLAN.md — Removal on a worker under the app mutation lock (`MutationHolder`, one refusal template)
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 21-15-PLAN.md — `u`, the job toggle and the default-daemon apply hold the app lock; their own flags deleted
+- [ ] 21-14-PLAN.md — Per-tool removal outcomes, retry that follows the proof, the unconditional follow-up pass, quit-wait (modals included)
 
 **Wave 9** *(blocked on Wave 8 completion)*
-- [ ] 21-16-PLAN.md — Every mutating key checks the lock; `MutationLock` base; reinstall and install-run holders
+- [ ] 21-15-PLAN.md — `u`, the job toggle and the default-daemon apply hold the app lock (always released); their own flags deleted
 
 **Wave 10** *(blocked on Wave 9 completion)*
-- [ ] 21-17-PLAN.md — Policies render live state and prerequisites (`installed_or`); a failed read shows an error
+- [ ] 21-16-PLAN.md — Every mutating key checks the lock; `MutationLock` base; reinstall and install-run holders; pinned pass counts for Doctor's early returns
 
 **Wave 11** *(blocked on Wave 10 completion)*
-- [ ] 21-18-PLAN.md — Policies DRIFT, the job-state worker, toggles republish
+- [ ] 21-17-PLAN.md — Policies render live state and prerequisites (`installed_or`); a failed state or requirements read shows an error
 
 **Wave 12** *(blocked on Wave 11 completion)*
-- [ ] 21-19-PLAN.md — Doctor findings via `ToolState.reasons` and `record_evidence`; a failed read shows an error
+- [ ] 21-18-PLAN.md — Policies DRIFT, the generation-guarded job-state worker, toggles republish
 
 **Wave 13** *(blocked on Wave 12 completion)*
-- [ ] 21-20-PLAN.md — Doctor `a` removed, `r` and `enter` republish, the first-run pick re-renders Doctor
+- [ ] 21-19-PLAN.md — Doctor findings via `ToolState.reasons` and `record_evidence`; a failed read shows an error
 
 **Wave 14** *(blocked on Wave 13 completion)*
-- [ ] 21-21-PLAN.md — UI-01 matrix, permanent fork guard, Phase 21 architecture section, NO_COLOR UAT
+- [ ] 21-20-PLAN.md — Doctor `a` removed; `r` and `enter` republish when their whole mutation ends (a failed invalidate is reported); the first-run pick re-renders Doctor
+
+**Wave 15** *(blocked on Wave 14 completion)*
+- [ ] 21-21-PLAN.md — UI-01 matrix plus the held-navigation repaint case, permanent fork guard, Phase 21 architecture section, NO_COLOR UAT
 
 ### Phase 22: Method lifecycle contract
 
