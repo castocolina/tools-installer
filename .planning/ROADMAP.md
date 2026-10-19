@@ -263,8 +263,58 @@ Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
   4. A removal runs on a worker with visible progress; afterwards the tool moves to "nothing to do", its selection is pruned, every tier shows `○`, and Policies shows a removed ban OFF on entry.
   5. Policies and Doctor read live state on entry: installing `watch` unblocks the docker tweak, Doctor's hidden `a` key is inert, and a dangling pnpm global shim shows as broken.
 
-**Plans**: TBD
+**Plans:** 21 plans
 **UI hint**: yes
+
+Plans:
+**Wave 1**
+- [ ] 21-01-PLAN.md — Neutral root, six installed views, one `show_view` order and the `AppScreen` lifecycle defaults
+- [ ] 21-02-PLAN.md — `removed` / `remove failed` in the shared outcome vocabulary; public `first_line`
+- [ ] 21-03-PLAN.md — `ToolBrowser.reload` prunes selections that are no longer selectable
+- [ ] 21-04-PLAN.md — Policies answer prerequisites and active state live (predicate `installed_tools`, omz `is_active`)
+- [ ] 21-05-PLAN.md — State service gains `mark_pending`, the Doctor evidence store and the pnpm off-PATH fact
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 21-06-PLAN.md — One app-level coalescing refresh owner; per-tier refresh workers deleted
+- [ ] 21-08-PLAN.md — Pure Uninstall projections over `ToolState`: group, label, detail
+- [ ] 21-09-PLAN.md — `perform_uninstall` reports removed / remove-failed per tool
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 21-07-PLAN.md — Uninstall re-renders on publish, `OwnershipRefreshed` deleted, a refused `u` still requests one pass
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 21-10-PLAN.md — Execute screen waits on the app's publication; `execute-wait` deleted
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 21-11-PLAN.md — Uninstall renders from the published state; the rows seam deleted
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 21-12-PLAN.md — `classify_tools`/`ToolRow`/owner hints and the script-install special case deleted
+- [ ] 21-13-PLAN.md — Removal on a worker under the app mutation lock (`MutationHolder`, one refusal template)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+- [ ] 21-14-PLAN.md — Per-tool removal outcomes, retry, the unconditional follow-up pass, quit-wait
+
+**Wave 8** *(blocked on Wave 7 completion)*
+- [ ] 21-15-PLAN.md — `u`, the job toggle and the default-daemon apply hold the app lock; their own flags deleted
+
+**Wave 9** *(blocked on Wave 8 completion)*
+- [ ] 21-16-PLAN.md — Every mutating key checks the lock; `MutationLock` base; reinstall and install-run holders
+
+**Wave 10** *(blocked on Wave 9 completion)*
+- [ ] 21-17-PLAN.md — Policies render live state and prerequisites (`installed_or`); a failed read shows an error
+
+**Wave 11** *(blocked on Wave 10 completion)*
+- [ ] 21-18-PLAN.md — Policies DRIFT, the job-state worker, toggles republish
+
+**Wave 12** *(blocked on Wave 11 completion)*
+- [ ] 21-19-PLAN.md — Doctor findings via `ToolState.reasons` and `record_evidence`; a failed read shows an error
+
+**Wave 13** *(blocked on Wave 12 completion)*
+- [ ] 21-20-PLAN.md — Doctor `a` removed, `r` and `enter` republish, the first-run pick re-renders Doctor
+
+**Wave 14** *(blocked on Wave 13 completion)*
+- [ ] 21-21-PLAN.md — UI-01 matrix, permanent fork guard, Phase 21 architecture section, NO_COLOR UAT
 
 ### Phase 22: Method lifecycle contract
 
