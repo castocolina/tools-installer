@@ -74,6 +74,7 @@ Recent decisions affecting current work:
 - [2026-10-15] [catalog] Add iTerm2 macOS-only entry after tool-onboarding refactor — [todo file](.planning/todos/pending/2026-10-15-add-iterm2-macos-only-entry-after-tool-onboarding-refactor.md)
 - [2026-10-15] [catalog] Adopt Apple Containers runtime; colima stays compose path — [todo file](.planning/todos/pending/2026-10-15-adopt-apple-containers-runtime-colima-stays-compose-path.md)
 - [2026-10-15] [catalog] Onboard Bruno API client via the tool-onboarding skill (nice to have) — [todo file](.planning/todos/pending/2026-10-15-onboard-bruno-api-client-via-the-tool-onboarding-skill.md)
+- [2026-10-21] [tweaks] Rename container shortcuts and detect the available engine — [todo file](.planning/todos/pending/2026-10-21-rename-container-shortcuts-and-detect-the-available-engine.md)
 
 ### Roadmap Evolution
 
