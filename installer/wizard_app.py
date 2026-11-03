@@ -2926,6 +2926,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
                 pass_error = error
         except Exception as exc:
             pass_error = first_line(exc)
+            # The one status path: an unexpected failure shows the retry copy too.
+            self.post_message(RefreshPublished(pass_error, None))
         finally:
             self.post_message(RefreshFinished(pass_error))
 
