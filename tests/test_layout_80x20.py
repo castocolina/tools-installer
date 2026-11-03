@@ -4,6 +4,7 @@ Every visibility claim reads the compositor through `screen.get_widget_at`, so a
 widget another one paints over does not count as shown.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import DataTable, Rule
 
+from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.enums import MutationHolder
 from installer.model import Tool, load_categories, load_tools
@@ -26,6 +28,7 @@ from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.screen_family import settle
 from tests.state_doubles import (
     HeldRefreshService,
+    absent_state,
     frozen_service,
     managed_state,
     pass_state,
@@ -42,6 +45,7 @@ def _app(
     tmp_path: Path,
     service: VersionRefreshService | None = None,
     policies: list[Policy] | None = None,
+    remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
 ) -> UnifiedApp:
     tools = load_tools(REGISTRY)
     if service is None:
@@ -61,7 +65,7 @@ def _app(
         uninstall=UninstallInputs(
             ban_names=list,
             has_path_block=lambda: False,
-            remove=lambda _decision: SweepResult(),
+            remove=remove,
         ),
         policies=PolicyInputs(policies=policies or [], link_mode=lambda: "symlink"),
         version_refresh=service,
@@ -248,6 +252,28 @@ async def test_uninstall_cursor_lands_on_the_removable_row_once_the_state_lands(
             assert table.region.y + 1 + table.cursor_row in rows_of(screen, table)
         finally:
             service.release.set()
+
+
+async def test_a_one_tool_removal_summary_takes_one_status_row_at_80x20(
+    tmp_path: Path,
+) -> None:
+    """With no lever chosen, `1 removed` is the whole summary: one status row,
+    so the table keeps its rows (21-UAT test 1 (c))."""
+    tool = load_tools(REGISTRY)[5]
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(tool, [tmp_path / "bin" / tool.id])])
+    app = _app(tmp_path, service, remove=lambda _decision: SweepResult(removed=(tool.id,)))
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        await settle(app, pilot)
+        service.queued = (absent_state(tool),)
+        table = screen.query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index(tool.id))
+        await pilot.press("space", "enter", "enter")
+        await settle(app, pilot)
+        status = app.view("uninstall").status
+        assert status.text == "1 removed"
+        assert rows_of(screen, status) == {18}
 
 
 async def test_policies_chrome_at_80x20(tmp_path: Path) -> None:
