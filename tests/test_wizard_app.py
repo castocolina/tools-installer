@@ -2146,7 +2146,7 @@ async def test_policy_with_hard_requires_false_still_enables_when_requires_missi
         assert "Recommended tool(s): fd, rg. Not required" in screen.detail_text
         assert "Missing required tool(s)" not in screen.detail_text
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert calls == ["apply"]
         assert screen.active_state["daemon:test"] is True
         assert "enabled" in screen.status.text
@@ -4713,13 +4713,8 @@ def _daemon_app(
     )
 
 
-async def _settle_daemon(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
-    """Wait for the on-by-default worker's completion message to be handled."""
-    for _ in range(400):
-        if not app.daemon_default_in_flight:
-            break
-        await pilot.pause()
-    await pilot.pause()
+_DAEMON_REFUSAL = "A daemon apply is running; wait for it to finish. Navigation still works."
+_TOGGLE_REFUSAL = "A policy toggle is running; wait for it to finish. Navigation still works."
 
 
 async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path: Path) -> None:
@@ -4731,12 +4726,12 @@ async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path:
         daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
         assert plist_path.exists()
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
-        assert app.daemon_default_in_flight is False
+        assert not app.mutation_in_flight
 
 
 async def test_on_by_default_does_not_reenable_an_explicitly_disabled_daemon(
@@ -4752,7 +4747,7 @@ async def test_on_by_default_does_not_reenable_an_explicitly_disabled_daemon(
         daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
         assert not plist_path.exists()
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
@@ -4768,12 +4763,12 @@ async def test_on_by_default_never_records_a_decision_on_a_failed_apply(tmp_path
         daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is False
         assert daemon.decided(state_path) is False
-        assert app.daemon_default_in_flight is False
+        assert not app.mutation_in_flight
 
 
 async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight(
@@ -4797,31 +4792,18 @@ async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_fli
             # Hold the on-by-default worker open until the test has proven the
             # refusal; on a slow runner it could otherwise finish before the
             # first assertion and "in flight" becomes a race (CI run 38656028040).
-            for _ in range(400):
-                if app.daemon_default_in_flight:
-                    break
-                await pilot.pause()
-            assert app.daemon_default_in_flight is True
+            assert app.mutation_in_flight
             await pilot.press("space")
             screen = app.screen
             assert isinstance(screen, PoliciesScreen)
-            assert "wait a moment" in screen.status.text.lower()
+            assert screen.status.text == _DAEMON_REFUSAL
             release.set()
-            await _settle_daemon(app, pilot)
+            await settle(app, pilot)
             assert screen.active_state["daemon:prune-tmpdir"] is True
             bootstrap_calls = [c for c in fake_run.calls if c[:2] == ["launchctl", "bootstrap"]]
             assert len(bootstrap_calls) == 1
     finally:
         release.set()
-
-
-async def _settle_toggle(screen: PoliciesScreen, pilot: Pilot[list[str] | None]) -> None:
-    """Wait for a scheduled-job toggle's thread worker (WR-02) to report back."""
-    for _ in range(400):
-        if not screen.toggle_in_flight:
-            break
-        await pilot.pause()
-    await pilot.pause()
 
 
 async def test_manual_daemon_toggle_runs_off_the_event_loop(tmp_path: Path) -> None:
@@ -4841,7 +4823,7 @@ async def test_manual_daemon_toggle_runs_off_the_event_loop(tmp_path: Path) -> N
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert screen.active_state["daemon:prune-tmpdir"] is True
         assert "enabled" in screen.status.text
         assert threads and not any(threads)
@@ -4864,11 +4846,11 @@ async def test_a_second_toggle_is_refused_while_a_daemon_toggle_is_in_flight(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")
-        assert screen.toggle_in_flight is True
+        assert app.mutation_in_flight
         await pilot.press("space")
-        assert "still applying" in screen.status.text
+        assert screen.status.text == _TOGGLE_REFUSAL
         release.set()
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert applies == ["apply"]
         assert screen.active_state["daemon:prune-tmpdir"] is True
 
@@ -4887,7 +4869,7 @@ async def test_daemon_default_resolves_the_row_state_off_the_event_loop(tmp_path
     policy = replace(base, active=False, is_active=is_active)
     app = _daemon_app(tmp_path, policy=policy, daemon_default=lambda: True)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
@@ -4924,7 +4906,7 @@ async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Pat
 
     app = _daemon_app(tmp_path, policy=policy, daemon_default=slow_daemon_default)
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app.daemon_default_in_flight is True
+        assert app.mutation_in_flight
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
@@ -4932,11 +4914,11 @@ async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Pat
         assert isinstance(app.screen, TimePickerScreen)
         await pilot.press("down", "down", "down", "enter")
         assert isinstance(app.screen, PoliciesScreen)
-        assert "wait a moment" in screen.status.text.lower()
+        assert screen.status.text == _DAEMON_REFUSAL
         plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
         assert plist_path.read_bytes() == seed_bytes  # untouched by the refused reschedule
         release.set()
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
 
 
 async def test_on_by_default_leaves_an_already_active_daemon_active(tmp_path: Path) -> None:
@@ -4960,11 +4942,11 @@ async def test_on_by_default_leaves_an_already_active_daemon_active(tmp_path: Pa
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
         assert screen.active_state["daemon:prune-tmpdir"] is True
 
 
-async def test_daemon_default_in_flight_clears_even_on_an_unexpected_exception(
+async def test_daemon_default_lock_clears_even_on_an_unexpected_exception(
     tmp_path: Path,
 ) -> None:
     def boom() -> bool:
@@ -4973,14 +4955,14 @@ async def test_daemon_default_in_flight_clears_even_on_an_unexpected_exception(
     policy = _daemon_policy(tmp_path)
     app = _daemon_app(tmp_path, policy=policy, daemon_default=boom)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_daemon(app, pilot)
-        assert app.daemon_default_in_flight is False
+        await settle(app, pilot)
+        assert not app.mutation_in_flight
 
 
 async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight(
     tmp_path: Path,
 ) -> None:
-    """The race guard blocks on daemon_default_in_flight alone -- never on
+    """The race guard blocks on the app lock alone -- never on
     whether a daemon: id happens to already be visible in _tweak_ids, which it
     is not yet during first-run auto-apply (11-REVIEWS.md cycle 3 finding
     #12)."""
@@ -5004,7 +4986,7 @@ async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight
         tweak_ids=("tweak:countdown",),  # an unrelated, real tweak -- no daemon id present yet
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app.daemon_default_in_flight is True
+        assert app.mutation_in_flight
         await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -5020,9 +5002,9 @@ async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight
         await pilot.press("enter")
         assert captured == []
         assert screen.applied is False
-        assert "wait a moment" in screen.status.text.lower()
+        assert screen.status.text == _DAEMON_REFUSAL
         release.set()
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
 
 
 async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_row(
@@ -5032,7 +5014,7 @@ async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_
     tweaks, the daemon's inactive-at-construction Policy means _tweak_ids is
     empty, so _build_entries never offers a tweaks row at all -- remove_tweaks
     can then never become True through this screen, so the guard MUST fire
-    directly on daemon_default_in_flight alone, never gated behind
+    directly on the app lock alone, never gated behind
     self.remove_tweaks (which the pre-fix code required, making the guard a
     no-op in exactly this scenario)."""
     policy = _daemon_policy(tmp_path)
@@ -5052,7 +5034,7 @@ async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_
         cases=[_removable_row(_tool("rg"), [tmp_path / "rg-artifact"])],
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        assert app.daemon_default_in_flight is True
+        assert app.mutation_in_flight
         await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -5064,9 +5046,9 @@ async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_
         await pilot.press("enter")
         assert captured == []
         assert screen.applied is False
-        assert "wait a moment" in screen.status.text.lower()
+        assert screen.status.text == _DAEMON_REFUSAL
         release.set()
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
 
 
 async def test_on_by_default_treats_an_existing_installation_as_fresh(tmp_path: Path) -> None:
@@ -5087,7 +5069,7 @@ async def test_on_by_default_treats_an_existing_installation_as_fresh(tmp_path: 
         daemon_default=lambda: ensure_daemon_default(policy),
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_daemon(app, pilot)
+        await settle(app, pilot)
         assert plist_path.exists()
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)

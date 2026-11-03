@@ -114,3 +114,5 @@ class MutationHolder(StrEnum):
 
     REMOVAL = "A removal"
     UPDATE = "An update"
+    POLICY_TOGGLE = "A policy toggle"
+    DAEMON_DEFAULT = "A daemon apply"
