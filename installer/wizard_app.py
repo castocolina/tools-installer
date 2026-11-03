@@ -3016,6 +3016,7 @@ class UnifiedApp(App[list[str] | None]):
         here as a plan-shaped outcome, so _session_exit_code needs no second
         rule. Successful updates record `done`, allowing latest-wins to clear
         an earlier failure; unknown-owner/unsupported refusals record nothing."""
+        self.end_mutation()
         failed = message.error is not None or (
             message.outcome is not None and message.outcome.status == "failed"
         )

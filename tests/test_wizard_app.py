@@ -6380,7 +6380,10 @@ async def test_second_u_press_while_latched_is_refused(tmp_path: Path) -> None:
         await pilot.press("u")
         assert started.wait(timeout=5)
         await pilot.press("u")
-        assert "in flight" in app.catalog.status_text
+        assert (
+            app.catalog.status_text
+            == "An update is running; wait for it to finish. Navigation still works."
+        )
         release.set()
         await _settle_update(app, pilot)
         assert calls == [["brew", "upgrade", "ripgrep"]]

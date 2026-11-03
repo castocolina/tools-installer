@@ -8,7 +8,7 @@ reusable `ToolBrowser` widget; this screen wires the catalog's data into it.
 """
 
 from collections.abc import Callable, Mapping
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from rich.markup import escape
 from rich.text import Text
@@ -19,7 +19,7 @@ from textual.message import Message
 from textual.widgets import DataTable
 
 from installer.deps import missing_requires
-from installer.enums import Audience, Priority
+from installer.enums import Audience, MutationHolder, Priority
 from installer.model import Tool
 from installer.ownership import (
     MUTATION_GRADE,
@@ -43,6 +43,9 @@ from installer.version_status import (
     ToolState,
     VersionRefreshService,
 )
+
+if TYPE_CHECKING:
+    from installer.wizard_app import UnifiedApp
 
 TableSortKey = Literal["id", "category", "priority", "audience", "health"]
 
@@ -239,6 +242,12 @@ class CatalogScreen(AppScreen):
     `CommandError.detail`. Live streaming of manager output is not built
     this phase.
     """
+
+    # Narrow .app from App[Unknown] so the app mutation lock is typed.
+    if TYPE_CHECKING:
+
+        @property
+        def app(self) -> "UnifiedApp": ...
 
     class Decided(Message):
         """The user resolved the catalog: `result` is the selected ids in catalog
@@ -621,6 +630,10 @@ class CatalogScreen(AppScreen):
         tool = self._by_id.get(tool_id)
         if tool is None:
             return
+        # Before every informational refusal: while a mutation runs, the holder's
+        # template wins over a row's own copy (pending, broken, current, unknown).
+        if self.app.refuse_if_mutating(self):
+            return
         state = self._state(tool)
         if state is None or state.health is Health.CHECKING:
             # CR-02 (15.4-REVIEW.md): never a silent return. A pending state is
@@ -665,6 +678,7 @@ class CatalogScreen(AppScreen):
             self.status.set(f"update already in flight for {in_flight}", "warn")
             self.post_message(RefreshRequested())
             return
+        self.app.begin_mutation(MutationHolder.UPDATE)
         self.status.set(f"updating {tool_id}…", "ok")
         # The state's ownership gates the keypress; UpdateService.run still
         # re-resolves it before mutating (T-19-46).
