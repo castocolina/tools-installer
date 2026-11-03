@@ -95,6 +95,7 @@ def _family_app(
     policies: PolicyInputs | None = None,
     fix: Callable[[], None] = lambda: None,
     reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
+    prompt_link_mode: bool = False,
 ) -> UnifiedApp:
     return app_cls(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
@@ -118,6 +119,7 @@ def _family_app(
         version_refresh=version_refresh,
         updates=updates,
         execute=execute,
+        prompt_link_mode=prompt_link_mode,
     )
 
 
@@ -2618,3 +2620,44 @@ async def test_a_real_cache_write_failure_after_a_reinstall_is_reported(
         state = service.state_of("mmdc")
         assert state is not None and state.generation == service.epoch
         assert state.ownership != before.ownership  # B, not the persisted A
+
+
+def _first_run_doctor(mode: dict[str, str], setter: Callable[[str], None]) -> UnifiedApp:
+    return _family_app(
+        initial_view="doctor",
+        prompt_link_mode=True,
+        fix_preview=lambda: f"PREVIEW-{mode['v']}",
+        policies=PolicyInputs(policies=[], link_mode=lambda: mode["v"], set_link_mode=setter),
+    )
+
+
+async def test_a_first_run_link_pick_rerenders_doctor():
+    mode = {"v": "centralized"}
+
+    def setter(value: str) -> None:
+        mode["v"] = value
+
+    app = _first_run_doctor(mode, setter)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await wait_until(pilot, lambda: isinstance(app.screen, LinkModeScreen))
+        assert "PREVIEW-centralized" in str(_doctor_text(app))
+        await pilot.press("down", "down", "enter")  # pick split
+        await settle(app, pilot)
+        assert "PREVIEW-split" in str(_doctor_text(app))
+        assert "Link mode saved: split" in app.view("doctor").status.text
+
+
+async def test_a_failed_first_run_pick_keeps_the_error():
+    mode = {"v": "centralized"}
+
+    def setter(value: str) -> None:
+        raise OSError("read-only")
+
+    app = _first_run_doctor(mode, setter)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await wait_until(pilot, lambda: isinstance(app.screen, LinkModeScreen))
+        await pilot.press("down", "down", "enter")
+        await settle(app, pilot)
+        doctor = app.view("doctor")
+        assert (doctor.status.text, doctor.status.severity) == ("read-only", Severity.ERROR)
+        assert "PREVIEW-centralized" in str(_doctor_text(app))
