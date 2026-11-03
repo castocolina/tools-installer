@@ -1449,7 +1449,9 @@ class UninstallScreen(AppScreen):
     # -- messages from the browser -----------------------------------------
     def on_tool_browser_selection_changed(self, event: ToolBrowser.SelectionChanged) -> None:
         event.stop()
-        self.status.clear()
+        # A mark is for the next removal; the running one keeps its status (D-05).
+        if self.app.mutation_holder is not MutationHolder.REMOVAL:
+            self.status.clear()
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
@@ -2735,6 +2737,10 @@ class MutationLock:
     @property
     def mutation_in_flight(self) -> bool:
         return self._mutation_holder is not None
+
+    @property
+    def mutation_holder(self) -> MutationHolder | None:
+        return self._mutation_holder
 
     def begin_mutation(self, holder: MutationHolder) -> None:
         # Every caller refuses first; a second take would let one end_mutation
