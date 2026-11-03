@@ -643,3 +643,19 @@ async def test_reload_prunes_zero_one_and_many(count: int) -> None:
         browser.selected.update({*gone, "one"})
         browser.reload(_adapter(selectable=_reject(*gone)))
         assert browser.selected == {"one"}
+
+
+async def test_reload_after_app_exit_skips_the_rebuild() -> None:
+    """A refresh pass can publish while the app is shutting down (seen on the
+    slower macOS CI runner): Textual has already removed the DataTable, but the
+    browser itself still reads `is_mounted`. The late reload must keep the new
+    adapter and its pruned selection without touching the gone table."""
+    app = _Host(_adapter())
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        browser.selected.add("alpha")
+        app.exit()
+        await browser.query_one(DataTable[Any]).remove()
+        await pilot.pause()
+        browser.reload(_adapter(selectable=_reject("alpha")))
+        assert browser.selected == set()

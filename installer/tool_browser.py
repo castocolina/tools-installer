@@ -252,7 +252,9 @@ class ToolBrowser(Widget, Generic[T]):
         self.selected -= {
             adapter.item_id(item) for item in adapter.items if not adapter.selectable(item)
         }
-        if self.is_mounted:
+        # is_attached is False once the app exits: a pass that publishes during
+        # shutdown finds the table already removed while the browser is mounted.
+        if self.is_mounted and self.is_attached:
             self._rebuild()
 
     # -- view switching ----------------------------------------------------
