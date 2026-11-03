@@ -75,11 +75,13 @@ from installer.wizard_app import (
     NavScreen,
     PoliciesScreen,
     PolicyInputs,
+    RefreshPublished,
     TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
 )
+from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,
     Presence,
@@ -1645,7 +1647,7 @@ async def test_env_predicate_failure_inside_the_rows_failure_branch_never_escape
 
 
 async def test_env_predicate_failure_during_a_background_repaint_never_escapes() -> None:
-    """CR-01 (15.4-REVIEW.md): `ownership_refreshed()` reaches the same
+    """CR-01 (15.4-REVIEW.md): `state_refreshed()` reaches the same
     branch from a repaint the user never initiated, so the same guard has
     to hold there."""
     row = _removable_row(_tool("rg"), [Path("/opt/rg")])
@@ -1668,21 +1670,10 @@ async def test_env_predicate_failure_during_a_background_repaint_never_escapes()
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         state["fail"] = True
-        screen.ownership_refreshed()  # must not raise
+        screen.state_refreshed()  # must not raise
         await pilot.pause()
         assert "stale handle" in screen.status.text
         assert "rc file vanished" in screen.status.text
-
-
-async def _wait_for(
-    pilot: Pilot[list[str] | None], predicate: Callable[[], bool], tries: int = 400
-) -> None:
-    for _ in range(tries):
-        if predicate():
-            await pilot.pause()
-            return
-        await pilot.pause()
-    raise AssertionError("condition never became true within the polling budget")
 
 
 async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
@@ -1772,8 +1763,8 @@ async def test_a_same_session_removal_refreshes_the_attribution_its_invalidate_d
         def restored() -> bool:
             return screen.query_one(DataTable[Any]).get_cell("jq", "via").plain == "dnf"
 
-        await _wait_for(pilot, lambda: bool(refreshed))
-        await _wait_for(pilot, restored)
+        await wait_until(pilot, lambda: bool(refreshed))
+        await wait_until(pilot, restored)
         # The background repaint must NOT wipe the sentence describing the
         # removal the user just performed (`clear_applied=False`).
         assert screen.applied is True
@@ -1857,15 +1848,15 @@ async def test_the_rows_predicate_is_re_read_on_every_entry() -> None:
         assert {"rg", "fd"} <= keys()
 
 
-def test_ownership_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
+def test_state_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
     """Safe to call regardless of mount state: `ToolBrowser.reload` no-ops
     when unmounted."""
     inputs = _uninstall_inputs(rows=_rg_rows())
     screen = UninstallScreen(inputs)
-    screen.ownership_refreshed()  # must not raise
+    screen.state_refreshed()  # must not raise
 
 
-async def test_ownership_refreshed_returns_early_through_the_unchanged_comparison() -> None:
+async def test_state_refreshed_returns_early_through_the_unchanged_comparison() -> None:
     """Safe to call when nothing changed: the same unchanged comparison
     `_resync` uses everywhere else returns early, proven by entries object
     identity surviving the call."""
@@ -1877,7 +1868,7 @@ async def test_ownership_refreshed_returns_early_through_the_unchanged_compariso
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         before_entries = screen._entries  # pyright: ignore[reportPrivateUsage]
-        screen.ownership_refreshed()
+        screen.state_refreshed()
         await pilot.pause()
         assert screen._entries is before_entries  # pyright: ignore[reportPrivateUsage]
 
@@ -5461,27 +5452,13 @@ def _macos_service(
     )
 
 
-async def _settle_versions(
-    app: UnifiedApp,
-    pilot: Pilot[list[str] | None],
-    screen: CatalogScreen | None = None,
-) -> None:
-    """Wait for a catalog version-refresh worker to post its completion message."""
-    target = app.catalog if screen is None else screen
-    for _ in range(400):
-        if not target.version_refreshing:
-            break
-        await pilot.pause()
-    await pilot.pause()
-
-
 async def test_codegraph_ver_cell_contains_installed_and_latest_after_refresh(
     tmp_path: Path,
 ) -> None:
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.6.0")
     app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
         assert "1.2.0" in cell.plain
         assert "v1.6.0" in cell.plain
@@ -5502,7 +5479,6 @@ async def test_version_refresh_runs_off_the_event_loop(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         assert started.wait(timeout=5)
         screen = app.catalog
-        assert screen.version_refreshing is True
         table = screen.query_one(DataTable[Any])
         assert table.row_count >= 1
         assert "codegraph" in {str(key.value) for key in table.rows}
@@ -5510,11 +5486,10 @@ async def test_version_refresh_runs_off_the_event_loop(tmp_path: Path) -> None:
         await pilot.press("space")
         assert screen.selected == {"codegraph"}
         release.set()
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         cell = table.get_cell("codegraph", "ver")
         assert "1.2.0" in cell.plain
         assert "v1.6.0" in cell.plain
-        assert screen.version_refreshing is False
 
 
 async def test_version_shows_probed_install_when_latest_fetch_fails(tmp_path: Path) -> None:
@@ -5528,7 +5503,7 @@ async def test_version_shows_probed_install_when_latest_fetch_fails(tmp_path: Pa
     service = _macos_service(tmp_path, resolve_tag=boom)
     app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver")
         assert cell.plain == "1.2.0"
@@ -5547,72 +5522,27 @@ async def test_version_worker_crash_clears_refreshing_and_renders_a_cell(
     service = _macos_service(tmp_path, resolve_tag=boom)
     app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running
-        assert app.catalog.version_refreshing is False
         cell = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "health")
         assert cell.plain == "…"
 
 
-async def test_version_navigation_discards_a_superseded_generation(tmp_path: Path) -> None:
-    lock = threading.Lock()
-    user_calls = 0
-    first_started = threading.Event()
-    second_started = threading.Event()
-    first_release = threading.Event()
-    second_release = threading.Event()
-
-    def resolve_tag(repo: str) -> str:
-        nonlocal user_calls
-        if repo.endswith("user-tool"):
-            with lock:
-                user_calls += 1
-                n = user_calls
-            if n == 1:
-                first_started.set()
-                assert first_release.wait(timeout=5)
-                return "v1.0.0"
-            second_started.set()
-            assert second_release.wait(timeout=5)
-            return "v2.0.0"
-        return "v9.0.0"
-
-    tools = [
-        _gh_tool("sys-tool", tier="system"),
-        _gh_tool("user-tool", tier="user"),
-        _gh_tool("ai-tool", tier="ai"),
-    ]
-    service = _macos_service(tmp_path, resolve_tag=resolve_tag)
-    app = _version_app(tools, service)
+async def test_a_clean_publish_clears_only_the_state_line_it_wrote(tmp_path: Path) -> None:
+    """RESEARCH P5/O2: the app clears its own error line on a clean publish,
+    and leaves a status a view wrote over it alone."""
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.6.0")
+    app = _version_app([_codegraph()], service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.press("2")
-        assert app.current_view == "user"
-        assert first_started.wait(timeout=5)
-        user = app.catalog_for("user")
-        superseded = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
-        await pilot.press("3")
-        assert app.current_view == "ai"
-        # A same-set refresh at one epoch joins the held pass (19-08 single
-        # flight); a mutation's invalidate makes the second entry a pass of its own.
-        service.invalidate(reason="test")
-        await pilot.press("2")
-        assert app.current_view == "user"
-        assert second_started.wait(timeout=5)
-        current = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
-        assert current == superseded + 1
-        second_release.set()
-        await _settle_versions(app, pilot, user)
-        cell = user.query_one(DataTable[Any]).get_cell("user-tool", "ver")
-        assert "v2.0.0" in cell.plain
-        assert "v1.0.0" not in cell.plain
-        first_release.set()
-        await _settle_versions(app, pilot, user)
-        cell = user.query_one(DataTable[Any]).get_cell("user-tool", "ver")
-        assert "v2.0.0" in cell.plain
-        assert "v1.0.0" not in cell.plain
-        assert user._version_refresh_generation == current  # pyright: ignore[reportPrivateUsage]
-        await _settle_versions(app, pilot)
-        await _settle_versions(app, pilot, app.catalog_for("ai"))
+        await settle(app, pilot)
+        app.on_refresh_published(RefreshPublished("boom", None))
+        assert app.catalog.status_text.startswith("tool state check failed: boom")
+        app.on_refresh_published(RefreshPublished(None, None))
+        assert app.catalog.status_text == ""
+        app.on_refresh_published(RefreshPublished("boom", None))
+        app.catalog.status.set("updated codegraph", "ok")
+        app.on_refresh_published(RefreshPublished(None, None))
+        assert app.catalog.status_text == "updated codegraph"
 
 
 # -- D-01/Task 1: closing the execute screen refreshes the tier it ran from,
@@ -5687,7 +5617,7 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         before = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver").plain
         assert before == ""
         app.catalog.selected.add("codegraph")
@@ -5696,24 +5626,38 @@ async def test_install_closed_refreshes_the_ver_cell_without_navigating_away(
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         after = app.catalog.query_one(DataTable[Any]).get_cell("codegraph", "ver").plain
         assert after != before
         assert "1.3.0" in after
         assert "->" not in after
 
 
+def _count_passes(service: VersionRefreshService, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """One entry per refresh pass the service runs."""
+    passes: list[int] = []
+    refresh = service.refresh
+
+    def counting(tools: Sequence[Tool]) -> None:
+        passes.append(1)
+        refresh(tools)
+
+    monkeypatch.setattr(service, "refresh", counting)
+    return passes
+
+
 async def test_install_closed_refreshes_the_non_base_tier_it_ran_from(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Pitfall 1 guard: the fix must index self._catalogs (uniform across all
     three tiers), never self._views (which drops the base tier) or a
     show_view-style base/non-base branch."""
     tool = _gh_tool("user-tool", tier="user")
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
+    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda _t: False)
+    passes = _count_passes(service, monkeypatch)
     execute = _execute_inputs(
         [tool],
-        present=lambda _t: True,
+        present=lambda _t: False,
         install=_tracking_install(lambda _t: None),
         platform=_install_closed_platform(),
         version_refresh=service,
@@ -5723,28 +5667,25 @@ async def test_install_closed_refreshes_the_non_base_tier_it_ran_from(
         await pilot.press("2")
         assert app.current_view == "user"
         user = app.catalog_for("user")
-        base = app.catalog
-        await _settle_versions(app, pilot, user)
-        before_user = user._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
-        before_base = base._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        await settle(app, pilot)
+        before = len(passes)
         user.selected.add("user-tool")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot, user)
-        assert user._version_refresh_generation == before_user + 1  # pyright: ignore[reportPrivateUsage]
-        assert base._version_refresh_generation == before_base  # pyright: ignore[reportPrivateUsage]
+        await settle(app, pilot)
+        assert len(passes) == before + 1
 
 
-async def test_install_closed_refreshes_even_when_the_run_never_started(
-    tmp_path: Path,
+async def test_install_closed_requests_no_pass_when_the_run_never_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The callback has no success condition to gate on: escaping before the
-    run is ever started still bumps the active tier's generation."""
+    """A close that ran nothing requests no pass (A11): nothing changed."""
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.3.0")
+    passes = _count_passes(service, monkeypatch)
     execute = _execute_inputs(
         [tool],
         present=lambda _t: True,
@@ -5754,16 +5695,16 @@ async def test_install_closed_refreshes_even_when_the_run_never_started(
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
-        before = app.catalog._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+        await settle(app, pilot)
+        before = len(passes)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
         assert screen.started is False
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
-        assert app.catalog._version_refresh_generation == before + 1  # pyright: ignore[reportPrivateUsage]
+        await settle(app, pilot)
+        assert len(passes) == before
 
 
 async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreadable_one(
@@ -5805,7 +5746,7 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         execute=execute,
     )
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("newly-installed", "ver").plain == ""
         assert table.get_cell("newly-installed", "health").plain == "○"
@@ -5816,7 +5757,7 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         # Do not assert tool B's Ver *text* here: which dim label it lands on
         # is Task 2's contract, not Task 1's.
@@ -5826,11 +5767,12 @@ async def test_install_closed_marks_a_freshly_installed_row_and_keeps_an_unreada
         assert table.get_cell("stays-installed", "health").plain == "✓"
 
 
-async def test_returning_from_another_view_rereads_presence_through_the_pass(
+async def test_returning_from_another_view_shows_the_state_a_pass_published(
     tmp_path: Path,
 ) -> None:
     """A tool removed while the user was on Uninstall must not keep its ✓ when
-    they come back: `show_view` re-reads presence on every catalog entry."""
+    they come back: the pass the removal requests publishes it, and entry
+    renders that state (entry itself starts no pass, D-05)."""
     tool = _gh_tool("removable", tier="system")
     presence = {"removable": True}
     service = _macos_service(
@@ -5845,12 +5787,14 @@ async def test_returning_from_another_view_rereads_presence_through_the_pass(
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("5")
         assert app.current_view == "uninstall"
         presence["removable"] = False
+        app.request_refresh()
+        await settle(app, pilot)
         await pilot.press("1")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("removable", "health").plain == "○"
 
@@ -5873,19 +5817,19 @@ async def test_returning_to_the_base_tier_re_resolves_ownership_an_install_dropp
     )
     app = _version_app([system_tool, user_tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("2")
         user_screen = app._catalogs["user"]  # pyright: ignore[reportPrivateUsage]
-        await _settle_versions(app, pilot, user_screen)
+        await settle(app, pilot)
         user_screen.selected.add("usr-tool")
         await pilot.press("enter")
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot, user_screen)
+        await settle(app, pilot)
         assert service.state_of("sys-tool") is not None
         await pilot.press("1")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert service.state_of("sys-tool") is not None
 
 
@@ -5930,7 +5874,7 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("shell-fn-tool", "health").plain == "○"
         app.catalog.selected.add("shell-fn-tool")
@@ -5939,7 +5883,7 @@ async def test_install_closed_marks_a_detect_path_tool_that_answers_no_version(
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("shell-fn-tool", "health").plain == "✓"
 
@@ -5986,7 +5930,7 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         before_calls = len(calls)
         before_epoch = service.epoch
         app.catalog.selected.add("codegraph")
@@ -5995,7 +5939,7 @@ async def test_install_closed_refresh_requeries_the_manager_inventory_after_a_ru
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert len(calls) > before_calls
         assert service.epoch > before_epoch
 
@@ -6031,7 +5975,7 @@ async def test_install_close_survives_a_presence_predicate_that_fails_after_the_
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
@@ -6039,7 +5983,7 @@ async def test_install_close_survives_a_presence_predicate_that_fails_after_the_
         await _settle_execute_screen(app, pilot)
         readable["ok"] = False
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running is True
         assert "re-check failed" not in app.catalog.status_text
         assert "stale file handle" not in app.catalog.status_text
@@ -6066,7 +6010,7 @@ async def test_install_closed_degrades_when_the_active_view_is_not_a_catalog_tie
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("4")
         await pilot.pause()
         assert app.current_view == "doctor"
@@ -6112,14 +6056,14 @@ async def test_a_failed_post_run_cache_invalidation_is_reported_not_swallowed(
     )
     app = _version_app([tool], service, execute=execute)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         # Non-fatal: the app is still running, and the summary merge that
         # follows the invalidate call in the same handler still ran, so the
         # run is still recorded...
@@ -6183,14 +6127,14 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
         uninstall=_uninstall_inputs(rows=rows),
     )
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         cells = app.screen.query_one(DataTable[Any]).get_row("codegraph")
@@ -6228,7 +6172,7 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         await pilot.press("2")
         assert app.current_view == "user"
         user = app.catalog_for("user")
-        await _settle_versions(app, pilot, user)
+        await settle(app, pilot)
         user.selected.add("mmdc")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
@@ -6236,7 +6180,7 @@ async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot, user)
+        await settle(app, pilot)
         # Behavioural first: marking mmdc on the user view runs the real
         # consumer, and pnpm is installed, so nothing is announced.
         await pilot.press("space")
@@ -6287,7 +6231,7 @@ async def test_install_close_reenters_without_a_presence_sweep(tmp_path: Path) -
     release.set()
     app, tools, calls = _sweep_app(tmp_path, release)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("sys-tool")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
@@ -6297,31 +6241,26 @@ async def test_install_close_reenters_without_a_presence_sweep(tmp_path: Path) -
         release.clear()
         await pilot.press("escape")
         await pilot.pause()
-        assert app.catalog.version_refreshing is True
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("sys-tool", "health").plain == "…"
         release.set()
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert table.get_cell("sys-tool", "health").plain != "…"
     assert calls == [], f"a presence sweep read {calls} (catalog: {[t.id for t in tools]})"
 
 
 async def test_view_switch_reenters_without_a_presence_sweep(tmp_path: Path) -> None:
-    """D-04: switching tiers re-enters through the refresh pass and never
-    re-reads the execute presence predicate over the catalog."""
+    """D-04/D-05: switching tiers starts no pass and never re-reads the
+    execute presence predicate over the catalog."""
     release = threading.Event()
     release.set()
     app, tools, calls = _sweep_app(tmp_path, release)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         for key, view in (("2", "user"), ("3", "ai"), ("1", "system")):
-            screen = app.catalog_for(view)
-            release.clear()
             await pilot.press(key)
             assert app.current_view == view
-            assert screen.version_refreshing is True
-            release.set()
-            await _settle_versions(app, pilot, screen)
+            await settle(app, pilot)
     assert calls == [], f"a presence sweep read {calls} (catalog: {[t.id for t in tools]})"
 
 
@@ -6332,7 +6271,7 @@ async def test_view_switch_reenters_without_a_presence_sweep(tmp_path: Path) -> 
 
 
 async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test 1: closing an interactive run from EACH catalog tier calls the
     injected synchronizer exactly once, as the close's last step, and
@@ -6350,6 +6289,7 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
         _gh_tool("ai-tool", tier="ai"),
     ]
     service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0", present=lambda _t: False)
+    passes = _count_passes(service, monkeypatch)
 
     # WR-07: `installed` gates BOTH resolve_dependencies' own selection-time
     # is_installed check (ExecuteScreen.on_mount). It
@@ -6379,8 +6319,8 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
                 await pilot.press(str(VIEW_ORDER.index(view) + 1))
             assert app.current_view == view
             screen = app.catalog_for(view)
-            await _settle_versions(app, pilot, screen)
-            before_generation = screen._version_refresh_generation  # pyright: ignore[reportPrivateUsage]
+            await settle(app, pilot)
+            before = len(passes)
             calls.clear()
             screen.selected.add(tools[index].id)
             await pilot.press("enter")
@@ -6388,13 +6328,11 @@ async def test_install_closed_calls_the_terminal_synchronizer_once_per_tier(
             await pilot.press("enter")
             await _settle_execute_screen(app, pilot)
             await pilot.press("escape")
-            await _settle_versions(app, pilot, screen)
+            await settle(app, pilot)
             assert calls.count("terminal-sync") == 1
             # The synchronizer is the last thing the close calls.
             assert calls.index("terminal-sync") == len(calls) - 1
-            assert (
-                screen._version_refresh_generation == before_generation + 1  # pyright: ignore[reportPrivateUsage]
-            )
+            assert len(passes) == before + 1
 
 
 async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the_summary(
@@ -6423,14 +6361,14 @@ async def test_install_closed_reports_a_terminal_sync_oserror_without_losing_the
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_boom)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running is True
         assert app.outcomes is not None
         assert "terminal shell synchronization" in app.catalog.status_text.lower()
@@ -6459,7 +6397,7 @@ async def test_install_closed_delivers_a_terminal_sync_warning_to_the_visible_do
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_warns)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("4")
         await pilot.pause()
         assert app.current_view == "doctor"
@@ -6495,14 +6433,14 @@ async def test_install_closed_with_no_terminal_sync_wired_is_unaffected(
     app = _version_app([tool], service, execute=execute)
     assert app._terminal_sync is None  # pyright: ignore[reportPrivateUsage]
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running is True
         assert app.catalog.status_text == ""
 
@@ -6536,14 +6474,14 @@ async def test_install_closed_skips_the_terminal_synchronizer_when_nothing_was_i
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=_terminal_sync)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running is True
         assert app.outcomes is not None
         assert all(o.result == "skipped" for o in app.outcomes.values())
@@ -6571,7 +6509,7 @@ async def test_install_closed_flushes_a_previously_queued_warning_even_with_no_n
     )
     app = _version_app([tool], service, execute=execute, terminal_sync=lambda: None)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         # Simulate a warning that arrived while queued (T-15.6-13) -- the
         # exact starting state a subsequent no-new-warning close must not
         # silently keep stranded.
@@ -6582,7 +6520,7 @@ async def test_install_closed_flushes_a_previously_queued_warning_even_with_no_n
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert app.is_running is True
         assert "queued: an earlier warning" in app.catalog.status_text
         assert app._pending_warnings == []  # pyright: ignore[reportPrivateUsage]
@@ -6717,7 +6655,7 @@ async def test_second_u_press_while_latched_is_refused(tmp_path: Path) -> None:
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         assert started.wait(timeout=5)
         await pilot.press("u")
@@ -6753,7 +6691,7 @@ async def test_unknown_owner_row_produces_zero_runner_invocations(tmp_path: Path
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert calls == []
@@ -6786,7 +6724,7 @@ async def test_non_mutation_grade_owner_produces_zero_runner_invocations(tmp_pat
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert calls == []
@@ -6818,7 +6756,7 @@ async def test_rg_end_to_end_delegates_to_brew(tmp_path: Path) -> None:
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         depth = len(app.screen_stack)
         await pilot.press("u")
         await _settle_update(app, pilot)
@@ -6853,7 +6791,7 @@ async def test_update_worker_crash_still_posts_and_clears(tmp_path: Path) -> Non
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert app.is_running
@@ -6887,7 +6825,7 @@ async def test_fresh_ownership_dispatches_on_reresolve_not_cache(tmp_path: Path)
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert calls == [["brew", "upgrade", "ripgrep"]]
@@ -6930,7 +6868,7 @@ async def test_fresh_unknown_overrides_cached_green_light(tmp_path: Path) -> Non
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert calls == []
@@ -6991,7 +6929,7 @@ async def test_pnpm_precapture_replays_pre_update_set(tmp_path: Path) -> None:
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert order.index("reresolve") < order.index("managed")
@@ -7049,7 +6987,7 @@ async def test_non_pnpm_node_tool_skips_snapshot_and_replay(
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert managed_calls == []
@@ -7098,7 +7036,7 @@ async def test_none_package_snapshot_refuses_the_update(tmp_path: Path) -> None:
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         assert replay_calls == []
@@ -7149,7 +7087,7 @@ async def test_post_update_status_comes_from_version_refresh(tmp_path: Path) -> 
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         cell = app.catalog.query_one(DataTable[Any]).get_cell("rectangle", "ver")
@@ -7192,7 +7130,7 @@ async def test_post_update_status_for_brew_also_comes_from_refresh(tmp_path: Pat
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("u")
         await _settle_update(app, pilot)
         cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
@@ -7250,7 +7188,7 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
         service.refresh = frozen_refresh  # type: ignore[method-assign]
         await pilot.press("u")
         await _settle_update(app, pilot)
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert "14.1.1" in app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver").plain
         release.set()
         await pilot.pause()
@@ -7290,7 +7228,7 @@ async def test_update_runs_off_the_event_loop_with_no_confirmation(tmp_path: Pat
     )
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         depth = len(app.screen_stack)
         await pilot.press("u")
         assert started.wait(timeout=5)
@@ -7610,7 +7548,7 @@ async def test_two_runs_keep_the_latest_outcome_per_tool() -> None:
 # by sleeping. ----------------------------------------------------------------
 
 
-async def test_ownership_refreshed_rebuilds_a_mounted_uninstall_screen_entered_during_an_in_flight_refresh(  # noqa: E501
+async def test_state_refreshed_rebuilds_a_mounted_uninstall_screen_entered_during_an_in_flight_refresh(  # noqa: E501
     tmp_path: Path,
 ) -> None:
     started = threading.Event()
@@ -7636,14 +7574,14 @@ async def test_ownership_refreshed_rebuilds_a_mounted_uninstall_screen_entered_d
         assert isinstance(app.screen, UninstallScreen)
         before = rows_calls["n"]
         release.set()  # let the worker commit
-        await _settle_versions(app, pilot)
-        # ownership_refreshed() re-derived in place -- a real extra rows()
+        await settle(app, pilot)
+        # state_refreshed() re-derived in place -- a real extra rows()
         # call beyond the one nav entry already made, with no second
         # navigation and no user keypress.
         assert rows_calls["n"] > before
 
 
-async def test_ownership_refreshed_does_not_touch_a_different_current_view(
+async def test_state_refreshed_does_not_touch_a_different_current_view(
     tmp_path: Path,
 ) -> None:
     """The nav path already re-derives every OTHER view before it is shown
@@ -7674,14 +7612,14 @@ async def test_ownership_refreshed_does_not_touch_a_different_current_view(
         assert app.current_view != "uninstall"
         before = rows_calls["n"]
         release.set()
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert rows_calls["n"] == before
 
 
-async def test_ownership_refreshed_preserves_a_standing_removal_summary(tmp_path: Path) -> None:
+async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Path) -> None:
     """A completion signal arriving while the user is reading a removal
     summary rebuilds the rows and LEAVES the summary standing --
-    `ownership_refreshed()` passes `clear_applied=False`, so the background
+    `state_refreshed()` passes `clear_applied=False`, so the background
     path can never wipe the sentence describing what the user just did."""
     started = threading.Event()
     release = threading.Event()
@@ -7721,7 +7659,7 @@ async def test_ownership_refreshed_preserves_a_standing_removal_summary(tmp_path
         applied_status = screen.status.text
         live_rows.clear()  # a background mutation the completion signal will pick up
         release.set()
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         assert screen.applied is True
         assert screen.status.text == applied_status
         assert screen.query_one(DataTable[Any]).row_count == 0
@@ -7907,14 +7845,14 @@ async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: P
         uninstall=_uninstall_inputs(rows=rows),
     )
     async with app.run_test(size=(120, 30)) as pilot:
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         app.catalog.selected.add("codegraph")
         await pilot.press("enter")
         assert isinstance(app.screen, ExecuteScreen)
         await pilot.press("enter")
         await _settle_execute_screen(app, pilot)
         await pilot.press("escape")
-        await _settle_versions(app, pilot)
+        await settle(app, pilot)
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         cell = app.screen.query_one(DataTable[Any]).get_cell("codegraph", "via")

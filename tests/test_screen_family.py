@@ -321,7 +321,8 @@ async def test_update_completion_requests_one_pass(tmp_path: Path, monkeypatch: 
                 )
             ]
         )
-        app.catalog.query_one(DataTable[Any]).move_cursor(row=0)
+        table = app.catalog.query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index("rg"))
         await pilot.press("u")
         await settle(app, pilot)
         assert service.passes == 2

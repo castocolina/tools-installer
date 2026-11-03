@@ -1325,7 +1325,7 @@ class UninstallScreen(AppScreen):
         if not self.status.text:
             self._show_standing_status()
 
-    def ownership_refreshed(self) -> None:
+    def state_refreshed(self) -> None:
         """Completion signal for an asynchronous ownership refresh landing
         while this screen may already be open.
 
@@ -2426,6 +2426,20 @@ class DaemonDefaultApplied(Message):
         super().__init__()
 
 
+class RefreshPublished(Message):
+    """The refresh worker published a stage. `error` is the first error of the
+    pass, carried on both stages so a clean publication means both succeeded."""
+
+    def __init__(self, error: str | None, warning: str | None) -> None:
+        super().__init__()
+        self.error = error
+        self.warning = warning
+
+
+class RefreshFinished(Message):
+    """The refresh worker ended; its arrival is its whole meaning."""
+
+
 class UnifiedApp(App[list[str] | None]):
     """One app hosting the wizard views. run() returns the catalog selection
     (ids in catalog order) on accept, or None when aborted. `current_view` and
@@ -2494,6 +2508,15 @@ class UnifiedApp(App[list[str] | None]):
         self.run_in_flight: bool = False
         self._version_refresh = version_refresh
         self._updates = updates
+        # D-05: one full-catalog pass at a time; a request during a pass sets
+        # pending and the finish handler runs exactly one more. Both flags live
+        # on the event loop (the worker thread only posts messages).
+        self._tools = list(tools)
+        self._refresh_running = False
+        self._refresh_pending = False
+        # The state line this app last wrote (screen, text), so a clean publish
+        # clears only its own line, never one a view wrote.
+        self._state_line: tuple[AppScreen, str] | None = None
         # D-01/15.6-06: the SAME composition-root closure Plans 04/05 wired for
         # Policies' OMZ-plugin apply and the direct `u` update -- called from
         # _install_closed on EVERY close event, never only a selected tool id
@@ -2625,6 +2648,75 @@ class UnifiedApp(App[list[str] | None]):
         ):
             self._link_mode_prompted = True
             self.push_screen(LinkModeScreen(), self._first_link_mode_picked)
+        self.request_refresh()  # the launch pass
+
+    def request_refresh(self) -> None:
+        """Run one full-catalog refresh pass, or queue exactly one more behind
+        the running one (D-05). No service: nothing to refresh."""
+        if self._version_refresh is None:
+            return
+        if self._refresh_running:
+            self._refresh_pending = True
+            return
+        self._refresh_running = True
+        self._refresh_worker()
+
+    @work(thread=True, exclusive=True, group="full-catalog-refresh", exit_on_error=False)
+    def _refresh_worker(self) -> None:
+        service = self._version_refresh
+        try:
+            if service is not None:
+                _result, error = run_live(lambda: service.refresh(self._tools))
+                self.post_message(
+                    RefreshPublished(error, service.warning if error is None else None)
+                )
+                _hosts, skills_error = run_live(lambda: service.refresh_skills(self._tools))
+                error = error or skills_error
+                self.post_message(
+                    RefreshPublished(error, service.warning if error is None else None)
+                )
+        finally:
+            self.post_message(RefreshFinished())
+
+    def on_refresh_published(self, message: RefreshPublished) -> None:
+        self._render_published()
+        if message.error is not None:
+            self._write_state_line(
+                f"tool state check failed: {message.error} — the next change retries it"
+            )
+        elif message.warning is not None:
+            self._write_state_line(
+                f"{message.warning} — marks are current; the next start checks again"
+            )
+        elif self._state_line is not None:
+            screen, line = self._state_line
+            if screen.status.text == line:
+                screen.status.clear()
+            self._state_line = None
+
+    def on_refresh_finished(self, message: RefreshFinished) -> None:
+        del message  # its arrival is its whole meaning
+        self._refresh_running = False
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self.request_refresh()
+
+    def _render_published(self) -> None:
+        """Re-render the visible view only (D-06); a view under a modal renders
+        the published state on its next `enter_view`."""
+        screen = self._visible_app_screen()
+        if screen is not None:
+            screen.state_refreshed()
+
+    def _write_state_line(self, line: str) -> None:
+        screen = self._visible_app_screen()
+        if screen is None:
+            if line not in self._pending_warnings:
+                self._pending_warnings.append(line)
+            return
+        # Plain text through StatusLine.set, never markup (T-19-40).
+        screen.status.set(line, "warn")
+        self._state_line = (screen, line)
 
     # exit_on_error=False (Textual's own worker.py defaults this True, which
     # calls App._handle_exception -- crashing the whole app -- on any
@@ -2757,6 +2849,8 @@ class UnifiedApp(App[list[str] | None]):
             await self.show_view(name)
 
     def _first_link_mode_picked(self, value: str | None) -> None:
+        # A launch pass that published under this modal rendered nowhere.
+        self._render_published()
         # make fix opens with initial_view="doctor", so the Doctor AppScreen is
         # on top and the catalog is hidden. Write D-05.3's explanation onto
         # the screen the user is looking at, never a hard catalog fallback:
@@ -2855,10 +2949,12 @@ class UnifiedApp(App[list[str] | None]):
         # tier's own version-refresh trigger, not a generic "screen visible"
         # signal).
         active = self._catalogs.get(self.current_view)
-        if active is not None:
-            active.enter_view()
-        # Both post-run failures land on one line, and both are written after
-        # enter_view so the refresh it starts cannot repaint over them.
+        # The modal is gone: re-render the view it revealed, then ask for the
+        # pass that publishes what the run changed (A11: only if it ran something).
+        self._render_published()
+        if result is not None and ran_anything(result):
+            self.request_refresh()
+        # Both post-run failures land on one line, written after the re-render.
         if self._invalidate_warning is not None:
             warnings.append(self._invalidate_warning)
             self._invalidate_warning = None
@@ -2885,6 +2981,8 @@ class UnifiedApp(App[list[str] | None]):
         visible.status.set(" · ".join(pending + warnings), "warn")
 
     def _visible_app_screen(self) -> AppScreen | None:
+        if not self.screen_stack:  # a handler driven before the app mounted
+            return None
         screen = self.screen
         return screen if isinstance(screen, AppScreen) else None
 
@@ -2949,6 +3047,9 @@ class UnifiedApp(App[list[str] | None]):
         elif message.outcome is not None and message.outcome.status == "updated":
             row = PlanRow(message.tool_id, Disposition.UPDATE, "")
             self._record(RowOutcome(row, "done"))
+        self._render_published()
+        # An update that ran and failed may still have changed the machine.
+        self.request_refresh()
 
     def _record(self, outcome: RowOutcome) -> None:
         """Latest outcome per tool id wins (cancel-then-retry, D-09)."""
@@ -2978,7 +3079,7 @@ class UnifiedApp(App[list[str] | None]):
             return
         screen = self._views.get("uninstall")
         if isinstance(screen, UninstallScreen):
-            screen.ownership_refreshed()
+            screen.state_refreshed()
 
     def action_abort(self) -> None:
         # The soft quit (q). Guarded so a priority q binding does not quit out from

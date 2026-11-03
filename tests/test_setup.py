@@ -484,6 +484,12 @@ def _capture_app(
         def _record(self, outcome: RowOutcome) -> None:
             real_record(self, outcome)
 
+        def _render_published(self) -> None:
+            """The real handler re-renders and asks for a pass; not under test."""
+
+        def request_refresh(self) -> None:
+            """See `_render_published`."""
+
     monkeypatch.setattr(setup, "UnifiedApp", _App)
     return seen
 
