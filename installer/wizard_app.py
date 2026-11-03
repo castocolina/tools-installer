@@ -2823,11 +2823,10 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._refresh_pending = False
         # Callbacks waiting for the next publication; served once no pass is pending.
         self._publication_waiters: list[Callable[[str | None], None]] = []
-        # The state line this app last wrote (screen, text), so a clean publish
-        # clears only its own line, never one a view wrote.
-        # The app's own status line and where it went: a screen, or None while
-        # it waits in _pending_warnings for the next entry.
-        self._state_line: tuple[AppScreen | None, str] | None = None
+        # The app's own state line: (screen, shown text, the text a retraction
+        # restores), or (None, line, "") while it waits in _pending_warnings.
+        # A clean publish clears only its own line, never one a view wrote.
+        self._state_line: tuple[AppScreen | None, str, str] | None = None
         # D-01/15.6-06: the SAME composition-root closure Plans 04/05 wired for
         # Policies' OMZ-plugin apply and the direct `u` update -- called from
         # _install_closed on EVERY close event, never only a selected tool id
@@ -3065,22 +3064,26 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         stands, and the line waits in _pending_warnings for the next entry."""
         previous, self._state_line = self._state_line, None
         if previous is not None:
-            where, old = previous
-            if where is not None:
-                where.status.retract(old)
-            elif old in self._pending_warnings:
-                self._pending_warnings.remove(old)
+            where, shown, rest = previous
+            if where is None:
+                if shown in self._pending_warnings:
+                    self._pending_warnings.remove(shown)
+            elif where.status.text == shown:
+                if rest:
+                    where.status.set(rest, "warn")
+                else:
+                    where.status.clear()
         if line is None:
             return
         screen = self._visible_app_screen()
         if screen is None or screen.status.text:
             if line not in self._pending_warnings:
                 self._pending_warnings.append(line)
-            self._state_line = (None, line)
+            self._state_line = (None, line, "")
             return
         # Plain text through StatusLine.set, never markup (T-19-40).
         screen.status.set(line, "warn")
-        self._state_line = (screen, line)
+        self._state_line = (screen, line, "")
 
     # exit_on_error=False (Textual's own worker.py defaults this True, which
     # calls App._handle_exception -- crashing the whole app -- on any
@@ -3175,11 +3178,21 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._flush_pending_warnings(target)
         target.enter_view()
 
-    def _flush_pending_warnings(self, screen: AppScreen) -> None:
-        if not self._pending_warnings:
+    def _flush_pending_warnings(self, screen: AppScreen, extra: Sequence[str] = ()) -> None:
+        """Write the queued warnings (and `extra`) on one line of `screen`. A
+        queued state line moves with them, so a clean publish still retracts it
+        (RR-02), leaving the other warnings standing."""
+        parts = [*self._pending_warnings, *extra]
+        self._pending_warnings = []
+        if not parts:
             return
-        pending, self._pending_warnings = self._pending_warnings, []
-        screen.status.set(" · ".join(pending), "warn")
+        text = " · ".join(parts)
+        screen.status.set(text, "warn")
+        if self._state_line is not None and self._state_line[0] is None:
+            line = self._state_line[1]
+            if line in parts:
+                rest = " · ".join(part for part in parts if part != line)
+                self._state_line = (screen, text, rest)
 
     def _navigable(self) -> bool:
         # ctrl+p and the number keys are priority App bindings, so they fire even
@@ -3355,8 +3368,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         if visible is None:
             self._pending_warnings.extend(warnings)
             return
-        pending, self._pending_warnings = self._pending_warnings, []
-        visible.status.set(" · ".join(pending + warnings), "warn")
+        self._flush_pending_warnings(visible, warnings)
 
     def _visible_app_screen(self) -> AppScreen | None:
         # Before mount there is no stack; during shutdown the app stops running
