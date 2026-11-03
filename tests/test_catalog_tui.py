@@ -3169,7 +3169,6 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
         ("broken", "rg is broken"),
         ("current", "rg is already current"),
         ("unknown", "cannot update rg:"),
-        ("in_flight", "update already in flight for fd"),
     ],
 )
 async def test_a_refused_update_still_requests_one_pass(
@@ -3196,9 +3195,6 @@ async def test_a_refused_update_still_requests_one_pass(
             ownership=_ownership(tool, owner="unknown", unknown_reason="no manager claimed it"),
             version=_outdated_status("rg"),
         ),
-        "in_flight": pass_state(
-            tool, platform=service.platform, ownership=brew, version=_outdated_status("rg")
-        ),
     }
     updated: list[str] = []
 
@@ -3211,8 +3207,6 @@ async def test_a_refused_update_still_requests_one_pass(
         await _mount_and_settle(app, pilot)
         if case in states:
             service.publish([states[case]])
-        if case == "in_flight":
-            assert updates.begin("fd")
         before = service.passes
         await pilot.press("u")
         status = app.catalog.status_text

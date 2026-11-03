@@ -673,10 +673,9 @@ class CatalogScreen(AppScreen):
             self.status.set(line, "warn")
             self.post_message(RefreshRequested())
             return
+        # A bare guard: every holder of the update service also holds the app
+        # lock, which refuse_if_mutating above already turned away.
         if not self._updates.begin(tool_id):
-            in_flight = self._updates.in_flight or "another tool"
-            self.status.set(f"update already in flight for {in_flight}", "warn")
-            self.post_message(RefreshRequested())
             return
         self.app.begin_mutation(MutationHolder.UPDATE)
         self.status.set(f"updating {tool_id}…", "ok")
