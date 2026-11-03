@@ -1254,3 +1254,5 @@ def test_outcome_words_for_removal() -> None:
     assert outcome_detail_text(failed) == "boom"
     dirty = RowOutcome(row, "remove_failed", detail="\x1b[31mx")
     assert "\x1b" not in outcome_detail_text(dirty)
+    # C-34: a removal failure never falls back to install wording.
+    assert outcome_detail_text(RowOutcome(row, "remove_failed")) == "not removed"
