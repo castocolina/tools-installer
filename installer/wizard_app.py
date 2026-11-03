@@ -13,7 +13,7 @@ root at the bottom: the stack is always `[root, <one view>]` once mounted.
 """
 
 import contextlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -1597,6 +1597,7 @@ class UninstallScreen(AppScreen):
                 PlanRow(tool_id, Disposition.REMOVE, ""), "remove_failed", detail=line
             )
         self._browser.selected -= set(swept.removed)
+        self.app.unstage(swept.removed)
         self._repaint()
         summary_parts = [summary_counts(outcomes)] if outcomes else []
         if swept.remove_failed:
@@ -2970,6 +2971,11 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         screen = self._visible_app_screen()
         if screen is not None:
             screen.state_refreshed()
+
+    def unstage(self, ids: Iterable[str]) -> None:
+        """Drop removed tools from the tiers' shared selection (in place: the
+        tier browsers hold this set)."""
+        self._staged.difference_update(ids)
 
     def show_result(self, origin: AppScreen, text: str, severity: Severity | str) -> None:
         """Write a mutation's result where the user is looking (C-28): on the
