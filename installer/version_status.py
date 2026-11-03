@@ -80,6 +80,8 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import (
+    PNPM_SMOKE_FAILED,
+    PNPM_SPLIT_GROUP,
     PNPM_TRACKED_OFF_PATH,
     audit_node_globals,
     incomplete_install_groups,
@@ -674,6 +676,24 @@ def _merge_facts(*maps: Mapping[str, _ConfigFacts]) -> dict[str, _ConfigFacts]:
 
 
 PNPM_GROUP_UNREADABLE_NOTE = "pnpm group not checked: the pnpm inventory is unreadable"
+PNPM_GROUP_INCOMPLETE = "pnpm group incomplete: missing {names}"
+
+
+def pnpm_findings(tool_id: str, reasons: Sequence[str]) -> tuple[str, ...]:
+    """The pnpm findings among a node tool's reasons, the ones Doctor prints.
+
+    Owner and version notes describe a healthy tool too, so they are left to
+    the detail bar (C-10). Each finding is matched by its template's prefix.
+    """
+    templates = (PNPM_SPLIT_GROUP, PNPM_TRACKED_OFF_PATH, PNPM_GROUP_INCOMPLETE)
+    prefixes = (
+        BROKEN_SHIM_REASON,
+        PNPM_SMOKE_FAILED.format(tool_id=tool_id, reason=""),
+        *(template.partition("{")[0] for template in templates),
+    )
+    return tuple(reason for reason in reasons if reason.startswith(prefixes))
+
+
 # The missing names reach the step text, so only plain npm names get a step.
 _NPM_NAME_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/-]*$")
 
@@ -707,7 +727,7 @@ def _pnpm_group_facts(
             # declaring tool's first node method -- the same pinned group,
             # --allow-build, real pnpm and smoke check as install and update.
             steps = (ConfigStep(f"install {names} with pnpm", "pnpm_group_install"),)
-        fact = _ConfigFacts((f"pnpm group incomplete: missing {names}",), steps)
+        fact = _ConfigFacts((PNPM_GROUP_INCOMPLETE.format(names=names),), steps)
         facts[tool_id] = facts.get(tool_id, _NO_FACTS).plus(fact)
     return facts
 

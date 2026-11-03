@@ -98,6 +98,7 @@ from installer.version_status import (
     Health,
     ToolState,
     VersionRefreshService,
+    pnpm_findings,
     uninstall_detail,
     uninstall_group,
     uninstall_label,
@@ -631,7 +632,7 @@ class DoctorScreen(AppScreen):
             state = service.state_of(entry.tool_id) if service is not None else None
             if state is None or state.health in (Health.CHECKING, Health.UNAVAILABLE):
                 continue
-            for reason in state.reasons:
+            for reason in pnpm_findings(entry.tool_id, state.reasons):
                 # Plain text, never markup: a reason can carry child-process output.
                 text.append(sanitize_log_line(f"{entry.tool_id}: {reason}") + "\n", style="yellow")
         if report is None or report.known:

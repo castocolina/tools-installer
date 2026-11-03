@@ -24,7 +24,7 @@ from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
+from installer.pnpm_globals import PNPM_SPLIT_GROUP, NodeGlobal, NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.systemd_daemon import DaemonState, TimerStateCache
@@ -2477,12 +2477,16 @@ async def test_doctor_rerenders_when_a_pass_publishes(tmp_path: Path):
         await settle(app, pilot)
         assert "a brand new finding" not in str(_doctor_text(app))
         service.queued = (
-            pass_state(tool, platform=service.platform, broken=("a brand new finding",)),
+            pass_state(
+                tool,
+                platform=service.platform,
+                broken=(_SMOKE.format(reason="a brand new finding"),),
+            ),
         )
         app.request_refresh()
         await settle(app, pilot)
         assert app.current_view == "doctor"
-        assert "mmdc: a brand new finding" in str(_doctor_text(app))
+        assert "fails right now: a brand new finding" in str(_doctor_text(app))
 
 
 async def test_an_unreadable_audit_records_no_evidence(tmp_path: Path):
@@ -2629,9 +2633,10 @@ async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
         await app.show_view("doctor")
         await settle(app, pilot)
         assert "pip shim is shadowed" in str(_doctor_text(app))
-        service.publish([pass_state(tool, platform=service.platform, broken=("a stale finding",))])
+        stale = _SMOKE.format(reason="a stale finding")
+        service.publish([pass_state(tool, platform=service.platform, broken=(stale,))])
         await _reenter_doctor(app, pilot)
-        assert "mmdc: a stale finding" in str(_doctor_text(app))
+        assert f"mmdc: {stale}" in str(_doctor_text(app))
         findings["on"] = False
         service.publish([pass_state(tool, platform=service.platform)])
         await _reenter_doctor(app, pilot)
@@ -2890,7 +2895,8 @@ async def test_a_failed_first_run_pick_keeps_the_error():
 
 # -- 21-21: the UI-01 matrix, every mutation source against every view --
 
-_WITNESS_NOTE = "matrix witness note"
+# A pnpm finding, so Doctor prints it; a note, so the tiers stay OK.
+_WITNESS_NOTE = PNPM_SPLIT_GROUP.format(names="matrix-witness, its-peer")
 _TIER_WITNESS = {"system": "w-system", "user": "w-user", "ai": "w-ai"}
 
 

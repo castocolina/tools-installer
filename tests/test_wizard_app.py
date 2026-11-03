@@ -60,6 +60,7 @@ from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     BROKEN_REPAIR_NOTE,
+    BROKEN_SHIM_REASON,
     UNKNOWN_OWNER_NOTE,
     Health,
     ToolState,
@@ -4079,7 +4080,7 @@ async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_pat
         methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
     )
     service = frozen_service(tmp_path)
-    service.publish([pass_state(mmdc, platform=service.platform, broken=("mmdc is not working",))])
+    service.publish([pass_state(mmdc, platform=service.platform, broken=(BROKEN_SHIM_REASON,))])
     app = _app(
         guard_warning=warning,
         node_globals=lambda: _mmdc_report(),

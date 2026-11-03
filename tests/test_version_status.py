@@ -79,6 +79,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
     ownership_notes,
+    pnpm_findings,
     resolve_github_release_status,
     resolve_status,
     tool_state,
@@ -5844,6 +5845,20 @@ def test_invalidate_drops_the_doctor_evidence(tmp_path: Path) -> None:
     state = _settled_states(service, _pending_tools())["rg"]
     assert "smoke failed" not in state.reasons
     assert state.health is not Health.BROKEN
+
+
+def test_pnpm_findings_keep_only_the_pnpm_sentences() -> None:
+    findings = (
+        BROKEN_SHIM_REASON,
+        "mmdc's command resolves on PATH, but the check the catalog declares for it "
+        "fails right now: exit 1",
+        "pnpm is holding a, b in separate global installs.",
+        "pnpm still tracks mmdc globally, but the command no longer resolves on PATH.",
+        "pnpm group incomplete: missing puppeteer",
+    )
+    reasons = ("managed by pnpm", *findings, "no latest version to compare against")
+    assert pnpm_findings("mmdc", reasons) == findings
+    assert pnpm_findings("other", findings[1:2]) == ()
 
 
 _OFF_PATH = "pnpm still tracks mmdc globally, but the command no longer resolves on PATH."
