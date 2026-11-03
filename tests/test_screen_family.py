@@ -805,6 +805,25 @@ async def test_a_held_removal_keeps_the_ui_responsive(tmp_path: Path):
             remover.release.set()
 
 
+async def test_a_removed_tool_leaves_the_tier_selection(tmp_path: Path):
+    """C-16: a tool staged on a tier and then removed on Uninstall is no
+    longer staged; the tier's next enter does not offer to install it."""
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, service = _removal_app(tmp_path, remover)
+    remover.release.set()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        _catalog_cursor(app, "yq")
+        await pilot.press("space")
+        assert app.catalog.selected == {"yq"}
+        await app.show_view("uninstall")
+        service.queued = (absent_state(_tool("yq")),)
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        assert app.view("uninstall").status.text.startswith("1 removed")
+        assert app.catalog.selected == set()
+
+
 async def test_a_second_removal_is_refused_while_one_runs(tmp_path: Path):
     remover = HeldRemover(SweepResult(removed=("yq",)))
     app, _service = _removal_app(tmp_path, remover)
