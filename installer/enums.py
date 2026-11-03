@@ -105,3 +105,11 @@ class DaemonState(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     UNAVAILABLE = "unavailable"
+
+
+class MutationHolder(StrEnum):
+    """The noun that fills `MUTATION_REFUSAL` ("{holder} is running; ...") while
+    the app mutation lock is held. One member per mutation that takes the lock;
+    each plan adds the member its holder uses (UI-SPEC Copywriting noun table)."""
+
+    REMOVAL = "A removal"

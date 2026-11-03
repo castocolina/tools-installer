@@ -31,7 +31,7 @@ from installer.app import UninstallDecision, path_writer_lines_for
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
-from installer.enums import Tier, UninstallState
+from installer.enums import MutationHolder, Tier, UninstallState
 from installer.execute_screen import (
     ExecuteInputs,
     ExecuteScreen,
@@ -69,6 +69,7 @@ from installer.session import (
     first_line,
     ran_anything,
     retained,
+    summary_counts,
 )
 from installer.shellrc import PathGuardOutcome, guard_path_writers, path_export_guard
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
@@ -896,6 +897,24 @@ def _has_daemon_id(ids: tuple[str, ...]) -> bool:
     return any(policy_id.startswith("daemon:") for policy_id in ids)
 
 
+class RemovalFinished(Message):
+    """The removal worker ended. `swept` is None when the remover failed or raised
+    (then `error` says why); `invalidate_error` is the post-removal cache failure."""
+
+    def __init__(
+        self,
+        decision: UninstallDecision,
+        swept: SweepResult | None,
+        error: str | None,
+        invalidate_error: str | None,
+    ) -> None:
+        super().__init__()
+        self.decision = decision
+        self.swept = swept
+        self.error = error
+        self.invalidate_error = invalidate_error
+
+
 class UninstallScreen(AppScreen):
     """Full catalog-parity uninstall browser. Every tool is listed with its
     removability state; only removable tools (and the env rows) toggle. Enter
@@ -1258,7 +1277,7 @@ class UninstallScreen(AppScreen):
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
-        if self.applied or not any(entry.selectable for entry in self._entries):
+        if not any(entry.selectable for entry in self._entries):
             return
         if not event.ids:
             self.status.set("Select at least one item to remove.", "warn")
@@ -1321,76 +1340,25 @@ class UninstallScreen(AppScreen):
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
         )
-        swept, self.error = run_live(lambda: self._remove(decision))
-        if swept is None:
-            self.status.set(
-                f"Uninstall failed: {self.error}. Check permissions, then press enter.",
-                "error",
-            )
+        if self.app.refuse_if_mutating(self):
             return
-        self.applied = True
-        tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
-        summary_parts = [self._applied_summary(tool_count, swept)]
-        # WR-01 (15.4-REVIEW.md): gated on `tool_count`, not called
-        # unconditionally. A sweep that removed only the pip/npm ban or the
-        # PATH block and no tool at all changes nothing any ownership record
-        # describes, so bumping the epoch for it degraded every managed row's
-        # attribution to the generic registry phrase in exchange for nothing.
-        # The invariant `version_status.py` states is "every MUTATION calls
-        # invalidate" -- an env-lever sweep is not a mutation of tool
-        # ownership, and reading it as one is what made this case a pure loss.
-        if self._invalidate is not None and tool_count:
-            # version_status.py:26-30's own invariant: every mutation this
-            # app performs calls invalidate. This screen's removal was the
-            # second hole in it (alongside install, closed by
-            # on_install_run_finished below) -- without this call, a tool
-            # the user just deleted keeps its pre-removal owner and version
-            # for up to MANAGER_STALE_AFTER, on a screen whose adjacent
-            # control deletes files. Mirrors on_install_run_finished's own
-            # both-directions contract exactly: a raising seam never flips
-            # a completed removal into a reported failure, and it is never
-            # swallowed -- it is appended to the status line instead.
-            try:
-                self._invalidate()
-            except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, appended below
-                summary_parts.append(f"version cache invalidation failed: {exc}")
-            # D-05: the removal ends with one app pass whether or not the
-            # invalidate raised; the publish re-renders this view.
-            self.app.request_refresh()
-        # D-01/15.6-06 Task 3: called unconditionally on every successful
-        # sweep (never gated on tool_count -- unlike invalidate above, a
-        # terminal reapply/reversion is warranted even when only an env
-        # lever came off, since sync_terminal_shells' own no-zsh branch is
-        # exactly what a zsh-removing sweep needs). A raised OSError is a
-        # secondary, non-fatal warning appended to the same completed-removal
-        # summary, mirroring the invalidate seam's own both-directions
-        # contract: never swallowed, never flips `applied` or the primary
-        # outcome.
-        # WR-03: the one shared failure contract (terminal_sync_warning), not a
-        # local try/except -- it is total and None-tolerant by construction.
-        # WR-04: a terminal-sync failure must render with "warn" styling, not
-        # the "ok" success color -- the text alone (appended above) is not
-        # enough to distinguish it from a clean run at a glance. Mirrors the
-        # Policies screen and _install_closed, both of which already use
-        # "warn" for this exact class of failure.
-        terminal_warning = terminal_sync_warning(self._terminal_sync)
-        terminal_failed = terminal_warning is not None
-        if terminal_warning:
-            summary_parts.append(terminal_warning)
-        self.status.set(multiline_summary(summary_parts), "warn" if terminal_failed else "ok")
+        self.app.begin_mutation(MutationHolder.REMOVAL)
+        if self._version_refresh is not None and decision.tools:
+            self._version_refresh.mark_pending([tool.id for tool in decision.tools])
+        self._repaint()
+        self.status.set("Removing…", "warn")
+        self._remove_worker(decision)
 
-    def _applied_summary(self, tool_count: int, swept: SweepResult) -> str:
+    def _applied_summary(self, decision: UninstallDecision, swept: SweepResult) -> str:
         parts: list[str] = []
-        if tool_count:
-            parts.append(f"Removed {tool_count} tool(s).")
-        if self.remove_ban:
+        if decision.remove_ban:
             parts.append(
                 "pip/npm ban removed — open a new shell or run `hash -r` so cached"
                 " command paths refresh."
             )
-        if self.remove_path_block:
+        if decision.remove_path_block:
             parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
-        if self.remove_tweaks:
+        if decision.remove_tweaks:
             # From the sweep's own result, never from the row's snapshot: the
             # snapshot describes what was offered, not what came off.
             if swept.swept:
@@ -1425,6 +1393,74 @@ class UninstallScreen(AppScreen):
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return multiline_summary(parts)
+
+    # exit_on_error=False: a crash must leave a usable app; RemovalFinished is
+    # posted from `finally`, so the lock cannot stay held on any outcome.
+    @work(thread=True, exclusive=True, group="uninstall-removal", exit_on_error=False)
+    def _remove_worker(self, decision: UninstallDecision) -> None:
+        swept: SweepResult | None = None
+        error: str | None = "removal did not complete"
+        invalidate_error: str | None = None
+        try:
+            try:
+                swept, error = run_live(lambda: self._remove(decision))
+            except Exception as exc:
+                error = first_line(exc)
+            # Also after a crash: only `invalidate` clears the pending ids (D-09).
+            if self._invalidate is not None and decision.tools:
+                try:
+                    self._invalidate()
+                except Exception as exc:
+                    invalidate_error = f"version cache invalidation failed: {first_line(exc)}"
+        finally:
+            self.post_message(RemovalFinished(decision, swept, error, invalidate_error))
+
+    def on_removal_finished(self, message: RemovalFinished) -> None:
+        self.app.end_mutation()
+        if not self.app.is_running:  # the app is shutting down: nothing to render
+            return
+        swept = message.swept
+        self.error = message.error
+        if swept is None:
+            self.status.set(
+                f"Uninstall failed: {self.error}. Check permissions, then press enter.",
+                "error",
+            )
+            self._request_pass_after(message.decision)
+            return
+        self.applied = True
+        outcomes = [
+            RowOutcome(PlanRow(tool_id, Disposition.REMOVE, ""), "done")
+            for tool_id in swept.removed
+        ] + [
+            RowOutcome(PlanRow(tool_id, Disposition.REMOVE, ""), "remove_failed", detail=line)
+            for tool_id, line in swept.remove_failed
+        ]
+        summary_parts = [summary_counts(outcomes)] if outcomes else []
+        summary_parts.append(self._applied_summary(message.decision, swept))
+        if message.invalidate_error is not None:
+            summary_parts.append(message.invalidate_error)
+        # D-01/15.6-06 Task 3: called unconditionally on every successful
+        # sweep (never gated on tools -- a terminal reapply/reversion is
+        # warranted even when only an env lever came off, since
+        # sync_terminal_shells' own no-zsh branch is exactly what a
+        # zsh-removing sweep needs). WR-03/WR-04: the one shared failure
+        # contract (terminal_sync_warning); a failure renders "warn", never
+        # the "ok" success color, and never flips `applied`.
+        terminal_warning = terminal_sync_warning(self._terminal_sync)
+        if terminal_warning:
+            summary_parts.append(terminal_warning)
+        self.status.set(
+            multiline_summary(summary_parts), "warn" if terminal_warning is not None else "ok"
+        )
+        self._request_pass_after(message.decision)
+
+    def _request_pass_after(self, decision: UninstallDecision) -> None:
+        """D-05: a removal that named tools ends with one app pass; the publish
+        re-renders this view. An environment-only sweep changes nothing a tool
+        state describes, so it asks for none (21-14 revisits that path)."""
+        if decision.tools:
+            self.app.request_refresh()
 
 
 class PoliciesScreen(AppScreen):
@@ -2255,6 +2291,7 @@ class LinkModeScreen(ModalScreen[str | None]):
 _DAEMON_DEFAULT_IN_FLIGHT_MESSAGE = (
     "Applying the on-by-default daemon setting; wait a moment, then try again."
 )
+MUTATION_REFUSAL = "{holder} is running; wait for it to finish. Navigation still works."
 _TOGGLE_IN_FLIGHT_MESSAGE = "A background job change is still applying; wait a moment, then retry."
 
 
@@ -2478,6 +2515,25 @@ class UnifiedApp(App[list[str] | None]):
         # finding #15). Permanently False -- a no-op state -- for every
         # construction site that never wires daemon_default at all.
         self.daemon_default_in_flight: bool = self._daemon_default is not None
+        self._mutation_holder: MutationHolder | None = None
+
+    @property
+    def mutation_in_flight(self) -> bool:
+        return self._mutation_holder is not None
+
+    def begin_mutation(self, holder: MutationHolder) -> None:
+        self._mutation_holder = holder
+
+    def end_mutation(self) -> None:
+        self._mutation_holder = None
+
+    def refuse_if_mutating(self, screen: AppScreen) -> bool:
+        """Refuse a second mutation while the lock is held: the one template on
+        `screen`'s status, true when refused."""
+        if self._mutation_holder is None:
+            return False
+        screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
+        return True
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
     # pyright-strict reports as partially unknown at the call site. Re-declare it

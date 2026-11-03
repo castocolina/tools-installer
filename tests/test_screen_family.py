@@ -594,7 +594,7 @@ _REFUSAL = "A removal is running; wait for it to finish. Navigation still works.
 
 
 def _removal_app(
-    tmp_path: Path, remover: HeldRemover, *, invalidate: bool = False
+    tmp_path: Path, remover: HeldRemover, *, invalidate: bool = True
 ) -> tuple[UnifiedApp, FrozenStateService]:
     yq, fd = _tool("yq"), _tool("fd")
     service = frozen_service(tmp_path)
@@ -648,6 +648,8 @@ async def test_a_held_removal_keeps_the_ui_responsive(tmp_path: Path):
             service.queued = (absent_state(_tool("yq")),)
             await settle(app, pilot)
             assert app.view("uninstall").status.text.startswith("1 removed")
+            await pilot.press("1")
+            await wait_until(pilot, lambda: app.current_view == "system")
             assert _health(app, "yq") == "○"
         finally:
             remover.release.set()
