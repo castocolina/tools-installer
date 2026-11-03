@@ -1126,3 +1126,119 @@ async def test_ctrl_c_under_the_palette_during_a_removal_waits(tmp_path: Path):
             remover.release.set()
     assert app.return_value is None
     assert len(remover.calls) == 1
+
+
+# -- 21-15: an update holds the same app lock --
+
+_UPDATE_REFUSAL = "An update is running; wait for it to finish. Navigation still works."
+
+
+class _HeldUpdates(ScriptedUpdates):
+    """A scripted update service whose run waits until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__({"rg": UpdateOutcome("rg", "updated", "brew")})
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def run(self, target: Any) -> UpdateOutcome:
+        self.started.set()
+        if not self.release.wait(timeout=10):
+            raise TimeoutError("_HeldUpdates was never released")
+        return super().run(target)
+
+
+def _rg_state(service: FrozenStateService, case: str) -> Any:
+    rg = _tool("rg")
+    outdated = case != "current"
+    version = VersionStatus("rg", "1.0", "1.1" if outdated else "1.0", outdated, False, "brew")
+    if case == "broken":
+        return plan_state(rg, health=Health.BROKEN, reasons=("rg exits non-zero",))
+    if case == "unknown_owner":
+        return pass_state(rg, platform=service.platform, version=version)
+    return pass_state(rg, platform=service.platform, ownership=_brew_owned(rg), version=version)
+
+
+def _update_app(
+    tmp_path: Path, updates: ScriptedUpdates, remover: HeldRemover, case: str = "outdated"
+) -> tuple[UnifiedApp, FrozenStateService]:
+    rg, fd = _tool("rg"), _tool("fd")
+    service = frozen_service(tmp_path)
+    service.publish([_rg_state(service, case), removable_state(fd, [tmp_path / "fd"])])
+    inputs = UninstallInputs(
+        ban_names=lambda: [],
+        has_path_block=lambda: False,
+        remove=remover,
+        tweak_ids=lambda: (),
+    )
+    app = _family_app(tools=[rg, fd], version_refresh=service, uninstall=inputs, updates=updates)
+    return app, service
+
+
+def _catalog_cursor(app: UnifiedApp, tool_id: str) -> None:
+    table = app.catalog.query_one(DataTable[Any])
+    table.move_cursor(row=table.get_row_index(tool_id))
+
+
+async def test_an_update_holds_the_mutation_lock(tmp_path: Path):
+    updates = _HeldUpdates()
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _update_app(tmp_path, updates, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            _catalog_cursor(app, "rg")
+            await pilot.press("u")
+            await wait_until(pilot, updates.started.is_set)
+            assert app.mutation_in_flight
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "fd")
+            status = app.view("uninstall").status
+            assert (status.text, status.severity) == (_UPDATE_REFUSAL, Severity.WARN)
+            assert remover.calls == []
+            updates.release.set()
+            await settle(app, pilot)
+            assert not app.mutation_in_flight
+        finally:
+            updates.release.set()
+
+
+@pytest.mark.parametrize("case", ["outdated", "pending", "current", "broken", "unknown_owner"])
+async def test_u_is_refused_during_a_removal(tmp_path: Path, case: str):
+    updates = _HeldUpdates()
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, service = _update_app(
+        tmp_path, updates, remover, "outdated" if case == "pending" else case
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover, "fd")
+            await app.show_view("system")
+            _catalog_cursor(app, "fd" if case == "pending" else "rg")
+            before = service.passes
+            await pilot.press("u")
+            await wait_until(pilot, lambda: service.passes == before + 1)
+            await pilot.pause()
+            assert service.passes == before + 1
+            status = app.catalog.status
+            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+            assert not updates.started.is_set()
+            assert updates.targets == []
+            remover.release.set()
+            await settle(app, pilot)
+        finally:
+            remover.release.set()
+
+
+async def test_the_lock_is_released_when_the_update_crashes(tmp_path: Path):
+    updates = ScriptedUpdates({"rg": RuntimeError("boom")})
+    app, _service = _update_app(tmp_path, updates, HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        _catalog_cursor(app, "rg")
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert not app.mutation_in_flight
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert len(updates.targets) == 2
