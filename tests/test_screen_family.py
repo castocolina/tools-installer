@@ -1754,6 +1754,27 @@ async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
             remover.release.set()
 
 
+@pytest.mark.parametrize("key", ["t", "m"])
+async def test_t_and_m_are_refused_before_their_picker(tmp_path: Path, key: str):
+    """C-17: while a mutation runs, t and m refuse at once on Policies; no
+    picker opens first."""
+    app, _service = _policy_app(
+        tmp_path,
+        [_policy(tmp_path, "job", active=True, set_schedule=lambda _h, _m: _policy_result())],
+        HeldRemover(),
+        set_link_mode=lambda _mode: None,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        app.begin_mutation(MutationHolder.UPDATE)
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.screen is app.view("policies")
+        status = app.view("policies").status
+        assert (status.text, status.severity) == (_UPDATE_REFUSAL, Severity.WARN)
+        app.end_mutation()
+
+
 async def test_the_daemon_default_apply_repaints_a_visible_uninstall(tmp_path: Path):
     release = threading.Event()
     tweaks: list[str] = []
