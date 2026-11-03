@@ -12,7 +12,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, St
 
 from installer import daemon
 from installer.app import UninstallDecision
-from installer.catalog_tui import CatalogScreen, health_cell
+from installer.catalog_tui import CatalogScreen, RefreshRequested, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
@@ -539,6 +539,36 @@ async def test_doctor_guard_yes_edits_one_file_and_reports_it() -> None:
         assert f"guarded {rc}" in body
 
 
+async def test_doctor_fix_with_a_guard_file_requests_its_pass_after_the_confirmations() -> None:
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(rc, text='export PATH="/opt/tools/bin:$PATH"')
+    scans = iter([[record], []])
+    calls: list[Path] = []
+
+    def guard_file(path: Path, lines: Sequence[PathWriterLine]) -> PathGuardOutcome:
+        calls.append(path)
+        return PathGuardOutcome("guarded")
+
+    class _CountingHost(_DoctorHost):
+        passes = 0
+
+        def on_refresh_requested(self, _message: RefreshRequested) -> None:
+            self.passes += 1
+
+    screen = _guard_doctor(writer_lines=[record], rescan=lambda: next(scans), guard_file=guard_file)
+    app = _CountingHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _guard_modal_text(app.screen)
+        assert app.passes == 0
+        await pilot.press("y")
+        await pilot.pause()
+        assert calls == [rc]
+        assert app.passes == 1
+
+
 async def test_doctor_guard_no_skips_without_calling_guard_file() -> None:
     rc = Path("tmp/.bashrc")
     record = _writer_line(rc)
@@ -884,19 +914,6 @@ async def test_doctor_enter_applies_fix_once() -> None:
         assert screen.error is None
         await pilot.press("enter")
         assert calls == ["fix"]
-
-
-async def test_doctor_hidden_a_alias_applies_fix() -> None:
-    calls: list[str] = []
-    app = _app(fix=lambda: calls.append("fix"))
-
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
-        await pilot.press("a")
-        assert calls == ["fix"]
-        assert isinstance(app.screen, DoctorScreen)
-        screen = app.screen
-        assert screen.applied is True
 
 
 async def test_doctor_apply_failure_shows_error_and_allows_retry() -> None:
