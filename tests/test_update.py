@@ -937,6 +937,34 @@ def test_update_service_invalidate_on_success(monkeypatch: pytest.MonkeyPatch) -
     assert reasons == ["updated rg"]
 
 
+def test_update_service_invalidates_after_a_failed_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-24: a failed update may still have changed the machine, so the
+    follow-up pass must not reuse the pre-update manager snapshot."""
+    brew = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", brew, cmd="rg")
+    reasons: list[str] = []
+
+    def fake_perform(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(
+            tool_id=target.tool.id, status="failed", owner="brew", detail="brew exited 1"
+        )
+
+    def record_invalidate(*, reason: str) -> int:
+        reasons.append(reason)
+        return 2
+
+    monkeypatch.setattr(update, "perform_update", fake_perform)
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=brew, package="ripgrep"),
+        invalidate=record_invalidate,
+    )
+    outcome = service.run(_target(tool, "brew", method=brew, package="ripgrep"))
+    assert outcome.status == "failed"
+    assert reasons == ["update of rg failed"]
+
+
 def test_update_service_invalidate_failure_stays_updated(monkeypatch: pytest.MonkeyPatch) -> None:
     """W2 regression (12-REVIEW.md, codex-sol-high): the machine was already
     mutated successfully by the time cache invalidation runs, so a failure
