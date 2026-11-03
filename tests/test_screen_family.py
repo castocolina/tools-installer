@@ -14,6 +14,7 @@ from installer import receipts
 from installer import uninstall as uninstall_module
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
+from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.engine import InstallOutcome
 from installer.enums import MutationHolder, Severity
@@ -2313,3 +2314,103 @@ async def test_a_hostile_pnpm_reason_renders_literally(tmp_path: Path):
         assert "[red]x[/red]" in str(body)
         assert "\x1b" not in str(body)
         assert not any("red" in str(span.style) for span in body.spans)
+
+
+_STATE_READ = "Could not read the doctor state: rc file locked."
+
+
+@pytest.mark.parametrize("seam", ["guard_state", "fix_preview"])
+async def test_a_failed_doctor_read_shows_the_error(seam: str):
+    failing = {"on": False}
+
+    def guard() -> tuple[dict[str, bool], str | None]:
+        if seam == "guard_state" and failing["on"]:
+            raise OSError("rc file locked\nsecond line")
+        return {"pip": True, "npm": False}, None
+
+    def preview() -> str:
+        if seam == "fix_preview" and failing["on"]:
+            raise OSError("rc file locked\nsecond line")
+        return "WIRE-THE-RC-FILE"
+
+    app = _family_app(guard_state=guard, fix_preview=preview)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        doctor = app.view("doctor")
+        first = str(_doctor_text(app))
+        assert "WIRE-THE-RC-FILE" in first
+        assert "pip" in first
+        assert doctor.status.text == ""
+        failing["on"] = True
+        await _reenter_doctor(app, pilot)
+        second = str(_doctor_text(app))
+        assert (doctor.status.text, doctor.status.severity) == (_STATE_READ, Severity.ERROR)
+        if seam == "guard_state":
+            assert "pip" not in second
+        else:
+            assert "WIRE-THE-RC-FILE" not in second
+        failing["on"] = False
+        await _reenter_doctor(app, pilot)
+        assert doctor.status.text == ""
+        assert "WIRE-THE-RC-FILE" in str(_doctor_text(app))
+
+
+async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
+    tool = _node_tool()
+    findings = {"on": True}
+    at_risk = DiskPressure(
+        home_free_percent=5.0,
+        tmp_used_percent=10.0,
+        daemon=DaemonState.INACTIVE,
+        tmp_threshold=True,
+    )
+    healthy = DiskPressure(
+        home_free_percent=90.0,
+        tmp_used_percent=10.0,
+        daemon=DaemonState.ACTIVE,
+        tmp_threshold=False,
+    )
+
+    def probe(*, blocking: bool = True) -> DiskPressure:
+        del blocking
+        return at_risk if findings["on"] else healthy
+
+    def guard() -> tuple[dict[str, bool], str | None]:
+        warning = "pip shim is shadowed" if findings["on"] else None
+        return {"pip": findings["on"], "npm": False}, warning
+
+    def build(directory: Path) -> tuple[UnifiedApp, FrozenStateService]:
+        service = frozen_service(directory)
+        service.publish([pass_state(tool, platform=service.platform)])
+        app = _family_app(
+            tools=[tool],
+            version_refresh=service,
+            guard_state=guard,
+            policies=PolicyInputs(policies=[], disk_pressure=probe),
+        )
+        return app, service
+
+    app, service = build(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert "pip shim is shadowed" in str(_doctor_text(app))
+        service.publish([pass_state(tool, platform=service.platform, broken=("a stale finding",))])
+        await _reenter_doctor(app, pilot)
+        assert "mmdc: a stale finding" in str(_doctor_text(app))
+        findings["on"] = False
+        service.publish([pass_state(tool, platform=service.platform)])
+        await _reenter_doctor(app, pilot)
+        again = str(_doctor_text(app))
+    fresh_app, _service = build(tmp_path / "fresh")
+    async with fresh_app.run_test(size=(120, 40)) as pilot:
+        await settle(fresh_app, pilot)
+        await fresh_app.show_view("doctor")
+        await settle(fresh_app, pilot)
+        fresh = str(_doctor_text(fresh_app))
+    assert again == fresh
+    assert "pip shim is shadowed" not in again
+    assert "a stale finding" not in again
