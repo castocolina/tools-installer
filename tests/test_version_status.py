@@ -6001,6 +6001,21 @@ def test_uninstall_label(state: ToolState | None, expected: str) -> None:
     assert uninstall_label(state) == expected
 
 
+def test_a_removable_row_names_the_installer_as_its_owner() -> None:
+    """C-23 (UI-SPEC:107-109): Installed-via names the owner of the removable
+    copy. Everything in `removable` is this installer's to remove, whatever
+    the method kind, and a copy shadowed by an active manager binary still
+    reads `installer`; the detail names the active copy instead."""
+    tool, state = _uninstall_state(owner="installer", removable=_REMOVABLE)
+    release = Method(kind="github_release", params={"repo": "o/rg", "asset": "rg"})
+    state = replace(state, ownership=replace(state.ownership, method=release))
+    assert uninstall_label(state) == "installer"
+    assert uninstall_detail(tool, state) == LAYOUT_PROOF_NOTE
+    shadowed = _state_of(removable=_REMOVABLE)
+    assert uninstall_label(shadowed) == "installer"
+    assert uninstall_detail(tool, shadowed) == f"{LAYOUT_PROOF_NOTE} — active copy: Homebrew"
+
+
 def test_uninstall_detail_proof() -> None:
     tool, adopted = _uninstall_state(removable=_REMOVABLE, notes=(ADOPTED_NOTE,))
     assert uninstall_detail(tool, adopted) == ADOPTED_NOTE
