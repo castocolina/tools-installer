@@ -306,6 +306,9 @@ class _BodyStatic(Static):
         return self.render()
 
 
+_DOCTOR_READ_ERROR = "Could not read the doctor state: "
+
+
 class DoctorScreen(AppScreen):
     """PATH audit and safe PATH repair in one view."""
 
@@ -432,6 +435,11 @@ class DoctorScreen(AppScreen):
         # Not globals_error: "nothing to reinstall" is not a failure, and the
         # error branch renders "Reinstall failed." in red.
         self.globals_note: str | None = None
+        # The two live reads' failures, and the status line this screen last wrote
+        # for them (cleared only while it still holds that copy).
+        self._guard_error: str | None = None
+        self._preview_error: str | None = None
+        self._read_line: str | None = None
         # Bumped every time an audit worker is actually started; carried on
         # its GlobalsAudited message so a superseded worker's result (one
         # started before a newer request, still running when the newer one
@@ -512,7 +520,9 @@ class DoctorScreen(AppScreen):
     def _refresh_guidance(self) -> None:
         # IO-free by construction. The pnpm findings are not here: they are the
         # published ToolState reasons, rendered by _refresh_body.
-        status, warning = self._guard_state()
+        read, self._guard_error = run_live(self._guard_state)
+        # A failed read contributes nothing: the earlier answer is not kept (B3).
+        status, warning = read if read is not None else ({}, None)
         # Position is a decision, pinned by a test: disk pressure follows the guard items.
         self.guidance = (
             doctor_guidance(self._report, self._duplicate_writers, self._writer_lines)
@@ -553,7 +563,8 @@ class DoctorScreen(AppScreen):
         text.append("Audit\n", style="bold")
         text.append(guidance_text(self._tui_guidance()))
         text.append("\n\nSafe fix preview\n", style="bold")
-        text.append(self._fix_preview())
+        preview, self._preview_error = run_live(self._fix_preview)
+        text.append(preview or "")
         text.append("\n\nAction\n", style="bold")
         if self.applied:
             text.append("PATH wired.", style="green")
@@ -624,6 +635,17 @@ class DoctorScreen(AppScreen):
         else:
             text.append("Press r to reinstall the pnpm-managed global set.", style="yellow")
         body.update(text)
+        self._sync_read_status()
+
+    def _sync_read_status(self) -> None:
+        error = self._guard_error or self._preview_error
+        if error is not None:
+            self._read_line = f"{_DOCTOR_READ_ERROR}{error.partition(chr(10))[0]}."
+            self.status.set(self._read_line, "error")
+        elif self._read_line is not None:
+            if self.status.text == self._read_line:
+                self.status.clear()
+            self._read_line = None
 
     def _tui_guidance(self) -> list[Guidance]:
         """Keep CLI doctor wording unchanged while the TUI points to the live apply action."""
