@@ -1,6 +1,6 @@
 ---
 phase: 21-one-screen-family
-verified: 2026-11-03T20:00:00Z
+verified: 2026-11-03T21:30:00Z
 status: human_needed
 score: 5/5 must-haves verified
 covered_files:
@@ -50,17 +50,15 @@ covered_files:
   - "installer/guidance.py"
   - "installer/uninstall.py"
   - "installer/wizard_app.py"
+  - "tests/test_layout_80x20.py"
   - "tests/test_screen_family.py"
-covered_digest: "v3:sha256:3321b902a798ac63f667e14c66557ef96a1e7d880b267766f6dca550277d4d1d"
+covered_digest: "v3:sha256:4fbad46f5d3ad6ebd6ee4d5154fddedbbcd46bd74544df976d333b8635dc5e97"
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
-  - test: "NO_COLOR tmux UAT at 80x20 in a disposable container (UI-SPEC's one human backstop): walk system/user/ai tiers, Uninstall, Policies and Doctor; trigger a held lock with the /tmp/uat-bin/systemctl shim and press a second mutating key"
-    expected: "Every refusal and status string fits 80x20 and is readable without colour; the Doctor status sits on its own row; the five known pre-existing 80x20 layout items are the only deviations (todo 2026-11-03-fix-80x20-layout-gaps-found-by-the-phase-21-tui-check)"
-    why_human: "Visual and layout judgment under NO_COLOR, and a real held-lock timing path; the tmux check recorded in the ledger is not a substitute for the user's own run"
-  - test: "Real-host check of a removal (run only in a disposable container, never on the developer host): remove an installer-owned tool and a managed-elsewhere tool from the Uninstall screen, then quit with q and with a second ctrl+c during a slow remover"
-    expected: "Removable tool moves to nothing to do, every tier shows the open circle, Policies shows a removed ban OFF; q waits, a second ctrl+c exits with 'Quit before the removal finished; some files may remain.'"
-    why_human: "Real filesystem, real package managers and real signal handling cannot be exercised by fake-seam pilots"
+  - test: "Real-host check of the installer on the developer's own machine (the one thing a disposable container cannot show): run the wizard, remove an installer-owned tool and a managed-elsewhere tool from Uninstall, toggle a Policies row, open Doctor, quit with q"
+    expected: "Every screen shows the current truth after each mutation; the removed tool moves to nothing to do and its tier row shows the open circle; no stale status or leftover files beyond what the installer reports"
+    why_human: "Real package managers, real shell rc and real systemd user session on the user's host; the container UAT (21-UAT.md) covered a clean Fedora user with no Homebrew and no pnpm, and the user's own run is the final acceptance"
 ---
 
 # Phase 21: One screen family Verification Report
@@ -68,14 +66,16 @@ human_verification:
 **Phase Goal:** Every screen shows the current truth after any mutation, and Uninstall, Policies and Doctor are projections of the shared state on one lifecycle.
 **Verified:** 2026-11-03
 **Status:** human_needed
-**Re-verification:** No, initial verification
+**Re-verification:** Yes, after review-fix round 3 (68d498d..1d07f04) changed covered files
 
-## Gates on HEAD (68d498d, clean tree)
+## Gates on HEAD (1d07f04; only .planning/RUN-LEDGER.md modified)
 
 | Gate | Result |
 | ---- | ------ |
-| `make validate` | exit 0 (ruff, pyright, bandit, vulture, shellcheck all ran) |
-| `make test` | exit 0, 5233 passed, 4 skipped, 92.83 s, total coverage 96.22 % (floor 90 %) |
+| `make validate` | exit 0 (re-run by the verifier on 1d07f04) |
+| `make test` | exit 0, 5237 passed, 4 skipped, 93.06 s, total coverage 96.22 % (floor 90 %); was 5233 at 68d498d, +4 round-3 RED-then-GREEN cases |
+| Round 3 targeted cases (`-k "supersedes or hostile or one_tool or Removing"`) | all pass |
+| CI / `make e2e` | per RUN-LEDGER 2026-11-03: e2e rc 0 at ~68d498d, CI green on 1d07f04 (not re-run here) |
 | `tests/test_screen_family.py` UI-01 matrix + fork guard (`-k "reaches_every_view or replaced_forks"`) | 68 cases (42 + 26) all pass |
 
 ## Goal Achievement
@@ -128,14 +128,33 @@ None blocking. No unreferenced TBD/FIXME/XXX in installer or setup.py files touc
 
 REVIEW-FIX reports 30 fixed, 1 by design (C-29), 3 backlog (C-22, C-25, C-27), 6 re-review items (RR-01..06) fixed, each with a RED test commit first. Backlog items are pre-existing and user-accepted, not gaps. The 5 pre-existing 80x20 layout items are tracked in a todo.
 
+### Round 3 re-check (68d498d..HEAD, touched wizard_app.py and two test files)
+
+| Change | Evidence in code at HEAD | Status |
+| ------ | ------------------------ | ------ |
+| T-21-52: every daemon-apply completion supersedes an in-flight job read | `PoliciesScreen.refresh_daemon_state` (`installer/wizard_app.py` ~2250-2272): resolved value only when present, then `_start_job_state_read()` on every mounted completion, `_job_state_generation += 1` when unmounted; `resolved = applied if policy.is_active is None else live` is behavior-equivalent to the old branches except the old early return | VERIFIED (RED test 59b2b15, fix 351becd, suite green); closes SECURITY T-21-52 |
+| pnpm smoke reason sanitized where recorded | `DoctorScreen` wraps `PNPM_SMOKE_FAILED.format(...)` in `sanitize_log_line` (:950); hostile-reason test passes | VERIFIED |
+| Uninstall one-tool summary takes one status row | blank `_applied_summary` no longer appended (:1646); layout test in `tests/test_layout_80x20.py` passes | VERIFIED; resolves UAT 1(c) |
+| `Removing...` kept when a row is marked during a removal | `UninstallScreen.on_tool_browser_selection_changed` skips `status.clear()` when `app.mutation_holder is MutationHolder.REMOVAL` (:1452); `MutationLock.mutation_holder` property added (:2741); resolves UAT 3 gap | VERIFIED |
+
+No regression found in truths 1-5: the full suite including the 42-case matrix and the 26-case fork guard is green on HEAD.
+
+### Human Verification Executed (21-UAT.md, container, orchestrator-run at 68d498d)
+
+| Item | Result |
+| ---- | ------ |
+| NO_COLOR 80x20 walk of all six views plus palette, refusals on row 19 / footer row 20 | Executed, issue (minor): the five known layout items reproduced; three more were seen: (a) Policies shows one table row, (b) a three-line toggle status scrolls the Policies table off screen, (c) Uninstall summary used two rows. (c) fixed in round 3 (5ced876). (a) and (b) are item 6 of the existing 80x20 layout todo (6 items, pre-existing), a backlog item, not a phase gap |
+| Real removal of an installer-owned tool | Executed, pass: tool moved to nothing to do, tier row showed the open circle, receipt and files gone |
+| Quit during removal (q, second ctrl+c, ctrl+q) | Executed, pass; the Removing-status loss on space was found here and fixed in round 3 (25f26bf) |
+| Not covered by UAT | 75-cell pnpm refusal (pnpm absent) and "Policies shows a removed ban OFF" (covered by automated matrix and `tests/test_policies_e2e.py`, not walked by hand) |
+
 ### Human Verification Required
 
-1. **NO_COLOR 80x20 tmux UAT** (disposable container). Expected: all strings fit and read without colour; only the five known layout items deviate. Why human: visual judgment and real held-lock timing.
-2. **Real-host removal check** (disposable container only). Expected: tool moves to nothing to do, tiers show the open circle, Policies shows a removed ban OFF, `q` waits and a second `ctrl+c` exits with the partial-removal warning. Why human: real filesystem, package managers and signals.
+1. **Real-host check on the developer's own machine** (the only remaining item). Expected: every screen shows current truth after each mutation; removed tool moves to nothing to do and its tier row shows the open circle. Why human: real package managers, shell rc and systemd user session; a container cannot stand in for the host, and the project forbids agents running setup there.
 
 ### Gaps Summary
 
-No gaps. All five roadmap success criteria and all seven requirement IDs are backed by code and by passing tests on HEAD. Status is `human_needed` solely because the phase's declared human backstops (NO_COLOR 80x20 UAT, real-host checks) are not automatable.
+No gaps. All five roadmap success criteria and all seven requirement IDs are backed by code and by passing tests on HEAD (`make validate` 0, `make test` 5237 passed). Round 3 fixes are present and tested. Known backlog (not gaps): C-22, C-25, C-27, the 80x20 layout todo (6 items), C-29 by design. Status is `human_needed` solely because the real-host check on the user's own machine cannot be automated.
 
 ---
 
