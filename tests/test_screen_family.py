@@ -2485,6 +2485,36 @@ async def test_an_unreadable_audit_records_no_evidence(tmp_path: Path):
         assert service.record_evidence("mmdc", broken=("x",)) is True
 
 
+async def test_an_audit_that_started_before_a_mutation_records_nothing(tmp_path: Path):
+    # C-09: the audit read the machine before the mutation, so its finding is stale.
+    service = _real_service(tmp_path)
+    started, release = threading.Event(), threading.Event()
+    report = _audit(("mmdc", "exit 1"))()
+
+    def held() -> NodeGlobalsReport:
+        started.set()
+        if not release.wait(timeout=10):
+            raise TimeoutError("the audit was never released")
+        return report
+
+    app = _family_app(tools=[_node_tool()], version_refresh=service, node_globals=held)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("doctor")
+            await wait_until(pilot, started.is_set)
+            service.invalidate(reason="mmdc reinstalled")
+            release.set()
+            doctor = cast(Any, app.view("doctor"))
+            await wait_until(pilot, lambda: not doctor.globals_auditing)
+            app.request_refresh()
+            await settle(app, pilot)
+            state = service.state_of("mmdc")
+            assert state is not None and state.health is not Health.BROKEN
+        finally:
+            release.set()
+
+
 async def test_a_hostile_pnpm_reason_renders_literally(tmp_path: Path):
     service = _real_service(tmp_path)
     reason = "[red]x[/red]\x1b[31mboom"

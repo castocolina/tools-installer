@@ -5837,6 +5837,16 @@ def test_evidence_is_read_under_the_lock_as_a_snapshot(tmp_path: Path) -> None:
     assert "late" in _settled_states(service, _pending_tools())["rg"].reasons
 
 
+def test_invalidate_drops_the_doctor_evidence(tmp_path: Path) -> None:
+    # C-09: a mutation may have repaired the tool, so its old Doctor finding expires.
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    service.record_evidence("rg", broken=("smoke failed",))
+    service.invalidate(reason="rg reinstalled")
+    state = _settled_states(service, _pending_tools())["rg"]
+    assert "smoke failed" not in state.reasons
+    assert state.health is not Health.BROKEN
+
+
 _OFF_PATH = "pnpm still tracks mmdc globally, but the command no longer resolves on PATH."
 
 
