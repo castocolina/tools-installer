@@ -66,6 +66,7 @@ from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.screen_family import wait_until
 from tests.state_doubles import (
     FrozenStateService,
     HeldRefreshService,
@@ -3862,6 +3863,30 @@ async def test_enter_with_a_held_refresh_waits_and_starts_nothing(tmp_path: Path
             await pilot.press("enter")
             await pilot.pause()
             assert service.calls == [frozenset({"rg"})]
+        finally:
+            service.release.set()
+
+
+async def test_the_review_waits_on_the_app_pass_and_runs_no_worker_of_its_own(
+    tmp_path: Path,
+) -> None:
+    captured: list[str] = []
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
+    inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            await pilot.press("enter")
+            await _wait_for_refresh_calls(service, pilot)
+            await pilot.pause()
+            assert [w for w in app.workers if w.group == "execute-wait"] == []
+            assert service.calls == [frozenset({"rg"})]
+            assert captured == []
+            service.release.set()
+            await wait_until(pilot, lambda: captured == ["rg"])
         finally:
             service.release.set()
 
