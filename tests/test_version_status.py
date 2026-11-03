@@ -34,6 +34,7 @@ from installer.model import (
     load_tools,
 )
 from installer.ownership import (
+    OWNER_LABELS,
     ManagerInventory,
     ManagerOwnership,
     Owner,
@@ -41,6 +42,7 @@ from installer.ownership import (
     also_installed_note,
     declared_manager_label,
     owner_label,
+    removal_hint,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -63,11 +65,14 @@ from installer.version_cache import (
 )
 from installer.version_status import (
     ADOPTED_NOTE,
+    BROKEN_REPAIR_NOTE,
     BROKEN_SHIM_REASON,
     LAYOUT_PROOF_NOTE,
     MAX_FETCHES_PER_REFRESH,
     NEEDS_BREW_REASON,
     RECEIPT_PROOF_NOTE,
+    UNKNOWN_OWNER_NOTE,
+    UNPROVEN_NOTE,
     Health,
     SkillHostStatus,
     ToolState,
@@ -5864,3 +5869,56 @@ def test_uninstall_detail_nothing_to_do() -> None:
     unavailable_tool, unavailable = _uninstall_state(present=False, unavailable=True)
     assert uninstall_detail(unavailable_tool, unavailable) == unavailable.reasons[0]
     assert uninstall_detail(tool, None) == "checking…"
+
+
+def test_uninstall_known_owner_shows_the_removal_command() -> None:
+    tool, state = _uninstall_state()
+    hint = removal_hint(state.ownership, tool.cmd)
+    assert hint is not None
+    assert "`" in hint
+    assert uninstall_detail(tool, state) == f"{hint} — found at {state.ownership.active_path}"
+
+
+def test_uninstall_known_owner_without_package_shows_the_sentence() -> None:
+    tool, state = _uninstall_state(owner="dnf")
+    state = replace(state, ownership=replace(state.ownership, active_path=None))
+    detail = uninstall_detail(tool, state)
+    assert detail == removal_hint(state.ownership, tool.cmd)
+    assert "`" not in detail
+
+
+def test_uninstall_unproven_installer_tool_shows_its_reasons() -> None:
+    tool, state = _uninstall_state(owner="installer", notes=(UNPROVEN_NOTE,))
+    assert UNPROVEN_NOTE in uninstall_detail(tool, state)
+    assert uninstall_label(state) == owner_label(state.ownership)
+
+
+def test_uninstall_unknown_owner_names_no_manager() -> None:
+    tool, state = _uninstall_state(owner="unknown")
+    detail = uninstall_detail(tool, state)
+    assert uninstall_label(state) == "unknown"
+    assert detail.startswith(UNKNOWN_OWNER_NOTE)
+    assert "`" not in detail
+    assert not any(label in detail for label in OWNER_LABELS.values())
+
+
+def test_uninstall_broken_shows_the_repair_text() -> None:
+    tool, state = _uninstall_state(broken=True)
+    assert uninstall_group(state) is UninstallState.MANAGED
+    assert uninstall_detail(tool, state).startswith(BROKEN_REPAIR_NOTE)
+
+
+def test_uninstall_detail_keeps_the_yourself_suffix() -> None:
+    tool, state = _uninstall_state(removable=RemovalPlan((), (Path("/x/rg"),)))
+    assert uninstall_detail(tool, state).endswith(" · remove it yourself: /x/rg")
+
+
+def test_uninstall_detail_keeps_the_required_by_suffix() -> None:
+    tool, state = _uninstall_state(removable=RemovalPlan((), (Path("/x/rg"),)))
+    detail = uninstall_detail(tool, state, ("fzf", "bat"))
+    assert detail.endswith(" · remove it yourself: /x/rg · required by fzf, bat")
+
+
+def test_uninstall_removable_detail_keeps_the_yourself_suffix() -> None:
+    tool, state = _uninstall_state(removable=RemovalPlan((_UNINSTALL_PATH,), (Path("/y/rg"),)))
+    assert uninstall_detail(tool, state) == f"{LAYOUT_PROOF_NOTE} · remove it yourself: /y/rg"

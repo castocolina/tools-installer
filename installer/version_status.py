@@ -630,6 +630,8 @@ ADOPTED_NOTE = "adopted: the file matches the release checksum"
 # Phase 20 binds `r` on the review screen (D-14, L-20-06).
 RECEIPT_PROOF_NOTE = "installed by this installer: receipt matches"
 LAYOUT_PROOF_NOTE = "installed in userspace — removable here"
+BROKEN_REPAIR_NOTE = "reinstall it from the catalog to repair; nothing to remove here"
+UNKNOWN_OWNER_NOTE = "owner unknown; nothing here can remove it safely"
 UNPROVEN_NOTE = "not proven: select it, then press r on the review to reinstall and adopt"
 # D-16, L-19-10: a drifted terminal -> (the row it lands on, its label). Konsole
 # has no catalog row; the zsh row carries it.
