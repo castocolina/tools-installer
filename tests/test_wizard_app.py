@@ -76,6 +76,7 @@ from installer.wizard_app import (
     DiskPressureProbe,
     DoctorScreen,
     LinkModeScreen,
+    MutationLock,
     NavScreen,
     PoliciesScreen,
     PolicyInputs,
@@ -468,7 +469,7 @@ def _guard_doctor(
     )
 
 
-class _DoctorHost(App[None]):
+class _DoctorHost(MutationLock, App[None]):
     def __init__(self, screen: DoctorScreen) -> None:
         super().__init__()
         self._doctor = screen

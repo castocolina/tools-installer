@@ -631,6 +631,8 @@ class DoctorScreen(AppScreen):
     def action_apply(self) -> None:
         if self.applied:
             return
+        if self.app.refuse_if_mutating(self):
+            return
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
         # Unconditional, not success-gated: run_live runs the callable BEFORE
@@ -717,7 +719,11 @@ class DoctorScreen(AppScreen):
     def action_reinstall_globals(self) -> None:
         # globals_done needs no message: the body already renders the success
         # line, so a repeat press is answered by what is on screen.
-        if self.globals_done or self.globals_running:
+        if self.globals_done:
+            return
+        if self.app.refuse_if_mutating(self):
+            return
+        if self.globals_running:
             return
         if self.globals_auditing:
             # Covers both "no audit has ever landed" (self._globals_report is
@@ -731,6 +737,7 @@ class DoctorScreen(AppScreen):
             # note.
             self.globals_note = _GLOBALS_UNKNOWN_YET
             self._refresh_body()
+            self.post_message(RefreshRequested())  # a refusal still ends with one pass
             return
         # Not auditing, past __init__: an audit has landed and set this.
         report = self._globals_report
@@ -747,13 +754,16 @@ class DoctorScreen(AppScreen):
             self.globals_note = _GLOBALS_UNKNOWN
             self._refresh_body()
             self._start_globals_audit()
+            self.post_message(RefreshRequested())
             return
         if not report.managed:
             self.globals_note = _NOTHING_TO_REINSTALL
             self._refresh_body()
+            self.post_message(RefreshRequested())
             return
         self.globals_note = None
         self.globals_running = True
+        self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
         self._refresh_body()
         # The package list is passed in rather than re-derived inside the
         # worker: re-deriving would put `pnpm list -g --json` on a second
@@ -763,7 +773,7 @@ class DoctorScreen(AppScreen):
     # Distinct groups: `exclusive` cancels within a group, so leaving both
     # workers in the default one would let a reinstall cancel an in-flight
     # audit and vice versa.
-    @work(thread=True, exclusive=True, group="globals-reinstall")
+    @work(thread=True, exclusive=True, group="globals-reinstall", exit_on_error=False)
     def _reinstall_globals_worker(self, packages: tuple[str, ...]) -> None:
         """Run the reinstall off the event loop, then hand the outcome back to it.
 
@@ -771,8 +781,12 @@ class DoctorScreen(AppScreen):
         a `pnpm add -g`. Widgets may only be touched from the app's own thread,
         hence a posted message rather than a direct refresh.
         """
-        _, error = run_live(lambda: self._reinstall_globals(packages))
-        self.post_message(GlobalsReinstalled(error))
+        error: str | None = "the reinstall did not complete"
+        try:
+            _, error = run_live(lambda: self._reinstall_globals(packages))
+        finally:
+            # Always posted: the handler releases the app lock.
+            self.post_message(GlobalsReinstalled(error))
 
     @work(thread=True, exclusive=True, group="globals-audit")
     def _audit_globals_worker(self, generation: int) -> None:
@@ -827,6 +841,7 @@ class DoctorScreen(AppScreen):
         self._refresh_body()
 
     def on_globals_reinstalled(self, message: GlobalsReinstalled) -> None:
+        self.app.end_mutation()
         self.globals_running = False
         self.globals_error = message.error
         self.globals_done = message.error is None
@@ -2339,7 +2354,33 @@ class RefreshFinished(Message):
         self.error = error
 
 
-class UnifiedApp(App[list[str] | None]):
+class MutationLock:
+    """The one app mutation lock: a holder noun while a mutation runs, else None.
+    A plain base so `UnifiedApp` and a test host share it instead of copying it."""
+
+    _mutation_holder: MutationHolder | None = None
+
+    @property
+    def mutation_in_flight(self) -> bool:
+        return self._mutation_holder is not None
+
+    def begin_mutation(self, holder: MutationHolder) -> None:
+        self._mutation_holder = holder
+
+    def end_mutation(self) -> None:
+        self._mutation_holder = None
+
+    def refuse_if_mutating(self, screen: AppScreen) -> bool:
+        """Refuse a second mutation while the lock is held: the one template on
+        `screen`'s status, true when refused."""
+        if self._mutation_holder is None:
+            return False
+        screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
+        screen.post_message(RefreshRequested())  # SPEC R2: a refusal still ends with one pass
+        return True
+
+
+class UnifiedApp(MutationLock, App[list[str] | None]):
     """One app hosting the wizard views. run() returns the catalog selection
     (ids in catalog order) on accept, or None when aborted. `current_view` and
     `catalog` are public for headless tests."""
@@ -2515,7 +2556,6 @@ class UnifiedApp(App[list[str] | None]):
         self.current_view = ""
         self._daemon_default = daemon_default
         self._daemon_default_policy_id = daemon_default_policy_id
-        self._mutation_holder: MutationHolder | None = None
         # Held from construction whenever a real auto-apply callback was wired,
         # so there is no window between __init__ and the worker starting in
         # on_mount where a mutation could slip in (11-REVIEWS.md cycle 2
@@ -2524,25 +2564,6 @@ class UnifiedApp(App[list[str] | None]):
             self.begin_mutation(MutationHolder.DAEMON_DEFAULT)
         # True once a quit waits on a running removal: no follow-up pass then.
         self.quitting = False
-
-    @property
-    def mutation_in_flight(self) -> bool:
-        return self._mutation_holder is not None
-
-    def begin_mutation(self, holder: MutationHolder) -> None:
-        self._mutation_holder = holder
-
-    def end_mutation(self) -> None:
-        self._mutation_holder = None
-
-    def refuse_if_mutating(self, screen: AppScreen) -> bool:
-        """Refuse a second mutation while the lock is held: the one template on
-        `screen`'s status, true when refused."""
-        if self._mutation_holder is None:
-            return False
-        screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
-        screen.post_message(RefreshRequested())  # SPEC R2: a refusal still ends with one pass
-        return True
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
     # pyright-strict reports as partially unknown at the call site. Re-declare it
@@ -2934,9 +2955,12 @@ class UnifiedApp(App[list[str] | None]):
 
     def on_install_run_started(self, message: InstallRunStarted) -> None:
         del message  # its arrival is its whole meaning
+        # run_in_flight stays the exit-code witness; the lock is the mutation guard.
         self.run_in_flight = True
+        self.begin_mutation(MutationHolder.INSTALL_RUN)
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
+        self.end_mutation()
         self.run_in_flight = False
         # Every mutation this app performs calls invalidate
         # (installer/version_status.py:26-30's own invariant); the install

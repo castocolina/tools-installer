@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.cells import cell_len
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import DataTable, Rule
 
 from installer.doctor import DoctorReport
+from installer.enums import MutationHolder
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
@@ -267,3 +269,20 @@ async def test_every_health_mark_renders_on_every_tier(tmp_path: Path, tier: str
             assert style in str(cell.style), (health, cell.style)
         for cell in table.get_row(picked["unavailable"].id):
             assert "dim" in str(cell.style), cell
+
+
+async def test_the_longest_refusal_fits_80_columns(tmp_path: Path) -> None:
+    tool = load_tools(REGISTRY)[0]
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(tool, [tmp_path / "bin"])])
+    app = _app(tmp_path, service)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
+        await pilot.press("space", "enter", "enter")
+        await pilot.pause()
+        status = app.view("uninstall").status
+        assert status.text.startswith("A pnpm reinstall is running")
+        assert cell_len(status.text) <= 78
+        assert len(rows_of(screen, status)) == 1
+        assert rows_of(screen, screen.query_one(FooterBar)) == {19}

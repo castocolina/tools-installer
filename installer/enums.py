@@ -116,3 +116,5 @@ class MutationHolder(StrEnum):
     UPDATE = "An update"
     POLICY_TOGGLE = "A policy toggle"
     DAEMON_DEFAULT = "A daemon apply"
+    GLOBALS_REINSTALL = "A pnpm reinstall"
+    INSTALL_RUN = "An install run"
