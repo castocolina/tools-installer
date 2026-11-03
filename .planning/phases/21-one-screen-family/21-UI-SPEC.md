@@ -23,7 +23,7 @@ This is a **Textual terminal UI**, not a web frontend. Units are terminal **cell
 2. Policies gains a live state, a DRIFT state and live prerequisites.
 3. Doctor loses the hidden `a` key and renders pnpm findings from tool reasons.
 4. A single app-level "mutation in flight" refusal appears on every screen.
-5. Quit waits for a running removal.
+5. Quit waits for a running removal; a second `ctrl+c` stops waiting.
 6. Every status obeys one lifecycle.
 
 ---
@@ -126,6 +126,7 @@ Three tool groups in this order, then the existing environment group. Titles are
 | User presses a mutating key anywhere (second removal, install `enter` / `a`, `u`, Doctor `enter` / `r`, Policies `space` / `t` / `m`) | Refused; nothing starts; status `warn` on the screen that received the key; the refusal still ends with one refresh pass | The lock template with the removal noun: `A removal is running; wait for it to finish. Navigation still works.` (68 cells) |
 | Worker ends (success, partial, or crash) | Summary written to the status line; rows republish; each removed tool moves to `nothing to do` and shows `○` on every tier; a removed policy ban reads OFF in Policies on its next entry | the existing environment-lever summary text (`_applied_summary`) is kept; per-tool words come from `WORDS` (`removed`, `remove_failed`) |
 | Quit (`q` / `ctrl+c`) during the removal | Status `warn`: `Waiting for the removal to finish…`, then the app exits | `Waiting for the removal to finish…` (34 cells) |
+| A second `ctrl+c` while waiting (D-10 amended, C-26) | The app exits at once without waiting for the removal; the warning prints on the terminal after the app closes. A second `q` keeps waiting | `Quit before the removal finished; some files may remain.` |
 
 - A tool whose removal failed keeps its row in `removable here`, stays selected (Phase 20 D-10 rule) and its word is `remove failed`, followed by ` — ` and the first line of the sanitized error.
 - Outcome words added to the shared vocabulary: `removed` (green), `remove failed` (red, counts toward a failure summary). They render in the status summary exactly like Phase 20's `summary_counts` (non-zero counts, comma-joined): `3 removed, 1 remove failed`.
@@ -250,6 +251,7 @@ Focal element per view: Uninstall, the first non-empty group's table (the cursor
 | Removal in progress | `Removing…` |
 | Mutation refused | One template, `{Holder} is running; wait for it to finish. Navigation still works.`, with the fixed holder noun from the table below. During a removal it reads exactly `A removal is running; wait for it to finish. Navigation still works.` Severity `warn`, on the screen that received the key |
 | Quit during removal | `Waiting for the removal to finish…` |
+| Second ctrl+c during removal | `Quit before the removal finished; some files may remain.` |
 | Removal summary | `{counts by word}` using `removed` and `remove failed`, followed by the existing environment-lever sentence |
 | Error state (removal failed) | row: `remove failed — {first line of the sanitized error}`; status `error`: `{N} remove failed. Fix the cause and press enter to try again.` (N = number of failed tools) |
 | Managed, unknown owner | `owner unknown; nothing here can remove it safely` |
@@ -328,7 +330,7 @@ Rule: the option that best fits the existing UI, with the user's "best, not easi
 | A6 | Policy DRIFT cell is `! [drift]` in yellow, reusing the `!` "needs action" glyph and the `[on]` / `[off]` bracket word style. | Smallest change to `_state_cell`; keeps glyph plus word |
 | A7 | Pruning stale selected ids writes no status. | SPEC R6 asks for correctness, not a message; a message on every background publish would be noise |
 | A8 | A publish re-render keeps cursor row id, selection and filter. | A re-render that moved the cursor would make the "visible view updates immediately" rule hostile to use |
-| A9 | Quit during removal shows `Waiting for the removal to finish…` and exits when the worker ends; there is no second prompt and no abort. | D-10: waits; cancelling a removal is out of scope |
+| A9 | Quit during removal shows `Waiting for the removal to finish…` and exits when the worker ends; there is no second prompt. A second `ctrl+c` exits without waiting and warns `Quit before the removal finished; some files may remain.` | D-10: waits; amended 2026-11-03 (C-26): a wedged remover must not trap the user. Cancelling the delete itself stays out of scope |
 | A10 | A removal failure status is `{N} remove failed. Fix the cause and press enter to try again.` | SPEC R5 has no failure copy; matches Phase 20's "problem plus next step" error register |
 | A11 | The Doctor smoke check shows no new copy while running. | The SPEC adds no feature here; the evidence store changes reasons only after the next pass |
 

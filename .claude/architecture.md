@@ -1184,7 +1184,9 @@ attributed. The removal runs on the `uninstall-removal` worker. It calls
 `mark_pending` for the tools being removed, shows per-tool words as results
 land, and then invalidates the version cache and requests one pass. A quit
 during a removal does not kill it: the app waits and exits in
-`_exit_after_removal`.
+`_exit_after_removal`. A second ctrl+c stops waiting and exits with a warning;
+the delete runs on a daemon thread the worker awaits, so the process never
+joins a wedged remover.
 
 `MutationLock` is the one app-wide lock for every mutation, inherited by
 `UnifiedApp` and the Doctor host. Its `MutationHolder` names the holder with a

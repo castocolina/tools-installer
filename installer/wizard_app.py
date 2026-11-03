@@ -12,7 +12,9 @@ once and reached through `show_view`. Navigation is therefore a stack with the
 root at the bottom: the stack is always `[root, <one view>]` once mounted.
 """
 
+import asyncio
 import contextlib
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1020,6 +1022,7 @@ _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
 _REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
+_REMOVAL_QUIT_CUT = "Quit before the removal finished; some files may remain."
 
 
 def _has_daemon_id(ids: tuple[str, ...]) -> bool:
@@ -1552,9 +1555,29 @@ class UninstallScreen(AppScreen):
         return multiline_summary(parts)
 
     # exit_on_error=False: a crash must leave a usable app; RemovalFinished is
-    # posted from `finally`, so the lock cannot stay held on any outcome.
-    @work(thread=True, exclusive=True, group="uninstall-removal", exit_on_error=False)
-    def _remove_worker(self, decision: UninstallDecision) -> None:
+    # posted from `finally`, so the lock cannot stay held on any outcome. The
+    # delete runs on a daemon thread this worker awaits: a forced quit (a second
+    # ctrl+c, D-10) drops the wait, and the process exits without joining it.
+    @work(exclusive=True, group="uninstall-removal", exit_on_error=False)
+    async def _remove_worker(self, decision: UninstallDecision) -> None:
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+
+        def finish() -> None:
+            if not done.done():
+                done.set_result(None)
+
+        def run() -> None:
+            try:
+                self._run_removal(decision)
+            finally:
+                with contextlib.suppress(RuntimeError):  # the loop closed: a forced quit
+                    loop.call_soon_threadsafe(finish)
+
+        threading.Thread(target=run, name="uninstall-removal", daemon=True).start()
+        await done
+
+    def _run_removal(self, decision: UninstallDecision) -> None:
         swept: SweepResult | None = None
         error: str | None = "removal did not complete"
         invalidate_error: str | None = None
@@ -3369,7 +3392,12 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._quit()
 
     def action_hard_abort(self) -> None:
-        # The hard quit (ctrl+c): always exits, including on top of the palette.
+        # The hard quit (ctrl+c): exits from anywhere, including on top of the
+        # palette. The first one during a removal waits for it; a second one
+        # stops waiting and says the removal may be partial (D-10, C-26).
+        if self.quitting and self._mutation_holder is MutationHolder.REMOVAL:
+            self.exit(None, message=_REMOVAL_QUIT_CUT)
+            return
         self._quit()
 
     def _quit(self) -> None:

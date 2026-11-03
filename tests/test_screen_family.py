@@ -1318,7 +1318,8 @@ async def test_a_second_ctrl_c_during_a_removal_exits_at_once(tmp_path: Path):
             assert not remover.release.is_set()
         finally:
             remover.release.set()
-    assert app.exit_messages == ["Quit before the removal finished; some files may remain."]
+    # run_test exits once more on teardown; the forced exit is the first.
+    assert app.exit_messages[0] == "Quit before the removal finished; some files may remain."
 
 
 async def test_a_second_q_during_a_removal_still_waits(tmp_path: Path):

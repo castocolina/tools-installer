@@ -80,6 +80,7 @@ None of these has landed as of 2026-10-14.
 - **D-10 (best, not easy):** Quitting during a removal waits for the worker.
   - `action_abort`/`action_hard_abort` (`:3002-3011`) become `async`. When the mutation lock is held by a removal, they show "waiting for removal to finish…" and `await self.workers.wait_for_complete([removal_worker])`, then exit.
   - Textual's `_shutdown` does not wait for thread workers (`textual/app.py:3737-3752`). Refusing the quit was rejected because the SPEC says "waits". jev: TypeSafe 0.99.
+  - Amended 2026-11-03 (review C-26, user decision): the first `q` or `ctrl+c` still waits. A second `ctrl+c` while it waits exits at once, with "Quit before the removal finished; some files may remain." printed after the app closes. The delete runs on a daemon thread the `uninstall-removal` worker awaits, so the process does not join a wedged remover. `q` never cuts the wait.
 - **D-11:** Removal outcomes extend 20 D-08's `RowOutcome`/`WORDS` with `removed` and `remove_failed`, so there is one vocabulary and the parity test covers them.
   - The environment-lever text (`_applied_summary`, `:1552-1597`) stays as it is.
   - Rows that ended remove_failed stay selected, following the 20 D-10 rule.
