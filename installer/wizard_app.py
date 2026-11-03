@@ -2205,12 +2205,13 @@ class PoliciesScreen(AppScreen):
 
         Touches no widget, so a thread worker may call it -- and only a worker
         should: for the Linux daemon it may spawn a bounded
-        `systemctl --user is-active` (WR-02).
+        `systemctl --user is-active` (WR-02). A failed read is None too: the
+        caller then keeps the row as it is.
         """
         policy = next((p for p in self._policies if p.id == policy_id), None)
         if policy is None or policy.is_active is None:
             return None
-        return policy.is_active()
+        return run_live(policy.is_active)[0]
 
     def refresh_daemon_state(self, policy_id: str, applied: bool, live: bool | None) -> None:
         """Explicit UI refresh after an on-by-default worker run completes.

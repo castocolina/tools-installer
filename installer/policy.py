@@ -1392,8 +1392,13 @@ def linux_daemon_policy(
             cache.invalidate()
 
     def _is_active() -> bool:
-        # The Policies row: is the timer RUNNING right now.
-        return cache.read() is DaemonState.ACTIVE
+        # The Policies row: is the timer RUNNING right now. An unreachable
+        # manager is a failed read (C-19): False beside the unit files on
+        # disk would read as drift.
+        state = cache.read()
+        if state is DaemonState.UNAVAILABLE:
+            raise OSError("the systemd user manager could not be reached")
+        return state is DaemonState.ACTIVE
 
     def _owned() -> bool:
         # The uninstall sweep: is anything this policy installed still on
@@ -1409,7 +1414,7 @@ def linux_daemon_policy(
             f"runs scripts/prune-tmp-linux.sh every {systemd_daemon.DEFAULT_INTERVAL} via a "
             "systemd user timer, deleting orphaned Bun runtime-cache files"
         ),
-        active=_is_active(),
+        active=cache.read() is DaemonState.ACTIVE,
         apply=_apply,
         remove=_remove,
         log_path=log_path,
