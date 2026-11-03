@@ -2450,6 +2450,22 @@ async def test_a_dangling_pnpm_shim_reads_broken_in_doctor_and_on_the_tier(tmp_p
         assert f"mmdc: {BROKEN_SHIM_REASON}" in str(_doctor_text(app))
 
 
+async def test_a_healthy_pnpm_owned_tool_prints_no_doctor_finding(tmp_path: Path):
+    # C-10: owner and version notes are the detail bar's, not pnpm findings.
+    tool = _node_tool()
+    service = frozen_service(tmp_path)
+    owned = replace(_brew_owned(tool), owner="pnpm", active_candidate="pnpm")
+    state = pass_state(tool, platform=service.platform, ownership=owned)
+    assert state.health is Health.OK and state.reasons
+    service.publish([state])
+    app = _family_app(tools=[tool], version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert "mmdc:" not in str(_doctor_text(app))
+
+
 async def test_doctor_rerenders_when_a_pass_publishes(tmp_path: Path):
     tool = _node_tool()
     service = frozen_service(tmp_path)
