@@ -808,6 +808,32 @@ async def test_a_held_removal_keeps_the_ui_responsive(tmp_path: Path):
             remover.release.set()
 
 
+async def test_a_mark_during_a_removal_keeps_the_removing_status(tmp_path: Path):
+    """Marks only matter for the next removal, so space still marks; the
+    running removal's status stays until it finishes (21-UAT test 3)."""
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "yq")
+            await wait_until(pilot, remover.started.is_set)
+            screen = _uninstall_screen(app)
+            table = screen.query_one(DataTable[Any])
+            table.move_cursor(row=table.get_row_index("fd"))
+            await pilot.press("space")
+            await pilot.pause()
+            assert "fd" in screen.selected
+            assert (screen.status.text, screen.status.severity) == ("Removing…", Severity.WARN)
+            remover.release.set()
+            service.queued = (absent_state(_tool("yq")),)
+            await settle(app, pilot)
+            assert screen.status.text.startswith("1 removed")
+        finally:
+            remover.release.set()
+
+
 async def test_a_removed_tool_leaves_the_tier_selection(tmp_path: Path):
     """C-16: a tool staged on a tier and then removed on Uninstall is no
     longer staged; the tier's next enter does not offer to install it."""
