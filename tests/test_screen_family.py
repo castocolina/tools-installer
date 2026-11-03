@@ -486,3 +486,96 @@ async def test_a_mutation_during_a_running_pass_supersedes_it(tmp_path: Path):
         assert state is not None
         assert state.generation == service.epoch
         assert probes.count("rg") >= 2
+
+
+async def test_await_publication_without_a_service_answers_at_once():
+    app = _family_app()
+    async with app.run_test(size=(120, 30)):
+        got: list[str | None] = []
+        app.await_publication(got.append)
+        assert got == [None]
+
+
+async def test_await_publication_joins_the_running_pass(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [])
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: len(service.calls) == 1)
+            got: list[str | None] = []
+            app.await_publication(got.append)
+            await pilot.pause()
+            assert len(service.calls) == 1
+            assert got == []
+            service.release.set()
+            await settle(app, pilot)
+            assert got == [None]
+            assert len(service.calls) == 1
+        finally:
+            service.release.set()
+
+
+async def test_await_publication_starts_one_pass_when_none_runs(tmp_path: Path):
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert service.passes == 1
+        got: list[str | None] = []
+        app.await_publication(got.append)
+        await settle(app, pilot)
+        assert service.passes == 2
+        assert got == [None]
+
+
+async def test_await_publication_waits_for_the_pending_pass(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [])
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        first = service.release
+        second = threading.Event()
+        try:
+            await wait_until(pilot, lambda: len(service.calls) == 1)
+            served: list[tuple[str | None, int]] = []
+            app.await_publication(lambda error: served.append((error, len(service.calls))))
+            app.request_refresh()  # queues the follow-up pass behind the running one
+            service.release = second  # the follow-up pass waits on its own event
+            first.set()
+            await wait_until(pilot, lambda: len(service.calls) == 2)
+            assert served == []
+            second.set()
+            await settle(app, pilot)
+            assert served == [(None, 2)]
+        finally:
+            first.set()
+            second.set()
+
+
+async def test_await_publication_reports_the_pass_error(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [], raising=OSError("disk"))
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: len(service.calls) == 1)
+            got: list[str | None] = []
+            app.await_publication(got.append)
+            service.release.set()
+            await settle(app, pilot)
+            assert got == ["disk"]
+        finally:
+            service.release.set()
+
+
+async def test_await_publication_reports_an_escaping_exception(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [], raising=RuntimeError("boom\nmore"))
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: len(service.calls) == 1)
+            got: list[str | None] = []
+            app.await_publication(got.append)
+            service.release.set()
+            await settle(app, pilot)
+            assert got == ["boom"]
+        finally:
+            service.release.set()
