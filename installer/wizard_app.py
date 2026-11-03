@@ -1608,6 +1608,10 @@ class UninstallScreen(AppScreen):
                 self,
                 f"Uninstall failed: {self.error}. Check permissions, then press enter.",
                 "error",
+                elsewhere=(
+                    f"Uninstall failed: {self.error}."
+                    " Check permissions, then open Uninstall and press enter."
+                ),
             )
             self._request_pass()
             return
@@ -1627,11 +1631,10 @@ class UninstallScreen(AppScreen):
         self.app.unstage(swept.removed)
         self._repaint()
         summary_parts = [summary_counts(outcomes)] if outcomes else []
-        if swept.remove_failed:
-            summary_parts.append(
-                f"{len(swept.remove_failed)} remove failed."
-                " Fix the cause and press enter to try again."
-            )
+        failed = len(swept.remove_failed)
+        fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
+        if failed:
+            summary_parts.append(fix_here)
         summary_parts.append(self._applied_summary(message.decision, swept))
         if message.invalidate_error is not None:
             summary_parts.append(message.invalidate_error)
@@ -1646,7 +1649,17 @@ class UninstallScreen(AppScreen):
         if terminal_warning:
             summary_parts.append(terminal_warning)
         severity = "error" if swept.remove_failed else "warn" if terminal_warning else "ok"
-        self.app.show_result(self, multiline_summary(summary_parts), severity)
+        summary = multiline_summary(summary_parts)
+        fix_elsewhere = (
+            f"{failed} remove failed. Fix the cause, then open Uninstall and press enter"
+            " to try again."
+        )
+        self.app.show_result(
+            self,
+            summary,
+            severity,
+            elsewhere=summary.replace(fix_here, fix_elsewhere) if failed else None,
+        )
         self._request_pass()
 
     def _request_pass(self) -> None:
@@ -3004,10 +3017,22 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         tier browsers hold this set)."""
         self._staged.difference_update(ids)
 
-    def show_result(self, origin: AppScreen, text: str, severity: Severity | str) -> None:
+    def show_result(
+        self,
+        origin: AppScreen,
+        text: str,
+        severity: Severity | str,
+        *,
+        elsewhere: str | None = None,
+    ) -> None:
         """Write a mutation's result where the user is looking (C-28): on the
-        current view, which is `origin` unless the user left it meanwhile."""
-        self._views.get(self.current_view, origin).status.set(text, severity)
+        current view, which is `origin` unless the user left it meanwhile.
+        `elsewhere` replaces `text` on another view when `text` names a key
+        only `origin` handles."""
+        screen = self._views.get(self.current_view, origin)
+        if elsewhere is not None and screen is not origin:
+            text = elsewhere
+        screen.status.set(text, severity)
 
     def _write_state_line(self, line: str | None) -> None:
         """Replace the app's previous state line with `line` (None: retract it).

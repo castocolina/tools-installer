@@ -189,7 +189,7 @@ Toggling stays immediate and reversible. A toggle ends with one full-catalog pas
 | Leaving the view | cleared (`clear_transient`) |
 | Re-entering | empty, except a standing status the view itself writes in `enter_view` (Uninstall: `Nothing to uninstall.` when nothing is listed) |
 | A publish re-render | never clears it |
-| A result lands (update, removal, toggle) while another view is visible | written to the visible view's status, the way app warnings are; the view it came from stays empty (amended 2026-11-03, review C-28) |
+| A result lands (update, removal, toggle) while another view is visible | written to the visible view's status, the way app warnings are; the view it came from stays empty (amended 2026-11-03, review C-28). A result that names a key of the view it came from names that view too: `{N} remove failed. Fix the cause, then open Uninstall and press enter to try again.`, `Uninstall failed: {error}. Check permissions, then open Uninstall and press enter.` |
 
 ---
 
@@ -253,7 +253,7 @@ Focal element per view: Uninstall, the first non-empty group's table (the cursor
 | Quit during removal | `Waiting for the removal to finish…` |
 | Second ctrl+c during removal | `Quit before the removal finished; some files may remain.` |
 | Removal summary | `{counts by word}` using `removed` and `remove failed`, followed by the existing environment-lever sentence |
-| Error state (removal failed) | row: `remove failed — {first line of the sanitized error}`; status `error`: `{N} remove failed. Fix the cause and press enter to try again.` (N = number of failed tools) |
+| Error state (removal failed) | row: `remove failed — {first line of the sanitized error}`; status `error`: `{N} remove failed. Fix the cause and press enter to try again.` (N = number of failed tools); shown on another view: `{N} remove failed. Fix the cause, then open Uninstall and press enter to try again.` |
 | Managed, unknown owner | `owner unknown; nothing here can remove it safely` |
 | Managed, broken | `reinstall it from the catalog to repair; nothing to remove here` |
 | Policy drift | state `! [drift]`; detail `Drift: this installer enabled it, but it is not active now. space applies it again.` |
