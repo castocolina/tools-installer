@@ -13,7 +13,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, St
 
 from installer import daemon
 from installer.app import UninstallDecision
-from installer.catalog_tui import CatalogScreen
+from installer.catalog_tui import CatalogScreen, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
@@ -63,7 +63,7 @@ from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import ToolState, VersionRefreshService, VersionStatus
+from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
@@ -84,6 +84,7 @@ from installer.wizard_app import (
 from tests.screen_family import settle
 from tests.state_doubles import (
     FrozenStateService,
+    HeldRefreshService,
     Presence,
     frozen_service,
     pass_state,
@@ -305,6 +306,7 @@ def _app(
     prompt_link_mode: bool = False,
     terminal_sync: Callable[[], str | None] | None = None,
     startup_warning: str | None = None,
+    version_refresh: VersionRefreshService | None = None,
 ) -> UnifiedApp:
     tools = [_tool("rg"), _tool("fd")]
     read_status = _predicate(guard_status or {"pip": False, "npm": False})
@@ -327,6 +329,7 @@ def _app(
         prompt_link_mode=prompt_link_mode,
         terminal_sync=terminal_sync,
         startup_warning=startup_warning,
+        version_refresh=version_refresh,
     )
 
 
@@ -1369,8 +1372,8 @@ async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_fai
 
 async def test_uninstall_unchanged_rows_rebuilds_nothing_on_reentry() -> None:
     """Entering with an equal rows result rebuilds nothing: `_build_entries`
-    is not called again and the browser is not reloaded, proven by entries
-    object identity surviving the round trip."""
+    is not called again, and the entries re-derived by the always-render rule
+    (21-11) equal the previous ones."""
     row = _removable_row(_tool("rg"), [Path("/opt/rg")])
 
     def rows() -> list[ToolRow]:
@@ -1384,7 +1387,7 @@ async def test_uninstall_unchanged_rows_rebuilds_nothing_on_reentry() -> None:
         await pilot.press("escape")
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
-        assert app.screen._entries is before_entries  # pyright: ignore[reportPrivateUsage]
+        assert app.screen._entries == before_entries  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_uninstall_rows_change_makes_new_tool_ids_reachable() -> None:
@@ -1910,9 +1913,8 @@ def test_state_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
 
 
 async def test_state_refreshed_returns_early_through_the_unchanged_comparison() -> None:
-    """Safe to call when nothing changed: the same unchanged comparison
-    `_resync` uses everywhere else returns early, proven by entries object
-    identity surviving the call."""
+    """Safe to call when nothing changed: the always-render rule (21-11)
+    re-derives entries equal to the previous ones."""
     app = _app(
         uninstall=_uninstall_inputs(rows=_rg_rows()),
         initial_view="uninstall",
@@ -1923,7 +1925,7 @@ async def test_state_refreshed_returns_early_through_the_unchanged_comparison() 
         before_entries = screen._entries  # pyright: ignore[reportPrivateUsage]
         screen.state_refreshed()
         await pilot.pause()
-        assert screen._entries is before_entries  # pyright: ignore[reportPrivateUsage]
+        assert screen._entries == before_entries  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_uninstall_empty_selection_refuses() -> None:
@@ -7779,13 +7781,13 @@ async def test_removes_column_starts_inside_the_viewport_at_the_minimum_size() -
 # -- 15.4-05/D-03/D-04: the "Installed via" cell renders the terse label ----
 
 
-def test_tool_entry_cell_per_state_and_removes_cell_unchanged() -> None:
+def test_tool_entry_cell_per_state_and_removes_cell_lists_the_paths() -> None:
     """Per-state cell coverage: the "Installed via" cell carries the TERSE
     manager label (`ToolRow.manager`) for an attributed managed row (D-03),
     the generic label for an unattributed one, and the short dash-style label
     for absent and unavailable rows (15.4-RESEARCH.md Pitfall 4). The full
     sentence stays in `detail` (CR-03). The "What gets removed" cell is
-    byte-identical to today's for all four states."""
+    the proven paths for a removable row and a dash for every other state (21-11)."""
     removable = ToolRow(
         _tool("rg"), "removable", [Path("/opt/rg")], "installed in userspace — removable here", True
     )
@@ -7805,7 +7807,7 @@ def test_tool_entry_cell_per_state_and_removes_cell_unchanged() -> None:
     screen = UninstallScreen(inputs)
     entries = {entry.key: entry for entry in screen._entries}  # pyright: ignore[reportPrivateUsage]
 
-    _VIA, _REMOVES = 3, 4
+    _VIA, _REMOVES = 4, 5
     assert entries["rg"].cells[_VIA].plain == "userspace"
     assert entries["jq"].cells[_VIA].plain == "dnf"
     assert entries["bat"].cells[_VIA].plain == "package manager"
@@ -7816,11 +7818,125 @@ def test_tool_entry_cell_per_state_and_removes_cell_unchanged() -> None:
     assert entries["jq"].detail == "managed by dnf — `dnf remove jq`"
     assert entries["rg"].detail == "installed in userspace — removable here"
 
-    assert entries["rg"].cells[_REMOVES].plain == "1 artifact(s)"
-    assert entries["jq"].cells[_REMOVES].plain == "nothing (managed elsewhere)"
-    assert entries["bat"].cells[_REMOVES].plain == "nothing (managed elsewhere)"
-    assert entries["fd"].cells[_REMOVES].plain == "nothing (not installed)"
-    assert entries["xyz"].cells[_REMOVES].plain == "nothing (unavailable)"
+    assert entries["rg"].cells[_REMOVES].plain == "/opt/rg"
+    for tool_id in ("jq", "bat", "fd", "xyz"):
+        assert entries[tool_id].cells[_REMOVES].plain == "—"
+
+
+# -- 21-11: the Uninstall Health column, three sections, bounded removal list --
+
+_UNINSTALL_HEADERS = ["Sel", "Tool", "Health", "Cat", "Installed via", "What gets removed"]
+
+
+def _uninstall_cell(table: DataTable[Any], key: str, column: str) -> str:
+    return table.get_cell(key, column).plain
+
+
+async def test_uninstall_health_column_reads_the_published_state(tmp_path: Path) -> None:
+    yq, jq = _tool("yq"), _tool("jq")
+    service = frozen_service(tmp_path)
+    service.publish([plan_state(yq, health=Health.OK), plan_state(jq, health=Health.OUTDATED)])
+    rows = [
+        _removable_row(yq, [Path("/opt/yq")]),
+        ToolRow(jq, "managed", [], "managed by Homebrew", False, "Homebrew"),
+    ]
+    app = _app(
+        uninstall=_uninstall_inputs(rows=_frozen(rows), ban_names=["pip"]),
+        initial_view="uninstall",
+        version_refresh=service,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert [column.label.plain for column in table.columns.values()] == _UNINSTALL_HEADERS
+        for tool in (yq, jq):
+            state = service.state_of(tool.id)
+            assert _uninstall_cell(table, tool.id, "health") == health_cell(state).plain
+        ban = [_uninstall_cell(table, "#ban", key) for key in ("health", "cat", "via", "removes")]
+        assert ban == ["", "env", "shell config", "shims + aliases (pip)"]
+
+
+async def test_uninstall_health_repaints_when_a_pass_publishes(tmp_path: Path) -> None:
+    yq = _tool("yq")
+    service = frozen_service(tmp_path)
+    service.publish([plan_state(yq, health=Health.OK)])
+    rows = [_removable_row(yq, [Path("/opt/yq")])]
+    app = _app(
+        uninstall=_uninstall_inputs(rows=_frozen(rows)),
+        initial_view="uninstall",
+        version_refresh=service,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, "yq", "health") == "✓"
+        screen.status.set("kept", "ok")
+        service.queued = (plan_state(yq, health=Health.OUTDATED),)
+        app.request_refresh()
+        await settle(app, pilot)
+        assert _uninstall_cell(table, "yq", "health") == "↑"
+        assert screen.status.text == "kept"
+
+
+async def test_uninstall_health_reads_checking_before_the_first_pass(tmp_path: Path) -> None:
+    yq, jq = _tool("yq"), _tool("jq")
+    service = HeldRefreshService(tmp_path, [])
+    rows = [
+        _removable_row(yq, [Path("/opt/yq")]),
+        ToolRow(jq, "managed", [], "managed by Homebrew", False, "Homebrew"),
+    ]
+    app = _app(
+        uninstall=_uninstall_inputs(rows=_frozen(rows)),
+        initial_view="uninstall",
+        version_refresh=service,
+    )
+    try:
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, UninstallScreen)
+            table = screen.query_one(DataTable[Any])
+            assert [_uninstall_cell(table, key, "health") for key in ("yq", "jq")] == ["…", "…"]
+            service.release.set()
+    finally:
+        service.release.set()
+
+
+async def test_uninstall_merges_missing_and_unavailable_under_nothing_to_do() -> None:
+    rows = [
+        ToolRow(_tool("xyz"), "unavailable", [], "not available on debian", False),
+        ToolRow(_tool("fd"), "absent", [], "not installed", False),
+    ]
+    app = _app(uninstall=_uninstall_inputs(rows=_frozen(rows)), initial_view="uninstall")
+    async with app.run_test(size=(120, 30)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        keys = [str(key.value) for key in screen.query_one(DataTable[Any]).rows]
+        assert keys == ["#nothing to do", "fd", "xyz"]
+
+
+async def test_uninstall_removes_cell_lists_the_proven_paths_within_budget() -> None:
+    long_paths = [Path(f"/home/someone/.local/share/a-long-directory-name/{n}/bin") for n in "abc"]
+    rows = [
+        _removable_row(_tool("rg"), [Path("/opt/rg")]),
+        _removable_row(_tool("bat"), long_paths),
+        ToolRow(_tool("jq"), "managed", [], "managed by dnf", False, "dnf"),
+    ]
+    app = _app(uninstall=_uninstall_inputs(rows=_frozen(rows)), initial_view="uninstall")
+    async with app.run_test(size=(120, 30)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, "rg", "removes") == "/opt/rg"
+        long_cell = _uninstall_cell(table, "bat", "removes")
+        assert long_cell.endswith("…")
+        assert len(long_cell) < len(", ".join(str(path) for path in long_paths))
+        assert long_cell.startswith("/home/someone")
+        assert _uninstall_cell(table, "jq", "removes") == "—"
 
 
 def _apt_tool(tool_id: str, package: str) -> Tool:
@@ -7847,7 +7963,7 @@ def test_uninstall_screen_cell_falls_back_when_seam_has_no_record(tmp_path: Path
     )
     screen = UninstallScreen(_uninstall_inputs(rows=_frozen(rows)))
     entry = next(e for e in screen._entries if e.key == "ripgrep")  # pyright: ignore[reportPrivateUsage]
-    assert "package manager" in entry.cells[3].plain
+    assert "package manager" in entry.cells[4].plain
 
 
 async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: Path) -> None:

@@ -28,7 +28,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision, path_writer_lines_for
-from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated
+from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
@@ -877,9 +877,12 @@ class _UninstallEntry:
 _STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
     (UninstallState.REMOVABLE, "removable here"),
     (UninstallState.MANAGED, "managed elsewhere"),
-    (UninstallState.ABSENT, "not installed"),
-    (UninstallState.UNAVAILABLE, "not available"),
+    (UninstallState.ABSENT, "nothing to do"),
+    (UninstallState.UNAVAILABLE, "nothing to do"),
 )
+# CR-03: the "What gets removed" cell is cut to this many cells so the column is
+# never sized by the longest path; ConfirmUninstall still lists every path.
+_REMOVES_CELL_MAX = 40
 _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
@@ -921,8 +924,11 @@ class UninstallScreen(AppScreen):
         @property
         def app(self) -> "UnifiedApp": ...
 
-    def __init__(self, inputs: UninstallInputs) -> None:
+    def __init__(
+        self, inputs: UninstallInputs, *, version_refresh: VersionRefreshService | None = None
+    ) -> None:
         super().__init__(view="uninstall", accent="red")
+        self._version_refresh = version_refresh
         self._rows_predicate = inputs.rows
         self._ban_names_of = inputs.ban_names
         self._has_path_block_of = inputs.has_path_block
@@ -1011,21 +1017,18 @@ class UninstallScreen(AppScreen):
             UninstallState.ABSENT: _VIA_NONE,
             UninstallState.UNAVAILABLE: _VIA_NONE,
         }[row.state]
-        removes = (
-            f"{len(row.paths)} artifact(s)"
-            if selectable
-            else {
-                UninstallState.MANAGED: "nothing (managed elsewhere)",
-                UninstallState.ABSENT: "nothing (not installed)",
-                UninstallState.UNAVAILABLE: "nothing (unavailable)",
-            }[row.state]
+        removes = Text(
+            ", ".join(str(path) for path in row.paths) if selectable else "—", style=style
         )
+        removes.truncate(_REMOVES_CELL_MAX, overflow="ellipsis")
+        state = self._version_refresh.state_of(row.tool.id) if self._version_refresh else None
         cells = [
             mark(False) if selectable else Text(""),
             Text(row.tool.id, style="bold" if selectable else "dim"),
+            health_cell(state),
             Text(row.tool.category, style=style),
             Text(installed_via, style=style),
-            Text(removes, style=style),
+            removes,
         ]
         return _UninstallEntry(
             key=row.tool.id,
@@ -1044,6 +1047,7 @@ class UninstallScreen(AppScreen):
             cells=[
                 mark(False),
                 Text("pip/npm ban", style="bold yellow"),
+                Text(""),
                 Text("env", style="yellow"),
                 Text("shell config", style="dim"),
                 Text(f"shims + aliases ({', '.join(self._ban_names)})", style="dim"),
@@ -1061,6 +1065,7 @@ class UninstallScreen(AppScreen):
             cells=[
                 mark(False),
                 Text("PATH wiring", style="bold yellow"),
+                Text(""),
                 Text("env", style="yellow"),
                 Text("shell config", style="dim"),
                 Text("managed block in ~/.myshellrc", style="dim"),
@@ -1101,6 +1106,7 @@ class UninstallScreen(AppScreen):
             cells=[
                 mark(False),
                 Text(label, style="bold yellow"),
+                Text(""),
                 Text("env", style="yellow"),
                 Text("shell config", style="dim"),
                 Text(f"blocks + helpers ({', '.join(self._tweak_ids)})", style="dim"),
@@ -1120,6 +1126,7 @@ class UninstallScreen(AppScreen):
             columns=(
                 ("Sel", "sel"),
                 ("Tool", "tool"),
+                ("Health", "health"),
                 ("Cat", "cat"),
                 ("Installed via", "via"),
                 ("What gets removed", "removes"),
@@ -1137,8 +1144,11 @@ class UninstallScreen(AppScreen):
         by_state: dict[UninstallState, list[_UninstallEntry]] = {}
         for row, entry in zip(self._rows, self._entries, strict=False):
             by_state.setdefault(row.state, []).append(entry)
+        by_title: dict[str, list[_UninstallEntry]] = {}
+        for state, title in _STATE_TITLES:
+            by_title.setdefault(title, []).extend(by_state.get(state, []))
         sections: list[Section[_UninstallEntry]] = [
-            (title, title, by_state[state]) for state, title in _STATE_TITLES if by_state.get(state)
+            (title, title, members) for title, members in by_title.items() if members
         ]
         env = [
             entry
@@ -1151,6 +1161,12 @@ class UninstallScreen(AppScreen):
 
     def compose_body(self) -> ComposeResult:
         yield self._browser
+
+    def _repaint(self) -> None:
+        """Rebuild the entries from the stored values and repaint the browser."""
+        self._entries = self._build_entries()
+        self._by_key = {entry.key: entry for entry in self._entries}
+        self._browser.reload(self._adapter())
 
     def _rows_of(self) -> list[ToolRow]:
         """Bare read of the rows predicate -- no failure isolation of its own.
@@ -1273,9 +1289,8 @@ class UninstallScreen(AppScreen):
         changed = refreshed != stored
         if changed:
             self._rows, self._ban_names, self._has_path_block, self._tweak_ids = refreshed
-            self._entries = self._build_entries()
-            self._by_key = {entry.key: entry for entry in self._entries}
-            self._browser.reload(self._adapter())
+        # Always: a publish changes Health without changing any stored value.
+        self._repaint()
         if error is not None:
             self.status.set(f"Could not refresh the tool list: {error}.", "warn")
             return
@@ -2579,7 +2594,7 @@ class UnifiedApp(App[list[str] | None]):
                     disk_pressure=policies.disk_pressure,
                     competing=policies.competing,
                 ),
-                "uninstall": UninstallScreen(uninstall),
+                "uninstall": UninstallScreen(uninstall, version_refresh=version_refresh),
                 "policies": PoliciesScreen(policies),
             }
         )

@@ -4,6 +4,7 @@ Every visibility claim reads the compositor through `screen.get_widget_at`, so a
 widget another one paints over does not count as shown.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
-from installer.uninstall import SweepResult
+from installer.uninstall import SweepResult, ToolRow
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.state_doubles import frozen_service, pass_state, seeded_service
@@ -27,7 +28,11 @@ _KEY = {"system": "1", "user": "2", "ai": "3", "doctor": "4", "uninstall": "5", 
 _TIERS = ["system", "user", "ai"]
 
 
-def _app(tmp_path: Path, service: VersionRefreshService | None = None) -> UnifiedApp:
+def _app(
+    tmp_path: Path,
+    service: VersionRefreshService | None = None,
+    rows: Callable[[], list[ToolRow]] = list,
+) -> UnifiedApp:
     tools = load_tools(REGISTRY)
     if service is None:
         service = seeded_service(
@@ -44,7 +49,7 @@ def _app(tmp_path: Path, service: VersionRefreshService | None = None) -> Unifie
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
+            rows=rows,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),
@@ -161,6 +166,35 @@ async def test_uninstall_chrome_at_80x20(tmp_path: Path) -> None:
         _assert_chrome(screen)
         assert rows_of(screen, screen.query_one(DataTable[Any]))
         assert len(rows_of(screen, screen.query_one("#browser-detail"))) == 3
+
+
+async def test_uninstall_rows_fit_at_80x20_with_health(tmp_path: Path) -> None:
+    tools = load_tools(REGISTRY)
+    widest = max(tools, key=lambda tool: len(tool.id))
+    long_paths = [Path(f"/home/someone/.local/share/a-long-directory-name/{n}/bin") for n in "abc"]
+    rows = [
+        ToolRow(widest, "removable", long_paths, "removable here", True),
+        ToolRow(tools[0], "managed", [], "managed", False, "Homebrew cask"),
+    ]
+    app = _app(tmp_path, rows=lambda: rows)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        table = screen.query_one(DataTable[Any])
+        spans = _column_spans(table)
+        assert list(spans) == [
+            "Sel",
+            "Tool",
+            "Health",
+            "Cat",
+            "Installed via",
+            "What gets removed",
+        ]
+        # The widest catalog id leaves the removes column only 16 cells on an 80-column
+        # screen, so "stays on screen" is its start plus a readable lead, and the
+        # fixed cell budget (40 + 2 padding) bounds how far it can run on.
+        start, end = spans["What gets removed"]
+        assert start + 12 <= table.region.right, spans
+        assert end - start <= 42, spans
 
 
 async def test_policies_chrome_at_80x20(tmp_path: Path) -> None:

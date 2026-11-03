@@ -16,6 +16,7 @@ from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError
 from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import (
+    RemovalPlan,
     SweepResult,
     active_tweak_ids,
     manager_name,
@@ -25,6 +26,14 @@ from installer.uninstall import (
     remove_proven,
     sweep_tweaks,
 )
+from installer.version_status import (
+    LAYOUT_PROOF_NOTE,
+    RECEIPT_PROOF_NOTE,
+    ToolState,
+    uninstall_detail,
+    uninstall_group,
+)
+from tests.state_doubles import pass_state
 
 
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
@@ -134,7 +143,7 @@ def test_plan_removal_survives_looping_link_and_opt_dir(
 ) -> None:
     """CR-01: a symlink loop is unproven, never a crash. A self-looping bin
     link (bin/foo -> foo) and a looping opt dir must leave plan_removal (and
-    every caller: classify_tools, UninstallScreen, run_uninstall) standing,
+    every caller: UninstallScreen, run_uninstall) standing,
     with the looping names still listed for manual removal."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
@@ -149,8 +158,6 @@ def test_plan_removal_survives_looping_link_and_opt_dir(
     assert plan.removable == ()
     assert bin_dir / "foo" in plan.yourself
     assert bin_dir / "bar" in plan.yourself
-    rows = classify_tools(tools, bin_dir, installed={"foo": False, "bar": False}, platform=_LINUX)
-    assert all(row.state != UninstallState.REMOVABLE for row in rows)
 
 
 @pytest.mark.parametrize(
@@ -257,27 +264,37 @@ def test_plan_removal_with_no_matches_is_empty(
     assert empty.yourself == ()
 
 
-def test_classify_rows_follow_the_removal_proof(
+def _removal_state(tool: Tool, plan: RemovalPlan, *, receipt: Receipt | None = None) -> ToolState:
+    """The published state of an installed `tool` whose removal proof is `plan`."""
+    return pass_state(tool, platform=_LINUX, present=True, removable=plan, receipt=receipt)
+
+
+def test_uninstall_group_follows_the_removal_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     tools = plant_removal_fixtures(tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
-    rows = classify_tools(tools, bin_dir, installed={t.id: True for t in tools}, platform=_LINUX)
-    by_id = {row.tool.id: row for row in rows}
-    fd = by_id["fd"]
-    assert fd.state == "removable"
-    assert fd.paths == [bin_dir / "fd", tmp_path / ".local" / "opt" / "fd"]
-    assert fd.selectable is True
-    assert "removable" in fd.hint
+    by_id = {tool.id: tool for tool in tools}
+
+    def state_of(tool_id: str) -> ToolState:
+        tool = by_id[tool_id]
+        return _removal_state(tool, plan_removal([tool], bin_dir))
+
+    fd = state_of("fd")
+    assert uninstall_group(fd) == UninstallState.REMOVABLE
+    assert fd.removable.removable == (bin_dir / "fd", tmp_path / ".local" / "opt" / "fd")
+    assert uninstall_detail(by_id["fd"], fd) == LAYOUT_PROOF_NOTE
     for tool_id in ("ruff", "yq", "drawio-desktop"):
-        row = by_id[tool_id]
-        assert row.state == "managed", tool_id
-        assert row.selectable is False, tool_id
-        assert row.paths == [], tool_id
-        assert "remove it yourself:" in row.hint, tool_id
-    assert str(bin_dir / "ruff") in by_id["ruff"].hint
-    assert str(bin_dir / "drawio") in by_id["drawio-desktop"].hint
+        state = state_of(tool_id)
+        detail = uninstall_detail(by_id[tool_id], state)
+        assert uninstall_group(state) == UninstallState.MANAGED, tool_id
+        assert state.removable.removable == (), tool_id
+        assert "remove it yourself:" in detail, tool_id
+    assert str(bin_dir / "ruff") in uninstall_detail(by_id["ruff"], state_of("ruff"))
+    assert str(bin_dir / "drawio") in uninstall_detail(
+        by_id["drawio-desktop"], state_of("drawio-desktop")
+    )
 
 
 def test_manager_name_is_a_public_export() -> None:
@@ -1567,13 +1584,7 @@ def test_tui_and_cli_delete_the_same_set(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(Path, "home", lambda: tui_home)
     tui_tools = plant_removal_fixtures(tui_home)
-    rows = classify_tools(
-        tui_tools,
-        tui_home / ".local" / "bin",
-        installed={t.id: True for t in tui_tools},
-        platform=_LINUX,
-    )
-    tui_set = {p for row in rows if row.state == "removable" for p in row.paths}
+    tui_set = set(plan_removal(tui_tools, tui_home / ".local" / "bin").removable)
     assert tui_set
 
     monkeypatch.setattr(Path, "home", lambda: cli_home)
@@ -1634,9 +1645,9 @@ def test_failed_opt_dir_delete_leaves_the_remainder_listed(
     plan = plan_removal([tool], bin_dir)
     assert plan.removable == ()
     assert opt in plan.yourself
-    rows = classify_tools([tool], bin_dir, installed={"fd": True}, platform=_LINUX)
-    assert rows[0].state == "managed"
-    assert str(opt) in rows[0].hint
+    state = _removal_state(tool, plan)
+    assert uninstall_group(state) == UninstallState.MANAGED
+    assert str(opt) in uninstall_detail(tool, state)
 
 
 def test_plan_uninstall_lists_exactly_the_existing_artifact_paths(
@@ -1952,20 +1963,20 @@ def test_receipt_of_another_kind_proves_nothing(
     assert plan.yourself == (bin_dir / "yq",)
 
 
-def test_classify_rows_use_the_receipt_proof(
+def test_uninstall_group_uses_the_receipt_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     yq, bin_dir = plant_raw_yq(tmp_path)
-    (row,) = classify_tools([yq], bin_dir, installed={"yq": True}, platform=_LINUX)
-    assert row.state == UninstallState.REMOVABLE
-    assert row.paths == [bin_dir / "yq"]
-    assert row.selectable is True
+    receipt = receipts.read(yq.id)
+    state = _removal_state(yq, plan_removal([yq], bin_dir), receipt=receipt)
+    assert uninstall_group(state) == UninstallState.REMOVABLE
+    assert state.removable.removable == (bin_dir / "yq",)
+    assert uninstall_detail(yq, state) == RECEIPT_PROOF_NOTE
     (bin_dir / "yq").write_text("rewritten after install, a different size")
-    (row,) = classify_tools([yq], bin_dir, installed={"yq": True}, platform=_LINUX)
-    assert row.state == UninstallState.MANAGED
-    assert row.selectable is False
-    assert f"remove it yourself: {bin_dir / 'yq'}" in row.hint
+    state = _removal_state(yq, plan_removal([yq], bin_dir), receipt=receipt)
+    assert uninstall_group(state) == UninstallState.MANAGED
+    assert f"remove it yourself: {bin_dir / 'yq'}" in uninstall_detail(yq, state)
 
 
 def _plant_retyped_yq(home: Path) -> tuple[Tool, Path, Path]:
@@ -2475,8 +2486,6 @@ def test_remove_paths_keeps_a_captured_dir_it_cannot_put_back(
 def test_a_leftover_quarantine_sibling_is_listed_to_remove_yourself(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import installer.uninstall as uninstall_module
-
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     fd, bin_dir, opt = _plant_fd(tmp_path)
     leftover = opt.parent / f".fd.k1ll3d{_QUARANTINE_SUFFIX}"
@@ -2485,9 +2494,9 @@ def test_a_leftover_quarantine_sibling_is_listed_to_remove_yourself(
     plan = plan_removal([fd], bin_dir)
     assert plan.removable == ()
     assert leftover in plan.yourself
-    rows = uninstall_module.classify_tools([fd], bin_dir, installed={"fd": False}, platform=_LINUX)
-    assert rows[0].state.value == "managed"
-    assert str(leftover) in rows[0].hint
+    state = _removal_state(fd, plan)
+    assert uninstall_group(state) == UninstallState.MANAGED
+    assert str(leftover) in uninstall_detail(fd, state)
 
     opt.mkdir()
     (opt / "fd").write_text("fd binary")
