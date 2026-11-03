@@ -1,6 +1,6 @@
 import inspect
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -6902,10 +6902,12 @@ async def test_epoch_guard_drops_stale_refresh_after_update(
     service = _freeze_status(tmp_path, tool, ownership=ownership, status=pre)
     frozen_refresh = service.refresh
 
+    latched: list[bool] = []
+
     def latched_refresh(tools: Sequence[Tool]) -> dict[str, VersionStatus]:
         del tools
         started.set()
-        assert release.wait(timeout=5)
+        latched.append(release.wait(timeout=5))
         # A pass the update raced: the service discards what it saw.
         return {}
 
@@ -6927,13 +6929,25 @@ async def test_epoch_guard_drops_stale_refresh_after_update(
     async with app.run_test(size=(100, 30)) as pilot:
         assert started.wait(timeout=5)
         monkeypatch.setattr(service, "refresh", frozen_refresh)
+        published: list[str | None] = []
+        frozen_publish = service.publish
+
+        def spy_publish(states: Iterable[ToolState]) -> None:
+            states = tuple(states)
+            published.extend(state.version.installed for state in states if state.version)
+            frozen_publish(states)
+
+        monkeypatch.setattr(service, "publish", spy_publish)
         await pilot.press("u")
+        # The update upgrades and invalidates while the launch pass is still latched.
+        await wait_until(pilot, lambda: bool(service.invalidations))
+        assert latched == []
+        # Release the raced pass now so it ends inside the test, not on its latch timeout.
+        release.set()
         await _settle_update(app, pilot)
         await settle(app, pilot)
-        assert "14.1.1" in app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver").plain
-        release.set()
-        await pilot.pause()
-        await pilot.pause()
+        assert latched == [True]
+        assert published and "14.1.0" not in published
         cell = app.catalog.query_one(DataTable[Any]).get_cell("rg", "ver")
         assert cell.plain == "14.1.1"
 
