@@ -46,7 +46,7 @@ import os
 import re
 import shutil
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -77,6 +77,8 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import (
+    PNPM_TRACKED_OFF_PATH,
+    audit_node_globals,
     incomplete_install_groups,
     node_install_policy,
     pnpm_global_packages,
@@ -694,6 +696,25 @@ def _pnpm_group_facts(
     return facts
 
 
+def _pnpm_missing_facts(
+    tools: Sequence[Tool], packages: frozenset[str] | None, which: Callable[[str], str | None]
+) -> dict[str, _ConfigFacts]:
+    """D-13: tools pnpm still tracks whose command no longer resolves.
+
+    One call to the Doctor's own rule; `smoke` is stubbed so the pass runs no
+    subprocess.
+    """
+    if packages is None:
+        return {}
+    report = audit_node_globals(
+        tools, which=which, managed=lambda: tuple(packages), smoke=lambda _cmd: None
+    )
+    return {
+        tool_id: _ConfigFacts((PNPM_TRACKED_OFF_PATH.format(names=tool_id),))
+        for tool_id in report.missing
+    }
+
+
 def _run_nothing(cmd: list[str]) -> None:
     """Adoption only renders an asset name; it never runs a command (D-09)."""
     raise ExecutorError(f"adoption runs no command: {cmd}")
@@ -939,6 +960,10 @@ class VersionRefreshService:
         # old snapshot or the new one, never a torn mix; each state carries
         # its pass's epoch (`generation`) and sequence number (`seq`).
         self._states: dict[str, ToolState] = {}
+        # Ids a removal is changing: hidden from `state_of` until the next epoch.
+        self._pending_ids: set[str] = set()
+        # Doctor findings per tool id: (broken, notes), read by every pass (D-13).
+        self._evidence: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
         self._skills: dict[str, SkillHostStatus] = {}
         # Per pack: seq and scan of the pass that published its state;
         # `refresh_skills` rebuilds each pack with its own (RR-03).
@@ -1118,6 +1143,33 @@ class VersionRefreshService:
                     self._states = {**self._states, **rebuilt}
                 return dict(merged)
 
+    def mark_pending(self, tool_ids: Collection[str]) -> None:
+        """Hide `tool_ids` until the next epoch (the removal start, D-09).
+
+        `state_of` answers `None` for exactly these ids; a pass already in
+        flight does not republish them, and `invalidate` clears the set.
+        """
+        with self._lock:
+            self._pending_ids |= set(tool_ids)
+            self._states = {k: v for k, v in self._states.items() if k not in self._pending_ids}
+
+    def record_evidence(
+        self, tool_id: str, *, broken: tuple[str, ...] = (), notes: tuple[str, ...] = ()
+    ) -> bool:
+        """Store Doctor findings for `tool_id`; True when the stored value changed.
+
+        Empty evidence deletes the entry. The next pass reads it (D-13).
+        """
+        new = (broken, notes) if broken or notes else None
+        with self._lock:
+            if self._evidence.get(tool_id) == new:
+                return False
+            if new is None:
+                del self._evidence[tool_id]
+            else:
+                self._evidence[tool_id] = new
+            return True
+
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the manager snapshot under the merge lock.
 
@@ -1127,6 +1179,7 @@ class VersionRefreshService:
         del reason
         with self._lock:
             self._epoch += 1
+            self._pending_ids.clear()
             # In memory first: a failed write must still force the next probe (WR2-03).
             self._skills_probed = False
             self._skills = {
@@ -1620,6 +1673,7 @@ class VersionRefreshService:
         platform = replace(self._platform, has_brew=self._which("brew") is not None)
         with self._lock:
             self._platform = platform
+            evidence = dict(self._evidence)
         # L-19-01: `uv tool dir`, asked once per pass and only when uv is on PATH.
         uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
         now = self._now()
@@ -1629,10 +1683,12 @@ class VersionRefreshService:
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
-        config = _merge_facts(
-            self._terminal_facts(platform), _pnpm_group_facts(tools, inventory.pnpm_globals)
-        )
         which = self._looked_through
+        config = _merge_facts(
+            self._terminal_facts(platform),
+            _pnpm_group_facts(tools, inventory.pnpm_globals),
+            _pnpm_missing_facts(tools, inventory.pnpm_globals, which),
+        )
         native = self._native_probe
         if native is not None and platform.os != "macos":
             # D-11: ONE batched path query per pass, over the live paths no tracked
@@ -1701,6 +1757,7 @@ class VersionRefreshService:
                     # No receipt, adoption or layout proves it (review C2-M2).
                     receipt_notes += (UNPROVEN_NOTE,)
                 facts = config.get(tool.id, _NO_FACTS)
+                found_broken, found_notes = evidence.get(tool.id, ((), ()))
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,
@@ -1711,12 +1768,13 @@ class VersionRefreshService:
                     version=status,
                     removable=removable,
                     receipt=receipt,
-                    broken=broken,
+                    broken=broken + found_broken,
                     misconfigured=facts.misconfigured,
                     unconfigured=facts.steps,
                     notes=ownership_notes(tool, ownership, platform)
                     + version_notes(tool, status, ownership, present=present)
                     + receipt_notes
+                    + found_notes
                     + (facts.unchecked if present else ()),
                 )
             if would_fetch:
@@ -1751,7 +1809,8 @@ class VersionRefreshService:
             fresh = {
                 tool_id: state
                 for tool_id, state in states.items()
-                if (current := self._states.get(tool_id)) is None or current.seq < seq
+                if tool_id not in self._pending_ids
+                and ((current := self._states.get(tool_id)) is None or current.seq < seq)
             }
             if not fresh:
                 return

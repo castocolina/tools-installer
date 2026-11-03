@@ -77,7 +77,7 @@ from installer.version_status import (
     version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
-from tests.state_doubles import ScriptedUpdates
+from tests.state_doubles import ScriptedUpdates, offline_service
 from tests.test_download import fixture_runner
 from tests.test_registry import REGISTRY
 
@@ -4701,7 +4701,7 @@ def _group_service(
         probe_output=lambda _argv: "1.0.0",
         now=lambda: _STATE_NOW,
         managed_bin_dir=tmp_path / "managed",
-        which=lambda _cmd: None,
+        which=lambda cmd: f"/bin/{cmd}" if cmd in present else None,
         artifacts_for=lambda _tool: [],
         read_inventory_fn=inventory,
         read_outdated_fn=_empty_outdated,
@@ -5610,3 +5610,136 @@ def test_inaccessible_receipts_dir_never_aborts_refresh(
     assert _ADOPTED not in state.reasons
     assert state.receipt is None
     assert state.removable.removable == ()
+
+
+def _pending_service(
+    tmp_path: Path, probe: Callable[[list[str]], str | None]
+) -> VersionRefreshService:
+    return offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=probe,
+    )
+
+
+def _pending_tools() -> list[Tool]:
+    return [_tool("rg"), _tool("fd")]
+
+
+def test_mark_pending_hides_only_the_named_ids(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    states = _settled_states(service, _pending_tools())
+    epoch = service.epoch
+    service.mark_pending({"rg"})
+    assert service.state_of("rg") is None
+    assert service.state_of("fd") is states["fd"]
+    assert service.epoch == epoch
+
+
+def test_mark_pending_survives_a_pass_that_commits_after_it(tmp_path: Path) -> None:
+    holder: list[VersionRefreshService] = []
+    fired: list[bool] = []
+
+    def probe(_argv: list[str]) -> str | None:
+        if not fired:
+            fired.append(True)
+            holder[0].mark_pending({"rg"})
+        return "1.0.0"
+
+    service = _pending_service(tmp_path, probe)
+    holder.append(service)
+    service.refresh(_pending_tools())
+    assert fired
+    assert service.state_of("rg") is None
+    assert service.state_of("fd") is not None
+
+
+def test_invalidate_clears_pending_and_the_next_pass_republishes(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    tools = _pending_tools()
+    service.refresh(tools)
+    service.mark_pending({"rg"})
+    epoch = service.invalidate(reason="t")
+    service.refresh(tools)
+    state = service.state_of("rg")
+    assert state is not None
+    assert state.generation == epoch
+
+
+def test_record_evidence_reports_change(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    assert service.record_evidence("rg", broken=("boom",)) is True
+    assert service.record_evidence("rg", broken=("boom",)) is False
+    assert service.record_evidence("rg") is True
+    assert service.record_evidence("rg") is False
+
+
+def test_evidence_reaches_the_next_pass(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    tools = _pending_tools()
+    note = "pnpm is holding a, b in separate global installs"
+    service.record_evidence("rg", broken=("smoke failed",))
+    service.record_evidence("fd", notes=(note,))
+    states = _settled_states(service, tools)
+    assert states["rg"].health is Health.BROKEN
+    assert "smoke failed" in states["rg"].reasons
+    assert note in states["fd"].reasons
+    assert states["fd"].health is not Health.BROKEN
+
+
+def test_evidence_is_read_under_the_lock_as_a_snapshot(tmp_path: Path) -> None:
+    holder: list[VersionRefreshService] = []
+
+    def probe(_argv: list[str]) -> str | None:
+        holder[0].record_evidence("rg", broken=("late",))
+        return "1.0.0"
+
+    service = _pending_service(tmp_path, probe)
+    holder.append(service)
+    first = _settled_states(service, _pending_tools())
+    assert "late" not in first["rg"].reasons
+    service.invalidate(reason="t")
+    assert "late" in _settled_states(service, _pending_tools())["rg"].reasons
+
+
+_OFF_PATH = "pnpm still tracks mmdc globally, but the command no longer resolves on PATH."
+
+
+def _off_path_service(
+    tmp_path: Path, pnpm_globals: frozenset[str] | None, *, resolves: bool
+) -> VersionRefreshService:
+    def inventory(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae={},
+            brew_casks={},
+            pnpm_globals=pnpm_globals,
+            uv_tools={},
+            brew_prefix=None,
+        )
+
+    return offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        which=(lambda cmd: f"/bin/{cmd}") if resolves else (lambda _cmd: None),
+        read_inventory_fn=inventory,
+    )
+
+
+def test_pass_reports_a_pnpm_tracked_command_that_left_path(tmp_path: Path) -> None:
+    service = _off_path_service(tmp_path, frozenset({_MMDC_PKG}), resolves=False)
+    state = _settled_states(service, [_node_pkg_tool("mmdc", _MMDC_PKG)])["mmdc"]
+    assert _OFF_PATH in state.reasons
+    assert state.health is Health.MISSING
+
+
+def test_pass_adds_no_pnpm_fact_when_the_command_resolves_or_pnpm_is_unknown(
+    tmp_path: Path,
+) -> None:
+    tools = [_node_pkg_tool("mmdc", _MMDC_PKG)]
+    resolving = _off_path_service(tmp_path / "a", frozenset({_MMDC_PKG}), resolves=True)
+    assert _OFF_PATH not in _settled_states(resolving, tools)["mmdc"].reasons
+    unknown = _off_path_service(tmp_path / "b", None, resolves=False)
+    assert _OFF_PATH not in _settled_states(unknown, tools)["mmdc"].reasons

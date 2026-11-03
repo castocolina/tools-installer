@@ -139,6 +139,12 @@ class IncompleteGroup:
     missing: tuple[str, ...]
 
 
+# One sentence for the tier reason and the CLI doctor.
+PNPM_TRACKED_OFF_PATH = (
+    "pnpm still tracks {names} globally, but the command no longer resolves on PATH."
+)
+
+
 @dataclass(frozen=True)
 class NodeGlobalsReport:
     """What pnpm actually manages globally, and which of it stopped working.
