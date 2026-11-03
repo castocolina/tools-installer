@@ -2323,6 +2323,10 @@ class PoliciesScreen(AppScreen):
                 self,
                 f"Policy change failed: {self.error}. Check permissions, then press space.",
                 "error",
+                elsewhere=(
+                    f"Policy change failed: {self.error}."
+                    " Check permissions, then open Policies and press space."
+                ),
             )
             self.app.request_refresh()
             return
