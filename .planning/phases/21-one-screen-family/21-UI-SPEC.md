@@ -70,7 +70,7 @@ This is the one interaction contract all six views share.
 | Leave a view | The view's transient status is gone | `clear_transient()` runs first. The catalog tiers also clear the recommends line (existing override) |
 | Enter a view | The view shows the **latest published** state, never the state it had when it was left | `enter_view` renders from `state_of`. It never starts a refresh pass |
 | First entry | A status written during entry stays visible (for example a startup read error, or the first-run link-mode result) | Widgets are built in `on_mount`; content and status are written only in `enter_view` / `state_refreshed`; entry never clears its own status |
-| Visible view and a pass publishes | The view re-renders in place; cursor stays on the same row id, selection is kept | `app` calls `screen.state_refreshed()` on publish; hidden views wait for their next `enter_view` |
+| Visible view and a pass publishes | The view re-renders in place; cursor stays on the same row id, selection is kept | `app` calls `screen.state_refreshed()` on publish; a view under a modal re-renders when the modal closes; views the user left wait for their next `enter_view` |
 | Rows whose state is not yet published | `…` in the Health mark and `checking…` where a word is shown (Phase 19 and 20 rule, unchanged) | Never a stale `✓` |
 
 - Cursor and scroll position survive a `state_refreshed` re-render (keyed by row id). A row that vanished moves the cursor to the nearest surviving row.
@@ -282,7 +282,7 @@ All new sentences are plain text, first letter capital, ending in a period (stat
 - **No motion.** No spinner and no animated ellipsis, including for `Removing…`.
 - **Width.** `…` `!` `●` `○` are one cell by `rich.cells.cell_len`. As in Phase 19, two-cell ambiguous-width terminals are not supported.
 - **Escaping.** Detail, reasons and errors are `Text` pieces passed through `sanitize_log_line`; a `[` in a path or id never restyles anything.
-- **Focus.** On every `enter_view` the main table keeps focus (Uninstall browser, Policies table, tier tables). Re-rendering on publish never steals focus from an open modal; a publish while a modal is on top only updates the hidden view for its next entry.
+- **Focus.** On every `enter_view` the main table keeps focus (Uninstall browser, Policies table, tier tables). Re-rendering on publish never steals focus from an open modal; a publish while a modal is on top is rendered on the view below when the modal closes (C-08), keeping its cursor, selection and status.
 
 ---
 

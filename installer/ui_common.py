@@ -8,11 +8,11 @@ catalog_tui.py adopts them when its browser is extracted into a shared widget
 from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from rich.text import Text
 from textual import events
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.coordinate import Coordinate
 from textual.message import Message
@@ -332,23 +332,43 @@ class AppScreen(Screen[None]):
     # Textual's own `Rule.-horizontal { margin: 1 0 }` out-ranks a bare `Rule` selector.
     DEFAULT_CSS = "AppScreen > Rule.-horizontal { margin: 0; color: $accent; }"
 
+    # Narrow .app from App[Unknown]; the wizard's screens narrow it further.
+    if TYPE_CHECKING:
+
+        @property
+        def app(self) -> App[Any]: ...
+
     def __init__(self, *, view: str, accent: str = "$accent") -> None:
         super().__init__()
         self._view = view
         self._accent = accent
         self.status = StatusLine()
+        # True while a modal covers this view; left views are popped instead.
+        self._covered = False
 
     @abstractmethod
     def compose_body(self) -> ComposeResult: ...
 
     def enter_view(self) -> None:
         """Render this view's current state; runs after `show_view` has pushed
-        and mounted the screen, the one navigation path (a ScreenResume handler
-        would also fire when the nav palette closes over a view the user never
-        left, discarding their in-progress selection). A view holding state
+        and mounted the screen, the one navigation path. A view holding state
         another view can change live overrides this to re-derive it.
         """
         self.state_refreshed()
+
+    def on_screen_suspend(self) -> None:
+        # Still on the stack: a modal opened over this view. Popped: the user left.
+        self._covered = self in self.app.screen_stack
+
+    def on_screen_resume(self) -> None:
+        """A modal closed over this view: render what was published under it
+        (D-06 as amended by C-08). An entry is `enter_view`'s render, not this
+        one. `state_refreshed` keeps the cursor, the selection (it drops only
+        ids that stopped being selectable) and any status."""
+        covered, self._covered = self._covered, False
+        # Like UnifiedApp._visible_app_screen: never render once the app stopped.
+        if covered and self.app.is_running and self.app.screen is self:
+            self.state_refreshed()
 
     def state_refreshed(self) -> None:
         """Render the latest published state. Default: nothing to render."""

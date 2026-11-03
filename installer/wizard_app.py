@@ -2956,7 +2956,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def _render_published(self) -> None:
         """Re-render the visible view only (D-06); a view under a modal renders
-        the published state on its next `enter_view`."""
+        the published state when the modal closes (`AppScreen.on_screen_resume`)."""
         screen = self._visible_app_screen()
         if screen is not None:
             screen.state_refreshed()
@@ -3118,8 +3118,6 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             await self.show_view(name)
 
     def _first_link_mode_picked(self, value: str | None) -> None:
-        # A launch pass that published under this modal rendered nowhere.
-        self._render_published()
         # make fix opens with initial_view="doctor", so the Doctor AppScreen is
         # on top and the catalog is hidden. Write D-05.3's explanation onto
         # the screen the user is looking at, never a hard catalog fallback:
@@ -3220,9 +3218,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # tier's own version-refresh trigger, not a generic "screen visible"
         # signal).
         active = self._catalogs.get(self.current_view)
-        # The modal is gone: re-render the view it revealed, then ask for the
-        # pass that publishes what the run changed (A11: only if it ran something).
-        self._render_published()
+        # The revealed view renders itself on resume (C-08); ask for the pass
+        # that publishes what the run changed (A11: only if it ran something).
         if result is not None and ran_anything(result):
             self.request_refresh()
         # Both post-run failures land on one line, written after the re-render.

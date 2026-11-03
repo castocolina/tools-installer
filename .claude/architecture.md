@@ -1169,7 +1169,8 @@ launch all go through it, in the same order.
 `full-catalog-refresh` worker and coalesces requests: one made during a pass
 queues exactly one more pass. Entering a view never starts a pass. A publish
 calls `state_refreshed` on the visible top view only; a view under a modal
-renders the published state on its next entry. Every mutation (install close,
+renders the published state when the modal closes (`AppScreen.on_screen_resume`),
+and a view the user left renders it on its next entry. Every mutation (install close,
 update, removal, policy toggle, pnpm reinstall, Doctor fix) ends with one
 `request_refresh`, so what one view changed is what every other view reads next.
 `await_publication` is the same owner's waiter for the execute screen: it joins

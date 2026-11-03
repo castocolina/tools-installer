@@ -53,7 +53,7 @@ None of these has landed as of 2026-10-14.
   - A request that arrives during a pass sets `_refresh_pending`. The worker runs exactly one more pass after it commits, so requests coalesce and no second pass runs concurrently.
   - Every mutation calls `request_refresh()` after it completes, never before: install close, `u`, an Uninstall removal, a Policies toggle, Doctor `r`.
   - Entering a view never starts a pass (there is a spy test).
-- **D-06:** On publish, the app calls `self.screen.state_refreshed()` directly when the top screen is an `AppScreen`. Hidden views render the published state on their next `enter_view`.
+- **D-06:** On publish, the app calls `self.screen.state_refreshed()` directly when the top screen is an `AppScreen`. A view under a modal renders the published state when the modal closes (`AppScreen.on_screen_resume`, amended 2026-11-03, review C-08); a view the user left renders it on its next `enter_view`.
   - There is no message broadcast. `OwnershipRefreshed` (`catalog_tui.py:152`, handled at `wizard_app.py:2978-3000`) and the per-tier `_refresh_versions_worker`/`_refresh_skills_worker` (`catalog_tui.py:404-469`) are deleted.
   - 20 D-13's Enter waiter hooks into the same publication.
 
