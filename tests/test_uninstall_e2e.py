@@ -2,6 +2,7 @@
 core against a sandboxed HOME, asserting real artifacts are deleted while the
 real $HOME is never touched. Saves an SVG screenshot for agent inspection."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -38,16 +39,23 @@ def _dl_tool() -> Tool:
     )
 
 
-def _fd_service(home: Path, bin_dir: Path) -> VersionRefreshService:
+def _fd_service(
+    home: Path, bin_dir: Path, previewed_extra: tuple[Path, ...] = ()
+) -> VersionRefreshService:
     """A service whose one published state carries the REAL removal proof over
-    the tree planted under `home`."""
+    the tree planted under `home`, plus `previewed_extra`: paths an earlier
+    plan of the tool named that its current plan no longer does."""
     tool = _dl_tool()
+    plan = plan_removal([tool], bin_dir)
+    plan = replace(plan, removable=plan.removable + previewed_extra)
     service = frozen_service(home)
-    service.publish([pass_state(tool, platform=_LINUX, removable=plan_removal([tool], bin_dir))])
+    service.publish([pass_state(tool, platform=_LINUX, removable=plan)])
     return service
 
 
-def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
+def _build_real_app(
+    home: Path, previewed_extra: tuple[Path, ...] = ()
+) -> tuple[UnifiedApp, Path, Path, Path]:
     bin_dir = home / ".local" / "bin"
     opt = home / ".local" / "opt" / "fd"
     opt.mkdir(parents=True)
@@ -59,7 +67,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
     write_ban_aliases(myshellrc)
     write_myshellrc([bin_dir], myshellrc)
 
-    service = _fd_service(home, bin_dir)
+    service = _fd_service(home, bin_dir, previewed_extra)
 
     def _remove(decision: UninstallDecision) -> SweepResult:
         return perform_uninstall(
@@ -267,3 +275,50 @@ async def test_uninstall_e2e_also_sweeps_tweaks_against_sandbox(
     plugins = zshrc.read_text().split("\n", 1)[0]
     # Only `docker` was ever ours; the names the user wrote are untouched.
     assert plugins == "plugins=(git kubectl)"
+
+
+async def test_a_tool_whose_plan_dropped_a_previewed_path_is_not_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-14: the preview named a path the tool's plan no longer names (its
+    receipt was rewritten before the confirm). The tool is `remove failed`,
+    nothing of it is deleted, and the path is named on the status once."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = Path.home()
+    stale = home / ".local" / "bin" / "fd-previous"
+    app, opt, bin_dir, _myshellrc = _build_real_app(home, previewed_extra=(stale,))
+    stale.write_text("an older copy")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert isinstance(app.screen, UninstallScreen)
+        status = app.screen.status.text
+        assert "1 remove failed" in status
+        assert not status.startswith("1 removed")
+        assert status.count(f"changed since the preview; not removed: {stale}") == 1
+    assert stale.exists()
+    assert (bin_dir / "fd").is_symlink()
+    assert opt.exists()
+
+
+async def test_a_tool_only_refusal_is_on_the_status_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-14: a refused path is named on the status whether or not shell
+    tweaks were selected, and exactly once."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, _opt, bin_dir, _myshellrc = _build_real_app(Path.home())
+    (bin_dir / "fd").unlink()
+    (bin_dir / "fd").write_text("foreign file")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("a")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert isinstance(app.screen, UninstallScreen)
+        status = app.screen.status.text
+        assert "1 remove failed" in status
+        assert status.count(f"changed since the preview; not removed: {bin_dir / 'fd'}") == 1
+    assert (bin_dir / "fd").read_text() == "foreign file"
