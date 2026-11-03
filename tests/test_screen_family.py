@@ -670,3 +670,55 @@ async def test_a_second_removal_is_refused_while_one_runs(tmp_path: Path):
             assert len(remover.calls) == 1
         finally:
             remover.release.set()
+
+
+async def test_a_refused_removal_still_requests_one_pass(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "yq")
+            await wait_until(pilot, remover.started.is_set)
+            before = service.passes
+            fd_before = _uninstall_health(app, "fd")
+            await _confirm_removal(app, pilot, "fd")
+            await wait_until(pilot, lambda: service.passes == before + 1)
+            await pilot.pause()
+            assert service.passes == before + 1
+            assert _uninstall_health(app, "fd") == fd_before
+            remover.release.set()
+            await settle(app, pilot)
+        finally:
+            remover.release.set()
+
+
+async def test_the_lock_is_released_when_the_remover_crashes(tmp_path: Path):
+    remover = HeldRemover(raising=RuntimeError("boom"))
+    remover.release.set()
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        service.queued = (removable_state(_tool("yq"), [tmp_path / "yq"]),)
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        status = app.view("uninstall").status
+        assert status.text == "Uninstall failed: boom. Check permissions, then press enter."
+        assert not app.mutation_in_flight
+        assert service.state_of("yq") is not None
+        assert _uninstall_health(app, "yq") != "…"
+
+
+async def test_removal_outcomes_do_not_change_the_exit_code(tmp_path: Path):
+    remover = HeldRemover(SweepResult(remove_failed=(("yq", "denied"),)))
+    remover.release.set()
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        assert app.view("uninstall").status.text.startswith("1 remove failed")
+        assert app.outcomes is None
