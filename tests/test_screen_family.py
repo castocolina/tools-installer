@@ -2080,6 +2080,29 @@ async def test_an_unreadable_job_state_shows_the_error(tmp_path: Path):
         )
 
 
+async def test_an_undecodable_policy_read_shows_the_error(tmp_path: Path):
+    reads = {"undecodable": False}
+
+    def is_active() -> bool:
+        if reads["undecodable"]:  # a managed rc file rewritten with invalid UTF-8
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        return True
+
+    policy = replace(_policy(tmp_path, "tweak"), is_active=is_active)
+    app, _service = _policy_app(tmp_path, [policy], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        reads["undecodable"] = True
+        await app.show_view("system")
+        await app.show_view("policies")
+        await settle(app, pilot)
+        assert app.is_running
+        status = app.view("policies").status
+        assert _state_text(app, "tweak") == ""
+        assert status.text.startswith("Could not read the policy state:")
+        assert status.severity is Severity.ERROR
+
+
 class _SpiedReads:
     """Records every JobStatesRead a PoliciesScreen posts, then forwards it."""
 
