@@ -47,10 +47,15 @@ from installer.guidance import (
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
-    node_globals_guidance,
 )
 from installer.model import Tool
-from installer.pnpm_globals import NodeGlobalsReport, reinstall_preview
+from installer.pnpm_globals import (
+    PNPM_SMOKE_FAILED,
+    PNPM_SPLIT_GROUP,
+    NodeGlobalsReport,
+    reinstall_preview,
+)
+from installer.pnpm_globals import node_globals as declared_node_globals
 from installer.policy import (
     Policy,
     PolicyMove,
@@ -90,6 +95,7 @@ from installer.ui_common import (
 from installer.uninstall import SweepResult, policy_owned, reverse_dependencies
 from installer.update import UpdateService
 from installer.version_status import (
+    Health,
     ToolState,
     VersionRefreshService,
     uninstall_detail,
@@ -300,6 +306,9 @@ class _BodyStatic(Static):
         return self.render()
 
 
+_DOCTOR_READ_ERROR = "Could not read the doctor state: "
+
+
 class DoctorScreen(AppScreen):
     """PATH audit and safe PATH repair in one view."""
 
@@ -344,9 +353,15 @@ class DoctorScreen(AppScreen):
         writer_lines: Sequence[PathWriterLine] = (),
         rescan_writer_lines: Callable[[], Sequence[PathWriterLine]] | None = None,
         guard_file: Callable[[Path, Sequence[PathWriterLine]], PathGuardOutcome] | None = None,
+        tools: Sequence[Tool] = (),
+        version_refresh: VersionRefreshService | None = None,
     ) -> None:
         super().__init__(view="doctor")
         self._report = report
+        # Doctor reads the pnpm findings the tiers read (ToolState.reasons) and
+        # records its own audit as session evidence; with no service it does neither.
+        self._node_entries = declared_node_globals(tools)
+        self._version_refresh = version_refresh
         # Computed ONCE by the composition root, which already does IO, and
         # held as data. _refresh_guidance is IO-free by construction and runs
         # on every navigation, so it must never be the thing that reads rc
@@ -420,6 +435,11 @@ class DoctorScreen(AppScreen):
         # Not globals_error: "nothing to reinstall" is not a failure, and the
         # error branch renders "Reinstall failed." in red.
         self.globals_note: str | None = None
+        # The two live reads' failures, and the status line this screen last wrote
+        # for them (cleared only while it still holds that copy).
+        self._guard_error: str | None = None
+        self._preview_error: str | None = None
+        self._read_line: str | None = None
         # Bumped every time an audit worker is actually started; carried on
         # its GlobalsAudited message so a superseded worker's result (one
         # started before a newer request, still running when the newer one
@@ -439,10 +459,13 @@ class DoctorScreen(AppScreen):
         synchronously, so it is started as a worker and rendered when it lands.
         The screen is mounted before entry, so the first entry starts it too.
         """
-        self._refresh_guidance()
-        self._refresh_body()
+        super().enter_view()
         self._start_globals_audit()
         self._start_disk_probe()
+
+    def state_refreshed(self) -> None:
+        self._refresh_guidance()
+        self._refresh_body()
 
     def _start_disk_probe(self) -> None:
         if self.disk_pressure is None:
@@ -495,21 +518,17 @@ class DoctorScreen(AppScreen):
         self._audit_globals_worker(self._globals_audit_generation)
 
     def _refresh_guidance(self) -> None:
-        # IO-free by construction: the globals half reads the last audited
-        # report, never the closure that would spawn `pnpm list -g --json`.
-        # Before the first audit lands there is nothing to say about the
-        # globals, which is honest — node_globals_guidance only ever speaks
-        # about a set it has seen.
-        status, warning = self._guard_state()
-        globals_report = self._globals_report
-        # Position is a decision, pinned by a test: disk pressure follows the
-        # guard items and precedes the pnpm-globals items.
+        # IO-free by construction. The pnpm findings are not here: they are the
+        # published ToolState reasons, rendered by _refresh_body.
+        read, self._guard_error = run_live(self._guard_state)
+        # A failed read contributes nothing: the earlier answer is not kept (B3).
+        status, warning = read if read is not None else ({}, None)
+        # Position is a decision, pinned by a test: disk pressure follows the guard items.
         self.guidance = (
             doctor_guidance(self._report, self._duplicate_writers, self._writer_lines)
             + guard_guidance(status, warning)
             + self._disk_pressure_items()
             + self._competing_items()
-            + (node_globals_guidance(globals_report) if globals_report is not None else [])
         )
 
     def _disk_pressure_items(self) -> list[Guidance]:
@@ -544,7 +563,8 @@ class DoctorScreen(AppScreen):
         text.append("Audit\n", style="bold")
         text.append(guidance_text(self._tui_guidance()))
         text.append("\n\nSafe fix preview\n", style="bold")
-        text.append(self._fix_preview())
+        preview, self._preview_error = run_live(self._fix_preview)
+        text.append(preview or "")
         text.append("\n\nAction\n", style="bold")
         if self.applied:
             text.append("PATH wired.", style="green")
@@ -591,6 +611,14 @@ class DoctorScreen(AppScreen):
         # Skipped when the count line above already said the same thing: a
         # known=False preview is the identical "could not be read" sentence
         # with only the tail changed, and printing both reads like a stutter.
+        for entry in self._node_entries:
+            service = self._version_refresh
+            state = service.state_of(entry.tool_id) if service is not None else None
+            if state is None or state.health in (Health.CHECKING, Health.UNAVAILABLE):
+                continue
+            for reason in state.reasons:
+                # Plain text, never markup: a reason can carry child-process output.
+                text.append(sanitize_log_line(f"{entry.tool_id}: {reason}") + "\n", style="yellow")
         if report is None or report.known:
             text.append(self._globals_preview_text)
         text.append("\n")
@@ -607,6 +635,17 @@ class DoctorScreen(AppScreen):
         else:
             text.append("Press r to reinstall the pnpm-managed global set.", style="yellow")
         body.update(text)
+        self._sync_read_status()
+
+    def _sync_read_status(self) -> None:
+        error = self._guard_error or self._preview_error
+        if error is not None:
+            self._read_line = f"{_DOCTOR_READ_ERROR}{error.partition(chr(10))[0]}."
+            self.status.set(self._read_line, "error")
+        elif self._read_line is not None:
+            if self.status.text == self._read_line:
+                self.status.clear()
+            self._read_line = None
 
     def _tui_guidance(self) -> list[Guidance]:
         """Keep CLI doctor wording unchanged while the TUI points to the live apply action."""
@@ -850,6 +889,7 @@ class DoctorScreen(AppScreen):
         self.globals_auditing = False
         self._globals_report = message.report
         self._globals_preview_text = message.preview
+        self._record_pnpm_evidence(message.report)
         # Any note naming the audit itself (waiting for it, or the previous
         # one having failed) is answered by this landing one way or another:
         # the fresh report is what the screen now shows instead. A note
@@ -860,6 +900,28 @@ class DoctorScreen(AppScreen):
             self.globals_note = None
         self._refresh_guidance()
         self._refresh_body()
+
+    def _record_pnpm_evidence(self, report: NodeGlobalsReport) -> None:
+        """Hand the audit's findings to the next pass (D-13); ask for one only
+        when what is stored changed. An unreadable audit stores nothing."""
+        service = self._version_refresh
+        if service is None or not report.known:
+            return
+        changed = False
+        for entry in self._node_entries:
+            broken = tuple(
+                PNPM_SMOKE_FAILED.format(tool_id=entry.tool_id, reason=reason)
+                for tool_id, reason in report.unhealthy
+                if tool_id == entry.tool_id
+            )
+            notes = tuple(
+                PNPM_SPLIT_GROUP.format(names=", ".join(group))
+                for group in report.split_groups
+                if entry.npm_pkg in group
+            )
+            changed |= service.record_evidence(entry.tool_id, broken=broken, notes=notes)
+        if changed and not self.app.quitting:
+            self.app.request_refresh()
 
     def on_globals_reinstalled(self, message: GlobalsReinstalled) -> None:
         self.app.end_mutation()
@@ -2744,6 +2806,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
                     # reaches both screens.
                     disk_pressure=policies.disk_pressure,
                     competing=policies.competing,
+                    tools=self._tools,
+                    version_refresh=version_refresh,
                 ),
                 "uninstall": UninstallScreen(
                     uninstall, tools=self._tools, version_refresh=version_refresh

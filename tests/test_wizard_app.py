@@ -30,7 +30,6 @@ from installer.guidance import (
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
-    node_globals_guidance,
 )
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
@@ -3481,9 +3480,7 @@ async def test_doctor_screen_shows_missing_pnpm_globals_and_preview() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert any("mmdc" in item.meaning for item in app.screen.guidance)
         body = str(app.screen.query_one("#doctor-body", Static).render())
-        assert "mmdc" in body
         assert preview in body
         assert "pnpm-managed globals" in body
 
@@ -3698,7 +3695,7 @@ async def test_doctor_reinstall_refuses_a_stale_report_while_reauditing() -> Non
         screen = app.screen
         assert isinstance(screen, DoctorScreen)
         body = str(screen.query_one("#doctor-body", Static).render())
-        assert "mmdc" in body
+        assert "1 package(s) in pnpm's global set" in body
 
         # Re-entering starts a fresh audit (the same call `enter_view` makes
         # on every entry) while the stale "mmdc missing" report is still
@@ -3717,8 +3714,8 @@ async def test_doctor_reinstall_refuses_a_stale_report_while_reauditing() -> Non
 
         release_second.set()
         await _settle(app, pilot)
-        body = str(screen.query_one("#doctor-body", Static).render())
-        assert "mmdc" not in body
+        assert screen.globals_auditing is False
+        assert screen.globals_note is None
 
 
 async def test_doctor_stale_audit_delivery_is_discarded() -> None:
@@ -3807,10 +3804,8 @@ async def test_doctor_r_clears_the_stale_missing_globals_warning() -> None:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         screen = app.screen
-        assert any("pnpm-managed global set" in item.title for item in screen.guidance)
         await pilot.press("r")
         await _settle(app, pilot)
-        assert all("pnpm-managed global set" not in item.title for item in screen.guidance)
         body = str(screen.query_one("#doctor-body", Static).render())
         assert "pnpm globals reinstalled" in body
         assert "went missing" not in body
@@ -3965,27 +3960,23 @@ async def test_doctor_r_then_enter_both_run() -> None:
 
 
 async def test_doctor_rereads_node_globals_on_enter_view() -> None:
-    missing: list[str] = []
+    reads: list[int] = []
 
     def read() -> NodeGlobalsReport:
-        return NodeGlobalsReport(
-            entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
-            missing=tuple(missing),
-            managed=("@mermaid-js/mermaid-cli",),
-        )
+        reads.append(1)
+        return _mmdc_report(missing=())
 
     app = _app(node_globals=read)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("4")
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert all("pnpm-managed global set" not in item.title for item in app.screen.guidance)
-        missing.append("mmdc")
+        assert len(reads) == 1
         await pilot.press("escape")
         await pilot.press("4")
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert any("pnpm-managed global set" in item.title for item in app.screen.guidance)
+        assert len(reads) == 2
 
 
 async def test_doctor_tui_guidance_rewrites_make_setup_prefix() -> None:
@@ -3993,7 +3984,10 @@ async def test_doctor_tui_guidance_rewrites_make_setup_prefix() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert any(item.next_step.startswith("Run `make setup`") for item in app.screen.guidance)
+        # The console wording never reaches the TUI: pnpm findings are state reasons now.
+        assert not any(
+            item.next_step.startswith("Run `make setup`") for item in app.screen.guidance
+        )
         body = str(app.screen.query_one("#doctor-body", Static).render())
         assert "Press r" in body
         assert "Run `make setup`" not in body
@@ -4061,24 +4055,33 @@ async def test_doctor_healthy_disk_pressure_adds_nothing() -> None:
         )
 
 
-async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_globals() -> None:
+async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_path: Path) -> None:
     warning = "pip shim is shadowed"
+    mmdc = replace(
+        _tool("mmdc"),
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(mmdc, platform=service.platform, broken=("mmdc is not working",))])
     app = _app(
         guard_warning=warning,
         node_globals=lambda: _mmdc_report(),
         policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)),
         initial_view="doctor",
+        tools=[mmdc],
+        version_refresh=service,
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         guard_items = guard_guidance({"pip": False, "npm": False}, warning)
-        globals_items = node_globals_guidance(_mmdc_report())
         assert guard_items
-        assert globals_items
         assert app.screen.guidance == (
-            _HEALTHY_DOCTOR + guard_items + disk_pressure_guidance(_AT_RISK) + globals_items
+            _HEALTHY_DOCTOR + guard_items + disk_pressure_guidance(_AT_RISK)
         )
+        body = _doctor_body(app)
+        [disk_item] = disk_pressure_guidance(_AT_RISK)
+        assert body.index("mmdc: ") > body.index(disk_item.title)
 
 
 async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_row() -> None:

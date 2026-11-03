@@ -14,7 +14,12 @@ from installer.diskusage import DISK_FREE_WARN_PERCENT, TMP_USED_WARN_PERCENT, D
 from installer.doctor import DoctorReport, has_problems
 from installer.enums import DaemonState, Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
-from installer.pnpm_globals import PNPM_TRACKED_OFF_PATH, NodeGlobalsReport
+from installer.pnpm_globals import (
+    PNPM_SMOKE_FAILED,
+    PNPM_SPLIT_GROUP,
+    PNPM_TRACKED_OFF_PATH,
+    NodeGlobalsReport,
+)
 from installer.rcclean import PathWriterLine
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, system_scope_warning
 
@@ -346,7 +351,7 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                 # survives on a user-settable pnpm option rather than on the
                 # declared group.
                 meaning=(
-                    f"pnpm is holding {names} in separate global installs. The dependent "
+                    PNPM_SPLIT_GROUP.format(names=names) + " The dependent "
                     "reaches its peer only through pnpm's user-settable "
                     "`auto-install-peers`, so this pair breaks if that setting changes; "
                     "the declared install group does not depend on it."
@@ -363,10 +368,7 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
         items.append(
             Guidance(
                 title=f"{tool_id} is installed but does not work",
-                meaning=(
-                    f"{tool_id}'s command resolves on PATH, but the check the catalog "
-                    f"declares for it fails right now: {reason}"
-                ),
+                meaning=PNPM_SMOKE_FAILED.format(tool_id=tool_id, reason=reason),
                 # Deliberately NOT one of the two rewritten prefixes: `r` replays
                 # pnpm's global set, and a global set is not what is broken here.
                 # A shared library the OS update removed comes back from the OS,

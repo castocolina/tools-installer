@@ -143,6 +143,12 @@ class IncompleteGroup:
 PNPM_TRACKED_OFF_PATH = (
     "pnpm still tracks {names} globally, but the command no longer resolves on PATH."
 )
+# The two Doctor findings the state carries as evidence (D-13); the console shares them.
+PNPM_SMOKE_FAILED = (
+    "{tool_id}'s command resolves on PATH, but the check the catalog declares for it "
+    "fails right now: {reason}"
+)
+PNPM_SPLIT_GROUP = "pnpm is holding {names} in separate global installs."
 
 
 @dataclass(frozen=True)
