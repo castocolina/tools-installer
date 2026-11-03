@@ -335,6 +335,11 @@ class DoctorScreen(AppScreen):
         padding: 1 2;
         border: round $accent;
     }
+    /* Docked so the card cannot cover it at 80x20; docks overlap, so clear the footer. */
+    DoctorScreen > StatusLine {
+        dock: bottom;
+        margin-bottom: 1;
+    }
     """
 
     def __init__(
