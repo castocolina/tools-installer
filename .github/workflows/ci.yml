@@ -31,4 +31,6 @@ jobs:
       - name: Validate
         run: make validate
       - name: Test
+        # Below the job's 15: a stalled run fails this step and keeps its log.
+        timeout-minutes: 12
         run: make test

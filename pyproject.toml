@@ -48,6 +48,8 @@ pythonVersion = "3.11"
 addopts = "-q"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# A test stuck this long dumps every thread's stack into the log (it does not fail it).
+faulthandler_timeout = 120
 
 [tool.coverage.run]
 source = ["installer"]
