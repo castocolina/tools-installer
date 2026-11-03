@@ -1065,6 +1065,9 @@ class VersionRefreshService:
             return self._present(tool)
         return state.present
 
+    def installed_or(self, launch: Mapping[str, bool]) -> Callable[[str], bool]:
+        return lambda tool_id: launch.get(tool_id, False)
+
     def _default_present(self, tool: Tool) -> bool:
         return is_installed(tool, which=self._looked_through, default_bin_dir=self._managed_bin_dir)
 

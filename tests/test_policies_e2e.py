@@ -6,6 +6,7 @@ screenshots for agent inspection."""
 import os
 import plistlib
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ import pytest
 from textual.widgets import DataTable
 
 from installer import systemd_daemon
+from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
 from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
@@ -35,6 +37,7 @@ from installer.wizard_app import (
     UninstallInputs,
 )
 from tests.screen_family import settle
+from tests.state_doubles import FrozenStateService, absent_state, frozen_service, plan_state
 
 _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
 _UX = _ARTIFACTS / "policies"
@@ -1061,3 +1064,124 @@ async def test_split_to_centralized_move_reports_the_path_wiring_action(
 
         assert mode["v"] == "centralized"
         assert 'make fix ARGS="--link-mode centralized"' in screen.status.text
+
+
+# -- 21-17: Policies renders live state and prerequisites on every entry --
+
+
+def _live_app(
+    policies: list[Policy],
+    *,
+    service: FrozenStateService | None = None,
+    tools: list[Tool] | None = None,
+    uninstall: UninstallInputs | None = None,
+) -> UnifiedApp:
+    return UnifiedApp(
+        tools if tools is not None else [_tool()],
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=uninstall
+        or UninstallInputs(
+            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
+        ),
+        policies=PolicyInputs(policies=policies),
+        initial_view="policies",
+        version_refresh=service,
+    )
+
+
+def _cell(app: UnifiedApp, policy_id: str, column: str) -> str:
+    return app.view("policies").query_one(DataTable[Any]).get_cell(policy_id, column).plain
+
+
+async def test_a_removed_ban_reads_off_on_the_next_entry(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=[rc],
+        remove_rc_paths=[rc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+    ban.apply()
+
+    def remove(_decision: Any) -> SweepResult:
+        ban.remove()
+        return SweepResult()
+
+    uninstall = UninstallInputs(
+        ban_names=lambda: [n for n, on in guard_status(bin_dir).items() if on],
+        has_path_block=lambda: False,
+        remove=remove,
+    )
+    app = _live_app([ban], uninstall=uninstall)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, "ban", "state") == "● [on]"
+        await app.show_view("uninstall")
+        table = app.view("uninstall").query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index("#ban"))
+        for key in ("space", "enter", "enter"):
+            await pilot.press(key)
+        await settle(app, pilot)
+        assert not any(guard_status(bin_dir).values())
+        await app.show_view("policies")
+        assert _cell(app, "ban", "state") == "○ [off]"
+
+
+async def test_installing_watch_unblocks_the_docker_tweak(tmp_path: Path) -> None:
+    watch = Tool(
+        id="watch",
+        name="watch",
+        category="search",
+        cmd="watch",
+        methods=(Method(kind="brew", params={"formula": "watch"}),),
+    )
+    service = frozen_service(tmp_path)
+    service.publish([absent_state(watch)])
+    docker = next(b for b in BUNDLES if b.id == "docker")
+    policy = tweak_policy(
+        docker,
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / "bin",
+        installed_tools=service.installed_or({"watch": False}),
+    )
+    app = _live_app([policy], service=service, tools=[watch])
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert "missing: watch" in _cell(app, "tweak:docker", "requires")
+        service.queued = (plan_state(watch),)
+        app.post_message(RefreshRequested())
+        await settle(app, pilot)
+        assert "missing" not in _cell(app, "tweak:docker", "requires")
+
+
+async def test_macos_prune_reads_off_without_its_plist(tmp_path: Path) -> None:
+    policy = _daemon_policy_for_test(tmp_path)
+    plist = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_bytes(b"")
+    # The policy's cached `active` says on; the plist is gone by the first entry.
+    stale = replace(policy, active=True)
+    plist.unlink()
+    app = _live_app([stale])
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, stale.id, "state") == "○ [off]"
+
+
+async def test_entering_policies_starts_no_pass(tmp_path: Path) -> None:
+    service = frozen_service(tmp_path)
+    app = _live_app([], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        before = service.passes
+        for view in ("system", "policies", "system", "policies"):
+            await app.show_view(view)
+        await settle(app, pilot)
+        assert service.passes == before
