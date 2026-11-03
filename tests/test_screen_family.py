@@ -20,14 +20,16 @@ from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome
 from installer.version_status import Health, VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
-from tests.screen_family import settle, wait_until
+from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
+    FrozenStateService,
     HeldRefreshService,
     ScriptedUpdates,
     absent_state,
     frozen_service,
     offline_service,
     pass_state,
+    removable_state,
 )
 
 VIEW_NAMES = ["system", "user", "ai", "doctor", "uninstall", "policies"]
@@ -55,15 +57,18 @@ def _family_app(
     version_refresh: VersionRefreshService | None = None,
     updates: ScriptedUpdates | None = None,
     app_cls: type[UnifiedApp] = UnifiedApp,
+    tools: Sequence[Tool] | None = None,
+    uninstall: UninstallInputs | None = None,
 ) -> UnifiedApp:
     return app_cls(
-        [_tool("rg"), _tool("fd")],
+        list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({"pip": False, "npm": False}, None),
         fix_preview="preview",
         fix=lambda: None,
-        uninstall=UninstallInputs(
+        uninstall=uninstall
+        or UninstallInputs(
             ban_names=lambda: [],
             has_path_block=has_path_block,
             remove=lambda _decision: SweepResult(),
@@ -581,3 +586,139 @@ async def test_await_publication_reports_an_escaping_exception(tmp_path: Path):
             assert got == ["boom"]
         finally:
             service.release.set()
+
+
+# -- 21-13: the removal runs on a worker under the app mutation lock --
+
+_REFUSAL = "A removal is running; wait for it to finish. Navigation still works."
+
+
+def _removal_app(
+    tmp_path: Path, remover: HeldRemover, *, invalidate: bool = True
+) -> tuple[UnifiedApp, FrozenStateService]:
+    yq, fd = _tool("yq"), _tool("fd")
+    service = frozen_service(tmp_path)
+    service.publish(
+        [removable_state(yq, [tmp_path / "yq"]), removable_state(fd, [tmp_path / "fd"])]
+    )
+    inputs = UninstallInputs(
+        ban_names=lambda: [],
+        has_path_block=lambda: False,
+        remove=remover,
+        tweak_ids=lambda: (),
+        invalidate=(lambda: service.invalidate(reason="test")) if invalidate else None,
+    )
+    return _family_app(tools=[yq, fd], version_refresh=service, uninstall=inputs), service
+
+
+def _uninstall_health(app: UnifiedApp, tool_id: str) -> str:
+    table = app.view("uninstall").query_one(DataTable[Any])
+    return table.get_cell(tool_id, "health").plain
+
+
+async def _confirm_removal(app: UnifiedApp, pilot: Any, tool_id: str) -> None:
+    """Select `tool_id` on Uninstall (alone), accept, and confirm the modal."""
+    table = app.view("uninstall").query_one(DataTable[Any])
+    table.move_cursor(row=table.get_row_index(tool_id))
+    await pilot.press("space")
+    await pilot.press("enter")
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+async def test_a_held_removal_keeps_the_ui_responsive(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "yq")
+            await wait_until(pilot, remover.started.is_set)
+            status = app.view("uninstall").status
+            assert (status.text, status.severity) == ("Removing…", Severity.WARN)
+            assert _uninstall_health(app, "yq") == "…"
+            assert _uninstall_health(app, "fd") != "…"
+            await pilot.press("1")
+            await wait_until(pilot, lambda: app.current_view == "system")
+            assert _health(app, "yq") == "…"
+            await pilot.press("5")
+            await wait_until(pilot, lambda: app.current_view == "uninstall")
+            remover.release.set()
+            service.queued = (absent_state(_tool("yq")),)
+            await settle(app, pilot)
+            assert app.view("uninstall").status.text.startswith("1 removed")
+            await pilot.press("1")
+            await wait_until(pilot, lambda: app.current_view == "system")
+            assert _health(app, "yq") == "○"
+        finally:
+            remover.release.set()
+
+
+async def test_a_second_removal_is_refused_while_one_runs(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "yq")
+            await wait_until(pilot, remover.started.is_set)
+            await _confirm_removal(app, pilot, "fd")
+            status = app.view("uninstall").status
+            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+            assert len(remover.calls) == 1
+        finally:
+            remover.release.set()
+
+
+async def test_a_refused_removal_still_requests_one_pass(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "yq")
+            await wait_until(pilot, remover.started.is_set)
+            before = service.passes
+            fd_before = _uninstall_health(app, "fd")
+            await _confirm_removal(app, pilot, "fd")
+            await wait_until(pilot, lambda: service.passes == before + 1)
+            await pilot.pause()
+            assert service.passes == before + 1
+            assert _uninstall_health(app, "fd") == fd_before
+            remover.release.set()
+            await settle(app, pilot)
+        finally:
+            remover.release.set()
+
+
+async def test_the_lock_is_released_when_the_remover_crashes(tmp_path: Path):
+    remover = HeldRemover(raising=RuntimeError("boom"))
+    remover.release.set()
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        service.queued = (removable_state(_tool("yq"), [tmp_path / "yq"]),)
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        status = app.view("uninstall").status
+        assert status.text == "Uninstall failed: boom. Check permissions, then press enter."
+        assert not app.mutation_in_flight
+        assert service.state_of("yq") is not None
+        assert _uninstall_health(app, "yq") != "…"
+
+
+async def test_removal_outcomes_do_not_change_the_exit_code(tmp_path: Path):
+    remover = HeldRemover(SweepResult(remove_failed=(("yq", "denied"),)))
+    remover.release.set()
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        assert app.view("uninstall").status.text.startswith("1 remove failed")
+        assert app.outcomes is None

@@ -1176,7 +1176,7 @@ async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
         await pilot.press("space")  # select rg
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm
-        await pilot.pause()
+        await settle(app, pilot)
         assert len(captured) == 1
         assert screen.applied is True
 
@@ -1202,14 +1202,14 @@ async def test_uninstall_apply_invalidates_the_shared_data_once_on_success() -> 
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert screen.applied is True
         assert len(invalidations) == 1
 
 
-async def test_uninstall_apply_does_not_invalidate_on_a_failed_sweep() -> None:
-    """Nothing was mutated, so nothing was falsified: a failed `run_live`
-    sweep must not call the seam at all."""
+async def test_uninstall_apply_invalidates_after_a_failed_sweep() -> None:
+    """The removal marked its tools pending (D-09) and only `invalidate` clears
+    that set, so a failed `run_live` sweep still calls the seam once."""
     invalidations: list[None] = []
 
     def boom(_decision: UninstallDecision) -> SweepResult:
@@ -1225,10 +1225,10 @@ async def test_uninstall_apply_does_not_invalidate_on_a_failed_sweep() -> None:
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is False
-        assert invalidations == []
+        assert invalidations == [None]
 
 
 async def test_uninstall_apply_survives_a_raising_invalidate_seam() -> None:
@@ -1252,7 +1252,7 @@ async def test_uninstall_apply_survives_a_raising_invalidate_seam() -> None:
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert screen.applied is True  # the removal itself still stands
         assert len(captured) == 1
         assert "version cache invalidation failed" in screen.status.text
@@ -1279,7 +1279,9 @@ async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success()
     rows = _rg_rows()
     app = _app(
         cases=rows,
-        uninstall=_uninstall_inputs(remove=_recorder(captured), terminal_sync=_terminal_sync),
+        uninstall=_uninstall_inputs(
+            remove=_recorder(captured, SweepResult(removed=("rg",))), terminal_sync=_terminal_sync
+        ),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1288,11 +1290,11 @@ async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success()
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert screen.applied is True
         assert len(captured) == 1
         assert len(calls) == 1
-        assert "Removed 1 tool(s)." in screen.status.text
+        assert "1 removed" in screen.status.text
         assert screen.status.severity is Severity.OK
 
 
@@ -1319,7 +1321,7 @@ async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_ap
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert screen.applied is True
         assert len(captured) == 1
         assert "terminal shell synchronization failed" in screen.status.text.lower()
@@ -1347,7 +1349,7 @@ async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_fai
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is False
         assert calls == []
@@ -1504,7 +1506,7 @@ async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
         await pilot.press("space")  # the ban pseudo-row is the only entry
         await pilot.press("enter")
         await pilot.press("enter")  # confirm
-        await pilot.pause()
+        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
@@ -1519,7 +1521,7 @@ async def _remove_rg(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> Uninsta
     await pilot.press("space")
     await pilot.press("enter")
     await pilot.press("enter")  # confirm
-    await pilot.pause()
+    await settle(app, pilot)
     assert screen.applied is True
     return screen
 
@@ -1651,7 +1653,7 @@ async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
         await pilot.press("space")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
@@ -1706,7 +1708,7 @@ async def test_uninstall_apply_error_surfaces_and_does_not_crash() -> None:
         await pilot.press("space")  # select rg
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm → _apply_removal raises OSError
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is False
         assert app.screen.error == "permission denied"
@@ -1787,7 +1789,7 @@ async def test_uninstall_partial_selection_apply() -> None:
         assert len(app.screen.selected) == 1
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm
-        await pilot.pause()  # wait for _apply_removal to complete
+        await settle(app, pilot)
     assert len(captured) == 1
     assert len(captured[0].paths) == 1
     assert Path("/opt/rg") in captured[0].paths
@@ -1813,7 +1815,7 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
         assert screen.remove_path_block is True
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert screen.applied is True
         assert "ban removed" in screen.status.text
@@ -1821,7 +1823,7 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
 
 
 async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
-    """Selecting only the ban (no tool) yields no 'Removed N tool(s).' line."""
+    """Selecting only the ban (no tool) yields no count line."""
     inputs = _uninstall_inputs(
         ban_names=["pip"],
         remove=lambda _d: SweepResult(),
@@ -1838,7 +1840,7 @@ async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
         assert screen.remove_ban is True
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert screen.applied is True
         assert "tool(s)" not in screen.status.text
@@ -3162,7 +3164,7 @@ async def test_uninstall_summary_reports_the_sweep_result_not_the_snapshot() -> 
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
         status = app.screen.status.text
@@ -3181,7 +3183,7 @@ async def test_uninstall_summary_says_so_when_the_sweep_found_nothing() -> None:
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert "no shell tweaks were still enabled" in app.screen.status.text
 
@@ -3245,7 +3247,7 @@ async def test_uninstall_applied_summary_names_a_linux_sweep_without_a_launchage
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         status = app.screen.status.text
         assert "LaunchAgent" not in status
@@ -3284,7 +3286,7 @@ async def test_uninstall_applied_summary_names_the_background_job_alone() -> Non
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         status = app.screen.status.text
         assert "background maintenance job" in status
@@ -3307,7 +3309,7 @@ async def test_uninstall_applied_summary_names_both_when_swept_together() -> Non
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         status = app.screen.status.text
         assert "background maintenance job" in status
@@ -3329,7 +3331,7 @@ async def test_uninstall_applied_summary_stays_byte_identical_without_a_daemon_i
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         status = app.screen.status.text
         assert "shell tweaks disabled (tweak:countdown) — open a new shell so functions" in status
@@ -3427,7 +3429,7 @@ async def test_uninstall_refreshes_and_clears_applied_when_live_state_changed_af
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
         applied_status = app.screen.status.text
@@ -7412,7 +7414,7 @@ async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Pa
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True

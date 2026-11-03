@@ -17,6 +17,7 @@ from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult, active_tweak_ids, plan_removal
 from installer.version_status import VersionRefreshService
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
+from tests.screen_family import settle
 from tests.state_doubles import frozen_service, pass_state, removable_state
 
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
@@ -197,7 +198,7 @@ async def test_uninstall_e2e_removes_everything_against_sandbox(
         await pilot.press("a")  # select all: tool + ban + PATH block
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm: apply live against the sandbox
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
         _ARTIFACTS.mkdir(exist_ok=True)
@@ -227,7 +228,7 @@ async def test_uninstall_ux_journey_captures_each_state(
         await pilot.pause()
         _snapshot(app, "04-modal.svg")
         await pilot.press("enter")  # confirm: apply live
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
         _snapshot(app, "05-applied.svg")
@@ -237,7 +238,7 @@ async def test_uninstall_ux_journey_captures_each_state(
         await pilot.press("a")
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm → removal raises -> error must render, not crash
-        await pilot.pause()
+        await settle(err, pilot)
         assert isinstance(err.screen, UninstallScreen)
         assert err.screen.error is not None
         _snapshot(err, "06-error.svg")
@@ -255,7 +256,7 @@ async def test_uninstall_e2e_also_sweeps_tweaks_against_sandbox(
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await pilot.pause()
+        await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
 
