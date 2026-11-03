@@ -56,6 +56,7 @@ from typing import Literal, cast
 import installer.locations
 from installer import receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
+from installer.enums import UninstallState
 from installer.executors import ExecutorError
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
@@ -617,6 +618,8 @@ SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
 # Phase 20 binds `r` on the review screen (D-14, L-20-06).
+RECEIPT_PROOF_NOTE = "installed by this installer: receipt matches"
+LAYOUT_PROOF_NOTE = "installed in userspace — removable here"
 UNPROVEN_NOTE = "not proven: select it, then press r on the review to reinstall and adopt"
 # D-16, L-19-10: a drifted terminal -> (the row it lands on, its label). Konsole
 # has no catalog row; the zsh row carries it.
@@ -1847,3 +1850,15 @@ class VersionRefreshService:
                     self._warning = None
 
             self._write_or_queue(save_pass)
+
+
+def uninstall_group(state: ToolState | None) -> UninstallState | None:
+    raise NotImplementedError
+
+
+def uninstall_label(state: ToolState | None) -> str:
+    raise NotImplementedError
+
+
+def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[str] = ()) -> str:
+    raise NotImplementedError(required_by)
