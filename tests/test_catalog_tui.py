@@ -68,7 +68,13 @@ from installer.version_status import (
 )
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 from tests.screen_family import settle, wait_until
-from tests.state_doubles import frozen_service, offline_service, pass_state, seeded_service
+from tests.state_doubles import (
+    ScriptedUpdates,
+    frozen_service,
+    offline_service,
+    pass_state,
+    seeded_service,
+)
 from tests.test_registry import REGISTRY
 
 # The developer's home, read at import time before any test patches HOME.
@@ -3132,6 +3138,67 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
         # post_message do not leak past the end of the test.
         release.set()
         await wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("checking", "cannot update rg: its state is still being checked"),
+        ("broken", "rg is broken"),
+        ("current", "rg is already current"),
+        ("unknown", "cannot update rg:"),
+        ("in_flight", "update already in flight for fd"),
+    ],
+)
+async def test_a_refused_update_still_requests_one_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, expected: str
+) -> None:
+    """SPEC R2 empty edge: a refused `u` keeps its copy and ends with one pass."""
+    tool = _tool("rg")
+    brew = _ownership(tool, owner="brew", package="rg")
+    service = frozen_service(tmp_path)
+    updates = ScriptedUpdates({})
+    current = replace(_outdated_status("rg"), installed="1.0.1", outdated=False)
+    states = {
+        "broken": pass_state(
+            tool,
+            platform=service.platform,
+            ownership=brew,
+            version=_outdated_status("rg"),
+            broken=("changed since install",),
+        ),
+        "current": pass_state(tool, platform=service.platform, ownership=brew, version=current),
+        "unknown": pass_state(
+            tool,
+            platform=service.platform,
+            ownership=_ownership(tool, owner="unknown", unknown_reason="no manager claimed it"),
+            version=_outdated_status("rg"),
+        ),
+        "in_flight": pass_state(
+            tool, platform=service.platform, ownership=brew, version=_outdated_status("rg")
+        ),
+    }
+    updated: list[str] = []
+
+    def record_update(_app: UnifiedApp, message: ToolUpdated) -> None:
+        updated.append(message.tool_id)
+
+    monkeypatch.setattr(UnifiedApp, "on_tool_updated", record_update)
+    app = _unified_app([tool], {"rg": True}, _BLURBS, version_refresh=service, updates=updates)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        if case in states:
+            service.publish([states[case]])
+        if case == "in_flight":
+            assert updates.begin("fd")
+        before = service.passes
+        await pilot.press("u")
+        status = app.catalog.status_text
+        await settle(app, pilot)
+        assert status.startswith(expected)
+        assert app.catalog.status_text == status
+        assert service.passes == before + 1
+        assert updated == []
 
 
 def _skill_pack(
