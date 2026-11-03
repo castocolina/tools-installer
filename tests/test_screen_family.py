@@ -3221,6 +3221,12 @@ async def test_a_first_run_link_pick_waits_for_the_daemon_default(
             await pilot.press("down", "down", "enter")  # pick split
             await pilot.pause()
             assert moves == []
+            # RR-06: the deferred pick says it waits, so it never reads as dropped.
+            doctor = app.view("doctor").status
+            assert (doctor.text, doctor.severity) == (
+                "Link mode split will be saved when the background apply finishes.",
+                Severity.WARN,
+            )
             release.set()
             await wait_until(pilot, lambda: not app.mutation_in_flight)
             await settle(app, pilot)
