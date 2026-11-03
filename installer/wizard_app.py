@@ -2949,8 +2949,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def on_refresh_finished(self, message: RefreshFinished) -> None:
         self._refresh_running = False
-        if self._refresh_pending:
-            self._refresh_pending = False
+        pending, self._refresh_pending = self._refresh_pending, False
+        # A shutdown or a quit in progress drops the queued pass; waiters still hear.
+        if pending and self.is_running and not self.quitting:
             self.request_refresh()
             return
         waiters, self._publication_waiters = self._publication_waiters, []
