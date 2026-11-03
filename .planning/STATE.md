@@ -78,6 +78,7 @@ Recent decisions affecting current work:
 - [2026-10-21] [tweaks] Rename container shortcuts and detect the available engine — [todo file](.planning/todos/pending/2026-10-21-rename-container-shortcuts-and-detect-the-available-engine.md)
 - [2026-10-21] [catalog] Research memory-efficient Compose on Apple Silicon — [todo file](.planning/todos/pending/2026-10-21-research-memory-efficient-compose-on-apple-silicon.md)
 - [2026-10-25] [catalog] Onboard GitHub Copilot CLI through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-10-24-onboard-github-copilot-cli-through-the-tool-onboarding-skill.md)
+- [2026-11-03] [catalog] Add the gh-stack extension through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-11-03-add-the-gh-stack-extension-through-the-tool-onboarding-skill.md)
 
 ### Roadmap Evolution
 
