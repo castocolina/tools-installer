@@ -25,6 +25,9 @@ copy gaps. Each renders the same at 390f464, before Phase 21, so none was introd
 4. System tier columns are cut: `Owne`, `OS p`.
 5. Doctor prints `Press r to reinstall the pnpm-managed global set.` right under
    `pnpm's global set could not be read (pnpm missing, or the query failed).`, which contradicts it.
+6. Policies shows one policy row at a time at 80x20 (the detail pane takes the rest), and a three-line
+   status after a toggle shrinks the table to its header row, so the new `● [on]` is hidden until the
+   status clears (Phase 21 round 3 pilot: identical output at 390f464).
 
 ## Solution
 
