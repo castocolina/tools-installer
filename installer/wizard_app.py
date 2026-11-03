@@ -25,6 +25,7 @@ from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision, path_writer_lines_for
@@ -882,6 +883,7 @@ _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
+_REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 
 
 def _has_daemon_id(ids: tuple[str, ...]) -> bool:
@@ -3046,8 +3048,34 @@ class UnifiedApp(App[list[str] | None]):
         # under the NavScreen palette; ctrl+c (action_hard_abort) stays unguarded.
         if not self._navigable():
             return
-        self.exit(None)
+        self._quit()
 
     def action_hard_abort(self) -> None:
         # The hard quit (ctrl+c): always exits, including on top of the palette.
+        self._quit()
+
+    def _quit(self) -> None:
+        if self._mutation_holder is MutationHolder.REMOVAL:
+            self._exit_after_removal()
+        else:
+            self.exit(None)
+
+    def _exit_after_removal(self) -> None:
+        """Never cut a delete: say so, then exit once the removal worker returns.
+        With a modal on top the copy is queued for the next visible view. The wait
+        runs on its own worker, so the key handler returns at once and a shutdown
+        cancels the wait instead of hanging on it."""
+        self.quitting = True
+        screen = self._visible_app_screen()
+        if screen is not None:
+            screen.status.set(_REMOVAL_QUIT_WAIT, "warn")
+        else:
+            self._pending_warnings.append(_REMOVAL_QUIT_WAIT)
+        removals = [w for w in self.workers if w.group == "uninstall-removal"]
+        self.run_worker(self._exit_when_done(removals), group="quit-wait", exit_on_error=False)
+
+    async def _exit_when_done(self, removals: Sequence[Worker[None]]) -> None:
+        for worker in removals:
+            with contextlib.suppress(WorkerFailed, WorkerCancelled):
+                await worker.wait()
         self.exit(None)
