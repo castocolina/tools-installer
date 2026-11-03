@@ -872,7 +872,10 @@ async def test_a_refused_removal_still_requests_one_pass(tmp_path: Path):
             await wait_until(pilot, remover.started.is_set)
             before = service.passes
             fd_before = _uninstall_health(app, "fd")
-            await _confirm_removal(app, pilot, "fd")
+            # One enter: the refusal comes before the confirm modal (C-17).
+            table = app.view("uninstall").query_one(DataTable[Any])
+            table.move_cursor(row=table.get_row_index("fd"))
+            await pilot.press("space", "enter")
             await wait_until(pilot, lambda: service.passes == before + 1)
             await pilot.pause()
             assert service.passes == before + 1

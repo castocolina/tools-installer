@@ -1449,6 +1449,10 @@ class UninstallScreen(AppScreen):
         if not event.ids:
             self.status.set("Select at least one item to remove.", "warn")
             return
+        # Refuse before the modal; _apply_removal checks again, because a
+        # mutation can start while the modal is open.
+        if self.app.refuse_if_mutating(self):
+            return
         self.app.push_screen(
             ConfirmUninstall(self._accept_summary(event.ids)),
             self._on_confirm(event.ids),
