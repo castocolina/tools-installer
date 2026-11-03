@@ -1013,6 +1013,71 @@ async def test_the_state_line_does_not_replace_a_removal_failure(
             remover.release.set()
 
 
+class _QueueingApp(UnifiedApp):
+    def close_install(self, result: list[RowOutcome] | None) -> None:
+        self._install_closed(result)
+
+    def queue_warning(self, text: str) -> None:
+        self._pending_warnings.append(text)
+
+
+async def _flush_a_queued_state_line(
+    app: _QueueingApp, pilot: Any, flag: dict[str, str | None], drain: str
+) -> AppScreen:
+    """Queue the state line behind an occupied status, then drain it onto a
+    view; the view that shows it."""
+    await settle(app, pilot)
+    app.catalog.status.set("some view status", "ok")  # occupied: the line queues
+    app.request_refresh()
+    await settle(app, pilot)
+    if drain == "enter":
+        await app.show_view("user")
+        shown: AppScreen = app.view("user")
+    else:
+        app.close_install(None)
+        shown = app.catalog
+    await settle(app, pilot)
+    assert "version cache not saved" in shown.status.text
+    flag["warning"] = None  # the cache saves now: a clean pass
+    return shown
+
+
+@pytest.mark.parametrize("drain", ["enter", "install close"])
+async def test_a_flushed_state_line_is_retracted_by_a_clean_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drain: str
+):
+    """RR-02: a state line queued behind another status and then drained onto a
+    view is still the app's line, so the next clean pass retracts it there."""
+    flag: dict[str, str | None] = {"warning": "version cache not saved: read-only"}
+    monkeypatch.setattr(FrozenStateService, "warning", property(lambda _self: flag["warning"]))
+    app = cast(
+        _QueueingApp, _family_app(version_refresh=frozen_service(tmp_path), app_cls=_QueueingApp)
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        shown = await _flush_a_queued_state_line(app, pilot, flag, drain)
+        app.request_refresh()
+        await settle(app, pilot)
+        assert shown.status.text == ""
+
+
+async def test_retracting_a_flushed_state_line_keeps_the_warning_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    flag: dict[str, str | None] = {"warning": "version cache not saved: read-only"}
+    monkeypatch.setattr(FrozenStateService, "warning", property(lambda _self: flag["warning"]))
+    app = cast(
+        _QueueingApp, _family_app(version_refresh=frozen_service(tmp_path), app_cls=_QueueingApp)
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        app.queue_warning("terminal sync failed")
+        shown = await _flush_a_queued_state_line(app, pilot, flag, "enter")
+        app.request_refresh()
+        await settle(app, pilot)
+        assert shown.status.text == "terminal sync failed"
+        assert shown.status.severity is Severity.WARN
+
+
 async def test_enter_retries_the_failed_rows(tmp_path: Path):
     remover = HeldRemover(
         SweepResult(removed=("yq",), remove_failed=(("fd", "permission denied"),))
