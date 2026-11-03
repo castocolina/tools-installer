@@ -3148,6 +3148,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             return
         text, severity = _link_mode_status(value, report or (), old_mode=old)
         target.status.set(text, severity)
+        if isinstance(target, DoctorScreen):
+            target.enter_view()  # the status survives: enter_view writes none
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
         if self._execute is None or message.result is None:
