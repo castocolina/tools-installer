@@ -945,8 +945,9 @@ class DoctorScreen(AppScreen):
             return
         changed = False
         for entry in self._node_entries:
+            # Child output: sanitized once here, so every view renders clean text.
             broken = tuple(
-                PNPM_SMOKE_FAILED.format(tool_id=entry.tool_id, reason=reason)
+                sanitize_log_line(PNPM_SMOKE_FAILED.format(tool_id=entry.tool_id, reason=reason))
                 for tool_id, reason in report.unhealthy
                 if tool_id == entry.tool_id
             )
