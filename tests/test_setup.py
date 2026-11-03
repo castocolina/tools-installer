@@ -50,9 +50,11 @@ from installer.wizard_app import (
 from tests.state_doubles import (
     FrozenStateService,
     ScriptedUpdates,
+    absent_state,
     empty_inventory,
     empty_outdated,
     pass_state,
+    plan_state,
     presence_service,
 )
 
@@ -774,6 +776,35 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     assert all(policy_id.startswith("cache-redirect:") for policy_id in ids[daemon_at + 1 :])
     assert ids[daemon_at + 1 :]
     assert len(ids) > 3
+
+
+def test_the_policy_requirements_read_the_shared_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The tweak policies answer prerequisites from the app's own service:
+    a published answer wins, an unknown state falls back to the launch snapshot."""
+    _sandbox(monkeypatch, tmp_path)
+    watch = Tool(
+        id="watch",
+        name="watch",
+        category="search",
+        cmd="watch",
+        methods=(Method(kind="brew", params={"formula": "watch"}),),
+        tier="system",
+    )
+    monkeypatch.setattr(setup, "is_installed", _never_installed)
+    built = _bind_refresh(monkeypatch, FrozenStateService)
+    seen = _capture_app(monkeypatch)
+    setup._build_app([watch], _platform())  # pyright: ignore[reportPrivateUsage]
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    docker = next(p for p in policies.policies if p.id == "tweak:docker")
+    service = built[0]
+    assert docker.missing_requirements() == ("watch",)  # unknown: the launch snapshot
+    service.publish([plan_state(watch)])
+    assert docker.missing_requirements() == ()
+    service.publish([absent_state(watch)])
+    assert docker.missing_requirements() == ("watch",)
 
 
 def test_zsh_is_cleared_without_a_local_delenv() -> None:
@@ -2204,6 +2235,10 @@ def test_build_app_reresolve_reads_live_inventory_not_cache(
 
 def _always_installed(_tool: Tool) -> bool:
     return True
+
+
+def _never_installed(_tool: Tool) -> bool:
+    return False
 
 
 def _dnf_owned_rg() -> ManagerOwnership:

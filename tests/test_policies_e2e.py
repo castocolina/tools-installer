@@ -6,6 +6,7 @@ screenshots for agent inspection."""
 import os
 import plistlib
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,9 @@ import pytest
 from textual.widgets import DataTable
 
 from installer import systemd_daemon
+from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
+from installer.enums import Severity
 from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
 from installer.policy import (
@@ -35,6 +38,7 @@ from installer.wizard_app import (
     UninstallInputs,
 )
 from tests.screen_family import settle
+from tests.state_doubles import FrozenStateService, absent_state, frozen_service, plan_state
 
 _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
 _UX = _ARTIFACTS / "policies"
@@ -1061,3 +1065,291 @@ async def test_split_to_centralized_move_reports_the_path_wiring_action(
 
         assert mode["v"] == "centralized"
         assert 'make fix ARGS="--link-mode centralized"' in screen.status.text
+
+
+# -- 21-17: Policies renders live state and prerequisites on every entry --
+
+
+def _live_app(
+    policies: list[Policy],
+    *,
+    service: FrozenStateService | None = None,
+    tools: list[Tool] | None = None,
+    uninstall: UninstallInputs | None = None,
+) -> UnifiedApp:
+    return UnifiedApp(
+        tools if tools is not None else [_tool()],
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=uninstall
+        or UninstallInputs(
+            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
+        ),
+        policies=PolicyInputs(policies=policies),
+        initial_view="policies",
+        version_refresh=service,
+    )
+
+
+def _cell(app: UnifiedApp, policy_id: str, column: str) -> str:
+    return app.view("policies").query_one(DataTable[Any]).get_cell(policy_id, column).plain
+
+
+async def test_a_removed_ban_reads_off_on_the_next_entry(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    rc = tmp_path / ".myshellrc"
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=[rc],
+        remove_rc_paths=[rc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+    ban.apply()
+
+    def remove(_decision: Any) -> SweepResult:
+        ban.remove()
+        return SweepResult()
+
+    uninstall = UninstallInputs(
+        ban_names=lambda: [n for n, on in guard_status(bin_dir).items() if on],
+        has_path_block=lambda: False,
+        remove=remove,
+    )
+    app = _live_app([ban], uninstall=uninstall)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, "ban", "state") == "● [on]"
+        await app.show_view("uninstall")
+        table = app.view("uninstall").query_one(DataTable[Any])
+        table.move_cursor(row=table.get_row_index("#ban"))
+        for key in ("space", "enter", "enter"):
+            await pilot.press(key)
+        await settle(app, pilot)
+        assert not any(guard_status(bin_dir).values())
+        await app.show_view("policies")
+        assert _cell(app, "ban", "state") == "○ [off]"
+
+
+async def test_installing_watch_unblocks_the_docker_tweak(tmp_path: Path) -> None:
+    watch = Tool(
+        id="watch",
+        name="watch",
+        category="search",
+        cmd="watch",
+        methods=(Method(kind="brew", params={"formula": "watch"}),),
+    )
+    service = frozen_service(tmp_path)
+    service.publish([absent_state(watch)])
+    docker = next(b for b in BUNDLES if b.id == "docker")
+    policy = tweak_policy(
+        docker,
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / "bin",
+        installed_tools=service.installed_or({"watch": False}),
+    )
+    app = _live_app([policy], service=service, tools=[watch])
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert "missing: watch" in _cell(app, "tweak:docker", "requires")
+        service.queued = (plan_state(watch),)
+        app.post_message(RefreshRequested())
+        await settle(app, pilot)
+        assert "missing" not in _cell(app, "tweak:docker", "requires")
+
+
+async def test_macos_prune_reads_off_without_its_plist(tmp_path: Path) -> None:
+    policy = _daemon_policy_for_test(tmp_path)
+    plist = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_bytes(b"")
+    # The policy's cached `active` says on; the plist is gone by the first entry.
+    stale = replace(policy, active=True)
+    plist.unlink()
+    app = _live_app([stale])
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, stale.id, "state") == "○ [off]"
+
+
+async def test_entering_policies_starts_no_pass(tmp_path: Path) -> None:
+    service = frozen_service(tmp_path)
+    app = _live_app([], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        before = service.passes
+        for view in ("system", "policies", "system", "policies"):
+            await app.show_view(view)
+        await settle(app, pilot)
+        assert service.passes == before
+
+
+class _Read:
+    """A live read that answers `value` until `fail` is set, then raises it."""
+
+    def __init__(self, value: Any, error: Exception) -> None:
+        self.value = value
+        self.error = error
+        self.fail = False
+
+    def __call__(self) -> Any:
+        if self.fail:
+            raise self.error
+        return self.value
+
+
+def _fake_policy(policy_id: str, applied: list[str], **overrides: Any) -> Policy:
+    result = PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    def apply() -> PolicyResult:
+        applied.append("apply")
+        return result
+
+    def remove() -> PolicyResult:
+        applied.append("remove")
+        return result
+
+    fields: dict[str, Any] = {
+        "id": policy_id,
+        "label": policy_id,
+        "description": "fake",
+        "active": True,
+        "apply": apply,
+        "remove": remove,
+    }
+    return Policy(**{**fields, **overrides})
+
+
+async def _reenter(app: UnifiedApp) -> None:
+    await app.show_view("system")
+    await app.show_view("policies")
+
+
+_READ_ERROR = "Could not read the policy state: "
+
+
+async def test_a_failed_policy_read_shows_the_error(tmp_path: Path) -> None:
+    read = _Read(True, OSError("permission denied\nsecond line"))
+    flaky = _fake_policy("flaky", [], is_active=read)
+    steady = _fake_policy("steady", [], is_active=lambda: False)
+    app = _live_app([flaky, steady], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, "flaky", "state") == "● [on]"
+        read.fail = True
+        await _reenter(app)
+        status = app.view("policies").status
+        assert _cell(app, "flaky", "state") == ""
+        assert _cell(app, "steady", "state") == "○ [off]"
+        assert (status.text, status.severity) == (
+            f"{_READ_ERROR}permission denied.",
+            Severity.ERROR,
+        )
+        read.fail = False
+        await _reenter(app)
+        assert _cell(app, "flaky", "state") == "● [on]"
+        assert app.view("policies").status.text == ""
+
+
+async def test_space_on_an_unreadable_policy_applies_nothing(tmp_path: Path) -> None:
+    calls: list[str] = []
+    read = _Read(True, OSError("denied"))
+    flaky = _fake_policy("flaky", calls, is_active=read)
+    service = frozen_service(tmp_path)
+    app = _live_app([flaky], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        read.fail = True
+        await _reenter(app)
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert calls == []
+        assert app.view("policies").status.text == f"{_READ_ERROR}denied."
+        assert service.passes == before + 1
+
+
+async def test_a_failed_requirements_read_blanks_requires_and_detail(tmp_path: Path) -> None:
+    calls: list[str] = []
+    needs = _Read(("watch",), OSError("denied\nmore"))
+    tool = _fake_policy(
+        "tweak:fake",
+        calls,
+        active=False,
+        is_active=lambda: False,
+        requires=("watch",),
+        missing_requires_now=needs,
+    )
+    service = frozen_service(tmp_path)
+    app = _live_app([tool], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert "watch" in _cell(app, "tweak:fake", "requires")
+        needs.fail = True
+        await _reenter(app)
+        await settle(app, pilot)
+        screen = app.view("policies")
+        assert isinstance(screen, PoliciesScreen)
+        assert _cell(app, "tweak:fake", "requires") == ""
+        assert "watch" not in screen.detail_text
+        assert "Required tool(s)" not in screen.detail_text
+        assert (screen.status.text, screen.status.severity) == (
+            f"{_READ_ERROR}denied.",
+            Severity.ERROR,
+        )
+        before = service.passes
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert calls == []
+        assert service.passes == before + 1
+        needs.fail = False
+        await _reenter(app)
+        assert "watch" in _cell(app, "tweak:fake", "requires")
+        assert screen.status.text == ""
+
+
+async def test_t_on_an_unreadable_policy_opens_no_picker(tmp_path: Path) -> None:
+    scheduled: list[tuple[int, int]] = []
+
+    def set_schedule(hour: int, minute: int) -> PolicyResult:
+        scheduled.append((hour, minute))
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    read = _Read(True, OSError("denied"))
+    job = _fake_policy("job", [], is_active=read, set_schedule=set_schedule)
+    service = frozen_service(tmp_path)
+    app = _live_app([job], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        read.fail = True
+        await _reenter(app)
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("t")
+        await settle(app, pilot)
+        screen = app.view("policies")
+        assert app.screen is screen
+        assert scheduled == []
+        assert (screen.status.text, screen.status.severity) == (
+            f"{_READ_ERROR}denied.",
+            Severity.ERROR,
+        )
+        assert service.passes == before + 1
+
+
+async def test_policies_with_no_policy_draws_its_empty_copy(tmp_path: Path) -> None:
+    app = _live_app([], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        for _ in range(2):
+            screen = app.view("policies")
+            assert isinstance(screen, PoliciesScreen)
+            assert screen.query_one(DataTable[Any]).row_count == 0
+            assert screen.detail_text == ""
+            assert screen.status.text == ""
+            await _reenter(app)

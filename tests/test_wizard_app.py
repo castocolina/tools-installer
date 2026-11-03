@@ -4867,7 +4867,14 @@ async def test_daemon_default_resolves_the_row_state_off_the_event_loop(tmp_path
         seen.append(threading.current_thread() is threading.main_thread())
         return True
 
-    policy = replace(base, active=False, is_active=is_active)
+    # A state_cache marks the policy whose probe may spawn systemctl: the
+    # entry render leaves it to a worker, so every read here is off the loop.
+    policy = replace(
+        base,
+        active=False,
+        is_active=is_active,
+        state_cache=TimerStateCache(lambda: DaemonState.INACTIVE),
+    )
     app = _daemon_app(tmp_path, policy=policy, daemon_default=lambda: True)
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)

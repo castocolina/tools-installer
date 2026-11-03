@@ -88,7 +88,13 @@ from installer.version_status import (
     version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
-from tests.state_doubles import ScriptedUpdates, offline_service
+from tests.state_doubles import (
+    ScriptedUpdates,
+    absent_state,
+    frozen_service,
+    offline_service,
+    plan_state,
+)
 from tests.test_download import fixture_runner
 from tests.test_registry import REGISTRY
 
@@ -2408,6 +2414,28 @@ def test_is_present_reads_the_state_then_probes(tmp_path: Path) -> None:
     service.invalidate(reason="update")
     assert service.is_present(tool) is True
     assert calls == ["alpha"]
+
+
+@pytest.mark.parametrize(
+    ("published", "tool_id", "expected"),
+    [
+        ("present", "watch", True),
+        ("missing", "watch", False),  # a published answer beats the launch snapshot
+        ("none", "other", True),  # never covered: the launch snapshot answers
+        ("checking", "watch", True),  # CHECKING is not an answer yet
+    ],
+)
+def test_installed_or(tmp_path: Path, published: str, tool_id: str, expected: bool) -> None:
+    watch = _gh_tool("watch")
+    service = frozen_service(tmp_path)
+    states = {
+        "present": plan_state(watch),
+        "missing": absent_state(watch),
+        "checking": plan_state(watch, health=Health.CHECKING),
+    }
+    if published in states:
+        service.publish([states[published]])
+    assert service.installed_or({"watch": True, "other": True})(tool_id) is expected
 
 
 def test_injected_present_predicate_drives_presence(tmp_path: Path) -> None:

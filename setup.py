@@ -498,7 +498,7 @@ def _disk_pressure_probe(
 
 def _build_daemon_policy(
     platform: Platform,
-    installed: Mapping[str, bool],
+    installed: Mapping[str, bool] | Callable[[str], bool],
     *,
     which: Callable[[str], str | None] | None = None,
     run: Runner = run_captured,
@@ -834,19 +834,21 @@ def _build_app(
     # not on disk, so the total sweep costs nothing.
     bundles = applicable_bundles(platform)
 
-    # Constructed once, here, and shared: the Policies list below, the
-    # on-by-default auto-apply closure, and the Uninstall teardown closures
-    # (all wired further down) must never each build their own independent
-    # daemon_policy instance -- all three need to read and act on the exact
-    # same object.
-    daemon = _build_daemon_policy(platform, installed, timer_cache=timer_cache)
-
     # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
     # invalidation): the Uninstall screen's seam binds to this instance, so
     # it must exist before that construction. A pure construction with no
     # dependency on anything declared between here and its old position
     # below -- this is a reordering and nothing else.
     version_refresh, updates, policy, _install = _build_services(tools, platform)
+
+    # Constructed once, here, and shared: the Policies list below, the
+    # on-by-default auto-apply closure, and the Uninstall teardown closures
+    # (all wired further down) must never each build their own independent
+    # daemon_policy instance -- all three need to read and act on the exact
+    # same object.
+    daemon = _build_daemon_policy(
+        platform, version_refresh.installed_or(installed), timer_cache=timer_cache
+    )
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
@@ -923,7 +925,7 @@ def _build_app(
                     bundle,
                     rc_path=_MYSHELLRC,
                     bin_dir=_DEFAULT_BIN_DIR,
-                    installed_tools=installed,
+                    installed_tools=version_refresh.installed_or(installed),
                     ensure_sourced_from=_tweak_ensure_sourced_from,
                 )
                 for bundle in bundles
