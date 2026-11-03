@@ -4251,6 +4251,47 @@ def test_perform_uninstall_a_tool_with_nothing_left_is_remove_failed(
     assert any(str(opt_fd) in w for w in result.warnings)
 
 
+def test_perform_uninstall_names_only_the_previewed_paths_that_dropped_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR-05: a whole-tool refusal names the paths that changed, not the
+    unchanged ones the tool keeps."""
+    apply, _yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    gone = tmp_path / ".local" / "opt" / "fd-old"
+    decision = UninstallDecision(
+        tools=(fd,),
+        paths={"fd": (bin_dir / "fd", opt_fd, gone)},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    result = apply(decision)
+    assert result.remove_failed == (("fd", "changed since the preview; not removed"),)
+    assert result.warnings == (f"changed since the preview; not removed: {gone}",)
+    assert (bin_dir / "fd").exists()
+
+
+def test_perform_uninstall_refuses_a_plan_that_grew_since_the_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR-05: a reinstall that added a path after the preview is a change too;
+    the tool is not reported removed and keeps its files."""
+    apply, _yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    decision = UninstallDecision(
+        tools=(fd,),
+        paths={"fd": (bin_dir / "fd",)},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    result = apply(decision)
+    assert result.removed == ()
+    assert result.remove_failed == (("fd", "changed since the preview; not removed"),)
+    assert result.warnings == (f"changed since the preview; not removed: {opt_fd}",)
+    assert (bin_dir / "fd").is_symlink()
+    assert opt_fd.exists()
+
+
 def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
