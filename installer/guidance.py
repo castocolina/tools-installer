@@ -322,12 +322,6 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                     "globals installed by earlier `pnpm add -g` invocations behind in a "
                     "stale directory."
                 ),
-                # The prefix is load-bearing: DoctorScreen._tui_guidance rewrites a
-                # next_step only when it starts with a known literal prefix — today
-                # `Run `make setup`` — so a step written in TUI terms ("press `r`")
-                # would leak the keybinding into `make doctor`'s console output,
-                # where no key can be pressed, and a step with an unrecognised
-                # prefix would leak console instructions into the TUI.
                 # "reinstall the globals pnpm still tracks", not "restore my global
                 # set": one `pnpm add -g` replays exactly the set pnpm reports, so
                 # anything pnpm has already forgotten is not coming back this way.
@@ -356,10 +350,6 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                     "`auto-install-peers`, so this pair breaks if that setting changes; "
                     "the declared install group does not depend on it."
                 ),
-                # This prefix is load-bearing: DoctorScreen._tui_guidance rewrites
-                # a next_step starting with `Run `make setup`` into
-                # `Press r to reinstall the pnpm-managed global set`. The console
-                # wording must stay runnable from a console.
                 next_step=_REINSTALL_NEXT_STEP,
                 severity=Severity.WARN,
             )
@@ -393,9 +383,8 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                     "only if pnpm's user-settable `auto-install-peers` pulled a copy into "
                     "the dependent's own tree."
                 ),
-                # Same load-bearing prefix as the two items above: the reinstall
-                # replay now completes a declared group rather than replaying only
-                # the names pnpm already listed, so `r` really is the repair here.
+                # The reinstall replay completes a declared group rather than
+                # replaying only the names pnpm already listed, so it is the repair.
                 next_step=_REINSTALL_NEXT_STEP,
                 severity=Severity.WARN,
             )

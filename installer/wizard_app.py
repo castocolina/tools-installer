@@ -682,20 +682,9 @@ class DoctorScreen(AppScreen):
                     )
                 )
             elif item.next_step.startswith(_DISK_PRESSURE_ENABLE_PREFIX):
-                # Ordering is load-bearing: this branch must stay BEFORE the
-                # generic `Run `make setup`` branch below, or a later edit to
-                # the console wording could let that prefix capture this item
-                # and answer a full disk with pnpm-reinstall advice.
                 tail = item.next_step[len(_DISK_PRESSURE_ENABLE_PREFIX) :]
                 tail = tail.split(";", 1)[1].strip() if ";" in tail else tail.strip()
                 rewritten.append(replace(item, next_step=f"{_DISK_PRESSURE_TUI_PREFIX} {tail}"))
-            elif item.next_step.startswith("Run `make setup`"):
-                rewritten.append(
-                    replace(
-                        item,
-                        next_step="Press r to reinstall the pnpm-managed global set.",
-                    )
-                )
             else:
                 rewritten.append(item)
         if not self.applied:
