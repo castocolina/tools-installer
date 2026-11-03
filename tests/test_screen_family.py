@@ -841,6 +841,26 @@ async def test_a_second_removal_is_refused_while_one_runs(tmp_path: Path):
             remover.release.set()
 
 
+async def test_uninstall_enter_is_refused_before_the_confirm_modal(tmp_path: Path):
+    """C-17: while a removal runs, enter on Uninstall refuses at once on the
+    view; no confirm modal opens first."""
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover)
+            table = app.view("uninstall").query_one(DataTable[Any])
+            table.move_cursor(row=table.get_row_index("fd"))
+            await pilot.press("space")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.screen is app.view("uninstall")
+            status = app.view("uninstall").status
+            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+        finally:
+            remover.release.set()
+
+
 async def test_a_refused_removal_still_requests_one_pass(tmp_path: Path):
     remover = HeldRemover(SweepResult(removed=("yq",)))
     app, service = _removal_app(tmp_path, remover)
