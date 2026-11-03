@@ -81,7 +81,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
-from tests.screen_family import settle, wait_until
+from tests.screen_family import settle
 from tests.state_doubles import (
     FrozenStateService,
     Presence,
@@ -180,7 +180,6 @@ def _uninstall_inputs(
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     invalidate: Callable[[], object] | None = None,
-    refresh: Callable[[], object] | None = None,
     terminal_sync: Callable[[], str | None] | None = None,
 ) -> UninstallInputs:
     """`rows` is strictly a callable, matching `UninstallInputs`' own field
@@ -197,7 +196,6 @@ def _uninstall_inputs(
         remove=remove,
         tweak_ids=_predicate(tweak_ids),
         invalidate=invalidate,
-        refresh=refresh,
         terminal_sync=terminal_sync,
     )
 
@@ -1706,69 +1704,124 @@ async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
         assert invalidated == []
 
 
-async def test_a_same_session_removal_refreshes_the_attribution_its_invalidate_dropped() -> None:
-    """WR-01 (15.4-REVIEW.md): the invalidate a removal performs has to be
-    paired with the pass that replaces what it dropped. Nothing else could:
-    `OwnershipRefreshed` is posted only from `CatalogScreen`, so a user going
-    Uninstall -> remove -> Policies -> Uninstall never visits a catalog tab
-    and saw the generic phrase for every managed row for the rest of the
-    session."""
-    state = {"invalidated": False}
-    refreshed: list[int] = []
-    captured: list[UninstallDecision] = []
+async def _remove_rg(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> UninstallScreen:
+    """Select rg on the Uninstall view and confirm its removal."""
+    screen = app.screen
+    assert isinstance(screen, UninstallScreen)
+    await pilot.press("space")
+    await pilot.press("enter")
+    await pilot.press("enter")  # confirm
+    await pilot.pause()
+    assert screen.applied is True
+    return screen
+
+
+async def test_removal_requests_the_app_pass_after_invalidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-05/D-06: the removal asks the one app owner for its pass after the
+    invalidate, and the Uninstall view re-renders on that publish."""
+    service = frozen_service(tmp_path)
+    events: list[str] = []
+    published: list[int] = []
+    original = UninstallScreen.state_refreshed
+
+    def spy(self: UninstallScreen) -> None:
+        published.append(service.passes)
+        original(self)
+
+    monkeypatch.setattr(UninstallScreen, "state_refreshed", spy)
 
     def invalidate() -> None:
-        state["invalidated"] = True
+        events.append(f"invalidate@{service.passes}")
 
-    def refresh() -> None:
-        refreshed.append(1)
-        state["invalidated"] = False  # the replacing pass committed
+    app = _version_app(
+        [_tool("rg")],
+        service,
+        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=_recorder([]), invalidate=invalidate),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        launch_passes = service.passes
+        published.clear()
+        await _remove_rg(app, pilot)
+        await settle(app, pilot)
+        assert events == [f"invalidate@{launch_passes}"]
+        assert service.passes == launch_passes + 1
+        assert published and published[-1] == launch_passes + 1
 
-    def rows() -> list[ToolRow]:
-        # Both registers degrade and recover together, as setup.py's two
-        # closures do: they read the same epoch-gated record.
-        degraded = state["invalidated"]
-        return [
-            _removable_row(_tool("rg"), [Path("/opt/rg")]),
-            ToolRow(
-                _tool("jq"),
-                "managed",
-                [],
-                "managed outside this installer — remove with your package manager"
-                if degraded
-                else "managed by dnf — `dnf remove jq`",
-                False,
-                None if degraded else "dnf",
-            ),
-        ]
 
-    app = _app(
+async def test_uninstall_rerenders_when_a_pass_publishes(tmp_path: Path) -> None:
+    """A publish re-derives the rows without clearing the standing status."""
+    service = frozen_service(tmp_path)
+    live_rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
+    app = _version_app(
+        [_tool("rg")],
+        service,
+        uninstall=_uninstall_inputs(rows=lambda: list(live_rows)),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        screen.applied = True
+        screen.status.set("standing result", "ok")
+        live_rows.clear()
+        app.request_refresh()
+        await settle(app, pilot)
+        assert screen.query_one(DataTable[Any]).row_count == 0
+        assert screen.status.text == "standing result"
+
+
+async def test_removal_requests_a_pass_even_when_invalidate_raises(tmp_path: Path) -> None:
+    service = frozen_service(tmp_path)
+
+    def invalidate() -> None:
+        raise RuntimeError("disk full")
+
+    app = _version_app(
+        [_tool("rg")],
+        service,
+        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=_recorder([]), invalidate=invalidate),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        launch_passes = service.passes
+        screen = await _remove_rg(app, pilot)
+        await settle(app, pilot)
+        assert "version cache invalidation failed: disk full" in screen.status.text
+        assert service.passes == launch_passes + 1
+
+
+async def test_an_environment_only_removal_requests_no_pass(tmp_path: Path) -> None:
+    """No tool named, no invalidate: nothing ownership describes changed, so the
+    removal asks for no pass here (21-14 revisits the environment-only path)."""
+    service = frozen_service(tmp_path)
+    app = _version_app(
+        [_tool("rg")],
+        service,
         uninstall=_uninstall_inputs(
-            rows=rows, remove=_recorder(captured), invalidate=invalidate, refresh=refresh
+            rows=_frozen([]),
+            ban_names=["pip"],
+            remove=_recorder([]),
+            invalidate=lambda: None,
         ),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        table = screen.query_one(DataTable[Any])
-        assert table.get_cell("jq", "via").plain == "dnf"
-        await pilot.press("space")  # select rg
+        await settle(app, pilot)
+        launch_passes = service.passes
+        await pilot.press("space")  # the ban pseudo-row is the only entry
         await pilot.press("enter")
         await pilot.press("enter")  # confirm
-        await pilot.pause()
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
-        summary = screen.status.text
-
-        def restored() -> bool:
-            return screen.query_one(DataTable[Any]).get_cell("jq", "via").plain == "dnf"
-
-        await wait_until(pilot, lambda: bool(refreshed))
-        await wait_until(pilot, restored)
-        # The background repaint must NOT wipe the sentence describing the
-        # removal the user just performed (`clear_applied=False`).
-        assert screen.applied is True
-        assert screen.status.text == summary
+        assert service.passes == launch_passes
 
 
 async def test_a_removal_with_no_refresh_seam_still_completes() -> None:

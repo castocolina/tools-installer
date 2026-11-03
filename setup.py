@@ -860,7 +860,7 @@ def _build_app(
         # pre-removal record reports as unavailable through the epoch-gated
         # `state_of`; and (3) a screen opened BEFORE that background
         # refresh commits renders this fallback and then the
-        # `OwnershipRefreshed` completion signal repaints it in place -- this
+        # published pass repaints it in place -- this
         # closure is re-called on that repaint too, never a one-shot read.
         # `state_of`'s two `None` cases (no pass has covered this tool, or a
         # mutation invalidated its state) are deliberately one return value
@@ -985,11 +985,6 @@ def _build_app(
             extra_policies=redirects,
         ),
         invalidate=lambda: version_refresh.invalidate(reason="uninstall run finished"),
-        # WR-01: the pass that REPLACES what the invalidate above drops, off
-        # the same service the catalog's own refresh worker uses, so one
-        # vocabulary of ownership feeds both screens. Called on a thread
-        # worker by `_apply_removal` -- it re-probes every manager.
-        refresh=lambda: version_refresh.refresh(tools),
         terminal_sync=_sync_omz_terminals,
     )
 

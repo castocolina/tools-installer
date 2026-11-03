@@ -2341,51 +2341,6 @@ def test_build_app_uninstall_hint_reverts_after_the_service_is_invalidated(
     assert "package manager" in after.hint
 
 
-def test_build_app_wires_a_refresh_seam_that_restores_the_invalidated_hint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """WR-01 (15.4-REVIEW.md): the composition root binds the pass that
-    REPLACES what the removal's own invalidate drops. Without it nothing on
-    the Uninstall screen could restore attribution -- `OwnershipRefreshed` is
-    posted only from `CatalogScreen`, so a session that never returns to a
-    catalog tab keeps the degraded generic phrase until it exits.
-
-    Asserted through the SAME closure pair the test above uses, so this is
-    the recovery arm of that degradation rather than a separate claim."""
-    _sandbox(monkeypatch, tmp_path)
-    platform = _platform()
-    tool = Tool(
-        id="rg",
-        name="ripgrep",
-        category="search",
-        cmd="rg",
-        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
-        tier="system",
-    )
-    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
-    app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
-    screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(screen, UninstallScreen)
-    rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
-    refresh = screen._refresh  # pyright: ignore[reportPrivateUsage]
-    assert refresh is not None
-    service = built[0]
-
-    service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
-    service.invalidate(reason="test")
-    degraded = next(r for r in rows_predicate() if r.tool.id == "rg")
-    assert "package manager" in degraded.hint
-    assert degraded.manager is None
-
-    # The seam re-resolves against the real (sandboxed, offline) environment;
-    # what matters here is that it commits a pass under the CURRENT epoch, so
-    # the screen stops reporting every record as unavailable.
-    refresh()
-    restored = service.state_of("rg")
-    assert restored is not None
-    assert restored.ownership.owner == "dnf"
-
-
 def test_interactive_main_never_calls_run_wizard(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
