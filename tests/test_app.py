@@ -28,7 +28,7 @@ from installer.session import (
     exit_code,
 )
 from installer.tweaks import TweakBundle
-from installer.uninstall import SweepResult
+from installer.uninstall import RemovalPlan, SweepResult
 from installer.update import UpdateOutcome
 from installer.version_status import Health
 from installer.versions import TagResolver
@@ -4183,6 +4183,37 @@ def test_perform_uninstall_one_failed_delete_does_not_stop_the_rest(
     assert result.remove_failed == (("fd", "disk full"),)
     assert not (bin_dir / "yq").exists()
     assert (bin_dir / "fd").is_symlink()
+    assert all(active is False for active in guard_status(bin_dir).values())
+
+
+def test_perform_uninstall_a_planning_error_does_not_stop_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-15: planning fd raises (a non-searchable parent); yq is still removed,
+    fd is `remove_failed`, and the ban lever still runs."""
+    from installer import app as app_module
+    from installer.guards import guard_status, install_shims
+
+    apply, yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    real = app_module.plan_removal
+
+    def plan(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
+        if tools[0].id == "fd":
+            raise PermissionError("permission denied: opt")
+        return real(tools, default_bin_dir, verify=verify)
+
+    monkeypatch.setattr(app_module, "plan_removal", plan)
+    install_shims(bin_dir)
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    decision = UninstallDecision(
+        tools=(fd, yq),
+        paths={"fd": (bin_dir / "fd", opt_fd), "yq": (bin_dir / "yq",)},
+        remove_ban=True,
+        remove_path_block=False,
+    )
+    result = apply(decision)
+    assert result.removed == ("yq",)
+    assert result.remove_failed == (("fd", "permission denied: opt"),)
     assert all(active is False for active in guard_status(bin_dir).values())
 
 
