@@ -89,6 +89,11 @@ class StatusLine(Static):
         self.severity = None
         self.update("")
 
+    def retract(self, text: str) -> None:
+        """Clear the line only while it still holds `text`: another writer's status stands."""
+        if self.text == text:
+            self.clear()
+
 
 @dataclass(frozen=True)
 class View:

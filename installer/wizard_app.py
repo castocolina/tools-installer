@@ -654,8 +654,7 @@ class DoctorScreen(AppScreen):
             self._read_line = f"{_DOCTOR_READ_ERROR}{error.partition(chr(10))[0]}."
             self.status.set(self._read_line, "error")
         elif self._read_line is not None:
-            if self.status.text == self._read_line:
-                self.status.clear()
+            self.status.retract(self._read_line)
             self._read_line = None
 
     def _tui_guidance(self) -> list[Guidance]:
@@ -1402,8 +1401,8 @@ class UninstallScreen(AppScreen):
         if self._nothing_to_uninstall():
             if not self.status.text:
                 self.status.set(_NOTHING_TO_UNINSTALL, "ok")
-        elif self.status.text == _NOTHING_TO_UNINSTALL:
-            self.status.clear()
+        else:
+            self.status.retract(_NOTHING_TO_UNINSTALL)
 
     # -- public seams the tests assert on ----------------------------------
     @property
@@ -1785,9 +1784,7 @@ class PoliciesScreen(AppScreen):
             self._read_error = _read_failure(errors[0])
             self.status.set(self._read_error, "error")
         elif self._read_error is not None:
-            # Retract only our own copy: another writer's status stands.
-            if self.status.text == self._read_error:
-                self.status.clear()
+            self.status.retract(self._read_error)
             self._read_error = None
 
     def _read_live_state(self, policy: Policy) -> str | None:
@@ -2748,7 +2745,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._publication_waiters: list[Callable[[str | None], None]] = []
         # The state line this app last wrote (screen, text), so a clean publish
         # clears only its own line, never one a view wrote.
-        self._state_line: tuple[AppScreen, str] | None = None
+        # The app's own status line and where it went: a screen, or None while
+        # it waits in _pending_warnings for the next entry.
+        self._state_line: tuple[AppScreen | None, str] | None = None
         # D-01/15.6-06: the SAME composition-root closure Plans 04/05 wired for
         # Policies' OMZ-plugin apply and the direct `u` update -- called from
         # _install_closed on EVERY close event, never only a selected tool id
@@ -2933,19 +2932,12 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def on_refresh_published(self, message: RefreshPublished) -> None:
         self._render_published()
+        line: str | None = None
         if message.error is not None:
-            self._write_state_line(
-                f"tool state check failed: {message.error} — the next change retries it"
-            )
+            line = f"tool state check failed: {message.error} — the next change retries it"
         elif message.warning is not None:
-            self._write_state_line(
-                f"{message.warning} — marks are current; the next start checks again"
-            )
-        elif self._state_line is not None:
-            screen, line = self._state_line
-            if screen.status.text == line:
-                screen.status.clear()
-            self._state_line = None
+            line = f"{message.warning} — marks are current; the next start checks again"
+        self._write_state_line(line)
 
     def on_refresh_finished(self, message: RefreshFinished) -> None:
         self._refresh_running = False
@@ -2965,11 +2957,24 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         if screen is not None:
             screen.state_refreshed()
 
-    def _write_state_line(self, line: str) -> None:
+    def _write_state_line(self, line: str | None) -> None:
+        """Replace the app's previous state line with `line` (None: retract it).
+        It is written over an empty status only; a status another writer left
+        stands, and the line waits in _pending_warnings for the next entry."""
+        previous, self._state_line = self._state_line, None
+        if previous is not None:
+            where, old = previous
+            if where is not None:
+                where.status.retract(old)
+            elif old in self._pending_warnings:
+                self._pending_warnings.remove(old)
+        if line is None:
+            return
         screen = self._visible_app_screen()
-        if screen is None:
+        if screen is None or screen.status.text:
             if line not in self._pending_warnings:
                 self._pending_warnings.append(line)
+            self._state_line = (None, line)
             return
         # Plain text through StatusLine.set, never markup (T-19-40).
         screen.status.set(line, "warn")
