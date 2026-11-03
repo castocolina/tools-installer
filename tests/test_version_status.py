@@ -6017,11 +6017,11 @@ def test_a_removable_row_names_the_installer_as_its_owner() -> None:
 
 
 def test_uninstall_detail_proof() -> None:
-    tool, adopted = _uninstall_state(removable=_REMOVABLE, notes=(ADOPTED_NOTE,))
+    tool, adopted = _uninstall_state("installer", removable=_REMOVABLE, notes=(ADOPTED_NOTE,))
     assert uninstall_detail(tool, adopted) == ADOPTED_NOTE
-    receipted = _uninstall_state(removable=_REMOVABLE, receipt=_receipt(tool))[1]
+    receipted = _uninstall_state("installer", removable=_REMOVABLE, receipt=_receipt(tool))[1]
     assert uninstall_detail(tool, receipted) == RECEIPT_PROOF_NOTE
-    layout = _uninstall_state(removable=_REMOVABLE)[1]
+    layout = _uninstall_state("installer", removable=_REMOVABLE)[1]
     assert uninstall_detail(tool, layout) == LAYOUT_PROOF_NOTE
 
 
@@ -6092,5 +6092,7 @@ def test_uninstall_detail_keeps_the_required_by_suffix() -> None:
 
 
 def test_uninstall_removable_detail_keeps_the_yourself_suffix() -> None:
-    tool, state = _uninstall_state(removable=RemovalPlan((_UNINSTALL_PATH,), (Path("/y/rg"),)))
+    tool, state = _uninstall_state(
+        "installer", removable=RemovalPlan((_UNINSTALL_PATH,), (Path("/y/rg"),))
+    )
     assert uninstall_detail(tool, state) == f"{LAYOUT_PROOF_NOTE} · remove it yourself: /y/rg"

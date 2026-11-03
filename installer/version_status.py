@@ -1933,14 +1933,16 @@ def uninstall_group(state: ToolState | None) -> UninstallState | None:
 
 
 def uninstall_label(state: ToolState | None) -> str:
-    """The Installed-via cell, reusing `removal_label` then `owner_label`. Pure."""
+    """The Installed-via cell: the owner of the copy this row would remove. A
+    removable row's paths are all this installer's (UI-SPEC:107-109), so it
+    reads `installer`; any other row reuses `removal_label` then `owner_label`.
+    Pure."""
     group = uninstall_group(state)
     if state is None or group in (None, UninstallState.ABSENT, UninstallState.UNAVAILABLE):
         return "—"
-    label = removal_label(state.ownership) or owner_label(state.ownership)
-    if label is not None:
-        return label
-    return "installer" if group is UninstallState.REMOVABLE else "unknown"
+    if group is UninstallState.REMOVABLE:
+        return "installer"
+    return removal_label(state.ownership) or owner_label(state.ownership) or "unknown"
 
 
 def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[str] = ()) -> str:
@@ -1960,6 +1962,10 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
             text = ADOPTED_NOTE
         else:
             text = RECEIPT_PROOF_NOTE if state.receipt is not None else LAYOUT_PROOF_NOTE
+        # The cell says `installer`; a manager's active copy is named here.
+        active = removal_label(state.ownership)
+        if active is not None:
+            text += f" — active copy: {active}"
     elif state.health is Health.BROKEN:
         text = BROKEN_REPAIR_NOTE
     elif state.ownership.owner == "unknown":

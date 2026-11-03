@@ -104,7 +104,8 @@ Three tool groups in this order, then the existing environment group. Titles are
 
 | Group / situation | `Installed via` | `What gets removed` | Detail bar |
 |-------------------|-----------------|---------------------|------------|
-| Removable with a receipt | the owner label (`installer`, or the proven manager) | the proven artifact paths, comma-joined, truncated | the proof sentence (`installed by this installer: receipt matches`) and the env levers |
+| Removable with a receipt | `installer`: the owner of the removable copy (amended 2026-11-03, review C-23; a manager is named only when it owns the copy this row removes, which the removal proof never yields) | the proven artifact paths, comma-joined, truncated | the proof sentence (`installed by this installer: receipt matches`) and the env levers |
+| Removable, another manager's copy is active | `installer` | the proven paths | the proof sentence followed by ` — active copy: {manager label}` (C-23) |
 | Removable by adoption | `installer` | the proven paths | `adopted: the file matches the release checksum` (Phase 19 text) |
 | Removable by archive layout | `installer` | the proven directory | the layout proof sentence already produced by `removable` |
 | Managed elsewhere, owner known | the owner label | `—` | `removable.hint` verbatim, followed by ` — found at {path}` when the resolver recorded the active path |
