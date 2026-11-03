@@ -2504,10 +2504,11 @@ archive = "xz"
 # Group coupling: pnpm's Global Packages documentation states that packages in
 # one comma group "are removed together" and that removing either member with
 # `pnpm remove -g` removes the WHOLE group. So a user who removes puppeteer by
-# hand also removes mmdc, and vice versa. `installer/uninstall.py` classifies
-# node tools as externally managed and non-selectable, so this installer never
+# hand also removes mmdc, and vice versa. The Uninstall view puts pnpm-owned
+# tools in `managed elsewhere` through `version_status.uninstall_group`, with
+# the removal sentence from `uninstall_detail`, so this installer never
 # performs that removal itself; the coupling is recorded here because it
-# changes what `_managed_hint` is telling the user and is the first thing a
+# changes what that sentence is telling the user and is the first thing a
 # future uninstall or Doctor-UX phase needs to know.
 [[tool]]
 id = "mmdc"

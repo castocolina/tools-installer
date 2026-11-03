@@ -184,12 +184,11 @@ def platform_could_support(tool: Tool, platform: Platform) -> bool:
     a UI can use to distinguish "will never work here" from "works once a
     prerequisite step runs."
 
-    This is NOT the same expression installer/uninstall.py::classify_tools uses
-    for UninstallState.UNAVAILABLE: classify_tools answers a narrower,
-    Uninstall-specific question (already excludes removable/managed/installed
-    tools before ever reaching a resolve_methods check). This answers "could
-    this tool EVER install here, once Homebrew is present" and is deliberately
-    has_brew-blind for exactly the reason classify_tools' check is not.
+    This is NOT the same question as `version_status.uninstall_group`'s
+    UNAVAILABLE group: that answers a narrower, Uninstall-specific question from
+    the published state (a tool no method of which applies right now). This
+    answers "could this tool EVER install here, once Homebrew is present" and is
+    deliberately has_brew-blind for exactly the reason that group is not.
     Related (both call resolve_methods), not identical.
     """
     return bool(resolve_methods(tool, replace(platform, has_brew=True)))
