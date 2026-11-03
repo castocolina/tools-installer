@@ -1107,6 +1107,9 @@ class UninstallScreen(AppScreen):
         # publishes, dropped when a removal naming the tool starts or its state
         # shows nothing left (see `_with_failure`).
         self._failed_lines: dict[str, RowOutcome] = {}
+        # True until a published state has been painted: the rows before it are
+        # placeholders, so the cursor is not kept on one of them.
+        self._placeholders = True
         self._entries = self._build_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
         self._browser: ToolBrowser[_UninstallEntry] = ToolBrowser(self._adapter())
@@ -1339,7 +1342,9 @@ class UninstallScreen(AppScreen):
         """Rebuild the entries from the stored values and repaint the browser."""
         self._entries = self._build_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
-        self._browser.reload(self._adapter())
+        self._browser.reload(self._adapter(), keep_cursor=not self._placeholders)
+        if any(uninstall_group(self._state_of(tool)) is not None for tool in self._tools):
+            self._placeholders = False
 
     def _env_state(self) -> tuple[list[str], bool, tuple[str, ...]]:
         """The three environment predicates another view can change while

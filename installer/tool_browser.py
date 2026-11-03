@@ -183,15 +183,15 @@ class ToolBrowser(Widget, Generic[T]):
                 return index
         return 0
 
-    def _rebuild(self) -> None:
+    def _rebuild(self, *, keep_cursor: bool = True) -> None:
         table = self.query_one(DataTable[Any])
         # Capture the row key under the cursor BEFORE clear() so a rebuild
         # (both reloads a version refresh now does, a tab switch, a column
         # sort) does not throw the user back to row 0 every time. None on an
         # empty table (the on_mount call site) or when nothing is
         # highlighted yet.
-        previous_key = highlighted_key(table)
-        previous_row = table.cursor_row
+        previous_key = highlighted_key(table) if keep_cursor else None
+        previous_row = table.cursor_row if keep_cursor else 0
         table.clear(columns=True)
         self._section_detail.clear()
         for label, key in self._adapter.columns:
@@ -232,7 +232,7 @@ class ToolBrowser(Widget, Generic[T]):
         # the rebuilt table has painted.
         table.call_after_refresh(self.refresh_marks)
 
-    def reload(self, adapter: BrowserAdapter[T]) -> None:
+    def reload(self, adapter: BrowserAdapter[T], *, keep_cursor: bool = True) -> None:
         """Swap in a freshly derived adapter and repaint.
 
         The host owns the item list. When a row's existence depends on state
@@ -244,6 +244,8 @@ class ToolBrowser(Widget, Generic[T]):
         because only ids this adapter used to carry are considered. Ids that
         are still listed but no longer selectable are dropped too, silently
         (no SelectionChanged: a publish must never clear a status).
+        `keep_cursor=False` starts the cursor on the first item row instead of
+        keeping it on its row.
         """
         stale = {key for key in self._by_id if key is not None}
         self._adapter = adapter
@@ -255,7 +257,7 @@ class ToolBrowser(Widget, Generic[T]):
         # is_attached is False once the app exits: a pass that publishes during
         # shutdown finds the table already removed while the browser is mounted.
         if self.is_mounted and self.is_attached:
-            self._rebuild()
+            self._rebuild(keep_cursor=keep_cursor)
 
     # -- view switching ----------------------------------------------------
     def _switch_view(self, step: int) -> None:
