@@ -3568,6 +3568,35 @@ async def test_a_removal_failure_shown_elsewhere_names_uninstall(
             remover.release.set()
 
 
+async def test_a_failed_job_toggle_shown_elsewhere_names_policies(tmp_path: Path):
+    """C-28 follow-up: a toggle failure that lands on another view says where
+    space retries it."""
+    release = threading.Event()
+
+    def held_denied() -> PolicyResult:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the toggle was never released")
+        raise OSError("denied")
+
+    app, _service = _policy_app(
+        tmp_path, [_policy(tmp_path, "job", apply=held_denied, background=True)], HeldRemover()
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await pilot.press("space")
+            assert app.mutation_in_flight
+            await app.show_view("system")
+            release.set()
+            await settle(app, pilot)
+            assert app.catalog.status_text == (
+                "Policy change failed: denied. Check permissions, then open Policies and"
+                " press space."
+            )
+        finally:
+            release.set()
+
+
 async def test_a_job_toggle_result_lands_on_the_visible_view(tmp_path: Path):
     release = threading.Event()
 
