@@ -2873,6 +2873,38 @@ async def test_a_hostile_pnpm_reason_renders_literally(tmp_path: Path):
         assert not any("red" in str(span.style) for span in body.spans)
 
 
+async def test_a_hostile_pnpm_reason_reaches_the_tiers_without_escape_bytes(tmp_path: Path):
+    tool = _node_tool()
+    service = _real_service(tmp_path)
+    app = _family_app(
+        tools=[tool],
+        version_refresh=service,
+        updates=ScriptedUpdates({}),
+        node_globals=_audit(("mmdc", "\x1b]0;pwn\x07boom")),
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+
+        def recorded() -> bool:
+            state = service.state_of("mmdc")
+            return state is not None and any("boom" in reason for reason in state.reasons)
+
+        await wait_until(pilot, recorded, tries=800)
+        await settle(app, pilot)
+        state = service.state_of("mmdc")
+        assert state is not None
+        assert not any("\x1b" in reason for reason in state.reasons)
+        await app.show_view("system")
+        await settle(app, pilot)
+        assert "boom" in app.catalog.detail_text
+        assert "\x1b" not in app.catalog.detail_text
+        await pilot.press("u")
+        await pilot.pause()
+        assert "is broken" in app.catalog.status.text
+        assert "\x1b" not in app.catalog.status.text
+
+
 _STATE_READ = "Could not read the doctor state: rc file locked."
 
 
