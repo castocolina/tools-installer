@@ -263,7 +263,7 @@ Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
   4. A removal runs on a worker with visible progress; afterwards the tool moves to "nothing to do", its selection is pruned, every tier shows `○`, and Policies shows a removed ban OFF on entry.
   5. Policies and Doctor read live state on entry: installing `watch` unblocks the docker tweak, Doctor's hidden `a` key is inert, and a dangling pnpm global shim shows as broken.
 
-**Plans:** 7/21 plans executed
+**Plans:** 8/21 plans executed
 **UI hint**: yes
 
 Plans:
@@ -279,7 +279,7 @@ Plans:
 - [x] 21-09-PLAN.md — `perform_uninstall` reports removed / remove-failed per tool
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 21-07-PLAN.md — Uninstall re-renders on publish, `OwnershipRefreshed` deleted, a refused `u` still requests one pass
+- [x] 21-07-PLAN.md — Uninstall re-renders on publish, `OwnershipRefreshed` deleted, a refused `u` still requests one pass
 
 **Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 21-08-PLAN.md — Pure Uninstall projections over `ToolState`: group, label, detail; the health-detail words move to `version_status` (after the last earlier catalog writer, 21-07)
@@ -418,7 +418,7 @@ Plans:
 | 18. Registry truth and drift guard | 0/TBD | Not started | - |
 | 19. One tool state with health plus receipts | 0/TBD | Not started | - |
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
-| 21. One screen family | 7/21 | In Progress | - |
+| 21. One screen family | 8/21 | In Progress | - |
 | 22. Method lifecycle contract | 0/TBD | Not started | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
