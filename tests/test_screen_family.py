@@ -1,10 +1,13 @@
 """Screen-family lifecycle pilots: launch, the one show_view order, status lifecycle."""
 
+import threading
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from textual.screen import ModalScreen
 from textual.widgets import DataTable
 
 from installer.doctor import DoctorReport
@@ -15,13 +18,14 @@ from installer.session import Disposition, PlanRow, RowOutcome
 from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, ToolRow
 from installer.update import UpdateOutcome
-from installer.version_status import VersionRefreshService, VersionStatus
+from installer.version_status import Health, VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
-from tests.screen_family import settle
+from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     HeldRefreshService,
     ScriptedUpdates,
     frozen_service,
+    offline_service,
     pass_state,
 )
 
@@ -349,3 +353,136 @@ async def test_install_close_requests_a_pass_only_when_something_ran(tmp_path: P
             app.close_install(result)
             await settle(app, pilot)
             assert service.passes == expected
+
+
+@pytest.mark.parametrize("name", VIEW_NAMES)
+async def test_entering_a_view_starts_no_pass(tmp_path: Path, name: str):
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert service.passes == 1
+        other = "user" if name == "system" else "system"
+        for view in (name, other, name):
+            await app.show_view(view)
+            await settle(app, pilot)
+        assert service.passes == 1
+
+
+async def test_two_requests_during_a_pass_coalesce_into_one(tmp_path: Path):
+    rg = _tool("rg")
+    service = HeldRefreshService(tmp_path, [])
+    service.pending = (pass_state(rg, platform=service.platform, present=True),)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await wait_until(pilot, lambda: len(service.calls) == 1)
+        app.request_refresh()
+        app.request_refresh()
+        await pilot.pause()
+        assert len(service.calls) == 1
+        service.release.set()
+        await settle(app, pilot)
+        assert len(service.calls) == 2
+        assert _health(app, "rg") == "✓"
+
+
+class _Covering(ModalScreen[None]):
+    """A minimal modal standing in for ConfirmUninstall, ExecuteScreen or the palette."""
+
+
+async def test_publish_under_a_modal_waits_for_the_next_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    rg = _tool("rg")
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        renders: list[str] = []
+        render = app.catalog.state_refreshed
+
+        def spy() -> None:
+            renders.append("render")
+            render()
+
+        monkeypatch.setattr(app.catalog, "state_refreshed", spy)
+        await app.push_screen(_Covering())
+        service.queued = (pass_state(rg, platform=service.platform, present=True),)
+        app.request_refresh()
+        await settle(app, pilot)
+        assert renders == []
+        await app.pop_screen()
+        await pilot.pause()
+        assert _health(app, "rg") == "…"
+        # show_view of the current view is a no-op, so leave and re-enter.
+        await app.show_view("user")
+        await app.show_view("system")
+        assert _health(app, "rg") == "✓"
+
+
+async def test_publish_keeps_cursor_selection_and_status(tmp_path: Path):
+    fd = _tool("fd")
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "space")
+        app.catalog.status.set("kept", "ok")
+        row = app.catalog.query_one(DataTable[Any]).cursor_row
+        selected = set(app.catalog.selected)
+        assert selected
+        service.queued = (pass_state(fd, platform=service.platform, present=True),)
+        app.request_refresh()
+        await settle(app, pilot)
+        assert _health(app, "fd") == "✓"
+        assert app.catalog.query_one(DataTable[Any]).cursor_row == row
+        assert set(app.catalog.selected) == selected
+        assert app.catalog.status_text == "kept"
+
+
+async def test_publish_prunes_a_staged_tool_that_became_unavailable(tmp_path: Path):
+    rg = _tool("rg")
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("space", "down", "space")
+        assert app.catalog.selected == {"rg", "fd"}
+        gone = replace(pass_state(rg, platform=service.platform), health=Health.UNAVAILABLE)
+        service.queued = (gone,)
+        app.request_refresh()
+        await settle(app, pilot)
+        assert app.catalog.selected == {"fd"}
+        await pilot.press("enter")
+        assert app.return_value == ["fd"]
+
+
+async def test_a_mutation_during_a_running_pass_supersedes_it(tmp_path: Path):
+    started = threading.Event()
+    release = threading.Event()
+    probes: list[str] = []
+
+    def probe(argv: list[str]) -> str | None:
+        probes.append(Path(argv[0]).name)
+        if not started.is_set():
+            started.set()
+            assert release.wait(timeout=10)
+        return "1.0"
+
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=probe,
+    )
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await wait_until(pilot, started.is_set)
+        service.invalidate(reason="t")
+        app.request_refresh()
+        release.set()
+        await settle(app, pilot)
+        state = service.state_of("rg")
+        assert state is not None
+        assert state.generation == service.epoch
+        assert probes.count("rg") >= 2
