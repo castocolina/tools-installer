@@ -243,7 +243,12 @@ class RunRecorder:
 
 class FrozenStateService(VersionRefreshService):
     """A machine that never changes: `publish` sets the states, and a refresh
-    re-publishes them at the current epoch without probing anything."""
+    re-publishes them at the current epoch without probing anything.
+
+    `passes` counts refreshes; `queued` states join the next one, then empty."""
+
+    passes: int = 0
+    queued: tuple[ToolState, ...] = ()
 
     def publish(self, states: Iterable[ToolState]) -> None:
         with self._lock:
@@ -260,7 +265,9 @@ class FrozenStateService(VersionRefreshService):
 
     def refresh(self, tools: Sequence[Tool]) -> None:
         del tools
-        self.publish(list(self._states.values()))
+        self.passes += 1
+        self.publish([*self._states.values(), *self.queued])
+        self.queued = ()
 
     def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
         del tools
