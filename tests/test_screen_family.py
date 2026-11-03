@@ -22,7 +22,13 @@ from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, plan_removal, remove_paths
 from installer.update import UpdateOutcome
 from installer.version_status import Health, VersionRefreshService, VersionStatus
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
+from installer.wizard_app import (
+    NavScreen,
+    PolicyInputs,
+    UnifiedApp,
+    UninstallInputs,
+    UninstallScreen,
+)
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,
@@ -1014,3 +1020,109 @@ async def test_a_failed_reason_survives_leaving_and_reentering_uninstall(tmp_pat
             assert service.passes >= 1
         finally:
             remover.release.set()
+
+
+# -- 21-14: quitting waits for a running removal --
+
+_WAITING = "Waiting for the removal to finish…"
+
+
+class _PeekApp(UnifiedApp):
+    def pending_warnings(self) -> list[str]:
+        return list(self._pending_warnings)
+
+
+async def _hold_a_removal(
+    app: UnifiedApp, pilot: Any, remover: HeldRemover, tool_id: str = "yq"
+) -> None:
+    await settle(app, pilot)
+    await app.show_view("uninstall")
+    await _confirm_removal(app, pilot, tool_id)
+    await wait_until(pilot, remover.started.is_set)
+
+
+async def _quit_during_a_removal(tmp_path: Path, key: str) -> tuple[UnifiedApp, int, int]:
+    """Hold a removal, press `key`, release; the app, passes since the removal
+    started, and the remover's call count."""
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover)
+            passes = service.passes
+            await pilot.press(key)
+            status = app.view("uninstall").status
+            await wait_until(pilot, lambda: status.text == _WAITING)
+            assert status.severity is Severity.WARN
+            assert app.is_running
+            remover.release.set()
+            await wait_until(pilot, lambda: not app.is_running)
+        finally:
+            remover.release.set()
+    return app, service.passes - passes, len(remover.calls)
+
+
+async def test_quit_during_a_removal_waits_for_it(tmp_path: Path):
+    app, _extra_passes, calls = await _quit_during_a_removal(tmp_path, "q")
+    assert app.return_value is None
+    assert calls == 1
+
+
+async def test_ctrl_c_during_a_removal_waits_too(tmp_path: Path):
+    app, _extra_passes, calls = await _quit_during_a_removal(tmp_path, "ctrl+c")
+    assert app.return_value is None
+    assert calls == 1
+
+
+async def test_quit_during_a_removal_requests_no_pass(tmp_path: Path):
+    _app, extra_passes, _calls = await _quit_during_a_removal(tmp_path, "q")
+    assert extra_passes == 0
+
+
+async def test_quit_without_a_removal_exits_at_once(tmp_path: Path):
+    app, _service = _removal_app(tmp_path, HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("q")
+        assert not app.is_running
+    assert app.return_value is None
+
+
+async def test_q_under_the_palette_during_a_removal_does_nothing(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover)
+            await pilot.press("ctrl+p")
+            assert isinstance(app.screen, NavScreen)
+            await pilot.press("q")
+            assert app.is_running
+            assert isinstance(app.screen, NavScreen)
+            assert not remover.release.is_set()
+            remover.release.set()
+            await settle(app, pilot)
+            assert app.is_running
+            assert app.view("uninstall").status.text.startswith("1 removed")
+        finally:
+            remover.release.set()
+
+
+async def test_ctrl_c_under_the_palette_during_a_removal_waits(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _removal_app(tmp_path, remover, app_cls=_PeekApp)
+    assert isinstance(app, _PeekApp)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover)
+            await pilot.press("ctrl+p")
+            assert isinstance(app.screen, NavScreen)
+            await pilot.press("ctrl+c")
+            await wait_until(pilot, lambda: app.pending_warnings() == [_WAITING])
+            assert app.is_running
+            remover.release.set()
+            await wait_until(pilot, lambda: not app.is_running)
+        finally:
+            remover.release.set()
+    assert app.return_value is None
+    assert len(remover.calls) == 1
