@@ -300,13 +300,16 @@ async def test_launch_pass_renders_the_visible_tier(tmp_path: Path):
     service = HeldRefreshService(tmp_path, [])
     service.pending = (pass_state(rg, platform=service.platform, present=True),)
     app = _family_app(version_refresh=service)
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        assert _health(app, "rg") == "…"
+    try:
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert _health(app, "rg") == "…"
+            service.release.set()
+            await settle(app, pilot)
+            assert _health(app, "rg") == "✓"
+            assert service.calls == [frozenset({"rg", "fd"})]
+    finally:
         service.release.set()
-        await settle(app, pilot)
-        assert _health(app, "rg") == "✓"
-        assert service.calls == [frozenset({"rg", "fd"})]
 
 
 async def test_failed_pass_writes_the_retry_copy(tmp_path: Path):
@@ -443,16 +446,19 @@ async def test_two_requests_during_a_pass_coalesce_into_one(tmp_path: Path):
     service = HeldRefreshService(tmp_path, [])
     service.pending = (pass_state(rg, platform=service.platform, present=True),)
     app = _family_app(version_refresh=service)
-    async with app.run_test(size=(120, 30)) as pilot:
-        await wait_until(pilot, lambda: len(service.calls) == 1)
-        app.request_refresh()
-        app.request_refresh()
-        await pilot.pause()
-        assert len(service.calls) == 1
+    try:
+        async with app.run_test(size=(120, 30)) as pilot:
+            await wait_until(pilot, lambda: len(service.calls) == 1)
+            app.request_refresh()
+            app.request_refresh()
+            await pilot.pause()
+            assert len(service.calls) == 1
+            service.release.set()
+            await settle(app, pilot)
+            assert len(service.calls) == 2
+            assert _health(app, "rg") == "✓"
+    finally:
         service.release.set()
-        await settle(app, pilot)
-        assert len(service.calls) == 2
-        assert _health(app, "rg") == "✓"
 
 
 class _Covering(ModalScreen[None]):

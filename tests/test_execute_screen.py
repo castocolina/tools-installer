@@ -4170,21 +4170,24 @@ async def test_a_late_settle_never_repaints_a_finished_run(tmp_path: Path) -> No
     service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
     inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
     app = _host(inputs, [rg])
-    async with app.run_test(size=(80, 20)) as pilot:
-        app.push_screen(ExecuteScreen(["rg"], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        service.publish([plan_state(rg, health=Health.MISSING)])
-        await pilot.press("enter")
-        await _settle_execute(screen, pilot)
-        assert _head_text(screen) == "Summary — 1 installed"
-        assert "✓ rg  installed" in _plan_prompts(screen)[0]
+    try:
+        async with app.run_test(size=(80, 20)) as pilot:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            service.publish([plan_state(rg, health=Health.MISSING)])
+            await pilot.press("enter")
+            await _settle_execute(screen, pilot)
+            assert _head_text(screen) == "Summary — 1 installed"
+            assert "✓ rg  installed" in _plan_prompts(screen)[0]
+            service.release.set()
+            await pilot.pause()
+            assert _head_text(screen) == "Summary — 1 installed"
+            keys = screen.query_one("#execute-keys", Static)
+            assert keys.content == "enter / esc return to catalog"
+    finally:
         service.release.set()
-        await pilot.pause()
-        assert _head_text(screen) == "Summary — 1 installed"
-        keys = screen.query_one("#execute-keys", Static)
-        assert keys.content == "enter / esc return to catalog"
 
 
 async def test_a_multi_line_state_check_error_shows_its_first_line_only(

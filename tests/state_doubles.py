@@ -326,7 +326,8 @@ class HeldRefreshService(FrozenStateService):
 
     def refresh(self, tools: Sequence[Tool]) -> None:
         self.calls.append(frozenset(tool.id for tool in tools))
-        self.release.wait()
+        if not self.release.wait(timeout=self.release_timeout):
+            raise TimeoutError("HeldRefreshService was never released")
         error = self.raising
         if error is not None:
             raise error
