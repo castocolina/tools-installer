@@ -77,7 +77,7 @@ from installer.version_status import (
     version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
-from tests.state_doubles import ScriptedUpdates
+from tests.state_doubles import ScriptedUpdates, offline_service
 from tests.test_download import fixture_runner
 from tests.test_registry import REGISTRY
 
@@ -5610,3 +5610,58 @@ def test_inaccessible_receipts_dir_never_aborts_refresh(
     assert _ADOPTED not in state.reasons
     assert state.receipt is None
     assert state.removable.removable == ()
+
+
+def _pending_service(
+    tmp_path: Path, probe: Callable[[list[str]], str | None]
+) -> VersionRefreshService:
+    return offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=probe,
+    )
+
+
+def _pending_tools() -> list[Tool]:
+    return [_tool("rg"), _tool("fd")]
+
+
+def test_mark_pending_hides_only_the_named_ids(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    states = _settled_states(service, _pending_tools())
+    epoch = service.epoch
+    service.mark_pending({"rg"})
+    assert service.state_of("rg") is None
+    assert service.state_of("fd") is states["fd"]
+    assert service.epoch == epoch
+
+
+def test_mark_pending_survives_a_pass_that_commits_after_it(tmp_path: Path) -> None:
+    holder: list[VersionRefreshService] = []
+    fired: list[bool] = []
+
+    def probe(_argv: list[str]) -> str | None:
+        if not fired:
+            fired.append(True)
+            holder[0].mark_pending({"rg"})
+        return "1.0.0"
+
+    service = _pending_service(tmp_path, probe)
+    holder.append(service)
+    service.refresh(_pending_tools())
+    assert fired
+    assert service.state_of("rg") is None
+    assert service.state_of("fd") is not None
+
+
+def test_invalidate_clears_pending_and_the_next_pass_republishes(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    tools = _pending_tools()
+    service.refresh(tools)
+    service.mark_pending({"rg"})
+    epoch = service.invalidate(reason="t")
+    service.refresh(tools)
+    state = service.state_of("rg")
+    assert state is not None
+    assert state.generation == epoch

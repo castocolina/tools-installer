@@ -46,7 +46,7 @@ import os
 import re
 import shutil
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -939,6 +939,8 @@ class VersionRefreshService:
         # old snapshot or the new one, never a torn mix; each state carries
         # its pass's epoch (`generation`) and sequence number (`seq`).
         self._states: dict[str, ToolState] = {}
+        # Ids a removal is changing: hidden from `state_of` until the next epoch.
+        self._pending_ids: set[str] = set()
         self._skills: dict[str, SkillHostStatus] = {}
         # Per pack: seq and scan of the pass that published its state;
         # `refresh_skills` rebuilds each pack with its own (RR-03).
@@ -1118,6 +1120,16 @@ class VersionRefreshService:
                     self._states = {**self._states, **rebuilt}
                 return dict(merged)
 
+    def mark_pending(self, tool_ids: Collection[str]) -> None:
+        """Hide `tool_ids` until the next epoch (the removal start, D-09).
+
+        `state_of` answers `None` for exactly these ids; a pass already in
+        flight does not republish them, and `invalidate` clears the set.
+        """
+        with self._lock:
+            self._pending_ids |= set(tool_ids)
+            self._states = {k: v for k, v in self._states.items() if k not in self._pending_ids}
+
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the manager snapshot under the merge lock.
 
@@ -1127,6 +1139,7 @@ class VersionRefreshService:
         del reason
         with self._lock:
             self._epoch += 1
+            self._pending_ids.clear()
             # In memory first: a failed write must still force the next probe (WR2-03).
             self._skills_probed = False
             self._skills = {
@@ -1751,7 +1764,8 @@ class VersionRefreshService:
             fresh = {
                 tool_id: state
                 for tool_id, state in states.items()
-                if (current := self._states.get(tool_id)) is None or current.seq < seq
+                if tool_id not in self._pending_ids
+                and ((current := self._states.get(tool_id)) is None or current.seq < seq)
             }
             if not fresh:
                 return
