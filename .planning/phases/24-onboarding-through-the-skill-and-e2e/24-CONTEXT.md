@@ -3,6 +3,8 @@
 **Gathered:** 2026-10-14 (assumptions mode, `--analyze --all --batch`, jev ladder, best-over-easy)
 **Status:** Ready for planning
 
+> **Scope change (user, 2026-11-02):** the installer does not install skill packs. herdr ships without a skill pack, so D-11 is dropped and every herdr skill-pack mention below is void. Removing existing skill-pack entries is a later, separate phase.
+
 <domain>
 ## Phase Boundary
 
@@ -85,7 +87,7 @@ None of these has landed as of 2026-10-14.
   - The map is verified against the host's existing herdr 0.9.3 through a **read-only** `herdr integration status`/`--help`.
   - Unregister is `herdr integration uninstall <agent>`, for the receipt hosts only.
   - The researcher must check whether an integration also edits an agent's main config (merge safety).
-- **D-11:** The herdr skill is its own `skill_pack` `[[tool]]` with `requires = ["herdr"]`, tier `ai` (the ponytail precedent, `registry.toml:2807-2868`). With it unselected, no skill files are written.
+- **D-11 (DROPPED 2026-11-02, no skill packs):** ~~The herdr skill is its own `skill_pack` `[[tool]]` with `requires = ["herdr"]`, tier `ai` (the ponytail precedent, `registry.toml:2807-2868`). With it unselected, no skill files are written.~~
 - **D-12 (SPEC R1 text, user-confirmed 2026-10-14):** The **separator and current-indicator** reuse from herdr-setup is **in scope**. Only these two: no accent or theme styling (user: "agregar el separador y el indicador más que el accent"). SPEC R1 names them, and the Boundaries exclude only features *beyond* them.
   - It ships as a named hook: place the plugin from a pinned source, `herdr plugin link`, write the `rows` arrays and `row_gap` through the 23 D-06/D-07 writer **only when absent**, `herdr server reload-config`, and record the writes in the ledger (23 D-08).
   - When the user already defines those arrays, nothing is written and a reason names the tokens to add by hand.

@@ -341,7 +341,7 @@ Plans:
 **Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, CONF-06, CONF-07, CONF-08, CONF-09, CONF-10, CONF-11, CONF-12
 **Success Criteria** (what must be TRUE):
 
-  1. Installing codex with rtk present runs `rtk init` for codex once and adds codex to `receipt.hooks`; removing rtk runs `rtk init -g --uninstall` for the recorded hosts; the codegraph, rtk, graphify and herdr hooks all read one agent-host list.
+  1. Installing codex with codegraph present runs codegraph's register for codex once and adds codex to `receipt.hooks`; removing codegraph unregisters exactly the recorded hosts; the codegraph, graphify and herdr hooks all read one agent-host list (rtk dropped 2026-11-02: the installer does not install or register rtk).
   2. A zsh started from any terminal has `SHELL` set to the real zsh (managed `~/.zshenv`), a kitty/WezTerm/Konsole config without the owned region shows `≈`, and RECONFIGURE writes it (scratch HOME).
   3. Installing starship with "yes" turns its shell-init bundle ON, declining leaves no health state, and removing the tool removes the bundle (same for direnv, zoxide, fzf, fnm and volta).
   4. tealdeer fetches its cache after install and update, Oh-My-Zsh plugin writes honor `$ZSH`, and selecting a current zsh no longer promises a step that never runs.
@@ -358,7 +358,7 @@ Plans:
 **Note**: Alacritty's cargo build in a throwaway Distrobox is user decision O5 (2026-10-13), overriding the TA's O5 recommendation and its §9.1 "no new method kind" cut; it rides on Phase 22's lifecycle contract (receipt, removal, update). ONB-04 runs the leftover-checking harness built in Phase 22 (LIFE-09).
 **Success Criteria** (what must be TRUE):
 
-  1. In a container, herdr installs, its integrations register for the present agent hosts, and uninstall leaves `herdr integration status` clean; its skill pack is a separate, optional selection.
+  1. In a container, herdr installs, its integrations register for the present agent hosts, and uninstall leaves `herdr integration status` clean; no herdr skill pack is installed (skill packs dropped 2026-11-02).
   2. On immutable Bazzite, Alacritty installs without a reboot: cargo builds it in a throwaway Distrobox, the native binary lands in `~/.local/bin` with its desktop entry, icon and terminfo under `~/.local/share`, all recorded in the receipt, and the container and image are gone afterwards; uninstall removes every recorded path.
   3. A newer Alacritty GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched; Alacritty gets the zsh/`SHELL` sync and the asked keybindings (word navigation, clear scrollback).
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.

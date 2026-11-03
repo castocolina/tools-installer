@@ -26,13 +26,13 @@ Scouted 2026-10-13:
 1. **herdr (ONB-01)**: herdr is a user-tier binary tool whose integrations hook registers for present agent hosts using the Phase 23 pair.
    - Current: Absent.
    - Target:
-     - Its skill pack is a separate, optional selection.
+     - No skill pack (user, 2026-11-02: the installer does not install skill packs).
      - Only the workspace agent separator and the current indicators are reused from herdr-setup.
      - Uninstall unregisters the recorded hosts.
    - Acceptance:
      - In a container, install leaves the integrations registered for the present hosts, and the receipt records them.
      - After uninstall, `herdr integration status` reports nothing installed.
-     - Without the skill pack selected, no skill files are written.
+     - No skill files are written.
 
 2. **`cargo_distrobox` kind (ONB-02, O5)**: A new method kind with data params.
    - Current: No way to build from source.
@@ -113,7 +113,7 @@ Scouted 2026-10-13:
 ## Boundaries
 
 **In scope:**
-- The herdr registry entry, its hook pair use and its optional skill pack
+- The herdr registry entry and its hook pair use (no skill pack)
 - The `cargo_distrobox` kind (params, executor, update, removal); Alacritty data and artifacts; method precedence
 - Alacritty in the terminal sync, and its keybinding region
 - Updating the tool-onboarding skill and its skill-judge score
@@ -136,7 +136,7 @@ Scouted 2026-10-13:
 
 ## Acceptance Criteria
 
-- [ ] herdr: integrations registered for present hosts and recorded; after uninstall `herdr integration status` is clean; the skill pack is written only when selected
+- [ ] herdr: integrations registered for present hosts and recorded; after uninstall `herdr integration status` is clean; no skill files are written
 - [ ] `cargo_distrobox` with a fake runner: create → build → copy → rm → image rm; an injected build failure still removes both and ends failed
 - [ ] One real Alacritty podman build recorded; no container or image left
 - [ ] The binary, desktop entry (valid), icon and terminfo are installed and recorded; `infocmp alacritty` resolves; uninstall removes all of them
@@ -154,7 +154,7 @@ Scouted 2026-10-13:
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
-| unclassified | R1 | ✅ covered | Install, status, uninstall, optional skill pack (AC 1) |
+| unclassified | R1 | ✅ covered | Install, status, uninstall; no skill pack (AC 1) |
 | unclassified | R2 | ✅ covered | Fake-runner sequence and failure cleanup (AC 2, AC 3) |
 | adjacency | R3 | ✅ covered | An existing `~/.local/share/terminfo/a/alacritty` from a native install is not overwritten unless the receipt records it; it is listed instead (AC 4) |
 | empty | R3 | ✅ covered | No `~/.local/share/applications` dir: it is created; only files are recorded, never the dirs (AC 4) |

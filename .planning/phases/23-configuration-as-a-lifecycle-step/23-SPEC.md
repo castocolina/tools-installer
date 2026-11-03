@@ -34,15 +34,16 @@ Scouted 2026-10-13:
 
 ## Requirements
 
-1. **Reversible host hooks (CONF-01)**: The codegraph, rtk, graphify and herdr hooks each become a `(register, unregister)` pair.
+1. **Reversible host hooks (CONF-01)**: The codegraph, graphify and herdr hooks each become a `(register, unregister)` pair.
    - Current: Register only.
    - Target:
      - Register runs for (present hosts ∩ the hook's supported hosts) and records the hosts in `receipt.hooks[name]`.
-     - On removal, unregister runs first for the recorded hosts only: `codegraph uninstall --keep-cli`, `rtk init -g --uninstall`, `graphify <host> uninstall`, `herdr integration uninstall`.
+     - On removal, unregister runs first for the recorded hosts only: `codegraph uninstall --keep-cli`, `graphify <host> uninstall`, `herdr integration uninstall`.
      - A supported, present host that is missing from `receipt.hooks` shows `≈`.
    - Acceptance:
-     - Installing codex with rtk present runs `rtk init` for codex once, and the receipt gains codex (fake runner).
-     - Removing rtk runs the uninstall for exactly the recorded hosts.
+     - Installing codex with codegraph present runs codegraph's register for codex once, and the receipt gains codex (fake runner).
+     - Removing codegraph runs the unregister for exactly the recorded hosts.
+     - rtk is out of scope (user, 2026-11-02): no rtk hook pair.
 
 2. **New host re-sync (CONF-02)**: At the end of any plan run that installed an agent host, the hooks of the already-installed hook tools run for the new host only.
    - Current: Nothing.
@@ -160,7 +161,7 @@ Scouted 2026-10-13:
 
 ## Acceptance Criteria
 
-- [ ] Installing codex with rtk present runs `rtk init` for codex once and records it; removing rtk unregisters exactly the recorded hosts
+- [ ] Installing codex with codegraph present runs its register for codex once and records it; removing codegraph unregisters exactly the recorded hosts
 - [ ] Installing a new host re-runs installed hook tools for that host only
 - [ ] No `_AGENT_HOST_IDS` in `installer/`; every hook reads `present_harnesses`
 - [ ] Each of the six shell-init tools: "yes" → bundle ON; "no" → OFF and no health state; removal disables the bundle

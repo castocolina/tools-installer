@@ -11,6 +11,8 @@ files:
 
 ## Problem
 
+> **Scope change (user, 2026-11-02):** rtk is out of scope; port nothing rtk-related (`rtk.sh`, rtk configure templates).
+
 ai-kit's shelved branch, now tag `archive/context-tools-plan1` (21 commits, 2026-07-28..30, ~4,900
 lines) added a setup-wizard "Step 0" that detects, installs, configures and uninstalls AI
 context tools: rtk, codegraph, graphify and gitnexus. On 2026-10-14 uz decided it does not land

@@ -3,6 +3,8 @@
 **Gathered:** 2026-10-14 (assumptions mode, `--analyze --all --batch`, jev ladder, best-over-easy)
 **Status:** Ready for planning
 
+> **Scope change (user, 2026-11-02):** rtk is out of scope. The installer does not install, register or unregister rtk, so CONF-01 covers only the codegraph, graphify and herdr hooks. This overrides every rtk mention below (`_RTK_HOST_ARGS`, `rtk init`, "register rtk for codex"). Removing an existing rtk catalog entry is a later, separate phase.
+
 <domain>
 ## Phase Boundary
 

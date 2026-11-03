@@ -1,5 +1,5 @@
 {
-  "model_profile": "adaptive",
+  "model_profile": "balanced",
   "commit_docs": true,
   "parallelization": true,
   "search_gitignored": false,
@@ -45,27 +45,23 @@
     "ui_review": true,
     "use_worktrees": true,
     "plan_review_convergence": true,
-    "cross_ai_execution": true,
+    "cross_ai_execution": false,
     "cross_ai_command": "pi -p --model router-env/my-coding --no-session",
     "cross_ai_timeout": 3600
   },
   "review": {
     "reviewer_instances": {
-      "opencode-plan-review": {
+      "opencode-referee-one": {
         "cli": "opencode",
-        "model": "router-env/my-plan-review"
+        "model": "router-env/my-referee-one"
       },
-      "opencode-gpt-sol": {
+      "opencode-referee-three": {
         "cli": "opencode",
-        "model": "openai/gpt-6.1-sol#xhigh"
-      },
-      "opencode-glm": {
-        "cli": "opencode",
-        "model": "zai-coding-plan/glm-5.3#high"
+        "model": "router-env/my-referee-three"
       }
     },
     "default_reviewers": [
-      "opencode-plan-review"
+      "opencode-referee-one"
     ],
     "timeouts": {
       "opencode": 2400
@@ -158,25 +154,32 @@
     "execution": "haiku"
   },
   "model_overrides": {
-    "gsd-planner": "fable",
-    "gsd-code-reviewer": "fable",
-    "gsd-executor": "haiku"
+    "gsd-planner": "opus",
+    "gsd-code-reviewer": "opus",
+    "gsd-plan-checker": "sonnet"
   },
   "effort": {
-    "default": "medium",
+    "default": "high",
     "agent_overrides": {
-      "gsd-planner": "high",
-      "gsd-plan-checker": "high",
-      "gsd-code-reviewer": "high",
-      "gsd-ui-auditor": "high",
-      "gsd-assumptions-analyzer": "high",
-      "gsd-debugger": "high",
-      "gsd-debug-session-manager": "high",
-      "gsd-eval-planner": "high",
-      "gsd-framework-selector": "high",
-      "gsd-roadmapper": "high",
-      "gsd-security-auditor": "high",
-      "gsd-user-profiler": "high"
+      "gsd-planner": "xhigh",
+      "gsd-code-reviewer": "high"
+    },
+    "routing_tier_defaults": {
+      "light": "low",
+      "standard": "medium",
+      "heavy": "high"
     }
+  },
+  "runtime": "claude",
+  "resolve_model_ids": false,
+  "dynamic_routing": {
+    "enabled": true,
+    "tier_models": {
+      "light": "haiku",
+      "standard": "sonnet",
+      "heavy": "opus"
+    },
+    "escalate_on_failure": true,
+    "max_escalations": 1
   }
 }

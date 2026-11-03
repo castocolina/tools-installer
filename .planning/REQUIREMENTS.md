@@ -84,7 +84,7 @@
 
 ### Configuration
 
-- [ ] **CONF-01**: Agent-host hooks (codegraph, rtk, graphify, herdr) register per host, record hosts in the receipt, and unregister on removal [TA §6, F X1]
+- [ ] **CONF-01**: Agent-host hooks (codegraph, graphify, herdr; rtk dropped 2026-11-02) register per host, record hosts in the receipt, and unregister on removal [TA §6, F X1]
 - [ ] **CONF-02**: Installing a new agent host re-runs the hooks of already-installed hook tools for that host only [A Ph9 D-01]
 - [ ] **CONF-03**: One agent-host list is used everywhere [TA §6]
 - [ ] **CONF-04**: Shell init for starship, direnv, zoxide, fzf, fnm and volta is offered at install through the existing confirm (default off) and removed with the tool [C G6, O11]
@@ -99,7 +99,7 @@
 
 ### Onboarding and end-to-end
 
-- [ ] **ONB-01**: herdr installs as a user-tier binary with an integrations postinstall for present agent hosts and an optional skill pack, reusing only the workspace agent separator and current indicators from herdr-setup [999.11]
+- [ ] **ONB-01**: herdr installs as a user-tier binary with an integrations postinstall for present agent hosts (no skill pack: dropped 2026-11-02), reusing only the workspace agent separator and current indicators from herdr-setup [999.11]
 - [ ] **ONB-02**: On immutable Bazzite, Alacritty installs without a reboot by building it with cargo inside a throwaway Distrobox and placing the native binary in `~/.local/bin`; the container and image are deleted afterwards. A newer GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched [999.11, O5: measured 2026-10-13: 35 s build, 12 MB binary, host libs resolve]
 - [ ] **ONB-06**: The Alacritty build also installs its desktop entry, icon and terminfo under `~/.local/share`, so it appears in the system menu and search; all of these are recorded in the receipt and removed on uninstall [O5]
 - [ ] **ONB-07**: Alacritty gets the terminal shell sync (zsh, `SHELL`) and the keybinding customizations (word navigation, clear scrollback) [999.11]
