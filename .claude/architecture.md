@@ -1142,10 +1142,13 @@ that would require elevation is BLOCKED and never escalated. The shared
 `update_refusal` predicate informs both the plan and the update engine, so
 the review cannot promise an update that the engine refuses.
 
-When state is pending, `_await_state` joins the service's single flight with
-the whole catalog; it never starts a parallel refresh or times out. A wait
-token fails closed after cancellation. Phase 21's refresh owner replaces
-this helper's body, not the review or execution contract.
+When state is pending, `_await_state` asks the app's refresh owner for the next
+publication (`UnifiedApp.await_publication`). It joins a running pass, as the
+single flight did, starts one only when none runs, and is served only once no
+follow-up pass is pending, so the review never reads a state older than the
+newest mutation. It never starts a parallel refresh and never times out; a
+failed or escaped pass reaches the review as its error. A wait token fails
+closed after cancellation. The review and execution contract is unchanged.
 
 Phase 20 deleted the obsolete `Summary`/`summarize`, `run_installs`,
 `audit.py`, `reapply_post_install`, and the screen's classification and

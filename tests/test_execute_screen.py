@@ -66,6 +66,7 @@ from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.screen_family import wait_until
 from tests.state_doubles import (
     FrozenStateService,
     HeldRefreshService,
@@ -334,6 +335,7 @@ def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
         ),
         policies=PolicyInputs(policies=[]),
         execute=inputs,
+        version_refresh=inputs.version_refresh,
     )
 
 
@@ -1485,7 +1487,6 @@ class _RecordingRefreshService(FrozenStateService):
     def refresh(self, tools: Sequence[Tool]) -> None:
         for tool in tools:
             self.asked.append(tool.id)
-            _publish(self, tool, version=_outdated_status(tool.id, outdated=True))
 
 
 class _RecordingUpdateService(UpdateService):
@@ -3866,6 +3867,30 @@ async def test_enter_with_a_held_refresh_waits_and_starts_nothing(tmp_path: Path
             service.release.set()
 
 
+async def test_the_review_waits_on_the_app_pass_and_runs_no_worker_of_its_own(
+    tmp_path: Path,
+) -> None:
+    captured: list[str] = []
+    rg = _tool("rg")
+    service = held_service(tmp_path / "state", [plan_state(rg, health=Health.MISSING)])
+    inputs = _inputs(tools=[rg], install=_install_with_output(captured), version_refresh=service)
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            await pilot.press("enter")
+            await _wait_for_refresh_calls(service, pilot)
+            await pilot.pause()
+            assert [w for w in app.workers if w.group == "execute-wait"] == []
+            assert service.calls == [frozenset({"rg"})]
+            assert captured == []
+            service.release.set()
+            await wait_until(pilot, lambda: captured == ["rg"])
+        finally:
+            service.release.set()
+
+
 async def test_releasing_the_refresh_rebuilds_the_plan_and_starts_the_run(tmp_path: Path) -> None:
     captured: list[str] = []
     rg = _tool("rg")
@@ -4501,7 +4526,7 @@ async def test_update_outcome_survives_state_invalidation_without_followup_refre
     screen, _ = await _run_execute(inputs, ["rg"])
 
     assert _outcomes_by_id(screen)["rg"].result == "done"
-    assert refresh.asked == []
+    assert refresh.asked == ["rg"]  # the app's launch pass only; the run asked for none
     assert "Summary — 1 updated" in _log_text(screen)
 
 
@@ -4717,7 +4742,7 @@ async def test_blocked_update_does_not_trigger_a_version_refresh(tmp_path: Path)
 
     screen, _ = await _run_execute(inputs, ["rg"])
 
-    assert refresh.asked == []
+    assert refresh.asked == ["rg"]  # the app's launch pass only; the run asked for none
     assert _outcomes_by_id(screen)["rg"].result == "blocked"
 
 
