@@ -44,6 +44,7 @@ from installer.wizard_app import (
     GlobalsReinstalled,
     JobStatesRead,
     LinkModeScreen,
+    MutationLock,
     NavScreen,
     PolicyInputs,
     TimePickerScreen,
@@ -2068,6 +2069,16 @@ _NOUNS = {
     MutationHolder.DAEMON_DEFAULT: _DAEMON_REFUSAL,
     MutationHolder.POLICY_TOGGLE: _TOGGLE_REFUSAL,
 }
+
+
+def test_a_held_lock_is_never_taken_twice():
+    """C-30: a second begin_mutation while the lock is held fails loudly; it
+    never overwrites the holder, so one end_mutation cannot release both."""
+    lock = MutationLock()
+    lock.begin_mutation(MutationHolder.UPDATE)
+    with pytest.raises(RuntimeError, match="An update"):
+        lock.begin_mutation(MutationHolder.REMOVAL)
+    assert lock.mutation_in_flight
 
 
 @pytest.mark.parametrize("holder", list(MutationHolder), ids=lambda holder: holder.name)
