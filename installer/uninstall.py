@@ -9,17 +9,14 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from installer import receipts
 from installer.download import DOWNLOAD_KINDS, artifact_paths, is_still_proven
-from installer.enums import UninstallState
 from installer.model import Method, Tool
-from installer.platform import Platform
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
-from installer.resolve import resolve_methods
 from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
 
@@ -196,152 +193,11 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     return RemovalPlan(tuple(removable), yourself, by_tool, artifacts)
 
 
-@dataclass(frozen=True, init=False)
-class ToolRow:
-    """A tool annotated with its removability on this machine + platform.
-
-    States: removable (userspace artifacts on disk -> selectable, has paths),
-    managed (installed but no userspace artifacts -> inert, manager hint),
-    absent (resolvable here but not installed -> inert), unavailable (no method
-    applies to this platform -> inert)."""
-
-    tool: Tool
-    state: UninstallState
-    paths: list[Path]
-    hint: str
-    selectable: bool
-    # CR-03 (15.4-REVIEW.md): the TERSE register beside `hint`'s prose one --
-    # the manager's bare name ("Homebrew", "dnf", "GitHub release"), for the
-    # table CELL, while `hint` stays the full sentence the detail bar shows.
-    # `None` means "no attribution for this row", which the screen renders as
-    # its own generic label; only the managed branch ever sets it.
-    manager: str | None
-
-    def __init__(
-        self,
-        tool: Tool,
-        state: UninstallState | str,
-        paths: list[Path],
-        hint: str,
-        selectable: bool,
-        manager: str | None = None,
-    ) -> None:
-        object.__setattr__(self, "tool", tool)
-        object.__setattr__(self, "state", UninstallState(state))
-        object.__setattr__(self, "paths", paths)
-        object.__setattr__(self, "hint", hint)
-        object.__setattr__(self, "selectable", selectable)
-        object.__setattr__(self, "manager", manager)
-
-
 def manager_name(method: Method, param: str, fallback: str) -> str:
     # brew/cask uninstall takes the formula/cask name (in the method params),
     # NOT the runnable cmd — they differ for e.g. rg/ripgrep, code/visual-studio-code.
     value = method.params.get(param)
     return value if isinstance(value, str) and value else fallback
-
-
-# The ownership seam `classify_tools` accepts (15.4-05/D-03/D-04): a plain
-# callable from `Tool` to `str | None`, never `ManagerOwnership` -- not even
-# under a `TYPE_CHECKING` guard. 15.4-RESEARCH.md Pitfall 3 offered threading
-# `platform`/`inventory`/`native_probe` into this module's own signature
-# instead; that is the shape D-05 explicitly rejects, because it would make
-# this screen run its own resolution pass. `installer/ownership.py` already
-# imports `manager_name` FROM this module (`ownership.py:74`), so the
-# dependency runs ownership-to-uninstall; importing `ManagerOwnership` here
-# would import back and create the cycle `.claude/architecture.md` rule 5
-# forbids. A plain callable keeps this module free of that import in either
-# direction -- the composition root (`setup.py`) is what actually binds the
-# seam to `VersionRefreshService.state_of` plus `installer.ownership
-# .removal_hint`.
-OwnerHint = Callable[[Tool], str | None]
-
-# The TERSE half of the same seam (CR-03, 15.4-REVIEW.md), bound in `setup.py`
-# to `VersionRefreshService.state_of` plus `installer.ownership
-# .removal_label` exactly as `OwnerHint` is bound to `removal_hint`. Two
-# callables rather than one returning a pair, for the same reason
-# `installer/ownership.py` keeps `OWNER_LABELS` and `OWNER_DETAIL_LABELS` as
-# two declared tables: a ~14-character cell and a removal sentence have
-# different jobs, and deriving one from the other by string surgery is the
-# coupling both registers exist to avoid.
-OwnerLabelHint = Callable[[Tool], str | None]
-
-
-def _manager_hint(tool: Tool, platform: Platform) -> str:
-    """The registry-derived removal phrase for a managed tool, consulted only
-    when the ownership seam has nothing to say for it.
-
-    Scans `resolve_methods(tool, platform)` -- already imported at :20 and
-    already called by `classify_tools` for its absent/unavailable branch, so
-    this introduces no new dependency and no second copy of `_applies` --
-    rather than a raw `tool.methods` scan (Round-2 review HIGH). The raw scan
-    used to return "managed by Homebrew — `brew uninstall --cask codex`" on a
-    Linux host for codex, whose cask is gated `os = ["macos"]`
-    (`installer/registry.toml:1343-1350`) and excluded there by
-    `installer/resolve.py:67-69` -- and this is the exact path taken when the
-    ownership seam is absent or epoch-invalidated, so the "degradation is
-    generic, never wrong" claim was false until this filter.
-
-    Deliberately NOT `installer/ownership.py`'s `_method_targets_platform`:
-    importing it would create the cycle noted on `OwnerHint` above, and the
-    two helpers answer different questions -- that one deliberately WIDENS
-    attribution past the install gate for ownership evidence backed by a real
-    inventory reading, while this is a registry-only GUESS with no evidence
-    behind it and must therefore be NARROWER, not wider. A linuxbrew-cask
-    tool gets its specific attribution from the ownership seam and the
-    generic phrase from here, which is the correct division.
-
-    One deliberate narrowing versus the pre-filter behaviour: a tool
-    declaring only a brew method on a host with no brew now gets the generic
-    phrase instead of a `brew uninstall` line that was never runnable there.
-    That is the fix, not a regression -- the existing brew/cask hint tests
-    all use a macOS-with-brew platform and stay green.
-
-    WR-04 (15.4-REVIEW.md): `resolve_methods` also filters on `arch` and
-    `min_os_version`, a SECOND narrowing the Round-2 fix did not name. The
-    registry has three rows it bites -- gnu-bash's two arch-split brew
-    methods and `container`'s `min_os_version` one -- so on a macOS arm64
-    host below `container`'s floor a brew-installed `container` fell all the
-    way through to the generic phrase. `_ownership_only_methods` in
-    `installer/ownership.py` now covers those rows on the evidence side, so
-    the seam rescues them with a real, inventory-backed attribution and this
-    registry-only GUESS is deliberately left as the narrower of the two --
-    per this docstring's own rule that it must be NARROWER, not wider.
-    """
-    for method in resolve_methods(tool, platform):
-        if method.kind == "cask":
-            name = manager_name(method, "cask", tool.cmd)
-            return f"managed by Homebrew — `brew uninstall --cask {name}`"
-        if method.kind == "brew":
-            name = manager_name(method, "formula", tool.cmd)
-            return f"managed by Homebrew — `brew uninstall {name}`"
-        if method.kind == "sdkman":
-            # ownership.py can now attribute SDKMAN by location. This
-            # registry-derived phrase remains the fallback when no ownership
-            # record is passed.
-            candidate = manager_name(method, "candidate", tool.cmd)
-            return f"managed by SDKMAN — `sdk uninstall {candidate} <version>`"
-    return "managed outside this installer — remove with your package manager"
-
-
-def _managed_hint(
-    tool: Tool,
-    which: Callable[[str], str | None],
-    platform: Platform,
-    owner_hint: OwnerHint | None,
-) -> str:
-    # The seam's phrase wins when it has one; a tool it cannot attribute (or
-    # no seam at all) falls back to the platform-filtered registry guess --
-    # per tool, not per call, so one unattributable tool does not degrade the
-    # rest. Surfaces where the tool actually resolves on PATH (e.g.
-    # /opt/homebrew/bin/rg) so "managed elsewhere" is concrete: the user sees
-    # it is a real, brew/system install this installer did not place and
-    # should not delete.
-    hint = owner_hint(tool) if owner_hint is not None else None
-    if hint is None:
-        hint = _manager_hint(tool, platform)
-    path = which(tool.cmd)
-    return f"{hint} — found at {path}" if path else hint
 
 
 def reverse_dependencies(tools: list[Tool]) -> dict[str, list[str]]:
@@ -354,93 +210,6 @@ def reverse_dependencies(tools: list[Tool]) -> dict[str, list[str]]:
         for dep_id in tool.requires:
             rev.setdefault(dep_id, []).append(tool.id)
     return rev
-
-
-def classify_tools(
-    tools: list[Tool],
-    default_bin_dir: Path,
-    *,
-    installed: dict[str, bool],
-    platform: Platform,
-    which: Callable[[str], str | None] = shutil.which,
-    reverse_deps: dict[str, list[str]] | None = None,
-    owner_hint: OwnerHint | None = None,
-    owner_label_hint: OwnerLabelHint | None = None,
-) -> list[ToolRow]:
-    """Classify every tool by removability, one ToolRow per tool in input order.
-
-    Uses plan_removal's proof (CONTEXT D-04): a tool is removable only when
-    its bin link is a symlink resolving to a regular file inside its own
-    opt dir; every other name match is listed as "remove it yourself" and
-    the row is inert. The installed map, the platform resolver and `which`
-    still resolve where a managed tool lives, so the Uninstall view keeps
-    full catalog parity: removable-here vs managed-elsewhere vs not-installed
-    vs unavailable.
-
-    When ``reverse_deps`` is provided, any tool that other tools depend on gets a
-    "required by …" note appended to its hint — warn-but-allow, no cascade or
-    block.
-
-    ``owner_hint``, when given, is consulted ONLY for the managed branch: a
-    phrase it returns for a tool wins over the platform-filtered registry
-    guess (``_manager_hint``); ``None`` for a tool (or no seam at all) falls
-    back to that guess, per tool. Removable, absent and unavailable rows never
-    consult it (see ``OwnerHint``'s own docstring for why this stays a plain
-    callable rather than an ownership resolver).
-
-    ``owner_label_hint`` is that seam's TERSE counterpart (CR-03), consulted
-    under exactly the same managed-only condition and stored on
-    ``ToolRow.manager`` for the table CELL, while ``hint`` keeps the full
-    sentence for the detail bar. There is no registry-derived fallback for
-    it: a row this seam cannot attribute carries ``None`` and the screen
-    renders its own generic label, because the registry guess behind
-    ``_manager_hint`` is a GUESS and a bare manager name in a cell reads as a
-    verified fact."""
-    rows: list[ToolRow] = []
-    for tool in tools:
-        plan = plan_removal([tool], default_bin_dir)
-        if plan.removable:
-            hint = "installed in userspace — removable here"
-            if plan.yourself:
-                hint += f" · remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
-            rows.append(ToolRow(tool, UninstallState.REMOVABLE, list(plan.removable), hint, True))
-        elif plan.yourself:
-            yourself_hint = f"remove it yourself: {', '.join(str(p) for p in plan.yourself)}"
-            if installed.get(tool.id, False):
-                yourself_hint = (
-                    f"{_managed_hint(tool, which, platform, owner_hint)} · {yourself_hint}"
-                )
-            rows.append(ToolRow(tool, UninstallState.MANAGED, [], yourself_hint, False))
-        elif installed.get(tool.id, False):
-            rows.append(
-                ToolRow(
-                    tool,
-                    UninstallState.MANAGED,
-                    [],
-                    _managed_hint(tool, which, platform, owner_hint),
-                    False,
-                    owner_label_hint(tool) if owner_label_hint is not None else None,
-                )
-            )
-        elif resolve_methods(tool, platform):
-            rows.append(ToolRow(tool, UninstallState.ABSENT, [], "not installed", False))
-        else:
-            rows.append(
-                ToolRow(
-                    tool, UninstallState.UNAVAILABLE, [], f"not available on {platform.os}", False
-                )
-            )
-    if reverse_deps:
-        rows = [
-            replace(
-                row,
-                hint=f"{row.hint} · required by {', '.join(reverse_deps[row.tool.id])}",
-            )
-            if reverse_deps.get(row.tool.id)
-            else row
-            for row in rows
-        ]
-    return rows
 
 
 def _put_back(quarantine: Path, path: Path) -> None:

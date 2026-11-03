@@ -5893,6 +5893,16 @@ def test_uninstall_unproven_installer_tool_shows_its_reasons() -> None:
     assert uninstall_label(state) == owner_label(state.ownership)
 
 
+def test_uninstall_script_install_shows_its_reasons_and_label() -> None:
+    tool, state = _uninstall_state(owner="installer", notes=(UNPROVEN_NOTE,))
+    script = Method(kind="script", params={"url": "https://example.invalid/i.sh"})
+    state = replace(state, ownership=replace(state.ownership, method=script))
+    assert uninstall_label(state) == "own installer"
+    detail = uninstall_detail(tool, state)
+    assert UNPROVEN_NOTE in detail
+    assert "`" not in detail
+
+
 def test_uninstall_unknown_owner_names_no_manager() -> None:
     tool, state = _uninstall_state(owner="unknown")
     detail = uninstall_detail(tool, state)

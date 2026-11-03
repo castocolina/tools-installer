@@ -87,7 +87,6 @@ def _build_real_app(home: Path, *, path_value: str | None = None) -> tuple[Unifi
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -184,7 +183,6 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -248,7 +246,6 @@ async def test_policies_screen_toggles_omz_plugins_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -297,7 +294,6 @@ def _omz_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -380,7 +376,6 @@ async def test_policies_screen_never_syncs_terminals_for_ban_policy(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -475,7 +470,6 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -557,7 +551,6 @@ def _daemon_app(home: Path, *, installed_tools: dict[str, bool]) -> tuple[Unifie
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -610,7 +603,7 @@ async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list, ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
+            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
         ),
         policies=PolicyInputs(policies=[daemon, redirect]),
         initial_view="policies",
@@ -744,7 +737,6 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
@@ -797,7 +789,6 @@ def _mode_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),

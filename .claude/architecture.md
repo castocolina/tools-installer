@@ -400,10 +400,10 @@ exercises for its dim rows — to dim the row and make it non-selectable.
 because it resolves against a hypothetical Homebrew-present platform. A
 machine that merely has not bootstrapped Homebrew yet is never wrongly marked
 disabled; only a genuine `os` / `arch` / macOS-version incompatibility is.
-This is related to, not identical with, `classify_tools`'s
-`UninstallState.UNAVAILABLE` branch, which answers a narrower
-Uninstall-specific question after excluding removable/managed/installed
-tools. Do not conflate the two.
+This is related to, not identical with, `uninstall_group`'s
+`UninstallState.UNAVAILABLE` group (`installer/version_status.py`), which
+answers a narrower Uninstall-specific question from the published state.
+Do not conflate the two.
 
 This reconciles, rather than contradicts, the "Tier is a browsing label"
 reasoning that "a screen with no `Platform` must not make a judgement it

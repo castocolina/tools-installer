@@ -423,6 +423,8 @@ def plan_state(
     unconfigured: tuple[ConfigStep, ...] = (),
     method: Method | None = None,
     present: bool = True,
+    package: str | None = None,
+    removable: RemovalPlan | None = None,
 ) -> ToolState:
     """A published state for one tool with the health and owner a plan test needs.
 
@@ -434,7 +436,7 @@ def plan_state(
         tool_id=tool.id,
         owner=owner,
         method=method,
-        package=None,
+        package=package,
         current_version=None,
         confidence=confidence,
         shadowed=False,
@@ -466,7 +468,30 @@ def plan_state(
         broken=broken,
         misconfigured=misconfigured,
         notes=notes,
+        removable=removable,
     )
+
+
+def removable_state(tool: Tool, paths: Sequence[Path]) -> ToolState:
+    """An installer-owned, present tool whose removal `paths` are proven."""
+    return plan_state(tool, removable=RemovalPlan(tuple(paths), ()))
+
+
+def managed_state(tool: Tool, owner: Owner = "brew") -> ToolState:
+    """A present tool another manager owns: nothing here may remove it."""
+    return plan_state(tool, owner=owner, package=tool.id, method=tool.methods[0])
+
+
+def absent_state(tool: Tool) -> ToolState:
+    return plan_state(tool, health=Health.MISSING)
+
+
+UNAVAILABLE_PLATFORM = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+
+
+def unavailable_state(tool: Tool) -> ToolState:
+    """A state for a tool with no install method on `UNAVAILABLE_PLATFORM`."""
+    return pass_state(tool, platform=UNAVAILABLE_PLATFORM, present=False)
 
 
 Presence = Collection[str] | Callable[[Tool], bool]

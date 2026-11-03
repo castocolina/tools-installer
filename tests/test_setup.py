@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import importlib
 import inspect
 import io
@@ -723,52 +724,11 @@ def test_the_uninstall_view_reads_every_environment_row_live(
     assert inputs.has_path_block() is True
 
 
-def test_the_uninstall_rows_closure_re_reads_presence_live(
+def test_the_uninstall_view_reads_the_app_catalog_and_service(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The rows closure re-reads presence on every call rather than closing
-    over the startup `installed` map (D-06) -- the same live-re-read shape
-    `test_build_app_reresolve_reads_live_inventory_not_cache` already proves
-    for ownership, applied here to the row list `_build_app` hands the
-    Uninstall screen."""
-    _sandbox(monkeypatch, tmp_path)
-    tool = Tool(
-        id="fd",
-        name="fd",
-        category="search",
-        cmd="fd",
-        methods=(Method(kind="brew", params={"formula": "fd"}),),
-        tier="system",
-    )
-
-    def _one_tool(_registry: object) -> list[Tool]:
-        return [tool]
-
-    monkeypatch.setattr(setup, "load_tools", _one_tool)
-    present = {"fd": False}
-
-    def fake_is_installed(t: Tool) -> bool:
-        return present[t.id]
-
-    _bind_refresh(monkeypatch, VersionRefreshService, present=fake_is_installed)
-    seen = _capture_app(monkeypatch)
-    assert setup.main(["--uninstall"]) == 0
-    inputs = seen[0]["uninstall"]
-    assert isinstance(inputs, UninstallInputs)
-
-    first = inputs.rows()
-    assert first[0].state.value == "absent"  # not installed, no userspace artifact
-    present["fd"] = True  # brew installed it in another terminal, mid-session
-    second = inputs.rows()
-    assert second[0].state.value == "managed"  # now reads as manager-installed
-
-
-def test_the_uninstall_rows_closure_calls_presence_once_per_catalog_tool(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """No quadratic re-read (Round-1 review LOW, T-15.4-21): one `rows()` call
-    invokes the presence predicate exactly once per catalog tool, never once
-    per tool per row and never more."""
+    """The Uninstall view lists every catalog tool and reads the one service
+    the app holds; `UninstallInputs` carries no rows seam any more (D-16)."""
     _sandbox(monkeypatch, tmp_path)
     tools = [
         Tool(
@@ -779,29 +739,16 @@ def test_the_uninstall_rows_closure_calls_presence_once_per_catalog_tool(
             methods=(Method(kind="brew", params={"formula": f"tool-{i}"}),),
             tier="system",
         )
-        for i in range(5)
+        for i in range(3)
     ]
-
-    def _five_tools(_registry: object) -> list[Tool]:
-        return tools
-
-    monkeypatch.setattr(setup, "load_tools", _five_tools)
-    calls: list[str] = []
-
-    def counting_is_installed(t: Tool) -> bool:
-        calls.append(t.id)
-        return False
-
-    _bind_refresh(monkeypatch, VersionRefreshService, present=counting_is_installed)
-    seen = _capture_app(monkeypatch)
-    assert setup.main(["--uninstall"]) == 0
-    inputs = seen[0]["uninstall"]
-    assert isinstance(inputs, UninstallInputs)
-    calls.clear()
-
-    inputs.rows()
-    assert len(calls) == len(tools)
-    assert sorted(calls) == sorted(tool.id for tool in tools)
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
+    app = setup._build_app(tools, _platform())  # pyright: ignore[reportPrivateUsage]
+    screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(screen, UninstallScreen)
+    keys = {e.key for e in screen._entries}  # pyright: ignore[reportPrivateUsage]
+    assert {tool.id for tool in tools} <= keys
+    assert screen._version_refresh is built[0]  # pyright: ignore[reportPrivateUsage]
+    assert "rows" not in {field.name for field in dataclasses.fields(UninstallInputs)}
 
 
 def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
@@ -2272,14 +2219,16 @@ def _dnf_owned_rg() -> ManagerOwnership:
     )
 
 
-def test_build_app_uninstall_hint_changes_when_the_ownership_map_changes(
+def _uninstall_detail_of(screen: UninstallScreen, tool_id: str) -> str:
+    entries = screen._entries  # pyright: ignore[reportPrivateUsage]
+    return next(e.detail for e in entries if e.key == tool_id)
+
+
+def test_build_app_uninstall_detail_changes_when_the_published_state_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The rows closure's `owner_hint` binding re-reads the shared
-    `VersionRefreshService.ownership_of` map LIVE (D-05), the same
-    live-re-read shape `test_build_app_reresolve_reads_live_inventory_not_cache`
-    proves for `_reresolve_ownership`: a record populated into the map after
-    construction changes the NEXT `rows()` call's hint, with no rebuild."""
+    """The Uninstall screen reads the app's one service LIVE (D-05): a state
+    published after construction changes the NEXT repaint, with no rebuild."""
     _sandbox(monkeypatch, tmp_path)
     platform = _platform()
     tool = Tool(
@@ -2294,26 +2243,22 @@ def test_build_app_uninstall_hint_changes_when_the_ownership_map_changes(
     app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
     screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(screen, UninstallScreen)
-    rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
     service = built[0]
 
-    before = next(r for r in rows_predicate() if r.tool.id == "rg")
-    assert "package manager" in before.hint  # no ownership pass has run yet
+    assert "dnf remove" not in _uninstall_detail_of(screen, "rg")  # no pass has run yet
 
     service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
+    screen.state_refreshed()
 
-    after = next(r for r in rows_predicate() if r.tool.id == "rg")
-    assert "ripgrep" in after.hint
-    assert "dnf remove ripgrep" in after.hint
+    assert "dnf remove ripgrep" in _uninstall_detail_of(screen, "rg")
 
 
-def test_build_app_uninstall_hint_reverts_after_the_service_is_invalidated(
+def test_build_app_uninstall_detail_reverts_after_the_service_is_invalidated(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """D-05: once the shared service is invalidated, the closure's hint
-    reverts to the platform-filtered registry phrase -- the epoch-gated
-    `ownership_of` reports the pre-invalidation record as unavailable rather
-    than stale-but-present."""
+    """D-05: once the shared service is invalidated, the pre-invalidation state
+    is unavailable rather than stale-but-present: the row keeps its painted text
+    and its Health cell reads `…` until the next pass."""
     _sandbox(monkeypatch, tmp_path)
     platform = _platform()
     tool = Tool(
@@ -2328,17 +2273,16 @@ def test_build_app_uninstall_hint_reverts_after_the_service_is_invalidated(
     app = setup._build_app([tool], platform)  # pyright: ignore[reportPrivateUsage]
     screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(screen, UninstallScreen)
-    rows_predicate = screen._rows_predicate  # pyright: ignore[reportPrivateUsage]
     service = built[0]
 
     service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
-    before = next(r for r in rows_predicate() if r.tool.id == "rg")
-    assert "ripgrep" in before.hint
+    screen.state_refreshed()
+    assert "dnf remove ripgrep" in _uninstall_detail_of(screen, "rg")
 
     service.invalidate(reason="test")
-    after = next(r for r in rows_predicate() if r.tool.id == "rg")
-    assert "ripgrep" not in after.hint
-    assert "package manager" in after.hint
+    screen.state_refreshed()
+    entries = screen._entries  # pyright: ignore[reportPrivateUsage]
+    assert next(e.cells[2].plain for e in entries if e.key == "rg") == "…"
 
 
 def test_interactive_main_never_calls_run_wizard(
@@ -3962,36 +3906,6 @@ def test_install_binding_passes_present(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert len(recorded) == 1
     assert recorded[0]["present"] == built[0].is_present
     assert recorded[0]["checksum_policy"] == "continue"
-
-
-def test_uninstall_rows_and_hints_read_the_state(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _sandbox(monkeypatch, tmp_path)
-    tool = Tool(
-        id="rg",
-        name="ripgrep",
-        category="search",
-        cmd="rg",
-        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
-        tier="system",
-    )
-    monkeypatch.setattr(setup, "is_installed", _always_installed)
-    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
-    inputs = _wired(monkeypatch, [tool])["uninstall"]
-    assert isinstance(inputs, UninstallInputs)
-    service = built[0]
-    service.publish([pass_state(tool, platform=service.platform, ownership=_dnf_owned_rg())])
-    managed = next(row for row in inputs.rows() if row.tool.id == "rg")
-    assert managed.state.value == "managed"
-    assert "dnf remove ripgrep" in managed.hint
-    assert managed.manager is not None
-    service.publish(
-        [pass_state(tool, platform=service.platform, present=False, ownership=_dnf_owned_rg())]
-    )
-    absent = next(row for row in inputs.rows() if row.tool.id == "rg")
-    assert absent.state.value != "managed"
-    assert "ripgrep" not in absent.hint
 
 
 def test_update_service_reresolves_through_the_service(

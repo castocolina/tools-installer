@@ -53,10 +53,6 @@ from installer.locations import (
 )
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
-from installer.ownership import (
-    removal_hint,
-    removal_label,
-)
 from installer.platform import Platform, detect
 from installer.policy import (
     DAEMON_DEFAULT_WAIT_SECONDS,
@@ -88,13 +84,7 @@ from installer.status import is_installed
 from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import BUNDLES, applicable_bundles
 from installer.ui_common import BASE_VIEW, run_live
-from installer.uninstall import (
-    SweepResult,
-    ToolRow,
-    active_tweak_ids,
-    classify_tools,
-    reverse_dependencies,
-)
+from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
@@ -836,71 +826,6 @@ def _build_app(
     def _current_link_mode() -> str:
         return settings.link_mode if settings is not None else link_mode
 
-    # The catalog tool list never changes while the app runs -- only install
-    # state does -- so this is computed once, outside the rows closure below.
-    reverse_deps = reverse_dependencies(tools)
-
-    def _uninstall_owner_hint(tool: Tool) -> str | None:
-        # 15.4-05/D-05: reuse the catalog's ALREADY-COMPUTED ownership map
-        # rather than running a second probe pass every time this screen
-        # opens -- `version_refresh` is the same `VersionRefreshService`
-        # instance the catalog's Owner column reads (hoisted above
-        # `uninstall_inputs` below for exactly this binding), so one
-        # resolution pass now feeds two screens. `fallback_name` is the
-        # tool's own cmd, a prose TOOL identifier only -- `removal_hint`
-        # (task 1) never lets it stand in for a package name in a command,
-        # which is exactly the split-package defect (`ripgrep`/`rg`,
-        # `git-core`/`git`) the Round-3 review caught.
-        #
-        # Freshness has THREE sources, not one, now that plan 15.4-04 task 3
-        # made the protocol real: (1) `UnifiedApp._install_closed` re-enters
-        # the active catalog, whose refresh worker repopulates the map; (2)
-        # `UninstallInputs.invalidate` (bound below) makes `_apply_removal`
-        # invalidate this same service after a successful sweep, so every
-        # pre-removal record reports as unavailable through the epoch-gated
-        # `state_of`; and (3) a screen opened BEFORE that background
-        # refresh commits renders this fallback and then the
-        # published pass repaints it in place -- this
-        # closure is re-called on that repaint too, never a one-shot read.
-        # `state_of`'s two `None` cases (no pass has covered this tool, or a
-        # mutation invalidated its state) are deliberately one return value
-        # here: to this caller they mean the same thing, and both degrade to
-        # the platform-filtered registry phrase (task 2) rather than guessing.
-        state = version_refresh.state_of(tool.id)
-        if state is None:
-            return None
-        return removal_hint(state.ownership, tool.cmd)
-
-    def _uninstall_owner_label(tool: Tool) -> str | None:
-        # CR-03: the TERSE half of the same binding, off the SAME map and the
-        # same epoch gate, so the cell and the detail bar can never disagree
-        # about which record they are describing. `removal_label` is
-        # `removal_hint`'s declared counterpart in `installer/ownership.py`
-        # and answers `None` for exactly the records `removal_hint` is silent
-        # for, so this closure needs no second condition of its own.
-        state = version_refresh.state_of(tool.id)
-        if state is None:
-            return None
-        return removal_label(state.ownership)
-
-    def _uninstall_rows() -> list[ToolRow]:
-        """Re-read presence on every call (D-06): a construction-time
-        snapshot goes stale the moment this session installs or removes a
-        tool, which Phase 13's live in-TUI install execution made routine.
-        Presence is the published state's (D-04), probed only while no pass
-        has settled the tool; `reverse_deps` above is the one piece that
-        does not need re-computing per call."""
-        installed_now = {tool.id: version_refresh.is_present(tool) for tool in tools}
-        return classify_tools(
-            tools,
-            _DEFAULT_BIN_DIR,
-            installed=installed_now,
-            platform=platform,
-            reverse_deps=reverse_deps,
-            owner_hint=_uninstall_owner_hint,
-            owner_label_hint=_uninstall_owner_label,
-        )
-
     # The Policies view offers what applies HERE; the teardown sweeps every
     # bundle. A bundle whose `platforms` tuple changed between installer
     # versions, or an rc file carried between machines, would otherwise leave a
@@ -959,11 +884,11 @@ def _build_app(
         from any of them is corrected the same way."""
         return _sync_terminals(platform)
 
-    # Every field is a predicate, not its result: the Policies and Doctor
-    # views mutate the three environment fields live in this same session,
-    # and this screen's own removal action changes what `rows` returns next
-    # -- the Uninstall view re-evaluates all four on entry (see
-    # UninstallInputs). `invalidate` mirrors `UpdateService`'s own seam
+    # The three environment fields are predicates, not their results: the
+    # Policies and Doctor views mutate them live in this same session, and the
+    # Uninstall view re-reads them on entry and on every publish (see
+    # UninstallInputs). The tool rows are not an input: the view builds them
+    # from the app's one published state. `invalidate` mirrors `UpdateService`'s own seam
     # (below): a successful removal falsifies the shared version/ownership
     # data exactly like an install or an update does, and this closure is
     # what closes that hole (D-05). `terminal_sync` is the SAME closure
@@ -972,7 +897,6 @@ def _build_app(
     # construction so the reference resolves at statement-execution time,
     # not only at call time.
     uninstall_inputs = UninstallInputs(
-        rows=_uninstall_rows,
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
         has_path_block=lambda: has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
