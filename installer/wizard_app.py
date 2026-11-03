@@ -25,6 +25,7 @@ from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision, path_writer_lines_for
@@ -58,7 +59,7 @@ from installer.policy import (
     move_link_mode,
 )
 from installer.rcclean import PathWriterLine, group_writer_lines
-from installer.render import guidance_text
+from installer.render import guidance_text, outcome_detail_text, outcome_word
 from installer.resolve import UnavailableReason
 from installer.run import CommandError
 from installer.sanitize import sanitize_log_line
@@ -101,8 +102,7 @@ from installer.version_status import (
 class UninstallInputs:
     """Everything the UninstallScreen needs besides the published tool state:
     the active ban names, whether a managed PATH block exists, the active
-    shell-tweak ids, the live removal closure bound by the composition root, and
-    an optional post-removal invalidate seam.
+    shell-tweak ids, and the live removal closure bound by the composition root.
 
     `ban_names`, `has_path_block` and `tweak_ids` are PREDICATES, not their
     results, because each is mutated live by another view in the same process:
@@ -118,7 +118,6 @@ class UninstallInputs:
     has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
-    invalidate: Callable[[], Any] | None = None
     # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
     # direct `u` update, unattended installation, the CLI uninstall route,
     # and interactive ExecuteScreen close already reuse. Called from
@@ -884,6 +883,7 @@ _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
+_REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 
 
 def _has_daemon_id(ids: tuple[str, ...]) -> bool:
@@ -947,7 +947,6 @@ class UninstallScreen(AppScreen):
         self._ban_names_of = inputs.ban_names
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
-        self._invalidate = inputs.invalidate
         # Evaluated THROUGH run_live (.claude/architecture.md rule 3), not
         # bare: construction happens outside the nav path `enter_view` guards,
         # so a bare call would let an OSError from the filesystem reads escape
@@ -965,13 +964,17 @@ class UninstallScreen(AppScreen):
         self._terminal_sync = inputs.terminal_sync
         self.applied = False
         self.error: str | None = None
+        # tool id -> its last `remove_failed` outcome; kept across navigation and
+        # publishes, dropped when a removal naming the tool starts or its state
+        # shows nothing left (see `_with_failure`).
+        self._failed_lines: dict[str, RowOutcome] = {}
         self._entries = self._build_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
         self._browser: ToolBrowser[_UninstallEntry] = ToolBrowser(self._adapter())
 
     # -- entry construction ------------------------------------------------
     def _build_entries(self) -> list[_UninstallEntry]:
-        entries = [self._tool_entry(tool) for tool in self._tools]
+        entries = [self._with_failure(self._tool_entry(tool), tool) for tool in self._tools]
         if self._ban_names:
             entries.append(self._ban_entry())
         if self._has_path_block:
@@ -1016,6 +1019,34 @@ class UninstallScreen(AppScreen):
         )
         self._painted[tool.id] = entry
         return entry
+
+    def _with_failure(self, entry: _UninstallEntry, tool: Tool) -> _UninstallEntry:
+        """The row of a tool whose last removal failed: the failed word and the
+        reason ahead of what the state says. A tool whose state shows nothing left
+        to retry or explain (gone, no `removable`, no `yourself`) drops its line."""
+        outcome = self._failed_lines.get(tool.id)
+        if outcome is None:
+            return entry
+        state = self._state_of(tool)
+        gone = state is not None and uninstall_group(state) is UninstallState.ABSENT
+        if (
+            gone
+            and state is not None
+            and not (state.removable.removable or state.removable.yourself)
+        ):
+            del self._failed_lines[tool.id]
+            return entry
+        word, style = outcome_word(outcome)
+        detail = f"{word} — {outcome_detail_text(outcome)}"
+        if not gone:
+            detail += f" · {entry.detail}"
+        elif state is not None and state.removable.yourself:
+            detail += (
+                f" · remove it yourself: {', '.join(str(p) for p in state.removable.yourself)}"
+            )
+        cells = [*entry.cells]
+        cells[5] = Text(word, style=style)
+        return replace(entry, cells=cells, detail=sanitize_log_line(detail))
 
     def _unknown_entry(self, tool: Tool, state: ToolState | None) -> _UninstallEntry:
         """A tool whose state is not known yet: what it was last painted with,
@@ -1343,6 +1374,8 @@ class UninstallScreen(AppScreen):
         if self.app.refuse_if_mutating(self):
             return
         self.app.begin_mutation(MutationHolder.REMOVAL)
+        for tool in decision.tools:
+            self._failed_lines.pop(tool.id, None)
         if self._version_refresh is not None and decision.tools:
             self._version_refresh.mark_pending([tool.id for tool in decision.tools])
         self._repaint()
@@ -1407,11 +1440,13 @@ class UninstallScreen(AppScreen):
             except Exception as exc:
                 error = first_line(exc)
             # Also after a crash: only `invalidate` clears the pending ids (D-09).
-            if self._invalidate is not None and decision.tools:
-                try:
-                    self._invalidate()
-                except Exception as exc:
-                    invalidate_error = f"version cache invalidation failed: {first_line(exc)}"
+            service = self._version_refresh
+            if service is not None and decision.tools:
+                _, cache_error = run_live(
+                    lambda: service.invalidate(reason="uninstall run finished")
+                )
+                if cache_error is not None:
+                    invalidate_error = f"version cache invalidation failed: {cache_error}"
         finally:
             self.post_message(RemovalFinished(decision, swept, error, invalidate_error))
 
@@ -1426,7 +1461,7 @@ class UninstallScreen(AppScreen):
                 f"Uninstall failed: {self.error}. Check permissions, then press enter.",
                 "error",
             )
-            self._request_pass_after(message.decision)
+            self._request_pass()
             return
         self.applied = True
         outcomes = [
@@ -1436,7 +1471,18 @@ class UninstallScreen(AppScreen):
             RowOutcome(PlanRow(tool_id, Disposition.REMOVE, ""), "remove_failed", detail=line)
             for tool_id, line in swept.remove_failed
         ]
+        for tool_id, line in swept.remove_failed:
+            self._failed_lines[tool_id] = RowOutcome(
+                PlanRow(tool_id, Disposition.REMOVE, ""), "remove_failed", detail=line
+            )
+        self._browser.selected -= set(swept.removed)
+        self._repaint()
         summary_parts = [summary_counts(outcomes)] if outcomes else []
+        if swept.remove_failed:
+            summary_parts.append(
+                f"{len(swept.remove_failed)} remove failed."
+                " Fix the cause and press enter to try again."
+            )
         summary_parts.append(self._applied_summary(message.decision, swept))
         if message.invalidate_error is not None:
             summary_parts.append(message.invalidate_error)
@@ -1450,16 +1496,14 @@ class UninstallScreen(AppScreen):
         terminal_warning = terminal_sync_warning(self._terminal_sync)
         if terminal_warning:
             summary_parts.append(terminal_warning)
-        self.status.set(
-            multiline_summary(summary_parts), "warn" if terminal_warning is not None else "ok"
-        )
-        self._request_pass_after(message.decision)
+        severity = "error" if swept.remove_failed else "warn" if terminal_warning else "ok"
+        self.status.set(multiline_summary(summary_parts), severity)
+        self._request_pass()
 
-    def _request_pass_after(self, decision: UninstallDecision) -> None:
-        """D-05: a removal that named tools ends with one app pass; the publish
-        re-renders this view. An environment-only sweep changes nothing a tool
-        state describes, so it asks for none (21-14 revisits that path)."""
-        if decision.tools:
+    def _request_pass(self) -> None:
+        """D-05: every removal, environment-only ones included, ends with one app
+        pass; the publish re-renders this view. A quit in progress exits instead."""
+        if not self.app.quitting:
             self.app.request_refresh()
 
 
@@ -2516,6 +2560,8 @@ class UnifiedApp(App[list[str] | None]):
         # construction site that never wires daemon_default at all.
         self.daemon_default_in_flight: bool = self._daemon_default is not None
         self._mutation_holder: MutationHolder | None = None
+        # True once a quit waits on a running removal: no follow-up pass then.
+        self.quitting = False
 
     @property
     def mutation_in_flight(self) -> bool:
@@ -3002,8 +3048,34 @@ class UnifiedApp(App[list[str] | None]):
         # under the NavScreen palette; ctrl+c (action_hard_abort) stays unguarded.
         if not self._navigable():
             return
-        self.exit(None)
+        self._quit()
 
     def action_hard_abort(self) -> None:
         # The hard quit (ctrl+c): always exits, including on top of the palette.
+        self._quit()
+
+    def _quit(self) -> None:
+        if self._mutation_holder is MutationHolder.REMOVAL:
+            self._exit_after_removal()
+        else:
+            self.exit(None)
+
+    def _exit_after_removal(self) -> None:
+        """Never cut a delete: say so, then exit once the removal worker returns.
+        With a modal on top the copy is queued for the next visible view. The wait
+        runs on its own worker, so the key handler returns at once and a shutdown
+        cancels the wait instead of hanging on it."""
+        self.quitting = True
+        screen = self._visible_app_screen()
+        if screen is not None:
+            screen.status.set(_REMOVAL_QUIT_WAIT, "warn")
+        else:
+            self._pending_warnings.append(_REMOVAL_QUIT_WAIT)
+        removals = [w for w in self.workers if w.group == "uninstall-removal"]
+        self.run_worker(self._exit_when_done(removals), group="quit-wait", exit_on_error=False)
+
+    async def _exit_when_done(self, removals: Sequence[Worker[None]]) -> None:
+        for worker in removals:
+            with contextlib.suppress(WorkerFailed, WorkerCancelled):
+                await worker.wait()
         self.exit(None)

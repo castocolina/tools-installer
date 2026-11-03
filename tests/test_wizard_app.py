@@ -85,7 +85,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
-from tests.screen_family import settle
+from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,
     HeldRefreshService,
@@ -169,7 +169,6 @@ def _uninstall_inputs(
     has_path_block: bool | Callable[[], bool] = False,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
-    invalidate: Callable[[], object] | None = None,
     terminal_sync: Callable[[], str | None] | None = None,
 ) -> UninstallInputs:
     """The environment inputs keep the plain-value convenience: they are
@@ -179,7 +178,6 @@ def _uninstall_inputs(
         has_path_block=_predicate(has_path_block),
         remove=remove,
         tweak_ids=_predicate(tweak_ids),
-        invalidate=invalidate,
         terminal_sync=terminal_sync,
     )
 
@@ -1181,19 +1179,19 @@ async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
         assert screen.applied is True
 
 
-async def test_uninstall_apply_invalidates_the_shared_data_once_on_success() -> None:
+async def test_uninstall_apply_invalidates_the_shared_data_once_on_success(
+    tmp_path: Path,
+) -> None:
     """D-05: a same-session removal falsifies the shared version/ownership
     data exactly like install and update already do -- the seam call is
     exactly once, after the sweep succeeded."""
     captured: list[UninstallDecision] = []
-    invalidations: list[None] = []
-    rows = _rg_rows()
-    app = _app(
-        cases=rows,
-        uninstall=_uninstall_inputs(
-            remove=_recorder(captured),
-            invalidate=lambda: invalidations.append(None),
-        ),
+    service = frozen_service(tmp_path)
+    app = _version_app(
+        [_tool("rg")],
+        service,
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1204,22 +1202,20 @@ async def test_uninstall_apply_invalidates_the_shared_data_once_on_success() -> 
         await pilot.press("enter")
         await settle(app, pilot)
         assert screen.applied is True
-        assert len(invalidations) == 1
+        assert len(service.invalidations) == 1
 
 
-async def test_uninstall_apply_invalidates_after_a_failed_sweep() -> None:
+async def test_uninstall_apply_invalidates_after_a_failed_sweep(tmp_path: Path) -> None:
     """The removal marked its tools pending (D-09) and only `invalidate` clears
     that set, so a failed `run_live` sweep still calls the seam once."""
-    invalidations: list[None] = []
+    service = frozen_service(tmp_path)
 
     def boom(_decision: UninstallDecision) -> SweepResult:
         raise OSError("permission denied")
 
-    inputs = _uninstall_inputs(
-        remove=boom,
-        invalidate=lambda: invalidations.append(None),
+    app = _version_app(
+        [_tool("rg")], service, cases=_rg_rows(), uninstall=_uninstall_inputs(remove=boom)
     )
-    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("space")
@@ -1228,22 +1224,22 @@ async def test_uninstall_apply_invalidates_after_a_failed_sweep() -> None:
         await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is False
-        assert invalidations == [None]
+        assert len(service.invalidations) == 1
 
 
-async def test_uninstall_apply_survives_a_raising_invalidate_seam() -> None:
+async def test_uninstall_apply_survives_a_raising_invalidate(tmp_path: Path) -> None:
     """Mirrors on_install_run_finished's own both-directions contract: a
     raising seam never flips a completed removal into a reported failure,
     and it is never swallowed -- it is appended to the status line."""
     captured: list[UninstallDecision] = []
 
-    def boom_invalidate() -> None:
-        raise RuntimeError("cache write refused")
-
-    rows = _rg_rows()
-    app = _app(
-        cases=rows,
-        uninstall=_uninstall_inputs(remove=_recorder(captured), invalidate=boom_invalidate),
+    service = frozen_service(tmp_path)
+    service.invalidate_error = OSError("cache write refused")
+    app = _version_app(
+        [_tool("rg")],
+        service,
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1484,22 +1480,19 @@ async def test_env_predicate_failure_during_a_background_repaint_never_escapes()
         assert "rc file vanished" in screen.status.text
 
 
-async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
+async def test_an_env_lever_only_sweep_does_not_invalidate_ownership(tmp_path: Path) -> None:
     """WR-01 (15.4-REVIEW.md): `_apply_removal` called `invalidate`
     unconditionally after any successful sweep -- including one that removed
     only the pip/npm ban or the PATH block and no tool at all. That degrades
     every managed row's attribution to the generic registry phrase in
     exchange for nothing: an env lever is not a mutation of any tool's
     ownership."""
-    invalidated: list[int] = []
+    service = frozen_service(tmp_path)
     captured: list[UninstallDecision] = []
-    app = _app(
-        cases=[],
-        uninstall=_uninstall_inputs(
-            ban_names=["pip"],
-            remove=_recorder(captured),
-            invalidate=lambda: invalidated.append(1),
-        ),
+    app = _version_app(
+        [],
+        service,
+        uninstall=_uninstall_inputs(ban_names=["pip"], remove=_recorder(captured)),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1511,7 +1504,7 @@ async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
         assert captured and captured[0].remove_ban is True
-        assert invalidated == []
+        assert service.invalidations == ()
 
 
 async def _remove_rg(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> UninstallScreen:
@@ -1532,7 +1525,6 @@ async def test_removal_requests_the_app_pass_after_invalidate(
     """D-05/D-06: the removal asks the one app owner for its pass after the
     invalidate, and the Uninstall view re-renders on that publish."""
     service = frozen_service(tmp_path)
-    events: list[str] = []
     published: list[int] = []
     original = UninstallScreen.state_refreshed
 
@@ -1542,14 +1534,11 @@ async def test_removal_requests_the_app_pass_after_invalidate(
 
     monkeypatch.setattr(UninstallScreen, "state_refreshed", spy)
 
-    def invalidate() -> None:
-        events.append(f"invalidate@{service.passes}")
-
     app = _version_app(
         [_tool("rg")],
         service,
         cases=_rg_rows(),
-        uninstall=_uninstall_inputs(remove=_recorder([]), invalidate=invalidate),
+        uninstall=_uninstall_inputs(remove=_recorder([])),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1558,7 +1547,7 @@ async def test_removal_requests_the_app_pass_after_invalidate(
         published.clear()
         await _remove_rg(app, pilot)
         await settle(app, pilot)
-        assert events == [f"invalidate@{launch_passes}"]
+        assert service.invalidations == (launch_passes,)
         assert service.passes == launch_passes + 1
         assert published and published[-1] == launch_passes + 1
 
@@ -1588,15 +1577,12 @@ async def test_uninstall_rerenders_when_a_pass_publishes(tmp_path: Path) -> None
 
 async def test_removal_requests_a_pass_even_when_invalidate_raises(tmp_path: Path) -> None:
     service = frozen_service(tmp_path)
-
-    def invalidate() -> None:
-        raise RuntimeError("disk full")
-
+    service.invalidate_error = OSError("disk full")
     app = _version_app(
         [_tool("rg")],
         service,
         cases=_rg_rows(),
-        uninstall=_uninstall_inputs(remove=_recorder([]), invalidate=invalidate),
+        uninstall=_uninstall_inputs(remove=_recorder([])),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1608,45 +1594,13 @@ async def test_removal_requests_a_pass_even_when_invalidate_raises(tmp_path: Pat
         assert service.passes == launch_passes + 1
 
 
-async def test_an_environment_only_removal_requests_no_pass(tmp_path: Path) -> None:
-    """No tool named, no invalidate: nothing ownership describes changed, so the
-    removal asks for no pass here (21-14 revisits the environment-only path)."""
-    service = frozen_service(tmp_path)
-    app = _version_app(
-        [],
-        service,
-        uninstall=_uninstall_inputs(
-            ban_names=["pip"],
-            remove=_recorder([]),
-            invalidate=lambda: None,
-        ),
-        initial_view="uninstall",
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await settle(app, pilot)
-        launch_passes = service.passes
-        await pilot.press("space")  # the ban pseudo-row is the only entry
-        await pilot.press("enter")
-        await pilot.press("enter")  # confirm
-        await settle(app, pilot)
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        assert screen.applied is True
-        assert service.passes == launch_passes
-
-
-async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
-    """The seam is optional -- every existing construction site (and the
-    `--uninstall` direct start, which builds no version service) leaves it
-    `None`, and a removal there must behave exactly as before."""
+async def test_a_removal_with_no_refresh_service_still_completes() -> None:
+    """The service is optional -- the `--uninstall` direct start builds none, and
+    a removal there must complete with nothing to invalidate."""
     captured: list[UninstallDecision] = []
-    invalidated: list[int] = []
     app = _app(
-        cases=_rg_rows(),
-        uninstall=_uninstall_inputs(
-            remove=_recorder(captured),
-            invalidate=lambda: invalidated.append(1),
-        ),
+        tools=[],
+        uninstall=_uninstall_inputs(ban_names=["pip"], remove=_recorder(captured)),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1657,7 +1611,7 @@ async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
-        assert invalidated == [1]
+        assert captured and captured[0].remove_ban is True
 
 
 def test_state_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
@@ -6904,7 +6858,9 @@ async def test_post_update_status_for_brew_also_comes_from_refresh(tmp_path: Pat
         assert "14.1.1" in cell.plain
 
 
-async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> None:
+async def test_epoch_guard_drops_stale_refresh_after_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     tool = _brew_rg()
     ownership = _owned(tool, "brew", package="ripgrep")
     started = threading.Event()
@@ -6938,7 +6894,7 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
     def upgrade(_cmd: list[str]) -> None:
         service.publish([_frozen_state(tool, service.platform, ownership=ownership, status=post)])
 
-    service.refresh = latched_refresh  # type: ignore[method-assign]
+    monkeypatch.setattr(service, "refresh", latched_refresh)
     updates = UpdateService(
         platform=service.platform,
         runner=upgrade,
@@ -6952,7 +6908,7 @@ async def test_epoch_guard_drops_stale_refresh_after_update(tmp_path: Path) -> N
     app = _update_app([tool], service=service, updates=updates)
     async with app.run_test(size=(100, 30)) as pilot:
         assert started.wait(timeout=5)
-        service.refresh = frozen_refresh  # type: ignore[method-assign]
+        monkeypatch.setattr(service, "refresh", frozen_refresh)
         await pilot.press("u")
         await _settle_update(app, pilot)
         await settle(app, pilot)
@@ -7414,10 +7370,10 @@ async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Pa
         await pilot.press("a")
         await pilot.press("enter")
         await pilot.press("enter")
-        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        assert screen.applied is True
+        # The removal's own pass queues behind the held one: wait on the summary.
+        await wait_until(pilot, lambda: screen.applied)
         applied_status = screen.status.text
         release.set()
         await settle(app, pilot)

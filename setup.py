@@ -888,10 +888,8 @@ def _build_app(
     # Policies and Doctor views mutate them live in this same session, and the
     # Uninstall view re-reads them on entry and on every publish (see
     # UninstallInputs). The tool rows are not an input: the view builds them
-    # from the app's one published state. `invalidate` mirrors `UpdateService`'s own seam
-    # (below): a successful removal falsifies the shared version/ownership
-    # data exactly like an install or an update does, and this closure is
-    # what closes that hole (D-05). `terminal_sync` is the SAME closure
+    # from the app's one published state, and the removal worker invalidates that
+    # state through the app's own service (D-05). `terminal_sync` is the SAME closure
     # `omz_plugins_policy` below and `UnifiedApp`'s own `terminal_sync` kwarg
     # are bound with (D-01/15.6-06 Task 3) -- defined just above this
     # construction so the reference resolves at statement-execution time,
@@ -908,7 +906,6 @@ def _build_app(
             daemon_policy=daemon,
             extra_policies=redirects,
         ),
-        invalidate=lambda: version_refresh.invalidate(reason="uninstall run finished"),
         terminal_sync=_sync_omz_terminals,
     )
 

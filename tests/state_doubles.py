@@ -246,10 +246,20 @@ class FrozenStateService(VersionRefreshService):
     """A machine that never changes: `publish` sets the states, and a refresh
     re-publishes them at the current epoch without probing anything.
 
-    `passes` counts refreshes; `queued` states join the next one, then empty."""
+    `passes` counts refreshes; `queued` states join the next one, then empty.
+    `invalidations` holds the `passes` count at each `invalidate` call, and
+    `invalidate_error` makes the next calls raise after recording."""
 
     passes: int = 0
     queued: tuple[ToolState, ...] = ()
+    invalidations: tuple[int, ...] = ()
+    invalidate_error: Exception | None = None
+
+    def invalidate(self, *, reason: str) -> int:
+        self.invalidations = (*self.invalidations, self.passes)
+        if self.invalidate_error is not None:
+            raise self.invalidate_error
+        return super().invalidate(reason=reason)
 
     def publish(self, states: Iterable[ToolState]) -> None:
         with self._lock:
