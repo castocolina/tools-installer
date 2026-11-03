@@ -2590,6 +2590,56 @@ async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
             service.release.set()
 
 
+async def test_an_unresolved_daemon_apply_still_supersedes_an_in_flight_job_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # T-21-52: the apply's own live read fails (None), so the row keeps its
+    # state; a read begun before the apply must still not repaint its answer.
+    probe = _ArmedProbe(first=True, later=False)
+    release_mutation = threading.Event()
+
+    def held_default() -> bool:
+        if not release_mutation.wait(timeout=10):
+            raise TimeoutError("the mutation was never released")
+        return True
+
+    service = held_service(tmp_path, [])
+    app, _ = _policy_app(
+        tmp_path,
+        [_job_policy(tmp_path, probe)],
+        HeldRemover(),
+        service=service,
+        daemon_default=held_default,
+        daemon_default_policy_id="jobstate",
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: _state_text(app, "jobstate") == "○ [off]")
+            screen = app.view("policies")
+
+            def unresolved(_policy_id: str) -> bool | None:
+                return None
+
+            monkeypatch.setattr(screen, "live_state", unresolved)
+            spy = _SpiedReads(screen, monkeypatch)
+            probe.armed = True
+            await app.show_view("system")
+            await app.show_view("policies")
+            await wait_until(pilot, probe.held.is_set)
+            release_mutation.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+            probe.release.set()
+            await wait_until(
+                pilot, lambda: any(m.states == {"jobstate": (True, False)} for m in spy.seen)
+            )
+            await pilot.pause()
+            assert _state_text(app, "jobstate") == "○ [off]"
+        finally:
+            release_mutation.set()
+            probe.release.set()
+            service.release.set()
+
+
 # -- Doctor joins the screen family (plan 21-19) --
 
 _SMOKE = (
