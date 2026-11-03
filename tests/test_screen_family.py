@@ -2231,6 +2231,8 @@ async def test_a_smoke_failure_reaches_the_tier_and_doctor_through_the_state(
         state = service.state_of("mmdc")
         assert state is not None and state.health is Health.BROKEN
         assert f"mmdc: {_SMOKE.format(reason='exit 1')}" in str(_doctor_text(app))
+        # The tier repaints on its next entry (D-06: only the visible view re-renders).
+        await app.show_view("system")
         assert "!" in _tier_marks(app, "mmdc")
 
 
