@@ -5665,3 +5665,39 @@ def test_invalidate_clears_pending_and_the_next_pass_republishes(tmp_path: Path)
     state = service.state_of("rg")
     assert state is not None
     assert state.generation == epoch
+
+
+def test_record_evidence_reports_change(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    assert service.record_evidence("rg", broken=("boom",)) is True
+    assert service.record_evidence("rg", broken=("boom",)) is False
+    assert service.record_evidence("rg") is True
+    assert service.record_evidence("rg") is False
+
+
+def test_evidence_reaches_the_next_pass(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    tools = _pending_tools()
+    note = "pnpm is holding a, b in separate global installs"
+    service.record_evidence("rg", broken=("smoke failed",))
+    service.record_evidence("fd", notes=(note,))
+    states = _settled_states(service, tools)
+    assert states["rg"].health is Health.BROKEN
+    assert "smoke failed" in states["rg"].reasons
+    assert note in states["fd"].reasons
+    assert states["fd"].health is not Health.BROKEN
+
+
+def test_evidence_is_read_under_the_lock_as_a_snapshot(tmp_path: Path) -> None:
+    holder: list[VersionRefreshService] = []
+
+    def probe(_argv: list[str]) -> str | None:
+        holder[0].record_evidence("rg", broken=("late",))
+        return "1.0.0"
+
+    service = _pending_service(tmp_path, probe)
+    holder.append(service)
+    first = _settled_states(service, _pending_tools())
+    assert "late" not in first["rg"].reasons
+    service.invalidate(reason="t")
+    assert "late" in _settled_states(service, _pending_tools())["rg"].reasons

@@ -941,6 +941,8 @@ class VersionRefreshService:
         self._states: dict[str, ToolState] = {}
         # Ids a removal is changing: hidden from `state_of` until the next epoch.
         self._pending_ids: set[str] = set()
+        # Doctor findings per tool id: (broken, notes), read by every pass (D-13).
+        self._evidence: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
         self._skills: dict[str, SkillHostStatus] = {}
         # Per pack: seq and scan of the pass that published its state;
         # `refresh_skills` rebuilds each pack with its own (RR-03).
@@ -1129,6 +1131,23 @@ class VersionRefreshService:
         with self._lock:
             self._pending_ids |= set(tool_ids)
             self._states = {k: v for k, v in self._states.items() if k not in self._pending_ids}
+
+    def record_evidence(
+        self, tool_id: str, *, broken: tuple[str, ...] = (), notes: tuple[str, ...] = ()
+    ) -> bool:
+        """Store Doctor findings for `tool_id`; True when the stored value changed.
+
+        Empty evidence deletes the entry. The next pass reads it (D-13).
+        """
+        new = (broken, notes) if broken or notes else None
+        with self._lock:
+            if self._evidence.get(tool_id) == new:
+                return False
+            if new is None:
+                del self._evidence[tool_id]
+            else:
+                self._evidence[tool_id] = new
+            return True
 
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the manager snapshot under the merge lock.
@@ -1633,6 +1652,7 @@ class VersionRefreshService:
         platform = replace(self._platform, has_brew=self._which("brew") is not None)
         with self._lock:
             self._platform = platform
+            evidence = dict(self._evidence)
         # L-19-01: `uv tool dir`, asked once per pass and only when uv is on PATH.
         uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
         now = self._now()
@@ -1714,6 +1734,7 @@ class VersionRefreshService:
                     # No receipt, adoption or layout proves it (review C2-M2).
                     receipt_notes += (UNPROVEN_NOTE,)
                 facts = config.get(tool.id, _NO_FACTS)
+                found_broken, found_notes = evidence.get(tool.id, ((), ()))
                 states[tool.id] = tool_state(
                     tool,
                     generation=started_epoch,
@@ -1724,12 +1745,13 @@ class VersionRefreshService:
                     version=status,
                     removable=removable,
                     receipt=receipt,
-                    broken=broken,
+                    broken=broken + found_broken,
                     misconfigured=facts.misconfigured,
                     unconfigured=facts.steps,
                     notes=ownership_notes(tool, ownership, platform)
                     + version_notes(tool, status, ownership, present=present)
                     + receipt_notes
+                    + found_notes
                     + (facts.unchecked if present else ()),
                 )
             if would_fetch:
