@@ -3427,6 +3427,41 @@ async def test_a_removal_result_lands_on_the_visible_view(tmp_path: Path):
             remover.release.set()
 
 
+@pytest.mark.parametrize(
+    ("make_remover", "expected"),
+    [
+        (
+            lambda: HeldRemover(SweepResult(remove_failed=(("fd", "denied"),))),
+            "1 remove failed. Fix the cause, then open Uninstall and press enter to try again.",
+        ),
+        (
+            lambda: HeldRemover(raising=RuntimeError("boom")),
+            "Uninstall failed: boom. Check permissions, then open Uninstall and press enter.",
+        ),
+    ],
+    ids=["remove-failed", "worker-failed"],
+)
+async def test_a_removal_failure_shown_elsewhere_names_uninstall(
+    tmp_path: Path, make_remover: Callable[[], HeldRemover], expected: str
+):
+    """C-28 follow-up: a failure that lands on another view says where enter
+    retries it."""
+    remover = make_remover()
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "fd")
+            await wait_until(pilot, remover.started.is_set)
+            await app.show_view("system")
+            remover.release.set()
+            await settle(app, pilot)
+            assert expected in app.catalog.status_text.splitlines()
+        finally:
+            remover.release.set()
+
+
 async def test_a_job_toggle_result_lands_on_the_visible_view(tmp_path: Path):
     release = threading.Event()
 
