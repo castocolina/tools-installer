@@ -66,8 +66,27 @@ fixed=30 by_design=1 backlog=3
 - **C-31.** The update worker calls `UpdateService.end()` before it posts the `ToolUpdated` message that releases the app lock. The install run holds `INSTALL_RUN`. So `refuse_if_mutating` always refuses first, and `begin()` stays only as a bare guard. The parametrized `in_flight` case went too: it faked a busy service with no lock held, which cannot happen.
 - **C-34.** The fallback is now `not removed` for `remove_failed` and stays `no method succeeded` for `failed`.
 
+## RR round (re-review of the fix loop, iteration 2)
+
+**Source:** `21-REVIEW.md`, section "Re-review of the fix loop (182e876..HEAD)", RR-01..RR-06, plus the layout and copy notes from the 2026-11-03 "Phase 21 tmux TUI check" ledger row. Each fix has a RED test commit followed by its fix commit. `make validate` and `make test` exited 0 on the tree of every fix commit; the last run passed 5233 tests (4 skipped). Gates ran in the main checkout, with no worktree.
+
+| ID | Finding | Status | Commits |
+|----|---------|--------|---------|
+| RR-01 | Textual's inherited `ctrl+q` exits during a removal and abandons the daemon delete thread | fixed | b27b26c (RED), b10354d. `UnifiedApp.action_quit` routes to `action_abort`, so `ctrl+q` is the soft quit like `q`: it waits during a removal, a second `ctrl+q` still waits, and under the palette it does nothing. A second `ctrl+c` still forces the exit with the warning (D-10 as amended) |
+| RR-02 | A queued state line drained by `show_view` or an install close is never retracted | fixed | d03c3b8 (RED), a21c0bd. Both drains share `_flush_pending_warnings`, which re-homes the queued line onto the view. `_state_line` now records what a retraction restores, so a warning drained beside the line stays |
+| RR-03 | An unreachable user manager overwrites every Policies result on the next render | fixed | 0caec27 (RED), f9095ac. Both read paths go through `_show_read_error`, which writes over an empty status or the screen's own earlier error only |
+| RR-04 | The Doctor guard chain end renders twice, so the live state is read twice | fixed | 487b0cc (RED), 1ed041e. `_finish_guard_chain` only rescans and requests the pass. The resume after the last modal renders Doctor once (C-08) |
+| RR-05 | A whole-tool refusal names unchanged paths; a grown plan is reported `removed` | fixed | 9fd6478 (RED), 8d4afab. Only dropped or newly added removable paths are named, and a grown plan is a refusal that keeps the receipt |
+| RR-06 | A deferred first-run link pick gives no feedback | fixed | d1c2b95 (RED), a0c5e8b. The target view shows `Link mode {value} will be saved when the background apply finishes.`, and the move's own status replaces it |
+| TUI-1 | Tab bar clipped (`[6] Policie`; `[6] Polic` on Doctor) | backlog, pre-existing | At 390f464 (Phase 21 base) the 80x20 render of row 0 is identical on every view. On Doctor the screen's scrollbar takes columns 78-79 at both commits |
+| TUI-2 | Doctor: the card scroll moves the tab bar and badge, the scrollbar thumb is drawn over the footer, and there is no keyboard scroll | backlog, pre-existing | Same geometry at 390f464 and HEAD: virtual size 78x29, `max_scroll_y` 9, screen scrollbar region x=78, h=20 (rows 0-19, header and footer included), nothing focused, and `pagedown`/`down`/`end` leave `scroll_y` at 0. 9813396 only turns row 18 from card content into the docked StatusLine; it changes neither the scroll range nor the scrollbar |
+| TUI-3 | Uninstall mode badge cut (`enter removes marked items (you'll`) | backlog, pre-existing | Row 2 renders identically at 390f464 |
+| TUI-4 | Uninstall cursor opens on a managed or section row, not the removable one | fixed (introduced by Phase 21) | 313a3fc (RED), 32c1d47. At 390f464, Uninstall read its rows live at construction and on each entry (`_rows_of`), so the first paint already had the removable section on top. Phase 21 made the view a projection of the published state. Entered before the first pass, it paints placeholder rows, and `_rebuild` kept the cursor on that key (`uv`) once `removable here` landed above it. Until a published state is painted, Uninstall now reloads with `keep_cursor=False`. Backstop: `test_uninstall_cursor_lands_on_the_removable_row_once_the_state_lands` (80x20) |
+| TUI-5 | System columns cut (`Owne`, `OS p`) | backlog, pre-existing | Same columns, owner labels (`"os-package": "OS package"`) and spans at 390f464 and HEAD: with a `0.10.11 -> 0.10.12` Ver cell, Owner spans x 71-83 in both |
+| TUI-6 | Doctor shows "Press r to reinstall the pnpm-managed global set." under "pnpm's global set could not be read" | backlog, pre-existing | Same `else` branch at 390f464 (`installer/wizard_app.py:607`). The copy comes from 8c4d9e9 (04-05) and 4a09900 (05-04) |
+
 ---
 
 _Fixed: 2026-11-03_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2 (RR round)_
