@@ -340,7 +340,7 @@ def _valid_cwd(path: Path) -> str | None:
     return None
 
 
-def _first_line(exc: Exception) -> str:
+def first_line(exc: Exception) -> str:
     """The exception's first line, or its type name when it carries no message."""
     text = str(exc).splitlines()[0] if str(exc) else ""
     return text or f"{type(exc).__name__} failed"
@@ -380,7 +380,7 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         try:
             return _StepResult(warning=ctx.terminal_sync())
         except Exception as exc:
-            return _StepResult(failed=_first_line(exc))
+            return _StepResult(failed=first_line(exc))
     if step.kind == "pnpm_group_install":
         method = next((m for m in tool.methods if m.kind == "node"), None)
         if method is None:
@@ -393,7 +393,7 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         try:
             executors.execute(method, ctx.runner)
         except (CommandError, OSError, executors.ExecutorError, VersionError) as exc:
-            return _StepResult(failed=_first_line(exc))
+            return _StepResult(failed=first_line(exc))
         return _StepResult()
     if step.kind == "skill_install" and not step.argv:
         # L-19-07: a harness the installer cannot write to gets a reviewed
@@ -416,12 +416,12 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         try:
             ctx.runner(in_directory(step.cwd, step.argv))
         except (CommandError, OSError) as exc:
-            return _StepResult(failed=_first_line(exc))
+            return _StepResult(failed=first_line(exc))
         return _StepResult()
     try:
         ctx.runner(list(step.argv))
     except (CommandError, OSError) as exc:
-        return _StepResult(failed=_first_line(exc))
+        return _StepResult(failed=first_line(exc))
     return _StepResult()
 
 
@@ -571,11 +571,11 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                     outcome = _run_reconfigure(row, tool, ctx)
             except Exception as exc:
                 halted = True
-                first_line = str(exc).splitlines()
+                lines = str(exc).splitlines()
                 detail = (
-                    f"{type(exc).__name__}: {_first_line(exc)}"
-                    if first_line and first_line[0]
-                    else _first_line(exc)
+                    f"{type(exc).__name__}: {first_line(exc)}"
+                    if lines and lines[0]
+                    else first_line(exc)
                 )
                 outcome = RowOutcome(row, "crashed", detail=detail)
         outcomes.append(outcome)

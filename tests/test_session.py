@@ -35,6 +35,7 @@ from installer.session import (
     SensitiveInstall,
     execute_plan,
     exit_code,
+    first_line,
     order_for_install,
     ran_anything,
     retained,
@@ -1472,3 +1473,8 @@ def test_remove_failed_is_retained_and_removed_is_not():
 
 def test_remove_is_not_runnable():
     assert Disposition.REMOVE not in session_module.RUNNABLE
+
+
+def test_first_line_is_the_message_or_the_type():
+    assert first_line(OSError("a\nb")) == "a"
+    assert first_line(OSError()) == "OSError failed"
