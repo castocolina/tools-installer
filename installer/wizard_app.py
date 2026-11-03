@@ -28,7 +28,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision, path_writer_lines_for
-from installer.catalog_tui import CatalogScreen, ToolUpdated
+from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
@@ -3019,6 +3019,11 @@ class UnifiedApp(App[list[str] | None]):
         if self.outcomes is None:
             self.outcomes = {}
         self.outcomes[outcome.row.tool_id] = outcome
+
+    def on_refresh_requested(self, message: RefreshRequested) -> None:
+        """A refused mutation still ends with one pass (SPEC R2)."""
+        del message  # payload-free
+        self.request_refresh()
 
     def action_abort(self) -> None:
         # The soft quit (q). Guarded so a priority q binding does not quit out from

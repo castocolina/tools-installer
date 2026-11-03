@@ -1796,6 +1796,34 @@ async def test_removal_requests_a_pass_even_when_invalidate_raises(tmp_path: Pat
         assert service.passes == launch_passes + 1
 
 
+async def test_an_environment_only_removal_requests_no_pass(tmp_path: Path) -> None:
+    """No tool named, no invalidate: nothing ownership describes changed, so the
+    removal asks for no pass here (21-14 revisits the environment-only path)."""
+    service = frozen_service(tmp_path)
+    app = _version_app(
+        [_tool("rg")],
+        service,
+        uninstall=_uninstall_inputs(
+            rows=_frozen([]),
+            ban_names=["pip"],
+            remove=_recorder([]),
+            invalidate=lambda: None,
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        launch_passes = service.passes
+        await pilot.press("space")  # the ban pseudo-row is the only entry
+        await pilot.press("enter")
+        await pilot.press("enter")  # confirm
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert screen.applied is True
+        assert service.passes == launch_passes
+
+
 async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
     """The seam is optional -- every existing construction site (and the
     `--uninstall` direct start, which builds no version service) leaves it

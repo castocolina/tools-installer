@@ -132,6 +132,10 @@ def health_cell(state: ToolState | None) -> Text:
     return Text(glyph, style=style)
 
 
+class RefreshRequested(Message):
+    """A refused mutation still ends with one refresh pass; no payload."""
+
+
 class ToolUpdated(Message):
     """An update worker finished. Applied unconditionally; epoch is recorded."""
 
@@ -634,12 +638,14 @@ class CatalogScreen(AppScreen):
                 "try again in a moment",
                 "warn",
             )
+            self.post_message(RefreshRequested())
             return
         if state.health is Health.BROKEN:
             # tool_health puts the winning facts first; a reason-less state is
             # refused all the same, as the execute screen does (P3-07).
             detail = f": {state.reasons[0]}" if state.reasons else ""
             self.status.set(f"{tool_id} is broken{detail}", "warn")
+            self.post_message(RefreshRequested())
             return
         ownership, status = state.ownership, state.version
         if status is not None and status.outdated is False:
@@ -651,6 +657,7 @@ class CatalogScreen(AppScreen):
                 if declared is not None and real is not None:
                     line += f" — {real} owns this copy; the catalog installs it via {declared}"
             self.status.set(line, "ok")
+            self.post_message(RefreshRequested())
             return
         if ownership.owner == "unknown" or ownership.confidence not in MUTATION_GRADE:
             reason = ownership.unknown_reason or "no manager claimed this tool"
@@ -659,10 +666,12 @@ class CatalogScreen(AppScreen):
             if note:
                 line += f" — {note}"
             self.status.set(line, "warn")
+            self.post_message(RefreshRequested())
             return
         if not self._updates.begin(tool_id):
             in_flight = self._updates.in_flight or "another tool"
             self.status.set(f"update already in flight for {in_flight}", "warn")
+            self.post_message(RefreshRequested())
             return
         self.status.set(f"updating {tool_id}…", "ok")
         # The state's ownership gates the keypress; UpdateService.run still
