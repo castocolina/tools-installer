@@ -26,6 +26,7 @@ from installer.model import (
 from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.receipts import Receipt
 from installer.run import Runner
 from installer.uninstall import RemovalPlan
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -383,9 +384,12 @@ def pass_state(
     misconfigured: tuple[str, ...] = (),
     unconfigured: tuple[ConfigStep, ...] = (),
     notes: tuple[str, ...] = (),
+    removable: RemovalPlan | None = None,
+    receipt: Receipt | None = None,
 ) -> ToolState:
     """A state built the way the refresh pass builds one: the owner and
     version sentences come first among the notes."""
+    del removable, receipt  # RED stub: wired in the next commit
     owner = ownership if ownership is not None else unknown_ownership(tool)
     pass_notes = ownership_notes(tool, owner, platform)
     if version is not None:
