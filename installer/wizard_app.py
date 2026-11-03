@@ -32,7 +32,7 @@ from installer.app import UninstallDecision, path_writer_lines_for
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
-from installer.enums import MutationHolder, Tier, UninstallState
+from installer.enums import MutationHolder, Severity, Tier, UninstallState
 from installer.execute_screen import (
     ExecuteInputs,
     ExecuteScreen,
@@ -1571,7 +1571,8 @@ class UninstallScreen(AppScreen):
         swept = message.swept
         self.error = message.error
         if swept is None:
-            self.status.set(
+            self.app.show_result(
+                self,
                 f"Uninstall failed: {self.error}. Check permissions, then press enter.",
                 "error",
             )
@@ -1611,7 +1612,7 @@ class UninstallScreen(AppScreen):
         if terminal_warning:
             summary_parts.append(terminal_warning)
         severity = "error" if swept.remove_failed else "warn" if terminal_warning else "ok"
-        self.status.set(multiline_summary(summary_parts), severity)
+        self.app.show_result(self, multiline_summary(summary_parts), severity)
         self._request_pass()
 
     def _request_pass(self) -> None:
@@ -2264,7 +2265,8 @@ class PoliciesScreen(AppScreen):
         # A read begun before this completion must not repaint its older answer.
         self._job_state_generation += 1
         if result is None:
-            self.status.set(
+            self.app.show_result(
+                self,
                 f"Policy change failed: {self.error}. Check permissions, then press space.",
                 "error",
             )
@@ -2280,7 +2282,9 @@ class PoliciesScreen(AppScreen):
         )
         self._set_detail(policy)
         verb = "enabled" if new_active else "disabled"
-        self.status.set(self._summary(policy, verb, result), "warn" if result.warning else "ok")
+        self.app.show_result(
+            self, self._summary(policy, verb, result), "warn" if result.warning else "ok"
+        )
         self.app.request_refresh()
 
     def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
@@ -2960,6 +2964,11 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         screen = self._visible_app_screen()
         if screen is not None:
             screen.state_refreshed()
+
+    def show_result(self, origin: AppScreen, text: str, severity: Severity | str) -> None:
+        """Write a mutation's result where the user is looking (C-28): on the
+        current view, which is `origin` unless the user left it meanwhile."""
+        self._views.get(self.current_view, origin).status.set(text, severity)
 
     def _write_state_line(self, line: str | None) -> None:
         """Replace the app's previous state line with `line` (None: retract it).

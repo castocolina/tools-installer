@@ -188,6 +188,7 @@ Toggling stays immediate and reversible. A toggle ends with one full-catalog pas
 | Leaving the view | cleared (`clear_transient`) |
 | Re-entering | empty, except a standing status the view itself writes in `enter_view` (Uninstall: `Nothing to uninstall.` when nothing is listed) |
 | A publish re-render | never clears it |
+| A result lands (update, removal, toggle) while another view is visible | written to the visible view's status, the way app warnings are; the view it came from stays empty (amended 2026-11-03, review C-28) |
 
 ---
 

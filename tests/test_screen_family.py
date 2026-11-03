@@ -1517,7 +1517,8 @@ async def test_a_background_job_toggle_holds_the_lock(tmp_path: Path):
             release.set()
             await settle(app, pilot)
             assert not app.mutation_in_flight
-            assert app.view("policies").status.text.startswith("job enabled.")
+            # C-28: the result lands on the view the user is looking at.
+            assert app.view("uninstall").status.text.startswith("job enabled.")
         finally:
             release.set()
 

@@ -707,10 +707,10 @@ class CatalogScreen(AppScreen):
     def on_tool_updated(self, message: ToolUpdated) -> None:
         outcome = message.outcome
         if message.error is not None:
-            self.status.set(f"update failed: {message.error}", "error")
+            self.app.show_result(self, f"update failed: {message.error}", "error")
             return
         if outcome is None:
-            self.status.set(f"update of {message.tool_id} did not complete", "error")
+            self.app.show_result(self, f"update of {message.tool_id} did not complete", "error")
             return
         if outcome.status == "updated":
             line = f"updated {message.tool_id}"
@@ -722,15 +722,17 @@ class CatalogScreen(AppScreen):
                 line += f" — {outcome.postinstall_warning}"
             if outcome.detail:
                 line += f" — {outcome.detail}"
-            self.status.set(line, "ok")
+            self.app.show_result(self, line, "ok")
             return
         if outcome.status == "failed":
             # opencode H3: a failed update is an error, the same severity a
             # raised worker error gets -- it must read as red, because it
             # folds into the session exit code.
-            self.status.set(outcome.detail or f"update of {message.tool_id} failed", "error")
+            self.app.show_result(
+                self, outcome.detail or f"update of {message.tool_id} failed", "error"
+            )
             return
-        self.status.set(outcome.detail or f"update {outcome.status}", "warn")
+        self.app.show_result(self, outcome.detail or f"update {outcome.status}", "warn")
 
     def on_screen_resume(self) -> None:
         # The staged set is shared by all three tier screens (plan 02-01), and

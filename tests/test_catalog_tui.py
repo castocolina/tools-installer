@@ -3683,16 +3683,18 @@ def test_skill_pack_with_probes_present_host_stays_present(tmp_path: Path) -> No
     assert state.present is True
 
 
-def test_a_failed_direct_update_renders_as_an_error_not_a_warning() -> None:
+async def test_a_failed_direct_update_renders_as_an_error_not_a_warning() -> None:
     """opencode H3 (screen half): a `u` update whose outcome is `failed` is an
     error, on the same severity as a raised worker error -- never a yellow
     warning for something that must turn the session exit code red."""
-    screen = _screen([_tool("rg")], {"rg": True})
-    messages: list[tuple[str, str]] = []
-    screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
-    outcome = UpdateOutcome(tool_id="rg", status="failed", owner="brew", detail="brew exploded")
-    screen.on_tool_updated(ToolUpdated("rg", outcome, None, 0))
-    assert messages == [("brew exploded", "error")]
+    app = _unified_app([_tool("rg")], {"rg": True}, _BLURBS)
+    async with app.run_test(size=(120, 30)):
+        outcome = UpdateOutcome(tool_id="rg", status="failed", owner="brew", detail="brew exploded")
+        app.catalog.on_tool_updated(ToolUpdated("rg", outcome, None, 0))
+        assert (app.catalog.status_text, app.catalog.status.severity) == (
+            "brew exploded",
+            Severity.ERROR,
+        )
 
 
 class _FailingUpdateService(UpdateService):
