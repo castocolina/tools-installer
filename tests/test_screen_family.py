@@ -500,7 +500,7 @@ class _Covering(ModalScreen[None]):
     """A minimal modal standing in for ConfirmUninstall, ExecuteScreen or the palette."""
 
 
-async def test_publish_under_a_modal_waits_for_the_next_entry(
+async def test_publish_under_a_modal_renders_when_it_closes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     rg = _tool("rg")
@@ -523,11 +523,53 @@ async def test_publish_under_a_modal_waits_for_the_next_entry(
         assert renders == []
         await app.pop_screen()
         await pilot.pause()
-        assert _health(app, "rg") == "…"
-        # show_view of the current view is a no-op, so leave and re-enter.
-        await app.show_view("user")
-        await app.show_view("system")
+        # The view the modal revealed renders the published state (C-08).
+        assert renders == ["render"]
         assert _health(app, "rg") == "✓"
+
+
+async def test_closing_the_palette_keeps_selection_and_status(tmp_path: Path):
+    fd = _tool("fd")
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "space")
+        app.catalog.status.set("kept", "ok")
+        row = app.catalog.query_one(DataTable[Any]).cursor_row
+        selected = set(app.catalog.selected)
+        assert selected
+        await pilot.press("ctrl+p")
+        assert isinstance(app.screen, NavScreen)
+        service.queued = (pass_state(fd, platform=service.platform, present=True),)
+        app.request_refresh()
+        await settle(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is app.catalog
+        assert _health(app, "fd") == "✓"
+        assert app.catalog.query_one(DataTable[Any]).cursor_row == row
+        assert set(app.catalog.selected) == selected
+        assert app.catalog.status_text == "kept"
+
+
+async def test_entering_a_view_renders_it_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    service = frozen_service(tmp_path)
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        renders: list[str] = []
+        target = app.view("user")
+        render = target.state_refreshed
+
+        def spy() -> None:
+            renders.append("render")
+            render()
+
+        monkeypatch.setattr(target, "state_refreshed", spy)
+        await app.show_view("user")
+        await settle(app, pilot)
+        assert renders == ["render"]
 
 
 async def test_publish_keeps_cursor_selection_and_status(tmp_path: Path):
