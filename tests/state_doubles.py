@@ -389,7 +389,6 @@ def pass_state(
 ) -> ToolState:
     """A state built the way the refresh pass builds one: the owner and
     version sentences come first among the notes."""
-    del removable, receipt  # RED stub: wired in the next commit
     owner = ownership if ownership is not None else unknown_ownership(tool)
     pass_notes = ownership_notes(tool, owner, platform)
     if version is not None:
@@ -401,7 +400,8 @@ def pass_state(
         present=present,
         ownership=owner,
         version=version,
-        removable=RemovalPlan(removable=(), yourself=()),
+        removable=removable if removable is not None else RemovalPlan(removable=(), yourself=()),
+        receipt=receipt,
         skill_hosts=skill_hosts,
         broken=broken,
         misconfigured=misconfigured,
