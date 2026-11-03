@@ -263,16 +263,16 @@ Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
   4. A removal runs on a worker with visible progress; afterwards the tool moves to "nothing to do", its selection is pruned, every tier shows `○`, and Policies shows a removed ban OFF on entry.
   5. Policies and Doctor read live state on entry: installing `watch` unblocks the docker tweak, Doctor's hidden `a` key is inert, and a dangling pnpm global shim shows as broken.
 
-**Plans:** 21 plans
+**Plans:** 5/21 plans executed
 **UI hint**: yes
 
 Plans:
 **Wave 1**
-- [ ] 21-01-PLAN.md — Neutral root, six installed views, one `show_view` order and the `AppScreen` lifecycle defaults
-- [ ] 21-02-PLAN.md — `removed` / `remove failed` in the shared outcome vocabulary; public `first_line`
-- [ ] 21-03-PLAN.md — `ToolBrowser.reload` prunes selections that are no longer selectable
-- [ ] 21-04-PLAN.md — Policies answer prerequisites and active state live (predicate `installed_tools`, omz `is_active`)
-- [ ] 21-05-PLAN.md — State service gains `mark_pending`, the Doctor evidence store and the pnpm off-PATH fact
+- [x] 21-01-PLAN.md — Neutral root, six installed views, one `show_view` order and the `AppScreen` lifecycle defaults
+- [x] 21-02-PLAN.md — `removed` / `remove failed` in the shared outcome vocabulary; public `first_line`
+- [x] 21-03-PLAN.md — `ToolBrowser.reload` prunes selections that are no longer selectable
+- [x] 21-04-PLAN.md — Policies answer prerequisites and active state live (predicate `installed_tools`, omz `is_active`)
+- [x] 21-05-PLAN.md — State service gains `mark_pending`, the Doctor evidence store and the pnpm off-PATH fact
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 21-06-PLAN.md — One app-level coalescing refresh owner; per-tier refresh workers deleted
@@ -418,7 +418,7 @@ Plans:
 | 18. Registry truth and drift guard | 0/TBD | Not started | - |
 | 19. One tool state with health plus receipts | 0/TBD | Not started | - |
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
-| 21. One screen family | 0/TBD | Not started | - |
+| 21. One screen family | 5/21 | In Progress | - |
 | 22. Method lifecycle contract | 0/TBD | Not started | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |

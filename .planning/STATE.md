@@ -6,10 +6,10 @@ current_phase: 21
 current_phase_name: One screen family
 status: executing
 stopped_at: Phase 21 UI-SPEC approved
-last_updated: "2026-10-19T02:40:45.613Z"
-last_activity: 2026-10-18
-last_activity_desc: Phase 20 closed; Phase 21 next
-state_head: b8064a57ea9d5372f61a8509118fa7d7b76ed7b4
+last_updated: "2026-11-03T11:36:21.540Z"
+last_activity: 2026-11-03
+last_activity_desc: Phase 21 execution started
+state_head: 390f464298f06a30365de37e11510d5479afa09a
 progress:
   total_phases: 11
   completed_phases: 1
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 21 (One screen family) — READY TO EXECUTE
-Plan: none yet
-Status: Ready to execute
-Last activity: 2026-10-18 — Phase 20 closed: 31 plans, verifier passed 9/9, SECURITY 52/52, UAT 9/9
+Phase: 21 (One screen family) — EXECUTING
+Plan: 1 of 21
+Status: Executing Phase 21
+Last activity: 2026-11-03 — Phase 21 execution started
 
 Progress: [█░░░░░░░░░] 9%
 
@@ -74,7 +74,10 @@ Recent decisions affecting current work:
 - [2026-10-15] [catalog] Add iTerm2 macOS-only entry after tool-onboarding refactor — [todo file](.planning/todos/pending/2026-10-15-add-iterm2-macos-only-entry-after-tool-onboarding-refactor.md)
 - [2026-10-15] [catalog] Adopt Apple Containers runtime; colima stays compose path — [todo file](.planning/todos/pending/2026-10-15-adopt-apple-containers-runtime-colima-stays-compose-path.md)
 - [2026-10-15] [catalog] Onboard Bruno API client via the tool-onboarding skill (nice to have) — [todo file](.planning/todos/pending/2026-10-15-onboard-bruno-api-client-via-the-tool-onboarding-skill.md)
+- [2026-10-22] [catalog] Onboard AWS CLI through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-10-21-onboard-aws-cli-through-the-tool-onboarding-skill.md)
 - [2026-10-21] [tweaks] Rename container shortcuts and detect the available engine — [todo file](.planning/todos/pending/2026-10-21-rename-container-shortcuts-and-detect-the-available-engine.md)
+- [2026-10-21] [catalog] Research memory-efficient Compose on Apple Silicon — [todo file](.planning/todos/pending/2026-10-21-research-memory-efficient-compose-on-apple-silicon.md)
+- [2026-10-25] [catalog] Onboard GitHub Copilot CLI through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-10-24-onboard-github-copilot-cli-through-the-tool-onboarding-skill.md)
 
 ### Roadmap Evolution
 
