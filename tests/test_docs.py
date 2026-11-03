@@ -210,6 +210,32 @@ def test_architecture_records_phase_20_mechanisms() -> None:
         assert phrase in text, f"missing load-bearing phrase: {phrase}"
 
 
+_PHASE_21_REQUIRED = (
+    "## Phase 21: one screen family",
+    "state_refreshed",
+    "clear_transient",
+    "request_refresh",
+    "full-catalog-refresh",
+    "await_publication",
+    "mark_pending",
+    "uninstall_group",
+    "uninstall-removal",
+    "_exit_after_removal",
+    "MutationLock",
+    "MutationHolder",
+    "{Holder} is running; wait for it to finish. Navigation still works.",
+    "record_evidence",
+    "test_the_replaced_forks_are_gone",
+)
+
+
+def test_architecture_records_phase_21_mechanisms() -> None:
+    """Keep the Phase 21 screen-family doctrine load-bearing."""
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_21_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
 _PHASE_19_REQUIRED = (
     "ToolState",
     "state_of",

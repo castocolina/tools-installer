@@ -1,5 +1,7 @@
 """Screen-family lifecycle pilots: launch, the one show_view order, status lifecycle."""
 
+import re
+import subprocess
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -2960,3 +2962,64 @@ async def test_a_visible_uninstall_repaints_its_environment_rows_on_publish(tmp_
             assert "wait for it to finish" not in app.view("uninstall").status.text
         finally:
             release.set()
+
+
+# -- 21-21: the replaced forks stay deleted --
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_REPLACED_FORKS = [
+    "OwnershipRefreshed",
+    "_pending_status",
+    "_resync",
+    "classify_tools",
+    "ToolRow",
+    "OwnerHint",
+    "OwnerLabelHint",
+    "_manager_hint",
+    "_managed_hint",
+    "_own_script_install",
+    "uninstall-ownership-refresh",
+    "_refresh_ownership_worker",
+    "get_default_screen",
+    "_start_version_refresh",
+    "_refresh_versions_worker",
+    "_refresh_skills_worker",
+    "VersionStatusRefreshed",
+    "SkillStatusRefreshed",
+    "execute-wait",
+    "_wait_worker",
+    "toggle_in_flight",
+    "daemon_default_in_flight",
+    "_TOGGLE_IN_FLIGHT_MESSAGE",
+    "_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE",
+    "_rows_of",
+    "_live_state",
+]
+
+
+def _guarded_files() -> list[Path]:
+    """Tracked and untracked-not-ignored files under installer/, plus setup.py."""
+    names: set[str] = set()
+    for argv in (
+        ["git", "ls-files", "installer"],
+        ["git", "ls-files", "--others", "--exclude-standard", "installer"],
+    ):
+        listing = subprocess.run(argv, cwd=_REPO_ROOT, check=True, capture_output=True, text=True)
+        names.update(listing.stdout.splitlines())
+    paths = [_REPO_ROOT / name for name in sorted(names)] + [_REPO_ROOT / "setup.py"]
+    return [path for path in paths if path.is_file()]
+
+
+@pytest.mark.parametrize("name", _REPLACED_FORKS)
+def test_the_replaced_forks_are_gone(name: str):
+    pattern = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
+    hits = [
+        f"{path.relative_to(_REPO_ROOT)}:{number}"
+        for path in _guarded_files()
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        )
+        if pattern.search(line)
+    ]
+    assert hits == [], f"{name} is named again: {', '.join(hits)}"

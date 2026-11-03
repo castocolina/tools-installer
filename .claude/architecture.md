@@ -1155,3 +1155,51 @@ Phase 20 deleted the obsolete `Summary`/`summarize`, `run_installs`,
 progress lists. Each duplicated decision path had no remaining production
 caller; deleting it follows rule 5 rather than preserving an orphan beside
 the plan and engine that replaced it.
+
+## Phase 21: one screen family
+
+All six views (three tiers, Uninstall, Policies, Doctor) share one lifecycle.
+`on_mount` builds widgets and nothing else. `AppScreen.enter_view` renders
+through `state_refreshed` on every entry, and `clear_transient` runs when a
+view is left, so a status written for one visit never greets the next.
+`UnifiedApp.show_view` is the one navigation path: key, palette, escape and
+launch all go through it, in the same order.
+
+`UnifiedApp.request_refresh` is the one refresh owner. It runs a single
+`full-catalog-refresh` worker and coalesces requests: one made during a pass
+queues exactly one more pass. Entering a view never starts a pass. A publish
+calls `state_refreshed` on the visible top view only; a view under a modal
+renders the published state on its next entry. Every mutation (install close,
+update, removal, policy toggle, pnpm reinstall, Doctor fix) ends with one
+`request_refresh`, so what one view changed is what every other view reads next.
+`await_publication` is the same owner's waiter for the execute screen: it joins
+a running pass, starts one when none runs, and answers only once no follow-up
+pass is pending; there is no second wait worker.
+
+Uninstall is a projection of the published state. `uninstall_group` maps one
+`ToolState` to its section, and a tool whose state is unknown is drawn from the
+last painted memory with its Health cell set to `…`; an unknown owner is never
+attributed. The removal runs on the `uninstall-removal` worker. It calls
+`mark_pending` for the tools being removed, shows per-tool words as results
+land, and then invalidates the version cache and requests one pass. A quit
+during a removal does not kill it: the app waits and exits in
+`_exit_after_removal`.
+
+`MutationLock` is the one app-wide lock for every mutation, inherited by
+`UnifiedApp` and the Doctor host. Its `MutationHolder` names the holder with a
+fixed noun, and every check site refuses with the one template
+`{Holder} is running; wait for it to finish. Navigation still works.`
+Navigation is never refused; only the keys that mutate are.
+
+Policies re-reads `is_active` on every render and marks a policy that is owned
+but no longer active as DRIFT. A job policy's state comes from a worker that a
+newer read supersedes, and a failed read shows its error copy instead of a
+guessed state. Doctor has a single findings channel: its pnpm audit is handed
+to the next pass through `record_evidence`, and Doctor renders the findings the
+tiers read from the published state. A failed read draws the error, never a
+stale list.
+
+The replaced forks cannot return silently: `test_the_replaced_forks_are_gone`
+fails when any deleted name (per-screen in-flight flags and messages, the old
+refresh workers and messages, the owner hints, `ToolRow`) is named again in
+`installer/` or `setup.py`, tracked or not.
