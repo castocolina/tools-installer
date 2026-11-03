@@ -1507,6 +1507,14 @@ class UninstallScreen(AppScreen):
             self.app.request_refresh()
 
 
+_POLICY_READ_ERROR = "Could not read the policy state: "
+
+
+def _read_failure(error: str) -> str:
+    """The status copy for a failed live read: the first line of the message."""
+    return f"{_POLICY_READ_ERROR}{error.partition(chr(10))[0]}."
+
+
 class PoliciesScreen(AppScreen):
     """Toggle environment policies (the pip/npm ban) on/off, applied live.
 
@@ -1550,6 +1558,7 @@ class PoliciesScreen(AppScreen):
         }
         # Each policy's prerequisites as last read; no entry means not (yet) readable.
         self._missing: dict[str, tuple[str, ...]] = {}
+        self._read_error: str | None = None
         self.error: str | None = None
         self.detail_text = ""
         # True while the one-shot competing-mechanism warm-up worker runs.
@@ -1619,27 +1628,51 @@ class PoliciesScreen(AppScreen):
         if not self.is_mounted:
             return
         table = self.query_one(DataTable[Any])
+        errors: list[str] = []
         for policy in self._policies:
-            self._read_live_state(policy)
-            self._read_requirements(policy)
+            errors += filter(None, (self._read_live_state(policy), self._read_requirements(policy)))
             table.update_cell(policy.id, "state", self._state_cell(policy.id), update_width=True)
             table.update_cell(policy.id, "requires", self._requires_cell(policy), update_width=True)
         self._set_detail(self._highlighted_policy())
         self._refresh_link_mode_line()
+        if errors:
+            self._read_error = _read_failure(errors[0])
+            self.status.set(self._read_error, "error")
+        elif self._read_error is not None:
+            # Retract only our own copy: another writer's status stands.
+            if self.status.text == self._read_error:
+                self.status.clear()
+            self._read_error = None
 
-    def _read_live_state(self, policy: Policy) -> None:
-        # A state_cache policy is read on a worker (21-18); one without
-        # is_active keeps the state its last toggle left.
+    def _read_live_state(self, policy: Policy) -> str | None:
+        """Re-read one policy's state; the error text when the read failed.
+
+        A state_cache policy is read on a worker (21-18); one without
+        is_active keeps the state its last toggle left. A failed read drops the
+        remembered answer: the row is never painted from a previous read.
+        """
         if policy.is_active is None or policy.state_cache is not None:
-            return
-        live, _error = run_live(policy.is_active)
-        if live is not None:
+            return None
+        live, error = run_live(policy.is_active)
+        if live is None:
+            self.active_state.pop(policy.id, None)
+        else:
             self.active_state[policy.id] = live
+        return error
 
-    def _read_requirements(self, policy: Policy) -> None:
-        missing, _error = run_live(policy.missing_requirements)
-        if missing is not None:
+    def _read_requirements(self, policy: Policy) -> str | None:
+        missing, error = run_live(policy.missing_requirements)
+        if missing is None:
+            self._missing.pop(policy.id, None)
+        else:
             self._missing[policy.id] = missing
+        return error
+
+    def _refuse_unreadable(self) -> None:
+        """A row whose state or prerequisites could not be read is never acted
+        on, never treated as OFF; the refusal still ends with one pass."""
+        self.status.set(self._read_error or f"{_POLICY_READ_ERROR}not read yet.", "error")
+        self.post_message(RefreshRequested())
 
     def _state_cell(self, policy_id: str) -> Text:
         # A ●/○ glyph carries the state independent of color: the lone row is
@@ -1969,10 +2002,15 @@ class PoliciesScreen(AppScreen):
             return
         if self.app.refuse_if_mutating(self):
             return
-        active = self.active_state[policy.id]
         # Re-read at the mutation point: a prerequisite can land after the render.
-        self._read_requirements(policy)
+        requirements_error = self._read_requirements(policy)
+        active = self.active_state.get(policy.id)
         missing_requires = self._missing.get(policy.id)
+        if active is None or missing_requires is None:
+            if requirements_error is not None:
+                self._read_error = _read_failure(requirements_error)
+            self._refuse_unreadable()
+            return
         if not active and missing_requires and policy.hard_requires:
             self.status.set(
                 "Install required tool(s) first: "
@@ -2050,7 +2088,11 @@ class PoliciesScreen(AppScreen):
         policy = self._highlighted_policy()
         if policy is None or policy.set_schedule is None:
             return
-        if not self.active_state[policy.id]:
+        active = self.active_state.get(policy.id)
+        if active is None:
+            self._refuse_unreadable()
+            return
+        if not active:
             self.status.set(
                 "Enable this policy first, then press t to set its schedule.",
                 "warn",

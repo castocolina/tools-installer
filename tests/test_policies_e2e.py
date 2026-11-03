@@ -1188,17 +1188,18 @@ async def test_entering_policies_starts_no_pass(tmp_path: Path) -> None:
         assert service.passes == before
 
 
-class _Script:
-    """A read that answers each call from a script; an exception is raised."""
+class _Read:
+    """A live read that answers `value` until `fail` is set, then raises it."""
 
-    def __init__(self, *answers: Any) -> None:
-        self.answers = list(answers)
+    def __init__(self, value: Any, error: Exception) -> None:
+        self.value = value
+        self.error = error
+        self.fail = False
 
     def __call__(self) -> Any:
-        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
+        if self.fail:
+            raise self.error
+        return self.value
 
 
 def _fake_policy(policy_id: str, applied: list[str], **overrides: Any) -> Policy:
@@ -1232,14 +1233,14 @@ _READ_ERROR = "Could not read the policy state: "
 
 
 async def test_a_failed_policy_read_shows_the_error(tmp_path: Path) -> None:
-    flaky = _fake_policy(
-        "flaky", [], is_active=_Script(True, OSError("permission denied\nsecond line"), True)
-    )
+    read = _Read(True, OSError("permission denied\nsecond line"))
+    flaky = _fake_policy("flaky", [], is_active=read)
     steady = _fake_policy("steady", [], is_active=lambda: False)
     app = _live_app([flaky, steady], service=frozen_service(tmp_path))
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         assert _cell(app, "flaky", "state") == "● [on]"
+        read.fail = True
         await _reenter(app)
         status = app.view("policies").status
         assert _cell(app, "flaky", "state") == ""
@@ -1248,6 +1249,7 @@ async def test_a_failed_policy_read_shows_the_error(tmp_path: Path) -> None:
             f"{_READ_ERROR}permission denied.",
             Severity.ERROR,
         )
+        read.fail = False
         await _reenter(app)
         assert _cell(app, "flaky", "state") == "● [on]"
         assert app.view("policies").status.text == ""
@@ -1255,11 +1257,13 @@ async def test_a_failed_policy_read_shows_the_error(tmp_path: Path) -> None:
 
 async def test_space_on_an_unreadable_policy_applies_nothing(tmp_path: Path) -> None:
     calls: list[str] = []
-    flaky = _fake_policy("flaky", calls, is_active=_Script(True, OSError("denied")))
+    read = _Read(True, OSError("denied"))
+    flaky = _fake_policy("flaky", calls, is_active=read)
     service = frozen_service(tmp_path)
     app = _live_app([flaky], service=service)
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
+        read.fail = True
         await _reenter(app)
         await settle(app, pilot)
         before = service.passes
@@ -1272,19 +1276,21 @@ async def test_space_on_an_unreadable_policy_applies_nothing(tmp_path: Path) -> 
 
 async def test_a_failed_requirements_read_blanks_requires_and_detail(tmp_path: Path) -> None:
     calls: list[str] = []
+    needs = _Read(("watch",), OSError("denied\nmore"))
     tool = _fake_policy(
         "tweak:fake",
         calls,
         active=False,
         is_active=lambda: False,
         requires=("watch",),
-        missing_requires_now=_Script(("watch",), OSError("denied\nmore"), ("watch",)),
+        missing_requires_now=needs,
     )
     service = frozen_service(tmp_path)
     app = _live_app([tool], service=service)
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         assert "watch" in _cell(app, "tweak:fake", "requires")
+        needs.fail = True
         await _reenter(app)
         await settle(app, pilot)
         screen = app.view("policies")
@@ -1301,6 +1307,7 @@ async def test_a_failed_requirements_read_blanks_requires_and_detail(tmp_path: P
         await settle(app, pilot)
         assert calls == []
         assert service.passes == before + 1
+        needs.fail = False
         await _reenter(app)
         assert "watch" in _cell(app, "tweak:fake", "requires")
         assert screen.status.text == ""
@@ -1313,16 +1320,13 @@ async def test_t_on_an_unreadable_policy_opens_no_picker(tmp_path: Path) -> None
         scheduled.append((hour, minute))
         return PolicyResult(layers=(), reload_hint=None, warning=None)
 
-    job = _fake_policy(
-        "job",
-        [],
-        is_active=_Script(True, OSError("denied")),
-        set_schedule=set_schedule,
-    )
+    read = _Read(True, OSError("denied"))
+    job = _fake_policy("job", [], is_active=read, set_schedule=set_schedule)
     service = frozen_service(tmp_path)
     app = _live_app([job], service=service)
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
+        read.fail = True
         await _reenter(app)
         await settle(app, pilot)
         before = service.passes
