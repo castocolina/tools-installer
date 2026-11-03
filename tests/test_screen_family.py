@@ -325,6 +325,18 @@ async def test_failed_pass_writes_the_retry_copy(tmp_path: Path):
         assert _health(app, "rg") == "…"
 
 
+async def test_an_unexpected_pass_failure_writes_the_retry_copy(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [], raising=RuntimeError("boom\nmore"))
+    service.release.set()
+    app = _family_app(version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert app.catalog.status_text == (
+            "tool state check failed: boom — the next change retries it"
+        )
+        assert app.catalog.status.severity is Severity.WARN
+
+
 async def test_a_failed_skills_stage_writes_the_retry_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
