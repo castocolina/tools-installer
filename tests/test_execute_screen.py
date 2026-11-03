@@ -335,6 +335,7 @@ def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
         ),
         policies=PolicyInputs(policies=[]),
         execute=inputs,
+        version_refresh=inputs.version_refresh,
     )
 
 
@@ -1486,7 +1487,6 @@ class _RecordingRefreshService(FrozenStateService):
     def refresh(self, tools: Sequence[Tool]) -> None:
         for tool in tools:
             self.asked.append(tool.id)
-            _publish(self, tool, version=_outdated_status(tool.id, outdated=True))
 
 
 class _RecordingUpdateService(UpdateService):
@@ -4526,7 +4526,7 @@ async def test_update_outcome_survives_state_invalidation_without_followup_refre
     screen, _ = await _run_execute(inputs, ["rg"])
 
     assert _outcomes_by_id(screen)["rg"].result == "done"
-    assert refresh.asked == []
+    assert refresh.asked == ["rg"]  # the app's launch pass only; the run asked for none
     assert "Summary — 1 updated" in _log_text(screen)
 
 
@@ -4742,7 +4742,7 @@ async def test_blocked_update_does_not_trigger_a_version_refresh(tmp_path: Path)
 
     screen, _ = await _run_execute(inputs, ["rg"])
 
-    assert refresh.asked == []
+    assert refresh.asked == ["rg"]  # the app's launch pass only; the run asked for none
     assert _outcomes_by_id(screen)["rg"].result == "blocked"
 
 

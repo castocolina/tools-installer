@@ -61,7 +61,14 @@ from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.resolve import UnavailableReason
 from installer.run import CommandError
-from installer.session import Disposition, PlanRow, RowOutcome, ran_anything, retained
+from installer.session import (
+    Disposition,
+    PlanRow,
+    RowOutcome,
+    first_line,
+    ran_anything,
+    retained,
+)
 from installer.shellrc import PathGuardOutcome, guard_path_writers, path_export_guard
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.terminal_shell import terminal_sync_warning
@@ -2400,7 +2407,11 @@ class RefreshPublished(Message):
 
 
 class RefreshFinished(Message):
-    """The refresh worker ended; its arrival is its whole meaning."""
+    """The refresh worker ended; `error` is the pass's first failure, if any."""
+
+    def __init__(self, error: str | None) -> None:
+        super().__init__()
+        self.error = error
 
 
 class UnifiedApp(App[list[str] | None]):
@@ -2477,6 +2488,8 @@ class UnifiedApp(App[list[str] | None]):
         self._tools = list(tools)
         self._refresh_running = False
         self._refresh_pending = False
+        # Callbacks waiting for the next publication; served once no pass is pending.
+        self._publication_waiters: list[Callable[[str | None], None]] = []
         # The state line this app last wrote (screen, text), so a clean publish
         # clears only its own line, never one a view wrote.
         self._state_line: tuple[AppScreen, str] | None = None
@@ -2624,9 +2637,20 @@ class UnifiedApp(App[list[str] | None]):
         self._refresh_running = True
         self._refresh_worker()
 
+    def await_publication(self, callback: Callable[[str | None], None]) -> None:
+        """Call `callback(error)` once a pass has finished with none pending: a
+        running pass is joined, otherwise one starts. No service: answer at once."""
+        if self._version_refresh is None:
+            callback(None)
+            return
+        self._publication_waiters.append(callback)
+        if not self._refresh_running:
+            self.request_refresh()
+
     @work(thread=True, exclusive=True, group="full-catalog-refresh", exit_on_error=False)
     def _refresh_worker(self) -> None:
         service = self._version_refresh
+        pass_error: str | None = "state check did not complete"
         try:
             if service is not None:
                 _result, error = run_live(lambda: service.refresh(self._tools))
@@ -2638,8 +2662,11 @@ class UnifiedApp(App[list[str] | None]):
                 self.post_message(
                     RefreshPublished(error, service.warning if error is None else None)
                 )
+                pass_error = error
+        except Exception as exc:
+            pass_error = first_line(exc)
         finally:
-            self.post_message(RefreshFinished())
+            self.post_message(RefreshFinished(pass_error))
 
     def on_refresh_published(self, message: RefreshPublished) -> None:
         self._render_published()
@@ -2658,11 +2685,14 @@ class UnifiedApp(App[list[str] | None]):
             self._state_line = None
 
     def on_refresh_finished(self, message: RefreshFinished) -> None:
-        del message  # its arrival is its whole meaning
         self._refresh_running = False
         if self._refresh_pending:
             self._refresh_pending = False
             self.request_refresh()
+            return
+        waiters, self._publication_waiters = self._publication_waiters, []
+        for waiter in waiters:
+            waiter(message.error)
 
     def _render_published(self) -> None:
         """Re-render the visible view only (D-06); a view under a modal renders

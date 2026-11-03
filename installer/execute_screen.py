@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.cells import cell_len
 from rich.console import Console
@@ -63,6 +63,9 @@ from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.update import UpdateService
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, resolve_github_tag
+
+if TYPE_CHECKING:
+    from installer.wizard_app import UnifiedApp
 
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
 _SENSITIVE_CHOICES: frozenset[str] = frozenset({"yes", "no"})
@@ -177,7 +180,7 @@ class SensitiveActionScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-def ask_from_worker(app: App[object], screen: ModalScreen[str | None]) -> str | None:
+def ask_from_worker(app: App[Any], screen: ModalScreen[str | None]) -> str | None:
     """Ask the user from a thread worker via MECHANISM=A (call_from_thread + push_screen_wait).
 
     The choice was made by a spike rather than assumed; see
@@ -248,7 +251,7 @@ class RowFinished(Message):
 
 
 class StateSettled(Message):
-    """The refresh joined by the review screen has finished."""
+    """The app's refresh pass the review waited on has finished; `error` is its result."""
 
     def __init__(self, token: int, error: str | None) -> None:
         self.token = token
@@ -342,7 +345,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     """
 
     if TYPE_CHECKING:
-        app: App[object]
+
+        @property
+        def app(self) -> UnifiedApp: ...
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "start", "start", show=True, priority=True),
@@ -536,25 +541,11 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             return
         self._waiting = True
         token = self._wait_token
-        self._wait_worker(token)
 
-    @work(thread=True, exclusive=True, group="execute-wait", exit_on_error=False)
-    def _wait_worker(self, token: int) -> None:
-        """Join the version and skill checks; always settle so Enter can retry."""
-        error: str | None = "state check did not complete"
-        try:
-            _result, live_error = run_live(
-                lambda: (
-                    self._inputs.version_refresh.refresh(self._inputs.catalog),
-                    self._inputs.version_refresh.refresh_skills(self._inputs.catalog),
-                )
-            )
-            error = live_error
-        except Exception as exc:
-            lines = str(exc).splitlines()
-            error = lines[0] if lines and lines[0] else type(exc).__name__
-        finally:
+        def settled(error: str | None) -> None:
             self.post_message(StateSettled(token, error))
+
+        self.app.await_publication(settled)
 
     def on_state_settled(self, message: StateSettled) -> None:
         if message.token != self._wait_token:
