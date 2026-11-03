@@ -563,6 +563,10 @@ class DoctorScreen(AppScreen):
         return competing_mechanism_guidance(units)
 
     def _refresh_body(self) -> None:
+        # A worker result can land after the app stopped running, when the
+        # body may already be gone (the 765c0e5 shutdown race).
+        if not self.app.is_running:
+            return
         body = self.query_one("#doctor-body", _BodyStatic)
         text = Text()
         text.append("PATH Doctor\n", style="bold")
@@ -2188,7 +2192,7 @@ class PoliciesScreen(AppScreen):
         self.active_state[policy_id] = resolved
         if resolved:
             self._drift.discard(policy_id)
-        if self.is_mounted:
+        if self.is_mounted and self.app.is_running:
             self.query_one(DataTable[Any]).update_cell(
                 policy_id, "state", self._state_cell(policy_id)
             )
