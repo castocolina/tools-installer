@@ -1,4 +1,3 @@
-import ast
 import inspect
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -7,7 +6,6 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
-from rich.text import Text
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, Static
@@ -35,15 +33,12 @@ from installer.guidance import (
     node_globals_guidance,
 )
 from installer.manager_versions import OutdatedReport
-from installer.model import Method, Tool, load_tools
+from installer.model import Method, Tool
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
     Owner,
     OwnershipCandidate,
-    removal_hint,
-    removal_label,
-    resolve_ownership,
 )
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
@@ -62,7 +57,7 @@ from installer.session import Disposition, PlanRow, Result, RowOutcome, Sensitiv
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
-from installer.uninstall import SweepResult, ToolRow, classify_tools
+from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     BROKEN_REPAIR_NOTE,
@@ -71,6 +66,7 @@ from installer.version_status import (
     ToolState,
     VersionRefreshService,
     VersionStatus,
+    uninstall_label,
 )
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
@@ -133,8 +129,11 @@ def _recorder(
     return record
 
 
-def _removable_row(tool: Tool, paths: list[Path]) -> ToolRow:
-    return ToolRow(tool, "removable", paths, "installed in userspace — removable here", True)
+_Case = tuple[Tool, ToolState]
+
+
+def _removable_row(tool: Tool, paths: list[Path]) -> _Case:
+    return tool, removable_state(tool, paths)
 
 
 _T = TypeVar("_T")
@@ -159,35 +158,13 @@ def _predicate(value: _T | Callable[[], _T]) -> Callable[[], _T]:
     return read
 
 
-def _rg_rows() -> Callable[[], list[ToolRow]]:
-    """TEST-ONLY: the one-removable-`rg` snapshot most Uninstall tests use,
-    named so the frozen shape stays visible at the call site (see `_frozen`)."""
-    return _frozen([_removable_row(_tool("rg"), [Path("/opt/rg")])])
-
-
-def _frozen(rows: list[ToolRow]) -> Callable[[], list[ToolRow]]:
-    """TEST-ONLY: an explicitly frozen row list, for tests that are not about
-    D-06's live re-read.
-
-    WR-05 (15.4-REVIEW.md). `_uninstall_inputs` used to accept
-    `list[ToolRow] | Callable[[], list[ToolRow]]` for `rows` -- the exact
-    union `UninstallInputs`' own docstring records as REJECTED, because it
-    "would keep the stale-snapshot shape representable and type-checkable
-    forever". Roughly two dozen `UninstallScreen` tests took it up on that
-    and passed a frozen list literal, so D-06's whole point (the row list
-    must be RE-READ) was covered only by the handful that pass a real live
-    callable: a regression that cached `_rows_of`'s result would have gone
-    unnoticed by most of this file.
-
-    The ergonomics are kept -- this is still one call -- but the opt-out is
-    now VISIBLE at the call site rather than inferable from the argument's
-    type, so a reader can see which tests deliberately freeze."""
-    return lambda: rows
+def _rg_rows() -> list[_Case]:
+    """The one-removable-`rg` case most Uninstall tests use."""
+    return [_removable_row(_tool("rg"), [Path("/opt/rg")])]
 
 
 def _uninstall_inputs(
     *,
-    rows: Callable[[], list[ToolRow]] = list,
     ban_names: list[str] | Callable[[], list[str]] | None = None,
     has_path_block: bool | Callable[[], bool] = False,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
@@ -195,15 +172,10 @@ def _uninstall_inputs(
     invalidate: Callable[[], object] | None = None,
     terminal_sync: Callable[[], str | None] | None = None,
 ) -> UninstallInputs:
-    """`rows` is strictly a callable, matching `UninstallInputs`' own field
-    (WR-05): a snapshot goes through `_frozen` above, which names itself.
-
-    The other three environment inputs keep the plain-value convenience --
-    they were predicates long before D-06 and no migration ever claimed
-    otherwise, so a frozen bool there is not a shape this project decided
-    against."""
+    """The environment inputs keep the plain-value convenience: they are
+    predicates, and most tests only care about one fixed reading."""
     return UninstallInputs(
-        rows=rows,
+        rows=list,  # unread since 21-12 task 1; the field goes in task 2
         ban_names=_predicate(ban_names if ban_names is not None else []),
         has_path_block=_predicate(has_path_block),
         remove=remove,
@@ -412,7 +384,7 @@ async def test_number_key_navigates_to_each_view() -> None:
 
 
 async def test_uninstall_view_is_reachable() -> None:
-    app = _app(uninstall=_uninstall_inputs(rows=_rg_rows()))
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert app.current_view == "uninstall"
@@ -1105,20 +1077,20 @@ async def test_ctrl_p_does_not_stack_a_second_palette() -> None:
         assert not isinstance(app.screen, NavScreen)
 
 
-def _managed_row(tool: Tool) -> ToolRow:
-    return ToolRow(tool, "managed", [], "managed by Homebrew — `brew uninstall jq`", False)
+def _managed_row(tool: Tool) -> _Case:
+    return tool, managed_state(tool)
 
 
-def _absent_row(tool: Tool) -> ToolRow:
-    return ToolRow(tool, "absent", [], "not installed", False)
+def _absent_row(tool: Tool) -> _Case:
+    return tool, absent_state(tool)
 
 
-def _unavailable_row(tool: Tool) -> ToolRow:
-    return ToolRow(tool, "unavailable", [], "not available on debian", False)
+def _unavailable_row(tool: Tool) -> _Case:
+    return tool, unavailable_state(tool)
 
 
 async def test_uninstall_toggle_selects_highlighted_tool() -> None:
-    app = _app(uninstall=_uninstall_inputs(rows=_rg_rows()))
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
@@ -1130,11 +1102,10 @@ async def test_uninstall_toggle_selects_highlighted_tool() -> None:
 
 async def test_uninstall_select_all_includes_ban_and_block() -> None:
     inputs = _uninstall_inputs(
-        rows=_rg_rows(),
         ban_names=["pip", "npm"],
         has_path_block=True,
     )
-    app = _app(uninstall=inputs)
+    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
@@ -1150,17 +1121,16 @@ async def test_uninstall_select_all_includes_ban_and_block() -> None:
 
 async def test_uninstall_lists_all_tools_with_their_states() -> None:
     """Catalog parity: every tool appears regardless of state."""
-    inputs = _uninstall_inputs(
-        rows=_frozen(
-            [
-                _removable_row(_tool("rg"), [Path("/opt/rg")]),
-                _managed_row(_tool("jq")),
-                _absent_row(_tool("fd")),
-                _unavailable_row(_tool("rect")),
-            ]
-        )
+    inputs = _uninstall_inputs()
+    app = _app(
+        cases=[
+            _removable_row(_tool("rg"), [Path("/opt/rg")]),
+            _managed_row(_tool("jq")),
+            _absent_row(_tool("fd")),
+            _unavailable_row(_tool("rect")),
+        ],
+        uninstall=inputs,
     )
-    app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
@@ -1171,15 +1141,14 @@ async def test_uninstall_lists_all_tools_with_their_states() -> None:
 
 async def test_uninstall_non_selectable_rows_are_inert() -> None:
     """Managed/absent/unavailable rows do not toggle; space on them is inert."""
-    inputs = _uninstall_inputs(
-        rows=_frozen(
-            [
-                _managed_row(_tool("jq")),
-                _removable_row(_tool("rg"), [Path("/opt/rg")]),
-            ]
-        )
+    inputs = _uninstall_inputs()
+    app = _app(
+        cases=[
+            _managed_row(_tool("jq")),
+            _removable_row(_tool("rg"), [Path("/opt/rg")]),
+        ],
+        uninstall=inputs,
     )
-    app = _app(uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
@@ -1188,8 +1157,8 @@ async def test_uninstall_non_selectable_rows_are_inert() -> None:
 
 
 async def test_uninstall_non_selectable_row_shows_hint() -> None:
-    inputs = _uninstall_inputs(rows=_frozen([_managed_row(_tool("jq"))]))
-    app = _app(uninstall=inputs, initial_view="uninstall")
+    inputs = _uninstall_inputs()
+    app = _app(cases=[_managed_row(_tool("jq"))], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -1200,7 +1169,7 @@ async def test_uninstall_non_selectable_row_shows_hint() -> None:
 async def test_uninstall_apply_calls_remove_and_flips_applied() -> None:
     captured: list[UninstallDecision] = []
     rows = _rg_rows()
-    app = _app(uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)))
+    app = _app(cases=rows, uninstall=_uninstall_inputs(remove=_recorder(captured)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
@@ -1221,11 +1190,11 @@ async def test_uninstall_apply_invalidates_the_shared_data_once_on_success() -> 
     invalidations: list[None] = []
     rows = _rg_rows()
     app = _app(
+        cases=rows,
         uninstall=_uninstall_inputs(
-            rows=rows,
             remove=_recorder(captured),
             invalidate=lambda: invalidations.append(None),
-        )
+        ),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1248,11 +1217,10 @@ async def test_uninstall_apply_does_not_invalidate_on_a_failed_sweep() -> None:
         raise OSError("permission denied")
 
     inputs = _uninstall_inputs(
-        rows=_rg_rows(),
         remove=boom,
         invalidate=lambda: invalidations.append(None),
     )
-    app = _app(uninstall=inputs)
+    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("space")
@@ -1275,9 +1243,8 @@ async def test_uninstall_apply_survives_a_raising_invalidate_seam() -> None:
 
     rows = _rg_rows()
     app = _app(
-        uninstall=_uninstall_inputs(
-            rows=rows, remove=_recorder(captured), invalidate=boom_invalidate
-        )
+        cases=rows,
+        uninstall=_uninstall_inputs(remove=_recorder(captured), invalidate=boom_invalidate),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1312,9 +1279,8 @@ async def test_uninstall_apply_calls_the_terminal_synchronizer_once_on_success()
 
     rows = _rg_rows()
     app = _app(
-        uninstall=_uninstall_inputs(
-            rows=rows, remove=_recorder(captured), terminal_sync=_terminal_sync
-        )
+        cases=rows,
+        uninstall=_uninstall_inputs(remove=_recorder(captured), terminal_sync=_terminal_sync),
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1345,7 +1311,7 @@ async def test_uninstall_apply_appends_a_terminal_sync_oserror_without_losing_ap
 
     rows = _rg_rows()
     app = _app(
-        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured), terminal_sync=_boom)
+        cases=rows, uninstall=_uninstall_inputs(remove=_recorder(captured), terminal_sync=_boom)
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1375,7 +1341,7 @@ async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_fai
         raise OSError("permission denied")
 
     app = _app(
-        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=boom, terminal_sync=_terminal_sync)
+        cases=_rg_rows(), uninstall=_uninstall_inputs(remove=boom, terminal_sync=_terminal_sync)
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
@@ -1388,19 +1354,12 @@ async def test_uninstall_apply_never_calls_the_terminal_synchronizer_after_a_fai
         assert calls == []
 
 
-# -- 15.4-04/Task 1: `rows` becomes the fourth live predicate -----------------
+# -- 21-12: the environment predicates are the screen's only live reads ----------
 
 
-async def test_uninstall_unchanged_rows_rebuilds_nothing_on_reentry() -> None:
-    """Entering with an equal rows result rebuilds nothing: `_build_entries`
-    is not called again, and the entries re-derived by the always-render rule
-    (21-11) equal the previous ones."""
-    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
-
-    def rows() -> list[ToolRow]:
-        return [row]  # a fresh list, but value-equal every call
-
-    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
+async def test_uninstall_reentry_repaints_equal_entries() -> None:
+    """Entering again with nothing changed repaints entries equal to the last."""
+    app = _app(cases=_rg_rows(), initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -1411,274 +1370,99 @@ async def test_uninstall_unchanged_rows_rebuilds_nothing_on_reentry() -> None:
         assert app.screen._entries == before_entries  # pyright: ignore[reportPrivateUsage]
 
 
-async def test_uninstall_rows_change_makes_new_tool_ids_reachable() -> None:
-    live_rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
-
-    def rows() -> list[ToolRow]:
-        return list(live_rows)
-
-    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
+async def test_uninstall_tool_disappearing_drops_its_stale_selection(tmp_path: Path) -> None:
+    rg, fd = _tool("rg"), _tool("fd")
+    service = frozen_service(tmp_path)
+    service.publish(
+        [removable_state(rg, [Path("/opt/rg")]), removable_state(fd, [Path("/opt/fd")])]
+    )
+    app = _app(tools=[rg, fd], version_refresh=service, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        assert "fd" not in {r.value for r in screen.query_one(DataTable[Any]).rows}
-        live_rows.append(_removable_row(_tool("fd"), [Path("/opt/fd")]))
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert "fd" in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
-        await pilot.press("a")
-        assert "fd" in app.screen.selected
-
-
-async def test_uninstall_tool_becomes_selectable_when_rows_reports_it_removable() -> None:
-    tool = _tool("rg")
-    state = {"selectable": False}
-
-    def rows() -> list[ToolRow]:
-        if state["selectable"]:
-            return [_removable_row(tool, [Path("/opt/rg")])]
-        return [_absent_row(tool)]
-
-    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
-    async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        await pilot.press("a")
-        assert screen.selected == set()  # inert: select-all skips a non-selectable row
-        state["selectable"] = True
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        await pilot.press("a")
-        assert app.screen.selected == {"rg"}
-
-
-async def test_uninstall_tool_disappearing_drops_it_and_its_stale_selection() -> None:
-    tool_a = _tool("rg")
-    tool_b = _tool("fd")
-    live_rows = [
-        _removable_row(tool_a, [Path("/opt/rg")]),
-        _removable_row(tool_b, [Path("/opt/fd")]),
-    ]
-
-    def rows() -> list[ToolRow]:
-        return list(live_rows)
-
-    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
-    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         await pilot.press("a")
         assert screen.selected == {"rg", "fd"}
-        live_rows.pop()  # fd disappears from the predicate's output
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert "fd" not in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
-        assert app.screen.selected == {"rg"}  # the stale fd selection is not carried over
+        service.queued = (absent_state(fd),)  # fd is no longer removable
+        app.request_refresh()
+        await settle(app, pilot)
+        assert screen.selected == {"rg"}  # the stale fd selection is not carried over
 
 
-async def test_uninstall_rows_failure_during_enter_view_keeps_previous_rows_and_warns() -> None:
-    """When the rows predicate raises OSError during enter_view the previous
-    row list is kept, the browser is not rebuilt from a partial result, a
-    warn status names the failure, and the other three predicates are still
-    evaluated."""
-    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
+async def test_uninstall_env_failure_during_enter_view_keeps_previous_rows_and_warns() -> None:
+    """When an environment predicate raises during enter_view the last
+    environment rows are kept, a warn status names the failure, and the tool
+    rows still repaint."""
     state = {"fail": False}
-    live_tweaks: list[str] = []
 
-    def rows() -> list[ToolRow]:
+    def has_path_block() -> bool:
         if state["fail"]:
             raise OSError("disconnected network mount")
-        return [row]
-
-    def tweak_ids() -> tuple[str, ...]:
-        return tuple(live_tweaks)
+        return True
 
     app = _app(
-        uninstall=_uninstall_inputs(rows=rows, tweak_ids=tweak_ids), initial_view="uninstall"
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        assert "rg" in {r.value for r in screen.query_one(DataTable[Any]).rows}
-        state["fail"] = True
-        live_tweaks.append("tweak:countdown")  # the other predicates still change
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert "disconnected network mount" in app.screen.status.text
-        assert "rg" in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
-        assert "#tweaks" in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
-
-
-async def test_precedence_failure_wins_over_a_standing_applied_summary_when_unchanged() -> None:
-    """PRECEDENCE case 1: `applied` set, rows predicate raising, environment
-    UNCHANGED. The warn status wins the status line, `applied` stays set,
-    and the entry does not rebuild from the failed read."""
-    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
-    state = {"fail": False}
-    captured: list[UninstallDecision] = []
-
-    def rows() -> list[ToolRow]:
-        if state["fail"]:
-            raise OSError("stale handle")
-        return [row]
-
-    app = _app(
-        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(has_path_block=has_path_block),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("space")
-        await pilot.press("enter")
-        await pilot.press("enter")
-        await pilot.pause()
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        assert screen.applied is True
-        applied_status = screen.status.text
-        state["fail"] = True  # nothing else changed
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert app.screen.applied is True  # a failure never clears applied
-        assert app.screen.status.text != applied_status
-        assert "stale handle" in app.screen.status.text
-
-
-async def test_precedence_failure_still_wins_when_environment_rows_also_changed() -> None:
-    """PRECEDENCE case 2: `applied` set, rows predicate raising, AND the
-    environment predicates reporting a changed value. The environment rows
-    still rebuild, the warn status still wins the status line, and `applied`
-    still stays set."""
-    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
-    state = {"fail": False}
-    live_tweaks: list[str] = []
-    captured: list[UninstallDecision] = []
-
-    def rows() -> list[ToolRow]:
-        if state["fail"]:
-            raise OSError("stale handle")
-        return [row]
-
-    def tweak_ids() -> tuple[str, ...]:
-        return tuple(live_tweaks)
-
-    app = _app(
-        uninstall=_uninstall_inputs(rows=rows, tweak_ids=tweak_ids, remove=_recorder(captured)),
-        initial_view="uninstall",
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("space")
-        await pilot.press("enter")
-        await pilot.press("enter")
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        assert screen.applied is True
+        assert "#path-block" in _row_keys(screen)
         state["fail"] = True
-        live_tweaks.append("tweak:countdown")
         await pilot.press("escape")
-        await pilot.press("5")
+        await pilot.press("5")  # must not raise out of the nav path
         assert isinstance(app.screen, UninstallScreen)
-        assert app.screen.applied is True
-        assert "stale handle" in app.screen.status.text
-        assert "#tweaks" in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
+        assert app.current_view == "uninstall"
+        assert app.screen.status.text == (
+            "Could not read the uninstall state: disconnected network mount."
+        )
+        assert "rg" in _row_keys(app.screen)
+        assert "#path-block" in _row_keys(app.screen)
 
 
-async def test_uninstall_construction_rows_failure_yields_a_usable_screen_that_self_heals() -> None:
-    """Round-1 review MEDIUM (T-15.4-19): construction happens outside the
-    nav path `enter_view` guards, so the initial rows evaluation must also
-    go through `run_live` -- a raising predicate must not take app
-    construction down. The screen still constructs with an empty row list,
-    the message is stashed, and the first entry shows it as a warn status
-    and then re-derives (self-heals)."""
+async def test_uninstall_construction_env_failure_yields_a_usable_screen_that_self_heals() -> None:
+    """Construction happens outside the nav path `enter_view` guards, so the
+    initial environment read goes through `run_live`: a raising predicate must
+    not take app construction down. The message is stashed, the first entry
+    shows it as a warn and re-reads (self-heals)."""
     calls = {"n": 0}
 
-    def flaky_rows() -> list[ToolRow]:
+    def flaky_block() -> bool:
         calls["n"] += 1
         if calls["n"] == 1:
             raise OSError("stale file handle")
-        return [_removable_row(_tool("rg"), [Path("/opt/rg")])]
+        return True
 
-    app = _app(uninstall=_uninstall_inputs(rows=flaky_rows))  # must not raise
+    app = _app(
+        cases=_rg_rows(), uninstall=_uninstall_inputs(has_path_block=flaky_block)
+    )  # must not raise
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert "stale file handle" in screen.status.text
-        assert "rg" in {r.value for r in screen.query_one(DataTable[Any]).rows}
+        assert "#path-block" in _row_keys(screen)
 
 
 def test_uninstall_construction_survives_a_raising_environment_predicate() -> None:
     """CR-01 (15.4-REVIEW.md): the three environment predicates are
     FILESYSTEM reads, not in-memory ones, so `__init__` must evaluate them
-    through `run_live` exactly as it already does the rows predicate. Bare,
-    a raising `has_path_block` took `_build_app` itself down before any
-    screen existed to report it."""
+    through `run_live`. Bare, a raising `has_path_block` took `_build_app`
+    itself down before any screen existed to report it."""
 
     def raising_block() -> bool:
         raise OSError("EACCES on ~/.myshellrc")
 
-    inputs = _uninstall_inputs(
-        rows=_rg_rows(),
-        has_path_block=raising_block,
-    )
-    screen = UninstallScreen(inputs)  # must not raise
+    inputs = _uninstall_inputs(has_path_block=raising_block)
+    screen = UninstallScreen(inputs, tools=[_tool("rg")])  # must not raise
     assert screen.remove_path_block is False
 
 
-async def test_env_predicate_failure_inside_the_rows_failure_branch_never_escapes_nav() -> None:
-    """CR-01 (15.4-REVIEW.md): the rows-failure branch re-derives the three
-    environment predicates, and they fail CORRELATED with the rows predicate
-    (same `$HOME`, same fault). Routed bare, the OSError escaped
-    `enter_view` AFTER `show_view` had already popped the previous screen --
-    a crash on the single nav path. Both messages must reach the status
-    line and the last known environment rows must survive."""
-    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
-    state = {"fail": False}
-
-    def rows() -> list[ToolRow]:
-        if state["fail"]:
-            raise OSError("disconnected network mount")
-        return [row]
-
-    def has_path_block() -> bool:
-        if state["fail"]:
-            raise OSError("EACCES on ~/.myshellrc")
-        return True
-
-    app = _app(
-        uninstall=_uninstall_inputs(rows=rows, has_path_block=has_path_block),
-        initial_view="uninstall",
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        assert "#path-block" in {r.value for r in app.screen.query_one(DataTable[Any]).rows}
-        state["fail"] = True
-        await pilot.press("escape")
-        await pilot.press("5")  # must not raise out of the nav path
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        assert app.current_view == "uninstall"
-        assert "disconnected network mount" in screen.status.text
-        assert "EACCES on ~/.myshellrc" in screen.status.text
-        # Last known values kept: the env row is still there, not silently dropped.
-        assert "#path-block" in {r.value for r in screen.query_one(DataTable[Any]).rows}
-
-
 async def test_env_predicate_failure_during_a_background_repaint_never_escapes() -> None:
-    """CR-01 (15.4-REVIEW.md): `state_refreshed()` reaches the same
-    branch from a repaint the user never initiated, so the same guard has
-    to hold there."""
-    row = _removable_row(_tool("rg"), [Path("/opt/rg")])
+    """CR-01 (15.4-REVIEW.md): `state_refreshed()` reads the environment from a
+    repaint the user never initiated, so the same guard has to hold there."""
     state = {"fail": False}
-
-    def rows() -> list[ToolRow]:
-        if state["fail"]:
-            raise OSError("stale handle")
-        return [row]
 
     def tweak_ids() -> tuple[str, ...]:
         if state["fail"]:
@@ -1686,7 +1470,9 @@ async def test_env_predicate_failure_during_a_background_repaint_never_escapes()
         return ()
 
     app = _app(
-        uninstall=_uninstall_inputs(rows=rows, tweak_ids=tweak_ids), initial_view="uninstall"
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(tweak_ids=tweak_ids),
+        initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
@@ -1694,7 +1480,6 @@ async def test_env_predicate_failure_during_a_background_repaint_never_escapes()
         state["fail"] = True
         screen.state_refreshed()  # must not raise
         await pilot.pause()
-        assert "stale handle" in screen.status.text
         assert "rc file vanished" in screen.status.text
 
 
@@ -1708,8 +1493,8 @@ async def test_an_env_lever_only_sweep_does_not_invalidate_ownership() -> None:
     invalidated: list[int] = []
     captured: list[UninstallDecision] = []
     app = _app(
+        cases=[],
         uninstall=_uninstall_inputs(
-            rows=_frozen([]),
             ban_names=["pip"],
             remove=_recorder(captured),
             invalidate=lambda: invalidated.append(1),
@@ -1762,7 +1547,8 @@ async def test_removal_requests_the_app_pass_after_invalidate(
     app = _version_app(
         [_tool("rg")],
         service,
-        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=_recorder([]), invalidate=invalidate),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(remove=_recorder([]), invalidate=invalidate),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1779,11 +1565,11 @@ async def test_removal_requests_the_app_pass_after_invalidate(
 async def test_uninstall_rerenders_when_a_pass_publishes(tmp_path: Path) -> None:
     """A publish re-derives the rows without clearing the standing status."""
     service = frozen_service(tmp_path)
-    live_rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
+    rg = _tool("rg")
     app = _version_app(
-        [_tool("rg")],
+        [rg],
         service,
-        uninstall=_uninstall_inputs(rows=lambda: list(live_rows)),
+        cases=[_removable_row(rg, [Path("/opt/rg")])],
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1792,10 +1578,10 @@ async def test_uninstall_rerenders_when_a_pass_publishes(tmp_path: Path) -> None
         assert isinstance(screen, UninstallScreen)
         screen.applied = True
         screen.status.set("standing result", "ok")
-        live_rows.clear()
+        service.queued = (absent_state(rg),)
         app.request_refresh()
         await settle(app, pilot)
-        assert screen.query_one(DataTable[Any]).row_count == 0
+        assert _row_keys(screen) == ["#nothing to do", "rg"]
         assert screen.status.text == "standing result"
 
 
@@ -1808,7 +1594,8 @@ async def test_removal_requests_a_pass_even_when_invalidate_raises(tmp_path: Pat
     app = _version_app(
         [_tool("rg")],
         service,
-        uninstall=_uninstall_inputs(rows=_rg_rows(), remove=_recorder([]), invalidate=invalidate),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(remove=_recorder([]), invalidate=invalidate),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1825,10 +1612,9 @@ async def test_an_environment_only_removal_requests_no_pass(tmp_path: Path) -> N
     removal asks for no pass here (21-14 revisits the environment-only path)."""
     service = frozen_service(tmp_path)
     app = _version_app(
-        [_tool("rg")],
+        [],
         service,
         uninstall=_uninstall_inputs(
-            rows=_frozen([]),
             ban_names=["pip"],
             remove=_recorder([]),
             invalidate=lambda: None,
@@ -1855,8 +1641,8 @@ async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
     captured: list[UninstallDecision] = []
     invalidated: list[int] = []
     app = _app(
+        cases=_rg_rows(),
         uninstall=_uninstall_inputs(
-            rows=_rg_rows(),
             remove=_recorder(captured),
             invalidate=lambda: invalidated.append(1),
         ),
@@ -1873,63 +1659,10 @@ async def test_a_removal_with_no_refresh_seam_still_completes() -> None:
         assert invalidated == [1]
 
 
-def test_no_uninstall_construction_site_hands_rows_a_bare_list() -> None:
-    """WR-05 (15.4-REVIEW.md): the AST gate, over THIS file rather than over
-    the production tree, because this file is where the rejected
-    `list | Callable` union actually came back. A snapshot must go through
-    `_frozen`, which names itself as the deliberate opt-out; a bare list
-    display passed to `rows=` is the stale-snapshot shape
-    `UninstallInputs`' docstring records as rejected."""
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    offenders: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-        if name not in {"_uninstall_inputs", "UninstallInputs"}:
-            continue
-        offenders.extend(
-            keyword.value.lineno
-            for keyword in node.keywords
-            if keyword.arg == "rows" and isinstance(keyword.value, ast.List | ast.ListComp)
-        )
-    assert offenders == [], offenders
-
-
-async def test_the_rows_predicate_is_re_read_on_every_entry() -> None:
-    """WR-05 (15.4-REVIEW.md): D-06's whole point, pinned explicitly. A
-    predicate whose RETURN VALUE CHANGES between calls must change what the
-    screen shows -- nothing asserted that directly before, so a regression
-    that cached `_rows_of`'s result (or froze the list at construction)
-    would have been caught only incidentally, by whichever few tests happen
-    to pass a live callable for another reason."""
-    installed_now = {"fd": False}
-
-    def rows() -> list[ToolRow]:
-        tools = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
-        if installed_now["fd"]:
-            tools.append(_removable_row(_tool("fd"), [Path("/opt/fd")]))
-        return tools
-
-    def keys() -> set[str]:
-        return {r.value for r in app.screen.query_one(DataTable[Any]).rows if r.value}
-
-    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
-    async with app.run_test(size=(100, 30)) as pilot:
-        assert "rg" in keys()
-        assert "fd" not in keys()
-        installed_now["fd"] = True  # something outside this screen changed
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert {"rg", "fd"} <= keys()
-
-
 def test_state_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
     """Safe to call regardless of mount state: `ToolBrowser.reload` no-ops
     when unmounted."""
-    inputs = _uninstall_inputs(rows=_rg_rows())
-    screen = UninstallScreen(inputs)
+    screen = UninstallScreen(_uninstall_inputs(), tools=[_tool("rg")])
     screen.state_refreshed()  # must not raise
 
 
@@ -1937,7 +1670,8 @@ async def test_state_refreshed_returns_early_through_the_unchanged_comparison() 
     """Safe to call when nothing changed: the always-render rule (21-11)
     re-derives entries equal to the previous ones."""
     app = _app(
-        uninstall=_uninstall_inputs(rows=_rg_rows()),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1951,8 +1685,8 @@ async def test_state_refreshed_returns_early_through_the_unchanged_comparison() 
 
 async def test_uninstall_empty_selection_refuses() -> None:
     captured: list[UninstallDecision] = []
-    inputs = _uninstall_inputs(rows=_rg_rows(), remove=_recorder(captured))
-    app = _app(uninstall=inputs)
+    inputs = _uninstall_inputs(remove=_recorder(captured))
+    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("enter")  # nothing selected
@@ -1966,8 +1700,8 @@ async def test_uninstall_apply_error_surfaces_and_does_not_crash() -> None:
     def boom(_decision: UninstallDecision) -> SweepResult:
         raise OSError("permission denied")
 
-    inputs = _uninstall_inputs(rows=_rg_rows(), remove=boom)
-    app = _app(uninstall=inputs)
+    inputs = _uninstall_inputs(remove=boom)
+    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("space")  # select rg
@@ -1985,7 +1719,8 @@ async def test_uninstall_destructive_red_accent() -> None:
     from installer.ui_common import WayfindingHeader
 
     app = _app(
-        uninstall=_uninstall_inputs(rows=_rg_rows()),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)):
@@ -1995,7 +1730,8 @@ async def test_uninstall_destructive_red_accent() -> None:
 
 async def test_uninstall_initial_view_opens_on_uninstall() -> None:
     app = _app(
-        uninstall=_uninstall_inputs(rows=_rg_rows()),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)):
@@ -2003,7 +1739,7 @@ async def test_uninstall_initial_view_opens_on_uninstall() -> None:
 
 
 async def test_uninstall_empty_state_shows_nothing_line() -> None:
-    app = _app(uninstall=_uninstall_inputs())  # no rows, no ban, no block
+    app = _app(cases=[], uninstall=_uninstall_inputs())  # no tools, no ban, no block
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("enter")  # no-op
@@ -2013,7 +1749,7 @@ async def test_uninstall_empty_state_shows_nothing_line() -> None:
 
 
 async def test_ctrl_c_aborts_from_uninstall_view() -> None:
-    app = _app(uninstall=_uninstall_inputs(rows=_rg_rows()))
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("ctrl+c")
@@ -2035,15 +1771,15 @@ async def test_uninstall_partial_selection_apply() -> None:
     """Only selected tools appear in the UninstallDecision paths."""
     captured: list[UninstallDecision] = []
     inputs = _uninstall_inputs(
-        rows=_frozen(
-            [
-                _removable_row(_tool("rg"), [Path("/opt/rg")]),
-                _removable_row(_tool("fd"), [Path("/opt/fd")]),
-            ]
-        ),
         remove=_recorder(captured),
     )
-    app = _app(uninstall=inputs)
+    app = _app(
+        cases=[
+            _removable_row(_tool("rg"), [Path("/opt/rg")]),
+            _removable_row(_tool("fd"), [Path("/opt/fd")]),
+        ],
+        uninstall=inputs,
+    )
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
@@ -2064,12 +1800,11 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
     Also verifies that remove_ban/remove_path_block read the browser's live
     selection correctly after the modal is dismissed (the post-modal read path)."""
     inputs = _uninstall_inputs(
-        rows=_rg_rows(),
         ban_names=["pip"],
         has_path_block=True,
         remove=lambda _d: SweepResult(),
     )
-    app = _app(uninstall=inputs)
+    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
@@ -2089,11 +1824,10 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
 async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
     """Selecting only the ban (no tool) yields no 'Removed N tool(s).' line."""
     inputs = _uninstall_inputs(
-        rows=_rg_rows(),
         ban_names=["pip"],
         remove=lambda _d: SweepResult(),
     )
-    app = _app(uninstall=inputs)
+    app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
@@ -2115,7 +1849,7 @@ async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
 async def test_uninstall_cancel_modal_removes_nothing() -> None:
     captured: list[UninstallDecision] = []
     rows = _rg_rows()
-    app = _app(uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)))
+    app = _app(cases=rows, uninstall=_uninstall_inputs(remove=_recorder(captured)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         screen = app.screen
@@ -2130,7 +1864,7 @@ async def test_uninstall_cancel_modal_removes_nothing() -> None:
 
 async def test_uninstall_confirm_modal_shows_artifact_count() -> None:
     rows = _rg_rows()
-    app = _app(uninstall=_uninstall_inputs(rows=rows))
+    app = _app(cases=rows, uninstall=_uninstall_inputs())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("space")
@@ -2142,7 +1876,8 @@ async def test_uninstall_confirm_modal_shows_artifact_count() -> None:
 
 async def test_uninstall_screen_omits_the_tweaks_row_when_none_are_active() -> None:
     app = _app(
-        uninstall=_uninstall_inputs(rows=_rg_rows()),
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -2160,7 +1895,7 @@ async def test_uninstall_screen_reports_the_tweaks_lever_in_its_summaries() -> N
         tweak_ids=("countdown", "omz-plugins"),
         remove=lambda _d: SweepResult(),
     )
-    app = _app(uninstall=inputs, initial_view="uninstall")
+    app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -2176,7 +1911,7 @@ async def test_uninstall_screen_reports_the_tweaks_lever_in_its_summaries() -> N
 
 async def test_uninstall_toggle_clears_stale_validation_toast() -> None:
     """A refusal toast must not linger once the selection changes."""
-    app = _app(uninstall=_uninstall_inputs(rows=_rg_rows()))
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         await pilot.press("enter")  # nothing selected → refusal toast
@@ -3457,7 +3192,7 @@ async def test_uninstall_tweak_row_names_background_jobs_when_a_daemon_id_is_off
     Tool-column label and detail both name the background job once a
     daemon:-prefixed id is among what is offered."""
     inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"))
-    app = _app(uninstall=inputs, initial_view="uninstall")
+    app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -3472,7 +3207,7 @@ async def test_uninstall_tweak_row_names_the_linux_timer_and_the_cache_redirect(
     inputs = _uninstall_inputs(
         tweak_ids=("tweak:countdown", "daemon:prune-tmp-linux", "cache-redirect:bun")
     )
-    app = _app(uninstall=inputs, initial_view="uninstall")
+    app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -3486,7 +3221,7 @@ async def test_uninstall_tweak_row_names_the_linux_timer_and_the_cache_redirect(
 
 async def test_uninstall_tweak_row_keeps_the_macos_launchagent_sentence() -> None:
     inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"))
-    app = _app(uninstall=inputs, initial_view="uninstall")
+    app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -3672,42 +3407,6 @@ async def test_uninstall_first_entry_picks_up_state_changed_before_it_was_ever_s
         assert "#tweaks" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
 
 
-async def test_uninstall_does_not_refresh_after_it_has_applied_when_unchanged() -> None:
-    """Once a removal has run, an entry whose live state has NOT changed
-    returns early through the ordinary unchanged comparison — the standing
-    message is that run's result, and a re-entry that finds nothing different
-    must not rebuild the rows out from under it (PRECEDENCE rule 3)."""
-    captured: list[UninstallDecision] = []
-    live = ["tweak:countdown"]
-
-    def tweak_ids() -> tuple[str, ...]:
-        return tuple(live)
-
-    inputs = _uninstall_inputs(
-        tweak_ids=tweak_ids,
-        remove=_recorder(captured, SweepResult(swept=("tweak:countdown",))),
-    )
-    app = _app(uninstall=inputs, initial_view="uninstall")
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("a")
-        await pilot.press("enter")
-        await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, UninstallScreen)
-        assert app.screen.applied is True
-        applied_status = app.screen.status.text
-        # live state is untouched here — the sweep's own recorded result is
-        # what changed, not the predicate's live reading.
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert app.screen.applied is True
-        # Leaving ended the status moment (UI-02); an unchanged entry rebuilds nothing.
-        assert applied_status
-        assert app.screen.status.text == ""
-        assert "#tweaks" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
-
-
 async def test_uninstall_refreshes_and_clears_applied_when_live_state_changed_after_apply() -> None:
     """D-06: a same-session removal's own effect is visible on the NEXT nav
     entry, not hidden behind the standing message forever — an entry whose
@@ -3724,7 +3423,7 @@ async def test_uninstall_refreshes_and_clears_applied_when_live_state_changed_af
         tweak_ids=tweak_ids,
         remove=_recorder(captured, SweepResult(swept=("tweak:countdown",))),
     )
-    app = _app(uninstall=inputs, initial_view="uninstall")
+    app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("a")
         await pilot.press("enter")
@@ -5039,8 +4738,10 @@ def _daemon_app(
     daemon_default: Callable[[], bool] | None,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _d: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
-    rows: Callable[[], list[ToolRow]] = list,
+    cases: Sequence[_Case] = (),
 ) -> UnifiedApp:
+    service = frozen_service(Path.home())
+    service.publish([state for _tool_of, state in cases])
     return UnifiedApp(
         [_tool("rg")],
         {"search": ""},
@@ -5048,8 +4749,9 @@ def _daemon_app(
         guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
-        uninstall=_uninstall_inputs(rows=rows, remove=remove, tweak_ids=tweak_ids),
+        uninstall=_uninstall_inputs(remove=remove, tweak_ids=tweak_ids),
         policies=PolicyInputs(policies=[policy]),
+        version_refresh=service,
         initial_view="policies",
         daemon_default=daemon_default,
         daemon_default_policy_id=policy.id,
@@ -5392,7 +5094,7 @@ async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_
         daemon_default=slow_daemon_default,
         remove=_recorder(captured, SweepResult()),
         tweak_ids=(),  # no other tweaks: the daemon row never appears at all
-        rows=_frozen([_removable_row(_tool("rg"), [tmp_path / "rg-artifact"])]),
+        cases=[_removable_row(_tool("rg"), [tmp_path / "rg-artifact"])],
     )
     async with app.run_test(size=(100, 30)) as pilot:
         assert app.daemon_default_in_flight is True
@@ -5473,7 +5175,12 @@ def _version_app(
     uninstall: UninstallInputs | None = None,
     initial_view: str = BASE_VIEW,
     terminal_sync: Callable[[], str | None] | None = None,
+    cases: Sequence[_Case] = (),
 ) -> UnifiedApp:
+    """`cases` are states a pass already published on the (frozen) `service`."""
+    if cases:
+        assert isinstance(service, FrozenStateService)
+        service.publish([state for _tool_of, state in cases])
     return UnifiedApp(
         tools,
         {"search": "find things", "ai": "agents"},
@@ -6158,31 +5865,13 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
     above (D-06): an install run closes, the user navigates to Uninstall
     afterward, and the row for the just-installed tool reflects its
     post-install state -- through the single nav path's `enter_view` ->
-    `_resync` re-derivation, without restarting the app or `_install_closed`
+    repaint, without restarting the app or `_install_closed`
     gaining any reference to the Uninstall screen."""
     tool = _gh_tool("codegraph", tier="system")
     presence = {"codegraph": False}
 
     def on_install(installed_tool: Tool) -> None:
         presence[installed_tool.id] = True
-
-    def rows() -> list[ToolRow]:
-        installed_now = presence["codegraph"]
-        return [
-            ToolRow(
-                tool,
-                "removable" if installed_now else "absent",
-                [Path("/opt/codegraph")] if installed_now else [],
-                # 15.4-05/D-03: the "Installed via" cell now renders this hint
-                # verbatim for a removable row, so it must carry the same
-                # "userspace" wording `installer/uninstall.py::classify_tools`
-                # produces for the real removable branch -- otherwise this
-                # fake row diverges from what the row it stands in for would
-                # actually render.
-                "installed in userspace — removable here" if installed_now else "not installed",
-                installed_now,
-            )
-        ]
 
     service = _macos_service(
         tmp_path,
@@ -6200,7 +5889,6 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
         [tool],
         service,
         execute=execute,
-        uninstall=_uninstall_inputs(rows=rows),
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -6213,8 +5901,10 @@ async def test_install_closed_then_navigating_to_uninstall_shows_the_post_instal
         await settle(app, pilot)
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
-        cells = app.screen.query_one(DataTable[Any]).get_row("codegraph")
-        assert "userspace" in " ".join(str(cell) for cell in cells)
+        state = service.state_of("codegraph")
+        assert state is not None and state.present
+        health = app.screen.query_one(DataTable[Any]).get_cell("codegraph", "health")
+        assert health.plain == health_cell(state).plain
 
 
 async def test_install_closed_keeps_cross_tier_ids_in_every_installed_map(
@@ -7624,8 +7314,20 @@ async def test_two_runs_keep_the_latest_outcome_per_tool() -> None:
 # by sleeping. ----------------------------------------------------------------
 
 
+def _count_state_refreshed(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    calls = {"n": 0}
+    original = UninstallScreen.state_refreshed
+
+    def spy(self: UninstallScreen) -> None:
+        calls["n"] += 1
+        original(self)
+
+    monkeypatch.setattr(UninstallScreen, "state_refreshed", spy)
+    return calls
+
+
 async def test_state_refreshed_rebuilds_a_mounted_uninstall_screen_entered_during_an_in_flight_refresh(  # noqa: E501
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     started = threading.Event()
     release = threading.Event()
@@ -7637,28 +7339,22 @@ async def test_state_refreshed_rebuilds_a_mounted_uninstall_screen_entered_durin
 
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=resolve_tag)
-    rows_calls = {"n": 0}
-
-    def rows() -> list[ToolRow]:
-        rows_calls["n"] += 1
-        return []
-
-    app = _version_app([tool], service, uninstall=_uninstall_inputs(rows=rows))
+    calls = _count_state_refreshed(monkeypatch)
+    app = _version_app([tool], service)
     async with app.run_test(size=(120, 30)) as pilot:
         assert started.wait(timeout=5)  # the base tier's version refresh is in flight
         await pilot.press("5")  # navigate to Uninstall BEFORE that refresh commits
         assert isinstance(app.screen, UninstallScreen)
-        before = rows_calls["n"]
+        before = calls["n"]
         release.set()  # let the worker commit
         await settle(app, pilot)
-        # state_refreshed() re-derived in place -- a real extra rows()
-        # call beyond the one nav entry already made, with no second
+        # The publish repaints the visible Uninstall in place, with no second
         # navigation and no user keypress.
-        assert rows_calls["n"] > before
+        assert calls["n"] > before
 
 
 async def test_state_refreshed_does_not_touch_a_different_current_view(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The nav path already re-derives every OTHER view before it is shown
     (rule 2), so a completion signal for a screen nobody is looking at buys
@@ -7673,30 +7369,24 @@ async def test_state_refreshed_does_not_touch_a_different_current_view(
 
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=resolve_tag)
-    rows_calls = {"n": 0}
-
-    def rows() -> list[ToolRow]:
-        rows_calls["n"] += 1
-        return []
-
-    app = _version_app([tool], service, uninstall=_uninstall_inputs(rows=rows))
+    calls = _count_state_refreshed(monkeypatch)
+    app = _version_app([tool], service)
     async with app.run_test(size=(120, 30)) as pilot:
         assert started.wait(timeout=5)
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("escape")  # back to the catalog -- Uninstall no longer current
         assert app.current_view != "uninstall"
-        before = rows_calls["n"]
+        before = calls["n"]
         release.set()
         await settle(app, pilot)
-        assert rows_calls["n"] == before
+        assert calls["n"] == before
 
 
 async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Path) -> None:
-    """A completion signal arriving while the user is reading a removal
-    summary rebuilds the rows and LEAVES the summary standing --
-    `state_refreshed()` passes `clear_applied=False`, so the background
-    path can never wipe the sentence describing what the user just did."""
+    """A publish arriving while the user is reads a removal summary repaints the
+    rows and LEAVES the summary standing: the background path can never wipe the
+    sentence describing what the user just did."""
     started = threading.Event()
     release = threading.Event()
 
@@ -7708,15 +7398,10 @@ async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Pa
     tool = _gh_tool("codegraph", tier="system")
     service = _macos_service(tmp_path, resolve_tag=resolve_tag)
     captured: list[UninstallDecision] = []
-    live_rows = [_removable_row(_tool("rg"), [Path("/opt/rg")])]
-
-    def rows() -> list[ToolRow]:
-        return list(live_rows)
-
     app = _version_app(
         [tool],
         service,
-        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured)),
+        uninstall=_uninstall_inputs(ban_names=["pip"], remove=_recorder(captured)),
         initial_view="uninstall",
     )
     async with app.run_test(size=(120, 30)) as pilot:
@@ -7733,12 +7418,10 @@ async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Pa
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
         applied_status = screen.status.text
-        live_rows.clear()  # a background mutation the completion signal will pick up
         release.set()
         await settle(app, pilot)
         assert screen.applied is True
         assert screen.status.text == applied_status
-        assert screen.query_one(DataTable[Any]).row_count == 0
 
 
 def _column_offsets(table: DataTable[Any]) -> dict[str, int]:
@@ -7771,26 +7454,12 @@ async def test_removes_column_starts_inside_the_viewport_at_the_minimum_size() -
     keys never reach the DataTable for horizontal scrolling. On a screen
     whose Enter key deletes files, the user could not see what an entry
     would remove."""
-    rows = [
-        ToolRow(
-            _tool("ripgrep"),
-            "removable",
-            [Path("/opt/rg")],
-            "installed in userspace — removable here · required by mmdc, codegraph, graphify",
-            True,
-        ),
-        ToolRow(
-            _tool("jetbrains-toolbox"),
-            "managed",
-            [],
-            "managed by Homebrew — `brew uninstall --cask jetbrains-toolbox`"
-            " — found at /home/user/.linuxbrew/bin/jetbrains-toolbox",
-            False,
-            "Homebrew cask",
-        ),
-        ToolRow(_tool("fd"), "absent", [], "not installed", False),
+    cases = [
+        _removable_row(_tool("ripgrep"), [Path("/opt/rg")]),
+        _managed_row(_tool("jetbrains-toolbox")),
+        _absent_row(_tool("fd")),
     ]
-    app = _app(uninstall=_uninstall_inputs(rows=_frozen(rows)), initial_view="uninstall")
+    app = _app(cases=cases, initial_view="uninstall")
     async with app.run_test(size=(80, 24)):
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -7802,46 +7471,30 @@ async def test_removes_column_starts_inside_the_viewport_at_the_minimum_size() -
 # -- 15.4-05/D-03/D-04: the "Installed via" cell renders the terse label ----
 
 
-def test_tool_entry_cell_per_state_and_removes_cell_lists_the_paths() -> None:
-    """Per-state cell coverage: the "Installed via" cell carries the TERSE
-    manager label (`ToolRow.manager`) for an attributed managed row (D-03),
-    the generic label for an unattributed one, and the short dash-style label
-    for absent and unavailable rows (15.4-RESEARCH.md Pitfall 4). The full
-    sentence stays in `detail` (CR-03). The "What gets removed" cell is
-    the proven paths for a removable row and a dash for every other state (21-11)."""
-    removable = ToolRow(
-        _tool("rg"), "removable", [Path("/opt/rg")], "installed in userspace — removable here", True
-    )
-    managed = ToolRow(_tool("jq"), "managed", [], "managed by dnf — `dnf remove jq`", False, "dnf")
-    unattributed = ToolRow(
-        _tool("bat"),
-        "managed",
-        [],
-        "managed outside this installer — remove with your package manager",
-        False,
-    )
-    absent = ToolRow(_tool("fd"), "absent", [], "not installed", False)
-    unavailable = ToolRow(_tool("xyz"), "unavailable", [], "not available on debian", False)
-    inputs = _uninstall_inputs(
-        rows=_frozen([removable, managed, unattributed, absent, unavailable])
-    )
-    screen = UninstallScreen(inputs)
-    entries = {entry.key: entry for entry in screen._entries}  # pyright: ignore[reportPrivateUsage]
-
-    _VIA, _REMOVES = 4, 5
-    assert entries["rg"].cells[_VIA].plain == "userspace"
-    assert entries["jq"].cells[_VIA].plain == "dnf"
-    assert entries["bat"].cells[_VIA].plain == "package manager"
-    assert entries["fd"].cells[_VIA].plain == "—"
-    assert entries["xyz"].cells[_VIA].plain == "—"
-
-    # CR-03: the full sentence is not lost, it moves to the detail bar.
-    assert entries["jq"].detail == "managed by dnf — `dnf remove jq`"
-    assert entries["rg"].detail == "installed in userspace — removable here"
-
-    assert entries["rg"].cells[_REMOVES].plain == "/opt/rg"
-    for tool_id in ("jq", "bat", "fd", "xyz"):
-        assert entries[tool_id].cells[_REMOVES].plain == "—"
+async def test_tool_entry_cell_per_state_and_removes_cell_lists_the_paths() -> None:
+    """Per-state cell coverage: the "Installed via" cell is `uninstall_label`
+    of the published state, and the sentence stays in `detail` (CR-03). The
+    "What gets removed" cell is the proven paths for a removable row and a dash
+    for every other state (21-11)."""
+    rg, jq, fd, xyz = _tool("rg"), _tool("jq"), _tool("fd"), _only_on_macos("xyz")
+    cases = [
+        _removable_row(rg, [Path("/opt/rg")]),
+        _managed_row(jq),
+        _absent_row(fd),
+        _unavailable_row(xyz),
+    ]
+    app = _app(cases=cases, initial_view="uninstall")
+    async with app.run_test(size=(120, 30)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        for tool, state in cases:
+            assert _uninstall_cell(table, tool.id, "via") == uninstall_label(state)
+        assert _uninstall_cell(table, "jq", "via") == "Homebrew"
+        assert _uninstall_cell(table, "fd", "via") == "—"
+        assert _uninstall_cell(table, "rg", "removes") == "/opt/rg"
+        for tool_id in ("jq", "fd", "xyz"):
+            assert _uninstall_cell(table, tool_id, "removes") == "—"
 
 
 # -- 21-11: the Uninstall Health column, three sections, bounded removal list --
@@ -7857,12 +7510,9 @@ async def test_uninstall_health_column_reads_the_published_state(tmp_path: Path)
     yq, jq = _tool("yq"), _tool("jq")
     service = frozen_service(tmp_path)
     service.publish([plan_state(yq, health=Health.OK), plan_state(jq, health=Health.OUTDATED)])
-    rows = [
-        _removable_row(yq, [Path("/opt/yq")]),
-        ToolRow(jq, "managed", [], "managed by Homebrew", False, "Homebrew"),
-    ]
     app = _app(
-        uninstall=_uninstall_inputs(rows=_frozen(rows), ban_names=["pip"]),
+        tools=[yq, jq],
+        uninstall=_uninstall_inputs(ban_names=["pip"]),
         initial_view="uninstall",
         version_refresh=service,
     )
@@ -7883,9 +7533,8 @@ async def test_uninstall_health_repaints_when_a_pass_publishes(tmp_path: Path) -
     yq = _tool("yq")
     service = frozen_service(tmp_path)
     service.publish([plan_state(yq, health=Health.OK)])
-    rows = [_removable_row(yq, [Path("/opt/yq")])]
     app = _app(
-        uninstall=_uninstall_inputs(rows=_frozen(rows)),
+        tools=[yq],
         initial_view="uninstall",
         version_refresh=service,
     )
@@ -7906,12 +7555,8 @@ async def test_uninstall_health_repaints_when_a_pass_publishes(tmp_path: Path) -
 async def test_uninstall_health_reads_checking_before_the_first_pass(tmp_path: Path) -> None:
     yq, jq = _tool("yq"), _tool("jq")
     service = HeldRefreshService(tmp_path, [])
-    rows = [
-        _removable_row(yq, [Path("/opt/yq")]),
-        ToolRow(jq, "managed", [], "managed by Homebrew", False, "Homebrew"),
-    ]
     app = _app(
-        uninstall=_uninstall_inputs(rows=_frozen(rows)),
+        tools=[yq, jq],
         initial_view="uninstall",
         version_refresh=service,
     )
@@ -7928,11 +7573,8 @@ async def test_uninstall_health_reads_checking_before_the_first_pass(tmp_path: P
 
 
 async def test_uninstall_merges_missing_and_unavailable_under_nothing_to_do() -> None:
-    rows = [
-        ToolRow(_tool("xyz"), "unavailable", [], "not available on debian", False),
-        ToolRow(_tool("fd"), "absent", [], "not installed", False),
-    ]
-    app = _app(uninstall=_uninstall_inputs(rows=_frozen(rows)), initial_view="uninstall")
+    rows = [_unavailable_row(_only_on_macos("xyz")), _absent_row(_tool("fd"))]
+    app = _app(cases=rows, initial_view="uninstall")
     async with app.run_test(size=(120, 30)):
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -7945,9 +7587,9 @@ async def test_uninstall_removes_cell_lists_the_proven_paths_within_budget() -> 
     rows = [
         _removable_row(_tool("rg"), [Path("/opt/rg")]),
         _removable_row(_tool("bat"), long_paths),
-        ToolRow(_tool("jq"), "managed", [], "managed by dnf", False, "dnf"),
+        _managed_row(_tool("jq")),
     ]
-    app = _app(uninstall=_uninstall_inputs(rows=_frozen(rows)), initial_view="uninstall")
+    app = _app(cases=rows, initial_view="uninstall")
     async with app.run_test(size=(120, 30)):
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
@@ -7958,299 +7600,6 @@ async def test_uninstall_removes_cell_lists_the_proven_paths_within_budget() -> 
         assert len(long_cell) < len(", ".join(str(path) for path in long_paths))
         assert long_cell.startswith("/home/someone")
         assert _uninstall_cell(table, "jq", "removes") == "—"
-
-
-def _apt_tool(tool_id: str, package: str) -> Tool:
-    return Tool(
-        id=tool_id,
-        name=tool_id,
-        category="c",
-        cmd=tool_id,
-        methods=(Method(kind="apt", params={"package": package}),),
-    )
-
-
-def test_uninstall_screen_cell_falls_back_when_seam_has_no_record(tmp_path: Path) -> None:
-    """The no-record fallback, at screen level: a seam answering `None` for a
-    tool renders the platform-filtered registry phrase in the cell, never a
-    blank or a guess."""
-    rows = classify_tools(
-        [_apt_tool("ripgrep", "ripgrep")],
-        tmp_path / "bin",
-        installed={"ripgrep": True},
-        platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
-        which=lambda _c: None,
-        owner_hint=lambda _tool: None,
-    )
-    screen = UninstallScreen(_uninstall_inputs(rows=_frozen(rows)))
-    entry = next(e for e in screen._entries if e.key == "ripgrep")  # pyright: ignore[reportPrivateUsage]
-    assert "package manager" in entry.cells[4].plain
-
-
-async def test_uninstall_screen_cell_reflects_post_run_ownership_map(tmp_path: Path) -> None:
-    """App-level freshness (D-05, arm 1): closing an install run re-enters
-    the active catalog, whose refresh worker repopulates the shared
-    ownership map, and the NEXT Uninstall entry's cell reflects it."""
-    tool = _gh_tool("codegraph", tier="system")
-    presence = {"codegraph": False}
-    owner_map: dict[str, str] = {}
-
-    def on_install(installed_tool: Tool) -> None:
-        presence[installed_tool.id] = True
-        owner_map[installed_tool.id] = "managed by dnf — `dnf remove codegraph`"
-
-    def owner_hint(t: Tool) -> str | None:
-        return owner_map.get(t.id)
-
-    def owner_label_hint(t: Tool) -> str | None:
-        return "dnf" if t.id in owner_map else None
-
-    def rows() -> list[ToolRow]:
-        return classify_tools(
-            [tool],
-            tmp_path / "bin",
-            installed={"codegraph": presence["codegraph"]},
-            platform=_install_closed_platform(),
-            which=lambda _c: None,
-            owner_hint=owner_hint,
-            owner_label_hint=owner_label_hint,
-        )
-
-    service = _macos_service(
-        tmp_path,
-        resolve_tag=lambda repo: "v1.0.0",
-        present=lambda t: presence[t.id],
-    )
-    execute = _execute_inputs(
-        [tool],
-        present=lambda t: presence[t.id],
-        install=_tracking_install(on_install),
-        platform=_install_closed_platform(),
-        version_refresh=service,
-    )
-    app = _version_app(
-        [tool],
-        service,
-        execute=execute,
-        uninstall=_uninstall_inputs(rows=rows),
-    )
-    async with app.run_test(size=(120, 30)) as pilot:
-        await settle(app, pilot)
-        app.catalog.selected.add("codegraph")
-        await pilot.press("enter")
-        assert isinstance(app.screen, ExecuteScreen)
-        await pilot.press("enter")
-        await _settle_execute_screen(app, pilot)
-        await pilot.press("escape")
-        await settle(app, pilot)
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        cell = app.screen.query_one(DataTable[Any]).get_cell("codegraph", "via")
-        assert cell.plain == "dnf"
-        # CR-03: the command itself lives in the detail bar, which is where
-        # the full sentence already went before the cell stopped duplicating it.
-        entry = next(
-            e
-            for e in app.screen._entries  # pyright: ignore[reportPrivateUsage]
-            if e.key == "codegraph"
-        )
-        assert "dnf remove codegraph" in entry.detail
-
-
-async def test_uninstall_next_entry_after_removal_shows_registry_phrase_not_pre_removal_attribution() -> (  # noqa: E501
-    None
-):
-    """D-05, arm 2 (screen level): after a removal performed on this screen
-    invalidates the shared ownership data, the NEXT entry into Uninstall
-    shows the platform-filtered registry fallback for a tool previously
-    attributed to a real manager -- never the pre-removal attribution."""
-    captured: list[UninstallDecision] = []
-    invalidated = {"done": False}
-
-    def invalidate() -> None:
-        invalidated["done"] = True
-
-    def rows() -> list[ToolRow]:
-        # Both registers degrade together after the invalidate, exactly as
-        # setup.py's two closures do: they read the same epoch-gated record.
-        jq_hint = (
-            "managed outside this installer — remove with your package manager"
-            if invalidated["done"]
-            else "managed by dnf — `dnf remove jq`"
-        )
-        jq_manager = None if invalidated["done"] else "dnf"
-        jq = ToolRow(_tool("jq"), "managed", [], jq_hint, False, jq_manager)
-        rg = _removable_row(_tool("rg"), [Path("/opt/rg")])
-        return [rg, jq]
-
-    app = _app(
-        uninstall=_uninstall_inputs(rows=rows, remove=_recorder(captured), invalidate=invalidate)
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("5")
-        screen = app.screen
-        assert isinstance(screen, UninstallScreen)
-        cell_before = screen.query_one(DataTable[Any]).get_cell("jq", "via")
-        assert "dnf" in cell_before.plain
-        await pilot.press("space")  # select rg
-        await pilot.press("enter")
-        await pilot.press("enter")  # confirm removal
-        await pilot.pause()
-        assert screen.applied is True
-        await pilot.press("escape")
-        await pilot.press("5")  # the next entry into Uninstall
-        screen_after = app.screen
-        assert isinstance(screen_after, UninstallScreen)
-        cell_after = screen_after.query_one(DataTable[Any]).get_cell("jq", "via")
-        assert "dnf" not in cell_after.plain
-        assert "package manager" in cell_after.plain
-
-
-async def test_uninstall_direct_initial_view_renders_registry_phrase_with_no_ownership_pass(
-    tmp_path: Path,
-) -> None:
-    """Round-1 review MEDIUM: a direct `--uninstall` start (`UnifiedApp
-    .on_mount` opening the requested view with no catalog tier ever mounted)
-    renders a complete, usable screen in which every hint is the
-    registry-derived phrase -- no ownership pass has run, so there is
-    nothing to reuse, and this is the documented best-effort outcome, not a
-    bug."""
-    dnf_tool = Tool(
-        id="jq",
-        name="jq",
-        category="data",
-        cmd="jq",
-        methods=(Method(kind="dnf", params={"package": "jq"}),),
-    )
-    brew_tool = Tool(
-        id="rectangle",
-        name="rectangle",
-        category="win",
-        cmd="rectangle",
-        methods=(Method(kind="brew", params={"formula": "rectangle"}),),
-    )
-
-    def owner_hint(_tool: Tool) -> str | None:
-        return None  # no pass has ever run
-
-    def rows() -> list[ToolRow]:
-        return classify_tools(
-            [dnf_tool, brew_tool],
-            tmp_path / "bin",
-            installed={"jq": True, "rectangle": True},
-            platform=Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
-            which=lambda _c: None,
-            owner_hint=owner_hint,
-        )
-
-    app = _app(uninstall=_uninstall_inputs(rows=rows), initial_view="uninstall")
-    async with app.run_test(size=(100, 30)):  # must not raise
-        assert isinstance(app.screen, UninstallScreen)
-        table = app.screen.query_one(DataTable[Any])
-        assert "package manager" in table.get_cell("jq", "via").plain
-        assert "package manager" in table.get_cell("rectangle", "via").plain
-
-
-async def test_uninstall_screen_renders_codex_generic_hint_on_linux_not_homebrew(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Round-2 review HIGH, screen level: the platform-filtered fallback must
-    be visible on the RENDERED cell, not only through `_manager_hint`
-    directly -- the real codex registry entry, whose cask is gated
-    `os = ["macos"]`."""
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    tools_by_id = {t.id: t for t in load_tools(_REGISTRY)}
-    codex = tools_by_id["codex"]
-    linux = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
-
-    def rows() -> list[ToolRow]:
-        return classify_tools(
-            [codex],
-            tmp_path / "bin",
-            installed={"codex": True},
-            platform=linux,
-            which=lambda _c: None,
-        )
-
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    app = _version_app([codex], service, uninstall=_uninstall_inputs(rows=rows))
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        cell = app.screen.query_one(DataTable[Any]).get_cell("codex", "via")
-        assert "package manager" in cell.plain
-        assert "Homebrew" not in cell.plain
-
-
-async def test_uninstall_screen_renders_ripgrep_not_rg_for_the_dnf_split_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Round-3 review HIGH, screen level: the REAL dnf package name
-    (`ripgrep`) -- never the tool's own `rg` cmd -- must reach the user
-    through the real registry entry, a faked native probe, a committed
-    ownership pass, and the rendered screen. Since CR-03 the surface that
-    carries the command is the detail bar rather than the cell, so this
-    asserts on both: the cell names the manager tersely, the detail carries
-    the package-accurate command."""
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    tools_by_id = {t.id: t for t in load_tools(_REGISTRY)}
-    rg = tools_by_id["rg"]
-    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
-
-    def native_probe(_argv: list[str]) -> str:
-        return "ripgrep\n"
-
-    def owner_hint(tool: Tool) -> str | None:
-        owned = resolve_ownership(
-            tool,
-            platform=fedora,
-            inventory=_empty_inventory(),
-            artifacts=(),
-            which=lambda _c: "/usr/bin/rg",
-            managed_bin_dir=tmp_path / "bin",
-            native_probe=native_probe,
-        )
-        return removal_hint(owned, tool.cmd)
-
-    def owner_label_hint(tool: Tool) -> str | None:
-        return removal_label(_resolved(tool))
-
-    def _resolved(tool: Tool) -> ManagerOwnership:
-        return resolve_ownership(
-            tool,
-            platform=fedora,
-            inventory=_empty_inventory(),
-            artifacts=(),
-            which=lambda _c: "/usr/bin/rg",
-            managed_bin_dir=tmp_path / "bin",
-            native_probe=native_probe,
-        )
-
-    def rows() -> list[ToolRow]:
-        return classify_tools(
-            [rg],
-            tmp_path / "bin",
-            installed={"rg": True},
-            platform=fedora,
-            which=lambda _c: None,
-            owner_hint=owner_hint,
-            owner_label_hint=owner_label_hint,
-        )
-
-    service = _macos_service(tmp_path, resolve_tag=lambda repo: "v1.0.0")
-    app = _version_app([rg], service, uninstall=_uninstall_inputs(rows=rows))
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        cell = app.screen.query_one(DataTable[Any]).get_cell("rg", "via")
-        assert cell.plain == "dnf"
-        entry = next(
-            e
-            for e in app.screen._entries  # pyright: ignore[reportPrivateUsage]
-            if e.key == "rg"
-        )
-        assert "ripgrep" in entry.detail
-        assert "dnf remove rg`" not in entry.detail
 
 
 async def test_doctor_apply_surfaces_a_consolidation_refusal_instead_of_reporting_success() -> None:
@@ -8499,7 +7848,7 @@ async def test_uninstall_offers_nothing_before_the_first_pass(tmp_path: Path) ->
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, UninstallScreen)
-            assert _row_keys(screen) == ["#nothing to do", "jq", "yq"]
+            assert _row_keys(screen) == ["#nothing to do", "yq", "jq"]
             table = screen.query_one(DataTable[Any])
             for key in ("yq", "jq"):
                 assert _uninstall_cell(table, key, "sel") == ""
@@ -8579,10 +7928,10 @@ async def test_uninstall_detail_markup_renders_literally() -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        assert await _detail_of(app, pilot, "jq") == "[red]x[/red]"
-        content = screen.query_one("#browser-detail", Static).content
-        assert isinstance(content, Text)
-        assert content.plain == "[red]x[/red]"
+        assert "[red]x[/red]" in await _detail_of(app, pilot, "jq")
+        detail = screen.query_one("#browser-detail", Static)
+        painted = " ".join("".join(seg.text for seg in detail.render_line(y)) for y in range(3))
+        assert "[red]x[/red]" in painted
 
 
 async def test_a_publish_rereads_the_environment_rows(tmp_path: Path) -> None:

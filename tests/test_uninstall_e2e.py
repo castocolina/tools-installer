@@ -14,8 +14,10 @@ from installer.platform import Platform
 from installer.policy import omz_plugins_policy, tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
 from installer.tweaks import BUNDLES
-from installer.uninstall import SweepResult, ToolRow, active_tweak_ids, classify_tools
+from installer.uninstall import SweepResult, active_tweak_ids, plan_removal
+from installer.version_status import VersionRefreshService
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
+from tests.state_doubles import frozen_service, pass_state, removable_state
 
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
 
@@ -35,6 +37,15 @@ def _dl_tool() -> Tool:
     )
 
 
+def _fd_service(home: Path, bin_dir: Path) -> VersionRefreshService:
+    """A service whose one published state carries the REAL removal proof over
+    the tree planted under `home`."""
+    tool = _dl_tool()
+    service = frozen_service(home)
+    service.publish([pass_state(tool, platform=_LINUX, removable=plan_removal([tool], bin_dir))])
+    return service
+
+
 def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
     bin_dir = home / ".local" / "bin"
     opt = home / ".local" / "opt" / "fd"
@@ -47,7 +58,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
     write_ban_aliases(myshellrc)
     write_myshellrc([bin_dir], myshellrc)
 
-    rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
+    service = _fd_service(home, bin_dir)
 
     def _remove(decision: UninstallDecision) -> SweepResult:
         return perform_uninstall(
@@ -62,7 +73,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
         )
 
     inputs = UninstallInputs(
-        rows=lambda: rows,
+        rows=list,
         ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
@@ -77,6 +88,7 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
         uninstall=inputs,
         policies=PolicyInputs(policies=[]),
         initial_view="uninstall",
+        version_refresh=service,
     )
     return app, opt, bin_dir, myshellrc
 
@@ -102,7 +114,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
     zshrc.write_text("plugins=(git kubectl)\nsource $ZSH/oh-my-zsh.sh\n")
     omz_plugins_policy(zshrc_path=zshrc, state_path=myshellrc, present=True).apply()
 
-    rows = classify_tools([_dl_tool()], bin_dir, installed={"fd": True}, platform=_LINUX)
+    service = _fd_service(home, bin_dir)
 
     def tweak_ids() -> tuple[str, ...]:
         return active_tweak_ids(BUNDLES, rc_path=myshellrc, bin_dir=bin_dir, zshrc_path=zshrc)
@@ -120,7 +132,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
         )
 
     inputs = UninstallInputs(
-        rows=lambda: rows,
+        rows=list,
         ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
@@ -136,6 +148,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
         uninstall=inputs,
         policies=PolicyInputs(policies=[]),
         initial_view="uninstall",
+        version_refresh=service,
     )
     return app, opt, bin_dir, myshellrc, zshrc
 
@@ -153,8 +166,10 @@ def _error_app(home: Path) -> UnifiedApp:
     def _boom(_decision: UninstallDecision) -> SweepResult:
         raise OSError("permission denied")
 
+    service = frozen_service(home)
+    service.publish([removable_state(_dl_tool(), [bin_dir / "fd"])])
     inputs = UninstallInputs(
-        rows=lambda: [ToolRow(_dl_tool(), "removable", [bin_dir / "fd"], "removable here", True)],
+        rows=list,
         ban_names=list,
         has_path_block=lambda: False,
         remove=_boom,
@@ -169,6 +184,7 @@ def _error_app(home: Path) -> UnifiedApp:
         uninstall=inputs,
         policies=PolicyInputs(policies=[]),
         initial_view="uninstall",
+        version_refresh=service,
     )
 
 

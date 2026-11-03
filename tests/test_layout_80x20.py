@@ -4,7 +4,6 @@ Every visibility claim reads the compositor through `screen.get_widget_at`, so a
 widget another one paints over does not count as shown.
 """
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +17,16 @@ from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
-from installer.uninstall import SweepResult, ToolRow
+from installer.uninstall import SweepResult
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
-from tests.state_doubles import frozen_service, pass_state, seeded_service
+from tests.state_doubles import (
+    frozen_service,
+    managed_state,
+    pass_state,
+    removable_state,
+    seeded_service,
+)
 from tests.test_registry import REGISTRY
 
 _KEY = {"system": "1", "user": "2", "ai": "3", "doctor": "4", "uninstall": "5", "policies": "6"}
@@ -31,7 +36,6 @@ _TIERS = ["system", "user", "ai"]
 def _app(
     tmp_path: Path,
     service: VersionRefreshService | None = None,
-    rows: Callable[[], list[ToolRow]] = list,
 ) -> UnifiedApp:
     tools = load_tools(REGISTRY)
     if service is None:
@@ -49,7 +53,7 @@ def _app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=rows,
+            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),
@@ -172,11 +176,9 @@ async def test_uninstall_rows_fit_at_80x20_with_health(tmp_path: Path) -> None:
     tools = load_tools(REGISTRY)
     widest = max(tools, key=lambda tool: len(tool.id))
     long_paths = [Path(f"/home/someone/.local/share/a-long-directory-name/{n}/bin") for n in "abc"]
-    rows = [
-        ToolRow(widest, "removable", long_paths, "removable here", True),
-        ToolRow(tools[0], "managed", [], "managed", False, "Homebrew cask"),
-    ]
-    app = _app(tmp_path, rows=lambda: rows)
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(widest, long_paths), managed_state(tools[0])])
+    app = _app(tmp_path, service)
     async with app.run_test(size=(80, 20)) as pilot:
         screen = await _open(app, pilot, "uninstall")
         table = screen.query_one(DataTable[Any])
@@ -189,11 +191,12 @@ async def test_uninstall_rows_fit_at_80x20_with_health(tmp_path: Path) -> None:
             "Installed via",
             "What gets removed",
         ]
-        # The widest catalog id leaves the removes column only 16 cells on an 80-column
+        # The widest catalog id and the owner label ("installer artifact" replaced
+        # the old "userspace") leave the removes column few cells on an 80-column
         # screen, so "stays on screen" is its start plus a readable lead, and the
         # fixed cell budget (40 + 2 padding) bounds how far it can run on.
         start, end = spans["What gets removed"]
-        assert start + 12 <= table.region.right, spans
+        assert start + 8 <= table.region.right, spans
         assert end - start <= 42, spans
 
 

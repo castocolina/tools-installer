@@ -16,7 +16,7 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership, OwnershipCandidate
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.ui_common import AppScreen
-from installer.uninstall import SweepResult, ToolRow
+from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome
 from installer.version_status import Health, VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
@@ -24,6 +24,7 @@ from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     HeldRefreshService,
     ScriptedUpdates,
+    absent_state,
     frozen_service,
     offline_service,
     pass_state,
@@ -48,7 +49,7 @@ def _tool(tool_id: str) -> Tool:
 
 def _family_app(
     *,
-    rows: Callable[[], list[ToolRow]] = list,
+    has_path_block: Callable[[], bool] = lambda: False,
     initial_view: str = "system",
     startup_warning: str | None = None,
     version_refresh: VersionRefreshService | None = None,
@@ -63,9 +64,9 @@ def _family_app(
         fix_preview="preview",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=rows,
+            rows=list,
             ban_names=lambda: [],
-            has_path_block=lambda: False,
+            has_path_block=has_path_block,
             remove=lambda _decision: SweepResult(),
             tweak_ids=lambda: (),
         ),
@@ -196,13 +197,13 @@ async def test_leaving_a_view_with_no_status_is_a_no_op():
 async def test_uninstall_startup_read_error_stays_visible_on_first_entry():
     calls: list[int] = []
 
-    def rows() -> list[ToolRow]:
+    def has_path_block() -> bool:
         calls.append(1)
         if len(calls) == 1:
             raise OSError("boom")
-        return []
+        return False
 
-    app = _family_app(rows=rows, initial_view="uninstall")
+    app = _family_app(has_path_block=has_path_block, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         status = _view(app, "uninstall").status
@@ -210,8 +211,10 @@ async def test_uninstall_startup_read_error_stays_visible_on_first_entry():
         assert status.severity == "warn"
 
 
-async def test_flushed_warning_is_not_replaced_by_the_standing_status():
-    app = _family_app(initial_view="uninstall", startup_warning="w")
+async def test_flushed_warning_is_not_replaced_by_the_standing_status(tmp_path: Path):
+    service = frozen_service(tmp_path)
+    service.publish([absent_state(_tool("rg")), absent_state(_tool("fd"))])
+    app = _family_app(initial_view="uninstall", startup_warning="w", version_refresh=service)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         status = _view(app, "uninstall").status

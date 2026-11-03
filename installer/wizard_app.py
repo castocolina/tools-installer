@@ -16,7 +16,7 @@ import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual import work
@@ -61,6 +61,7 @@ from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import guidance_text
 from installer.resolve import UnavailableReason
 from installer.run import CommandError
+from installer.sanitize import sanitize_log_line
 from installer.session import (
     Disposition,
     PlanRow,
@@ -84,9 +85,15 @@ from installer.ui_common import (
     multiline_summary,
     run_live,
 )
-from installer.uninstall import SweepResult, ToolRow, policy_owned
+from installer.uninstall import SweepResult, ToolRow, policy_owned, reverse_dependencies
 from installer.update import UpdateService
-from installer.version_status import VersionRefreshService
+from installer.version_status import (
+    ToolState,
+    VersionRefreshService,
+    uninstall_detail,
+    uninstall_group,
+    uninstall_label,
+)
 
 
 @dataclass(frozen=True)
@@ -859,7 +866,8 @@ class _UninstallEntry:
     `detail` is the detail-bar line. `paths` are the tool's removable artifacts
     (empty for env rows). `is_ban`/`is_path_block`/`is_tweaks` flag the env rows
     so a selection maps back to the UninstallDecision levers. `tool` is the
-    tool for a tool row, None for an environment row."""
+    tool for a tool row, None for an environment row. `group` is the section a
+    tool row sits in (`uninstall_group`), None for an environment row."""
 
     key: str
     cells: list[Text]
@@ -870,6 +878,7 @@ class _UninstallEntry:
     is_path_block: bool
     is_tweaks: bool = False
     tool: Tool | None = None
+    group: UninstallState | None = None
 
 
 # Section titles per state, in display order. The "environment" section holds the
@@ -880,23 +889,15 @@ _STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
     (UninstallState.ABSENT, "nothing to do"),
     (UninstallState.UNAVAILABLE, "nothing to do"),
 )
-# CR-03: the "What gets removed" cell is cut to this many cells so the column is
-# never sized by the longest path; ConfirmUninstall still lists every path.
+# CR-03: the "What gets removed" cell has a fixed budget because left/right switch
+# views, so a too-wide table can never be scrolled on the screen whose Enter
+# deletes files; ConfirmUninstall still lists every path.
 _REMOVES_CELL_MAX = 40
+_NOTHING_TO_UNINSTALL = "Nothing to uninstall."
 _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
-
-# The "Installed via" cell's three non-attributed labels (CR-03). The first
-# two are byte-identical to the pre-15.4-05 enum's values for the same two
-# cases, so this column's width budget is the one it was designed with; only
-# an ATTRIBUTED managed row now reads differently, which is the whole of what
-# D-03 asked for. See `_tool_entry` for why the cell is a label and not the
-# hint.
-_VIA_USERSPACE = "userspace"
-_VIA_UNATTRIBUTED = "package manager"
-_VIA_NONE = "—"
 
 
 def _has_daemon_id(ids: tuple[str, ...]) -> bool:
@@ -925,47 +926,37 @@ class UninstallScreen(AppScreen):
         def app(self) -> "UnifiedApp": ...
 
     def __init__(
-        self, inputs: UninstallInputs, *, version_refresh: VersionRefreshService | None = None
+        self,
+        inputs: UninstallInputs,
+        *,
+        tools: Sequence[Tool],
+        version_refresh: VersionRefreshService | None = None,
     ) -> None:
         super().__init__(view="uninstall", accent="red")
         self._version_refresh = version_refresh
-        self._rows_predicate = inputs.rows
+        self._tools = list(tools)
+        # The catalog does not change in a session, so this is computed once.
+        self._required_by = reverse_dependencies(self._tools)
+        # The last entry built from a KNOWN state: a row whose state is unknown
+        # again (a removal in flight) keeps its section and selectability.
+        self._painted: dict[str, _UninstallEntry] = {}
         self._ban_names_of = inputs.ban_names
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
         self._invalidate = inputs.invalidate
         # Evaluated THROUGH run_live (.claude/architecture.md rule 3), not
         # bare: construction happens outside the nav path `enter_view` guards,
-        # so a bare call would let an OSError from the per-tool filesystem
-        # reads escape before any screen or status line exists to report it
-        # (Round-1 review MEDIUM). On failure the screen still constructs,
-        # with an empty row list and the message stashed on
-        # `self._startup_error`; the first `enter_view`/`_resync` surfaces it
-        # as a one-time warn status and the empty list makes that same entry's
-        # comparison differ from a real reading, so the screen self-heals on
-        # its first display rather than staying empty forever.
-        rows, rows_error = run_live(self._rows_of)
-        self._rows: list[ToolRow] = rows if rows is not None else []
-        # Through the SAME seam as the rows predicate above, and for the same
-        # reason (CR-01, 15.4-REVIEW.md): these three are filesystem reads,
-        # not in-memory ones -- `has_managed_block` does `path.read_text()`,
-        # `active_tweak_ids` reads the rc files and stats the bin dir, and
-        # `guard_state` probes the managed bin dir. A bare call here raised
-        # OSError straight out of `UninstallScreen.__init__`, i.e. out of
-        # `_build_app`, before any screen existed to report it.
+        # so a bare call would let an OSError from the filesystem reads escape
+        # before any screen or status line exists to report it. On failure the
+        # screen still constructs with no environment rows and the message
+        # stashed on `self._startup_error`; the first `enter_view` surfaces it
+        # as a one-time warn and re-reads, so the screen self-heals.
         env, env_error = run_live(self._env_state)
         empty_env: tuple[list[str], bool, tuple[str, ...]] = ([], False, ())
         self._ban_names, self._has_path_block, self._tweak_ids = (
             env if env is not None else empty_env
         )
-        # One stash for BOTH construction-time reads: `_resync` surfaces it
-        # once on the first entry and then clears it, and a machine whose
-        # $HOME just became unreadable typically fails both predicates, so
-        # two separate one-time statuses would mean the user only ever sees
-        # whichever one won the precedence ladder.
-        self._startup_error: str | None = (
-            "; ".join(part for part in (rows_error, env_error) if part is not None) or None
-        )
+        self._startup_error: str | None = env_error
         self._remove = inputs.remove
         self._terminal_sync = inputs.terminal_sync
         self.applied = False
@@ -976,7 +967,7 @@ class UninstallScreen(AppScreen):
 
     # -- entry construction ------------------------------------------------
     def _build_entries(self) -> list[_UninstallEntry]:
-        entries = [self._tool_entry(row) for row in self._rows]
+        entries = [self._tool_entry(tool) for tool in self._tools]
         if self._ban_names:
             entries.append(self._ban_entry())
         if self._has_path_block:
@@ -985,60 +976,69 @@ class UninstallScreen(AppScreen):
             entries.append(self._tweak_entry())
         return entries
 
-    def _tool_entry(self, row: ToolRow) -> _UninstallEntry:
-        selectable = row.state == UninstallState.REMOVABLE
+    def _state_of(self, tool: Tool) -> ToolState | None:
+        return self._version_refresh.state_of(tool.id) if self._version_refresh else None
+
+    def _tool_entry(self, tool: Tool) -> _UninstallEntry:
+        """One tool row, drawn from its published state alone (D-07)."""
+        state = self._state_of(tool)
+        group = uninstall_group(state)
+        if state is None or group is None:
+            return self._unknown_entry(tool, state)
+        selectable = group is UninstallState.REMOVABLE
         style = "" if selectable else "dim"
-        # 15.4-05/D-03: the cell names the REAL manager rather than collapsing
-        # every managed tool into the identical "package manager" text -- but
-        # from `row.manager`, the TERSE register, not from `row.hint`.
-        #
-        # CR-03 (15.4-REVIEW.md): rendering `row.hint` here sized the column
-        # to the longest hint in the catalog -- including `_managed_hint`'s
-        # trailing "— found at /abs/path" and `classify_tools`' "· required by
-        # a, b, c" suffix -- which measured 120 columns wide at the project's
-        # own minimum tested size (80x24) and pushed "What gets removed" to
-        # x=174. The column was not merely truncated but UNREACHABLE:
-        # `tool_browser.py` binds `left`/`right` to view switching with
-        # `priority=True`, so those keys never reach the DataTable for
-        # horizontal scrolling, and this is the screen whose Enter key deletes
-        # files. The full sentence is not lost -- it is `detail` below, which
-        # is where it already went, so the cell is a LABEL and the detail bar
-        # is the prose, the same split `OWNER_LABELS`/`OWNER_DETAIL_LABELS`
-        # already runs for the catalog's Owner column.
-        #
-        # `_VIA_UNATTRIBUTED` and `_VIA_USERSPACE` are byte-identical to the
-        # pre-15.4-05 enum's values for those two cases: a managed row the
-        # ownership seam could not attribute is exactly what that text always
-        # meant, and D-03 asked only for the ATTRIBUTED rows to stop
-        # collapsing into it.
-        installed_via = {
-            UninstallState.REMOVABLE: _VIA_USERSPACE,
-            UninstallState.MANAGED: row.manager or _VIA_UNATTRIBUTED,
-            UninstallState.ABSENT: _VIA_NONE,
-            UninstallState.UNAVAILABLE: _VIA_NONE,
-        }[row.state]
-        removes = Text(
-            ", ".join(str(path) for path in row.paths) if selectable else "—", style=style
-        )
+        paths = state.removable.removable if selectable else ()
+        removes = Text(", ".join(str(path) for path in paths) or "—", style=style)
         removes.truncate(_REMOVES_CELL_MAX, overflow="ellipsis")
-        state = self._version_refresh.state_of(row.tool.id) if self._version_refresh else None
-        cells = [
-            mark(False) if selectable else Text(""),
-            Text(row.tool.id, style="bold" if selectable else "dim"),
-            health_cell(state),
-            Text(row.tool.category, style=style),
-            Text(installed_via, style=style),
-            removes,
-        ]
-        return _UninstallEntry(
-            key=row.tool.id,
-            cells=cells,
+        entry = _UninstallEntry(
+            key=tool.id,
+            cells=[
+                mark(False) if selectable else Text(""),
+                Text(tool.id, style="bold" if selectable else "dim"),
+                health_cell(state),
+                Text(tool.category, style=style),
+                Text(uninstall_label(state), style=style),
+                removes,
+            ],
             selectable=selectable,
-            detail=row.hint,
-            paths=tuple(row.paths),
+            detail=sanitize_log_line(
+                uninstall_detail(tool, state, self._required_by.get(tool.id, ()))
+            ),
+            paths=tuple(paths),
             is_ban=False,
             is_path_block=False,
-            tool=row.tool,
+            tool=tool,
+            group=group,
+        )
+        self._painted[tool.id] = entry
+        return entry
+
+    def _unknown_entry(self, tool: Tool, state: ToolState | None) -> _UninstallEntry:
+        """A tool whose state is not known yet: what it was last painted with,
+        its Health cell set to `…`; a row never painted before is an unselectable
+        `nothing to do` row (T-21-18)."""
+        painted = self._painted.get(tool.id)
+        if painted is not None:
+            cells = [*painted.cells]
+            cells[2] = health_cell(state)
+            return replace(painted, cells=cells)
+        return _UninstallEntry(
+            key=tool.id,
+            cells=[
+                Text(""),
+                Text(tool.id, style="dim"),
+                health_cell(state),
+                Text(tool.category, style="dim"),
+                Text("—", style="dim"),
+                Text("—", style="dim"),
+            ],
+            selectable=False,
+            detail=uninstall_detail(tool, state),
+            paths=(),
+            is_ban=False,
+            is_path_block=False,
+            tool=tool,
+            group=UninstallState.ABSENT,
         )
 
     def _ban_entry(self) -> _UninstallEntry:
@@ -1141,12 +1141,11 @@ class UninstallScreen(AppScreen):
         )
 
     def _groups(self, _view: str) -> list[Section[_UninstallEntry]]:
-        by_state: dict[UninstallState, list[_UninstallEntry]] = {}
-        for row, entry in zip(self._rows, self._entries, strict=False):
-            by_state.setdefault(row.state, []).append(entry)
         by_title: dict[str, list[_UninstallEntry]] = {}
         for state, title in _STATE_TITLES:
-            by_title.setdefault(title, []).extend(by_state.get(state, []))
+            by_title.setdefault(title, []).extend(
+                entry for entry in self._entries if entry.group is state
+            )
         sections: list[Section[_UninstallEntry]] = [
             (title, title, members) for title, members in by_title.items() if members
         ]
@@ -1168,33 +1167,17 @@ class UninstallScreen(AppScreen):
         self._by_key = {entry.key: entry for entry in self._entries}
         self._browser.reload(self._adapter())
 
-    def _rows_of(self) -> list[ToolRow]:
-        """Bare read of the rows predicate -- no failure isolation of its own.
-
-        Every caller wraps this in `ui_common.run_live` (.claude/architecture.md
-        rule 3): `__init__` directly (construction sits outside the nav path),
-        and `_resync` via `_live_state`, which is what makes this call the
-        one that touches the filesystem once per catalog tool.
-        """
-        return self._rows_predicate()
-
     def _env_state(self) -> tuple[list[str], bool, tuple[str, ...]]:
         """The three environment predicates another view can change while
         this one is suspended, as one tuple.
 
         Every one of them touches the FILESYSTEM and can therefore raise
         (CR-01, 15.4-REVIEW.md): `has_path_block` -> `shellrc.has_managed_block`
-        -> `Path.read_text()`; `tweak_ids` -> `active_tweak_ids` ->
-        `active_policies` -> `tweak_present`/`tweak_executables_present`,
-        which read the rc files and stat the managed bin dir; `ban_names` ->
-        `guard_state`, which probes that same bin dir. They read the same
-        `$HOME` the rows predicate does, so a permission/IO fault under it
-        fails them in a CORRELATED way, never independently.
-
-        That is why this tuple exists as its own seam: both call sites
-        (`__init__` and `_resync`) evaluate it through `run_live`, so a
-        failure degrades to the last known values plus a warn status rather
-        than escaping the nav path.
+        -> `Path.read_text()`; `tweak_ids` -> `active_tweak_ids` -> the rc files
+        and the managed bin dir; `ban_names` -> `guard_state`, which probes that
+        same bin dir. That is why this tuple is its own seam: every caller
+        evaluates it through `run_live`, so a failure degrades to the last known
+        values plus a warn rather than escaping the nav path.
         """
         return (
             self._ban_names_of(),
@@ -1202,165 +1185,63 @@ class UninstallScreen(AppScreen):
             self._tweak_ids_of(),
         )
 
-    def _live_state(self) -> tuple[list[ToolRow], list[str], bool, tuple[str, ...]]:
-        """Every input another view can change while this one is suspended,
-        plus the row list itself -- now a live predicate rather than a
-        construction-time snapshot (D-06), read through `_rows_of`.
-
-        This method itself can raise, from EITHER half: the row list comes
-        from `_rows_of`'s bare predicate call and the other three come from
-        `_env_state`'s. `_resync` is the caller that wraps the WHOLE tuple in
-        `run_live` and, on the exception that wrapping catches, retries
-        `_env_state` alone through a SECOND `run_live` -- never bare, since
-        the three environment predicates are filesystem reads correlated
-        with the rows failure rather than the "cheap, non-failing in-memory
-        reads" a deferred Round-3 finding claimed them to be.
-        """
-        return (self._rows_of(), *self._env_state())
-
-    def _resync(self, *, clear_applied: bool) -> None:
-        """Re-derive every live-state predicate and rebuild if it changed.
-
-        PRECEDENCE (Round-2 review MEDIUM), a single ordered rule rather than
-        an emergent one: the three outcomes of a re-derivation -- a predicate
-        FAILURE, a CHANGED comparison, and an UNCHANGED comparison -- can all
-        coexist with a standing `applied` summary, and nothing said which
-        wins before this rule existed.
-
-        1. A rows-predicate FAILURE wins the status line, over both the
-           ordinary standing status and a standing `applied` summary, and it
-           NEVER clears `applied`. Rationale: a warning about data the
-           screen could not refresh outranks a repetition of an older
-           result, and a failed read is not evidence that the removal
-           summary stopped being true. The other three predicates are still
-           evaluated and can still rebuild the environment rows on their
-           own -- a rows failure suppresses only the row list's update, not
-           the whole entry.
-        2. Otherwise a CHANGED comparison rebuilds, conditionally clears
-           `applied` (only when `clear_applied` is true AND `applied` was
-           set), and writes the ordinary standing status.
-        3. Otherwise an UNCHANGED comparison returns early with whatever
-           message is standing -- this is what preserves the standing
-           result message after an apply.
-
-        `clear_applied` is the ONE thing the two callers legitimately
-        differ on: `enter_view` passes True (a NAV ENTRY is D-06's explicit
-        trigger for a same-session removal to stop being claimed once it no
-        longer describes the screen). `state_refreshed` passes False --
-        the user has not navigated, they are reading the summary of the
-        removal they just performed, and a background repaint that wipes
-        that sentence would be a regression: the fresh rows and the summary
-        agree, they do not conflict.
-        """
-        refreshed, error = run_live(lambda: self._live_state())
-        if error is not None:
-            # A rows-predicate failure must not also freeze the three
-            # environment predicates, so they are re-derived here rather
-            # than through `_live_state`, whose whole tuple was discarded by
-            # the exception `run_live` just caught -- but through the SAME
-            # `run_live` seam (.claude/architecture.md rule 3), never bare.
-            # CR-01 (15.4-REVIEW.md): all three are filesystem reads (see
-            # `_env_state`'s docstring), so the very fault that triggers this
-            # branch is the one most likely to make them raise too. A bare
-            # call here escaped `enter_view` AFTER `show_view` had already
-            # popped the previous screen, leaving the stack popped and
-            # `current_view` un-updated -- a crash on the single nav path,
-            # reachable from a background `state_refreshed()` repaint the
-            # user never initiated. On failure the last known values are kept
-            # and both messages are reported together.
-            fallback, env_error = run_live(self._env_state)
-            if fallback is None:
-                fallback = (self._ban_names, self._has_path_block, self._tweak_ids)
-                error = f"{error}; {env_error}"
-            refreshed = (self._rows, *fallback)
-        # run_live always pairs a None result with a non-None error, so
-        # `refreshed` is never None here: either run_live's own call
-        # succeeded, or the `error is not None` branch above just
-        # reassigned it -- a static hint only (bandit B101 rejects a
-        # runtime assert here, and none is needed: the invariant already
-        # holds structurally, not because an assert enforces it), since
-        # pyright cannot correlate the two independent tuple-unpacked
-        # variables across the branch on its own.
-        refreshed = cast(
-            "tuple[list[ToolRow], list[str], bool, tuple[str, ...]]",
-            refreshed,
-        )
-        stored = (self._rows, self._ban_names, self._has_path_block, self._tweak_ids)
-        changed = refreshed != stored
-        if changed:
-            self._rows, self._ban_names, self._has_path_block, self._tweak_ids = refreshed
-        # Always: a publish changes Health without changing any stored value.
-        self._repaint()
-        if error is not None:
-            self.status.set(f"Could not refresh the tool list: {error}.", "warn")
-            return
-        if self._startup_error is not None:
-            # The one-time construction-time failure (Round-1 review
-            # MEDIUM, T-15.4-19), now covering the environment predicates
-            # too (CR-01): surfaced on the first entry only, then cleared.
-            # The fresh read above already re-derived (self-healed or not)
-            # regardless -- this only controls what the status line says
-            # about THIS entry.
-            stashed = self._startup_error
-            self._startup_error = None
-            self.status.set(f"Could not read the uninstall state at startup: {stashed}.", "warn")
-            return
-        if not changed:
-            return
-        if clear_applied and self.applied:
-            self.applied = False
-        # A background repaint (clear_applied=False) that finds `applied`
-        # still set must rebuild the rows -- already done above -- WITHOUT
-        # touching the status line: `_show_standing_status` would otherwise
-        # overwrite the sentence describing the removal the user just
-        # performed with the ordinary "Nothing to uninstall." / cleared
-        # standing text. A nav entry always reaches this with `applied`
-        # already False (either it was never set, or the branch above just
-        # cleared it), so the guard changes nothing on that path.
-        if self.is_mounted and not self.applied:
-            self._show_standing_status()
+    def _reread_env(self) -> str | None:
+        """Re-read the environment predicates; the error text when that failed
+        (the last values are kept). A publish can follow a mutation that changed
+        them while this view is the visible one (D-06), so both `enter_view` and
+        `state_refreshed` call it."""
+        env, error = run_live(self._env_state)
+        if env is not None:
+            self._ban_names, self._has_path_block, self._tweak_ids = env
+        return error
 
     def enter_view(self) -> None:
-        """Re-derive every live-state predicate each time this view is opened.
+        """Re-read the environment and repaint each time this view is opened.
 
-        The Policies view toggles the ban and the tweaks live, the Doctor
-        view writes the managed PATH block, and this screen's own removal
-        action changes what `rows` should return -- all one nav step away
-        at most -- so every row's existence and label must be read at entry
-        rather than frozen in `__init__`. `clear_applied=True`: a nav entry
-        is D-06's trigger for a same-session removal to stop being claimed
-        once it no longer describes the screen.
+        A nav entry is D-06's trigger for a same-session removal summary to stop
+        being claimed once it no longer describes the screen, so `applied` is
+        cleared. Over an empty line only: a warning flushed by show_view or
+        written here must not be replaced by the standing text.
         """
-        self._resync(clear_applied=True)
-        # Only over an empty line: a warning flushed by show_view or written by
-        # _resync must not be replaced by the standing text.
+        error = self._reread_env()
+        stashed, self._startup_error = self._startup_error, None
+        self.applied = False
+        self._repaint()
+        if error is not None:
+            self.status.set(f"Could not read the uninstall state: {error}.", "warn")
+        elif stashed is not None:
+            self.status.set(f"Could not read the uninstall state at startup: {stashed}.", "warn")
         if not self.status.text:
             self._show_standing_status()
 
     def state_refreshed(self) -> None:
-        """Completion signal for an asynchronous ownership refresh landing
-        while this screen may already be open.
+        """A publish landed while this view may be open (D-06): re-read the
+        environment, repaint every row, and never clear or replace a status
+        someone else wrote. `applied` stays, so a removal summary stands."""
+        error = self._reread_env()
+        self._repaint()
+        if error is not None and not self.status.text:
+            self.status.set(f"Could not read the uninstall state: {error}.", "warn")
+        if self.is_mounted:
+            self._show_standing_status()
 
-        `installer/catalog_tui.py`'s threaded version-refresh worker
-        repopulates the shared ownership map this screen's rows ultimately
-        derive from; a screen entered BEFORE that worker committed shows an
-        honest-but-stale fallback with nothing to tell it the real answer
-        later arrived. `UnifiedApp` wires this as that completion signal
-        (task 3), calling it only when this screen is the current view.
-
-        Safe to call regardless of mount state (`ToolBrowser.reload` no-ops
-        when unmounted) and safe to call when nothing changed (the ordinary
-        unchanged comparison inside `_resync` returns early). `clear_applied
-        =False`: this is a background repaint, not a navigation, so it must
-        never wipe the sentence describing a removal the user just
-        performed.
-        """
-        self._resync(clear_applied=False)
+    def _nothing_to_uninstall(self) -> bool:
+        """True only when every tool's state is known and none is removable or
+        managed, and there is no environment row (RESEARCH P7)."""
+        known = all(uninstall_group(self._state_of(tool)) is not None for tool in self._tools)
+        idle = all(
+            entry.group in (UninstallState.ABSENT, UninstallState.UNAVAILABLE)
+            for entry in self._entries
+        )
+        return known and idle
 
     def _show_standing_status(self) -> None:
-        if not self._entries:
-            self.status.set("Nothing to uninstall.", "ok")
-        else:
+        """Write the standing copy into an empty line while it is true, and
+        retract it only while the line still holds exactly that copy."""
+        if self._nothing_to_uninstall():
+            if not self.status.text:
+                self.status.set(_NOTHING_TO_UNINSTALL, "ok")
+        elif self.status.text == _NOTHING_TO_UNINSTALL:
             self.status.clear()
 
     # -- public seams the tests assert on ----------------------------------
@@ -1392,7 +1273,7 @@ class UninstallScreen(AppScreen):
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
-        if self.applied or not self._entries:  # nothing to uninstall: keep the standing message
+        if self.applied or not any(entry.selectable for entry in self._entries):
             return
         if not event.ids:
             self.status.set("Select at least one item to remove.", "warn")
@@ -2594,7 +2475,9 @@ class UnifiedApp(App[list[str] | None]):
                     disk_pressure=policies.disk_pressure,
                     competing=policies.competing,
                 ),
-                "uninstall": UninstallScreen(uninstall, version_refresh=version_refresh),
+                "uninstall": UninstallScreen(
+                    uninstall, tools=self._tools, version_refresh=version_refresh
+                ),
                 "policies": PoliciesScreen(policies),
             }
         )
