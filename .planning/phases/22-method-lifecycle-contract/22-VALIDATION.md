@@ -4,7 +4,7 @@ slug: "method-lifecycle-contract"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: "2026-11-03"
 ---
@@ -53,7 +53,7 @@ Task IDs are filled in by the planner; each row names the requirement, the behav
 | 22-05-T1, 22-05-T2, 22-08-T1 | 22-05, 22-08 | 3, 4 | LIFE-06 | T-22-11 | `u` on OMZ runs `<omz_root>/tools/upgrade.sh` (`$ZSH` honored when the default dir is absent); `u` on SDKMAN runs the sourced `sdk selfupdate`; the registry declares both | unit | `uv run pytest tests/test_update.py tests/test_executors.py tests/test_registry.py -n auto -q --no-cov` | created by 22-05, 22-08 RED | ⬜ pending |
 | 22-04-T1, 22-04-T2, 22-04-T3 | 22-04 | 2 | LIFE-07 | T-22-09, T-22-10 | unwritable brew prefix fixture = MANUAL with zero executions; writable proceeds; engine re-check catches a prefix that became unwritable after planning | unit | `uv run pytest tests/test_executors.py tests/test_plan.py tests/test_engine.py tests/test_version_status.py tests/test_registry.py -n auto -q --no-cov` | created by 22-04 RED | ⬜ pending |
 | 22-09-T3, 22-11-T2 | 22-09, 22-11 | 4, 6 | LIFE-08 | T-22-26 | removing one member of a co-install group warns in the CLI preview and the review naming group and others; non-member no warning; removing all members gives one warning | unit + pilot | `uv run pytest tests/test_pnpm_globals.py tests/test_app.py tests/test_wizard_app.py -n auto -q --no-cov` | created by 22-09, 22-11 RED | ⬜ pending |
-| 22-13-T1, 22-13-T2, 22-13-T3 | 22-13 | 7 | LIFE-09 | T-22-30, T-22-31 | harness fails on a planted leftover and passes clean (extracted-function self-test); one Fedora podman run recorded with `TRACER_LEFTOVER_OK`, container removed | script test + container e2e | `uv run pytest tests/test_container_e2e_receipts.py -n auto -q --no-cov`; `make e2e` | created by 22-13 RED; recorded run is manual evidence | ⬜ pending |
+| 22-13-T1, 22-13-T2, 22-13-T3 | 22-13 | 7 | LIFE-09 | T-22-30, T-22-31 | harness fails on a planted leftover, fails on a leftover install path inside a harness dir (must-clear script `paths` and receipt paths win over every allowed prefix), and passes clean (extracted-function self-test); one Fedora podman run recorded with `TRACER_LEFTOVER_OK`, container removed | script test + container e2e | `uv run pytest tests/test_container_e2e_receipts.py -n auto -q --no-cov`; `make e2e` | created by 22-13 RED; recorded run is manual evidence | ⬜ pending |
 | 22-12-T1, 22-12-T2, 22-12-T3 | 22-12 | 6 | LIFE-10 | T-22-28, T-22-29 | a greedy-outdated auto-updating cask reads OUTDATED (`↑`) and `u` runs `brew upgrade --cask --greedy-auto-updates`; a non-auto-updates cask never gets the flag; Linux unchanged; the facts survive the cache | unit | `uv run pytest tests/test_manager_versions.py tests/test_version_cache.py tests/test_version_status.py tests/test_update.py -n auto -q --no-cov` | created by 22-12 RED | ⬜ pending |
 | 22-09-T1, 22-09-T2, 22-10-T1, 22-10-T2, 22-10-T3, 22-11-T1, 22-11-T3 | 22-09, 22-10, 22-11 | 4, 5, 6 | UI-04 | T-22-21, T-22-22, T-22-23, T-22-24, T-22-27 | "delete config too" absent without `config_paths`; off = config survives; on = exactly the listed paths gone; CLI `--yes` keeps config; failed removal keeps config; shared path kept while another tool uses it | pilot + unit + CLI | `uv run pytest tests/test_wizard_app.py tests/test_app.py tests/test_uninstall.py tests/test_tool_browser.py tests/test_layout_80x20.py -n auto -q --no-cov` | created by 22-09, 22-10, 22-11 RED | ⬜ pending |
 | 22-06-T2, 22-09-T2 | 22-06, 22-09 | 3, 4 | Edge: crash backstop | T-22-14 | an interrupt between `remove` and path deletion leaves the receipt (tool not removable, broken when a leaf is gone); an interrupt before config deletion leaves config | unit | `uv run pytest tests/test_app.py -k "interrupt_after_the_vendor or interrupt_before_step_4" -q --no-cov -n 0` | created by 22-06, 22-09 RED | ⬜ pending |
@@ -86,11 +86,11 @@ Task IDs are filled in by the planner; each row names the requirement, the behav
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (39/39 tasks across 22-01..22-13)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (no plan uses the MISSING sentinel; each Wave 0 item is created by the RED commit of the task named above)
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s (per-task commands are targeted pytest runs; `make e2e` is the recorded manual-evidence run, not a per-task sample)
+- [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending

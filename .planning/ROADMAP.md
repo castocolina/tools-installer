@@ -346,7 +346,7 @@ Plans:
 - [ ] 22-06-PLAN.md — `removal_plan` levels (L1 manager by receipt, L2, L3 recipe) and one ordered remover for CLI and TUI
 **Wave 4**
 - [ ] 22-07-PLAN.md — Uninstall rows by removal level; native hints name the package; SDKMAN hint carries the version
-- [ ] 22-08-PLAN.md — Vendor-verified lifecycle data for all 17 script stanzas, pi re-dated, first `config_paths`
+- [ ] 22-08-PLAN.md — Vendor-verified lifecycle data for all 18 script stanzas, pi re-dated, first `config_paths`
 - [ ] 22-09-PLAN.md — Config deletion as removal step 4 (shared-path rule, CLI never deletes); pnpm co-install group warning
 **Wave 5**
 - [ ] 22-10-PLAN.md — Uninstall "delete config too" toggle on `c`
