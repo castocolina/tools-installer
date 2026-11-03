@@ -8,7 +8,7 @@ index 2, where launchd's `["launchctl", <verb>, ...]` has it at index 1).
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -124,7 +124,7 @@ def _build(
     *,
     run: Runner,
     read_output: OutputRunner | None = None,
-    installed_tools: Mapping[str, bool] | None = None,
+    installed_tools: Mapping[str, bool] | Callable[[str], bool] | None = None,
     age_minutes: int | None = None,
     timer_cache: systemd_daemon.TimerStateCache | None = None,
 ) -> Policy:
@@ -149,6 +149,11 @@ def _build(
 
 
 # --- first-ever apply: enable failure rolls back everything ------------------
+
+
+def test_linux_daemon_policy_accepts_a_predicate(tmp_path: Path) -> None:
+    policy = _build(_make_paths(tmp_path), run=_FakeRun(), installed_tools=lambda _id: False)
+    assert policy.missing_requirements() == ()
 
 
 def test_linux_factory_binds_its_own_decided_closures(tmp_path: Path) -> None:

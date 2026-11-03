@@ -809,6 +809,7 @@ def omz_plugins_policy(
         active=plugins_owned(state_path),
         apply=_apply,
         remove=_remove,
+        is_active=lambda: plugins_owned(state_path),
         requires=("oh-my-zsh",),
         missing_requires=read_missing_requires(),
         missing_requires_now=read_missing_requires,
@@ -850,7 +851,7 @@ def daemon_policy(
     wrapper_bin_dir: Path,
     script_path: Path,
     state_path: Path,
-    installed_tools: Mapping[str, bool],
+    installed_tools: Mapping[str, bool] | Callable[[str], bool],
     path_value: str,
     tmpdir_value: str,
     home_value: str,
@@ -1016,9 +1017,11 @@ def daemon_policy(
             warning=None,
         )
 
-    missing_requires = tuple(
-        tool_id for tool_id in ("fd", "rg") if not installed_tools.get(tool_id, False)
-    )
+    is_installed = _installed_predicate(installed_tools)
+
+    def _missing() -> tuple[str, ...]:
+        return tuple(tool_id for tool_id in ("fd", "rg") if not is_installed(tool_id))
+
     return Policy(
         id="daemon:prune-tmpdir",
         label="Background tmpdir cleanup",
@@ -1030,7 +1033,8 @@ def daemon_policy(
         apply=_apply,
         remove=_remove,
         requires=("fd", "rg"),
-        missing_requires=missing_requires,
+        missing_requires=_missing(),
+        missing_requires_now=_missing,
         hard_requires=False,
         log_path=log_path,
         set_schedule=_set_schedule,
@@ -1055,7 +1059,7 @@ def linux_daemon_policy(
     wrapper_bin_dir: Path,
     script_path: Path,
     state_path: Path,
-    installed_tools: Mapping[str, bool],
+    installed_tools: Mapping[str, bool] | Callable[[str], bool],
     path_value: str,
     tmpdir_value: str,
     home_value: str,

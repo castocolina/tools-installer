@@ -11,7 +11,7 @@ shape already guarantees.
 """
 
 import plistlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -87,7 +87,7 @@ def _build(
     paths: _Paths,
     *,
     run: Runner,
-    installed_tools: Mapping[str, bool] | None = None,
+    installed_tools: Mapping[str, bool] | Callable[[str], bool] | None = None,
     tmpdir_value: str | None = None,
     home_value: str | None = None,
 ) -> Policy:
@@ -109,6 +109,30 @@ def _build(
 
 
 # --- missing_requires derivation --------------------------------------------
+
+
+def test_daemon_policy_reads_requirements_live(tmp_path: Path) -> None:
+    installed = {"fd": False, "rg": False}
+    policy = _build(
+        _make_paths(tmp_path),
+        run=_FakeRun(),
+        installed_tools=lambda tool_id: installed.get(tool_id, False),
+    )
+    assert policy.missing_requirements() == ("fd", "rg")
+    installed.update(fd=True, rg=True)
+    assert policy.missing_requirements() == ()
+
+
+def test_macos_prune_reads_off_without_its_plist(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    paths.plist_path.parent.mkdir(parents=True)
+    paths.plist_path.write_bytes(plistlib.dumps({"Label": "x"}))
+    policy = _build(paths, run=_FakeRun())
+    assert policy.active is True
+    assert policy.is_active is not None
+    assert policy.is_active() is True
+    paths.plist_path.unlink()
+    assert policy.is_active() is False
 
 
 def test_macos_factory_binds_its_own_decided_closures(tmp_path: Path) -> None:
