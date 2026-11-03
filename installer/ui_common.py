@@ -48,10 +48,11 @@ def run_live(action: Callable[[], T]) -> tuple[T | None, str | None]:
 
     A typed refusal from the core — an operation the core declined to perform for
     a stated reason — is surfaced the same way a failed command is, so a screen
-    that discards its console cannot record success."""
+    that discards its console cannot record success. A file that is not valid
+    UTF-8 (UnicodeDecodeError) is a failed read too, never a crash."""
     try:
         return action(), None
-    except (OSError, CommandError, ShellrcRefusal) as exc:
+    except (OSError, CommandError, ShellrcRefusal, UnicodeDecodeError) as exc:
         return None, str(exc)
 
 
