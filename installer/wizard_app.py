@@ -713,6 +713,12 @@ class DoctorScreen(AppScreen):
             return
         if self.app.refuse_if_mutating(self):
             return
+        # Never write rc files the user was not shown (T-21-41, C-11): the
+        # re-render re-reads the preview, and a failure keeps the error status.
+        if self._preview_error is not None:
+            self._refresh_body()
+            self.post_message(RefreshRequested())
+            return
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
         # Unconditional, not success-gated: run_live runs the callable BEFORE
