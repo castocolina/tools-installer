@@ -2974,7 +2974,9 @@ class UnifiedApp(App[list[str] | None]):
         visible.status.set(" · ".join(pending + warnings), "warn")
 
     def _visible_app_screen(self) -> AppScreen | None:
-        if not self.screen_stack:  # a handler driven before the app mounted
+        # Before mount there is no stack; during shutdown the app stops running
+        # before it prunes the screens, and a late pass must not render into them.
+        if not self.screen_stack or not self.is_running:
             return None
         screen = self.screen
         return screen if isinstance(screen, AppScreen) else None

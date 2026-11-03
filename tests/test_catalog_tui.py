@@ -66,7 +66,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from installer.wizard_app import PolicyInputs, RefreshPublished, UnifiedApp, UninstallInputs
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     ScriptedUpdates,
@@ -4849,3 +4849,18 @@ async def test_status_view_survives_a_publication_mid_rebuild(
             assert glyph == section[:1], f"{key}: {glyph!r} under {section!r}"
         assert sorted(seen) == sorted(ids)
         assert len(seen) == len(set(seen))
+
+
+async def test_a_publication_during_shutdown_renders_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_test's teardown (App._shutdown) stops the app before it prunes the
+    screens, and a refresh pass can still publish in between (macOS CI). A
+    publication that lands once the app stopped running must not render: the
+    catalog's DataTable may already be gone while its browser reads mounted."""
+    app = _app()
+    async with app.run_test(size=(100, 30)):
+        await app.catalog.query_one(ToolBrowser).query_one(DataTable).remove()
+        with monkeypatch.context() as patch:
+            patch.setattr(UnifiedApp, "is_running", property(lambda _self: False))
+            app.on_refresh_published(RefreshPublished(error="late", warning=None))
