@@ -1275,6 +1275,14 @@ async def test_ctrl_c_during_a_removal_waits_too(tmp_path: Path):
     assert calls == 1
 
 
+async def test_ctrl_q_during_a_removal_waits_like_q(tmp_path: Path):
+    """RR-01: Textual's inherited ctrl+q goes through the same quit path as q,
+    so it never abandons the daemon delete thread mid-removal."""
+    app, _extra_passes, calls = await _quit_during_a_removal(tmp_path, "ctrl+q")
+    assert app.return_value is None
+    assert calls == 1
+
+
 async def test_quit_during_a_removal_requests_no_pass(tmp_path: Path):
     _app, extra_passes, _calls = await _quit_during_a_removal(tmp_path, "q")
     assert extra_passes == 0
