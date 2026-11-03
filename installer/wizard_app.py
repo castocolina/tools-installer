@@ -2793,6 +2793,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._set_link_mode = policies.set_link_mode
         self._read_link_mode = policies.link_mode
         self._link_mode_prompted = False
+        # A first-run pick made while the launch daemon apply held the lock;
+        # on_daemon_default_applied moves it (C-18).
+        self._deferred_link_mode: str | None = None
         # The exit code answers "did everything this session asked for succeed":
         # the latest outcome per tool id wins, so a cancel followed by a retry
         # never leaks an earlier not_attempted. None until the first run finishes.
@@ -3131,6 +3134,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # Policies is skipped: refresh_daemon_state already wrote its row.
         if self._visible_app_screen() is not policies_screen:
             self._render_published()
+        value, self._deferred_link_mode = self._deferred_link_mode, None
+        if value is not None:
+            self._move_first_link_mode(value, self._views.get(self.current_view, self.catalog))
 
     @property
     def catalog(self) -> CatalogScreen:
@@ -3234,6 +3240,17 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
                 unchanged = f"{self._startup_warning} · {unchanged}"
             target.status.set(unchanged, "warn")
             return
+        if self._set_link_mode is None:
+            return
+        # C-18: the launch daemon apply rewrites ~/.myshellrc as the move does,
+        # so the pick waits for it instead of making the user answer again. It
+        # is the only holder possible here: the picker opens at launch.
+        if self.mutation_in_flight:
+            self._deferred_link_mode = value
+            return
+        self._move_first_link_mode(value, target)
+
+    def _move_first_link_mode(self, value: str, target: AppScreen) -> None:
         setter = self._set_link_mode
         if setter is None:
             return
@@ -3253,7 +3270,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             return
         text, severity = _link_mode_status(value, report or (), old_mode=old)
         target.status.set(text, severity)
-        if isinstance(target, DoctorScreen):
+        if isinstance(target, DoctorScreen) and self._visible_app_screen() is target:
             target.enter_view()  # the status survives: enter_view writes none
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
