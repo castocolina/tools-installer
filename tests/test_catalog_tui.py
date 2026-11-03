@@ -14,7 +14,6 @@ import pytest
 from rich.cells import cell_len
 from rich.text import Text
 from textual.binding import Binding
-from textual.message import Message
 from textual.widgets import DataTable, Static
 from textual.widgets.data_table import ColumnKey
 
@@ -23,10 +22,7 @@ from installer.catalog_tui import (
     _LEGEND,  # pyright: ignore[reportPrivateUsage]
     AUDIENCE_LABEL,
     CatalogScreen,
-    OwnershipRefreshed,
-    SkillStatusRefreshed,
     ToolUpdated,
-    VersionStatusRefreshed,
     group_tools,
     health_cell,
     sort_for_table,
@@ -71,6 +67,7 @@ from installer.version_status import (
     VersionStatus,
 )
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.screen_family import settle, wait_until
 from tests.state_doubles import frozen_service, offline_service, pass_state, seeded_service
 from tests.test_registry import REGISTRY
 
@@ -1071,16 +1068,13 @@ def test_zsh_is_audience_human_in_the_real_catalog() -> None:
     assert "for human" in screen._detail_text(zsh)  # pyright: ignore[reportPrivateUsage]
 
 
-def _ver_screen(
-    tmp_path: Path, tool: Tool, version: VersionStatus | None, *, refreshing: bool = False
-) -> CatalogScreen:
+def _ver_screen(tmp_path: Path, tool: Tool, version: VersionStatus | None) -> CatalogScreen:
     """A screen over a frozen machine where `tool` is present at `version`
     (no state at all when `version` is None)."""
     service = frozen_service(tmp_path)
     if version is not None:
         service.publish([pass_state(tool, platform=service.platform, version=version)])
     screen = _screen([tool], {}, version_refresh=service)
-    screen.version_refreshing = refreshing
     return screen
 
 
@@ -1118,92 +1112,6 @@ def test_ver_cell_is_empty_when_no_version_was_read(tmp_path: Path) -> None:
     state = screen._state(tool)  # pyright: ignore[reportPrivateUsage]
     assert state is not None
     assert "version unreadable" in state.reasons
-
-
-def test_epoch_guard_drops_a_superseded_version_refresh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tool = _tool("rg")
-    service = frozen_service(tmp_path)
-    screen = _screen([tool], {}, version_refresh=service)
-    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
-    service.invalidate(reason="test")
-    reloads: list[object] = []
-    monkeypatch.setattr(screen._browser, "reload", reloads.append)  # pyright: ignore[reportPrivateUsage]
-    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=0))
-    assert reloads == []
-    assert screen.version_refreshing is False
-
-
-def _posted_messages(screen: CatalogScreen, monkeypatch: pytest.MonkeyPatch) -> list[Message]:
-    """Capture every message a screen posts without needing a running app
-    (`post_message` requires a live message pump, which a bare
-    `CatalogScreen()` construction never has)."""
-    posted: list[Message] = []
-
-    def fake_post_message(message: Message) -> bool:
-        posted.append(message)
-        return True
-
-    monkeypatch.setattr(screen, "post_message", fake_post_message)
-    return posted
-
-
-def test_ownership_refreshed_is_posted_on_the_commit_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """15.4-04, Round-2 review HIGH: the commit path -- both the generation
-    and the epoch gates already passed -- is the ONE point where the shared
-    ownership map is known to hold a current pass, so it is the one point
-    that posts the completion signal a mounted Uninstall screen listens
-    for."""
-    tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1.6.0",
-        probe_output=lambda argv: "1.2.0",
-    )
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
-    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
-    posted = _posted_messages(screen, monkeypatch)
-    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=service.epoch))
-    assert any(isinstance(message, OwnershipRefreshed) for message in posted)
-
-
-def test_ownership_refreshed_is_not_posted_on_a_superseded_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1.6.0",
-        probe_output=lambda argv: "1.2.0",
-    )
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
-    screen._version_refresh_generation = 2  # pyright: ignore[reportPrivateUsage]
-    posted = _posted_messages(screen, monkeypatch)
-    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=service.epoch))
-    assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
-
-
-def test_ownership_refreshed_is_not_posted_on_a_raced_epoch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tool = _tool("rg")
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda repo: "v1.6.0",
-        probe_output=lambda argv: "1.2.0",
-    )
-    screen = _screen([tool], {"rg": True}, version_refresh=service)
-    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
-    service.invalidate(reason="test")
-    posted = _posted_messages(screen, monkeypatch)
-    screen.on_version_status_refreshed(VersionStatusRefreshed(generation=1, epoch=0))
-    assert not any(isinstance(message, OwnershipRefreshed) for message in posted)
 
 
 # -- 15.4-01/D-01: tracer -- probe -> resolver -> label table -> rendered
@@ -1324,7 +1232,6 @@ def test_owner_column_is_blank_while_a_pass_is_in_flight(tmp_path: Path) -> None
     that says "checking", so Owner stays blank instead of repeating it."""
     tool = _tool("demo")
     screen = _screen([tool], {}, version_refresh=frozen_service(tmp_path))
-    screen.version_refreshing = True
     for unavailable in (False, True):
         screen._unavailable["demo"] = unavailable  # pyright: ignore[reportPrivateUsage]
         assert screen._row_cells(tool)[7].plain == ""  # pyright: ignore[reportPrivateUsage]
@@ -1406,7 +1313,7 @@ async def test_ver_cell_is_empty_for_unparseable_probe_output(
     )
     app = _unified_app([tool], {"dasel": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         state = service.state_of("dasel")
         assert state is not None
@@ -1475,13 +1382,6 @@ def test_ver_cell_unparseable_latest_shows_the_bare_version(tmp_path: Path) -> N
     assert screen._ver_cell(tool).plain == "14.1.0"  # pyright: ignore[reportPrivateUsage]
 
 
-def test_ver_cell_is_empty_without_a_state_whether_or_not_refreshing(tmp_path: Path) -> None:
-    tool = _tool("rg")
-    for refreshing in (True, False):
-        screen = _ver_screen(tmp_path, tool, None, refreshing=refreshing)
-        assert screen._ver_cell(tool).plain == ""  # pyright: ignore[reportPrivateUsage]
-
-
 def test_ver_cell_never_renders_a_dim_label(tmp_path: Path) -> None:
     """The six situations that used to produce four dim labels (D-02) now
     produce only two cells: empty when there is no version to show, the bare
@@ -1489,8 +1389,8 @@ def test_ver_cell_never_renders_a_dim_label(tmp_path: Path) -> None:
     tool = _tool("rg")
     installed = "14.1.0"
 
-    def cell_for(status: VersionStatus | None, *, refreshing: bool = False) -> Text:
-        screen = _ver_screen(tmp_path, tool, status, refreshing=refreshing)
+    def cell_for(status: VersionStatus | None) -> Text:
+        screen = _ver_screen(tmp_path, tool, status)
         return screen._ver_cell(tool)  # pyright: ignore[reportPrivateUsage]
 
     def status(version: str | None, latest: str | None, source: str) -> VersionStatus:
@@ -1504,7 +1404,6 @@ def test_ver_cell_never_renders_a_dim_label(tmp_path: Path) -> None:
         )
 
     empty = [
-        cell_for(None, refreshing=True),
         cell_for(None),
         cell_for(status(None, None, "unknown")),
     ]
@@ -1513,7 +1412,7 @@ def test_ver_cell_never_renders_a_dim_label(tmp_path: Path) -> None:
         cell_for(status(installed, None, "github")),
         cell_for(status(installed, "not-a-version", "github")),
     ]
-    assert [cell.plain for cell in empty] == ["", "", ""]
+    assert [cell.plain for cell in empty] == ["", ""]
     assert [cell.plain for cell in bare] == [installed] * 3
     assert all(not cell.spans and str(cell.style) == "" for cell in empty + bare)
 
@@ -1527,8 +1426,8 @@ def test_ver_cell_stale_suffix_only_qualifies_a_comparison(tmp_path: Path) -> No
     tool = _tool("rg")
     installed = "14.1.0"
 
-    def cell_for(status: VersionStatus | None, *, refreshing: bool = False) -> str:
-        screen = _ver_screen(tmp_path, tool, status, refreshing=refreshing)
+    def cell_for(status: VersionStatus | None) -> str:
+        screen = _ver_screen(tmp_path, tool, status)
         return screen._ver_cell(tool).plain  # pyright: ignore[reportPrivateUsage]
 
     def status(
@@ -1544,7 +1443,6 @@ def test_ver_cell_stale_suffix_only_qualifies_a_comparison(tmp_path: Path) -> No
         )
 
     no_claim = [
-        cell_for(None, refreshing=True),
         cell_for(None),
         cell_for(status(None, None, None, "unknown")),
         cell_for(status(installed, None, None, "unknown")),
@@ -1590,15 +1488,11 @@ async def test_checking_mark_reaches_the_rendered_table_while_a_pass_is_blocked(
     )
     app = _unified_app([tool], {"dasel": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(400):
-            if not app.catalog.version_refreshing:
-                break
-            await pilot.pause()
-        await pilot.pause()
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("dasel", "health").plain == "…"
         assert table.get_cell("dasel", "ver").plain == ""
-        app.catalog.enter_view()
+        app.request_refresh()
         # A blocking Event.wait() here would starve the asyncio loop of the
         # tick it needs to actually dispatch the thread-worker submission --
         # pilot.pause() yields control instead, so the background thread gets
@@ -1610,11 +1504,7 @@ async def test_checking_mark_reaches_the_rendered_table_while_a_pass_is_blocked(
         assert started.is_set()
         assert table.get_cell("dasel", "health").plain == "…"
         release.set()
-        for _ in range(400):
-            if not app.catalog.version_refreshing:
-                break
-            await pilot.pause()
-        await pilot.pause()
+        await settle(app, pilot)
         assert table.get_cell("dasel", "health").plain != "…"
         assert "v2.8.0" in table.get_cell("dasel", "ver").plain
 
@@ -1649,17 +1539,13 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
     )
     app = _unified_app(tools, {"alpha": True, "beta": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(400):
-            if not app.catalog.version_refreshing:
-                break
-            await pilot.pause()
-        await pilot.pause()
+        await settle(app, pilot)
         table = app.catalog.query_one(DataTable[Any])
         table.move_cursor(row=table.get_row_index("beta"))
         await pilot.pause()
         started_row = table.cursor_row
         blocking["on"] = True
-        app.catalog.enter_view()
+        app.request_refresh()
         # See the sibling checking-marker test above: pilot.pause() (not a
         # blocking Event.wait()) is what lets the thread-worker submission
         # actually happen while we poll.
@@ -1670,11 +1556,7 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
         assert started.is_set()
         assert table.cursor_row == started_row
         release.set()
-        for _ in range(400):
-            if not app.catalog.version_refreshing:
-                break
-            await pilot.pause()
-        await pilot.pause()
+        await settle(app, pilot)
         assert table.cursor_row == started_row
 
 
@@ -1959,7 +1841,7 @@ async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
     tools = [_gh_tool("fresh"), _gh_tool("stale")]
     app = _unified_app(tools, {"fresh": True, "stale": True}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         table = app.catalog.query_one(DataTable[Any])
         fresh = table.get_cell("fresh", "ver").plain
@@ -2383,8 +2265,8 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
         )
         app.catalog._browser.highlighted_id = lambda: "jq"  # type: ignore[method-assign]
         await pilot.press("u")
-        await _wait_until(pilot, lambda: reresolve_calls == ["jq"])
-        await _wait_until(pilot, lambda: "dnf" in app.catalog.status_text)
+        await wait_until(pilot, lambda: reresolve_calls == ["jq"])
+        await wait_until(pilot, lambda: "dnf" in app.catalog.status_text)
     assert "dnf" in app.catalog.status_text
     assert runner_calls == []
 
@@ -2829,14 +2711,6 @@ def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) 
 # spawns a real subprocess. -----------------------------------------------
 
 
-async def _wait_until(pilot: Any, predicate: Callable[[], bool], tries: int = 400) -> None:
-    for _ in range(tries):
-        if predicate():
-            return
-        await pilot.pause()
-    raise AssertionError("condition never became true within the polling budget")
-
-
 def _outdated_status(tool_id: str, *, source: str = "brew") -> VersionStatus:
     return VersionStatus(
         tool_id=tool_id,
@@ -2849,9 +2723,9 @@ def _outdated_status(tool_id: str, *, source: str = "brew") -> VersionStatus:
 
 
 async def _mount_and_settle(app: UnifiedApp, pilot: Any) -> None:
-    """Let the on_mount version-refresh worker finish before a test publishes
-    its own states, so the mount-time pass cannot land after them."""
-    await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+    """Let the launch pass finish before a test publishes its own states, so it
+    cannot land after them."""
+    await settle(app, pilot)
 
 
 async def test_update_success_renders_new_version_on_status_line(tmp_path: Path) -> None:
@@ -2881,7 +2755,7 @@ async def test_update_success_renders_new_version_on_status_line(tmp_path: Path)
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         assert "updated rg" in app.catalog.status_text
         assert "update failed" not in app.catalog.status_text
 
@@ -2953,9 +2827,9 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
         # UpdateService.run, the ToolUpdated message loop) stays real.
         app.catalog._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         assert "updated rg" in app.catalog.status_text
-        await _wait_until(pilot, lambda: not app.catalog.version_refreshing)
+        await settle(app, pilot)
         # The untouched tool answers again -- without the follow-on pass it
         # stays `None` (and its Owner cell stays blank) for the rest of the
         # session, or until the user navigates away and back.
@@ -3031,7 +2905,7 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating pnpm" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating pnpm" not in app.catalog.status_text)
         status = app.catalog.status_text
         assert "updated pnpm" in status
         assert "replayed typescript, eslint" in status
@@ -3078,7 +2952,7 @@ async def test_update_success_reports_terminal_follow_up_warning_without_downgra
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         status = app.catalog.status_text
         assert "updated rg" in status
         assert "konsole profile is not writable" in status
@@ -3124,7 +2998,7 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         assert "updated rg" in app.catalog.status_text
         assert calls == [1]
 
@@ -3160,7 +3034,7 @@ async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         status = app.catalog.status_text
         assert "updated rg" not in status
         assert "permission denied" in status
@@ -3202,7 +3076,7 @@ async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Pa
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updating rg" not in app.catalog.status_text)
         status = app.catalog.status_text
         assert "updated rg" not in status
         assert "brew inventory changed mid-flight" in status
@@ -3257,7 +3131,7 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
         # Let the blocked update finish so the worker's own thread and
         # post_message do not leak past the end of the test.
         release.set()
-        await _wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
+        await wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
 
 
 def _skill_pack(
@@ -3318,7 +3192,7 @@ async def test_skill_worker_paints_superpowers_installed_with_claude_code_owner(
     )
     app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(140, 30)) as pilot:
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         table = app.catalog.query_one(DataTable[Any])
         assert table.get_cell("superpowers", "health").plain == "✓"
@@ -3341,7 +3215,6 @@ def _skill_screen(
     hosts: dict[str, str] | None,
     *,
     stale: bool = False,
-    refreshing: bool = False,
 ) -> tuple[CatalogScreen, Tool]:
     """A screen over a frozen pack state with these host answers (no state at
     all when `hosts` is None)."""
@@ -3362,7 +3235,6 @@ def _skill_screen(
             ]
         )
     screen = _screen([pack], {}, version_refresh=service)
-    screen.skill_refreshing = refreshing
     return screen, pack
 
 
@@ -3411,7 +3283,7 @@ def test_skill_health_cell_is_ok_after_the_probe_lands(tmp_path: Path) -> None:
 
 
 def test_skill_health_cell_is_checking_until_a_host_answers(tmp_path: Path) -> None:
-    screen, pack = _skill_screen(tmp_path, None, refreshing=True)
+    screen, pack = _skill_screen(tmp_path, None)
     cell = screen._row_cells(pack)[5]  # pyright: ignore[reportPrivateUsage]
     assert (cell.plain, str(cell.style)) == ("…", "dim")
 
@@ -3504,7 +3376,6 @@ def test_skill_rendering_leaves_a_non_pack_row_unchanged(tmp_path: Path) -> None
         skill_probe=_claude_has_superpowers,
     )
     wired = _screen([tool], {"rg": True}, version_refresh=service)
-    wired.skill_refreshing = True
 
     def signature(screen: CatalogScreen) -> list[tuple[str, str]]:
         return [
@@ -3542,13 +3413,13 @@ async def test_skill_probe_runs_once_across_three_catalog_entries(tmp_path: Path
     )
     app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(140, 30)) as pilot:
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
-        app.catalog.enter_view()
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        app.request_refresh()
+        await settle(app, pilot)
         await pilot.pause()
-        app.catalog.enter_view()
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        app.request_refresh()
+        await settle(app, pilot)
         await pilot.pause()
     assert calls.count(["claude", "plugin", "list", "--json"]) == 1
 
@@ -3568,12 +3439,12 @@ async def test_skill_probe_runs_again_after_invalidate(tmp_path: Path) -> None:
     )
     app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(140, 30)) as pilot:
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         assert calls.count(["claude", "plugin", "list", "--json"]) == 1
         service.invalidate(reason="x")
-        app.catalog.enter_view()
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        app.request_refresh()
+        await settle(app, pilot)
         await pilot.pause()
     assert calls.count(["claude", "plugin", "list", "--json"]) == 2
 
@@ -3595,7 +3466,7 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
     )
     app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
     async with app.run_test(size=(140, 30)) as pilot:
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         cell = app.catalog.query_one(DataTable[Any]).get_cell("superpowers", "health")
         # The probe finished with no readable answer: MISSING, never stuck (G8).
@@ -3603,32 +3474,6 @@ async def test_skill_probe_failure_paints_unknown_and_keeps_the_app_running(tmp_
     status = _skill_hosts(service, "superpowers")
     assert status is not None
     assert status.hosts == {"claude": "unknown"}
-
-
-def test_skill_status_refreshed_discards_a_superseded_epoch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    pack = _skill_pack(
-        "superpowers",
-        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
-    )
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda _repo: "v1",
-        probe_output=lambda _argv: None,
-    )
-    screen = _screen([pack], {"superpowers": False}, version_refresh=service)
-    screen._version_refresh_generation = 1  # pyright: ignore[reportPrivateUsage]
-    service.invalidate(reason="x")
-    reloads = {"n": 0}
-
-    def counting(_adapter: object) -> None:
-        reloads["n"] += 1
-
-    monkeypatch.setattr(screen._browser, "reload", counting)  # pyright: ignore[reportPrivateUsage]
-    screen.on_skill_status_refreshed(SkillStatusRefreshed(generation=1, epoch=0))
-    assert reloads["n"] == 0
 
 
 async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: Path) -> None:
@@ -3661,7 +3506,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
     )
     async with app.run_test(size=(140, 30)) as pilot:
         assert app.current_view == "system"
-        await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         assert ["claude", "plugin", "list", "--json"] in calls
         status = _skill_hosts(service, "superpowers")
@@ -3671,7 +3516,7 @@ async def test_skill_probe_covers_packs_when_system_view_mounts_first(tmp_path: 
         assert raw["skills"]["superpowers"]
         before = len(calls)
         await pilot.press("3")
-        await _wait_until(pilot, lambda: not app.catalog_for("ai").skill_refreshing)
+        await settle(app, pilot)
         await pilot.pause()
         cell = app.catalog_for("ai").query_one(DataTable[Any]).get_cell("superpowers", "health")
         assert cell.plain == "✓"
@@ -3811,7 +3656,7 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
             ]
         )
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "brew exploded" in app.catalog.status_text)
+        await wait_until(pilot, lambda: "brew exploded" in app.catalog.status_text)
         outcomes = app.outcomes
         assert outcomes is not None
         assert outcomes["rg"].result == "failed"
@@ -3873,11 +3718,11 @@ async def test_health_cell_is_checking_before_the_first_pass(tmp_path: Path) -> 
     )
     app = _unified_app(tools, installed, _BLURBS, version_refresh=service)
     async with app.run_test(size=(120, 30)) as pilot:
-        await _wait_until(pilot, started.is_set)
+        await wait_until(pilot, started.is_set)
         cells = _health_cells(app, ids)
         assert cells == dict.fromkeys(ids, "…")
         release.set()
-        await _wait_until(pilot, lambda: _health_cells(app, ids)["rg"] == "✓")
+        await wait_until(pilot, lambda: _health_cells(app, ids)["rg"] == "✓")
         assert _health_cells(app, ids) == {"rg": "✓", "fd": "○", "lazygit": "○"}
 
 
@@ -4071,7 +3916,7 @@ async def test_status_view_groups_by_health(
         ]
         table.move_cursor(row=table.get_row_index("fd"))
         await pilot.pause()
-        app.catalog.enter_view()
+        app.request_refresh()
         await _mount_and_settle(app, pilot)
         await pilot.pause()
         assert highlighted_key(table) == "fd"
@@ -4173,7 +4018,7 @@ async def test_requires_presence_comes_from_state(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("3")
         ai = app.catalog_for("ai")
-        await _wait_until(pilot, lambda: not ai.version_refreshing)
+        await settle(app, pilot)
         await pilot.press("space")
         await pilot.pause()
         assert "mmdc" in ai.selected
@@ -4198,8 +4043,7 @@ async def test_refresh_worker_covers_the_full_catalog(
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("3")
-        ai = app.catalog_for("ai")
-        await _wait_until(pilot, lambda: not ai.version_refreshing and len(calls) >= 2)
+        await settle(app, pilot)
     assert calls
     assert all(batch == {"rg", "mmdc", "jq"} for batch in calls)
 
@@ -4225,7 +4069,7 @@ async def test_refresh_error_shows_the_retry_copy(
         await _mount_and_settle(app, pilot)
         await pilot.pause()
         assert app.catalog.status_text == (
-            "tool state check failed: boom — leave and re-enter this view to retry"
+            "tool state check failed: boom — the next change retries it"
         )
         assert app.catalog.status.severity is Severity.WARN
         assert set(_health_cells(app, [tool.id for tool in tools]).values()) == {"…"}
@@ -4298,12 +4142,12 @@ async def test_update_shows_checking_on_every_row_until_the_full_pass(tmp_path: 
         gate = threading.Event()
         hold["gate"] = gate
         await pilot.press("u")
-        await _wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
-        await _wait_until(pilot, lambda: hold.get("started") is not None)
+        await wait_until(pilot, lambda: "updated rg" in app.catalog.status_text)
+        await wait_until(pilot, lambda: hold.get("started") is not None)
         assert _health_cells(app, ids) == dict.fromkeys(ids, "…")
         hold["gate"] = None
         gate.set()
-        await _wait_until(pilot, lambda: _health_cells(app, ids)["rg"] != "…")
+        await wait_until(pilot, lambda: _health_cells(app, ids)["rg"] != "…")
         assert _health_cells(app, ids) == {"rg": "↑", "fd": "✓", "lazygit": "✓"}
 
 
@@ -4340,7 +4184,7 @@ async def test_cache_save_warning_reaches_the_status_line(
         assert app.catalog.status.severity is Severity.WARN
         assert _health_cells(app, ids) == {"rg": "✓", "fd": "○", "lazygit": "○"}
         fail["on"] = False
-        app.catalog.enter_view()
+        app.request_refresh()
         await _mount_and_settle(app, pilot)
         await pilot.pause()
         assert service.warning is None
@@ -4380,10 +4224,10 @@ async def test_skill_cache_save_warning_reaches_the_status_line(
     app = _unified_app([pack], {"superpowers": False}, _BLURBS, version_refresh=service)
     try:
         async with app.run_test(size=(140, 30)) as pilot:
-            # The version pass finishes first, so it cannot clear the line afterwards.
-            await _mount_and_settle(app, pilot)
+            # The skills stage publishes last, so nothing clears the line afterwards.
+            await pilot.pause()
             release.set()
-            await _wait_until(pilot, lambda: not app.catalog.skill_refreshing)
+            await settle(app, pilot)
             await pilot.pause()
             state = service.state_of("superpowers")
             assert state is not None
@@ -4424,16 +4268,23 @@ async def test_quick_tier_switching_runs_one_full_pass(tmp_path: Path) -> None:
         tools, dict.fromkeys((tool.id for tool in tools), True), _BLURBS, version_refresh=service
     )
     async with app.run_test(size=(120, 30)) as pilot:
-        await _wait_until(pilot, started.is_set)
+        await wait_until(pilot, started.is_set)
         await pilot.press("2")
         await pilot.press("3")
         await pilot.pause()
         release.set()
-        screens = [app.catalog_for(tier) for tier in ("system", "user", "ai")]
-        await _wait_until(pilot, lambda: not any(s.version_refreshing for s in screens))
-        await pilot.pause()
-        for screen, tool in zip(screens, tools, strict=True):
-            cell = screen.query_one(DataTable[Any]).get_cell(tool.id, "health")
+        await settle(app, pilot)
+        # One pass published every tool; only the visible tier re-rendered (D-06),
+        # the others render it on their next entry.
+        assert all(service.state_of(tool.id) is not None for tool in tools)
+        for key, tier, tool in (
+            ("3", "ai", tools[2]),
+            ("2", "user", tools[1]),
+            ("1", "system", tools[0]),
+        ):
+            await pilot.press(key)
+            await pilot.pause()
+            cell = app.catalog_for(tier).query_one(DataTable[Any]).get_cell(tool.id, "health")
             assert cell.plain != "…", tool.id
     assert sorted(calls) == sorted(f"owner/{tool.id}" for tool in tools)
 
@@ -4519,7 +4370,6 @@ def test_owner_cell_follows_the_state(tmp_path: Path) -> None:
         ]
     )
     screen = _screen([rg, groovy, pending, pack], {}, version_refresh=service)
-    screen.version_refreshing = True
     owner = screen._owner_cell  # pyright: ignore[reportPrivateUsage]
     assert owner(rg).plain == "Homebrew"
     off_policy = owner(groovy)

@@ -149,58 +149,9 @@ class ToolUpdated(Message):
         self.epoch = epoch
 
 
-class VersionStatusRefreshed(Message):
-    """A version-refresh worker finished; generation and epoch both gate apply.
-
-    `generation` discards a superseded worker within one screen (rapid tier
-    navigation). `epoch` discards a pass whose view of the machine a mutation
-    has since invalidated (Plan 12-03's update action calling invalidate).
-    """
-
-    def __init__(
-        self,
-        generation: int,
-        epoch: int,
-        *,
-        error: str | None = None,
-        warning: str | None = None,
-    ) -> None:
-        super().__init__()
-        self.generation = generation
-        self.epoch = epoch
-        self.error = error
-        self.warning = warning
-
-
-class SkillStatusRefreshed(Message):
-    """A skill-pack probe finished. `epoch` discards a pass a mutation superseded.
-
-    `warning` is the service warning after a completed probe (a failed cache
-    write); the screen shows it on the status line after the reload.
-    """
-
-    def __init__(self, generation: int, epoch: int, *, warning: str | None = None) -> None:
-        super().__init__()
-        self.generation = generation
-        self.epoch = epoch
-        self.warning = warning
-
-
 class OwnershipRefreshed(Message):
-    """The shared ownership map now holds a committed pass under the current
-    epoch -- carries no payload; that fact is its whole meaning.
-
-    Ownership is committed by `VersionRefreshService.refresh` inside the
-    threaded worker (`_refresh_versions_worker`, below), so the only moment
-    a consumer outside this screen can learn the shared map changed is the
-    moment `on_version_status_refreshed` accepts a pass. Posted ONLY from
-    that handler's commit path -- after both its existing early returns --
-    so a superseded generation and a raced epoch each post nothing: neither
-    means the shared map gained a current pass, so there is nothing for a
-    consumer to repaint to (15.4-04, Round-2 review HIGH: the async window
-    between an install run closing and a mounted Uninstall screen learning
-    the real ownership answer arrived).
-    """
+    """The Uninstall screen's own ownership refresh committed a pass under the
+    current epoch -- carries no payload; that fact is its whole meaning."""
 
 
 VIEWS: tuple[str, ...] = ("category", "priority", "audience", "status", "table")
@@ -338,15 +289,9 @@ class CatalogScreen(AppScreen):
         # that construct a CatalogScreen without a service stay silent.
         self._version_refresh = version_refresh
         self._updates = updates
-        self._version_refresh_generation = 0
-        self.version_refreshing = False
-        self.skill_refreshing = False
         self._browser: ToolBrowser[Tool] = ToolBrowser(self._adapter(), selected=staged)
         self.recommends_line = StatusLine()
         self._pending_recommends: tuple[str, ...] = ()
-        # The refresh error or cache warning this screen last showed, so a clean
-        # pass clears only its own line, never an unrelated status message.
-        self._state_line: str | None = None
         # The states the last rebuild painted from. Empty until the first one.
         self._painted: dict[str, ToolState | None] = {}
 
@@ -373,103 +318,8 @@ class CatalogScreen(AppScreen):
         yield self._browser
         yield self.recommends_line
 
-    def enter_view(self) -> None:
-        self._start_version_refresh()
-
-    def _start_version_refresh(self) -> None:
-        if self._version_refresh is None:
-            return
-        self._version_refresh_generation += 1
-        self.version_refreshing = True
-        self.skill_refreshing = True
-        # Repaint through the same path the completion handler already uses
-        # so the checking marker is something a user can actually see, not
-        # only a value _ver_cell returns to a direct caller. Without this,
-        # version_refreshing flips on a screen nobody repaints until the
-        # worker finishes, so a rendered cell keeps its previous text for the
-        # whole refresh. reload's selection-pruning line is a no-op here
-        # because self.tools is unchanged between the two adapters; the
-        # on_mount call site stays safe because reload guards on is_mounted.
+    def state_refreshed(self) -> None:
         self._browser.reload(self._adapter())
-        generation = self._version_refresh_generation
-        self._refresh_versions_worker(generation)
-        self._refresh_skills_worker(generation)
-
-    @work(thread=True, exclusive=True, group="version-refresh", exit_on_error=False)
-    def _refresh_versions_worker(self, generation: int) -> None:
-        epoch = 0
-        error: str | None = None
-        warning: str | None = None
-        service = self._version_refresh
-        try:
-            if service is not None:
-                epoch = service.epoch
-                # The whole catalog, never the tier: every tier asks for the same
-                # set, so the service joins an in-flight pass instead of repeating it.
-                _result, error = run_live(lambda: service.refresh(self._catalog))
-                if error is None:
-                    warning = service.warning
-        finally:
-            self.post_message(
-                VersionStatusRefreshed(generation, epoch, error=error, warning=warning)
-            )
-
-    @work(thread=True, exclusive=True, group="skill-refresh", exit_on_error=False)
-    def _refresh_skills_worker(self, generation: int) -> None:
-        epoch = 0
-        warning: str | None = None
-        service = self._version_refresh
-        try:
-            if service is not None:
-                epoch = service.epoch
-                _hosts, error = run_live(lambda: service.refresh_skills(self._catalog))
-                if error is None:
-                    warning = service.warning
-        finally:
-            self.post_message(SkillStatusRefreshed(generation, epoch, warning=warning))
-
-    def on_skill_status_refreshed(self, message: "SkillStatusRefreshed") -> None:
-        if message.generation != self._version_refresh_generation:
-            return
-        self.skill_refreshing = False
-        service = self._version_refresh
-        if service is None or message.epoch != service.epoch:
-            return
-        self._browser.reload(self._adapter())
-        if message.warning is not None:
-            self._show_cache_warning(message.warning)
-
-    def on_version_status_refreshed(self, message: "VersionStatusRefreshed") -> None:
-        if message.generation != self._version_refresh_generation:
-            return
-        self.version_refreshing = False
-        service = self._version_refresh
-        if service is None or message.epoch != service.epoch:
-            return
-        self._browser.reload(self._adapter())
-        if message.error is not None:
-            # Nothing was published: rows stay `…`, never a stale mark.
-            self._show_state_line(
-                f"tool state check failed: {message.error} — leave and re-enter this view to retry"
-            )
-            return
-        if message.warning is not None:
-            self._show_cache_warning(message.warning)
-        elif self._state_line is not None and self.status.text == self._state_line:
-            self.status.clear()
-            self._state_line = None
-        # Commit path only -- both early returns above already discarded a
-        # superseded generation and a raced epoch, so this is the ONE point
-        # where the shared ownership map is known to hold a current pass.
-        self.post_message(OwnershipRefreshed())
-
-    def _show_state_line(self, line: str) -> None:
-        # Plain text through StatusLine.set, never markup (T-19-40).
-        self.status.set(line, "warn")
-        self._state_line = line
-
-    def _show_cache_warning(self, warning: str) -> None:
-        self._show_state_line(f"{warning} — marks are current; the next start checks again")
 
     def _state(
         self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None
@@ -846,13 +696,6 @@ class CatalogScreen(AppScreen):
 
     def on_tool_updated(self, message: ToolUpdated) -> None:
         outcome = message.outcome
-        if outcome is not None and outcome.status == "updated":
-            # CR-02 (15.4-REVIEW.md): `UpdateService.run` called `invalidate`,
-            # which bumped the shared epoch, so every tool's state is stale
-            # and `state_of` answers `None` until a pass lands. Kicking the
-            # full pass here replaces the invalidate the update performed; the
-            # rows read `…` in the meantime.
-            self._start_version_refresh()
         if message.error is not None:
             self.status.set(f"update failed: {message.error}", "error")
             return
