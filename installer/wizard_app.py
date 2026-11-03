@@ -2248,23 +2248,23 @@ class PoliciesScreen(AppScreen):
         policy = next((p for p in self._policies if p.id == policy_id), None)
         if policy is None:
             return
-        if live is not None:
-            resolved = live
-        elif policy.is_active is not None:
-            return
-        else:
-            resolved = applied
-        self.active_state[policy_id] = resolved
-        if resolved:
-            self._drift.discard(policy_id)
+        resolved = applied if policy.is_active is None else live
+        if resolved is not None:
+            self.active_state[policy_id] = resolved
+            if resolved:
+                self._drift.discard(policy_id)
         if self.is_mounted and self.app.is_running:
-            self.query_one(DataTable[Any]).update_cell(
-                policy_id, "state", self._state_cell(policy_id)
-            )
-            highlighted = self._highlighted_policy()
-            if highlighted is not None and highlighted.id == policy_id:
-                self._set_detail(highlighted)
+            if resolved is not None:
+                self.query_one(DataTable[Any]).update_cell(
+                    policy_id, "state", self._state_cell(policy_id)
+                )
+                highlighted = self._highlighted_policy()
+                if highlighted is not None and highlighted.id == policy_id:
+                    self._set_detail(highlighted)
+            # Every completion supersedes older reads, even an unresolved one (T-21-52).
             self._start_job_state_read()
+        else:
+            self._job_state_generation += 1
 
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
