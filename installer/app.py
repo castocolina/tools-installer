@@ -686,9 +686,10 @@ def perform_uninstall(
     # D-08: tool by tool, so one tool's refusal never stops the next. The
     # tool's current plan must still name every path its preview showed,
     # `yourself` included (a path that drifted since the preview is no longer
-    # proven; the name match still ties it to its tool). When it does not, the
-    # plan changed under the confirm (a receipt rewritten by a reinstall), so
-    # none of the tool is touched and its receipt stays.
+    # proven; the name match still ties it to its tool), and no removable path
+    # the preview did not show. When it does not, the plan changed under the
+    # confirm (a receipt rewritten by a reinstall), so none of the tool is
+    # touched and its receipt stays.
     refused: tuple[str, ...] = ()
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
@@ -698,8 +699,11 @@ def perform_uninstall(
             # Planning reads the disk too (a non-searchable parent raises).
             plan = plan_removal([tool], bin_dir)
             named = {*plan.removable, *plan.yourself}
-            if not previewed or any(path not in named for path in previewed):
-                refused += tuple(f"changed since the preview; not removed: {p}" for p in previewed)
+            # A path that dropped out, or one a reinstall added, is a change.
+            changed = [p for p in previewed if p not in named]
+            changed += [p for p in plan.removable if p not in previewed]
+            if not previewed or changed:
+                refused += tuple(f"changed since the preview; not removed: {p}" for p in changed)
                 remove_failed.append((tool.id, "changed since the preview; not removed"))
                 continue
             _gone, tool_refused = remove_proven([tool], list(previewed), bin_dir)
