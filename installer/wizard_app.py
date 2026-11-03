@@ -3270,6 +3270,10 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # is the only holder possible here: the picker opens at launch.
         if self.mutation_in_flight:
             self._deferred_link_mode = value
+            # The move's own status replaces this line once the apply ends.
+            target.status.set(
+                f"Link mode {value} will be saved when the background apply finishes.", "warn"
+            )
             return
         self._move_first_link_mode(value, target)
 
