@@ -694,13 +694,14 @@ def perform_uninstall(
     remove_failed: list[tuple[str, str]] = []
     for tool in decision.tools:
         previewed = decision.paths.get(tool.id, ())
-        plan = plan_removal([tool], bin_dir)
-        named = {*plan.removable, *plan.yourself}
-        if not previewed or any(path not in named for path in previewed):
-            refused += tuple(f"changed since the preview; not removed: {p}" for p in previewed)
-            remove_failed.append((tool.id, "changed since the preview; not removed"))
-            continue
         try:
+            # Planning reads the disk too (a non-searchable parent raises).
+            plan = plan_removal([tool], bin_dir)
+            named = {*plan.removable, *plan.yourself}
+            if not previewed or any(path not in named for path in previewed):
+                refused += tuple(f"changed since the preview; not removed: {p}" for p in previewed)
+                remove_failed.append((tool.id, "changed since the preview; not removed"))
+                continue
             _gone, tool_refused = remove_proven([tool], list(previewed), bin_dir)
         except OSError as exc:
             remove_failed.append((tool.id, first_line(exc)))
