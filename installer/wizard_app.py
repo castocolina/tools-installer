@@ -1641,7 +1641,9 @@ class UninstallScreen(AppScreen):
         fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
         if failed:
             summary_parts.append(fix_here)
-        summary_parts.append(self._applied_summary(message.decision, swept))
+        # Empty when no lever was chosen; a blank line would cost a status row.
+        if applied := self._applied_summary(message.decision, swept):
+            summary_parts.append(applied)
         if message.invalidate_error is not None:
             summary_parts.append(message.invalidate_error)
         # D-01/15.6-06 Task 3: called unconditionally on every successful
