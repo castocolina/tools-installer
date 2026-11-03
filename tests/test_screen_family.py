@@ -473,6 +473,25 @@ async def test_two_requests_during_a_pass_coalesce_into_one(tmp_path: Path):
         service.release.set()
 
 
+async def test_a_queued_pass_does_not_start_once_quit_began(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [])
+    app = _family_app(version_refresh=service)
+    try:
+        async with app.run_test(size=(120, 30)) as pilot:
+            await wait_until(pilot, lambda: len(service.calls) == 1)
+            app.request_refresh()
+            got: list[str | None] = []
+            app.await_publication(got.append)
+            # A quit during a removal sets this, then waits for the removal.
+            app.quitting = True
+            service.release.set()
+            await settle(app, pilot)
+            assert len(service.calls) == 1
+            assert got == [None]
+    finally:
+        service.release.set()
+
+
 class _Covering(ModalScreen[None]):
     """A minimal modal standing in for ConfirmUninstall, ExecuteScreen or the palette."""
 
