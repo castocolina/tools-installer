@@ -2337,6 +2337,35 @@ async def test_a_superseded_job_state_read_is_discarded(
             probe.release.set()
 
 
+async def test_a_publish_keeps_the_job_row_while_it_is_re_read(tmp_path: Path):
+    """C-21: a publish re-reads the job row on the worker but keeps its last
+    answer meanwhile; only an entry blanks it until the read answers."""
+    probe = _ArmedProbe(first=True, later=True)
+    app, service = _policy_app(tmp_path, [_job_policy(tmp_path, probe)], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            assert _state_text(app, "jobstate") == "● [on]"
+            probe.armed = True
+            before = service.passes
+            app.request_refresh()
+            await wait_until(pilot, probe.held.is_set)
+            await wait_until(pilot, lambda: service.passes == before + 1)
+            await pilot.pause()
+            assert _state_text(app, "jobstate") == "● [on]"
+            probe.release.set()
+            await settle(app, pilot)
+            probe.held.clear()
+            probe.release.clear()
+            probe.armed = True
+            await app.show_view("system")
+            await app.show_view("policies")
+            await wait_until(pilot, probe.held.is_set)
+            assert _state_text(app, "jobstate") == ""
+        finally:
+            probe.release.set()
+
+
 # -- 21-18: a toggle ends with one pass; a mutation completion supersedes older reads --
 
 
