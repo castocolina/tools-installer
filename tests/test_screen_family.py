@@ -968,10 +968,12 @@ async def test_a_partial_delete_keeps_its_reason_while_leftovers_remain(
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         await app.show_view("uninstall")
+        await _select_and_confirm(app, pilot, "fd")
+        await settle(app, pilot)
         remainder = plan_removal([fd], bin_dir)
         assert remainder.removable == () and opt in remainder.yourself
         service.queued = (plan_state(fd, health=Health.MISSING, removable=remainder),)
-        await _select_and_confirm(app, pilot, "fd")
+        app.request_refresh()
         await settle(app, pilot)
         assert _section_of(app, "fd") == "#nothing to do"
         detail = await _detail_of(app, pilot, "fd")
