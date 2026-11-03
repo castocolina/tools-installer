@@ -148,6 +148,7 @@ Three tool groups in this order, then the existing environment group. Titles are
 - Glyph and word both carry the state; color is redundant (existing rule for this table). `!` is the Phase 19 "needs action" glyph.
 - The State column width grows from 6 to 9 cells (`! [drift]`). Policy and Effect columns absorb it; the table must still fit 78 cells (existing test).
 - `enter_view` re-reads `is_active()` for every policy and rewrites each State cell, the Requires cell and the detail panel for the highlighted row. The link-mode line is re-read in the same pass.
+- A scheduled-job row (`state_cache`) is read on a worker. On `enter_view` its State cell is empty until that read answers; on a publish, or when a modal closes over Policies, it keeps its last answer while the worker re-reads (amended 2026-11-03, review C-21). A failed read still empties it.
 - macOS: the prune policy is ON only when its plist exists. Without the plist it reads OFF.
 
 ### Requires cell

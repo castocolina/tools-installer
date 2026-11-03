@@ -1812,20 +1812,26 @@ class PoliciesScreen(AppScreen):
             return
         line.update(f"PATH link mode: {self._link_mode()}  (press m to change)")
 
+    def enter_view(self) -> None:
+        """An entry blanks the job rows until their worker read answers: the
+        last answer is from a previous visit. A publish keeps it (C-21)."""
+        for policy in self._policies:
+            if policy.state_cache is not None:
+                self._record_state(policy.id, None)
+        self.state_refreshed()
+
     def state_refreshed(self) -> None:
         """Render every row from a fresh read of the machine (D-04, D-12).
 
-        The AppScreen default `enter_view` calls this on every entry and the
-        app calls it on every publish while Policies is on top.
+        `enter_view` calls this on every entry and the app calls it on every
+        publish while Policies is on top. A job row keeps its last answer while
+        the worker re-reads it.
         """
         if not self.is_mounted:
             return
         table = self.query_one(DataTable[Any])
         errors: list[str] = []
         for policy in self._policies:
-            if policy.state_cache is not None:
-                # Read on a worker: blank, not stale, until it answers.
-                self._record_state(policy.id, None)
             errors += filter(None, (self._read_live_state(policy), self._read_requirements(policy)))
             table.update_cell(policy.id, "state", self._state_cell(policy.id), update_width=True)
             table.update_cell(policy.id, "requires", self._requires_cell(policy), update_width=True)
