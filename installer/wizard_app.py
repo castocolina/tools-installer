@@ -889,7 +889,7 @@ class DoctorScreen(AppScreen):
                 # Always posted: the handler releases the app lock.
                 self.post_message(GlobalsReinstalled(error, invalidate_error))
 
-    @work(thread=True, exclusive=True, group="globals-audit")
+    @work(thread=True, exclusive=True, group="globals-audit", exit_on_error=False)
     def _audit_globals_worker(self, generation: int) -> None:
         """Ask pnpm what it manages globally, off the event loop.
 
@@ -909,12 +909,16 @@ class DoctorScreen(AppScreen):
         # resolver failure into an uncaught WorkerFailed that kills the app,
         # rather than the "could not be read" text this worker exists to
         # show instead.
-        outcome, error = run_live(self._audit_globals)
-        if outcome is None:
-            report, preview = _GLOBALS_UNREADABLE, _GLOBALS_UNREADABLE_PREVIEW
-        else:
-            report, preview = outcome
-        self.post_message(GlobalsAudited(report, preview, error, generation))
+        report, preview = _GLOBALS_UNREADABLE, _GLOBALS_UNREADABLE_PREVIEW
+        error: str | None = "the audit did not complete"
+        try:
+            outcome, error = run_live(self._audit_globals)
+            if outcome is not None:
+                report, preview = outcome
+        finally:
+            # Always posted, even on an exception run_live does not map (C-13):
+            # the handler is what clears globals_auditing.
+            self.post_message(GlobalsAudited(report, preview, error, generation))
 
     def _audit_globals(self) -> tuple[NodeGlobalsReport, str]:
         report = self._node_globals()
