@@ -2325,6 +2325,33 @@ async def test_an_unreadable_job_state_shows_the_error(tmp_path: Path):
         )
 
 
+@pytest.mark.parametrize("kind", ["job", "sync"])
+async def test_a_failed_policy_read_does_not_overwrite_another_status(tmp_path: Path, kind: str):
+    """RR-03: a read that keeps failing (no user bus) shows its error over an
+    empty status or its own earlier error, never over another writer's result."""
+
+    def is_active() -> bool:
+        raise OSError("the systemd user manager could not be reached")
+
+    policy = (
+        _job_policy(tmp_path, is_active)
+        if kind == "job"
+        else replace(_policy(tmp_path, "tweak"), is_active=is_active)
+    )
+    app, _service = _policy_app(tmp_path, [policy], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        status = app.view("policies").status
+        assert status.text.startswith("Could not read the policy state:")
+        app.request_refresh()  # the error's own re-render keeps it
+        await settle(app, pilot)
+        assert status.text.startswith("Could not read the policy state:")
+        status.set("Link mode saved: split", "ok")
+        app.request_refresh()
+        await settle(app, pilot)
+        assert status.text == "Link mode saved: split"
+
+
 async def test_an_undecodable_policy_read_shows_the_error(tmp_path: Path):
     reads = {"undecodable": False}
 
