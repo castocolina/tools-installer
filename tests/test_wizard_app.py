@@ -30,7 +30,6 @@ from installer.guidance import (
     disk_pressure_guidance,
     doctor_guidance,
     guard_guidance,
-    node_globals_guidance,
 )
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
@@ -4061,24 +4060,33 @@ async def test_doctor_healthy_disk_pressure_adds_nothing() -> None:
         )
 
 
-async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_globals() -> None:
+async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_path: Path) -> None:
     warning = "pip shim is shadowed"
+    mmdc = replace(
+        _tool("mmdc"),
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(mmdc, platform=service.platform, broken=("mmdc is not working",))])
     app = _app(
         guard_warning=warning,
         node_globals=lambda: _mmdc_report(),
         policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)),
         initial_view="doctor",
+        tools=[mmdc],
+        version_refresh=service,
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         guard_items = guard_guidance({"pip": False, "npm": False}, warning)
-        globals_items = node_globals_guidance(_mmdc_report())
         assert guard_items
-        assert globals_items
         assert app.screen.guidance == (
-            _HEALTHY_DOCTOR + guard_items + disk_pressure_guidance(_AT_RISK) + globals_items
+            _HEALTHY_DOCTOR + guard_items + disk_pressure_guidance(_AT_RISK)
         )
+        body = _doctor_body(app)
+        [disk_item] = disk_pressure_guidance(_AT_RISK)
+        assert body.index("mmdc: ") > body.index(disk_item.title)
 
 
 async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_row() -> None:

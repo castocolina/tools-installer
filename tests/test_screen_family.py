@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 from textual.screen import ModalScreen
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from installer import receipts
 from installer import uninstall as uninstall_module
@@ -21,14 +21,19 @@ from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.pnpm_globals import NodeGlobalsReport
+from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.systemd_daemon import DaemonState, TimerStateCache
 from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, plan_removal, remove_paths
 from installer.update import UpdateOutcome
-from installer.version_status import Health, VersionRefreshService, VersionStatus
+from installer.version_status import (
+    BROKEN_SHIM_REASON,
+    Health,
+    VersionRefreshService,
+    VersionStatus,
+)
 from installer.wizard_app import (
     JobStatesRead,
     LinkModeScreen,
@@ -82,14 +87,19 @@ def _family_app(
     tools: Sequence[Tool] | None = None,
     uninstall: UninstallInputs | None = None,
     execute: ExecuteInputs | None = None,
+    node_globals: Callable[[], NodeGlobalsReport] | None = None,
+    guard_state: Callable[[], tuple[dict[str, bool], str | None]] | None = None,
+    fix_preview: str | Callable[[], str] = "preview",
+    policies: PolicyInputs | None = None,
 ) -> UnifiedApp:
     return app_cls(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({"pip": False, "npm": False}, None),
-        fix_preview="preview",
+        guard_state=guard_state or (lambda: ({"pip": False, "npm": False}, None)),
+        fix_preview=fix_preview,
         fix=lambda: None,
+        node_globals=node_globals,
         uninstall=uninstall
         or UninstallInputs(
             ban_names=lambda: [],
@@ -97,7 +107,7 @@ def _family_app(
             remove=lambda _decision: SweepResult(),
             tweak_ids=lambda: (),
         ),
-        policies=PolicyInputs(policies=[]),
+        policies=policies or PolicyInputs(policies=[]),
         initial_view=initial_view,
         startup_warning=startup_warning,
         version_refresh=version_refresh,
@@ -2134,3 +2144,170 @@ async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
             release_mutation.set()
             probe.release.set()
             service.release.set()
+
+
+# -- Doctor joins the screen family (plan 21-19) --
+
+_SMOKE = (
+    "mmdc's command resolves on PATH, but the check the catalog declares for it "
+    "fails right now: {reason}"
+)
+
+
+def _node_tool() -> Tool:
+    return Tool(
+        id="mmdc",
+        name="mmdc",
+        category="search",
+        cmd="mmdc",
+        methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+
+
+def _audit(*unhealthy: tuple[str, str], known: bool = True) -> Callable[[], NodeGlobalsReport]:
+    report = NodeGlobalsReport(
+        entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
+        missing=(),
+        managed=("@mermaid-js/mermaid-cli",),
+        known=known,
+        unhealthy=unhealthy,
+    )
+    return lambda: report
+
+
+def _doctor_text(app: UnifiedApp) -> Any:
+    return app.view("doctor").query_one("#doctor-body", Static).render()
+
+
+def _tier_marks(app: UnifiedApp, tool_id: str) -> list[str]:
+    table = app.catalog.query_one(DataTable[Any])
+    return [str(cell) for cell in table.get_row(tool_id)]
+
+
+def _real_service(tmp_path: Path) -> VersionRefreshService:
+    return offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: "1.0",
+    )
+
+
+def _count_passes(monkeypatch: pytest.MonkeyPatch, service: VersionRefreshService) -> list[int]:
+    passes: list[int] = []
+    original = service.refresh
+
+    def counting(tools: Sequence[Tool]) -> Any:
+        passes.append(1)
+        return original(tools)
+
+    monkeypatch.setattr(service, "refresh", counting)
+    return passes
+
+
+async def _reenter_doctor(app: UnifiedApp, pilot: Any) -> None:
+    await app.show_view("system")
+    await app.show_view("doctor")
+    await settle(app, pilot)
+
+
+async def test_a_smoke_failure_reaches_the_tier_and_doctor_through_the_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    service = _real_service(tmp_path)
+    passes = _count_passes(monkeypatch, service)
+    app = _family_app(
+        tools=[_node_tool()], version_refresh=service, node_globals=_audit(("mmdc", "exit 1"))
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await wait_until(pilot, lambda: len(passes) == 2)
+        await settle(app, pilot)
+        state = service.state_of("mmdc")
+        assert state is not None and state.health is Health.BROKEN
+        assert f"mmdc: {_SMOKE.format(reason='exit 1')}" in str(_doctor_text(app))
+        assert "!" in _tier_marks(app, "mmdc")
+
+
+async def test_an_unchanged_audit_requests_no_pass(tmp_path: Path):
+    service = frozen_service(tmp_path)
+    app = _family_app(
+        tools=[_node_tool()], version_refresh=service, node_globals=_audit(("mmdc", "exit 1"))
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert service.passes == 2
+        await _reenter_doctor(app, pilot)
+        await _reenter_doctor(app, pilot)
+        assert service.passes == 2
+
+
+async def test_a_dangling_pnpm_shim_reads_broken_in_doctor_and_on_the_tier(tmp_path: Path):
+    tool = _node_tool()
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform, broken=(BROKEN_SHIM_REASON,))])
+    app = _family_app(tools=[tool], version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert "!" in _tier_marks(app, "mmdc")
+        assert f"mmdc: {BROKEN_SHIM_REASON}" in str(_doctor_text(app))
+
+
+async def test_doctor_rerenders_when_a_pass_publishes(tmp_path: Path):
+    tool = _node_tool()
+    service = frozen_service(tmp_path)
+    service.publish([pass_state(tool, platform=service.platform)])
+    app = _family_app(tools=[tool], version_refresh=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert "a brand new finding" not in str(_doctor_text(app))
+        service.queued = (
+            pass_state(tool, platform=service.platform, broken=("a brand new finding",)),
+        )
+        app.request_refresh()
+        await settle(app, pilot)
+        assert app.current_view == "doctor"
+        assert "mmdc: a brand new finding" in str(_doctor_text(app))
+
+
+async def test_an_unreadable_audit_records_no_evidence(tmp_path: Path):
+    service = frozen_service(tmp_path)
+    app = _family_app(
+        tools=[_node_tool()],
+        version_refresh=service,
+        node_globals=_audit(("mmdc", "exit 1"), known=False),
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert service.passes == 1
+        # Nothing was stored, so storing something is still a change.
+        assert service.record_evidence("mmdc", broken=("x",)) is True
+
+
+async def test_a_hostile_pnpm_reason_renders_literally(tmp_path: Path):
+    service = _real_service(tmp_path)
+    reason = "[red]x[/red]\x1b[31mboom"
+    app = _family_app(
+        tools=[_node_tool()], version_refresh=service, node_globals=_audit(("mmdc", reason))
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await wait_until(pilot, lambda: "boom" in str(_doctor_text(app)), tries=800)
+        body = _doctor_text(app)
+        assert "[red]x[/red]" in str(body)
+        assert "\x1b" not in str(body)
+        assert not any("red" in str(span.style) for span in body.spans)
