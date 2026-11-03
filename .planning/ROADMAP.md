@@ -263,7 +263,7 @@ Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
   4. A removal runs on a worker with visible progress; afterwards the tool moves to "nothing to do", its selection is pruned, every tier shows `○`, and Policies shows a removed ban OFF on entry.
   5. Policies and Doctor read live state on entry: installing `watch` unblocks the docker tweak, Doctor's hidden `a` key is inert, and a dangling pnpm global shim shows as broken.
 
-**Plans:** 17/21 plans executed
+**Plans:** 18/21 plans executed
 **UI hint**: yes
 
 Plans:
@@ -307,7 +307,7 @@ Plans:
 - [x] 21-17-PLAN.md — Policies render live state and prerequisites (`installed_or`); a failed state or requirements read shows an error
 
 **Wave 12** *(blocked on Wave 11 completion)*
-- [ ] 21-18-PLAN.md — Policies DRIFT, the generation-guarded job-state worker, toggles republish
+- [x] 21-18-PLAN.md — Policies DRIFT, the generation-guarded job-state worker, toggles republish
 
 **Wave 13** *(blocked on Wave 12 completion)*
 - [ ] 21-19-PLAN.md — Doctor findings via `ToolState.reasons` and `record_evidence`; a failed read shows an error
@@ -418,7 +418,7 @@ Plans:
 | 18. Registry truth and drift guard | 0/TBD | Not started | - |
 | 19. One tool state with health plus receipts | 0/TBD | Not started | - |
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
-| 21. One screen family | 17/21 | In Progress | - |
+| 21. One screen family | 18/21 | In Progress | - |
 | 22. Method lifecycle contract | 0/TBD | Not started | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
