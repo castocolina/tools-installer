@@ -15,9 +15,12 @@ from installer import uninstall as uninstall_module
 from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
-from installer.enums import Severity
+from installer.engine import InstallOutcome
+from installer.enums import MutationHolder, Severity
+from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership, OwnershipCandidate
+from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.session import Disposition, PlanRow, RowOutcome
@@ -45,6 +48,7 @@ from tests.state_doubles import (
     offline_service,
     pass_state,
     plan_state,
+    presence_service,
     removable_state,
 )
 
@@ -75,6 +79,7 @@ def _family_app(
     app_cls: type[UnifiedApp] = UnifiedApp,
     tools: Sequence[Tool] | None = None,
     uninstall: UninstallInputs | None = None,
+    execute: ExecuteInputs | None = None,
 ) -> UnifiedApp:
     return app_cls(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
@@ -95,6 +100,7 @@ def _family_app(
         startup_warning=startup_warning,
         version_refresh=version_refresh,
         updates=updates,
+        execute=execute,
     )
 
 
@@ -1673,3 +1679,220 @@ async def test_navigation_works_during_a_removal(tmp_path: Path):
                 assert app.view(name).status.text != _REFUSAL
         finally:
             remover.release.set()
+
+
+# -- 21-16: the pnpm reinstall and the install run hold the lock --
+
+_REINSTALL_REFUSAL = "A pnpm reinstall is running; wait for it to finish. Navigation still works."
+_INSTALL_REFUSAL = "An install run is running; wait for it to finish. Navigation still works."
+
+
+def _reinstall_app(
+    tmp_path: Path,
+    remover: HeldRemover,
+    reinstall: Callable[[Sequence[str]], tuple[str, ...]],
+    *,
+    report: Callable[[], NodeGlobalsReport] = _managed_report,
+    fix: Callable[[], None] = lambda: None,
+) -> tuple[UnifiedApp, FrozenStateService]:
+    return _policy_app(
+        tmp_path, [], remover, node_globals=report, reinstall_globals=reinstall, fix=fix
+    )
+
+
+def _held_reinstall(
+    started: threading.Event, release: threading.Event
+) -> Callable[[Sequence[str]], tuple[str, ...]]:
+    def reinstall(packages: Sequence[str]) -> tuple[str, ...]:
+        del packages
+        started.set()
+        if not release.wait(timeout=10):
+            raise TimeoutError("the reinstall was never released")
+        return ()
+
+    return reinstall
+
+
+async def test_a_pnpm_reinstall_holds_the_lock(tmp_path: Path):
+    started, release = threading.Event(), threading.Event()
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _reinstall_app(tmp_path, remover, _held_reinstall(started, release))
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _open_view(app, pilot, "doctor")
+            await pilot.press("r")
+            await wait_until(pilot, started.is_set)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "fd")
+            status = app.view("uninstall").status
+            assert (status.text, status.severity) == (_REINSTALL_REFUSAL, Severity.WARN)
+            assert remover.calls == []
+            release.set()
+            await settle(app, pilot)
+            assert not app.mutation_in_flight
+        finally:
+            release.set()
+
+
+async def test_the_lock_is_released_when_the_reinstall_crashes(tmp_path: Path):
+    def reinstall(packages: Sequence[str]) -> tuple[str, ...]:
+        raise RuntimeError("boom")
+
+    app, _service = _reinstall_app(tmp_path, HeldRemover(), reinstall)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert not app.mutation_in_flight
+        assert cast(Any, app.view("doctor")).globals_error == "boom"
+
+
+async def test_an_install_run_holds_the_lock(tmp_path: Path):
+    started, release = threading.Event(), threading.Event()
+    rg = _tool("rg")
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    def install(tool: Tool, *_args: Any, **_kwargs: Any) -> InstallOutcome:
+        started.set()
+        assert release.wait(timeout=10)
+        return InstallOutcome(tool.id, "installed")
+
+    service = presence_service([rg], platform=platform)
+    inputs = ExecuteInputs(
+        catalog=[rg],
+        platform=platform,
+        wire_path=lambda: "PATH wired",
+        verify=lambda: "PATH verified",
+        install=install,
+        version_refresh=service,
+    )
+    app = _family_app(tools=[rg], version_refresh=service, execute=inputs)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            _catalog_cursor(app, "rg")
+            await pilot.press("space", "enter")
+            await wait_until(pilot, lambda: isinstance(app.screen, ExecuteScreen))
+            await pilot.press("enter")
+            await wait_until(pilot, started.is_set)
+            assert app.mutation_in_flight
+            assert app.run_in_flight
+            assert app.refuse_if_mutating(app.catalog)
+            assert app.catalog.status.text == _INSTALL_REFUSAL
+            release.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+            assert not app.run_in_flight
+        finally:
+            release.set()
+
+
+_NOUNS = {
+    MutationHolder.REMOVAL: _REFUSAL,
+    MutationHolder.INSTALL_RUN: _INSTALL_REFUSAL,
+    MutationHolder.UPDATE: _UPDATE_REFUSAL,
+    MutationHolder.GLOBALS_REINSTALL: _REINSTALL_REFUSAL,
+    MutationHolder.DAEMON_DEFAULT: _DAEMON_REFUSAL,
+    MutationHolder.POLICY_TOGGLE: _TOGGLE_REFUSAL,
+}
+
+
+@pytest.mark.parametrize("holder", list(MutationHolder), ids=lambda holder: holder.name)
+async def test_each_holder_names_itself_in_the_refusal(tmp_path: Path, holder: MutationHolder):
+    assert set(_NOUNS) == set(MutationHolder)
+    app, _service = _reinstall_app(tmp_path, HeldRemover(), lambda _packages: ())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        app.begin_mutation(holder)
+        await pilot.press("enter")
+        status = app.view("doctor").status
+        assert (status.text, status.severity) == (_NOUNS[holder], Severity.WARN)
+        app.end_mutation()
+
+
+_STILL_CHECKING = "Still checking pnpm's global set — press r again in a moment."
+_UNREADABLE = "pnpm's global set could not be read — install or repair pnpm, then retry."
+_NOTHING = "Nothing to reinstall — pnpm manages no globals here."
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "apply_after_applied",
+        "reinstall_after_done",
+        "reinstall_while_running",
+        "reinstall_while_auditing",
+        "reinstall_unknown_report",
+        "reinstall_nothing_managed",
+    ],
+)
+async def test_doctor_early_returns_end_with_a_pinned_pass_count(tmp_path: Path, case: str):
+    fixes: list[str] = []
+    reinstalls: list[str] = []
+    started, release, gate = threading.Event(), threading.Event(), threading.Event()
+    gate.set()
+    report = {
+        "reinstall_unknown_report": NodeGlobalsReport(
+            entries=(), missing=(), managed=(), known=False
+        ),
+        "reinstall_nothing_managed": NodeGlobalsReport(entries=(), missing=(), managed=()),
+    }.get(case, _managed_report())
+
+    def audit() -> NodeGlobalsReport:
+        assert gate.wait(timeout=10)
+        return report
+
+    def reinstall(packages: Sequence[str]) -> tuple[str, ...]:
+        reinstalls.append("reinstall")
+        if case == "reinstall_while_running":
+            return _held_reinstall(started, release)(packages)
+        return ()
+
+    app, service = _reinstall_app(
+        tmp_path, HeldRemover(), reinstall, report=audit, fix=lambda: fixes.append("fix")
+    )
+    if case == "reinstall_while_auditing":
+        gate.clear()
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            doctor = cast(Any, app.view("doctor"))
+            if case == "reinstall_while_auditing":
+                await app.show_view("doctor")
+            else:
+                await _open_view(app, pilot, "doctor")
+            held: str | None = None
+            if case == "apply_after_applied":
+                await pilot.press("enter")
+                await settle(app, pilot)
+            elif case == "reinstall_after_done":
+                await pilot.press("r")
+                await settle(app, pilot)
+                assert doctor.globals_done
+            elif case == "reinstall_while_running":
+                await pilot.press("r")
+                await wait_until(pilot, started.is_set)
+                held = _REINSTALL_REFUSAL
+            elif case == "reinstall_while_auditing":
+                held = _STILL_CHECKING
+            elif case == "reinstall_unknown_report":
+                gate.clear()  # the re-audit the unknown answer starts stays held
+                held = _UNREADABLE
+            else:
+                held = _NOTHING
+            await pilot.pause()
+            before = service.passes
+            await pilot.press("enter" if case == "apply_after_applied" else "r")
+            if held is None:
+                await settle(app, pilot)
+                assert service.passes == before
+                assert fixes == (["fix"] if case == "apply_after_applied" else [])
+                assert reinstalls == (["reinstall"] if case == "reinstall_after_done" else [])
+                return
+            await wait_until(pilot, lambda: service.passes == before + 1)
+            await pilot.pause()
+            assert service.passes == before + 1
+            text = doctor.status.text if held == _REINSTALL_REFUSAL else doctor.globals_note
+            assert text == held
+        finally:
+            gate.set()
+            release.set()
+        await settle(app, pilot)
