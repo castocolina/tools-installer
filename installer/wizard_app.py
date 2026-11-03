@@ -737,6 +737,7 @@ class DoctorScreen(AppScreen):
             # note.
             self.globals_note = _GLOBALS_UNKNOWN_YET
             self._refresh_body()
+            self.post_message(RefreshRequested())  # a refusal still ends with one pass
             return
         # Not auditing, past __init__: an audit has landed and set this.
         report = self._globals_report
@@ -753,13 +754,16 @@ class DoctorScreen(AppScreen):
             self.globals_note = _GLOBALS_UNKNOWN
             self._refresh_body()
             self._start_globals_audit()
+            self.post_message(RefreshRequested())
             return
         if not report.managed:
             self.globals_note = _NOTHING_TO_REINSTALL
             self._refresh_body()
+            self.post_message(RefreshRequested())
             return
         self.globals_note = None
         self.globals_running = True
+        self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
         self._refresh_body()
         # The package list is passed in rather than re-derived inside the
         # worker: re-deriving would put `pnpm list -g --json` on a second
@@ -769,7 +773,7 @@ class DoctorScreen(AppScreen):
     # Distinct groups: `exclusive` cancels within a group, so leaving both
     # workers in the default one would let a reinstall cancel an in-flight
     # audit and vice versa.
-    @work(thread=True, exclusive=True, group="globals-reinstall")
+    @work(thread=True, exclusive=True, group="globals-reinstall", exit_on_error=False)
     def _reinstall_globals_worker(self, packages: tuple[str, ...]) -> None:
         """Run the reinstall off the event loop, then hand the outcome back to it.
 
@@ -777,8 +781,12 @@ class DoctorScreen(AppScreen):
         a `pnpm add -g`. Widgets may only be touched from the app's own thread,
         hence a posted message rather than a direct refresh.
         """
-        _, error = run_live(lambda: self._reinstall_globals(packages))
-        self.post_message(GlobalsReinstalled(error))
+        error: str | None = "the reinstall did not complete"
+        try:
+            _, error = run_live(lambda: self._reinstall_globals(packages))
+        finally:
+            # Always posted: the handler releases the app lock.
+            self.post_message(GlobalsReinstalled(error))
 
     @work(thread=True, exclusive=True, group="globals-audit")
     def _audit_globals_worker(self, generation: int) -> None:
@@ -833,6 +841,7 @@ class DoctorScreen(AppScreen):
         self._refresh_body()
 
     def on_globals_reinstalled(self, message: GlobalsReinstalled) -> None:
+        self.app.end_mutation()
         self.globals_running = False
         self.globals_error = message.error
         self.globals_done = message.error is None
@@ -2946,9 +2955,12 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def on_install_run_started(self, message: InstallRunStarted) -> None:
         del message  # its arrival is its whole meaning
+        # run_in_flight stays the exit-code witness; the lock is the mutation guard.
         self.run_in_flight = True
+        self.begin_mutation(MutationHolder.INSTALL_RUN)
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
+        self.end_mutation()
         self.run_in_flight = False
         # Every mutation this app performs calls invalidate
         # (installer/version_status.py:26-30's own invariant); the install

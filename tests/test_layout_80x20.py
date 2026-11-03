@@ -272,11 +272,14 @@ async def test_every_health_mark_renders_on_every_tier(tmp_path: Path, tier: str
 
 
 async def test_the_longest_refusal_fits_80_columns(tmp_path: Path) -> None:
-    app = _app(tmp_path)
+    tool = load_tools(REGISTRY)[0]
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(tool, [tmp_path / "bin"])])
+    app = _app(tmp_path, service)
     async with app.run_test(size=(80, 20)) as pilot:
         screen = await _open(app, pilot, "uninstall")
         app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
-        await pilot.press("enter")
+        await pilot.press("space", "enter", "enter")
         await pilot.pause()
         status = app.view("uninstall").status
         assert status.text.startswith("A pnpm reinstall is running")

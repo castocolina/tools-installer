@@ -1744,7 +1744,7 @@ async def test_the_lock_is_released_when_the_reinstall_crashes(tmp_path: Path):
         await pilot.press("r")
         await settle(app, pilot)
         assert not app.mutation_in_flight
-        assert cast(Any, app.view("doctor")).globals_error == "boom"
+        assert cast(Any, app.view("doctor")).globals_error == "the reinstall did not complete"
 
 
 async def test_an_install_run_holds_the_lock(tmp_path: Path):
