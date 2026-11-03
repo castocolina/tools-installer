@@ -166,6 +166,20 @@ async def test_doctor_chrome_at_80x20(tmp_path: Path) -> None:
         assert screen.get_widget_at(0, 3)[0] is screen
 
 
+async def test_doctor_status_line_stays_visible_at_80x20(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "doctor")
+        app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
+        await pilot.press("enter")
+        await pilot.pause()
+        status = app.view("doctor").status
+        assert status.text.startswith("A pnpm reinstall is running")
+        # The refusal is painted, on one row right above the footer, not under the card.
+        assert rows_of(screen, status) == {18}
+        assert rows_of(screen, screen.query_one(FooterBar)) == {19}
+
+
 async def test_uninstall_chrome_at_80x20(tmp_path: Path) -> None:
     app = _app(tmp_path)
     async with app.run_test(size=(80, 20)) as pilot:
