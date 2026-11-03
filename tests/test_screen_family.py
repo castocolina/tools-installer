@@ -900,6 +900,28 @@ async def test_a_failed_removal_keeps_the_row_selected_with_its_reason(tmp_path:
             remover.release.set()
 
 
+async def test_the_state_line_does_not_replace_a_removal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    unsaved = "version cache not saved: read-only"
+    monkeypatch.setattr(FrozenStateService, "warning", property(lambda _self: unsaved))
+    remover = HeldRemover(
+        SweepResult(removed=("yq",), remove_failed=(("fd", "permission denied"),))
+    )
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _fail_fd_and_remove_yq(app, pilot, remover, service)
+            screen = _uninstall_screen(app)
+            assert screen.status.text.splitlines()[:2] == ["1 removed, 1 remove failed", _FIX_LINE]
+            assert screen.status.severity is Severity.ERROR
+            # The app's line waits for the next entry instead.
+            await app.show_view("system")
+            assert app.catalog.status_text.startswith(unsaved)
+        finally:
+            remover.release.set()
+
+
 async def test_enter_retries_the_failed_rows(tmp_path: Path):
     remover = HeldRemover(
         SweepResult(removed=("yq",), remove_failed=(("fd", "permission denied"),))
