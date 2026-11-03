@@ -1286,6 +1286,61 @@ async def test_quit_without_a_removal_exits_at_once(tmp_path: Path):
     assert app.return_value is None
 
 
+class _ExitSpyApp(UnifiedApp):
+    """Records the message each exit carries (printed once the app has stopped)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.exit_messages: list[object] = []
+
+    def exit(
+        self, result: list[str] | None = None, return_code: int = 0, message: Any = None
+    ) -> None:
+        self.exit_messages.append(message)
+        super().exit(result, return_code, message)
+
+
+async def test_a_second_ctrl_c_during_a_removal_exits_at_once(tmp_path: Path):
+    """C-26 (D-10 amended): the first ctrl+c waits; a second one exits without
+    waiting for the remover and warns that the removal may be partial."""
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _removal_app(tmp_path, remover, app_cls=_ExitSpyApp)
+    assert isinstance(app, _ExitSpyApp)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover)
+            await pilot.press("ctrl+c")
+            status = app.view("uninstall").status
+            await wait_until(pilot, lambda: status.text == _WAITING)
+            assert app.is_running
+            await pilot.press("ctrl+c")
+            await wait_until(pilot, lambda: not app.is_running)
+            assert not remover.release.is_set()
+        finally:
+            remover.release.set()
+    assert app.exit_messages == ["Quit before the removal finished; some files may remain."]
+
+
+async def test_a_second_q_during_a_removal_still_waits(tmp_path: Path):
+    """Only ctrl+c cuts the wait; q stays the soft quit."""
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover)
+            await pilot.press("q")
+            status = app.view("uninstall").status
+            await wait_until(pilot, lambda: status.text == _WAITING)
+            await pilot.press("q")
+            await pilot.pause()
+            assert app.is_running
+            remover.release.set()
+            await wait_until(pilot, lambda: not app.is_running)
+        finally:
+            remover.release.set()
+    assert len(remover.calls) == 1
+
+
 async def test_q_under_the_palette_during_a_removal_does_nothing(tmp_path: Path):
     remover = HeldRemover(SweepResult(removed=("yq",)))
     app, _service = _removal_app(tmp_path, remover)
