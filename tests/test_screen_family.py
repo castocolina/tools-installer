@@ -103,6 +103,7 @@ def _family_app(
     fix: Callable[[], None] = lambda: None,
     reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
     prompt_link_mode: bool = False,
+    daemon_default: Callable[[], bool] | None = None,
 ) -> UnifiedApp:
     return app_cls(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
@@ -127,6 +128,7 @@ def _family_app(
         updates=updates,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
+        daemon_default=daemon_default,
     )
 
 
@@ -3081,6 +3083,52 @@ async def test_a_failed_first_run_pick_keeps_the_error():
         doctor = app.view("doctor")
         assert (doctor.status.text, doctor.status.severity) == ("read-only", Severity.ERROR)
         assert "PREVIEW-centralized" in str(_doctor_text(app))
+
+
+async def test_a_first_run_link_pick_waits_for_the_daemon_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """C-18: the launch daemon apply and a link-mode move both rewrite
+    ~/.myshellrc. A pick made while the apply holds the lock is kept and moved
+    once the apply is done, never beside it."""
+    release = threading.Event()
+    moves: list[str] = []
+    mode = {"v": "centralized"}
+
+    def setter(value: str) -> None:
+        mode["v"] = value
+
+    def spy_move(
+        policies: Sequence[Policy], new_mode: str, set_mode: Callable[[str], None], *, old_mode: str
+    ) -> tuple[Any, ...]:
+        del policies, old_mode
+        moves.append(new_mode)
+        set_mode(new_mode)
+        return ()
+
+    monkeypatch.setattr("installer.wizard_app.move_link_mode", spy_move)
+    app = _family_app(
+        initial_view="doctor",
+        prompt_link_mode=True,
+        fix_preview=lambda: f"PREVIEW-{mode['v']}",
+        policies=PolicyInputs(policies=[], link_mode=lambda: mode["v"], set_link_mode=setter),
+        daemon_default=_held_daemon_default(release),
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: isinstance(app.screen, LinkModeScreen))
+            assert app.mutation_in_flight
+            await pilot.press("down", "down", "enter")  # pick split
+            await pilot.pause()
+            assert moves == []
+            release.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+            await settle(app, pilot)
+            assert moves == ["split"]
+            assert "Link mode saved: split" in app.view("doctor").status.text
+            assert "PREVIEW-split" in str(_doctor_text(app))
+        finally:
+            release.set()
 
 
 # -- 21-21: the UI-01 matrix, every mutation source against every view --
