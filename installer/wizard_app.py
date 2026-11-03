@@ -7,9 +7,9 @@ doctor, uninstall, and policies views apply their changes live through
 injected closures. The app's run value stays the catalog decision
 (`list[str] | None`).
 
-The first registered view is the base screen (`get_default_screen`); it cannot
-be switched out. Navigation is therefore a stack with the base view at the
-bottom: the stack is always `[base]` or `[base, <one other view>]`.
+Textual's empty default screen is the neutral root; every view is installed
+once and reached through `show_view`. Navigation is therefore a stack with the
+root at the bottom: the stack is always `[root, <one view>]` once mounted.
 """
 
 import contextlib
@@ -419,29 +419,19 @@ class DoctorScreen(AppScreen):
     def compose_body(self) -> ComposeResult:
         yield _BodyStatic(id="doctor-body")
 
-    def on_mount(self) -> None:
+    def enter_view(self) -> None:
+        """Re-read the ban state on every entry, and re-ask pnpm off the loop.
+
+        Installed screens are suspended, not unmounted: without this, Policies
+        → toggle the ban → Doctor reports the state from before the toggle. The
+        globals audit needs the same freshness but cannot be taken here
+        synchronously, so it is started as a worker and rendered when it lands.
+        The screen is mounted before entry, so the first entry starts it too.
+        """
         self._refresh_guidance()
         self._refresh_body()
         self._start_globals_audit()
         self._start_disk_probe()
-
-    def enter_view(self) -> None:
-        """Re-read the ban state on every entry, and re-ask pnpm off the loop.
-
-        Installed screens are suspended, not unmounted, so `on_mount` fires once
-        for the life of the app: without this, Policies → toggle the ban →
-        Doctor reports the state from before the toggle. The globals audit needs
-        the same freshness but cannot be taken here synchronously, so it is
-        started as a worker and rendered when it lands.
-
-        The audit is not started on the first entry: this runs BEFORE the screen
-        is pushed, and `on_mount` starts it a moment later.
-        """
-        self._refresh_guidance()
-        if self.is_mounted:
-            self._refresh_body()
-            self._start_globals_audit()
-            self._start_disk_probe()
 
     def _start_disk_probe(self) -> None:
         if self.disk_pressure is None:
@@ -953,16 +943,6 @@ class UninstallScreen(AppScreen):
         # its first display rather than staying empty forever.
         rows, rows_error = run_live(self._rows_of)
         self._rows: list[ToolRow] = rows if rows is not None else []
-        # `_resync`'s own two warn-status writes must not be silently
-        # dropped when the very first `enter_view` runs BEFORE this screen
-        # is ever mounted (`show_view` calls `entering.enter_view()` before
-        # `push_screen`, matching the ordinary standing-status guard below):
-        # `on_mount`'s own call would otherwise immediately overwrite an
-        # unconditional pre-mount `status.set()` with the ordinary standing
-        # text. `_set_status` stashes here instead of writing directly when
-        # not yet mounted, and `on_mount` applies the stash before falling
-        # back to `_show_standing_status`.
-        self._pending_status: tuple[str, str] | None = None
         # Through the SAME seam as the rows predicate above, and for the same
         # reason (CR-01, 15.4-REVIEW.md): these three are filesystem reads,
         # not in-memory ones -- `has_managed_block` does `path.read_text()`,
@@ -1175,30 +1155,6 @@ class UninstallScreen(AppScreen):
     def compose_body(self) -> ComposeResult:
         yield self._browser
 
-    def on_mount(self) -> None:
-        if self._pending_status is not None:
-            text, severity = self._pending_status
-            self._pending_status = None
-            self.status.set(text, severity)
-        else:
-            self._show_standing_status()
-
-    def _set_status(self, text: str, severity: str) -> None:
-        """Write a status line even before this screen has ever mounted.
-
-        `Textual`'s own `on_mount` fires on FIRST PUSH, not at
-        `install_screen` time, and `show_view` calls `entering.enter_view()`
-        BEFORE `push_screen` (the single nav path's own ordering, unrelated
-        to this screen). A warn status written on that very first entry
-        would otherwise be overwritten by `on_mount`'s subsequent call to
-        `_show_standing_status`, silently dropping it. Stashed here instead
-        when not yet mounted; `on_mount` applies it.
-        """
-        if self.is_mounted:
-            self.status.set(text, severity)
-        else:
-            self._pending_status = (text, severity)
-
     def _rows_of(self) -> list[ToolRow]:
         """Bare read of the rows predicate -- no failure isolation of its own.
 
@@ -1324,7 +1280,7 @@ class UninstallScreen(AppScreen):
             self._by_key = {entry.key: entry for entry in self._entries}
             self._browser.reload(self._adapter())
         if error is not None:
-            self._set_status(f"Could not refresh the tool list: {error}.", "warn")
+            self.status.set(f"Could not refresh the tool list: {error}.", "warn")
             return
         if self._startup_error is not None:
             # The one-time construction-time failure (Round-1 review
@@ -1335,7 +1291,7 @@ class UninstallScreen(AppScreen):
             # about THIS entry.
             stashed = self._startup_error
             self._startup_error = None
-            self._set_status(f"Could not read the uninstall state at startup: {stashed}.", "warn")
+            self.status.set(f"Could not read the uninstall state at startup: {stashed}.", "warn")
             return
         if not changed:
             return
@@ -1364,6 +1320,10 @@ class UninstallScreen(AppScreen):
         once it no longer describes the screen.
         """
         self._resync(clear_applied=True)
+        # Only over an empty line: a warning flushed by show_view or written by
+        # _resync must not be replaced by the standing text.
+        if not self.status.text:
+            self._show_standing_status()
 
     def ownership_refreshed(self) -> None:
         """Completion signal for an asynchronous ownership refresh landing
@@ -2574,10 +2534,8 @@ class UnifiedApp(App[list[str] | None]):
             )
             for tier in Tier
         }
-        # Non-base views, installed on mount and pushed by value.
-        self._views: dict[str, AppScreen] = {
-            name: screen for name, screen in self._catalogs.items() if name != BASE_VIEW
-        }
+        # Every view, installed on mount and pushed by value (tiers first).
+        self._views: dict[str, AppScreen] = dict(self._catalogs)
         # Fifteen UnifiedApp(...) constructions exist outside setup.py. Required
         # kwargs would TypeError at every one of them; those modules are
         # deliberately not edited here. The cost of the default is that a
@@ -2627,7 +2585,8 @@ class UnifiedApp(App[list[str] | None]):
             }
         )
         self._initial_view = initial_view
-        self.current_view = BASE_VIEW
+        # "" is the root sentinel: on_mount's show_view is never an early return.
+        self.current_view = ""
         self._daemon_default = daemon_default
         self._daemon_default_policy_id = daemon_default_policy_id
         # True from construction time whenever a real auto-apply callback was
@@ -2647,32 +2606,13 @@ class UnifiedApp(App[list[str] | None]):
         def install_screen(self, screen: Screen[None], name: str) -> None: ...
 
     async def on_mount(self) -> None:
-        # Install every view screen: an installed screen is SUSPENDED when popped;
-        # an uninstalled one is REMOVED (App._replace_screen) — its whole widget
-        # tree destroyed. Re-pushing the same instance then re-composes onto stale
-        # state: pending callbacks lose their widgets, and screen.focused can point
-        # at a detached widget, collapsing the binding chain so the App's priority
-        # number keys stop matching — later keys in a fast burst were silently
-        # dropped (the "press 2 for Doctor but land elsewhere" bug). The catalog
-        # needs no install: it is the base screen and is never popped.
+        # Install every view: an installed screen is SUSPENDED when popped; an
+        # uninstalled one is REMOVED (App._replace_screen) and re-pushing it
+        # re-composes onto stale state, dropping later keys in a fast burst. The
+        # empty default screen is the neutral root under all of them.
         for name, screen in self._views.items():
             self.install_screen(screen, name)
-        if self._initial_view != BASE_VIEW:
-            await self.show_view(self._initial_view)
-        else:
-            # The base catalog is never pushed, so show_view never flushes for
-            # it: deliver the startup warning here, before the first-run
-            # picker is pushed, so the picker sits on top of an informed view.
-            catalog = self.catalog
-            if catalog.is_mounted:
-                self._flush_pending_warnings(catalog)
-            else:
-                # App.on_mount runs before the default screen mounts, so the
-                # first-run launch (the only path that gets here unmounted)
-                # defers the flush one tick. call_later, not call_after_refresh:
-                # the repaint hook does not fire from inside on_mount before
-                # the default screen exists.
-                self.call_later(self._flush_pending_warnings, catalog)
+        await self.show_view(self._initial_view)
         if self._daemon_default is not None:
             self._apply_daemon_default_worker()
         # Last in on_mount so a first-run user answers exactly one question;
@@ -2750,44 +2690,28 @@ class UnifiedApp(App[list[str] | None]):
         """Headless-test seam for the two non-base tier screens."""
         return self._catalogs[view]
 
-    def get_default_screen(self) -> CatalogScreen:
-        # The first registered tier is the app's base screen, so App-level queries
-        # (the tests' app.query_one) resolve against it. It reports its decision
-        # via the Decided message rather than dismissing the only screen on the stack.
-        return self._catalogs[BASE_VIEW]
+    def view(self, name: str) -> AppScreen:
+        """Headless-test seam: the installed screen for any of the six views."""
+        return self._views[name]
 
     async def show_view(self, name: str) -> None:
         # Await each stack mutation so a transition fully settles before the next
-        # runs: this prevents a queued second nav from popping/pushing onto an
-        # in-flight stack and breaking the [catalog] / [catalog, <view>] invariant.
+        # runs: the stack stays [root, <one view>].
         if name == self.current_view:
             return
-        # An actual view change ends the selection moment the view being left was
-        # describing, so its transient prompt/notice go with it. This is the one
-        # navigation path (.claude/architecture.md rule 2), which makes it the only
-        # correct trigger: a screen-suspend handler would also fire for the nav
-        # palette opening on top, wiping state for a view the user never left.
-        leaving = self._catalogs.get(self.current_view)
+        # This is the one navigation path (.claude/architecture.md rule 2), so it
+        # is the only correct place to end the leaving view's transient state.
+        leaving = self._views.get(self.current_view)
         if leaving is not None:
             leaving.clear_transient()
-        if self.current_view != BASE_VIEW:
             await self.pop_screen()
-        if name == BASE_VIEW:
-            # The base catalog is never pushed, so it re-derives here or never.
-            self._catalogs[BASE_VIEW].enter_view()
-        else:
-            entering = self._views[name]
-            # The single navigation path is also the single refresh point: a
-            # view holding state another view can change live re-derives it
-            # here, before it is shown (rule 2).
-            entering.enter_view()
-            await self.push_screen(entering)
+        target = self._views[name]
+        await self.push_screen(target)
         self.current_view = name
-        # T-15.6-13: this is also the one place a warning queued because no
-        # AppScreen was resolvable when it arrived can finally be delivered.
-        visible = self._catalogs.get(name) or self._views.get(name)
-        if visible is not None:
-            self._flush_pending_warnings(visible)
+        # Flush before entry: a status written by enter_view wins over a queued
+        # warning. T-15.6-13: also where an early warning is finally delivered.
+        self._flush_pending_warnings(target)
+        target.enter_view()
 
     def _flush_pending_warnings(self, screen: AppScreen) -> None:
         if not self._pending_warnings:
@@ -2797,11 +2721,9 @@ class UnifiedApp(App[list[str] | None]):
 
     def _navigable(self) -> bool:
         # ctrl+p and the number keys are priority App bindings, so they fire even
-        # while a NavScreen modal is open. Navigate only when the catalog or a
-        # placeholder is the active screen — never on top of the palette, which
-        # would push onto a live modal and break the [catalog] / [catalog, <view>]
-        # stack invariant.
-        return self.screen is self._catalogs[BASE_VIEW] or self.screen in self._views.values()
+        # while a NavScreen modal is open. Navigate only when a view is the active
+        # screen, never on top of the palette (it would break the stack invariant).
+        return self.screen in self._views.values()
 
     async def action_show(self, name: str) -> None:
         if not self._navigable():

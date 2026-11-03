@@ -480,8 +480,9 @@ class _DoctorHost(App[None]):
         super().__init__()
         self._doctor = screen
 
-    def on_mount(self) -> None:
-        self.push_screen(self._doctor)
+    async def on_mount(self) -> None:
+        await self.push_screen(self._doctor)
+        self._doctor.enter_view()
 
 
 async def _ready_doctor(app: App[None], pilot: Pilot[None]) -> DoctorScreen:
@@ -3283,10 +3284,8 @@ async def test_rapid_view_switching_keeps_stack_one_deep() -> None:
         await pilot.press("4", "5", "6", "1")
         assert app.current_view == "system"
         assert isinstance(app.screen, CatalogScreen)
-        # The system view is the app's base screen (get_default_screen), so it is
-        # never pushed or popped — it is always the permanent bottom of the stack.
-        # After navigating back to the system view, the stack is [base] (depth 1).
-        assert len(app.screen_stack) == 1  # back to just the base screen
+        # The empty root is the permanent bottom; one view sits on top of it.
+        assert len(app.screen_stack) == 2
         # not wedged: a subsequent press still navigates
         await pilot.press("5")
         assert app.current_view == "uninstall"
@@ -3636,7 +3635,9 @@ async def test_uninstall_does_not_refresh_after_it_has_applied_when_unchanged() 
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
-        assert app.screen.status.text == applied_status
+        # Leaving ended the status moment (UI-02); an unchanged entry rebuilds nothing.
+        assert applied_status
+        assert app.screen.status.text == ""
         assert "#tweaks" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
 
 
@@ -7705,7 +7706,10 @@ async def test_ownership_refreshed_preserves_a_standing_removal_summary(tmp_path
         initial_view="uninstall",
     )
     async with app.run_test(size=(120, 30)) as pilot:
-        assert started.wait(timeout=5)  # the base tier mounts and starts refreshing regardless
+        # The system tier refreshes on entry only, so visit it and come back.
+        await app.show_view("system")
+        await app.show_view("uninstall")
+        assert started.wait(timeout=5)
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("a")
         await pilot.press("enter")

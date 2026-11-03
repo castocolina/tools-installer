@@ -336,16 +336,20 @@ class AppScreen(Screen[None]):
     def compose_body(self) -> ComposeResult: ...
 
     def enter_view(self) -> None:
-        """Re-derive anything this view must not read from a stale snapshot.
-
-        Called by UnifiedApp.show_view just before the view is shown — the one
-        navigation path, and therefore the only correct trigger: a
-        ScreenResume handler would also fire when the nav palette closes over
-        a view the user never left, discarding their in-progress selection.
-        The app is a single process where one view's live toggle can invalidate
-        another's build-time snapshot, so a view that holds such state
-        overrides this. Default: nothing to refresh.
+        """Render this view's current state; runs after `show_view` has pushed
+        and mounted the screen, the one navigation path (a ScreenResume handler
+        would also fire when the nav palette closes over a view the user never
+        left, discarding their in-progress selection). A view holding state
+        another view can change live overrides this to re-derive it.
         """
+        self.state_refreshed()
+
+    def state_refreshed(self) -> None:
+        """Render the latest published state. Default: nothing to render."""
+
+    def clear_transient(self) -> None:
+        """End the view's transient moment on leave: drop its status line."""
+        self.status.clear()
 
     def compose(self) -> ComposeResult:
         yield WayfindingHeader(active=self._view, accent=self._accent)

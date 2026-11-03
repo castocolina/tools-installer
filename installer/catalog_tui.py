@@ -373,12 +373,8 @@ class CatalogScreen(AppScreen):
         yield self._browser
         yield self.recommends_line
 
-    def on_mount(self) -> None:
-        self._start_version_refresh()
-
     def enter_view(self) -> None:
-        if self.is_mounted:
-            self._start_version_refresh()
+        self._start_version_refresh()
 
     def _start_version_refresh(self) -> None:
         if self._version_refresh is None:
