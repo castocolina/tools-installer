@@ -1342,21 +1342,6 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, ids: list[str]) -> None:
-        # Gated DIRECTLY on the in-flight boolean, unconditionally -- never
-        # additionally on self.remove_tweaks or whether a daemon: id already
-        # appears in self._tweak_ids. On a fresh machine with no OTHER active
-        # tweaks, the daemon starts inactive at screen-construction time, so
-        # _build_entries never offers a tweaks row at all (self._tweak_ids is
-        # empty) -- self.remove_tweaks can then never become True through
-        # this screen, so a condition on it would never fire in exactly the
-        # scenario it exists to guard: the on-by-default worker can still
-        # register the daemon during or after this uninstall completes with
-        # no user-visible way to have prevented it (post-implementation
-        # review finding, previously 11-REVIEWS.md cycle 3 finding #12's
-        # narrower self._tweak_ids-based guard).
-        if getattr(self.app, "daemon_default_in_flight", False):
-            self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
-            return
         paths: list[Path] = []
         tools: dict[str, Tool] = {}  # by id, in selection order; env rows carry no tool
         for key in ids:
@@ -1550,9 +1535,6 @@ class PoliciesScreen(AppScreen):
         }
         self.error: str | None = None
         self.detail_text = ""
-        # True while a scheduled-job toggle runs on its thread worker (WR-02);
-        # a second toggle or a reschedule waits for it.
-        self.toggle_in_flight = False
         # True while the one-shot competing-mechanism warm-up worker runs.
         self.competing_probing = False
         # Explicit, not left to on_data_table_row_highlighted's own reset as the
@@ -1934,13 +1916,7 @@ class PoliciesScreen(AppScreen):
         policy = self._highlighted_policy()
         if policy is None:
             return
-        if policy.id == getattr(self.app, "_daemon_default_policy_id", None) and getattr(
-            self.app, "daemon_default_in_flight", False
-        ):
-            self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
-            return
-        if self.toggle_in_flight:
-            self.status.set(_TOGGLE_IN_FLIGHT_MESSAGE, "warn")
+        if self.app.refuse_if_mutating(self):
             return
         active = self.active_state[policy.id]
         missing_requires = policy.missing_requirements()
@@ -1962,7 +1938,7 @@ class PoliciesScreen(AppScreen):
             # competing-mechanism probes -- seconds of frozen UI on a wedged
             # user manager. It runs on a thread worker through the same
             # run_live, and the outcome comes back as PolicyToggled.
-            self.toggle_in_flight = True
+            self.app.begin_mutation(MutationHolder.POLICY_TOGGLE)
             self.status.set(f"Applying {policy.label}...", "warn")
             self._toggle_policy_worker(policy, active, action)
             return
@@ -1981,7 +1957,7 @@ class PoliciesScreen(AppScreen):
             self.post_message(PolicyToggled(policy.id, active, result, error))
 
     def on_policy_toggled(self, message: PolicyToggled) -> None:
-        self.toggle_in_flight = False
+        self.app.end_mutation()
         policy = next((item for item in self._policies if item.id == message.policy_id), None)
         if policy is None:
             return
@@ -2045,23 +2021,10 @@ class PoliciesScreen(AppScreen):
                 return
             # Checked HERE, at the actual mutation point, not only when the
             # picker was opened: the picker can stay on screen for as long as
-            # the user takes to choose a time, and the on-by-default worker
-            # can start racing to reapply/reschedule the SAME policy at any
-            # point during that window (a machine where the plist already
-            # exists -- so this policy reads active=True at construction --
-            # but daemon.decided() is still False, e.g. an upgrade that
-            # registered the LaunchAgent before the "decided" marker existed).
-            # Guarding only action_pick_time would leave that whole window
-            # open; action_toggle_policy and UninstallScreen._apply_removal
-            # already guard their own mutation points the same way
-            # (post-implementation review finding CR-02).
-            if policy.id == getattr(self.app, "_daemon_default_policy_id", None) and getattr(
-                self.app, "daemon_default_in_flight", False
-            ):
-                self.status.set(_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE, "warn")
-                return
-            if self.toggle_in_flight:
-                self.status.set(_TOGGLE_IN_FLIGHT_MESSAGE, "warn")
+            # the user takes to choose a time, and any worker mutation (the
+            # on-by-default daemon apply, a removal, an update) can start
+            # during that window (post-implementation review finding CR-02).
+            if self.app.refuse_if_mutating(self):
                 return
             hour_text, minute_text = value.split(":")
             hour, minute = int(hour_text), int(minute_text)
@@ -2095,6 +2058,10 @@ class PoliciesScreen(AppScreen):
             return
         setter = self._set_link_mode
         if setter is None:
+            return
+        # At the mutation point, like the time picker: the modal can outlive a
+        # mutation that started after it opened.
+        if self.app.refuse_if_mutating(self):
             return
         aware_active = self.link_mode_aware_active()
         old = self._link_mode() if self._link_mode is not None else "centralized"
@@ -2332,11 +2299,7 @@ class LinkModeScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE = (
-    "Applying the on-by-default daemon setting; wait a moment, then try again."
-)
 MUTATION_REFUSAL = "{holder} is running; wait for it to finish. Navigation still works."
-_TOGGLE_IN_FLIGHT_MESSAGE = "A background job change is still applying; wait a moment, then retry."
 
 
 class DaemonDefaultApplied(Message):
@@ -2349,7 +2312,7 @@ class DaemonDefaultApplied(Message):
     may only be touched from the app's own thread.
     """
 
-    def __init__(self, policy_id: str, applied: bool, live: bool | None = None) -> None:
+    def __init__(self, policy_id: str | None, applied: bool, live: bool | None = None) -> None:
         self.policy_id = policy_id
         self.applied = applied
         # The policy's own is_active() answer, resolved on the worker thread
@@ -2552,14 +2515,13 @@ class UnifiedApp(App[list[str] | None]):
         self.current_view = ""
         self._daemon_default = daemon_default
         self._daemon_default_policy_id = daemon_default_policy_id
-        # True from construction time whenever a real auto-apply callback was
-        # wired, so there is no window between __init__ and the worker
-        # actually starting inside on_mount where this reads False while an
-        # auto-apply is nonetheless about to run (11-REVIEWS.md cycle 2
-        # finding #15). Permanently False -- a no-op state -- for every
-        # construction site that never wires daemon_default at all.
-        self.daemon_default_in_flight: bool = self._daemon_default is not None
         self._mutation_holder: MutationHolder | None = None
+        # Held from construction whenever a real auto-apply callback was wired,
+        # so there is no window between __init__ and the worker starting in
+        # on_mount where a mutation could slip in (11-REVIEWS.md cycle 2
+        # finding #15). on_daemon_default_applied releases it.
+        if self._daemon_default is not None:
+            self.begin_mutation(MutationHolder.DAEMON_DEFAULT)
         # True once a quit waits on a running removal: no follow-up pass then.
         self.quitting = False
 
@@ -2716,8 +2678,10 @@ class UnifiedApp(App[list[str] | None]):
         completion message is ALWAYS posted -- regardless of whether
         self._daemon_default() returns normally or raises ANYTHING, including
         an exception outside ensure_daemon_default's own
-        except (OSError, CommandError) tuple -- so daemon_default_in_flight
-        can never get stuck True (11-REVIEWS.md cycle 3 finding #15). An
+        except (OSError, CommandError) tuple -- so the app mutation lock the
+        constructor took can never stay held (11-REVIEWS.md cycle 3 finding
+        #15). The post carries the policy id, or None when none was wired, so
+        the take and the release are paired on the same condition. An
         exception raised inside the try still propagates normally after the
         finally runs and is recorded on the Worker itself (state=ERROR,
         .error); exit_on_error=False is what keeps that from also crashing
@@ -2738,19 +2702,20 @@ class UnifiedApp(App[list[str] | None]):
             ):
                 live = policies_screen.live_state(self._daemon_default_policy_id)
         finally:
-            if self._daemon_default_policy_id is not None:
-                self.post_message(
-                    DaemonDefaultApplied(self._daemon_default_policy_id, applied, live)
-                )
+            self.post_message(DaemonDefaultApplied(self._daemon_default_policy_id, applied, live))
 
     def on_daemon_default_applied(self, message: DaemonDefaultApplied) -> None:
-        # Cleared FIRST, unconditionally: this is the ONE place the flag is
-        # ever cleared, and the ALWAYS-post-message guarantee above is what
-        # makes that safe on every outcome, not only a successful apply.
-        self.daemon_default_in_flight = False
+        # Released FIRST, unconditionally: the worker posts this on every
+        # outcome, so a crash never leaves the lock held.
+        self.end_mutation()
         policies_screen = self._views.get("policies")
-        if isinstance(policies_screen, PoliciesScreen):
+        if message.policy_id is not None and isinstance(policies_screen, PoliciesScreen):
             policies_screen.refresh_daemon_state(message.policy_id, message.applied, message.live)
+        # The apply changes the environment rows a visible view shows (the
+        # daemon's tweaks row on Uninstall), so repaint it without a pass.
+        # Policies is skipped: refresh_daemon_state already wrote its row.
+        if self._visible_app_screen() is not policies_screen:
+            self._render_published()
 
     @property
     def catalog(self) -> CatalogScreen:
@@ -3016,6 +2981,7 @@ class UnifiedApp(App[list[str] | None]):
         here as a plan-shaped outcome, so _session_exit_code needs no second
         rule. Successful updates record `done`, allowing latest-wins to clear
         an earlier failure; unknown-owner/unsupported refusals record nothing."""
+        self.end_mutation()
         failed = message.error is not None or (
             message.outcome is not None and message.outcome.status == "failed"
         )

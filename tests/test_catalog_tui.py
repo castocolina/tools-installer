@@ -4,7 +4,8 @@ import inspect
 import re
 import threading
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -997,6 +998,13 @@ async def test_unavailable_recommendation_is_not_staged_or_emitted() -> None:
     assert seeded.return_value == ["agent"]
 
 
+@asynccontextmanager
+async def _lock_host() -> AsyncGenerator[None]:
+    """A running app so a bare `CatalogScreen` can reach the app mutation lock."""
+    async with _unified_app([_tool("rg")], {}, _BLURBS).run_test(size=(100, 30)):
+        yield
+
+
 def _screen(
     tools: list[Tool],
     installed: Mapping[str, bool],
@@ -1598,7 +1606,7 @@ def test_broken_row_marks_health_red_and_explains_repair(
     assert _BROKEN_HINT in detail
 
 
-def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> None:
+async def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> None:
     tool = _tool("mmdc")
     ownership = _ownership(tool, owner="pnpm", broken=True)
     service = frozen_service(tmp_path)
@@ -1620,7 +1628,8 @@ def test_update_on_broken_row_hints_repair_without_updating(tmp_path: Path) -> N
     screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert begins == []
     assert started == []
     assert messages == [f"mmdc is broken: {_BROKEN_HINT}"]
@@ -2086,7 +2095,7 @@ def test_unknown_detail_names_the_active_binary(tmp_path: Path) -> None:
     assert "active binary resolves to /opt/x/bin/foo" in text
 
 
-def test_update_unknown_appends_the_active_path(tmp_path: Path) -> None:
+async def test_update_unknown_appends_the_active_path(tmp_path: Path) -> None:
     tool = _tool("foo")
     path = Path("/opt/x/bin/foo")
     ownership = _ownership(
@@ -2102,7 +2111,8 @@ def test_update_unknown_appends_the_active_path(tmp_path: Path) -> None:
     screen._browser.highlighted_id = lambda: "foo"  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert messages
     assert messages[-1].endswith("— active binary resolves to /opt/x/bin/foo")
 
@@ -2384,7 +2394,7 @@ def test_update_binding_exists_and_is_shown() -> None:
     assert keys["u"].action == "update_tool"
 
 
-def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
+async def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
     service = frozen_service(tmp_path)
@@ -2412,7 +2422,8 @@ def test_action_update_tool_skips_confirmed_current(tmp_path: Path) -> None:
     screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert started == []
     assert messages == ["rg is already current"]
 
@@ -2455,7 +2466,9 @@ def test_off_policy_owner_cell_and_detail_name_the_declared_manager(tmp_path: Pa
     assert "the catalog's policy installs groovy via SDKMAN" in detail
 
 
-def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path: Path) -> None:
+async def test_update_on_current_off_policy_tool_explains_and_does_not_begin(
+    tmp_path: Path,
+) -> None:
     tool = _sdkman_tool("groovy")
     ownership = _ownership(tool, owner="brew", off_policy=True)
     service = frozen_service(tmp_path)
@@ -2482,14 +2495,15 @@ def test_update_on_current_off_policy_tool_explains_and_does_not_begin(tmp_path:
     screen._browser.highlighted_id = lambda: "groovy"  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert begins == []
     assert messages == [
         "groovy is already current — Homebrew owns this copy; the catalog installs it via SDKMAN"
     ]
 
 
-def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
+async def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
     service = frozen_service(tmp_path)
@@ -2516,12 +2530,13 @@ def test_update_on_current_tool_says_already_current(tmp_path: Path) -> None:
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert begins == []
     assert messages == ["rg is already current"]
 
 
-def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> None:
+async def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(tool, owner="brew")
     service = frozen_service(tmp_path)
@@ -2547,11 +2562,12 @@ def test_update_on_stale_current_qualifies_the_last_check(tmp_path: Path) -> Non
     screen._browser.highlighted_id = lambda: "rg"  # type: ignore[method-assign]
     messages: list[tuple[str, str]] = []
     screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert messages == [("rg is current as of the last check", "ok")]
 
 
-def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> None:
+async def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> None:
     tool = _sdkman_tool("groovy")
     ownership = _ownership(tool, owner="brew", off_policy=True)
     service = frozen_service(tmp_path)
@@ -2577,7 +2593,8 @@ def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> No
     screen._browser.highlighted_id = lambda: "groovy"  # type: ignore[method-assign]
     messages: list[tuple[str, str]] = []
     screen.status.set = lambda text, severity: messages.append((text, severity))  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert messages == [
         (
             "groovy is current as of the last check — Homebrew owns this copy; the catalog "
@@ -2587,7 +2604,7 @@ def test_update_on_stale_current_off_policy_keeps_the_tail(tmp_path: Path) -> No
     ]
 
 
-def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
+async def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
     tool = _tool("rg")
     ownership = _ownership(
         tool, owner="unknown", unknown_reason="the brew inventory could not be read"
@@ -2617,12 +2634,13 @@ def test_action_update_tool_refuses_non_mutation_grade(tmp_path: Path) -> None:
     screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert started == []
     assert any("brew inventory" in message for message in messages)
 
 
-def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noop(
+async def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noop(
     tmp_path: Path,
 ) -> None:
     """CR-02 (15.4-REVIEW.md): no current state used to be a
@@ -2650,13 +2668,14 @@ def test_action_update_tool_reports_an_in_flight_refresh_instead_of_a_silent_noo
     screen._update_tool_worker = lambda target: started.append(target.tool.id)  # type: ignore[method-assign]
     messages: list[str] = []
     screen.status.set = lambda text, severity: messages.append(text)  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert started == []
     assert any("cannot update rg" in message for message in messages)
     assert any("its state is still being checked" in message for message in messages)
 
 
-def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) -> None:
+async def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) -> None:
     tool = Tool(
         id="pnpm",
         name="pnpm",
@@ -2705,7 +2724,8 @@ def test_action_update_tool_starts_worker_when_outdated_is_none(tmp_path: Path) 
 
     screen._update_tool_worker = fake_worker  # type: ignore[method-assign]
     screen.status.set = lambda text, severity: None  # type: ignore[method-assign]
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert started == ["pnpm"]
 
 
@@ -3126,13 +3146,16 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
                 )
             ]
         )
-        # `begin()` latches synchronously inside action_update_tool, before the
-        # worker thread is even spawned, so the second press deterministically
-        # observes the in-flight guard regardless of the first update's timing.
+        # `begin_mutation` takes the app lock synchronously inside
+        # action_update_tool, before the worker thread is even spawned, so the
+        # second press deterministically observes it (D-08).
         await pilot.press("u")
         assert "updating rg" in app.catalog.status_text
         await pilot.press("u")
-        assert "already in flight for rg" in app.catalog.status_text
+        assert (
+            app.catalog.status_text
+            == "An update is running; wait for it to finish. Navigation still works."
+        )
         # Let the blocked update finish so the worker's own thread and
         # post_message do not leak past the end of the test.
         release.set()
@@ -4643,10 +4666,13 @@ def _u_screen(
     return screen, targets, lines, begins
 
 
-def test_u_on_a_pending_row_says_checking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_u_on_a_pending_row_says_checking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     tool = _tool("rg")
     screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, None)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert lines == [
         ("cannot update rg: its state is still being checked — try again in a moment", "warn")
     ]
@@ -4660,12 +4686,13 @@ def test_u_on_a_pending_row_says_checking(tmp_path: Path, monkeypatch: pytest.Mo
         health=Health.CHECKING,
     )
     screen, targets, lines, _begins = _u_screen(tmp_path / "checking", monkeypatch, tool, checking)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert lines[-1][0].endswith("its state is still being checked — try again in a moment")
     assert targets == []
 
 
-def test_u_on_a_broken_row_without_a_reason_still_refuses(
+async def test_u_on_a_broken_row_without_a_reason_still_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool = _tool("rg")
@@ -4680,13 +4707,14 @@ def test_u_on_a_broken_row_without_a_reason_still_refuses(
     state = replace(state, reasons=())
     assert state.health is Health.BROKEN
     screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, state)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert lines == [("rg is broken", "warn")]
     assert targets == []
     assert begins == []
 
 
-def test_u_on_a_broken_row_names_the_first_reason(
+async def test_u_on_a_broken_row_names_the_first_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool = _tool("rg")
@@ -4700,26 +4728,28 @@ def test_u_on_a_broken_row_names_the_first_reason(
     )
     assert state.health is Health.BROKEN
     screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, state)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert lines == [("rg is broken: changed since install", "warn")]
     assert targets == []
     assert begins == []
 
 
-def test_u_uses_the_state_ownership(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_u_uses_the_state_ownership(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _tool("rg")
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     ownership = _ownership(tool, owner="brew", package="ripgrep")
     state = pass_state(tool, platform=macos, ownership=ownership, version=_outdated_status("rg"))
     assert state.health is Health.OUTDATED
     screen, targets, lines, begins = _u_screen(tmp_path, monkeypatch, tool, state)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert targets == [UpdateTarget(tool=tool, ownership=ownership)]
     assert begins == ["rg"]
     assert lines == [("updating rg…", "ok")]
 
 
-def test_u_current_and_unknown_owner_copies_unchanged(
+async def test_u_current_and_unknown_owner_copies_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool = _tool("rg")
@@ -4736,7 +4766,8 @@ def test_u_current_and_unknown_owner_copies_unchanged(
         tool, platform=macos, ownership=_ownership(tool, owner="brew"), version=current
     )
     screen, targets, lines, _begins = _u_screen(tmp_path, monkeypatch, tool, state)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert lines == [("rg is already current", "ok")]
     assert targets == []
 
@@ -4748,7 +4779,8 @@ def test_u_current_and_unknown_owner_copies_unchanged(
     )
     state = pass_state(tool, platform=macos, ownership=unknown, version=_outdated_status("rg"))
     screen, targets, lines, _begins = _u_screen(tmp_path / "unknown", monkeypatch, tool, state)
-    screen.action_update_tool()
+    async with _lock_host():
+        screen.action_update_tool()
     assert lines == [
         (
             "cannot update rg: the brew inventory could not be read"

@@ -113,3 +113,6 @@ class MutationHolder(StrEnum):
     each plan adds the member its holder uses (UI-SPEC Copywriting noun table)."""
 
     REMOVAL = "A removal"
+    UPDATE = "An update"
+    POLICY_TOGGLE = "A policy toggle"
+    DAEMON_DEFAULT = "A daemon apply"

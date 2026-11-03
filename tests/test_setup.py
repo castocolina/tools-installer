@@ -491,6 +491,9 @@ def _capture_app(
         def request_refresh(self) -> None:
             """See `_render_published`."""
 
+        def end_mutation(self) -> None:
+            """See `_render_published`."""
+
     monkeypatch.setattr(setup, "UnifiedApp", _App)
     return seen
 

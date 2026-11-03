@@ -34,18 +34,10 @@ from installer.wizard_app import (
     UnifiedApp,
     UninstallInputs,
 )
+from tests.screen_family import settle
 
 _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
 _UX = _ARTIFACTS / "policies"
-
-
-async def _settle_toggle(screen: PoliciesScreen, pilot: Any) -> None:
-    """Wait for a scheduled-job toggle's thread worker (WR-02) to report back."""
-    for _ in range(400):
-        if not screen.toggle_in_flight:
-            break
-        await pilot.pause()
-    await pilot.pause()
 
 
 def _tool() -> Tool:
@@ -615,18 +607,18 @@ async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert service.exists() and timer.exists()
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert not service.exists() and not timer.exists()
         await pilot.press("down")
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert conf.exists()
         assert "tools-installer: cache-redirect" in conf.read_text()
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert not conf.exists()
         assert home == tmp_path
         assert os.environ["HOME"] == str(tmp_path)
@@ -655,13 +647,13 @@ async def test_daemon_policy_toggles_on_despite_missing_fd_and_rg_with_recommend
         assert "before enabling" not in screen.detail_text
 
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
         assert plist_path.exists()  # concrete proof apply() actually ran
 
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is False
         assert not plist_path.exists()
@@ -682,7 +674,7 @@ async def test_daemon_policy_time_picker_rewrites_the_real_plist_and_updates_det
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")  # enable the daemon so t becomes reachable
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert screen.active_state["daemon:prune-tmpdir"] is True
 
         await pilot.press("t")
@@ -752,9 +744,9 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")  # enable the ban (row 0)
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         await pilot.press("down", "space")  # enable the tweak (row 1)
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         assert "tools-installer ban" in rc.read_text()
         await pilot.press("m")
         await pilot.press("down", "down", "enter")  # pick split
@@ -940,9 +932,9 @@ async def test_policies_screen_reports_a_failed_move(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         await pilot.press("down", "space")
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         await pilot.press("m", "down", "down", "enter")
         await pilot.pause()
 
@@ -1001,9 +993,9 @@ async def test_policies_screen_shows_lost_policies_off_after_a_failed_restore(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")  # enable the ban (row 0)
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         await pilot.press("down", "space")  # enable the tweak (row 1)
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         await pilot.press("m", "down", "down", "enter")  # pick split
         await pilot.pause()
 
@@ -1033,7 +1025,7 @@ async def test_link_mode_change_after_an_uninstall_does_not_resurrect(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")  # enable the ban
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         # what the Uninstall view's sweep leaves on disk, without touching
         # this screen's cached active_state:
         ban.remove()
@@ -1063,7 +1055,7 @@ async def test_split_to_centralized_move_reports_the_path_wiring_action(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("space")  # enable the ban
-        await _settle_toggle(screen, pilot)
+        await settle(app, pilot)
         await pilot.press("m", "enter")  # pick centralized
         await pilot.pause()
 
