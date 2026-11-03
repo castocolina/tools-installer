@@ -1302,9 +1302,10 @@ def _policy_app(
     fix: Callable[[], None] = lambda: None,
     node_globals: Callable[[], NodeGlobalsReport] | None = None,
     reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
+    service: FrozenStateService | None = None,
 ) -> tuple[UnifiedApp, FrozenStateService]:
     rg, fd = _tool("rg"), _tool("fd")
-    service = frozen_service(tmp_path)
+    service = service or frozen_service(tmp_path)
     service.publish(
         states if states is not None else [removable_state(fd, [tmp_path / "fd"]), absent_state(rg)]
     )
@@ -2011,3 +2012,125 @@ async def test_a_superseded_job_state_read_is_discarded(
             assert app.view("policies").status.text == ""
         finally:
             probe.release.set()
+
+
+# -- 21-18: a toggle ends with one pass; a mutation completion supersedes older reads --
+
+
+async def test_a_toggle_requests_one_pass(tmp_path: Path):
+    app, service = _policy_app(tmp_path, [_policy(tmp_path, "plain")], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert service.passes == before + 1
+        assert _state_text(app, "plain") == "● [on]"
+
+
+async def test_a_job_toggle_requests_one_pass_after_it_lands(tmp_path: Path):
+    release = threading.Event()
+
+    def held_apply() -> PolicyResult:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the toggle was never released")
+        return _policy_result()
+
+    app, service = _policy_app(
+        tmp_path, [_policy(tmp_path, "job", apply=held_apply, background=True)], HeldRemover()
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            before = service.passes
+            await pilot.press("space")
+            await pilot.pause()
+            assert app.mutation_in_flight
+            assert service.passes == before
+            release.set()
+            await settle(app, pilot)
+            assert service.passes == before + 1
+        finally:
+            release.set()
+
+
+async def test_a_failed_toggle_still_requests_a_pass(tmp_path: Path):
+    def denied() -> PolicyResult:
+        raise OSError("denied")
+
+    app, service = _policy_app(tmp_path, [_policy(tmp_path, "plain", apply=denied)], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("space")
+        await settle(app, pilot)
+        status = app.view("policies").status
+        assert (status.text, status.severity) == (
+            "Policy change failed: denied. Check permissions, then press space.",
+            Severity.ERROR,
+        )
+        assert service.passes == before + 1
+
+
+@pytest.mark.parametrize("mutation", ["toggle", "daemon_default"])
+async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    # Reads answer OFF until the mutation lands, then ON; the armed read starts
+    # before the mutation completes and answers OFF after it did.
+    probe = _ArmedProbe(first=False, later=False)
+    release_mutation = threading.Event()
+
+    def mutate() -> None:
+        if not release_mutation.wait(timeout=10):
+            raise TimeoutError("the mutation was never released")
+        probe.later = True
+
+    def held_apply() -> PolicyResult:
+        mutate()
+        return _policy_result()
+
+    def held_default() -> bool:
+        mutate()
+        return True
+
+    policy = replace(
+        _job_policy(tmp_path, probe), apply=held_apply, log_path=tmp_path / "jobstate.log"
+    )
+    kwargs: dict[str, Any] = {}
+    service = held_service(tmp_path, [])
+    if mutation == "daemon_default":
+        kwargs = {"daemon_default": held_default, "daemon_default_policy_id": "jobstate"}
+    else:
+        service.release.set()
+    app, _ = _policy_app(tmp_path, [policy], HeldRemover(), service=service, **kwargs)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: _state_text(app, "jobstate") == "○ [off]")
+            if mutation == "toggle":
+                await settle(app, pilot)
+                service.release.clear()  # the toggle's follow-up pass stays unpublished
+            spy = _SpiedReads(app.view("policies"), monkeypatch)
+            if mutation == "toggle":
+                await pilot.press("space")
+                await wait_until(pilot, lambda: app.mutation_in_flight)
+            probe.armed = True
+            await app.show_view("system")
+            await app.show_view("policies")
+            await wait_until(pilot, probe.held.is_set)
+            release_mutation.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+            await wait_until(pilot, lambda: _state_text(app, "jobstate") == "● [on]")
+            probe.release.set()
+            await wait_until(
+                pilot, lambda: any(m.states == {"jobstate": (False, False)} for m in spy.seen)
+            )
+            await pilot.pause()
+            assert _state_text(app, "jobstate") == "● [on]"
+            service.release.set()
+            await settle(app, pilot)
+            assert _state_text(app, "jobstate") == "● [on]"
+        finally:
+            release_mutation.set()
+            probe.release.set()
+            service.release.set()
