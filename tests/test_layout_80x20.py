@@ -189,8 +189,12 @@ async def test_uninstall_rows_fit_at_80x20_with_health(tmp_path: Path) -> None:
             "Installed via",
             "What gets removed",
         ]
-        assert spans["What gets removed"][1] <= table.region.right, spans
-        assert table.region.right <= 80
+        # The widest catalog id leaves the removes column only 16 cells on an 80-column
+        # screen, so "stays on screen" is its start plus a readable lead, and the
+        # fixed cell budget (40 + 2 padding) bounds how far it can run on.
+        start, end = spans["What gets removed"]
+        assert start + 12 <= table.region.right, spans
+        assert end - start <= 42, spans
 
 
 async def test_policies_chrome_at_80x20(tmp_path: Path) -> None:
