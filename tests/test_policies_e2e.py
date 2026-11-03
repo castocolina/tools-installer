@@ -16,6 +16,7 @@ from textual.widgets import DataTable
 from installer import systemd_daemon
 from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
+from installer.enums import Severity
 from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
 from installer.model import Method, Tool
 from installer.policy import (
@@ -1185,3 +1186,166 @@ async def test_entering_policies_starts_no_pass(tmp_path: Path) -> None:
             await app.show_view(view)
         await settle(app, pilot)
         assert service.passes == before
+
+
+class _Script:
+    """A read that answers each call from a script; an exception is raised."""
+
+    def __init__(self, *answers: Any) -> None:
+        self.answers = list(answers)
+
+    def __call__(self) -> Any:
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _fake_policy(policy_id: str, applied: list[str], **overrides: Any) -> Policy:
+    result = PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    def apply() -> PolicyResult:
+        applied.append("apply")
+        return result
+
+    def remove() -> PolicyResult:
+        applied.append("remove")
+        return result
+
+    fields: dict[str, Any] = {
+        "id": policy_id,
+        "label": policy_id,
+        "description": "fake",
+        "active": True,
+        "apply": apply,
+        "remove": remove,
+    }
+    return Policy(**{**fields, **overrides})
+
+
+async def _reenter(app: UnifiedApp) -> None:
+    await app.show_view("system")
+    await app.show_view("policies")
+
+
+_READ_ERROR = "Could not read the policy state: "
+
+
+async def test_a_failed_policy_read_shows_the_error(tmp_path: Path) -> None:
+    flaky = _fake_policy(
+        "flaky", [], is_active=_Script(True, OSError("permission denied\nsecond line"), True)
+    )
+    steady = _fake_policy("steady", [], is_active=lambda: False)
+    app = _live_app([flaky, steady], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, "flaky", "state") == "● [on]"
+        await _reenter(app)
+        status = app.view("policies").status
+        assert _cell(app, "flaky", "state") == ""
+        assert _cell(app, "steady", "state") == "○ [off]"
+        assert (status.text, status.severity) == (
+            f"{_READ_ERROR}permission denied.",
+            Severity.ERROR,
+        )
+        await _reenter(app)
+        assert _cell(app, "flaky", "state") == "● [on]"
+        assert app.view("policies").status.text == ""
+
+
+async def test_space_on_an_unreadable_policy_applies_nothing(tmp_path: Path) -> None:
+    calls: list[str] = []
+    flaky = _fake_policy("flaky", calls, is_active=_Script(True, OSError("denied")))
+    service = frozen_service(tmp_path)
+    app = _live_app([flaky], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await _reenter(app)
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert calls == []
+        assert app.view("policies").status.text == f"{_READ_ERROR}denied."
+        assert service.passes == before + 1
+
+
+async def test_a_failed_requirements_read_blanks_requires_and_detail(tmp_path: Path) -> None:
+    calls: list[str] = []
+    tool = _fake_policy(
+        "tweak:fake",
+        calls,
+        active=False,
+        is_active=lambda: False,
+        requires=("watch",),
+        missing_requires_now=_Script(("watch",), OSError("denied\nmore"), ("watch",)),
+    )
+    service = frozen_service(tmp_path)
+    app = _live_app([tool], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert "watch" in _cell(app, "tweak:fake", "requires")
+        await _reenter(app)
+        await settle(app, pilot)
+        screen = app.view("policies")
+        assert isinstance(screen, PoliciesScreen)
+        assert _cell(app, "tweak:fake", "requires") == ""
+        assert "watch" not in screen.detail_text
+        assert "Required tool(s)" not in screen.detail_text
+        assert (screen.status.text, screen.status.severity) == (
+            f"{_READ_ERROR}denied.",
+            Severity.ERROR,
+        )
+        before = service.passes
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert calls == []
+        assert service.passes == before + 1
+        await _reenter(app)
+        assert "watch" in _cell(app, "tweak:fake", "requires")
+        assert screen.status.text == ""
+
+
+async def test_t_on_an_unreadable_policy_opens_no_picker(tmp_path: Path) -> None:
+    scheduled: list[tuple[int, int]] = []
+
+    def set_schedule(hour: int, minute: int) -> PolicyResult:
+        scheduled.append((hour, minute))
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    job = _fake_policy(
+        "job",
+        [],
+        is_active=_Script(True, OSError("denied")),
+        set_schedule=set_schedule,
+    )
+    service = frozen_service(tmp_path)
+    app = _live_app([job], service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await _reenter(app)
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("t")
+        await settle(app, pilot)
+        screen = app.view("policies")
+        assert app.screen is screen
+        assert scheduled == []
+        assert (screen.status.text, screen.status.severity) == (
+            f"{_READ_ERROR}denied.",
+            Severity.ERROR,
+        )
+        assert service.passes == before + 1
+
+
+async def test_policies_with_no_policy_draws_its_empty_copy(tmp_path: Path) -> None:
+    app = _live_app([], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        for _ in range(2):
+            screen = app.view("policies")
+            assert isinstance(screen, PoliciesScreen)
+            assert screen.query_one(DataTable[Any]).row_count == 0
+            assert screen.detail_text == ""
+            assert screen.status.text == ""
+            await _reenter(app)
