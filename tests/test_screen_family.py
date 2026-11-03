@@ -276,6 +276,25 @@ def _health(app: UnifiedApp, tool_id: str) -> str:
     return app.catalog.query_one(DataTable[Any]).get_cell(tool_id, "health").plain
 
 
+def test_an_unreleased_held_refresh_fails_fast(tmp_path: Path):
+    service = HeldRefreshService(tmp_path, [], release_timeout=0.05)
+    errors: list[TimeoutError] = []
+
+    def run() -> None:
+        try:
+            service.refresh([])
+        except TimeoutError as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=2)
+    still_waiting = worker.is_alive()
+    service.release.set()
+    assert not still_waiting
+    assert [str(error) for error in errors] == ["HeldRefreshService was never released"]
+
+
 async def test_launch_pass_renders_the_visible_tier(tmp_path: Path):
     rg = _tool("rg")
     service = HeldRefreshService(tmp_path, [])

@@ -299,6 +299,7 @@ class HeldRefreshService(FrozenStateService):
         *,
         raising: Exception | None = None,
         platform: Platform | None = None,
+        release_timeout: float = 10.0,
     ) -> None:
         super().__init__(
             platform=platform or _MACOS,
@@ -320,6 +321,7 @@ class HeldRefreshService(FrozenStateService):
         self.pending = tuple(pending)
         self.raising = raising
         self.release = threading.Event()
+        self.release_timeout = release_timeout
         self.calls: list[frozenset[str]] = []
 
     def refresh(self, tools: Sequence[Tool]) -> None:
