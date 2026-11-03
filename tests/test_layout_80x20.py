@@ -23,7 +23,9 @@ from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
 from installer.uninstall import SweepResult
 from installer.version_status import VersionRefreshService, VersionStatus
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from tests.screen_family import settle
 from tests.state_doubles import (
+    HeldRefreshService,
     frozen_service,
     managed_state,
     pass_state,
@@ -215,6 +217,37 @@ async def test_uninstall_rows_fit_at_80x20_with_health(tmp_path: Path) -> None:
         start, end = spans["What gets removed"]
         assert start + 8 <= table.region.right, spans
         assert end - start <= 42, spans
+
+
+async def test_uninstall_cursor_lands_on_the_removable_row_once_the_state_lands(
+    tmp_path: Path,
+) -> None:
+    """Entered before the first pass publishes, Uninstall paints placeholder
+    rows; once the state lands the cursor goes to the first removable row on
+    top, not the placeholder row it sat on (tmux check, 2026-11-03)."""
+    tools = load_tools(REGISTRY)
+    removable = tools[5]
+    service = HeldRefreshService(
+        tmp_path,
+        [
+            managed_state(tools[0]),
+            managed_state(tools[1]),
+            removable_state(removable, [tmp_path / "bin" / removable.id]),
+        ],
+    )
+    app = _app(tmp_path, service)
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            screen = await _open(app, pilot, "uninstall")
+            service.release.set()
+            await settle(app, pilot)
+            table = screen.query_one(DataTable[Any])
+            keys = [str(key.value) for key in table.rows]
+            assert keys[:2] == ["#removable here", removable.id], keys[:4]
+            assert keys[table.cursor_row] == removable.id
+            assert table.region.y + 1 + table.cursor_row in rows_of(screen, table)
+        finally:
+            service.release.set()
 
 
 async def test_policies_chrome_at_80x20(tmp_path: Path) -> None:
