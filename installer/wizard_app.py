@@ -3453,6 +3453,11 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             return
         self._quit()
 
+    async def action_quit(self) -> None:
+        # Textual's inherited ctrl+q calls exit() directly, which would abandon a
+        # removal's daemon delete thread (RR-01); it is the soft quit, like q.
+        self.action_abort()
+
     def action_hard_abort(self) -> None:
         # The hard quit (ctrl+c): exits from anywhere, including on top of the
         # palette. The first one during a removal waits for it; a second one
