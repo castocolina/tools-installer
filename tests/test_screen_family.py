@@ -3199,3 +3199,70 @@ def test_the_replaced_forks_are_gone(name: str):
         if pattern.search(line)
     ]
     assert hits == [], f"{name} is named again: {', '.join(hits)}"
+
+
+# -- C-28: a result that lands while another view is visible goes to that view --
+
+
+async def test_an_update_result_lands_on_the_visible_view(tmp_path: Path):
+    updates = _HeldUpdates()
+    app, _service = _update_app(tmp_path, updates, HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            _catalog_cursor(app, "rg")
+            await pilot.press("u")
+            await wait_until(pilot, updates.started.is_set)
+            await app.show_view("doctor")
+            updates.release.set()
+            await settle(app, pilot)
+            assert app.view("doctor").status.text == "updated rg"
+            await app.show_view("system")
+            assert app.catalog.status_text == ""
+        finally:
+            updates.release.set()
+
+
+async def test_a_removal_result_lands_on_the_visible_view(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "fd")
+            await wait_until(pilot, remover.started.is_set)
+            await app.show_view("system")
+            remover.release.set()
+            await settle(app, pilot)
+            assert app.catalog.status_text.startswith("1 removed")
+            await app.show_view("uninstall")
+            assert not app.view("uninstall").status.text.startswith("1 removed")
+        finally:
+            remover.release.set()
+
+
+async def test_a_job_toggle_result_lands_on_the_visible_view(tmp_path: Path):
+    release = threading.Event()
+
+    def held_apply() -> PolicyResult:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the toggle was never released")
+        return _policy_result()
+
+    app, _service = _policy_app(
+        tmp_path, [_policy(tmp_path, "job", apply=held_apply, background=True)], HeldRemover()
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await pilot.press("space")
+            assert app.mutation_in_flight
+            await app.show_view("system")
+            release.set()
+            await settle(app, pilot)
+            assert app.catalog.status_text.startswith("job enabled.")
+            await app.show_view("policies")
+            assert not app.view("policies").status.text.startswith("job enabled.")
+        finally:
+            release.set()
