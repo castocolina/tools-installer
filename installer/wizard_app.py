@@ -2350,6 +2350,10 @@ class PoliciesScreen(AppScreen):
         policy = self._highlighted_policy()
         if policy is None or policy.set_schedule is None:
             return
+        # Refuse before the picker; _time_picked checks again, because a
+        # mutation can start while the picker is open.
+        if self.app.refuse_if_mutating(self):
+            return
         active = self.active_state.get(policy.id)
         if active is None:
             self._refuse_unreadable()
@@ -2404,6 +2408,8 @@ class PoliciesScreen(AppScreen):
                 "Link mode cannot be changed from this entry point.",
                 "warn",
             )
+            return
+        if self.app.refuse_if_mutating(self):  # before the picker, as t does
             return
         self.app.push_screen(LinkModeScreen(), self._link_mode_picked)
 

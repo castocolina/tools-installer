@@ -4942,10 +4942,10 @@ async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Pat
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert screen.active_state["daemon:prune-tmpdir"] is True
+        # Refused before the picker opens (C-17); the pick-time check is
+        # test_t_and_m_are_refused_at_their_mutation_point.
         await pilot.press("t")
-        assert isinstance(app.screen, TimePickerScreen)
-        await pilot.press("down", "down", "down", "enter")
-        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen is screen
         assert screen.status.text == _DAEMON_REFUSAL
         plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
         assert plist_path.read_bytes() == seed_bytes  # untouched by the refused reschedule

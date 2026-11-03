@@ -1717,6 +1717,7 @@ async def test_late_doctor_and_daemon_results_render_nothing_during_shutdown(
 
 
 async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
+    """A mutation that starts while a picker is open is refused at the pick."""
     scheduled: list[tuple[int, int]] = []
     modes: list[str] = []
 
@@ -1724,34 +1725,30 @@ async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
         scheduled.append((hour, minute))
         return _policy_result()
 
-    remover = HeldRemover(SweepResult(removed=("fd",)))
     app, _service = _policy_app(
         tmp_path,
         [_policy(tmp_path, "job", active=True, set_schedule=set_schedule)],
-        remover,
+        HeldRemover(),
         set_link_mode=modes.append,
     )
     async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            await app.show_view("uninstall")
-            await _confirm_removal(app, pilot, "fd")
-            await wait_until(pilot, remover.started.is_set)
-            await app.show_view("policies")
-            status = app.view("policies").status
-            await pilot.press("t")
-            assert isinstance(app.screen, TimePickerScreen)
-            await pilot.press("down", "down", "down", "enter")
-            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
-            assert scheduled == []
-            status.clear()
-            await pilot.press("m")
-            assert isinstance(app.screen, LinkModeScreen)
-            await pilot.press("down", "enter")
-            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
-            assert modes == []
-        finally:
-            remover.release.set()
+        await settle(app, pilot)
+        status = app.view("policies").status
+        await pilot.press("t")
+        assert isinstance(app.screen, TimePickerScreen)
+        app.begin_mutation(MutationHolder.REMOVAL)
+        await pilot.press("down", "down", "down", "enter")
+        assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+        assert scheduled == []
+        app.end_mutation()
+        status.clear()
+        await pilot.press("m")
+        assert isinstance(app.screen, LinkModeScreen)
+        app.begin_mutation(MutationHolder.REMOVAL)
+        await pilot.press("down", "enter")
+        assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+        assert modes == []
+        app.end_mutation()
 
 
 @pytest.mark.parametrize("key", ["t", "m"])
