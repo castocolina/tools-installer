@@ -2871,6 +2871,101 @@ def test_failed_invalidate_save_still_reprobes_the_skills(
     assert calls.count(["claude", "plugin", "list", "--json"]) == 2
 
 
+def _failing_save(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
+    original = save_version_cache
+    failing = {"on": False}
+
+    def full(
+        path: Path,
+        cache: Mapping[str, VersionCacheEntry],
+        *,
+        managers: Mapping[str, object] | None = None,
+        skills: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
+        if failing["on"]:
+            raise OSError("disk full")
+        original(path, cache, managers=managers, skills=skills)
+
+    monkeypatch.setattr("installer.version_status.save_version_cache", full)
+    return failing
+
+
+def test_failed_invalidate_save_still_requeries_the_managers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queries = {"n": 0}
+
+    def outdated(**_kwargs: object) -> OutdatedReport:
+        queries["n"] += 1
+        return _empty_outdated()
+
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: "1.0",
+        which=lambda cmd: None if cmd == "brew" else str(tmp_path / cmd),
+        read_outdated_fn=outdated,
+    )
+    tool = _gh_tool("rg")
+    failing = _failing_save(monkeypatch)
+    service.refresh([tool])
+    assert queries["n"] == 1
+    service.refresh([tool])
+    assert queries["n"] == 1  # the Phase 19 window reuses the saved snapshot
+    failing["on"] = True
+    with pytest.raises(OSError, match="disk full"):
+        service.invalidate(reason="test")
+    service.refresh([tool])
+    assert queries["n"] == 2  # the persisted snapshot is skipped; its own save fails
+    service.refresh([tool])
+    assert queries["n"] == 3  # that answer never reached disk
+    failing["on"] = False
+    service.refresh([tool])
+    assert queries["n"] == 4
+    service.refresh([tool])
+    assert queries["n"] == 4  # a queried snapshot was saved, so the flag cleared
+
+
+def test_a_failed_query_after_a_failed_invalidate_save_clears_the_flag_and_backs_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queries = {"n": 0}
+    down = {"on": False}
+
+    def outdated(**_kwargs: object) -> OutdatedReport:
+        queries["n"] += 1
+        if down["on"]:
+            raise OSError("pnpm down")
+        return _empty_outdated()
+
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: "1.0",
+        now=lambda: now,
+        which=lambda cmd: None if cmd == "brew" else str(tmp_path / cmd),
+        read_outdated_fn=outdated,
+    )
+    tool = _gh_tool("rg")
+    failing = _failing_save(monkeypatch)
+    service.refresh([tool])
+    assert queries["n"] == 1
+    failing["on"] = True
+    with pytest.raises(OSError, match="disk full"):
+        service.invalidate(reason="test")
+    failing["on"] = False
+    down["on"] = True
+    service.refresh([tool])
+    assert queries["n"] == 2  # the flag hides the snapshot; the query fails and is saved
+    snapshot = load_manager_snapshot(tmp_path / "versions.json")
+    assert snapshot is not None and snapshot.failed_at is not None
+    service.refresh([tool])
+    assert queries["n"] == 2  # the 30-minute retry backoff governs the saved failure
+
+
 def test_only_published_records_are_cached(tmp_path: Path) -> None:
     hold = _Hold(tag="9.9.9")
     service = _held_service(tmp_path, hold)

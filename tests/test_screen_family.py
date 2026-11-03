@@ -20,7 +20,7 @@ from installer.engine import InstallOutcome
 from installer.enums import MutationHolder, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.model import Method, Tool
-from installer.ownership import ManagerOwnership, OwnershipCandidate
+from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
@@ -51,6 +51,7 @@ from tests.state_doubles import (
     HeldRefreshService,
     ScriptedUpdates,
     absent_state,
+    empty_inventory,
     frozen_service,
     held_service,
     offline_service,
@@ -2560,7 +2561,24 @@ async def test_a_crashed_reinstall_still_invalidates(
 async def test_a_real_cache_write_failure_after_a_reinstall_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    service = _real_service(tmp_path)
+    # The manager-only fact is pnpm's global inventory: A lists no package, B lists mmdc's.
+    package = "@mermaid-js/mermaid-cli"
+    answer = {"pnpm_globals": frozenset[str]()}
+    reads: list[str] = []
+
+    def inventory(**_kwargs: Any) -> ManagerInventory:
+        reads.append("inventory")
+        return replace(empty_inventory(), pnpm_globals=answer["pnpm_globals"])
+
+    managed = tmp_path / ".local" / "bin"
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: "1.0",
+        which=lambda cmd: None if cmd == "brew" else str(managed / cmd),
+        read_inventory_fn=inventory,
+    )
     app = _family_app(
         tools=[_node_tool()],
         version_refresh=service,
@@ -2571,8 +2589,16 @@ async def test_a_real_cache_write_failure_after_a_reinstall_is_reported(
         await settle(app, pilot)
         await _open_view(app, pilot, "doctor")
         await settle(app, pilot)
+        before = service.state_of("mmdc")
+        assert before is not None
+        launch_reads = len(reads)
+        assert launch_reads >= 1
+        app.request_refresh()
+        await settle(app, pilot)
+        assert len(reads) == launch_reads  # the saved snapshot is reused
         passes = _count_passes(monkeypatch, service)
         epoch = service.epoch
+        answer["pnpm_globals"] = frozenset({package})
 
         def full(*_args: Any, **_kwargs: Any) -> None:
             raise OSError("disk full")
@@ -2588,5 +2614,7 @@ async def test_a_real_cache_write_failure_after_a_reinstall_is_reported(
         assert service.epoch > epoch
         assert not app.mutation_in_flight
         assert len(passes) == 1
+        assert len(reads) > launch_reads  # the managers were queried again
         state = service.state_of("mmdc")
         assert state is not None and state.generation == service.epoch
+        assert state.ownership != before.ownership  # B, not the persisted A
