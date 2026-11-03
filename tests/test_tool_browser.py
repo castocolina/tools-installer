@@ -156,24 +156,24 @@ async def test_detail_bar_follows_highlight_and_section_rows() -> None:
         assert browser.detail_text == "group: letters"
 
 
-async def test_rebuild_cursor_falls_back_to_first_selectable_when_key_is_gone() -> None:
-    """The widened _rebuild cursor contract's missing-key half: the branch the
-    uninstall view's live re-derivation takes on a real machine. A reload
-    whose adapter no longer carries the row the user had highlighted must
-    land on the first selectable row -- today's unconditional behaviour --
-    rather than raise or silently stay wherever clear() left it."""
-    app = _Host(_adapter())
+async def test_rebuild_cursor_moves_to_the_nearest_surviving_row_when_key_is_gone() -> None:
+    """A reload whose adapter no longer carries the highlighted row lands the
+    cursor on the item row nearest the old row index (UI-SPEC State lifecycle),
+    never back on the first item row."""
+    items = [*_ITEMS[:2], _Item("one", "numbers", "n"), _Item("two", "numbers", "n")]
+    app = _Host(_adapter(items=items))
     async with app.run_test(size=(80, 20)) as pilot:
         browser = app.query_one(ToolBrowser[_Item])
         table = app.query_one(DataTable[Any])
-        # rows: [#letters, alpha, beta, #numbers, one]; "one" is neither row 0
-        # nor the first selectable row (alpha).
+        # rows: [#letters, alpha, beta, #numbers, one, two]
         table.move_cursor(row=table.get_row_index("one"))
-        browser.reload(_adapter(items=[_ITEMS[0], _ITEMS[1]]))  # drops "one"
+        browser.reload(_adapter(items=[items[0], items[1], items[3]]))  # drops "one"
         await pilot.pause()
-        first = browser._first_selectable_row()  # pyright: ignore[reportPrivateUsage]
-        assert first is not None
-        assert table.cursor_row == first
+        assert browser.highlighted_id() == "two"
+        # rows: [#letters, alpha, beta]; the cursor was on row 4, past the end
+        browser.reload(_adapter(items=items[:2]))
+        await pilot.pause()
+        assert browser.highlighted_id() == "beta"
 
 
 async def test_rebuild_cursor_keeps_a_surviving_section_row_under_the_cursor() -> None:
@@ -578,3 +578,68 @@ async def test_empty_view_shows_the_adapters_empty_detail() -> None:
     async with app.run_test(size=(80, 20)) as pilot:
         await pilot.pause()
         assert _detail_rows(app) == ["Nothing here.", "Press a key.", ""]
+
+
+# -- 21-03: a selected row that became unselectable is pruned on reload --------
+
+
+def _reject(*ids: str) -> Callable[[_Item], bool]:
+    return lambda item: item.id not in ids
+
+
+async def test_reload_prunes_a_selected_id_that_became_unselectable() -> None:
+    app = _Host(_adapter())
+    async with app.run_test(size=(80, 20)):
+        browser = app.query_one(ToolBrowser[_Item])
+        browser.selected.update({"alpha", "beta"})
+        browser.reload(_adapter(selectable=_reject("alpha")))
+        assert browser.selected == {"beta"}
+
+
+async def test_selected_ids_filters_on_selectable() -> None:
+    app = _Host(_adapter(selectable=_reject("alpha")))
+    async with app.run_test(size=(80, 20)):
+        browser = app.query_one(ToolBrowser[_Item])
+        browser.selected = {"alpha", "beta"}
+        assert browser.selected_ids() == ["beta"]
+
+
+async def test_accept_never_carries_an_unselectable_id() -> None:
+    app = _Host(_adapter(selectable=_reject("alpha")))
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        browser.selected = {"alpha", "beta"}
+        await pilot.press("enter")
+        assert app.accepted == ["beta"]
+
+
+async def test_reload_prune_keeps_foreign_ids_and_the_shared_set() -> None:
+    shared = {"alpha", "elsewhere"}
+    app = _SharedHost(_adapter(), selected=shared)
+    async with app.run_test(size=(80, 20)):
+        browser = app.query_one(ToolBrowser[_Item])
+        browser.reload(_adapter(selectable=_reject("alpha")))
+        assert browser.selected is shared
+        assert shared == {"elsewhere"}
+
+
+async def test_reload_prune_posts_no_selection_change() -> None:
+    app = _SharedHost(_adapter(), selected={"alpha"})
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        await pilot.pause()
+        before = len(app.changes)
+        browser.reload(_adapter(selectable=_reject("alpha")))
+        await pilot.pause()
+        assert len(app.changes) == before
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+async def test_reload_prunes_zero_one_and_many(count: int) -> None:
+    gone = ["alpha", "beta"][:count]
+    app = _Host(_adapter())
+    async with app.run_test(size=(80, 20)):
+        browser = app.query_one(ToolBrowser[_Item])
+        browser.selected.update({*gone, "one"})
+        browser.reload(_adapter(selectable=_reject(*gone)))
+        assert browser.selected == {"one"}
