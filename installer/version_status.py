@@ -987,6 +987,8 @@ class VersionRefreshService:
         self._skills_probed = False
         # Fresh skill answers a failed cache write has not persisted yet (RR3-03).
         self._skills_unsaved = False
+        # The cleared manager snapshot may not have reached disk (invalidate).
+        self._managers_invalid = False
         self._skills_pass_lock = threading.Lock()
         self._epoch = 0
         self._seq = 0
@@ -1203,7 +1205,8 @@ class VersionRefreshService:
         """Bump the epoch and drop the manager snapshot under the merge lock.
 
         The in-memory flags change before the cache write, so a failed write
-        still forces the next skill probe; the write's OSError still propagates.
+        still forces the next skill probe and the next manager query; the
+        write's OSError still propagates.
         """
         del reason
         with self._lock:
@@ -1211,6 +1214,8 @@ class VersionRefreshService:
             self._pending_ids.clear()
             # In memory first: a failed write must still force the next probe (WR2-03).
             self._skills_probed = False
+            # In memory first: a failed write must still force the next manager query (WR2-03).
+            self._managers_invalid = True
             self._skills = {
                 tool_id: replace(entry, stale=True) for tool_id, entry in self._skills.items()
             }
@@ -1580,7 +1585,7 @@ class VersionRefreshService:
         backoff stays in charge): brew appearing or vanishing reaches
         ownership on the next pass, not after the 6-hour window (review M6).
         """
-        snapshot = load_manager_snapshot(self._cache_path)
+        snapshot = None if self._managers_invalid else load_manager_snapshot(self._cache_path)
         if not should_fetch_managers(snapshot, now=now) and (
             snapshot is None
             or snapshot.failed_at is not None
@@ -1873,6 +1878,10 @@ class VersionRefreshService:
                     self._warning = f"version cache not saved: {exc}"
                 else:
                     self._skills_unsaved = False
+                    if persist_snapshot:
+                        # Cleared once a snapshot this pass queried is on disk, so the retry
+                        # backoff governs a failing manager (RR3-03).
+                        self._managers_invalid = False
                     self._warning = None
 
             self._write_or_queue(save_pass)
