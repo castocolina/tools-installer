@@ -699,7 +699,7 @@ def test_the_uninstall_view_is_wired_to_a_total_teardown_of_the_real_zshrc(
 
     inputs.remove(
         UninstallDecision(
-            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
         )
     )
     assert forwarded[0]["bundles"] is BUNDLES
@@ -1365,7 +1365,7 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
         UninstallDecision(
-            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
         )
     )
     assert forwarded[0]["daemon_policy"] is daemon_in_list
@@ -2863,7 +2863,7 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
         UninstallDecision(
-            tools=(), paths=(), remove_ban=False, remove_path_block=False, remove_tweaks=True
+            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
         )
     )
     policies = seen[-1]["policies"]

@@ -1478,16 +1478,14 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, ids: list[str]) -> None:
-        paths: list[Path] = []
         tools: dict[str, Tool] = {}  # by id, in selection order; env rows carry no tool
         for key in ids:
             entry = self._by_key[key]
-            paths.extend(entry.paths)
             if entry.tool is not None:
                 tools.setdefault(entry.tool.id, entry.tool)
         decision = UninstallDecision(
             tools=tuple(tools.values()),
-            paths=tuple(paths),
+            paths={tool_id: self._by_key[tool_id].paths for tool_id in tools},
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
@@ -1541,9 +1539,10 @@ class UninstallScreen(AppScreen):
                 parts.append(
                     f"could not disable {', '.join(swept.failed)} — check permissions and re-run."
                 )
-            parts.extend(f"warning: {warning}." for warning in swept.warnings)
             if not swept.swept and not swept.failed:
                 parts.append("no shell tweaks were still enabled — nothing to disable.")
+        # Refused paths travel here too, so they show whatever levers were chosen.
+        parts.extend(f"warning: {warning}." for warning in swept.warnings)
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return multiline_summary(parts)

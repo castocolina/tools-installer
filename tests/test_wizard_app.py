@@ -1763,9 +1763,7 @@ async def test_uninstall_partial_selection_apply() -> None:
         await pilot.press("enter")  # confirm
         await settle(app, pilot)
     assert len(captured) == 1
-    assert len(captured[0].paths) == 1
-    assert Path("/opt/rg") in captured[0].paths
-    assert Path("/opt/fd") not in captured[0].paths
+    assert captured[0].paths == {"rg": (Path("/opt/rg"),)}
 
 
 async def test_uninstall_applied_summary_ban_and_path() -> None:

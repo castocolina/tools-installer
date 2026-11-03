@@ -636,13 +636,14 @@ def run_uninstall(
 
 @dataclass(frozen=True)
 class UninstallDecision:
-    """The levers the in-app uninstall view collected: selected artifact paths,
-    plus whether to also remove the pip/npm ban, the managed PATH block, and
-    the still-enabled shell tweaks. `tools` are the selected tools, so
-    deletion re-proves per tool exactly like the CLI (L-19-06)."""
+    """The levers the in-app uninstall view collected: the previewed artifact
+    paths of each selected tool (by tool id), plus whether to also remove the
+    pip/npm ban, the managed PATH block, and the still-enabled shell tweaks.
+    `tools` are the selected tools, so deletion re-proves per tool exactly like
+    the CLI (L-19-06)."""
 
     tools: tuple[Tool, ...]
-    paths: tuple[Path, ...]
+    paths: Mapping[str, tuple[Path, ...]]
     remove_ban: bool
     remove_path_block: bool
     remove_tweaks: bool = False
@@ -682,24 +683,25 @@ def perform_uninstall(
     # file, dangling, looping, a drifted receipt) is refused and reported
     # through SweepResult.warnings, which the UninstallScreen already renders;
     # the rest go ahead.
-    # D-08: tool by tool, so one tool's refusal never stops the next. A path
-    # belongs to the selected tool whose plan names it, `yourself` included: a
-    # path that drifted since the preview is no longer proven, and only the
-    # name match still ties it to its tool.
+    # D-08: tool by tool, so one tool's refusal never stops the next. The
+    # tool's current plan must still name every path its preview showed,
+    # `yourself` included (a path that drifted since the preview is no longer
+    # proven; the name match still ties it to its tool). When it does not, the
+    # plan changed under the confirm (a receipt rewritten by a reinstall), so
+    # none of the tool is touched and its receipt stays.
     refused: tuple[str, ...] = ()
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
-    claimed: set[Path] = set()
     for tool in decision.tools:
+        previewed = decision.paths.get(tool.id, ())
         plan = plan_removal([tool], bin_dir)
         named = {*plan.removable, *plan.yourself}
-        mine = [path for path in decision.paths if path in named]
-        claimed.update(mine)
-        if not mine:
+        if not previewed or any(path not in named for path in previewed):
+            refused += tuple(f"changed since the preview; not removed: {p}" for p in previewed)
             remove_failed.append((tool.id, "changed since the preview; not removed"))
             continue
         try:
-            _gone, tool_refused = remove_proven([tool], mine, bin_dir)
+            _gone, tool_refused = remove_proven([tool], list(previewed), bin_dir)
         except OSError as exc:
             remove_failed.append((tool.id, first_line(exc)))
             continue
@@ -708,11 +710,6 @@ def perform_uninstall(
             remove_failed.append((tool.id, tool_refused[0]))
         else:
             removed.append(tool.id)
-    refused += tuple(
-        f"changed since the preview; not removed: {path}"
-        for path in decision.paths
-        if path not in claimed
-    )
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)
