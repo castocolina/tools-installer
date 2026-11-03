@@ -38,6 +38,10 @@ from installer.version_status import (
     VersionStatus,
 )
 from installer.wizard_app import (
+    DaemonDefaultApplied,
+    DiskPressureProbed,
+    DoctorScreen,
+    GlobalsReinstalled,
     JobStatesRead,
     LinkModeScreen,
     NavScreen,
@@ -1539,6 +1543,35 @@ async def test_a_daemon_default_without_a_policy_id_releases_the_lock(tmp_path: 
         await _confirm_removal(app, pilot, "fd")
         await settle(app, pilot)
         assert len(remover.calls) == 1
+
+
+async def test_late_doctor_and_daemon_results_render_nothing_during_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The 765c0e5 shape: run_test's teardown stops the app before it prunes the
+    screens, so a worker result that lands in between finds widgets gone."""
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _policy_app(
+        tmp_path,
+        [_policy(tmp_path, "job")],
+        remover,
+        daemon_default=lambda: True,
+        daemon_default_policy_id="job",
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        doctor = app.view("doctor")
+        assert isinstance(doctor, DoctorScreen)
+        policies = app.view("policies")
+        await doctor.query_one("#doctor-body").remove()
+        await policies.query_one(DataTable[Any]).remove()
+        with monkeypatch.context() as patch:
+            patch.setattr(UnifiedApp, "is_running", property(lambda _self: False))
+            doctor.on_globals_reinstalled(GlobalsReinstalled(None))
+            doctor.on_disk_pressure_probed(DiskPressureProbed())
+            app.on_daemon_default_applied(DaemonDefaultApplied("job", True, True))
 
 
 async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
