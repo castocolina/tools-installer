@@ -17,14 +17,17 @@ from installer.doctor import DoctorReport
 from installer.enums import Severity
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership, OwnershipCandidate
+from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, plan_removal, remove_paths
 from installer.update import UpdateOutcome
 from installer.version_status import Health, VersionRefreshService, VersionStatus
 from installer.wizard_app import (
+    LinkModeScreen,
     NavScreen,
     PolicyInputs,
+    TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
@@ -1242,3 +1245,266 @@ async def test_the_lock_is_released_when_the_update_crashes(tmp_path: Path):
         await pilot.press("u")
         await settle(app, pilot)
         assert len(updates.targets) == 2
+
+
+# -- 21-15: the job toggle and the on-by-default daemon hold the same lock --
+
+_TOGGLE_REFUSAL = "A policy toggle is running; wait for it to finish. Navigation still works."
+_DAEMON_REFUSAL = "A daemon apply is running; wait for it to finish. Navigation still works."
+
+
+def _policy_result() -> PolicyResult:
+    return PolicyResult(layers=(PolicyLayer("Job", "registered"),), reload_hint=None, warning=None)
+
+
+def _policy(
+    tmp_path: Path,
+    policy_id: str,
+    *,
+    active: bool = False,
+    apply: Callable[[], PolicyResult] = _policy_result,
+    background: bool = False,
+    set_schedule: Callable[[int, int], PolicyResult] | None = None,
+) -> Policy:
+    return Policy(
+        id=policy_id,
+        label=policy_id,
+        description="",
+        active=active,
+        apply=apply,
+        remove=_policy_result,
+        log_path=tmp_path / f"{policy_id}.log" if background else None,
+        set_schedule=set_schedule,
+    )
+
+
+def _policy_app(
+    tmp_path: Path,
+    policies: list[Policy],
+    remover: HeldRemover,
+    *,
+    daemon_default: Callable[[], bool] | None = None,
+    daemon_default_policy_id: str | None = None,
+    set_link_mode: Callable[[str], None] | None = None,
+    tweak_ids: Callable[[], tuple[str, ...]] = lambda: (),
+    states: Sequence[Any] | None = None,
+) -> tuple[UnifiedApp, FrozenStateService]:
+    rg, fd = _tool("rg"), _tool("fd")
+    service = frozen_service(tmp_path)
+    service.publish(
+        states if states is not None else [removable_state(fd, [tmp_path / "fd"]), absent_state(rg)]
+    )
+    app = UnifiedApp(
+        [rg, fd],
+        {"search": "find things"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({"pip": False, "npm": False}, None),
+        fix_preview="preview",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            ban_names=lambda: [],
+            has_path_block=lambda: False,
+            remove=remover,
+            tweak_ids=tweak_ids,
+        ),
+        policies=PolicyInputs(
+            policies=policies, link_mode=lambda: "centralized", set_link_mode=set_link_mode
+        ),
+        initial_view="policies",
+        version_refresh=service,
+        daemon_default=daemon_default,
+        daemon_default_policy_id=daemon_default_policy_id,
+    )
+    return app, service
+
+
+def _policy_cursor(app: UnifiedApp, policy_id: str) -> None:
+    table = app.view("policies").query_one(DataTable[Any])
+    table.move_cursor(row=table.get_row_index(policy_id))
+
+
+def _held_daemon_default(release: threading.Event) -> Callable[[], bool]:
+    def apply() -> bool:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the daemon default was never released")
+        return True
+
+    return apply
+
+
+async def test_a_background_job_toggle_holds_the_lock(tmp_path: Path):
+    release = threading.Event()
+
+    def held_apply() -> PolicyResult:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the toggle was never released")
+        return _policy_result()
+
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _policy_app(
+        tmp_path, [_policy(tmp_path, "job", apply=held_apply, background=True)], remover
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await pilot.press("space")
+            assert app.mutation_in_flight
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "fd")
+            status = app.view("uninstall").status
+            assert (status.text, status.severity) == (_TOGGLE_REFUSAL, Severity.WARN)
+            assert remover.calls == []
+            release.set()
+            await settle(app, pilot)
+            assert not app.mutation_in_flight
+            assert app.view("policies").status.text.startswith("job enabled.")
+        finally:
+            release.set()
+
+
+async def test_the_daemon_default_holds_the_lock_from_construction(tmp_path: Path):
+    release = threading.Event()
+    app, _service = _policy_app(
+        tmp_path,
+        [_policy(tmp_path, "daemon")],
+        HeldRemover(),
+        daemon_default=_held_daemon_default(release),
+        daemon_default_policy_id="daemon",
+    )
+    assert app.mutation_in_flight
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await pilot.pause()
+            assert app.mutation_in_flight
+            release.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+        finally:
+            release.set()
+
+
+async def test_any_toggle_is_refused_while_the_daemon_default_applies(tmp_path: Path):
+    release = threading.Event()
+    applied: list[str] = []
+
+    def other_apply() -> PolicyResult:
+        applied.append("other")
+        return _policy_result()
+
+    app, _service = _policy_app(
+        tmp_path,
+        [_policy(tmp_path, "daemon"), _policy(tmp_path, "other", apply=other_apply)],
+        HeldRemover(),
+        daemon_default=_held_daemon_default(release),
+        daemon_default_policy_id="daemon",
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await pilot.pause()
+            _policy_cursor(app, "other")
+            await pilot.press("space")
+            status = app.view("policies").status
+            assert (status.text, status.severity) == (_DAEMON_REFUSAL, Severity.WARN)
+            assert applied == []
+            release.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+        finally:
+            release.set()
+
+
+async def test_a_daemon_default_without_a_policy_id_releases_the_lock(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    remover.release.set()
+    app, _service = _policy_app(
+        tmp_path, [_policy(tmp_path, "job")], remover, daemon_default=lambda: True
+    )
+    assert app.mutation_in_flight
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert not app.mutation_in_flight
+        await app.show_view("uninstall")
+        await _confirm_removal(app, pilot, "fd")
+        await settle(app, pilot)
+        assert len(remover.calls) == 1
+
+
+async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
+    scheduled: list[tuple[int, int]] = []
+    modes: list[str] = []
+
+    def set_schedule(hour: int, minute: int) -> PolicyResult:
+        scheduled.append((hour, minute))
+        return _policy_result()
+
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _policy_app(
+        tmp_path,
+        [_policy(tmp_path, "job", active=True, set_schedule=set_schedule)],
+        remover,
+        set_link_mode=modes.append,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _confirm_removal(app, pilot, "fd")
+            await wait_until(pilot, remover.started.is_set)
+            await app.show_view("policies")
+            status = app.view("policies").status
+            await pilot.press("t")
+            assert isinstance(app.screen, TimePickerScreen)
+            await pilot.press("down", "down", "down", "enter")
+            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+            assert scheduled == []
+            status.clear()
+            await pilot.press("m")
+            assert isinstance(app.screen, LinkModeScreen)
+            await pilot.press("down", "enter")
+            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+            assert modes == []
+        finally:
+            remover.release.set()
+
+
+async def test_the_daemon_default_apply_repaints_a_visible_uninstall(tmp_path: Path):
+    release = threading.Event()
+    tweaks: list[str] = []
+
+    def daemon_default() -> bool:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the daemon default was never released")
+        tweaks.append("daemon:prune-tmp-linux")
+        return True
+
+    states = [absent_state(_tool("rg")), absent_state(_tool("fd"))]
+    app, service = _policy_app(
+        tmp_path,
+        [_policy(tmp_path, "job")],
+        HeldRemover(),
+        daemon_default=daemon_default,
+        tweak_ids=lambda: tuple(tweaks),
+        states=states,
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, lambda: service.passes == 1)
+            await app.show_view("uninstall")
+            screen = app.view("uninstall")
+            table = screen.query_one(DataTable[Any])
+            assert "#tweaks" not in [row.value for row in table.rows]
+            assert (screen.status.text, screen.status.severity) == (
+                "Nothing to uninstall.",
+                Severity.OK,
+            )
+            assert app.mutation_in_flight
+            before = service.passes
+            release.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+            await settle(app, pilot)
+            assert app.screen is screen
+            cells = " ".join(str(cell) for cell in table.get_row("#tweaks"))
+            assert "shell tweaks + background jobs" in cells
+            assert "daemon:prune-tmp-linux" in cells
+            assert service.passes == before
+            assert screen.status.text == ""
+        finally:
+            release.set()
