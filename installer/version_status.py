@@ -1185,14 +1185,23 @@ class VersionRefreshService:
             self._states = {k: v for k, v in self._states.items() if k not in self._pending_ids}
 
     def record_evidence(
-        self, tool_id: str, *, broken: tuple[str, ...] = (), notes: tuple[str, ...] = ()
+        self,
+        tool_id: str,
+        *,
+        epoch: int,
+        broken: tuple[str, ...] = (),
+        notes: tuple[str, ...] = (),
     ) -> bool:
         """Store Doctor findings for `tool_id`; True when the stored value changed.
 
         Empty evidence deletes the entry. The next pass reads it (D-13).
+        `epoch` is the epoch the audit started at: findings read before a
+        later `invalidate` are stale and dropped (C-09).
         """
         new = (broken, notes) if broken or notes else None
         with self._lock:
+            if epoch != self._epoch:
+                return False
             if self._evidence.get(tool_id) == new:
                 return False
             if new is None:
@@ -1202,7 +1211,7 @@ class VersionRefreshService:
             return True
 
     def invalidate(self, *, reason: str) -> int:
-        """Bump the epoch and drop the manager snapshot under the merge lock.
+        """Bump the epoch and drop the Doctor evidence and the manager snapshot under the lock.
 
         The in-memory flags change before the cache write, so a failed write
         still forces the next skill probe and the next manager query; the
@@ -1212,6 +1221,8 @@ class VersionRefreshService:
         with self._lock:
             self._epoch += 1
             self._pending_ids.clear()
+            # A mutation may have repaired what Doctor found (C-09).
+            self._evidence.clear()
             # In memory first: a failed write must still force the next probe (WR2-03).
             self._skills_probed = False
             # In memory first: a failed write must still force the next manager query (WR2-03).

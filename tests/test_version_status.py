@@ -5803,18 +5803,18 @@ def test_invalidate_clears_pending_and_the_next_pass_republishes(tmp_path: Path)
 
 def test_record_evidence_reports_change(tmp_path: Path) -> None:
     service = _pending_service(tmp_path, lambda _argv: "1.0.0")
-    assert service.record_evidence("rg", broken=("boom",)) is True
-    assert service.record_evidence("rg", broken=("boom",)) is False
-    assert service.record_evidence("rg") is True
-    assert service.record_evidence("rg") is False
+    assert service.record_evidence("rg", epoch=service.epoch, broken=("boom",)) is True
+    assert service.record_evidence("rg", epoch=service.epoch, broken=("boom",)) is False
+    assert service.record_evidence("rg", epoch=service.epoch) is True
+    assert service.record_evidence("rg", epoch=service.epoch) is False
 
 
 def test_evidence_reaches_the_next_pass(tmp_path: Path) -> None:
     service = _pending_service(tmp_path, lambda _argv: "1.0.0")
     tools = _pending_tools()
     note = "pnpm is holding a, b in separate global installs"
-    service.record_evidence("rg", broken=("smoke failed",))
-    service.record_evidence("fd", notes=(note,))
+    service.record_evidence("rg", epoch=service.epoch, broken=("smoke failed",))
+    service.record_evidence("fd", epoch=service.epoch, notes=(note,))
     states = _settled_states(service, tools)
     assert states["rg"].health is Health.BROKEN
     assert "smoke failed" in states["rg"].reasons
@@ -5826,21 +5826,20 @@ def test_evidence_is_read_under_the_lock_as_a_snapshot(tmp_path: Path) -> None:
     holder: list[VersionRefreshService] = []
 
     def probe(_argv: list[str]) -> str | None:
-        holder[0].record_evidence("rg", broken=("late",))
+        holder[0].record_evidence("rg", epoch=holder[0].epoch, broken=("late",))
         return "1.0.0"
 
     service = _pending_service(tmp_path, probe)
     holder.append(service)
     first = _settled_states(service, _pending_tools())
     assert "late" not in first["rg"].reasons
-    service.invalidate(reason="t")
     assert "late" in _settled_states(service, _pending_tools())["rg"].reasons
 
 
 def test_invalidate_drops_the_doctor_evidence(tmp_path: Path) -> None:
     # C-09: a mutation may have repaired the tool, so its old Doctor finding expires.
     service = _pending_service(tmp_path, lambda _argv: "1.0.0")
-    service.record_evidence("rg", broken=("smoke failed",))
+    service.record_evidence("rg", epoch=service.epoch, broken=("smoke failed",))
     service.invalidate(reason="rg reinstalled")
     state = _settled_states(service, _pending_tools())["rg"]
     assert "smoke failed" not in state.reasons

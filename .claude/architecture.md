@@ -1196,7 +1196,8 @@ Policies re-reads `is_active` on every render and marks a policy that is owned
 but no longer active as DRIFT. A job policy's state comes from a worker that a
 newer read supersedes, and a failed read shows its error copy instead of a
 guessed state. Doctor has a single findings channel: its pnpm audit is handed
-to the next pass through `record_evidence`, and Doctor renders the findings the
+to the next pass through `record_evidence`, `invalidate` drops it, and an audit
+that started before the last `invalidate` stores nothing. Doctor renders the findings the
 tiers read from the published state. A failed read draws the error, never a
 stale list.
 

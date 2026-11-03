@@ -2482,7 +2482,7 @@ async def test_an_unreadable_audit_records_no_evidence(tmp_path: Path):
         await settle(app, pilot)
         assert service.passes == 1
         # Nothing was stored, so storing something is still a change.
-        assert service.record_evidence("mmdc", broken=("x",)) is True
+        assert service.record_evidence("mmdc", epoch=service.epoch, broken=("x",)) is True
 
 
 async def test_an_audit_that_started_before_a_mutation_records_nothing(tmp_path: Path):

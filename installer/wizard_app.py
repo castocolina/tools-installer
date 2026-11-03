@@ -452,6 +452,9 @@ class DoctorScreen(AppScreen):
         # lands) is recognisably stale and discarded rather than clobbering
         # fresher state.
         self._globals_audit_generation = 0
+        # The service epoch the current audit started at: its findings are
+        # dropped when a mutation invalidated the cache meanwhile (C-09).
+        self._globals_audit_epoch = 0
 
     def compose_body(self) -> ComposeResult:
         yield _BodyStatic(id="doctor-body")
@@ -520,6 +523,8 @@ class DoctorScreen(AppScreen):
         # is still delivered. Bumping the generation here is what lets
         # on_globals_audited recognise that stale delivery and drop it.
         self._globals_audit_generation += 1
+        service = self._version_refresh
+        self._globals_audit_epoch = service.epoch if service is not None else 0
         self.globals_auditing = True
         self._audit_globals_worker(self._globals_audit_generation)
 
@@ -948,7 +953,9 @@ class DoctorScreen(AppScreen):
                 for group in report.split_groups
                 if entry.npm_pkg in group
             )
-            changed |= service.record_evidence(entry.tool_id, broken=broken, notes=notes)
+            changed |= service.record_evidence(
+                entry.tool_id, epoch=self._globals_audit_epoch, broken=broken, notes=notes
+            )
         if changed and not self.app.quitting:
             self.app.request_refresh()
 
