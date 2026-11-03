@@ -28,7 +28,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 
 from installer import daemon, env_redirect
 from installer.app import UninstallDecision, path_writer_lines_for
-from installer.catalog_tui import CatalogScreen, OwnershipRefreshed, ToolUpdated
+from installer.catalog_tui import CatalogScreen, ToolUpdated
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import Tier, UninstallState
@@ -119,15 +119,6 @@ class UninstallInputs:
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
     invalidate: Callable[[], Any] | None = None
-    # WR-01 (15.4-REVIEW.md): the pass that REPLACES what `invalidate` drops.
-    # Without it, `_apply_removal`'s invalidate degraded every managed row's
-    # attribution to the generic registry phrase with nothing on this screen
-    # able to restore it: `OwnershipRefreshed` is posted only from
-    # `CatalogScreen`, so a user who went Uninstall -> remove -> Policies ->
-    # Uninstall never visited a catalog tab and saw generic phrases for the
-    # rest of the session. BLOCKING when called -- `_apply_removal` runs it
-    # on a thread worker, never on the message loop.
-    refresh: Callable[[], Any] | None = None
     # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
     # direct `u` update, unattended installation, the CLI uninstall route,
     # and interactive ExecuteScreen close already reuse. Called from
@@ -930,7 +921,6 @@ class UninstallScreen(AppScreen):
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
         self._invalidate = inputs.invalidate
-        self._refresh = inputs.refresh
         # Evaluated THROUGH run_live (.claude/architecture.md rule 3), not
         # bare: construction happens outside the nav path `enter_view` guards,
         # so a bare call would let an OSError from the per-tool filesystem
@@ -1233,7 +1223,7 @@ class UninstallScreen(AppScreen):
         `clear_applied` is the ONE thing the two callers legitimately
         differ on: `enter_view` passes True (a NAV ENTRY is D-06's explicit
         trigger for a same-session removal to stop being claimed once it no
-        longer describes the screen). `ownership_refreshed` passes False --
+        longer describes the screen). `state_refreshed` passes False --
         the user has not navigated, they are reading the summary of the
         removal they just performed, and a background repaint that wipes
         that sentence would be a regression: the fresh rows and the summary
@@ -1252,7 +1242,7 @@ class UninstallScreen(AppScreen):
             # call here escaped `enter_view` AFTER `show_view` had already
             # popped the previous screen, leaving the stack popped and
             # `current_view` un-updated -- a crash on the single nav path,
-            # reachable from a background `ownership_refreshed()` repaint the
+            # reachable from a background `state_refreshed()` repaint the
             # user never initiated. On failure the last known values are kept
             # and both messages are reported together.
             fallback, env_error = run_live(self._env_state)
@@ -1476,15 +1466,9 @@ class UninstallScreen(AppScreen):
                 self._invalidate()
             except Exception as exc:  # noqa: BLE001 -- post-mutation side effect, appended below
                 summary_parts.append(f"version cache invalidation failed: {exc}")
-            else:
-                # WR-01: pair the invalidate with the pass that replaces what
-                # it dropped. Nothing else can: `OwnershipRefreshed` is posted
-                # only from `CatalogScreen`, so a session that never visits a
-                # catalog tab again would show the degraded generic phrase for
-                # every managed row until it exits. Only on the success path
-                # -- an invalidate that raised did not drop anything, so there
-                # is nothing to replace.
-                self._refresh_ownership_worker()
+            # D-05: the removal ends with one app pass whether or not the
+            # invalidate raised; the publish re-renders this view.
+            self.app.request_refresh()
         # D-01/15.6-06 Task 3: called unconditionally on every successful
         # sweep (never gated on tool_count -- unlike invalidate above, a
         # terminal reapply/reversion is warranted even when only an env
@@ -1506,27 +1490,6 @@ class UninstallScreen(AppScreen):
         if terminal_warning:
             summary_parts.append(terminal_warning)
         self.status.set(multiline_summary(summary_parts), "warn" if terminal_failed else "ok")
-
-    @work(thread=True, exclusive=True, group="uninstall-ownership-refresh", exit_on_error=False)
-    def _refresh_ownership_worker(self) -> None:
-        """Re-resolve ownership after this screen's own invalidate (WR-01).
-
-        BLOCKING: the seam re-probes every manager, which is why this is a
-        thread worker and not an inline call on the message loop. Failure is
-        deliberately silent -- the screen is already showing the removal
-        summary the user asked for, the degraded-but-honest registry phrase is
-        what it falls back to, and a second error line about a background
-        repaint would bury the result they are reading. `OwnershipRefreshed`
-        is posted only when the pass actually committed, exactly as
-        `CatalogScreen` posts it, so `UnifiedApp.on_ownership_refreshed`
-        routes it back here through the one path that already exists.
-        """
-        refresh = self._refresh
-        if refresh is None:
-            return
-        _result, error = run_live(refresh)
-        if error is None:
-            self.post_message(OwnershipRefreshed())
 
     def _applied_summary(self, tool_count: int, swept: SweepResult) -> str:
         parts: list[str] = []
@@ -3056,30 +3019,6 @@ class UnifiedApp(App[list[str] | None]):
         if self.outcomes is None:
             self.outcomes = {}
         self.outcomes[outcome.row.tool_id] = outcome
-
-    def on_ownership_refreshed(self, message: OwnershipRefreshed) -> None:
-        """The completion signal for an asynchronous ownership refresh that
-        just committed (`installer/catalog_tui.py`'s `OwnershipRefreshed`,
-        posted only from its commit path).
-
-        Hands it to the Uninstall screen ONLY when that view is the current
-        one, and does nothing at all otherwise (Round-2 review HIGH). The
-        single nav path (`show_view` -> `entering.enter_view()`) already
-        re-derives every OTHER view before it is shown, so a full-catalog
-        filesystem sweep for a screen nobody is looking at buys nothing.
-        This patches exactly one hole -- a screen entered BEFORE the async
-        refresh landed -- and is a completion callback for an in-flight
-        read, not a second navigation trigger; it does not contradict rule
-        2 or `_install_closed`'s own no-new-coupling comment above, which
-        deliberately refreshes nothing here because at THAT moment there is
-        nothing fresh yet to hand over.
-        """
-        del message  # carries no payload; its arrival is its whole meaning
-        if self.current_view != "uninstall":
-            return
-        screen = self._views.get("uninstall")
-        if isinstance(screen, UninstallScreen):
-            screen.state_refreshed()
 
     def action_abort(self) -> None:
         # The soft quit (q). Guarded so a priority q binding does not quit out from

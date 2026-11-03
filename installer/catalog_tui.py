@@ -149,11 +149,6 @@ class ToolUpdated(Message):
         self.epoch = epoch
 
 
-class OwnershipRefreshed(Message):
-    """The Uninstall screen's own ownership refresh committed a pass under the
-    current epoch -- carries no payload; that fact is its whole meaning."""
-
-
 VIEWS: tuple[str, ...] = ("category", "priority", "audience", "status", "table")
 _TAB_LABELS = {
     "category": "Category",
