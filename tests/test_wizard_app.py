@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
+from rich.text import Text
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, Static
@@ -63,7 +64,14 @@ from installer.systemd_daemon import CompetingUnit, TimerStateCache
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, ToolRow, classify_tools
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
-from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
+from installer.version_status import (
+    BROKEN_REPAIR_NOTE,
+    UNKNOWN_OWNER_NOTE,
+    Health,
+    ToolState,
+    VersionRefreshService,
+    VersionStatus,
+)
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
@@ -86,10 +94,14 @@ from tests.state_doubles import (
     FrozenStateService,
     HeldRefreshService,
     Presence,
+    absent_state,
     frozen_service,
+    managed_state,
     pass_state,
     plan_state,
     presence_service,
+    removable_state,
+    unavailable_state,
 )
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
@@ -307,8 +319,17 @@ def _app(
     terminal_sync: Callable[[], str | None] | None = None,
     startup_warning: str | None = None,
     version_refresh: VersionRefreshService | None = None,
+    tools: list[Tool] | None = None,
+    cases: Sequence[tuple[Tool, ToolState]] | None = None,
 ) -> UnifiedApp:
-    tools = [_tool("rg"), _tool("fd")]
+    """`cases` pairs each catalog tool with the state a pass published for it;
+    the app then lists exactly those tools and reads them from a frozen service."""
+    if cases is not None and version_refresh is None:
+        version_refresh = frozen_service(Path.home())
+        version_refresh.publish([state for _tool_of, state in cases])
+    if cases is not None:
+        tools = [tool for tool, _state in cases]
+    tools = tools if tools is not None else [_tool("rg"), _tool("fd")]
     read_status = _predicate(guard_status or {"pip": False, "npm": False})
     return UnifiedApp(
         tools,
@@ -8403,3 +8424,254 @@ async def test_cancel_then_retry_leaves_the_latest_outcome_and_exits_clean() -> 
         assert outcomes is not None
         assert outcomes["rg"].result == "done"
         assert app.run_errors == []
+
+
+# -- 21-12: the Uninstall view is a projection of the published state ----------
+
+_NOTHING = "Nothing to uninstall."
+
+
+def _only_on_macos(tool_id: str) -> Tool:
+    """A tool with no install method on the unavailable-platform double."""
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={"repo": "o/x"}, os=("macos",)),),
+    )
+
+
+def _row_keys(screen: UninstallScreen) -> list[str]:
+    return [str(row.value) for row in screen.query_one(DataTable[Any]).rows]
+
+
+async def test_uninstall_draws_three_sections_from_the_published_state() -> None:
+    yq, jq, fd, xyz = _tool("yq"), _tool("jq"), _tool("fd"), _only_on_macos("xyz")
+    cases = [
+        (yq, removable_state(yq, [Path("/opt/yq")])),
+        (jq, managed_state(jq)),
+        (fd, absent_state(fd)),
+        (xyz, unavailable_state(xyz)),
+    ]
+    app = _app(cases=cases, initial_view="uninstall")
+    async with app.run_test(size=(120, 30)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == [
+            "#removable here",
+            "yq",
+            "#managed elsewhere",
+            "jq",
+            "#nothing to do",
+            "fd",
+            "xyz",
+        ]
+        table = screen.query_one(DataTable[Any])
+        selectable = {tool.id: _uninstall_cell(table, tool.id, "sel") != "" for tool, _ in cases}
+        assert selectable == {"yq": True, "jq": False, "fd": False, "xyz": False}
+        for tool, state in cases:
+            assert _uninstall_cell(table, tool.id, "health") == health_cell(state).plain
+
+
+async def test_uninstall_rows_change_when_a_pass_publishes(tmp_path: Path) -> None:
+    yq = _tool("yq")
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(yq, [Path("/opt/yq")])])
+    app = _app(tools=[yq], version_refresh=service, initial_view="uninstall")
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == ["#removable here", "yq"]
+        service.queued = (absent_state(yq),)
+        app.request_refresh()
+        await settle(app, pilot)
+        assert _row_keys(screen) == ["#nothing to do", "yq"]
+
+
+async def test_uninstall_offers_nothing_before_the_first_pass(tmp_path: Path) -> None:
+    yq, jq = _tool("yq"), _tool("jq")
+    service = HeldRefreshService(tmp_path, [])
+    app = _app(tools=[yq, jq], version_refresh=service, initial_view="uninstall")
+    try:
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, UninstallScreen)
+            assert _row_keys(screen) == ["#nothing to do", "jq", "yq"]
+            table = screen.query_one(DataTable[Any])
+            for key in ("yq", "jq"):
+                assert _uninstall_cell(table, key, "sel") == ""
+                assert _uninstall_cell(table, key, "health") == "…"
+            await pilot.press("space")
+            assert screen.selected == set()
+            assert screen.status.text != _NOTHING
+    finally:
+        service.release.set()
+
+
+async def test_uninstall_nothing_installed_draws_only_nothing_to_do() -> None:
+    rg, fd = _tool("rg"), _tool("fd")
+    app = _app(cases=[(rg, absent_state(rg)), (fd, absent_state(fd))], initial_view="uninstall")
+    async with app.run_test(size=(120, 30)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert [key for key in _row_keys(screen) if key.startswith("#")] == ["#nothing to do"]
+        assert (screen.status.text, screen.status.severity) == (_NOTHING, "ok")
+
+
+async def test_uninstall_unpublished_row_keeps_its_painted_section(tmp_path: Path) -> None:
+    yq = _tool("yq")
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(yq, [Path("/opt/yq")])])
+    app = _app(tools=[yq], version_refresh=service, initial_view="uninstall")
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        service.mark_pending({"yq"})
+        screen.state_refreshed()
+        await pilot.pause()
+        table = screen.query_one(DataTable[Any])
+        assert _row_keys(screen) == ["#removable here", "yq"]
+        assert _uninstall_cell(table, "yq", "sel") != ""
+        assert _uninstall_cell(table, "yq", "health") == "…"
+
+
+async def _detail_of(app: UnifiedApp, pilot: Pilot[list[str] | None], key: str) -> str:
+    screen = app.screen
+    assert isinstance(screen, UninstallScreen)
+    table = screen.query_one(DataTable[Any])
+    for _ in range(len(table.rows)):
+        if str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value) == key:
+            break
+        await pilot.press("down")
+    await pilot.pause()
+    return screen.detail_text
+
+
+async def test_uninstall_unknown_owner_row_names_no_manager() -> None:
+    jq = _tool("jq")
+    app = _app(cases=[(jq, plan_state(jq, owner="unknown"))], initial_view="uninstall")
+    async with app.run_test(size=(120, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _uninstall_cell(screen.query_one(DataTable[Any]), "jq", "via") == "unknown"
+        assert (await _detail_of(app, pilot, "jq")).startswith(UNKNOWN_OWNER_NOTE)
+
+
+async def test_uninstall_broken_row_shows_the_repair_text() -> None:
+    jq = _tool("jq")
+    state = plan_state(jq, health=Health.BROKEN, owner="brew", package="jq", reasons=("shim",))
+    app = _app(cases=[(jq, state)], initial_view="uninstall")
+    async with app.run_test(size=(120, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen)[0] == "#managed elsewhere"
+        assert (await _detail_of(app, pilot, "jq")).startswith(BROKEN_REPAIR_NOTE)
+
+
+async def test_uninstall_detail_markup_renders_literally() -> None:
+    jq = _tool("jq")
+    state = plan_state(jq, owner="installer", reasons=("[red]x[/red]",))
+    app = _app(cases=[(jq, state)], initial_view="uninstall")
+    async with app.run_test(size=(120, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert await _detail_of(app, pilot, "jq") == "[red]x[/red]"
+        content = screen.query_one("#browser-detail", Static).content
+        assert isinstance(content, Text)
+        assert content.plain == "[red]x[/red]"
+
+
+async def test_a_publish_rereads_the_environment_rows(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(rg, [Path("/opt/rg")])])
+    bans = ["pip"]
+    app = _app(
+        tools=[rg],
+        version_refresh=service,
+        uninstall=_uninstall_inputs(ban_names=lambda: list(bans)),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert "#ban" in _row_keys(screen)
+        screen.status.set("kept", "ok")
+        bans.clear()
+        app.request_refresh()
+        await settle(app, pilot)
+        assert "#ban" not in _row_keys(screen)
+        assert screen.status.text == "kept"
+
+
+async def test_a_publish_that_adds_an_env_row_retracts_nothing_to_uninstall(
+    tmp_path: Path,
+) -> None:
+    rg = _tool("rg")
+    service = frozen_service(tmp_path)
+    service.publish([absent_state(rg)])
+    tweaks: list[str] = []
+    app = _app(
+        tools=[rg],
+        version_refresh=service,
+        uninstall=_uninstall_inputs(tweak_ids=lambda: tuple(tweaks)),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (screen.status.text, screen.status.severity) == (_NOTHING, "ok")
+        tweaks.append("daemon:prune-tmp-linux")
+        app.request_refresh()
+        await settle(app, pilot)
+        assert "#tweaks" in _row_keys(screen)
+        assert screen.status.text == ""
+        # A status somebody else wrote survives the same kind of publish.
+        screen.status.set("someone else", "warn")
+        tweaks.append("other")
+        app.request_refresh()
+        await settle(app, pilot)
+        assert screen.status.text == "someone else"
+
+
+async def test_a_failed_env_read_on_publish_keeps_rows_and_status(tmp_path: Path) -> None:
+    rg = _tool("rg")
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(rg, [Path("/opt/rg")])])
+    failing = {"on": False}
+
+    def bans() -> list[str]:
+        if failing["on"]:
+            raise OSError("denied")
+        return ["pip"]
+
+    app = _app(
+        tools=[rg],
+        version_refresh=service,
+        uninstall=_uninstall_inputs(ban_names=bans),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        screen.status.set("written", "ok")
+        failing["on"] = True
+        app.request_refresh()
+        await settle(app, pilot)
+        assert "#ban" in _row_keys(screen)
+        assert screen.status.text == "written"
+        screen.status.clear()
+        app.request_refresh()
+        await settle(app, pilot)
+        assert "#ban" in _row_keys(screen)
+        assert (screen.status.text, screen.status.severity) == (
+            "Could not read the uninstall state: denied.",
+            "warn",
+        )
