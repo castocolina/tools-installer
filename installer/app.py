@@ -64,6 +64,7 @@ from installer.session import (
     SensitiveInstall,
     build_plan,
     execute_plan,
+    first_line,
 )
 from installer.shellrc import (
     collect_bin_dirs,
@@ -660,7 +661,10 @@ def perform_uninstall(
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
-    partial selection leaves the ban and PATH wiring untouched.
+    partial selection leaves the ban and PATH wiring untouched. Each selected
+    tool is removed on its own: the result's `removed` and `remove_failed`
+    name every tool's outcome, and one refusal or failed delete (`OSError`)
+    never stops the next tool or the environment levers.
 
     Returns what the tweak sweep actually did, so the view reports its effect
     rather than the snapshot it rendered its rows from. Empty when the sweep
@@ -694,7 +698,11 @@ def perform_uninstall(
         if not mine:
             remove_failed.append((tool.id, "changed since the preview; not removed"))
             continue
-        _gone, tool_refused = remove_proven([tool], mine, bin_dir)
+        try:
+            _gone, tool_refused = remove_proven([tool], mine, bin_dir)
+        except OSError as exc:
+            remove_failed.append((tool.id, first_line(exc)))
+            continue
         refused += tool_refused
         if tool_refused:
             remove_failed.append((tool.id, tool_refused[0]))
