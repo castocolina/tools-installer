@@ -1,0 +1,73 @@
+---
+phase: 21-one-screen-family
+fixed_at: 2026-11-03
+review_path: .planning/phases/21-one-screen-family/21-REVIEW.md
+iteration: 1
+findings_in_scope: 34
+fixed: 30
+skipped: 0
+status: all_fixed
+---
+
+# Phase 21: Code Review Fix Report
+
+**Source review:** `21-REVIEW.md`, section "Consolidated findings (3 lanes, verified)", C-01..C-34.
+**Lanes:**
+- L1: gsd-code-reviewer, deep.
+- L2: opencode router-env/my-referee-one.
+- L3: ponytail-review.
+
+**Fix loop:** batches A to F, `182e876..HEAD`, run in sequence on `main`. Each behavioral fix has a RED test commit followed by its fix commit.
+**Gates:** `make validate` and `make test` ran in the main checkout, not a worktree. Both exited 0 on the tree of every fix commit.
+**User decisions:** recorded in `.planning/RUN-LEDGER.md`, row "User decisions on review findings" (2026-11-03). Amendments to the locked documents are in CONTEXT, UI-SPEC and `.claude/architecture.md`, as each batch row notes.
+
+fixed=30 by_design=1 backlog=3
+
+| id | finding | lanes | status | commit(s) / reason / where recorded |
+|----|---------|-------|--------|-------------------------------------|
+| C-01 | macOS 15-min hang: unbounded `HeldRefreshService` wait | L1 WR-10 | fixed (batch A) | efe7b77 (RED), a3baa64, 020c15f (`faulthandler_timeout`, CI step timeout) |
+| C-02 | Epoch-guard test passes only through its 5 s latch timeout | L1 WR-09 | fixed (batch A) | f5f3c38 |
+| C-03 | 23 `test_setup.py` tests wait the full 5 s daemon-default timeout | L1 WR-10 | fixed (batch A) | 452a412 |
+| C-04 | An unexpected pass exception writes no status | L1 WR-03, L2 R2-11 | fixed (batch B) | 5346cc0 (RED), 1963a5b |
+| C-05 | A pending pass starts after shutdown begins | L2 R2-10 | fixed (batch B) | 7d01ccc (RED), 246926a |
+| C-06 | The app state line overwrites a view's own status | L3 P4 | fixed (batch B) | ae6b20d (RED), 2eb5005 |
+| C-07 | Widget queries on the shutdown path | L1 WR-05 | fixed (batch B) | cbd98f8 (RED), 838f8e5; 320ad60 (test settle for the CI race) |
+| C-08 | A pass published under a modal is not rendered when it closes | L3 P3 | user decision, then fixed (batch B) | Ledger: re-render on `on_screen_resume`, D-06 amended. 28c8220 (RED), f577b45 |
+| C-09 | Doctor smoke evidence never expires | L2 R2-1, L3 P2 | fixed (batch C) | 551a3ec (RED), 447a3fd |
+| C-10 | Doctor prints healthy owner notes as findings | L1 IN-02, L3 P1 | fixed (batch C) | 744e1ee (RED), db9275f |
+| C-11 | Doctor `enter` wires PATH after a failed preview read | L1 WR-04 | fixed (batch C) | 0849830 (RED), 8c1cba8 |
+| C-12 | Unreachable "Run `make setup`" rewrite in Doctor | L2 R2-12 | fixed (batch C) | 612d9bc (refactor) |
+| C-13 | `_audit_globals_worker` lacks `exit_on_error=False` and a `finally` post | L1 IN-05 | fixed (batch C) | c8e8ec2 (RED), 86e7195 |
+| C-14 | A removal reports `removed` while a previewed path stays | L1 WR-02, L3 P6 | fixed (batch D) | 62d8b08 (RED), bbfe963 |
+| C-15 | An `OSError` in `plan_removal` aborts the whole batch | L2 R2-6 | fixed (batch D) | 17fd185 (RED), 30be1fd |
+| C-16 | A removed tool stays staged on the catalog tiers | L2 R2-8 | fixed (batch D) | fd9bcd8 (RED), 6b9943f |
+| C-17 | Mutating keys open a modal before the lock refuses | L2 R2-9 | fixed (batches D, E) | Uninstall: a84b5f6 (RED), 1206200. Policies `t`/`m`: 2166ae4 (RED), c34be67 |
+| C-18 | The first-run link pick bypasses the lock during the daemon apply | L1 WR-01 | fixed (batch E) | 2257ef6 (RED), dec878f |
+| C-19 | An unreadable Linux daemon state reads `! [drift]` | L2 R2-3 | fixed (batch E) | 8196304 (RED), 15392e2 |
+| C-20 | `UnicodeDecodeError` escapes `run_live` | L2 R2-4 | fixed (batch B) | 1c06709 (RED), 73b26c0 |
+| C-21 | Policies blanks job rows on every publish | L3 P5 | fixed (batch E) | 00bd2dc (RED), 68b4a2d |
+| C-22 | Overlapping timer-cache probes: an older answer can win | L2 R2-2 | backlog | Pre-existing mechanism, PARTIAL. Ledger "Phase 21 code review consolidated" row |
+| C-23 | Installed-via wording; a shadowed installer copy reads `Homebrew` | L1 WR-08, ledger | user decision, then fixed (batch D) | Ledger: owner of the removable copy. f937ce3 (RED), f4aa3e2. Batch F confirmed nothing remains: removable rows read `installer` and the detail adds ` — active copy: {manager}` (UI-SPEC row 108). An installer-owned MANAGED row (unproven or script install) keeps its kind label by pinned design (`test_uninstall_script_install_shows_its_reasons_and_label`) |
+| C-24 | A failed update never invalidates, so the next pass reuses pre-update data | L2 R2-5 | fixed (batch F) | 23c0f2f (RED), b6d3ee2 |
+| C-25 | Quitting during a non-removal mutation drops its outcome; exit 0 | L1 WR-06 | user decision: backlog | Pre-existing. Ledger "User decisions" row; also batch D row (exit code after a cut removal) |
+| C-26 | During a removal no key exits a wedged remover | L1 WR-07 | user decision, then fixed (batch D) | Ledger: a second ctrl+c forces exit, D-10 amended. c9ef1e1 (RED), a0940de |
+| C-27 | Missing/unavailable rows hide `removable.yourself` leftovers | L2 R2-7 | user decision: backlog | Pre-existing. Ledger "User decisions" row |
+| C-28 | Completion handlers write status on hidden views | L1 IN-06 | user decision, then fixed (batches B, D, E) | Ledger: write to the visible view. 61116a4 (RED), 102f87f. Uninstall copy: 6af15f1 (RED), 15904d6. Policies copy: 80081fe (RED), 79d332e |
+| C-29 | `_managers_invalid` bypasses the manager backoff while saves fail | L1 IN-01 | by design | `test_failed_invalidate_save_still_requeries_the_managers` pins the cycle-3 re-query design. Ledger batch C row |
+| C-30 | `begin_mutation` silently overwrites a held lock | L1 IN-07 | fixed (batch E) | 2e60736 (RED), 5ddeeab |
+| C-31 | The catalog's "update already in flight" branch is unreachable | L3 P8 | fixed (batch F) | e9130c6 (refactor) |
+| C-32 | "Retract only my own status line" hand-rolled four times | L3 P7 | fixed (batch B) | 2eb5005 (`StatusLine.retract`, with C-06) |
+| C-33 | Stale comments after the rewrite | L1 IN-04 | fixed (batch F) | 364adf9 (refactor) |
+| C-34 | `remove_failed` with an empty detail falls back to install wording | L1 IN-03 | fixed (batch F) | 343b879 (RED), 7058a0d |
+
+## Batch F notes
+
+- **C-24.** `UpdateService.run` now invalidates on `failed` as well as `updated`. The reason string is `update of {id} failed`. A failed invalidation still goes into the outcome detail. The pnpm pre-capture refusal returns earlier and changes nothing on the machine, so it still invalidates nothing.
+- **C-31.** The update worker calls `UpdateService.end()` before it posts the `ToolUpdated` message that releases the app lock. The install run holds `INSTALL_RUN`. So `refuse_if_mutating` always refuses first, and `begin()` stays only as a bare guard. The parametrized `in_flight` case went too: it faked a busy service with no lock held, which cannot happen.
+- **C-34.** The fallback is now `not removed` for `remove_failed` and stays `no method succeeded` for `failed`.
+
+---
+
+_Fixed: 2026-11-03_
+_Fixer: Claude (gsd-code-fixer)_
+_Iteration: 1_
