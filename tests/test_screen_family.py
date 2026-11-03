@@ -24,11 +24,13 @@ from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.session import Disposition, PlanRow, RowOutcome
+from installer.systemd_daemon import DaemonState, TimerStateCache
 from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, plan_removal, remove_paths
 from installer.update import UpdateOutcome
 from installer.version_status import Health, VersionRefreshService, VersionStatus
 from installer.wizard_app import (
+    JobStatesRead,
     LinkModeScreen,
     NavScreen,
     PolicyInputs,
@@ -1896,3 +1898,116 @@ async def test_doctor_early_returns_end_with_a_pinned_pass_count(tmp_path: Path,
             gate.set()
             release.set()
         await settle(app, pilot)
+
+
+# -- 21-18: the systemd-backed state is read on a worker, never on the event loop --
+
+
+def _job_policy(
+    tmp_path: Path, is_active: Callable[[], bool], owned: Callable[[], bool] | None = None
+) -> Policy:
+    cache = TimerStateCache(lambda: DaemonState.INACTIVE)
+    base = _policy(tmp_path, "jobstate")
+    return replace(base, is_active=is_active, owned=owned, state_cache=cache)
+
+
+def _state_text(app: UnifiedApp, policy_id: str) -> str:
+    return app.view("policies").query_one(DataTable[Any]).get_cell(policy_id, "state").plain
+
+
+async def test_the_job_state_is_read_off_the_event_loop(tmp_path: Path):
+    threads: list[threading.Thread] = []
+
+    def is_active() -> bool:
+        threads.append(threading.current_thread())
+        return True
+
+    def owned() -> bool:
+        threads.append(threading.current_thread())
+        return True
+
+    app, _service = _policy_app(tmp_path, [_job_policy(tmp_path, is_active, owned)], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert len(threads) >= 2
+        assert threading.main_thread() not in threads
+        assert _state_text(app, "jobstate") == "● [on]"
+
+
+async def test_an_unreadable_job_state_shows_the_error(tmp_path: Path):
+    def is_active() -> bool:
+        raise OSError("systemd user manager not reachable")
+
+    app, _service = _policy_app(tmp_path, [_job_policy(tmp_path, is_active)], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        status = app.view("policies").status
+        assert _state_text(app, "jobstate") == ""
+        assert (status.text, status.severity) == (
+            "Could not read the policy state: systemd user manager not reachable.",
+            Severity.ERROR,
+        )
+
+
+class _SpiedReads:
+    """Records every JobStatesRead a PoliciesScreen posts, then forwards it."""
+
+    def __init__(self, screen: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.seen: list[JobStatesRead] = []
+        forward = screen.post_message
+
+        def spy(message: Any) -> bool:
+            if isinstance(message, JobStatesRead):
+                self.seen.append(message)
+            return cast(bool, forward(message))
+
+        monkeypatch.setattr(screen, "post_message", spy)
+
+
+class _ArmedProbe:
+    """is_active: the armed call holds on `release` and answers `first`; others answer `later`."""
+
+    def __init__(self, first: bool, later: bool) -> None:
+        self.first, self.later = first, later
+        self.calls = 0
+        self.armed = False
+        self.held = threading.Event()
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+
+    def __call__(self) -> bool:
+        with self._lock:
+            hold = self.armed
+            self.armed = False
+            self.calls += 1
+        if not hold:
+            return self.later
+        self.held.set()
+        if not self.release.wait(timeout=10):
+            raise TimeoutError("the job read was never released")
+        return self.first
+
+
+async def test_a_superseded_job_state_read_is_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    probe = _ArmedProbe(first=True, later=False)
+    probe.armed = True
+    app, _service = _policy_app(tmp_path, [_job_policy(tmp_path, probe)], HeldRemover())
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await wait_until(pilot, probe.held.is_set)
+            spy = _SpiedReads(app.view("policies"), monkeypatch)
+            await app.show_view("system")
+            await app.show_view("policies")
+            await settle(app, pilot)
+            assert _state_text(app, "jobstate") == "○ [off]"
+            before = len(spy.seen)
+            probe.release.set()
+            await wait_until(pilot, lambda: len(spy.seen) > before)
+            await pilot.pause()
+            await settle(app, pilot)
+            assert _state_text(app, "jobstate") == "○ [off]"
+            assert app.view("policies").status.text == ""
+        finally:
+            probe.release.set()

@@ -254,6 +254,27 @@ class CompetingProbed(Message):
     """
 
 
+class JobStatesRead(Message):
+    """The Policies screen's threaded read of the systemd-backed rows finished.
+
+    `states` maps a policy id to (active, owned) for every row that read
+    cleanly; a row the worker could not read is absent. `generation` is the
+    read this answers: the handler drops any other, so a slow older read
+    finishing last cannot repaint a stale cell.
+    """
+
+    def __init__(
+        self,
+        generation: int,
+        states: dict[str, tuple[bool, bool]],
+        error: str | None,
+    ) -> None:
+        self.generation = generation
+        self.states = states
+        self.error = error
+        super().__init__()
+
+
 class PolicyToggled(Message):
     """A scheduled-job toggle finished on its thread worker (WR-02).
 

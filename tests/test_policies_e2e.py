@@ -1353,3 +1353,47 @@ async def test_policies_with_no_policy_draws_its_empty_copy(tmp_path: Path) -> N
             assert screen.detail_text == ""
             assert screen.status.text == ""
             await _reenter(app)
+
+
+_DRIFT = "Drift: this installer enabled it, but it is not active now. space applies it again."
+
+
+async def test_an_owned_inactive_policy_reads_drift(tmp_path: Path) -> None:
+    applied: list[str] = []
+    drifted = _fake_policy(
+        "drifted", applied, active=False, is_active=lambda: False, owned=lambda: True
+    )
+    app = _live_app([drifted], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.view("policies")
+        assert isinstance(screen, PoliciesScreen)
+        cell = screen.query_one(DataTable[Any]).get_cell("drifted", "state")
+        assert (cell.plain, str(cell.style)) == ("! [drift]", "yellow")
+        assert screen.detail_text.splitlines()[0] == _DRIFT
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert applied == ["apply"]
+
+
+async def test_a_policy_without_owned_never_drifts(tmp_path: Path) -> None:
+    plain = _fake_policy("plain", [], active=False, is_active=lambda: False)
+    app = _live_app([plain], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        assert _cell(app, "plain", "state") == "○ [off]"
+
+
+async def test_a_failed_owned_read_shows_the_error(tmp_path: Path) -> None:
+    owned = _Read(True, OSError("unreadable state file"))
+    owned.fail = True
+    broken = _fake_policy("broken", [], is_active=lambda: False, owned=owned)
+    app = _live_app([broken], service=frozen_service(tmp_path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        status = app.view("policies").status
+        assert _cell(app, "broken", "state") == ""
+        assert (status.text, status.severity) == (
+            f"{_READ_ERROR}unreadable state file.",
+            Severity.ERROR,
+        )
