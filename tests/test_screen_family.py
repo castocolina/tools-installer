@@ -2592,6 +2592,26 @@ async def test_a_failed_doctor_read_shows_the_error(seam: str):
         assert "WIRE-THE-RC-FILE" in str(_doctor_text(app))
 
 
+async def test_doctor_enter_does_not_apply_a_fix_it_could_not_preview():
+    # C-11 (T-21-41): the user never saw what the fix would write.
+    fixes: list[str] = []
+
+    def preview() -> str:
+        raise OSError("rc file locked\nsecond line")
+
+    app = _family_app(fix_preview=preview, fix=lambda: fixes.append("fix"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        doctor = app.view("doctor")
+        assert fixes == []
+        assert (doctor.status.text, doctor.status.severity) == (_STATE_READ, Severity.ERROR)
+        assert "PATH wired." not in str(_doctor_text(app))
+
+
 async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
     tool = _node_tool()
     findings = {"on": True}
