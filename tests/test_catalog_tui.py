@@ -4892,7 +4892,10 @@ async def test_a_publication_during_shutdown_renders_nothing(
     publication that lands once the app stopped running must not render: the
     catalog's DataTable may already be gone while its browser reads mounted."""
     app = _app()
-    async with app.run_test(size=(100, 30)):
+    async with app.run_test(size=(100, 30)) as pilot:
+        # The launch pass must settle first: a real publication landing after the
+        # table is removed while the app still runs is not the shutdown case.
+        await settle(app, pilot)
         await app.catalog.query_one(ToolBrowser).query_one(DataTable).remove()
         with monkeypatch.context() as patch:
             patch.setattr(UnifiedApp, "is_running", property(lambda _self: False))
