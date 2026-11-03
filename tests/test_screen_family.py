@@ -20,7 +20,7 @@ from installer.engine import InstallOutcome
 from installer.enums import MutationHolder, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.model import Method, Tool
-from installer.ownership import ManagerOwnership, OwnershipCandidate
+from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
@@ -51,6 +51,7 @@ from tests.state_doubles import (
     HeldRefreshService,
     ScriptedUpdates,
     absent_state,
+    empty_inventory,
     frozen_service,
     held_service,
     offline_service,
@@ -92,6 +93,9 @@ def _family_app(
     guard_state: Callable[[], tuple[dict[str, bool], str | None]] | None = None,
     fix_preview: str | Callable[[], str] = "preview",
     policies: PolicyInputs | None = None,
+    fix: Callable[[], None] = lambda: None,
+    reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
+    prompt_link_mode: bool = False,
 ) -> UnifiedApp:
     return app_cls(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
@@ -99,8 +103,9 @@ def _family_app(
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=guard_state or (lambda: ({"pip": False, "npm": False}, None)),
         fix_preview=fix_preview,
-        fix=lambda: None,
+        fix=fix,
         node_globals=node_globals,
+        reinstall_globals=reinstall_globals,
         uninstall=uninstall
         or UninstallInputs(
             ban_names=lambda: [],
@@ -114,6 +119,7 @@ def _family_app(
         version_refresh=version_refresh,
         updates=updates,
         execute=execute,
+        prompt_link_mode=prompt_link_mode,
     )
 
 
@@ -2414,3 +2420,244 @@ async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
     assert again == fresh
     assert "pip shim is shadowed" not in again
     assert "a stale finding" not in again
+
+
+# -- 21-20: Doctor drops its hidden key and republishes after its fixes --
+
+_INVALIDATE_FAILED = "version cache invalidation failed: {error}"
+
+
+def _record_invalidations(
+    monkeypatch: pytest.MonkeyPatch, service: VersionRefreshService
+) -> list[str]:
+    reasons: list[str] = []
+    original = service.invalidate
+
+    def recording(*, reason: str) -> int:
+        reasons.append(reason)
+        return original(reason=reason)
+
+    monkeypatch.setattr(service, "invalidate", recording)
+    return reasons
+
+
+async def _wait_for_passes(pilot: Any, service: FrozenStateService, expected: int) -> None:
+    await wait_until(pilot, lambda: service.passes >= expected)
+    await pilot.pause()
+    assert service.passes == expected
+
+
+async def test_reinstall_invalidates_and_requests_one_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    app, service = _reinstall_app(tmp_path, HeldRemover(), lambda _packages: ())
+    reasons = _record_invalidations(monkeypatch, service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("r")
+        await settle(app, pilot)
+        await _wait_for_passes(pilot, service, before + 1)
+        assert reasons == ["pnpm globals reinstalled"]
+        assert service.invalidations == (before,)
+
+
+async def test_a_is_inert_on_doctor(tmp_path: Path):
+    fixes: list[str] = []
+    app, _service = _reinstall_app(
+        tmp_path, HeldRemover(), lambda _packages: (), fix=lambda: fixes.append("fix")
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert fixes == []
+        assert app.view("doctor").status.text == ""
+
+
+async def test_doctor_footer_lists_enter_and_r_only(tmp_path: Path):
+    app, _service = _reinstall_app(tmp_path, HeldRemover(), lambda _packages: ())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        doctor = app.view("doctor")
+        shown = {
+            key
+            for key, active in doctor.active_bindings.items()
+            if active.node is doctor and active.binding.show
+        }
+        assert shown == {"enter", "r"}
+        assert "a" not in doctor.active_bindings
+
+
+@pytest.mark.parametrize("fix_raises", [False, True], ids=["fix_ok", "fix_raises"])
+async def test_doctor_fix_requests_one_pass(tmp_path: Path, fix_raises: bool):
+    def fix() -> None:
+        if fix_raises:
+            raise OSError("rc is read-only")
+
+    app, service = _reinstall_app(tmp_path, HeldRemover(), lambda _packages: (), fix=fix)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await _wait_for_passes(pilot, service, before + 1)
+
+
+@pytest.mark.parametrize(
+    ("error", "shown"),
+    [
+        (OSError("cache is read-only"), "cache is read-only"),
+        (RuntimeError("cache is read-only"), "the cache invalidation did not complete"),
+    ],
+    ids=["mapped", "unmapped"],
+)
+async def test_a_failed_invalidate_after_a_reinstall_is_reported(
+    tmp_path: Path, error: Exception, shown: str
+):
+    app, service = _reinstall_app(tmp_path, HeldRemover(), lambda _packages: ())
+    service.invalidate_error = error
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("r")
+        await settle(app, pilot)
+        await _wait_for_passes(pilot, service, before + 1)
+        body = str(_doctor_text(app))
+        assert "pnpm globals reinstalled." in body
+        assert _INVALIDATE_FAILED.format(error=shown) in body
+        assert not app.mutation_in_flight
+
+
+@pytest.mark.parametrize(
+    "invalidate_crashes", [False, True], ids=["invalidate_ok", "invalidate_crashes"]
+)
+async def test_a_crashed_reinstall_still_invalidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalidate_crashes: bool
+):
+    def reinstall(packages: Sequence[str]) -> tuple[str, ...]:
+        raise RuntimeError("boom")
+
+    app, service = _reinstall_app(tmp_path, HeldRemover(), reinstall)
+    if invalidate_crashes:
+        service.invalidate_error = RuntimeError("cache gone")
+    reasons = _record_invalidations(monkeypatch, service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _open_view(app, pilot, "doctor")
+        await settle(app, pilot)
+        before = service.passes
+        await pilot.press("r")
+        await settle(app, pilot)
+        await _wait_for_passes(pilot, service, before + 1)
+        body = str(_doctor_text(app))
+        assert reasons == ["pnpm globals reinstalled"]
+        assert "the reinstall did not complete" in body
+        failed = _INVALIDATE_FAILED.format(error="the cache invalidation did not complete")
+        assert (failed in body) is invalidate_crashes
+        assert not app.mutation_in_flight
+
+
+async def test_a_real_cache_write_failure_after_a_reinstall_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # The manager-only fact is pnpm's global inventory: A lists no package, B lists mmdc's.
+    package = "@mermaid-js/mermaid-cli"
+    answer = {"pnpm_globals": frozenset[str]()}
+    reads: list[str] = []
+
+    def inventory(**_kwargs: Any) -> ManagerInventory:
+        reads.append("inventory")
+        return replace(empty_inventory(), pnpm_globals=answer["pnpm_globals"])
+
+    managed = tmp_path / ".local" / "bin"
+    service = offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "v1",
+        probe_output=lambda _argv: "1.0",
+        which=lambda cmd: None if cmd == "brew" else str(managed / cmd),
+        read_inventory_fn=inventory,
+    )
+    app = _family_app(
+        tools=[_node_tool()],
+        version_refresh=service,
+        node_globals=_audit(),
+        reinstall_globals=lambda _packages: (),
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await _open_view(app, pilot, "doctor")
+        await settle(app, pilot)
+        before = service.state_of("mmdc")
+        assert before is not None
+        launch_reads = len(reads)
+        assert launch_reads >= 1
+        app.request_refresh()
+        await settle(app, pilot)
+        assert len(reads) == launch_reads  # the saved snapshot is reused
+        passes = _count_passes(monkeypatch, service)
+        epoch = service.epoch
+        answer["pnpm_globals"] = frozenset({package})
+
+        def full(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("installer.version_status.save_version_cache", full)
+        await pilot.press("r")
+        await settle(app, pilot)
+        await wait_until(pilot, lambda: len(passes) >= 1)
+        await settle(app, pilot)
+        body = str(_doctor_text(app))
+        assert "pnpm globals reinstalled." in body
+        assert _INVALIDATE_FAILED.format(error="disk full") in body
+        assert service.epoch > epoch
+        assert not app.mutation_in_flight
+        assert len(passes) == 1
+        assert len(reads) > launch_reads  # the managers were queried again
+        state = service.state_of("mmdc")
+        assert state is not None and state.generation == service.epoch
+        assert state.ownership != before.ownership  # B, not the persisted A
+
+
+def _first_run_doctor(mode: dict[str, str], setter: Callable[[str], None]) -> UnifiedApp:
+    return _family_app(
+        initial_view="doctor",
+        prompt_link_mode=True,
+        fix_preview=lambda: f"PREVIEW-{mode['v']}",
+        policies=PolicyInputs(policies=[], link_mode=lambda: mode["v"], set_link_mode=setter),
+    )
+
+
+async def test_a_first_run_link_pick_rerenders_doctor():
+    mode = {"v": "centralized"}
+
+    def setter(value: str) -> None:
+        mode["v"] = value
+
+    app = _first_run_doctor(mode, setter)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await wait_until(pilot, lambda: isinstance(app.screen, LinkModeScreen))
+        assert "PREVIEW-centralized" in str(_doctor_text(app))
+        await pilot.press("down", "down", "enter")  # pick split
+        await settle(app, pilot)
+        assert "PREVIEW-split" in str(_doctor_text(app))
+        assert "Link mode saved: split" in app.view("doctor").status.text
+
+
+async def test_a_failed_first_run_pick_keeps_the_error():
+    mode = {"v": "centralized"}
+
+    def setter(value: str) -> None:
+        raise OSError("read-only")
+
+    app = _first_run_doctor(mode, setter)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await wait_until(pilot, lambda: isinstance(app.screen, LinkModeScreen))
+        await pilot.press("down", "down", "enter")
+        await settle(app, pilot)
+        doctor = app.view("doctor")
+        assert (doctor.status.text, doctor.status.severity) == ("read-only", Severity.ERROR)
+        assert "PREVIEW-centralized" in str(_doctor_text(app))

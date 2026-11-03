@@ -212,8 +212,9 @@ class GlobalsReinstalled(Message):
     the worker never touches a widget from its own thread.
     """
 
-    def __init__(self, error: str | None) -> None:
+    def __init__(self, error: str | None, invalidate_error: str | None = None) -> None:
         self.error = error
+        self.invalidate_error = invalidate_error
         super().__init__()
 
 
@@ -320,7 +321,6 @@ class DoctorScreen(AppScreen):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "apply", "apply", show=True),
-        Binding("a", "apply", "apply", show=False),
         Binding("r", "reinstall_globals", "reinstall pnpm globals", show=True),
     ]
     DEFAULT_CSS = """
@@ -422,6 +422,7 @@ class DoctorScreen(AppScreen):
         # silently suppress the other and each section render the other's outcome.
         self.globals_done = False
         self.globals_error: str | None = None
+        self.globals_invalidate_error: str | None = None
         # The reinstall is the only subprocess a view starts, and `pnpm add -g`
         # of a Puppeteer-carrying package is minutes, not seconds. It runs in a
         # thread worker so the event loop keeps painting; this flag is what the
@@ -634,6 +635,11 @@ class DoctorScreen(AppScreen):
             text.append(self.globals_note, style="yellow")
         else:
             text.append("Press r to reinstall the pnpm-managed global set.", style="yellow")
+        if self.globals_invalidate_error is not None and not self.globals_running:
+            text.append(
+                f"\nversion cache invalidation failed: {self.globals_invalidate_error}",
+                style="yellow",
+            )
         body.update(text)
         self._sync_read_status()
 
@@ -707,11 +713,13 @@ class DoctorScreen(AppScreen):
         # the fix left on disk, so a grown managed block cannot shift a foreign
         # line out from under its record.
         if self._guard_file is None:
+            self.post_message(RefreshRequested())
             return
         rescan = self._rescan_writer_lines
         self._adopt_writer_lines(rescan() if rescan is not None else self._writer_lines)
         self._pending_guards = self._guardable_files()
         if not self._pending_guards:
+            self.post_message(RefreshRequested())
             return
         self._guard_next()
 
@@ -775,6 +783,7 @@ class DoctorScreen(AppScreen):
             self._adopt_writer_lines(rescan())
         self._refresh_guidance()
         self._refresh_body()
+        self.post_message(RefreshRequested())  # the whole mutation has ended
 
     def action_reinstall_globals(self) -> None:
         # globals_done needs no message: the body already renders the success
@@ -822,6 +831,7 @@ class DoctorScreen(AppScreen):
             self.post_message(RefreshRequested())
             return
         self.globals_note = None
+        self.globals_invalidate_error = None
         self.globals_running = True
         self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
         self._refresh_body()
@@ -842,11 +852,22 @@ class DoctorScreen(AppScreen):
         hence a posted message rather than a direct refresh.
         """
         error: str | None = "the reinstall did not complete"
+        invalidate_error: str | None = None
+        service = self._version_refresh
         try:
             _, error = run_live(lambda: self._reinstall_globals(packages))
         finally:
-            # Always posted: the handler releases the app lock.
-            self.post_message(GlobalsReinstalled(error))
+            # A failed or crashed `pnpm add -g` can write before it fails, so the
+            # cache is invalidated either way.
+            try:
+                if service is not None:
+                    invalidate_error = "the cache invalidation did not complete"
+                    _, invalidate_error = run_live(
+                        lambda: service.invalidate(reason="pnpm globals reinstalled")
+                    )
+            finally:
+                # Always posted: the handler releases the app lock.
+                self.post_message(GlobalsReinstalled(error, invalidate_error))
 
     @work(thread=True, exclusive=True, group="globals-audit")
     def _audit_globals_worker(self, generation: int) -> None:
@@ -927,6 +948,7 @@ class DoctorScreen(AppScreen):
         self.app.end_mutation()
         self.globals_running = False
         self.globals_error = message.error
+        self.globals_invalidate_error = message.invalidate_error
         self.globals_done = message.error is None
         self._refresh_body()
         # The globals audit is a live `shutil.which` probe whose answer this
@@ -936,6 +958,7 @@ class DoctorScreen(AppScreen):
         # subprocess, so it goes back through the worker rather than being
         # taken inline here, where it would block the loop twice over.
         self._start_globals_audit()
+        self.post_message(RefreshRequested())
 
 
 @dataclass(frozen=True)
@@ -3125,6 +3148,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             return
         text, severity = _link_mode_status(value, report or (), old_mode=old)
         target.status.set(text, severity)
+        if isinstance(target, DoctorScreen):
+            target.enter_view()  # the status survives: enter_view writes none
 
     def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
         if self._execute is None or message.result is None:
