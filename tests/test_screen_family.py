@@ -2478,8 +2478,13 @@ async def test_doctor_footer_lists_enter_and_r_only(tmp_path: Path):
     async with app.run_test(size=(120, 30)) as pilot:
         await _open_view(app, pilot, "doctor")
         doctor = app.view("doctor")
-        own = {key for key, active in doctor.active_bindings.items() if active.node is doctor}
-        assert own == {"enter", "r"}
+        shown = {
+            key
+            for key, active in doctor.active_bindings.items()
+            if active.node is doctor and active.binding.show
+        }
+        assert shown == {"enter", "r"}
+        assert "a" not in doctor.active_bindings
 
 
 @pytest.mark.parametrize("fix_raises", [False, True], ids=["fix_ok", "fix_raises"])
