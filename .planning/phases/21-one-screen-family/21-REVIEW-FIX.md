@@ -85,8 +85,20 @@ fixed=30 by_design=1 backlog=3
 | TUI-5 | System columns cut (`Owne`, `OS p`) | backlog, pre-existing | Same columns, owner labels (`"os-package": "OS package"`) and spans at 390f464 and HEAD: with a `0.10.11 -> 0.10.12` Ver cell, Owner spans x 71-83 in both |
 | TUI-6 | Doctor shows "Press r to reinstall the pnpm-managed global set." under "pnpm's global set could not be read" | backlog, pre-existing | Same `else` branch at 390f464 (`installer/wizard_app.py:607`). The copy comes from 8c4d9e9 (04-05) and 4a09900 (05-04) |
 
+## Round 3 (security + UAT)
+
+**Source:** `21-SECURITY.md` (T-21-52 and the unregistered pnpm escape-byte flag) and `21-UAT.md` test 1 (b), (c) and test 3. Each fix has a RED test commit followed by its fix commit. `make validate` and `make test` exited 0 on the tree of every fix commit; the last run passed 5237 tests (4 skipped). Gates ran in the main checkout, with no worktree.
+
+| ID | Finding | Status | Commits |
+|----|---------|--------|---------|
+| T-21-52 | A daemon apply whose own live read fails does not supersede an older job read | fixed | 59b2b15 (RED), 351becd. `refresh_daemon_state` starts a fresh job-state read on every completion, including an unresolved one, so the generation always advances. The row keeps its state until the fresh read lands. Advancing the generation alone was not enough: a row blanked by the entry would have stayed blank |
+| SEC-low | pnpm smoke output reaches the tier detail and the `is broken` status with ESC/OSC bytes | fixed | 3771f8d (RED), ff5260b. `_record_pnpm_evidence` runs `sanitize_log_line` on the formatted reason, so the published `ToolState.reasons` that every view reads are already clean |
+| UAT-1b | After a Policies toggle, `● [on]` shows only after re-entering the view; the three-line status pushes the table off screen at 80x20 | not fixed, pre-existing | The state path is correct. In a pilot (real PoliciesScreen, a policy whose `is_active` flips on apply, 80x20), the cell reads `● [on]` right after the toggle. The table region shrinks from 3 rows (`y=4..6`) to 1 row (`y=4`, the header only), and the status takes rows 16-18. Re-entry clears the status, so the row comes back. The same pilot at 390f464 gives the same output: the cell is `● [on]`, the table is 1 row at `y=4`, and the status is on rows 16-18. `git diff 390f464 HEAD` changes no Policies CSS, `StatusLine` height or `_summary`. This belongs with the 80x20 layout todo |
+| UAT-1c | The Uninstall summary `1 removed` takes two status rows | fixed (introduced by Phase 21) | 7f31401 (RED), 5ced876. d1202e8 (21-13) always appended `_applied_summary(...)`, which is empty when no lever was chosen, so the status became `1 removed\n`. At 390f464 that function opened with `Removed N tool(s).`. The empty line is now dropped. Backstop: `test_a_one_tool_removal_summary_takes_one_status_row_at_80x20` |
+| UAT-3 | Space on Uninstall during a removal clears `Removing…` | fixed | cfafbb0 (RED), 25f26bf. While a removal holds the lock (`MutationLock.mutation_holder`), a mark change leaves the status alone. Space still marks: marks only feed the next removal and do not mutate the machine (D-05) |
+
 ---
 
 _Fixed: 2026-11-03_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 2 (RR round)_
+_Iteration: 3 (security + UAT round)_
