@@ -631,6 +631,8 @@ class DoctorScreen(AppScreen):
     def action_apply(self) -> None:
         if self.applied:
             return
+        if self.app.refuse_if_mutating(self):
+            return
         _, self.error = run_live(self._fix)
         self.applied = self.error is None
         # Unconditional, not success-gated: run_live runs the callable BEFORE
@@ -717,7 +719,11 @@ class DoctorScreen(AppScreen):
     def action_reinstall_globals(self) -> None:
         # globals_done needs no message: the body already renders the success
         # line, so a repeat press is answered by what is on screen.
-        if self.globals_done or self.globals_running:
+        if self.globals_done:
+            return
+        if self.app.refuse_if_mutating(self):
+            return
+        if self.globals_running:
             return
         if self.globals_auditing:
             # Covers both "no audit has ever landed" (self._globals_report is
@@ -2339,7 +2345,33 @@ class RefreshFinished(Message):
         self.error = error
 
 
-class UnifiedApp(App[list[str] | None]):
+class MutationLock:
+    """The one app mutation lock: a holder noun while a mutation runs, else None.
+    A plain base so `UnifiedApp` and a test host share it instead of copying it."""
+
+    _mutation_holder: MutationHolder | None = None
+
+    @property
+    def mutation_in_flight(self) -> bool:
+        return self._mutation_holder is not None
+
+    def begin_mutation(self, holder: MutationHolder) -> None:
+        self._mutation_holder = holder
+
+    def end_mutation(self) -> None:
+        self._mutation_holder = None
+
+    def refuse_if_mutating(self, screen: AppScreen) -> bool:
+        """Refuse a second mutation while the lock is held: the one template on
+        `screen`'s status, true when refused."""
+        if self._mutation_holder is None:
+            return False
+        screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
+        screen.post_message(RefreshRequested())  # SPEC R2: a refusal still ends with one pass
+        return True
+
+
+class UnifiedApp(MutationLock, App[list[str] | None]):
     """One app hosting the wizard views. run() returns the catalog selection
     (ids in catalog order) on accept, or None when aborted. `current_view` and
     `catalog` are public for headless tests."""
@@ -2515,7 +2547,6 @@ class UnifiedApp(App[list[str] | None]):
         self.current_view = ""
         self._daemon_default = daemon_default
         self._daemon_default_policy_id = daemon_default_policy_id
-        self._mutation_holder: MutationHolder | None = None
         # Held from construction whenever a real auto-apply callback was wired,
         # so there is no window between __init__ and the worker starting in
         # on_mount where a mutation could slip in (11-REVIEWS.md cycle 2
@@ -2524,25 +2555,6 @@ class UnifiedApp(App[list[str] | None]):
             self.begin_mutation(MutationHolder.DAEMON_DEFAULT)
         # True once a quit waits on a running removal: no follow-up pass then.
         self.quitting = False
-
-    @property
-    def mutation_in_flight(self) -> bool:
-        return self._mutation_holder is not None
-
-    def begin_mutation(self, holder: MutationHolder) -> None:
-        self._mutation_holder = holder
-
-    def end_mutation(self) -> None:
-        self._mutation_holder = None
-
-    def refuse_if_mutating(self, screen: AppScreen) -> bool:
-        """Refuse a second mutation while the lock is held: the one template on
-        `screen`'s status, true when refused."""
-        if self._mutation_holder is None:
-            return False
-        screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
-        screen.post_message(RefreshRequested())  # SPEC R2: a refusal still ends with one pass
-        return True
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
     # pyright-strict reports as partially unknown at the call site. Re-declare it

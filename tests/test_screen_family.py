@@ -1586,40 +1586,41 @@ async def _open_view(app: UnifiedApp, pilot: Any, name: str) -> None:
     await pilot.pause()
 
 
-async def _press_tier_enter(app: UnifiedApp, pilot: Any) -> None:
+async def _press_tier_enter(app: UnifiedApp, pilot: Any, again: bool) -> None:
     await _open_view(app, pilot, "system")
     _catalog_cursor(app, "rg")
-    await pilot.press("space", "enter")
+    # space marks rg; the refused first enter leaves the mark, so a second space would clear it
+    await pilot.press("enter" if again else "space", *([] if again else ["enter"]))
 
 
-async def _press_doctor(key: str, app: UnifiedApp, pilot: Any) -> None:
+async def _press_doctor(key: str, app: UnifiedApp, pilot: Any, _again: bool) -> None:
     await _open_view(app, pilot, "doctor")
     await pilot.press(key)
 
 
-async def _press_policy(policy_id: str, app: UnifiedApp, pilot: Any) -> None:
+async def _press_policy(policy_id: str, app: UnifiedApp, pilot: Any, _again: bool) -> None:
     await _open_view(app, pilot, "policies")
     _policy_cursor(app, policy_id)
     await pilot.press("space")
 
 
-async def _press_t(app: UnifiedApp, pilot: Any) -> None:
+async def _press_t(app: UnifiedApp, pilot: Any, _again: bool) -> None:
     await _open_view(app, pilot, "policies")
     _policy_cursor(app, "sched")
     await pilot.press("t", "down", "down", "down", "enter")
 
 
-async def _press_m(app: UnifiedApp, pilot: Any) -> None:
+async def _press_m(app: UnifiedApp, pilot: Any, _again: bool) -> None:
     await _open_view(app, pilot, "policies")
     await pilot.press("m", "down", "enter")
 
 
-_MATRIX: dict[str, tuple[str, str, Callable[[UnifiedApp, Any], Any]]] = {
+_MATRIX: dict[str, tuple[str, str, Callable[[UnifiedApp, Any, bool], Any]]] = {
     "tier_enter": ("system", "decided", _press_tier_enter),
-    "doctor_enter": ("doctor", "fix", lambda a, p: _press_doctor("enter", a, p)),
-    "doctor_r": ("doctor", "reinstall", lambda a, p: _press_doctor("r", a, p)),
-    "policy_plain": ("policies", "plain", lambda a, p: _press_policy("plain", a, p)),
-    "policy_job": ("policies", "job", lambda a, p: _press_policy("job", a, p)),
+    "doctor_enter": ("doctor", "fix", lambda a, p, n: _press_doctor("enter", a, p, n)),
+    "doctor_r": ("doctor", "reinstall", lambda a, p, n: _press_doctor("r", a, p, n)),
+    "policy_plain": ("policies", "plain", lambda a, p, n: _press_policy("plain", a, p, n)),
+    "policy_job": ("policies", "job", lambda a, p, n: _press_policy("job", a, p, n)),
     "t": ("policies", "schedule", _press_t),
     "m": ("policies", "mode", _press_m),
 }
@@ -1635,7 +1636,7 @@ async def test_every_mutating_key_is_refused_during_a_removal(tmp_path: Path, ca
         try:
             await _hold_a_removal(app, pilot, remover, "fd")
             before = service.passes
-            await press(app, pilot)
+            await press(app, pilot, False)
             await wait_until(pilot, lambda: service.passes == before + 1)
             await pilot.pause()
             assert service.passes == before + 1
@@ -1645,7 +1646,7 @@ async def test_every_mutating_key_is_refused_during_a_removal(tmp_path: Path, ca
             remover.release.set()
             await settle(app, pilot)
             status.clear()
-            await press(app, pilot)
+            await press(app, pilot, True)
             await settle(app, pilot)
             assert calls == [tag]
         finally:
