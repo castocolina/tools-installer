@@ -95,6 +95,7 @@ class Disposition(StrEnum):
     REINSTALL = "reinstall"
     SKIP = "skip"
     BLOCKED = "blocked"
+    REMOVE = "remove"
 
 
 Result = Literal[
@@ -107,6 +108,7 @@ Result = Literal[
     "skipped",
     "blocked",
     "manual",
+    "remove_failed",
 ]
 
 # The dispositions an engine runs; SKIP, BLOCKED and WAIT never reach one.
@@ -140,6 +142,7 @@ WORDS: dict[Disposition, Words] = {
     Disposition.REINSTALL: Words("will be reinstalled", "reinstalled", "yellow"),
     Disposition.SKIP: Words("skipped", "skipped", "dim", done_style="dim"),
     Disposition.BLOCKED: Words("blocked", "blocked", "red", done_style="red"),
+    Disposition.REMOVE: Words("will remove", "removed", "red", done_style="green"),
 }
 
 # Every non-done result. `done` has no entry: its word is the disposition's done word.
@@ -152,6 +155,7 @@ RESULT_WORDS: dict[Result, tuple[str, str]] = {
     "manual": ("manual", "yellow"),
     "skipped": ("skipped", "dim"),
     "blocked": ("blocked", "red"),
+    "remove_failed": ("remove failed", "red"),
 }
 
 
@@ -213,7 +217,9 @@ def review_counts(rows: Sequence[PlanRow]) -> str:
     return _count_line((WORDS[row.disposition].review for row in rows), order)
 
 
-_FAILURE = frozenset({"failed", "mismatch", "dependency_failed", "not_attempted", "crashed"})
+_FAILURE = frozenset(
+    {"failed", "mismatch", "dependency_failed", "not_attempted", "crashed", "remove_failed"}
+)
 _KEEP = _FAILURE | {"blocked", "manual"}
 # These results represent executed work; manual counts only for a reconfigure row
 # whose reviewed steps include an actual command.
@@ -257,6 +263,7 @@ def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
             "dependency_failed",
             "not_attempted",
             "crashed",
+            "remove_failed",
         )
     )
     order = list(dict.fromkeys(order))

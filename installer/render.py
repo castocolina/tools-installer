@@ -123,7 +123,7 @@ def plan_head(rows: Sequence[PlanRow]) -> str:
 _DONE_MARK: tuple[str, str] = ("✓", "green")
 _FAILURE_MARK: tuple[str, str] = ("✖", "red")
 _RUNNING_MARK: tuple[str, str] = (">", "bold")
-_FAILURE_RESULTS: frozenset[str] = frozenset({"failed", "mismatch", "crashed"})
+_FAILURE_RESULTS: frozenset[str] = frozenset({"failed", "mismatch", "crashed", "remove_failed"})
 
 
 def outcome_mark(outcome: RowOutcome) -> tuple[str, str]:
@@ -148,7 +148,7 @@ def outcome_detail_text(outcome: RowOutcome) -> str:
     """Return the UI-SPEC text after the finished word, or empty."""
     if outcome.result in {"done", "mismatch", "not_attempted"}:
         return ""
-    if outcome.result == "failed":
+    if outcome.result in {"failed", "remove_failed"}:
         errors = outcome.install.errors if outcome.install is not None else ()
         if not errors and outcome.update is not None:
             errors = outcome.update.errors

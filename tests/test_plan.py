@@ -1024,3 +1024,13 @@ def test_runnable_is_every_disposition_an_engine_runs():
         == RUNNABLE
     )
     assert not RUNNABLE & {Disposition.SKIP, Disposition.BLOCKED, Disposition.WAIT}
+
+
+@pytest.mark.parametrize("health", list(Health))
+def test_build_plan_never_emits_remove(health: Health):
+    rg = _tool("rg")
+    states = [{"rg": plan_state(rg, health=health)}, {"rg": None}]
+    for state in states:
+        for reinstall in (frozenset[str](), frozenset({"rg"})):
+            rows = build_plan(["rg"], [rg], _state_of(state), MACOS, reinstall=reinstall)
+            assert all(row.disposition is not Disposition.REMOVE for row in rows)
