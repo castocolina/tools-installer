@@ -1839,8 +1839,7 @@ class PoliciesScreen(AppScreen):
         self._refresh_link_mode_line()
         self._start_job_state_read()
         if errors:
-            self._read_error = _read_failure(errors[0])
-            self.status.set(self._read_error, "error")
+            self._show_read_error(errors[0])
         elif self._read_error is not None:
             self.status.retract(self._read_error)
             self._read_error = None
@@ -1910,7 +1909,13 @@ class PoliciesScreen(AppScreen):
                 )
         self._set_detail(self._highlighted_policy())
         if message.error is not None:
-            self._read_error = _read_failure(message.error)
+            self._show_read_error(message.error)
+
+    def _show_read_error(self, error: str) -> None:
+        """Over an empty status or this screen's own earlier error only: another
+        writer's result stands, the same rule as the app's state line (RR-03)."""
+        previous, self._read_error = self._read_error, _read_failure(error)
+        if not self.status.text or self.status.text == previous:
             self.status.set(self._read_error, "error")
 
     def _read_requirements(self, policy: Policy) -> str | None:
