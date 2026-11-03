@@ -588,6 +588,10 @@ class SweepResult:
     # but still had something to disclose (CR-01: the unreachable-manager
     # case). Dropping these would report a clean teardown that was not one.
     warnings: tuple[str, ...] = ()
+    # Ids of the tools whose every previewed path was removed.
+    removed: tuple[str, ...] = ()
+    # (tool id, first line) of each tool that was refused or whose delete raised.
+    remove_failed: tuple[tuple[str, str], ...] = ()
 
 
 def policy_owned(policy: Policy) -> bool:
