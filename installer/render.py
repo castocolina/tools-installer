@@ -152,12 +152,13 @@ def outcome_detail_text(outcome: RowOutcome) -> str:
         errors = outcome.install.errors if outcome.install is not None else ()
         if not errors and outcome.update is not None:
             errors = outcome.update.errors
+        fallback = "not removed" if outcome.result == "remove_failed" else "no method succeeded"
         error = (
             str(errors[-1]).splitlines()[0]
             if errors
             else outcome.detail.splitlines()[0]
             if outcome.detail
-            else "no method succeeded"
+            else fallback
         )
         return sanitize_log_line(error)
     if outcome.result == "dependency_failed":
