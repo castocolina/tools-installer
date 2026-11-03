@@ -2707,6 +2707,10 @@ class MutationLock:
         return self._mutation_holder is not None
 
     def begin_mutation(self, holder: MutationHolder) -> None:
+        # Every caller refuses first; a second take would let one end_mutation
+        # release both (C-30), so it is a bug, never a queue.
+        if self._mutation_holder is not None:
+            raise RuntimeError(f"{self._mutation_holder} already holds the mutation lock")
         self._mutation_holder = holder
 
     def end_mutation(self) -> None:
