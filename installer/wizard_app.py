@@ -792,8 +792,8 @@ class DoctorScreen(AppScreen):
         rescan = self._rescan_writer_lines
         if rescan is not None:
             self._adopt_writer_lines(rescan())
-        self._refresh_guidance()
-        self._refresh_body()
+        # No render here: this runs from the last modal's callback, and the
+        # resume that follows renders Doctor once (C-08, RR-04).
         self.post_message(RefreshRequested())  # the whole mutation has ended
 
     def action_reinstall_globals(self) -> None:
