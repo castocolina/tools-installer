@@ -2086,19 +2086,21 @@ class PoliciesScreen(AppScreen):
         (11-REVIEWS.md cycle 3 finding #11). `applied` is used only for a
         policy with no is_active closure; a policy that has one but whose
         answer the worker could not resolve keeps its row as it is.
-        Idempotent: a no-op when the resolved value does not actually
-        change anything, so calling this unconditionally is harmless.
+        An unchanged value still supersedes every older job-state read: one
+        that began before this apply must not repaint its pre-apply answer.
         """
         policy = next((p for p in self._policies if p.id == policy_id), None)
+        if policy is None:
+            return
         if live is not None:
             resolved = live
-        elif policy is not None and policy.is_active is not None:
+        elif policy.is_active is not None:
             return
         else:
             resolved = applied
-        if policy_id not in self.active_state or self.active_state[policy_id] == resolved:
-            return
         self.active_state[policy_id] = resolved
+        if resolved:
+            self._drift.discard(policy_id)
         if self.is_mounted:
             self.query_one(DataTable[Any]).update_cell(
                 policy_id, "state", self._state_cell(policy_id)
@@ -2106,6 +2108,7 @@ class PoliciesScreen(AppScreen):
             highlighted = self._highlighted_policy()
             if highlighted is not None and highlighted.id == policy_id:
                 self._set_detail(highlighted)
+            self._start_job_state_read()
 
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
@@ -2167,14 +2170,18 @@ class PoliciesScreen(AppScreen):
         self._finish_toggle(policy, message.was_active, message.result)
 
     def _finish_toggle(self, policy: Policy, active: bool, result: PolicyResult | None) -> None:
+        # A read begun before this completion must not repaint its older answer.
+        self._job_state_generation += 1
         if result is None:
             self.status.set(
                 f"Policy change failed: {self.error}. Check permissions, then press space.",
                 "error",
             )
+            self.app.request_refresh()
             return
         new_active = not active
         self.active_state[policy.id] = new_active
+        self._drift.discard(policy.id)
         self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(policy.id))
         self._read_requirements(policy)
         self.query_one(DataTable[Any]).update_cell(
@@ -2183,6 +2190,7 @@ class PoliciesScreen(AppScreen):
         self._set_detail(policy)
         verb = "enabled" if new_active else "disabled"
         self.status.set(self._summary(policy, verb, result), "warn" if result.warning else "ok")
+        self.app.request_refresh()
 
     def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
         # One line per outcome: a single joined line overflows the terminal width
