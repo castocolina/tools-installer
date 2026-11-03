@@ -35,6 +35,7 @@ from installer.session import (
     SensitiveInstall,
     execute_plan,
     exit_code,
+    first_line,
     order_for_install,
     ran_anything,
     retained,
@@ -819,6 +820,7 @@ def test_result_words_cover_every_non_done_result_the_engine_can_produce():
         "skipped",
         "blocked",
         "manual",
+        "remove_failed",
     }
 
 
@@ -1450,3 +1452,29 @@ def test_reconfigure_stops_at_a_builtin_step_and_never_reaches_the_next() -> Non
     assert outcome.result == "failed"
     assert outcome.detail == f"{sync.text}: no terminal synchronizer bound"
     assert recorder.argv == []
+
+
+def _removal(tool_id: str, result: Result, detail: str = "") -> RowOutcome:
+    return RowOutcome(PlanRow(tool_id, Disposition.REMOVE, ""), result, detail=detail)
+
+
+def test_summary_counts_reads_removed_and_remove_failed():
+    both = [_removal("rg", "done"), _removal("fd", "remove_failed", "permission denied")]
+    assert summary_counts(both) == "1 removed, 1 remove failed"
+    many = [_removal(t, "done") for t in ("a", "b", "c")] + [_removal("d", "remove_failed")]
+    assert summary_counts(many) == "3 removed, 1 remove failed"
+
+
+def test_remove_failed_is_retained_and_removed_is_not():
+    outcomes = [_removal("rg", "done"), _removal("fd", "remove_failed")]
+    assert retained(outcomes) == {"fd"}
+    assert exit_code(outcomes) == 1
+
+
+def test_remove_is_not_runnable():
+    assert Disposition.REMOVE not in session_module.RUNNABLE
+
+
+def test_first_line_is_the_message_or_the_type():
+    assert first_line(OSError("a\nb")) == "a"
+    assert first_line(OSError()) == "OSError failed"

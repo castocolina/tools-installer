@@ -12,8 +12,10 @@ from installer.engine import InstallOutcome
 from installer.executors import ExecutorError
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
+    outcome_detail_text,
     outcome_mark,
     outcome_row_text,
+    outcome_word,
     render_done_notes,
     render_failure_details,
     render_guard,
@@ -685,6 +687,7 @@ def test_render_plan_words_and_marks_come_from_the_tables(
         Disposition.REINSTALL: Health.OK,
         Disposition.SKIP: Health.OK,
         Disposition.BLOCKED: Health.UNAVAILABLE,
+        Disposition.REMOVE: Health.OK,
         Disposition.WAIT: None,
     }[disposition]
     row = PlanRow("example", disposition, "why", health=health)
@@ -1240,3 +1243,14 @@ def test_render_run_summary_mixed_run_counts_every_category() -> None:
         "Summary — 1 installed, 1 skipped, 1 blocked, 1 manual, 1 failed, "
         "1 checksum mismatch, 1 dependency failed, 1 not attempted, 1 crashed"
     )
+
+
+def test_outcome_words_for_removal() -> None:
+    row = PlanRow("rg", Disposition.REMOVE, "")
+    assert outcome_word(RowOutcome(row, "done")) == ("removed", "green")
+    failed = RowOutcome(row, "remove_failed", detail="boom\nmore")
+    assert outcome_word(failed) == ("remove failed", "red")
+    assert outcome_mark(failed) == ("✖", "red")
+    assert outcome_detail_text(failed) == "boom"
+    dirty = RowOutcome(row, "remove_failed", detail="\x1b[31mx")
+    assert "\x1b" not in outcome_detail_text(dirty)
