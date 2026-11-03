@@ -578,9 +578,16 @@ class UpdateService:
             follow_up_warning = terminal_sync_warning(self._terminal_follow_up)
             if follow_up_warning:
                 detail = f"{detail}; {follow_up_warning}" if detail else follow_up_warning
-        if outcome.status == "updated" and self._invalidate is not None:
+        # C-24: a failed update may still have changed the machine, so the
+        # follow-up pass must not reuse the pre-update manager snapshot.
+        if outcome.status in ("updated", "failed") and self._invalidate is not None:
+            reason = (
+                f"updated {target.tool.id}"
+                if outcome.status == "updated"
+                else f"update of {target.tool.id} failed"
+            )
             try:
-                self._invalidate(reason=f"updated {target.tool.id}")
+                self._invalidate(reason=reason)
             except Exception as extra:  # noqa: BLE001 -- W2 (12-REVIEW.md): cache
                 # write is a POST-mutation side effect; its failure must never
                 # flip an already-successful mutation into a reported failure.
