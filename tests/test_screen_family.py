@@ -1,8 +1,10 @@
 """Screen-family lifecycle pilots: launch, the one show_view order, status lifecycle."""
 
+import re
+import subprocess
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -2661,3 +2663,363 @@ async def test_a_failed_first_run_pick_keeps_the_error():
         doctor = app.view("doctor")
         assert (doctor.status.text, doctor.status.severity) == ("read-only", Severity.ERROR)
         assert "PREVIEW-centralized" in str(_doctor_text(app))
+
+
+# -- 21-21: the UI-01 matrix, every mutation source against every view --
+
+_WITNESS_NOTE = "matrix witness note"
+_TIER_WITNESS = {"system": "w-system", "user": "w-user", "ai": "w-ai"}
+
+
+def _matrix_tool(tool_id: str, tier: str, *, node: bool = False) -> Tool:
+    method = (
+        Method(kind="node", params={"npm_pkg": f"{tool_id}-pkg"})
+        if node
+        else Method(kind="brew", params={"formula": tool_id})
+    )
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="search",
+        cmd=tool_id,
+        methods=(method,),
+        priority="P1",
+        audience="both",
+        tier=tier,
+        desc="",
+    )
+
+
+_MATRIX_TOOLS = [
+    _matrix_tool("w-system", "system"),
+    _matrix_tool("w-user", "user", node=True),
+    _matrix_tool("w-ai", "ai"),
+    _matrix_tool("up-system", "system"),
+    _matrix_tool("up-user", "user"),
+    _matrix_tool("up-ai", "ai"),
+    _matrix_tool("rm", "system"),
+]
+
+
+@dataclass
+class MatrixSeams:
+    """What a matrix case acts on: the app, its service and the published witnesses."""
+
+    app: UnifiedApp
+    service: FrozenStateService
+    bans: list[str]
+    witnesses: tuple[Any, ...]
+
+
+def matrix_app(
+    tmp_path: Path,
+    *,
+    remover: HeldRemover | None = None,
+    bans: list[str] | None = None,
+    job_apply: Callable[[], PolicyResult] | None = None,
+) -> MatrixSeams:
+    """One catalog for every matrix case: the witnesses start MISSING, and the
+    pass a source requests publishes them present and OK (`witnesses`)."""
+    by_id = {tool.id: tool for tool in _MATRIX_TOOLS}
+    service = frozen_service(tmp_path)
+    platform = service.platform
+    outdated = [
+        pass_state(
+            by_id[tool_id],
+            platform=platform,
+            ownership=_brew_owned(by_id[tool_id]),
+            version=VersionStatus(tool_id, "1.0", "1.1", True, False, "brew"),
+        )
+        for tool_id in ("up-system", "up-user", "up-ai")
+    ]
+    service.publish(
+        [
+            *(absent_state(by_id[tool_id]) for tool_id in _TIER_WITNESS.values()),
+            *outdated,
+            removable_state(by_id["rm"], [tmp_path / "rm"]),
+        ]
+    )
+    witnesses = (
+        removable_state(by_id["w-system"], [tmp_path / "w-system"]),
+        pass_state(by_id["w-user"], platform=platform, notes=(_WITNESS_NOTE,)),
+        plan_state(by_id["w-ai"]),
+    )
+    ban_list = bans if bans is not None else []
+
+    def missing_now() -> tuple[str, ...]:
+        state = service.state_of("w-system")
+        return () if state is not None and state.health is Health.OK else ("w-system",)
+
+    policies = [
+        _policy(tmp_path, "plain"),
+        replace(
+            _policy(tmp_path, "tweak"),
+            requires=("w-system",),
+            missing_requires=("w-system",),
+            missing_requires_now=missing_now,
+        ),
+    ]
+    if job_apply is not None:
+        policies.append(_policy(tmp_path, "job", apply=job_apply, background=True))
+    updates = ScriptedUpdates(
+        {f"up-{tier}": UpdateOutcome(f"up-{tier}", "updated", "brew") for tier in _TIER_WITNESS}
+    )
+    if remover is None:
+        remover = HeldRemover(SweepResult(removed=("rm",)))
+        remover.release.set()
+
+    def install(tool: Tool, *_args: Any, **_kwargs: Any) -> InstallOutcome:
+        return InstallOutcome(tool.id, "installed")
+
+    execute = ExecuteInputs(
+        catalog=_MATRIX_TOOLS,
+        platform=platform,
+        wire_path=lambda: "PATH wired",
+        verify=lambda: "PATH verified",
+        install=install,
+        version_refresh=service,
+    )
+    app = _family_app(
+        tools=_MATRIX_TOOLS,
+        version_refresh=service,
+        updates=updates,
+        uninstall=UninstallInputs(
+            ban_names=lambda: list(ban_list),
+            has_path_block=lambda: False,
+            remove=remover,
+            tweak_ids=lambda: (),
+        ),
+        policies=PolicyInputs(policies=policies),
+        node_globals=_managed_report,
+        reinstall_globals=lambda _packages: (),
+        execute=execute,
+    )
+    return MatrixSeams(app, service, ban_list, witnesses)
+
+
+def _cursor(app: UnifiedApp, view: str, key: str) -> None:
+    table = app.view(view).query_one(DataTable[Any])
+    table.move_cursor(row=table.get_row_index(key))
+
+
+async def _install_close(seams: MatrixSeams, pilot: Any) -> None:
+    app = seams.app
+    await _open_view(app, pilot, "system")
+    _cursor(app, "system", "w-system")
+    await pilot.press("space", "enter")
+    await wait_until(pilot, lambda: isinstance(app.screen, ExecuteScreen))
+    await pilot.press("enter")
+    await settle(app, pilot)
+    await pilot.press("escape")
+
+
+async def _update_on(tier: str, seams: MatrixSeams, pilot: Any) -> None:
+    await _open_view(seams.app, pilot, tier)
+    _cursor(seams.app, tier, f"up-{tier}")
+    await pilot.press("u")
+
+
+async def _remove(seams: MatrixSeams, pilot: Any) -> None:
+    await _open_view(seams.app, pilot, "uninstall")
+    await _confirm_removal(seams.app, pilot, "rm")
+
+
+async def _toggle(seams: MatrixSeams, pilot: Any) -> None:
+    await _open_view(seams.app, pilot, "policies")
+    _cursor(seams.app, "policies", "plain")
+    await pilot.press("space")
+
+
+async def _doctor_r(seams: MatrixSeams, pilot: Any) -> None:
+    await _open_view(seams.app, pilot, "doctor")
+    await pilot.press("r")
+
+
+# source -> (the view it acts in, its driver)
+MATRIX_SOURCES: dict[str, tuple[str, Callable[[MatrixSeams, Any], Any]]] = {
+    "install-close": ("system", _install_close),
+    "update-system": ("system", lambda seams, pilot: _update_on("system", seams, pilot)),
+    "update-user": ("user", lambda seams, pilot: _update_on("user", seams, pilot)),
+    "update-ai": ("ai", lambda seams, pilot: _update_on("ai", seams, pilot)),
+    "uninstall-removal": ("uninstall", _remove),
+    "policies-toggle": ("policies", _toggle),
+    "doctor-r": ("doctor", _doctor_r),
+}
+
+
+def _tier_mark(app: UnifiedApp, view: str) -> str:
+    table = app.view(view).query_one(DataTable[Any])
+    return table.get_cell(_TIER_WITNESS[view], "health").plain
+
+
+def _requires_text(app: UnifiedApp) -> str:
+    table = app.view("policies").query_one(DataTable[Any])
+    return str(table.get_cell("tweak", "requires"))
+
+
+def _tier_target(view: str) -> tuple[Callable[[UnifiedApp], bool], Callable[[UnifiedApp], bool]]:
+    return (
+        lambda app: _tier_mark(app, view) == "○",
+        lambda app: _tier_mark(app, view) == "✓",
+    )
+
+
+# target -> (reads as before the pass, reads as after it)
+MATRIX_TARGETS: dict[str, tuple[Callable[[UnifiedApp], bool], Callable[[UnifiedApp], bool]]] = {
+    "system": _tier_target("system"),
+    "user": _tier_target("user"),
+    "ai": _tier_target("ai"),
+    "uninstall": (
+        lambda app: _section_of(app, "w-system") == "#nothing to do",
+        lambda app: _section_of(app, "w-system") != "#nothing to do",
+    ),
+    "policies": (
+        lambda app: _requires_text(app) == "missing: w-system",
+        lambda app: _requires_text(app) == "w-system",
+    ),
+    "doctor": (
+        lambda app: f"w-user: {_WITNESS_NOTE}" not in str(_doctor_text(app)),
+        lambda app: f"w-user: {_WITNESS_NOTE}" in str(_doctor_text(app)),
+    ),
+}
+
+
+def test_the_matrix_covers_seven_sources_and_six_targets():
+    assert len(MATRIX_SOURCES) == 7
+    assert len(MATRIX_TARGETS) == 6
+    assert set(MATRIX_TARGETS) == set(VIEW_NAMES)
+
+
+@pytest.mark.parametrize("target", list(MATRIX_TARGETS))
+@pytest.mark.parametrize("source", list(MATRIX_SOURCES))
+async def test_a_mutation_reaches_every_view(tmp_path: Path, source: str, target: str):
+    view, drive = MATRIX_SOURCES[source]
+    before, after = MATRIX_TARGETS[target]
+    seams = matrix_app(tmp_path)
+    app = seams.app
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await _open_view(app, pilot, target)
+        assert before(app)
+        await _open_view(app, pilot, view)
+        seams.service.queued = seams.witnesses
+        await drive(seams, pilot)
+        await settle(app, pilot)
+        assert seams.service.queued == ()
+        if target != view:
+            await _open_view(app, pilot, target)
+        assert after(app)
+
+
+async def test_a_held_mutation_repaints_a_view_navigated_to_before_it_finishes(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("rm",)))
+    seams = matrix_app(tmp_path, remover=remover)
+    app = seams.app
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover, "rm")
+            seams.service.queued = seams.witnesses
+            await pilot.press("1")
+            await wait_until(pilot, lambda: app.current_view == "system")
+            screen = app.catalog
+            assert app.screen is screen
+            assert _tier_mark(app, "system") == "○"
+            remover.release.set()
+            await settle(app, pilot)
+            assert app.screen is screen
+            assert _tier_mark(app, "system") == "✓"
+        finally:
+            remover.release.set()
+
+
+async def test_a_visible_uninstall_repaints_its_environment_rows_on_publish(tmp_path: Path):
+    release = threading.Event()
+    bans = ["pip"]
+
+    def clear_the_ban() -> PolicyResult:
+        if not release.wait(timeout=10):
+            raise TimeoutError("the toggle was never released")
+        bans.clear()
+        return _policy_result()
+
+    seams = matrix_app(tmp_path, bans=bans, job_apply=clear_the_ban)
+    app = seams.app
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await _open_view(app, pilot, "policies")
+            _cursor(app, "policies", "job")
+            await pilot.press("space")
+            assert app.mutation_in_flight
+            await _open_view(app, pilot, "uninstall")
+            screen = app.screen
+            assert screen is app.view("uninstall")
+            assert "#ban" in _row_keys(app)
+            release.set()
+            await settle(app, pilot)
+            assert app.screen is screen
+            assert "#ban" not in _row_keys(app)
+            assert "wait for it to finish" not in app.view("uninstall").status.text
+        finally:
+            release.set()
+
+
+# -- 21-21: the replaced forks stay deleted --
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_REPLACED_FORKS = [
+    "OwnershipRefreshed",
+    "_pending_status",
+    "_resync",
+    "classify_tools",
+    "ToolRow",
+    "OwnerHint",
+    "OwnerLabelHint",
+    "_manager_hint",
+    "_managed_hint",
+    "_own_script_install",
+    "uninstall-ownership-refresh",
+    "_refresh_ownership_worker",
+    "get_default_screen",
+    "_start_version_refresh",
+    "_refresh_versions_worker",
+    "_refresh_skills_worker",
+    "VersionStatusRefreshed",
+    "SkillStatusRefreshed",
+    "execute-wait",
+    "_wait_worker",
+    "toggle_in_flight",
+    "daemon_default_in_flight",
+    "_TOGGLE_IN_FLIGHT_MESSAGE",
+    "_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE",
+    "_rows_of",
+    "_live_state",
+]
+
+
+def _guarded_files() -> list[Path]:
+    """Tracked and untracked-not-ignored files under installer/, plus setup.py."""
+    names: set[str] = set()
+    for argv in (
+        ["git", "ls-files", "installer"],
+        ["git", "ls-files", "--others", "--exclude-standard", "installer"],
+    ):
+        listing = subprocess.run(argv, cwd=_REPO_ROOT, check=True, capture_output=True, text=True)
+        names.update(listing.stdout.splitlines())
+    paths = [_REPO_ROOT / name for name in sorted(names)] + [_REPO_ROOT / "setup.py"]
+    return [path for path in paths if path.is_file()]
+
+
+@pytest.mark.parametrize("name", _REPLACED_FORKS)
+def test_the_replaced_forks_are_gone(name: str):
+    pattern = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
+    hits = [
+        f"{path.relative_to(_REPO_ROOT)}:{number}"
+        for path in _guarded_files()
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        )
+        if pattern.search(line)
+    ]
+    assert hits == [], f"{name} is named again: {', '.join(hits)}"
