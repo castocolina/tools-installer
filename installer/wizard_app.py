@@ -2533,6 +2533,7 @@ class UnifiedApp(App[list[str] | None]):
         if self._mutation_holder is None:
             return False
         screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
+        screen.post_message(RefreshRequested())  # SPEC R2: a refusal still ends with one pass
         return True
 
     # Textual annotates install_screen with a bare (unparameterized) Screen, which
