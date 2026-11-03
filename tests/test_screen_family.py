@@ -13,10 +13,12 @@ from textual.widgets import DataTable
 from installer import receipts
 from installer import uninstall as uninstall_module
 from installer.app import UninstallDecision
+from installer.catalog_tui import CatalogScreen
 from installer.doctor import DoctorReport
 from installer.enums import Severity
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership, OwnershipCandidate
+from installer.pnpm_globals import NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.ui_common import AppScreen
@@ -1288,19 +1290,25 @@ def _policy_app(
     set_link_mode: Callable[[str], None] | None = None,
     tweak_ids: Callable[[], tuple[str, ...]] = lambda: (),
     states: Sequence[Any] | None = None,
+    app_cls: type[UnifiedApp] = UnifiedApp,
+    fix: Callable[[], None] = lambda: None,
+    node_globals: Callable[[], NodeGlobalsReport] | None = None,
+    reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
 ) -> tuple[UnifiedApp, FrozenStateService]:
     rg, fd = _tool("rg"), _tool("fd")
     service = frozen_service(tmp_path)
     service.publish(
         states if states is not None else [removable_state(fd, [tmp_path / "fd"]), absent_state(rg)]
     )
-    app = UnifiedApp(
+    app = app_cls(
         [rg, fd],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         guard_state=lambda: ({"pip": False, "npm": False}, None),
         fix_preview="preview",
-        fix=lambda: None,
+        fix=fix,
+        node_globals=node_globals,
+        reinstall_globals=reinstall_globals,
         uninstall=UninstallInputs(
             ban_names=lambda: [],
             has_path_block=lambda: False,
@@ -1508,3 +1516,159 @@ async def test_the_daemon_default_apply_repaints_a_visible_uninstall(tmp_path: P
             assert screen.status.text == ""
         finally:
             release.set()
+
+
+# -- 21-16: every mutating key checks the lock, navigation never does --
+
+
+class _DecidedApp(UnifiedApp):
+    """Records the tier `enter` hand-off instead of starting an install."""
+
+    def __init__(self, *args: Any, calls: list[str], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._calls = calls
+
+    def on_catalog_screen_decided(self, message: CatalogScreen.Decided) -> None:
+        del message
+        self._calls.append("decided")
+
+
+def _managed_report() -> NodeGlobalsReport:
+    return NodeGlobalsReport(entries=(), missing=(), managed=("mmdc",))
+
+
+def _tag(calls: list[str], tag: str) -> Callable[[], PolicyResult]:
+    def apply() -> PolicyResult:
+        calls.append(tag)
+        return _policy_result()
+
+    return apply
+
+
+def _matrix_app(
+    tmp_path: Path, remover: HeldRemover, calls: list[str]
+) -> tuple[UnifiedApp, FrozenStateService]:
+    def schedule(hour: int, minute: int) -> PolicyResult:
+        del hour, minute
+        calls.append("schedule")
+        return _policy_result()
+
+    def reinstall(packages: Sequence[str]) -> tuple[str, ...]:
+        del packages
+        calls.append("reinstall")
+        return ()
+
+    class _App(_DecidedApp):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, calls=calls, **kwargs)
+
+    return _policy_app(
+        tmp_path,
+        [
+            _policy(tmp_path, "plain", apply=_tag(calls, "plain")),
+            _policy(tmp_path, "job", apply=_tag(calls, "job"), background=True),
+            _policy(tmp_path, "sched", active=True, set_schedule=schedule),
+        ],
+        remover,
+        set_link_mode=lambda mode: calls.append("mode"),
+        app_cls=_App,
+        fix=lambda: calls.append("fix"),
+        node_globals=_managed_report,
+        reinstall_globals=reinstall,
+    )
+
+
+async def _open_view(app: UnifiedApp, pilot: Any, name: str) -> None:
+    await app.show_view(name)
+    if name == "doctor":
+        doctor = cast(Any, app.view("doctor"))
+        await wait_until(pilot, lambda: not doctor.globals_auditing)
+    await pilot.pause()
+
+
+async def _press_tier_enter(app: UnifiedApp, pilot: Any) -> None:
+    await _open_view(app, pilot, "system")
+    _catalog_cursor(app, "rg")
+    await pilot.press("space", "enter")
+
+
+async def _press_doctor(key: str, app: UnifiedApp, pilot: Any) -> None:
+    await _open_view(app, pilot, "doctor")
+    await pilot.press(key)
+
+
+async def _press_policy(policy_id: str, app: UnifiedApp, pilot: Any) -> None:
+    await _open_view(app, pilot, "policies")
+    _policy_cursor(app, policy_id)
+    await pilot.press("space")
+
+
+async def _press_t(app: UnifiedApp, pilot: Any) -> None:
+    await _open_view(app, pilot, "policies")
+    _policy_cursor(app, "sched")
+    await pilot.press("t", "down", "down", "down", "enter")
+
+
+async def _press_m(app: UnifiedApp, pilot: Any) -> None:
+    await _open_view(app, pilot, "policies")
+    await pilot.press("m", "down", "enter")
+
+
+_MATRIX: dict[str, tuple[str, str, Callable[[UnifiedApp, Any], Any]]] = {
+    "tier_enter": ("system", "decided", _press_tier_enter),
+    "doctor_enter": ("doctor", "fix", lambda a, p: _press_doctor("enter", a, p)),
+    "doctor_r": ("doctor", "reinstall", lambda a, p: _press_doctor("r", a, p)),
+    "policy_plain": ("policies", "plain", lambda a, p: _press_policy("plain", a, p)),
+    "policy_job": ("policies", "job", lambda a, p: _press_policy("job", a, p)),
+    "t": ("policies", "schedule", _press_t),
+    "m": ("policies", "mode", _press_m),
+}
+
+
+@pytest.mark.parametrize("case", list(_MATRIX))
+async def test_every_mutating_key_is_refused_during_a_removal(tmp_path: Path, case: str):
+    view, tag, press = _MATRIX[case]
+    calls: list[str] = []
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, service = _matrix_app(tmp_path, remover, calls)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover, "fd")
+            before = service.passes
+            await press(app, pilot)
+            await wait_until(pilot, lambda: service.passes == before + 1)
+            await pilot.pause()
+            assert service.passes == before + 1
+            status = app.view(view).status
+            assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
+            assert calls == []
+            remover.release.set()
+            await settle(app, pilot)
+            status.clear()
+            await press(app, pilot)
+            await settle(app, pilot)
+            assert calls == [tag]
+        finally:
+            remover.release.set()
+
+
+async def test_navigation_works_during_a_removal(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("fd",)))
+    app, _service = _matrix_app(tmp_path, remover, [])
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _hold_a_removal(app, pilot, remover, "fd")
+            for key, name in zip("123456", VIEW_NAMES, strict=True):
+                await pilot.press(key)
+                await wait_until(pilot, lambda name=name: app.current_view == name)
+            await pilot.press("escape")
+            await wait_until(pilot, lambda: app.current_view == "system")
+            await pilot.press("ctrl+p")
+            assert isinstance(app.screen, NavScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is app.view("system")
+            for name in VIEW_NAMES:
+                assert app.view(name).status.text != _REFUSAL
+        finally:
+            remover.release.set()
