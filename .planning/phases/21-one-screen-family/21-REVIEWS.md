@@ -1,8 +1,8 @@
 ---
 phase: 21
 reviewers: [opencode-plan-review]
-reviewed_at: 2026-10-19T04:20:00Z
-cycle: 2
+reviewed_at: 2026-10-19T08:07:03Z
+cycle: 3
 plans_reviewed: [21-01-PLAN.md, 21-02-PLAN.md, 21-03-PLAN.md, 21-04-PLAN.md, 21-05-PLAN.md, 21-06-PLAN.md, 21-07-PLAN.md, 21-08-PLAN.md, 21-09-PLAN.md, 21-10-PLAN.md, 21-11-PLAN.md, 21-12-PLAN.md, 21-13-PLAN.md, 21-14-PLAN.md, 21-15-PLAN.md, 21-16-PLAN.md, 21-17-PLAN.md, 21-18-PLAN.md, 21-19-PLAN.md, 21-20-PLAN.md, 21-21-PLAN.md]
 models:
   opencode-plan-review: "router-env/my-plan-review"
@@ -16,13 +16,197 @@ model_sources:
 ## Plan-Revision Conflicts
 <!-- gsd:plan-revision-conflicts:end -->
 
-## Cycle 2 (current) — reviewed at HEAD 46b6a76
+## Cycle 3 (current) — reviewed at HEAD 65c812e
 
-Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`, the router lane, about 15 minutes, exit 0). No direct alternate was needed. There was a single reviewer, so the consensus gate is skipped. The reviewer was told four things: 21-CONTEXT.md, 21-SPEC.md and the approved 21-UI-SPEC.md are locked; the 21-REUSE.md notes are part of the plans they name; D-16 is read literally as "same plan"; and it should first check every cycle-1 HIGH and actionable item against the current plan text, then review the revised plans afresh. It read the plans and the supporting artifacts from disk, cited source `file:line` throughout (about 83 source citations) and gave every plan id its own section (plan coverage 21/21). It modified no file. The raw output is under `.review-diagnostics/20261019T040516Z-gsd-review-cycle2/` (gitignored).
+Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`, the router lane). This was the last allowed convergence cycle. The router lane hit quota errors (HTTP 429 "usage limit" and "policy budget exceeded"), and so did the direct `gpt-sol` and `glm` alternates. The run was retried every 10 minutes from 05:10Z. Try 17 started at 07:54:38Z and succeeded at 08:07:03Z, about 12 minutes, so the review comes from the router lane. There was a single reviewer, so the consensus gate is skipped. The reviewer was told the same four things as in cycle 2: CONTEXT, SPEC and the approved UI-SPEC are locked; REUSE notes are part of the plans they name; D-16 is read literally as "same plan". It was also asked to check the two narrow deferrals in the 65c812e replan against source. It first checked each of the 19 cycle-2 items against the current plan text, then reviewed the plans afresh. It cited about 88 source `file:line` locations and about 59 planning-artifact locations, and gave every plan id its own section (plan coverage 21/21). It modified no file. The raw output is `.review-diagnostics/20261019T045525Z-gsd-review-cycle3/retry17-router.log` (gitignored).
 
 ## OpenCode Review (opencode-plan-review)
 
-### Cycle-1 resolution table
+### Cycle-2 resolution table
+
+The reviewer judged each item by the task action, the acceptance criteria and the prescribed tests, checked against source. It did not take the ledger's word. RESOLVED means the plan now specifies a sound fix. Nothing was executed.
+
+| # | Plan | Cycle-2 concern | Status | Evidence (abridged) |
+|---|---|---|---|---|
+| 1 | 21-06 | The modal-publication pilot re-enters the view that is already current | **RESOLVED** | `21-06-PLAN.md:198,204,220`: the pilot leaves for user and returns to system, and the plan forbids weakening the no-op at `installer/wizard_app.py:2763-2764`. |
+| 2 | 21-12 | A publish repaints Uninstall from stale environment caches | **RESOLVED** | `21-12-PLAN.md:104,147-148,162`: both entry and publication call the guarded `_reread_env`. That refreshes the inputs of `installer/wizard_app.py:995-1002`. The separate daemon-default deferral is raised below. |
+| 3 | 21-12 | The `21-12b` fallback breaks the literal reading of D-16 | **RESOLVED** | `21-12-PLAN.md:114`: the fallback resumes the same plan id and SUMMARY and blocks downstream work. |
+| 4 | 21-12 | The absence gate hits the registry's `_managed_hint` comment before its rewrite | **RESOLVED** | `21-12-PLAN.md:13,239,245,271,280-293`: Task 3 rewrites `installer/registry.toml:2504-2511` before the unchanged gate. |
+| 5 | 21-15 | `u` checks the lock after the informational refusals | **RESOLVED** | `21-15-PLAN.md:113,122`: the lock check comes before the CHECKING, BROKEN, current and unknown-owner returns (`installer/catalog_tui.py:787-825`), and the test covers five row shapes. |
+| 6 | 21-18 | A mutation completion does not supersede an older job-state read | **RESOLVED** | `21-18-PLAN.md:79-81,151,156`: both completions advance the generation. A daemon completion returns early only for an unknown id and otherwise starts a fresh read. |
+| 7 | 21-20 | An unmapped reinstall exception skips the invalidate | **RESOLVED** | `21-20-PLAN.md:71-72,106,114`: the invalidate sits in the outer `finally:` and the completion post in a nested `finally:` (`installer/ui_common.py:52-55`). |
+| 8 | 21-08 | The REUSE catalog edit is undeclared and overlaps 21-06 | **RESOLVED** | `21-08-PLAN.md:5-10,88,119`: the plan declares `installer/catalog_tui.py` and moves to wave 4. Its wave-4 sibling 21-10 touches different files. |
+| 9 | 21-11 | Environment rows emit five cells under six headers | **RESOLVED** | `21-11-PLAN.md:118,132-133,151`: all three builders get a blank third cell, and a per-header alignment check is added. |
+| 10 | 21-13 | The refusal test settles globally while the remover is held | **RESOLVED** | `21-13-PLAN.md:102,167`: targeted waits while held, global settle only after release. |
+| 11 | 21-14 | A MISSING tool after a partial delete loses its failure detail | **RESOLVED** | `21-14-PLAN.md:76,115,122`: the reason is cleared only when the tool is absent and both leftover collections are empty. |
+| 12 | 21-16 | Held early-return cases count passes through a global settle | **RESOLVED** | `21-16-PLAN.md:101,165-169`. |
+| 13 | 21-17 | The schedule action indexes a deleted `active_state` entry | **RESOLVED** | `21-17-PLAN.md:87,166,172`: `.get()`, a refusal and a failed-read → `t` test (`installer/wizard_app.py:2132-2139`). |
+| 14 | 21-18 | The reverse-order test may assert before the cancelled read's late message | **RESOLVED** | `21-18-PLAN.md:91,112`: the test observes the forwarded `JobStatesRead`, then drains. |
+| 15 | 21-19 | The new reason lines are not sanitized | **RESOLVED** | `21-19-PLAN.md:78,114,123`: sanitized plain `Text` and hostile-content coverage. |
+| 16 | 21-19 | The Doctor ordering-test migration is unnamed | **RESOLVED** | `21-19-PLAN.md:79,115,138` names `tests/test_wizard_app.py:4341-4357`. |
+| 17 | 21-20 | A failed cache write leaves the persisted manager snapshot fresh | **DEFERRED-WRONG** | `21-20-PLAN.md:73,107,239` reports the error and publishes under a new epoch, but still allows stale manager facts, and wrongly claims a restart clears them (`setup.py:727-744`, `installer/version_status.py:1501-1507`, `installer/version_cache.py:420-435`). This is now the 21-20 HIGH. |
+| 18 | 21-21 | The tool-only Uninstall witness misses environment staleness | **RESOLVED** | `21-21-PLAN.md:77,108,116`: a held Policies toggle → visible Uninstall check that the ban row goes away. |
+| 19 | 21-21 | The UAT has no safe held-lock trigger | **RESOLVED** | `21-21-PLAN.md:78,180-181`: a slow `systemctl` shim, used only in the container. The name-based calls at `installer/systemd_daemon.py:381-409` make it work. |
+
+### 21-01
+**Summary:** Neutral root, six installed views, enter after the awaited push, shared status lifecycle.
+**Concerns:** None new. **Suggestions:** Keep the call-order and first-entry-status pilots as acceptance evidence. **Risk: LOW.**
+
+### 21-02
+**Summary:** Extends the outcome vocabulary without making removal an install-engine operation; the direct `build_plan` assertion guards the builder boundary (`installer/session.py:738-785`).
+**Concerns:** None new. **Risk: LOW.**
+
+### 21-03
+**Summary:** Selection pruning is right, but one locked browser-navigation rule is not covered.
+
+**Concerns**
+- **HIGH — A highlighted row that vanishes still sends the cursor to the first item, not the nearest surviving row.** The locked UI-SPEC requires the nearest surviving row (`21-UI-SPEC.md:76`). The plan leaves the `_rebuild` fallback unchanged (`21-03-PLAN.md:96`). That fallback picks the first selectable row after a missing-key lookup (`installer/tool_browser.py:208-225`), and `tests/test_tool_browser.py:159-176` asserts it. The case is reachable: Uninstall environment rows vanish when their predicates change (`installer/wizard_app.py:995-1002`).
+
+**Suggestions:** Fix the missing-key fallback once in the shared browser. Replace the first-item test with a near-bottom vanishing-row fixture that checks the cursor lands on the nearest survivor, and keep same-key restoration. **Risk: HIGH against the locked UI contract.**
+
+### 21-04
+**Summary:** Live prerequisites and OMZ's live activity predicate; REUSE drops Linux's unused parameter.
+**Concerns:** None new once REUSE is applied. **Risk: LOW.**
+
+### 21-05
+**Summary:** Pending suppression reaches the publication filter; evidence and the off-PATH pnpm fact use existing inputs. The cycle-1 refutation (MISSING vs the dangling-shim BROKEN fact) still holds.
+**Concerns:** None new. **Risk: LOW.**
+
+### 21-06
+**Summary:** The coalescing refresh owner; first-error propagation; the modal pilot now really leaves and re-enters.
+**Concerns:** None new. Vanished-row behavior depends on the 21-03 fix. **Suggestions:** Keep both modal assertions and the decided-id pruning test. **Risk: MEDIUM** (async ordering, broad test migration).
+
+### 21-07
+**Summary:** Removal and informational update refusals reach the owner; the ownership-message fork is deleted in the same task.
+**Concerns:** None new. **Suggestions:** Keep exactly-one-pass assertions through 21-15's lock reorder. **Risk: LOW.**
+
+### 21-08
+**Summary:** Pure Uninstall projections; the health-detail vocabulary moves without duplication; the catalog-reader migration is declared and serialized.
+**Concerns:** None new. **Risk: LOW.**
+
+### 21-09
+**Summary:** Per-tool removal outcomes with fresh proof kept in the remover; ordinary delete failures are isolated per tool.
+**Concerns:** None new. The cycle-1 attribution HIGH stays refuted. **Risk: LOW.**
+
+### 21-10
+**Summary:** ExecuteScreen's private refresh worker is replaced by waiting on the app's publication.
+**Concerns:** None new. **Suggestions:** Give the pending-pass test separate completion points for each pass, so it proves pass one does not serve the waiter. **Risk: LOW.**
+
+### 21-11
+**Summary:** Uninstall rendering prerequisites. All three environment builders get the Health cell, and the old classifier stays until 21-12.
+**Concerns:** None new. **Risk: LOW.**
+
+### 21-12
+**Summary:** Fixes the publication-time environment reread and the same-plan deletion, but adds a daemon-default deferral that does not hold.
+
+**Concerns**
+- **HIGH — The daemon-default deferral leaves a real mutation invisible on a visible Uninstall.** The ledger accepts stale environment rows until the next publish or entry (`21-12-PLAN.md:374`). `ensure_daemon_default` calls `policy.apply()` (`installer/policy.py:1469-1477`). Uninstall's environment closure includes that same daemon (`setup.py:979-985`). The completion updates only Policies (`installer/wizard_app.py:2735-2742`), and 21-15 keeps that (`21-15-PLAN.md:175`). If the launch pass finishes before the held apply, the user can enter Uninstall, the apply then finishes, and no repaint is guaranteed. Leaving the daemon off the named list in D-05 is not an explicit exception to "every mutation" (`21-CONTEXT.md:54`) or to UI-01's "immediately if visible" (`.planning/REQUIREMENTS.md:63`). The deletion-time proof does not restore a missing environment row.
+
+**Suggestions:** Guarantee a lifecycle repaint after the daemon-default completion, without invalidating tool state. Add a test: hold the default apply, let the launch pass finish, show Uninstall, release, and check the environment row without navigating. **Risk: HIGH.**
+
+### 21-13
+**Summary:** Off-loop removal, precise pending marks and the shared mutation lock.
+
+**Concerns**
+- **LOW — The crash pilot does not check that pending state recovers.** `21-13-PLAN.md:168` checks the failure copy and the lock release, but not the invalidate or the eventual republication of the pending ids. Pending suppression lasts until the next invalidate (`21-05-PLAN.md:72,106`). This is a coverage gap, not a defect: `21-13-PLAN.md:89` already catches remover exceptions in the worker.
+
+**Suggestions:** Extend the crash pilot to assert the invalidate and that the affected ids publish again. **Risk: LOW–MEDIUM.**
+
+### 21-14
+**Summary:** Durable partial-delete feedback, plus retry, refresh and quit behavior. The new pilot uses real `remove_paths`/`plan_removal`.
+**Concerns:** None new. The crash-recovery gap is recorded once, under 21-13. **Risk: LOW–MEDIUM.**
+
+### 21-15
+**Summary:** Update refusal precedence is fixed. Updates, job toggles and the daemon default fold into the shared lock, and the release is unconditional.
+**Concerns:** None local. The daemon-default completion's narrow repaint scope is the 21-12 cross-plan HIGH. **Risk: LOW locally.**
+
+### 21-16
+**Summary:** Mutating-key checks, guaranteed reinstall completion with release first, and early-return accounting with targeted waits.
+**Concerns:** None new. **Risk: LOW.**
+
+### 21-17
+**Summary:** Policies renders live state and prerequisites. The non-probing `installed_or` fallback is used, and the schedule path is safe after a failed read.
+**Concerns:** None new. **Risk: LOW.**
+
+### 21-18
+**Summary:** DRIFT, off-loop job-state reads, and generation supersession across renders and mutation completions.
+**Concerns:** None new. The binding action at `:156`, read with `:79-81`, closes the cycle-2 gap. **Suggestions:** Add an unresolved-live or failed daemon-completion case. **Risk: MEDIUM** (concurrent probe ordering).
+
+### 21-19
+**Summary:** Doctor's pnpm findings go through the published reasons, with sanitized `Text` and the named ordering-test migration.
+**Concerns:** None new. **Risk: LOW–MEDIUM** (migration breadth).
+
+### 21-20
+**Summary:** Cleanup after a reinstall is now guaranteed, but the deferral for a failed manager-cache invalidate does not hold.
+
+**Concerns**
+- **HIGH — A failed manager invalidate can publish pre-reinstall facts as current, and a restart does not recover them as the plan claims.** `21-20-PLAN.md:73,239` defers reuse of the fresh persisted manager snapshot and says a later start clears it. `invalidate` bumps the epoch before its clearing write (`installer/version_status.py:1128-1140`). When that write fails, `_load_or_query_snapshot` reloads and reuses the old snapshot from disk (`:1501-1507`). Startup only seeds skills (`setup.py:727-744`), so the snapshot's freshness and backoff survive a restart (`installer/version_cache.py:420-435`). Those inputs feed ownership and health in the new pass (`installer/version_status.py:1630-1634,1653-1674`), and a cached outdated entry yields `outdated=True, stale=False` (`:528-537`). The planned test checks the report, the epoch and the publication. It does not check that stale manager answers are rejected.
+
+**Suggestions:** Keep the guaranteed cleanup and the error report. On a failed manager invalidate, either force a fresh query in memory or mark the affected facts as unverified. Test it with a fresh persisted pre-reinstall snapshot, changed manager answers, a failed clearing write and a second service instance. **Risk: HIGH.**
+
+### 21-21
+**Summary:** The final matrix, held-navigation witnesses, fork guard, doctrine and a safe container UAT; the new environment witness changes ban data while Uninstall is visible.
+**Concerns:** None local. Successful-publication witnesses do not cover the daemon-default or failed-invalidate gaps. Those belong in the owning plans. **Risk: LOW locally.**
+
+### Cross-plan priorities
+
+**Verdict: revise before execution.** GSD implementation plans, 21/21 covered, at HEAD `65c812e`. 18 of 19 cycle-2 items are resolved. Item 17 is DEFERRED-WRONG, and the separate daemon-default deferral does not hold against source either. Three HIGHs remain: (1) 21-12, daemon-default completion vs a visible Uninstall; (2) 21-20, failed manager invalidation vs falsely current facts; (3) 21-03, the nearest-survivor cursor rule. Execution ordering is much better. Every dependency points to an earlier wave, ROADMAP and the frontmatter waves agree, there is no same-wave file overlap, and D-16's normal and fallback paths both stay inside 21-12. The partial-delete chain (21-08 → 21-12 → 21-14) is coherent. The removal-crash republication assertion and the unresolved-live daemon test are useful additions but do not block.
+
+### Not checked
+
+No files were modified. Tests, plan execution, package-manager operations and container/terminal UAT were not run. Runtime timing, collection floors, coverage and visual behavior are unverified.
+
+---
+
+## Source-grounding adjudication of the reviewer's cycle-3 HIGHs
+
+Each HIGH, and the DEFERRED-WRONG item behind one of them, was traced against the tree. `git diff 65c812e HEAD` shows no change under `installer/`, `setup.py`, `tests/` or this phase directory, and the working tree is clean there, so the reviewer's tree is the current one. None of the three is refuted, and no CONTEXT decision, REUSE note or other plan already covers any of them. `21-CONTEXT.md:160-167` defers nothing relevant. Item 17 and the 21-20 HIGH are the same finding, so it is counted once.
+
+| Plan | Reviewer HIGH | Verdict | Evidence | Minimal plan change |
+|---|---|---|---|---|
+| 21-03 | A vanished highlighted row sends the cursor to the first item, not the nearest surviving row | **CONFIRMED** (contract break, not a safety hole) | `21-UI-SPEC.md:76` (status `approved`, `:4`): "A row that vanished moves the cursor to the nearest surviving row". `installer/tool_browser.py:214-225`: when `previous_key` is missing, `_rebuild` falls back to `_first_selectable_row()` (`:291-296`). `tests/test_tool_browser.py:159-176` pins that, saying "today's unconditional behaviour". No plan mentions the rule: `rg -i nearest` over the 21 plans finds nothing, and 21-03's action (`21-03-PLAN.md:96`) touches only `reload`/`selected_ids`. Reachable through the Uninstall environment rows (`installer/wizard_app.py:995-1002`). Not destructive: Uninstall's Enter acts on `selected_ids()`, not the cursor (`installer/tool_browser.py:356-365`). The only cursor-driven mutation is the catalog `u` (`installer/catalog_tui.py:781`), and catalog rows do not vanish on a publish. It is HIGH because it contradicts a locked artifact, as 21-15 was in cycle 2. | 21-03 Task 1: before `table.clear`, `_rebuild` also records the cursor row index. On a missing key, it moves to the item row nearest that index (clamped to the last row) instead of the first selectable row. Replace `test_rebuild_cursor_falls_back_to_first_selectable_when_key_is_gone` with a test where a row near the bottom vanishes and the cursor lands on its neighbor. |
+| 21-12 | The daemon-default completion repaints only Policies, so a visible Uninstall misses the daemon's environment row | **CONFIRMED** (narrow window) | Ledger `21-12-PLAN.md:374` reasons that "D-05 lists the mutations that do" request a pass, and that "the next publish or entry re-reads". Neither is guaranteed. `installer/policy.py:1469-1477`: `ensure_daemon_default` calls `policy.apply()`. `setup.py:979-985`: `tweak_ids` passes `daemon_policy=daemon` into `active_tweak_ids` → `active_policies`, which lists the daemon once `policy_owned(daemon_policy)` holds (`installer/uninstall.py:645`). The source already says so: "the daemon starts inactive at screen-construction time, so `_build_entries` never offers a tweaks row" (`installer/wizard_app.py:1460`). `on_daemon_default_applied` (`installer/wizard_app.py:2735-2742`) refreshes only Policies, and 21-15 (`:175`) and 21-18 (`:81`, which restates the D-05 reading) keep that. 21-12's `_reread_env` runs only from `enter_view`/`state_refreshed` (`21-12-PLAN.md:104,162`). So with the apply still running, the user enters Uninstall (navigation is never blocked, `21-UI-SPEC.md:280`). The apply then lands, and the daemon's tweak row stays missing until some later publish or entry. That breaks UI-01's "immediately if visible" (`.planning/REQUIREMENTS.md:63`). The window is narrow: it needs an undecided first-run host (`ensure_daemon_default` returns early when `decided()`) and navigation during the apply. The result is a missing row, not a wrong deletion, since `remove_proven` and the lock (21-15) still guard removal. | Not a user decision. The fix needs no pass, so it does not touch D-05's list. 21-15 Task 2 (which already rewrites `on_daemon_default_applied`): after `end_mutation()` and the Policies refresh, when the top screen is an `AppScreen`, call its `state_refreshed()`. Uninstall's (21-12) re-reads the environment through the guarded `_reread_env`. Then drop the 21-12 `:374` ledger row and add the held-apply → visible-Uninstall pilot the reviewer describes. |
+| 21-20 | A failed manager invalidate reuses the stale persisted snapshot, and a restart does not clear it (= cycle-2 item 17, DEFERRED-WRONG) | **CONFIRMED** (severity judgment noted) | `installer/version_status.py:1121-1141`: `invalidate` bumps the epoch and resets the skills in memory first ("a failed write must still force the next probe (WR2-03)"). For managers, the only reset is the disk write `save_version_cache(..., managers={})`. `_load_or_query_snapshot` (`:1491-1507`) reloads the disk snapshot and reuses it while `should_fetch_managers` is false (`installer/version_cache.py:420-435`; `MANAGER_STALE_AFTER = 6h`, `MANAGER_RETRY_BACKOFF = 30m` at `:46-47`). `setup.py:727-743` builds the service and only calls `seed_skills_from_cache()`. No startup path clears managers: `rg 'managers=\{\}'` finds only `invalidate`. So the restart claim in `21-20-PLAN.md:73` and the ledger `:239` is false. The pass then feeds the snapshot into ownership and status (`installer/version_status.py:1626-1631,1653-1674`), and a cached outdated entry yields `outdated=True, stale=False` (`:528-537`). Severity note: the trigger is a rare cache-write `OSError`, the user is told `version cache invalidation failed`, and the staleness is capped at 6 h. The behavior predates this phase and hits all four `invalidate` callers. It stays HIGH because the deferral's stated recovery is factually wrong and the published state claims to be current. | 21-20 (or 21-05, which already edits `version_status.py`): mirror WR2-03 for managers. `invalidate` sets an in-memory `_managers_invalid = True` before the write. `_load_or_query_snapshot` skips the disk snapshot while the flag is set, and the first successful query clears it. Extend `test_a_real_cache_write_failure_after_a_reinstall_is_reported`: a fresh persisted pre-reinstall snapshot plus changed manager answers must publish the new answers. Correct the ledger row and `:73` (drop "the next start"). |
+
+### Disposition of the reviewer's cycle-3 MEDIUM/LOW findings
+
+The reviewer raised one explicit LOW and three suggestions. Each premise was checked against source and the plan text:
+
+- **21-13 (L) — the crash pilot does not check pending recovery: actionable.** `21-13-PLAN.md:89` catches a remover exception in the worker and then runs the invalidate "right after the remover". That invalidate is what clears `_pending_ids` (`21-05-PLAN.md:72`). But `test_the_lock_is_released_when_the_remover_crashes` (`:168`) asserts only the status copy and `mutation_in_flight`. If that ordering regressed, the crashed tool would show `checking…` for the rest of the session. The fix is one assertion: after the crash, the tool's state is published again (`state_of` is not `None` after `settle`).
+- **21-10 (suggestion) — separate completion points for the pending-pass test: actionable (LOW).** `test_await_publication_waits_for_the_pending_pass` (`21-10-PLAN.md:144`) says to "release once" and then check that the waiter "has not been served after the first pass". `HeldRefreshService` has one `threading.Event` (`tests/state_doubles.py:304,309`), so a single `set()` lets the follow-up pass through as well. A buggy implementation that serves the waiter after pass one would still show "served once" at the end, so the test cannot fail for the bug it targets. The fix: record `len(service.calls)` when the waiter is served and assert it is 2, or hold pass two on its own event.
+- **21-18 (suggestion) — add an unresolved-live or failed daemon-completion case: not actionable.** The binding action (`21-18-PLAN.md:81,156`) already says the early return happens only for an unknown id and that a mounted screen always starts a fresh read, "also when the resolved value did not change". The reviewer calls it a non-blocking reinforcement, and nothing in source shows a gap.
+- **21-06 / 21-14 / 21-19 risk ratings (MEDIUM, LOW–MEDIUM):** these are ratings of async ordering and migration breadth, with no finding behind them. Not actionable.
+
+## Consensus Summary
+
+There was one reviewer (opencode-plan-review on the router lane, about 88 source citations, 21/21 plan coverage), so there is no cross-reviewer consensus. Reviewer verdict: **revise before execution**. Cycle 2 is closed except item 17 (21-20), which is DEFERRED-WRONG and continues as the 21-20 HIGH. Cycle 3 has **3 HIGH** concerns (21-03, 21-12, 21-20), all confirmed by source, and **2 actionable LOW** concerns (21-13, 21-10). None is refuted. Each has a small change in a single plan. No item needs a user decision, so the Plan-Revision Conflicts section stays empty.
+
+### Agreed Strengths
+- (single reviewer) 18 of 19 cycle-2 items are carried into task text and tests that match source. The waves are consistent and free of overlap, and D-16's literal same-plan reading holds on both the normal and the fallback path. Destructive removal still goes through `remove_proven`'s deletion-time re-proof (`installer/uninstall.py:532-557`).
+
+### Agreed Concerns
+- n/a (one reviewer). Two of the three HIGHs are the two narrow deferrals made in the 65c812e replan (`21-12-PLAN.md:374`, `21-20-PLAN.md:239`). Each deferral's rationale fails against source.
+
+### Divergent Views
+- None (one reviewer). Source grounding adds that the 21-03 HIGH cannot cause a wrong deletion (Enter acts on the selection) and that the 21-12 window needs an undecided first-run host. It also corrects the 21-20 evidence: the failure is pre-existing across all four `invalidate` callers, and it shares one in-memory fix with WR2-03. It adds one actionable LOW the reviewer only suggested (21-10: the test cannot fail with a single-event holder).
+
+## Verification coverage
+
+- **Fact drift:** the plans are unchanged since 65c812e, and HEAD `22787f8` touches neither the source nor this phase's plans. Every reviewer citation behind the three HIGHs, item 17 and the actionable items was re-read at HEAD. They all match within a line or two. The reviewer's `installer/tool_browser.py:208-225` is the comment-plus-fallback block (the logic is `:214-225`). Its `installer/version_status.py:1128-1140` sits inside `invalidate` at `:1121-1141`. `installer/policy.py:1469-1477`, `setup.py:727-744` and `:979-985`, `installer/wizard_app.py:995-1002`, `:2735-2742` and `:2763-2764`, `installer/version_cache.py:420-435`, `tests/test_tool_browser.py:159-176`, `21-UI-SPEC.md:76`, `21-CONTEXT.md:54`, `.planning/REQUIREMENTS.md:63`, `21-12-PLAN.md:104,162,374`, `21-13-PLAN.md:89,168`, `21-15-PLAN.md:175`, `21-18-PLAN.md:81,156` and `21-20-PLAN.md:73,107,239` all match exactly.
+- **UNCHECKABLE (INFO):** Textual runtime timing (whether a launch pass can finish before a slow `systemctl`/`launchctl` apply) was reasoned from the code, not executed. `make validate`, `make test` and the UAT were not run (read-only review).
+- **Requirement IDs / glossary:** unchanged from cycle 2. No new contradiction. D-05's mutation list vs UI-01's "any mutation" is the reading behind the 21-12 HIGH. It is resolved inside the plans (a repaint without a pass), not by changing a decision.
+
+CYCLE_SUMMARY: current_high=3 current_actionable=2
+
+---
+
+## Cycle 2 (history) — reviewed at HEAD 46b6a76
+
+Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`, the router lane, about 15 minutes, exit 0). No direct alternate was needed. There was a single reviewer, so the consensus gate is skipped. The reviewer was told four things: 21-CONTEXT.md, 21-SPEC.md and the approved 21-UI-SPEC.md are locked; the 21-REUSE.md notes are part of the plans they name; D-16 is read literally as "same plan"; and it should first check every cycle-1 HIGH and actionable item against the current plan text, then review the revised plans afresh. It read the plans and the supporting artifacts from disk, cited source `file:line` throughout (about 83 source citations) and gave every plan id its own section (plan coverage 21/21). It modified no file. The raw output is under `.review-diagnostics/20261019T040516Z-gsd-review-cycle2/` (gitignored).
+
+### OpenCode Review (opencode-plan-review) — cycle 2
+
+#### Cycle-1 resolution table
 
 | Plan | Cycle-1 concern | Status | Evidence |
 |---|---|---|---|
@@ -45,7 +229,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 | 21-21 | UAT permits a wrapped refusal despite the one-row contract | **RESOLVED** | `.planning/phases/21-one-screen-family/21-21-PLAN.md:22,177-178` now requires one row, matching `.planning/phases/21-one-screen-family/21-UI-SPEC.md:264-273` and the automated backstop in `.planning/phases/21-one-screen-family/21-16-PLAN.md:171`. |
 | 21-11/21-12 | Delete each fork in the same plan that makes it unreferenced | **PARTIAL** | Normal execution now performs replacement and deletion within 21-12 at `.planning/phases/21-one-screen-family/21-12-PLAN.md:152-158,203-205,258-260`. However, its binding rule at `:112` permits unfinished deletions to move into a separate `21-12b`, asserting that the same wave suffices. That contradicts the fixed same-plan reading. |
 
-### 21-01
+#### 21-01
 
 **Summary:** Establishes the neutral root, six installed views, and one lifecycle/navigation order.
 
@@ -59,7 +243,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The ordering change and its connected test-host migrations are explicitly covered.
 
-### 21-02
+#### 21-02
 
 **Summary:** Extends the shared outcome vocabulary without making removal an install-engine operation.
 
@@ -73,7 +257,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The new boundary assertion closes the cycle-1 omission.
 
-### 21-03
+#### 21-03
 
 **Summary:** Prunes unselectable selections on reload and filters acceptance again.
 
@@ -87,7 +271,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The change is localized and its shared-set behavior is tested.
 
-### 21-04
+#### 21-04
 
 **Summary:** Makes policy prerequisites live and supplies OMZ’s missing live activity predicate.
 
@@ -102,7 +286,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The effective plan reuses existing policy interfaces.
 
-### 21-05
+#### 21-05
 
 **Summary:** Adds precise pending suppression, session evidence, and the cached-inventory off-PATH fact.
 
@@ -117,7 +301,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The proposed additions follow the service’s lock and publication model.
 
-### 21-06
+#### 21-06
 
 **Summary:** Introduces the coalescing app refresh owner and removes per-tier refresh workers.
 
@@ -132,7 +316,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: HIGH.** The central owner is coherent, but a mandatory acceptance pilot is internally inconsistent.
 
-### 21-07
+#### 21-07
 
 **Summary:** Removes the ownership-message fork and connects removal and refused updates to the owner.
 
@@ -146,7 +330,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The transitional and final responsibilities are identified.
 
-### 21-08
+#### 21-08
 
 **Summary:** Adds pure group, label, and detail projections over published state.
 
@@ -161,7 +345,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** Projection behavior is sound; execution ownership is incompletely represented.
 
-### 21-09
+#### 21-09
 
 **Summary:** Adds per-tool removal outcomes and isolates ordinary delete failures.
 
@@ -176,7 +360,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** Destructive authority remains unchanged.
 
-### 21-10
+#### 21-10
 
 **Summary:** Replaces ExecuteScreen’s private refresh worker with publication waiting.
 
@@ -191,7 +375,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW.** The revised waiter contract addresses cycle 1.
 
-### 21-11
+#### 21-11
 
 **Summary:** Lands Uninstall rendering prerequisites without retiring the row source prematurely.
 
@@ -207,7 +391,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** The re-cut is sound, but the column migration is incomplete.
 
-### 21-12
+#### 21-12
 
 **Summary:** Switches Uninstall to state projections and deletes the old seams and classifier.
 
@@ -226,7 +410,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: HIGH.** False visible state, a locked execution-contract violation, and a guaranteed gate failure remain.
 
-### 21-13
+#### 21-13
 
 **Summary:** Moves removal off-loop, marks affected tools pending, and introduces the shared lock.
 
@@ -241,7 +425,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** The worker design is sound; the concurrency pilot’s wait is incompatible with its scenario.
 
-### 21-14
+#### 21-14
 
 **Summary:** Adds conditional retryability, durable row feedback, service invalidation, and quit waiting.
 
@@ -257,7 +441,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** Cycle-1 fixes are real, but partial deletion can still lose durable failure guidance.
 
-### 21-15
+#### 21-15
 
 **Summary:** Folds update, job-toggle, and daemon-default guards into the shared lock.
 
@@ -272,7 +456,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: HIGH.** This is not a destructive-operation bypass, but it deterministically breaks the locked interaction contract.
 
-### 21-16
+#### 21-16
 
 **Summary:** Completes remaining lock checks, holder vocabulary, and Doctor refusal accounting.
 
@@ -288,7 +472,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: LOW locally.** The cycle-1 accounting gap is closed; complete refusal behavior depends on 21-15.
 
-### 21-17
+#### 21-17
 
 **Summary:** Makes Policies render live state and guarded prerequisites through one lifecycle hook.
 
@@ -303,7 +487,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** The failure model is improved, but a connected caller retains the old dictionary invariant.
 
-### 21-18
+#### 21-18
 
 **Summary:** Adds DRIFT and generation-guarded asynchronous job-state reads.
 
@@ -319,7 +503,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: HIGH.** Render-to-render ordering is fixed, but another permitted ordering still reports false policy state.
 
-### 21-19
+#### 21-19
 
 **Summary:** Routes Doctor findings through published reasons and adds guarded failed-read rendering.
 
@@ -336,7 +520,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** The state/evidence mechanism is coherent; rendering-boundary enforcement remains incomplete.
 
-### 21-20
+#### 21-20
 
 **Summary:** Removes Doctor’s hidden key, reports invalidation errors, and publishes after complete fix/guard workflows.
 
@@ -353,7 +537,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: HIGH.** Lock release remains protected; the remaining issue is publishing pre-mutation inventory after partial mutation.
 
-### 21-21
+#### 21-21
 
 **Summary:** Adds the final publication matrix, held-navigation proof, fork guard, and documentation/UAT.
 
@@ -370,7 +554,7 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 **Risk Assessment: MEDIUM.** Cycle-1 coverage fixes are present, but the matrix still misses a real projection-specific failure.
 
-### Cross-plan priorities
+#### Cross-plan priorities
 
 **Verdict: revise before execution.** Framework: **GSD · implementation plans**. Coverage: **21/21 plans**, reviewed against HEAD `46b6a76`, locked context/specification/UI contract, binding REUSE instructions, and current source.
 
@@ -401,13 +585,13 @@ Reviewer: opencode-plan-review (`opencode run --model router-env/my-plan-review`
 
 The plans substantially cover all five roadmap success criteria, but **SC1 remains incomplete** because visible environment rows can stay stale, and **SC5 remains at risk** from job-read completion ordering. The lifecycle/status and removal architecture are otherwise materially stronger than cycle 1. Destructive operations continue to use the existing deletion-time proof authority; this review found no new path bypassing it.
 
-### Not checked
+#### Not checked
 
 No files were modified, created, or deleted. Tests, plan execution, package-manager operations, and terminal/container UAT were not run; runtime timing, coverage floors, and visual claims remain unverified. The pre-existing `.planning/config.json` modification was left untouched.
 
 ---
 
-## Source-grounding adjudication of the reviewer's cycle-2 HIGHs
+### Source-grounding adjudication of the reviewer's cycle-2 HIGHs
 
 Each HIGH was traced against the current tree (HEAD `46b6a76`) and the plan text. None is refuted on its premise, so all seven stand. One reviewer ran, so each counts. Two notes on severity are recorded beside their verdicts.
 
@@ -421,7 +605,7 @@ Each HIGH was traced against the current tree (HEAD `46b6a76`) and the plan text
 | 21-18 | The generation only advances when `state_refreshed` starts a read. A daemon-default or toggle completion that writes a newer answer does not supersede an in-flight read, so the older read can overwrite it | **CONFIRMED** (partial resolution of the cycle-1 HIGH) | `21-18-PLAN.md:75-76`: the bump happens only per worker start. `refresh_daemon_state` (`installer/wizard_app.py:2008-2040`, kept by `21-17-PLAN.md:88`) writes `active_state` directly, and the daemon-default completion requests no app pass (`21-15-PLAN.md:81`; no `request_refresh` in 21-15). A read started on entry before the apply can return its pre-apply answer. `StateCache.read` returns an unstored probe value after an invalidate (`installer/systemd_daemon.py:501-520`). It carries the current generation, so `on_job_states_read` accepts it and paints the stale OFF, which stays until the next render. On the toggle path, the stale paint lasts only until the toggle's own publish starts a newer read (`21-18-PLAN.md:77`), but it can still flash. |
 | 21-20 | An unmapped exception from the reinstall skips the invalidate, so the follow-up pass can reuse fresh pre-mutation manager inventory | **CONFIRMED (crash path only)** | `21-20-PLAN.md:71-72`: the invalidate runs after the reinstall's `run_live` returns. `run_live` maps only `OSError`, `CommandError` and `ShellrcRefusal` (`installer/ui_common.py:52-53`). A `RuntimeError` from the reinstall (pinned by `21-16-PLAN.md:161`) escapes before the invalidate. The `finally:` post still releases the lock, and the pass still runs, but the pass loads the not-yet-stale manager snapshot (`installer/version_status.py:1501-1507`). That contradicts the plan's own truth, "invalidates … success or failure". Mapped failures (the common case) do invalidate. The fix is to call the invalidate from the worker's `finally:`, before the post. |
 
-### Disposition of the reviewer's cycle-2 MEDIUM/LOW findings
+#### Disposition of the reviewer's cycle-2 MEDIUM/LOW findings
 
 Each premise was checked against source. All are confirmed, and none is already covered by a plan task, a ledger entry or a REUSE instruction, so all count as actionable:
 
@@ -440,20 +624,20 @@ Each premise was checked against source. All are confirmed, and none is already 
 
 Cycle-1 items, as the reviewer re-checked them against the current plan text (resolution table above): every cycle-1 HIGH and actionable item is **RESOLVED** except two. 21-18's generation is PARTIAL (now the 21-18 HIGH above). The 21-11/21-12 D-16 cut is PARTIAL (now the 21-12 split-fallback HIGH above). The four HIGHs refuted in cycle 1 (21-05, 21-09, 21-19, 21-20 lock) stay refuted, and the replan did not change them. Spot checks agree with the reviewer: 21-02 `:99,104` (the `build_plan` boundary test), 21-10 `:142-146` (both arrival orders), 21-14 `:76,114` (`_failed_lines` survives entry), 21-16 `:164-170` (pinned pass counts), 21-17 `:89` (`_missing` map), 21-20 `:72-74` (invalidate error plus guard-chain pass), and 21-21 `:22,74,105` (the held-navigation case and one-row refusal).
 
-## Consensus Summary
+### Consensus Summary
 
 There was one reviewer (opencode-plan-review, source-grounded with about 83 source `file:line` citations and 21/21 plan coverage), so no cross-reviewer consensus is possible. Reviewer verdict: **revise before execution**. After source grounding, cycle 1 is closed except for two partials. Cycle 2 has **7 HIGH** concerns (21-06, 21-12 ×3, 21-15, 21-18, 21-20) and **12 actionable MEDIUM/LOW** concerns. None is refuted.
 
-### Agreed Strengths
+#### Agreed Strengths
 - (single reviewer) Every cycle-1 HIGH and actionable concern except two is carried into executable task text and tests. Destructive removal still goes through `remove_proven`'s deletion-time re-proof (`installer/uninstall.py:532-557`). No new path bypasses it.
 
-### Agreed Concerns
+#### Agreed Concerns
 - n/a (one reviewer). The open items are in the adjudication above. 21-12 holds three of the seven HIGHs and is the priority for the replan.
 
-### Divergent Views
+#### Divergent Views
 - None (one reviewer). Source grounding confirmed all seven HIGHs. It found a more direct trigger for the 21-12 environment-staleness HIGH than the reviewer gave. It flags the 21-15 HIGH as a copy-contract break, not a safety hole, and the 21-20 HIGH as a crash path only.
 
-## Verification coverage
+### Verification coverage
 
 Source-grounding pass (`plan_review.source_grounding = true`, configured authority `grep`). The effective authority from `drift-guard authority --raw` is `intel`. Severities come from `drift-guard severity --authority intel`: VERIFIED → none, MISSING → needs-acknowledgement, AMBIGUOUS → MEDIUM, UNCHECKABLE → INFO. Nothing set `hardBlock`.
 - **File paths:** 52 distinct repo paths were extracted from the 21 plans.
