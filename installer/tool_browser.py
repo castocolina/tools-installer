@@ -191,6 +191,7 @@ class ToolBrowser(Widget, Generic[T]):
         # empty table (the on_mount call site) or when nothing is
         # highlighted yet.
         previous_key = highlighted_key(table)
+        previous_row = table.cursor_row
         table.clear(columns=True)
         self._section_detail.clear()
         for label, key in self._adapter.columns:
@@ -208,10 +209,9 @@ class ToolBrowser(Widget, Generic[T]):
         # Restore the cursor to the row the user was on -- a section row that
         # survives the rebuild is a place the user chose (they can already
         # reach one with `up`), so landing back on it is correct, not a bug.
-        # Fall back to the first selectable row -- today's unconditional
-        # behaviour -- when there was no key to restore or the rebuilt table
-        # no longer carries it (a filtered-out row, the uninstall view's live
-        # re-derivation).
+        # A vanished key (a filtered-out row, the uninstall view's live
+        # re-derivation) moves the cursor to the item row nearest the row it
+        # had (UI-SPEC); with no key yet that is the first item row.
         restored = False
         if previous_key is not None:
             try:
@@ -220,11 +220,11 @@ class ToolBrowser(Widget, Generic[T]):
             except RowDoesNotExist:
                 restored = False
         if not restored:
-            first = self._first_selectable_row()
-            if first is not None:
-                table.move_cursor(row=first)
+            nearest = self._nearest_selectable_row(previous_row)
+            if nearest is not None:
+                table.move_cursor(row=nearest)
         # No item row means no highlight event, so the empty copy is set here.
-        if self._first_selectable_row() is None and self._adapter.empty_detail is not None:
+        if self._nearest_selectable_row() is None and self._adapter.empty_detail is not None:
             self._show_detail(self._adapter.empty_detail)
         # DataTable keeps serving render caches measured at the previous column
         # widths after clear(columns=True); a cell mutation arriving in a later
@@ -241,12 +241,17 @@ class ToolBrowser(Widget, Generic[T]):
         rather than shipping a snapshot frozen at construction. Marks on rows
         that no longer exist are dropped so a stale selection can never be
         committed; marks the host shares with another browser are untouched,
-        because only ids this adapter used to carry are considered.
+        because only ids this adapter used to carry are considered. Ids that
+        are still listed but no longer selectable are dropped too, silently
+        (no SelectionChanged: a publish must never clear a status).
         """
         stale = {key for key in self._by_id if key is not None}
         self._adapter = adapter
         self._by_id = {adapter.item_id(item): item for item in adapter.items}
         self.selected -= stale - {key for key in self._by_id if key is not None}
+        self.selected -= {
+            adapter.item_id(item) for item in adapter.items if not adapter.selectable(item)
+        }
         if self.is_mounted:
             self._rebuild()
 
@@ -288,12 +293,12 @@ class ToolBrowser(Widget, Generic[T]):
             return None
         return self._adapter.item_id(item)
 
-    def _first_selectable_row(self) -> int | None:
+    def _nearest_selectable_row(self, row: int = 0) -> int | None:
+        """The item row closest to `row` (the upper one on a tie), or None without item rows."""
         table = self.query_one(DataTable[Any])
-        for index, row_key in enumerate(table.rows):
-            if row_key.value in self._by_id:  # item rows key on the id; sections on "#title"
-                return index
-        return None
+        # item rows key on the id; sections on "#title"
+        item_rows = [i for i, key in enumerate(table.rows) if key.value in self._by_id]
+        return min(item_rows, key=lambda i: abs(i - row), default=None)
 
     def refresh_marks(self) -> None:
         # Scheduled via call_after_refresh, so by the time it fires under the real
@@ -358,7 +363,7 @@ class ToolBrowser(Widget, Generic[T]):
         return [
             self._adapter.item_id(item)
             for item in self._adapter.items
-            if self._adapter.item_id(item) in self.selected
+            if self._adapter.item_id(item) in self.selected and self._adapter.selectable(item)
         ]
 
     def action_accept(self) -> None:
