@@ -538,6 +538,22 @@ def test_linux_daemon_policy_uses_the_injected_cache_by_identity(tmp_path: Path)
     assert policy.state_cache is injected
 
 
+def test_an_unreachable_user_manager_is_a_failed_read_not_drift(tmp_path: Path) -> None:
+    """C-19: an UNAVAILABLE timer state is a failed read. With the unit files
+    on disk, answering False would paint the row as drift (owned, not active)."""
+    paths = _make_paths(tmp_path)
+    service_path, _timer_path = systemd_daemon.unit_paths(paths.unit_dir)
+    service_path.parent.mkdir(parents=True)
+    service_path.write_text("[Service]\n")
+    cache = systemd_daemon.TimerStateCache(lambda: DaemonState.UNAVAILABLE)
+    policy = _build(paths, run=_RecordingRun(), timer_cache=cache)
+    assert policy.active is False
+    assert policy.owned is not None and policy.owned()
+    assert policy.is_active is not None
+    with pytest.raises(OSError, match="the systemd user manager could not be reached"):
+        policy.is_active()
+
+
 def test_policy_without_state_cache_argument_still_builds_and_reads_none() -> None:
     policy = Policy(
         id="tweak:example",
