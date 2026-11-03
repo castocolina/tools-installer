@@ -74,6 +74,7 @@ from installer.ownership import (
     owner_label,
     query_uv_tool_dir,
     read_inventory,
+    removal_label,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -197,6 +198,15 @@ HEALTH_MARKS: dict[Health, tuple[str, str]] = {
     Health.OK: ("✓", "green"),
     Health.MISSING: ("○", ""),
     Health.UNAVAILABLE: ("–", "dim"),
+}
+HEALTH_DETAIL: dict[Health, str] = {
+    Health.CHECKING: "checking…",
+    Health.BROKEN: "broken",
+    Health.MISCONFIGURED: "needs configuration",
+    Health.OUTDATED: "update available",
+    Health.OK: "ok",
+    Health.MISSING: "not installed",
+    Health.UNAVAILABLE: "not available on this machine",
 }
 
 
@@ -1853,12 +1863,43 @@ class VersionRefreshService:
 
 
 def uninstall_group(state: ToolState | None) -> UninstallState | None:
-    raise NotImplementedError
+    """The Uninstall group of one published state, `None` while it is not known
+    yet (no state, or CHECKING). Pure: reads only `state`."""
+    if state is None or state.health is Health.CHECKING:
+        return None
+    if state.health is Health.MISSING:
+        return UninstallState.ABSENT
+    if state.health is Health.UNAVAILABLE:
+        return UninstallState.UNAVAILABLE
+    if state.health is Health.BROKEN:
+        return UninstallState.MANAGED
+    return UninstallState.REMOVABLE if state.removable.removable else UninstallState.MANAGED
 
 
 def uninstall_label(state: ToolState | None) -> str:
-    raise NotImplementedError
+    """The Installed-via cell, reusing `removal_label` then `owner_label`. Pure."""
+    group = uninstall_group(state)
+    if state is None or group in (None, UninstallState.ABSENT, UninstallState.UNAVAILABLE):
+        return "—"
+    label = removal_label(state.ownership) or owner_label(state.ownership)
+    if label is not None:
+        return label
+    return "installer" if group is UninstallState.REMOVABLE else "unknown"
 
 
 def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[str] = ()) -> str:
-    raise NotImplementedError(required_by)
+    """The Uninstall detail sentence: proof for a removable row, the health words
+    (`HEALTH_DETAIL`) for nothing to do. Pure: reads only `state`."""
+    del tool, required_by  # used by the managed branch
+    group = uninstall_group(state)
+    if state is None or group is None:
+        return HEALTH_DETAIL[Health.CHECKING]
+    if group is UninstallState.ABSENT:
+        return HEALTH_DETAIL[Health.MISSING]
+    if group is UninstallState.UNAVAILABLE:
+        return state.reasons[0] if state.reasons else HEALTH_DETAIL[Health.UNAVAILABLE]
+    if group is UninstallState.REMOVABLE:
+        if ADOPTED_NOTE in state.reasons:
+            return ADOPTED_NOTE
+        return RECEIPT_PROOF_NOTE if state.receipt is not None else LAYOUT_PROOF_NOTE
+    return " · ".join(state.reasons)

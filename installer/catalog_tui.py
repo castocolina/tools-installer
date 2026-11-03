@@ -36,6 +36,7 @@ from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, AppScreen, StatusLine, mark, run_live
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
+    HEALTH_DETAIL,
     HEALTH_MARKS,
     Health,
     SkillHostStatus,
@@ -109,7 +110,7 @@ def group_tools(
         groups = [
             (
                 f"{HEALTH_MARKS[health][0]} {_HEALTH_WORD[health]}",
-                _HEALTH_DETAIL[health],
+                HEALTH_DETAIL[health],
                 [t for t in ordered if healths[t.id] is health],
             )
             for health in Health
@@ -204,15 +205,6 @@ _HEALTH_WORD = {
     Health.OK: "ok",
     Health.MISSING: "missing",
     Health.UNAVAILABLE: "unavailable",
-}
-_HEALTH_DETAIL = {
-    Health.CHECKING: "checking…",
-    Health.BROKEN: "broken",
-    Health.MISCONFIGURED: "needs configuration",
-    Health.OUTDATED: "update available",
-    Health.OK: "ok",
-    Health.MISSING: "not installed",
-    Health.UNAVAILABLE: "not available on this machine",
 }
 # Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
 _OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
@@ -473,7 +465,7 @@ class CatalogScreen(AppScreen):
         health = Health.CHECKING if state is None else state.health
         glyph, style = HEALTH_MARKS[health]
         block = f"[{style}]{glyph}[/] " if style else f"{glyph} "
-        block += _HEALTH_DETAIL[health]
+        block += HEALTH_DETAIL[health]
         reasons = list(state.reasons) if state is not None else []
         if state is None:
             # Before the first pass only the launch-time resolver knows this.
