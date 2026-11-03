@@ -254,6 +254,27 @@ class CompetingProbed(Message):
     """
 
 
+class JobStatesRead(Message):
+    """The Policies screen's threaded read of the systemd-backed rows finished.
+
+    `states` maps a policy id to (active, owned) for every row that read
+    cleanly; a row the worker could not read is absent. `generation` is the
+    read this answers: the handler drops any other, so a slow older read
+    finishing last cannot repaint a stale cell.
+    """
+
+    def __init__(
+        self,
+        generation: int,
+        states: dict[str, tuple[bool, bool]],
+        error: str | None,
+    ) -> None:
+        self.generation = generation
+        self.states = states
+        self.error = error
+        super().__init__()
+
+
 class PolicyToggled(Message):
     """A scheduled-job toggle finished on its thread worker (WR-02).
 
@@ -1515,6 +1536,32 @@ def _read_failure(error: str) -> str:
     return f"{_POLICY_READ_ERROR}{error.partition(chr(10))[0]}."
 
 
+_DRIFT_DETAIL = (
+    "Drift: this installer enabled it, but it is not active now. space applies it again."
+)
+_JOB_READ_INCOMPLETE = "the job state read did not complete"
+
+
+def _read_active_owned(policy: Policy) -> tuple[tuple[bool, bool] | None, str | None]:
+    """One policy's (active, owned) through run_live, or the failure text.
+
+    `owned` is read only when the policy binds it; either read failing fails
+    the pair, so a row is never half-painted from one answer.
+    """
+    if policy.is_active is None:
+        return None, None
+    active, error = run_live(policy.is_active)
+    if active is None:
+        return None, error
+    owned = False
+    if policy.owned is not None:
+        read, error = run_live(policy.owned)
+        if read is None:
+            return None, error
+        owned = read
+    return (active, owned), None
+
+
 class PoliciesScreen(AppScreen):
     """Toggle environment policies (the pip/npm ban) on/off, applied live.
 
@@ -1556,6 +1603,11 @@ class PoliciesScreen(AppScreen):
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
+        # Policies whose last read said owned-but-not-active.
+        self._drift: set[str] = set()
+        # Bumped by every render and mutation completion that supersedes a
+        # job-state read in flight; JobStatesRead carries the one it began with.
+        self._job_state_generation = 0
         # Each policy's prerequisites as last read; no entry means not (yet) readable.
         self._missing: dict[str, tuple[str, ...]] = {}
         self._read_error: str | None = None
@@ -1630,11 +1682,15 @@ class PoliciesScreen(AppScreen):
         table = self.query_one(DataTable[Any])
         errors: list[str] = []
         for policy in self._policies:
+            if policy.state_cache is not None:
+                # Read on a worker: blank, not stale, until it answers.
+                self._record_state(policy.id, None)
             errors += filter(None, (self._read_live_state(policy), self._read_requirements(policy)))
             table.update_cell(policy.id, "state", self._state_cell(policy.id), update_width=True)
             table.update_cell(policy.id, "requires", self._requires_cell(policy), update_width=True)
         self._set_detail(self._highlighted_policy())
         self._refresh_link_mode_line()
+        self._start_job_state_read()
         if errors:
             self._read_error = _read_failure(errors[0])
             self.status.set(self._read_error, "error")
@@ -1653,12 +1709,64 @@ class PoliciesScreen(AppScreen):
         """
         if policy.is_active is None or policy.state_cache is not None:
             return None
-        live, error = run_live(policy.is_active)
-        if live is None:
-            self.active_state.pop(policy.id, None)
-        else:
-            self.active_state[policy.id] = live
+        read, error = _read_active_owned(policy)
+        self._record_state(policy.id, read)
         return error
+
+    def _record_state(self, policy_id: str, read: tuple[bool, bool] | None) -> None:
+        """Keep one policy's (active, owned) answer; None drops it (blank cell)."""
+        if read is None:
+            self.active_state.pop(policy_id, None)
+            self._drift.discard(policy_id)
+            return
+        active, owned = read
+        self.active_state[policy_id] = active
+        if owned and not active:
+            self._drift.add(policy_id)
+        else:
+            self._drift.discard(policy_id)
+
+    def _start_job_state_read(self) -> None:
+        """Supersede any job-state read in flight and start a fresh one."""
+        self._job_state_generation += 1
+        if any(policy.state_cache is not None for policy in self._policies):
+            self._read_job_states_worker(self._job_state_generation)
+
+    @work(thread=True, exclusive=True, group="policies-job-state", exit_on_error=False)
+    def _read_job_states_worker(self, generation: int) -> None:
+        """Read the systemd-backed rows off the event loop (WR-02)."""
+        states: dict[str, tuple[bool, bool]] = {}
+        error: str | None = _JOB_READ_INCOMPLETE
+        try:
+            errors: list[str] = []
+            for policy in self._policies:
+                if policy.state_cache is None:
+                    continue
+                read, failure = _read_active_owned(policy)
+                if read is not None:
+                    states[policy.id] = read
+                if failure is not None:
+                    errors.append(failure)
+            error = errors[0] if errors else None
+        finally:
+            self.post_message(JobStatesRead(generation, states, error))
+
+    def on_job_states_read(self, message: JobStatesRead) -> None:
+        if message.generation != self._job_state_generation:
+            return
+        if not self.is_mounted or not self.app.is_running:
+            return
+        table = self.query_one(DataTable[Any])
+        for policy in self._policies:
+            if policy.state_cache is not None:
+                self._record_state(policy.id, message.states.get(policy.id))
+                table.update_cell(
+                    policy.id, "state", self._state_cell(policy.id), update_width=True
+                )
+        self._set_detail(self._highlighted_policy())
+        if message.error is not None:
+            self._read_error = _read_failure(message.error)
+            self.status.set(self._read_error, "error")
 
     def _read_requirements(self, policy: Policy) -> str | None:
         missing, error = run_live(policy.missing_requirements)
@@ -1680,6 +1788,8 @@ class PoliciesScreen(AppScreen):
         active = self.active_state.get(policy_id)
         if active is None:
             return Text("")
+        if policy_id in self._drift:
+            return Text("! [drift]", style="yellow")
         label = "● [on]" if active else "○ [off]"
         return Text(label, style="green" if active else "dim")
 
@@ -1801,7 +1911,8 @@ class PoliciesScreen(AppScreen):
                 env_redirect.BUN_CACHE_REDIRECT.coverage_caveat,
             ),
         }
-        lines = [f"{policy.label} — {policy.description}"]
+        lines = [_DRIFT_DETAIL] if policy.id in self._drift else []
+        lines.append(f"{policy.label} — {policy.description}")
         if missing_requires and policy.hard_requires:
             lines.append(
                 "Missing required tool(s): "
@@ -1975,19 +2086,21 @@ class PoliciesScreen(AppScreen):
         (11-REVIEWS.md cycle 3 finding #11). `applied` is used only for a
         policy with no is_active closure; a policy that has one but whose
         answer the worker could not resolve keeps its row as it is.
-        Idempotent: a no-op when the resolved value does not actually
-        change anything, so calling this unconditionally is harmless.
+        An unchanged value still supersedes every older job-state read: one
+        that began before this apply must not repaint its pre-apply answer.
         """
         policy = next((p for p in self._policies if p.id == policy_id), None)
+        if policy is None:
+            return
         if live is not None:
             resolved = live
-        elif policy is not None and policy.is_active is not None:
+        elif policy.is_active is not None:
             return
         else:
             resolved = applied
-        if policy_id not in self.active_state or self.active_state[policy_id] == resolved:
-            return
         self.active_state[policy_id] = resolved
+        if resolved:
+            self._drift.discard(policy_id)
         if self.is_mounted:
             self.query_one(DataTable[Any]).update_cell(
                 policy_id, "state", self._state_cell(policy_id)
@@ -1995,6 +2108,7 @@ class PoliciesScreen(AppScreen):
             highlighted = self._highlighted_policy()
             if highlighted is not None and highlighted.id == policy_id:
                 self._set_detail(highlighted)
+            self._start_job_state_read()
 
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
@@ -2056,14 +2170,18 @@ class PoliciesScreen(AppScreen):
         self._finish_toggle(policy, message.was_active, message.result)
 
     def _finish_toggle(self, policy: Policy, active: bool, result: PolicyResult | None) -> None:
+        # A read begun before this completion must not repaint its older answer.
+        self._job_state_generation += 1
         if result is None:
             self.status.set(
                 f"Policy change failed: {self.error}. Check permissions, then press space.",
                 "error",
             )
+            self.app.request_refresh()
             return
         new_active = not active
         self.active_state[policy.id] = new_active
+        self._drift.discard(policy.id)
         self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(policy.id))
         self._read_requirements(policy)
         self.query_one(DataTable[Any]).update_cell(
@@ -2072,6 +2190,7 @@ class PoliciesScreen(AppScreen):
         self._set_detail(policy)
         verb = "enabled" if new_active else "disabled"
         self.status.set(self._summary(policy, verb, result), "warn" if result.warning else "ok")
+        self.app.request_refresh()
 
     def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
         # One line per outcome: a single joined line overflows the terminal width

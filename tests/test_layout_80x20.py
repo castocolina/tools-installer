@@ -17,6 +17,7 @@ from installer.doctor import DoctorReport
 from installer.enums import MutationHolder
 from installer.model import Tool, load_categories, load_tools
 from installer.platform import Platform
+from installer.policy import Policy, PolicyResult
 from installer.resolve import resolve_methods
 from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
 from installer.uninstall import SweepResult
@@ -38,6 +39,7 @@ _TIERS = ["system", "user", "ai"]
 def _app(
     tmp_path: Path,
     service: VersionRefreshService | None = None,
+    policies: list[Policy] | None = None,
 ) -> UnifiedApp:
     tools = load_tools(REGISTRY)
     if service is None:
@@ -59,7 +61,7 @@ def _app(
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),
         ),
-        policies=PolicyInputs(policies=[], link_mode=lambda: "symlink"),
+        policies=PolicyInputs(policies=policies or [], link_mode=lambda: "symlink"),
         version_refresh=service,
     )
 
@@ -286,3 +288,32 @@ async def test_the_longest_refusal_fits_80_columns(tmp_path: Path) -> None:
         assert cell_len(status.text) <= 78
         assert len(rows_of(screen, status)) == 1
         assert rows_of(screen, screen.query_one(FooterBar)) == {19}
+
+
+async def test_a_drifted_policies_table_fits_80x20(tmp_path: Path) -> None:
+    def result() -> PolicyResult:
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    drifted = [
+        Policy(
+            id=f"drift{n}",
+            label=f"a long policy label number {n}",
+            description="a description long enough to need the Effect column budget",
+            active=False,
+            apply=result,
+            remove=result,
+            is_active=lambda: False,
+            owned=lambda: True,
+        )
+        for n in range(3)
+    ]
+    app = _app(tmp_path, policies=drifted)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "policies")
+        await pilot.pause()
+        table = screen.query_one(DataTable[Any])
+        assert {table.get_cell(p.id, "state").plain for p in drifted} == {"! [drift]"}
+        spans = _column_spans(table)
+        # The drift label is the widest State cell; State and Policy stay on screen.
+        assert spans["State"][1] <= 78, spans
+        assert spans["Policy"][1] <= 78, spans

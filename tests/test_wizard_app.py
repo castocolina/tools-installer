@@ -4841,7 +4841,12 @@ async def test_a_second_toggle_is_refused_while_a_daemon_toggle_is_in_flight(
         applies.append("apply")
         return _ok_result()
 
-    policy = replace(_daemon_policy(tmp_path), active=False, apply=slow_apply)
+    policy = replace(
+        _daemon_policy(tmp_path),
+        active=False,
+        apply=slow_apply,
+        is_active=lambda: bool(applies),  # the pass the toggle requests re-reads the real state
+    )
     app = _daemon_app(tmp_path, policy=policy, daemon_default=None)
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
