@@ -2535,6 +2535,20 @@ async def test_an_audit_that_started_before_a_mutation_records_nothing(tmp_path:
             release.set()
 
 
+async def test_an_unexpected_audit_error_does_not_kill_the_app():
+    # C-13: an exception run_live does not map must not reach Textual.
+    def audit() -> NodeGlobalsReport:
+        raise ValueError("bad pnpm json")
+
+    app = _family_app(tools=[_node_tool()], node_globals=audit)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await settle(app, pilot)
+        assert app.is_running
+        assert not cast(Any, app.view("doctor")).globals_auditing
+
+
 async def test_a_hostile_pnpm_reason_renders_literally(tmp_path: Path):
     service = _real_service(tmp_path)
     reason = "[red]x[/red]\x1b[31mboom"
