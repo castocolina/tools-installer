@@ -497,6 +497,9 @@ def _capture_app(
             """See `_render_published`."""
 
     monkeypatch.setattr(setup, "UnifiedApp", _App)
+    # The stand-in never runs the daemon-default worker that finishes the armed
+    # collector, so main would otherwise sit out the full 5 s wait every test.
+    monkeypatch.setattr(setup, "DAEMON_DEFAULT_WAIT_SECONDS", 0.01)
     return seen
 
 
