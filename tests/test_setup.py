@@ -724,87 +724,6 @@ def test_the_uninstall_view_reads_every_environment_row_live(
     assert inputs.has_path_block() is True
 
 
-def test_the_uninstall_rows_closure_re_reads_presence_live(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The rows closure re-reads presence on every call rather than closing
-    over the startup `installed` map (D-06) -- the same live-re-read shape
-    `test_build_app_reresolve_reads_live_inventory_not_cache` already proves
-    for ownership, applied here to the row list `_build_app` hands the
-    Uninstall screen."""
-    _sandbox(monkeypatch, tmp_path)
-    tool = Tool(
-        id="fd",
-        name="fd",
-        category="search",
-        cmd="fd",
-        methods=(Method(kind="brew", params={"formula": "fd"}),),
-        tier="system",
-    )
-
-    def _one_tool(_registry: object) -> list[Tool]:
-        return [tool]
-
-    monkeypatch.setattr(setup, "load_tools", _one_tool)
-    present = {"fd": False}
-
-    def fake_is_installed(t: Tool) -> bool:
-        return present[t.id]
-
-    _bind_refresh(monkeypatch, VersionRefreshService, present=fake_is_installed)
-    seen = _capture_app(monkeypatch)
-    assert setup.main(["--uninstall"]) == 0
-    inputs = seen[0]["uninstall"]
-    assert isinstance(inputs, UninstallInputs)
-
-    first = inputs.rows()
-    assert first[0].state.value == "absent"  # not installed, no userspace artifact
-    present["fd"] = True  # brew installed it in another terminal, mid-session
-    second = inputs.rows()
-    assert second[0].state.value == "managed"  # now reads as manager-installed
-
-
-def test_the_uninstall_rows_closure_calls_presence_once_per_catalog_tool(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """No quadratic re-read (Round-1 review LOW, T-15.4-21): one `rows()` call
-    invokes the presence predicate exactly once per catalog tool, never once
-    per tool per row and never more."""
-    _sandbox(monkeypatch, tmp_path)
-    tools = [
-        Tool(
-            id=f"tool-{i}",
-            name=f"tool-{i}",
-            category="search",
-            cmd=f"tool-{i}",
-            methods=(Method(kind="brew", params={"formula": f"tool-{i}"}),),
-            tier="system",
-        )
-        for i in range(5)
-    ]
-
-    def _five_tools(_registry: object) -> list[Tool]:
-        return tools
-
-    monkeypatch.setattr(setup, "load_tools", _five_tools)
-    calls: list[str] = []
-
-    def counting_is_installed(t: Tool) -> bool:
-        calls.append(t.id)
-        return False
-
-    _bind_refresh(monkeypatch, VersionRefreshService, present=counting_is_installed)
-    seen = _capture_app(monkeypatch)
-    assert setup.main(["--uninstall"]) == 0
-    inputs = seen[0]["uninstall"]
-    assert isinstance(inputs, UninstallInputs)
-    calls.clear()
-
-    inputs.rows()
-    assert len(calls) == len(tools)
-    assert sorted(calls) == sorted(tool.id for tool in tools)
-
-
 def test_the_uninstall_view_reads_the_app_catalog_and_service(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -3987,36 +3906,6 @@ def test_install_binding_passes_present(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert len(recorded) == 1
     assert recorded[0]["present"] == built[0].is_present
     assert recorded[0]["checksum_policy"] == "continue"
-
-
-def test_uninstall_rows_and_hints_read_the_state(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _sandbox(monkeypatch, tmp_path)
-    tool = Tool(
-        id="rg",
-        name="ripgrep",
-        category="search",
-        cmd="rg",
-        methods=(Method(kind="dnf", params={"package": "ripgrep"}),),
-        tier="system",
-    )
-    monkeypatch.setattr(setup, "is_installed", _always_installed)
-    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
-    inputs = _wired(monkeypatch, [tool])["uninstall"]
-    assert isinstance(inputs, UninstallInputs)
-    service = built[0]
-    service.publish([pass_state(tool, platform=service.platform, ownership=_dnf_owned_rg())])
-    managed = next(row for row in inputs.rows() if row.tool.id == "rg")
-    assert managed.state.value == "managed"
-    assert "dnf remove ripgrep" in managed.hint
-    assert managed.manager is not None
-    service.publish(
-        [pass_state(tool, platform=service.platform, present=False, ownership=_dnf_owned_rg())]
-    )
-    absent = next(row for row in inputs.rows() if row.tool.id == "rg")
-    assert absent.state.value != "managed"
-    assert "ripgrep" not in absent.hint
 
 
 def test_update_service_reresolves_through_the_service(

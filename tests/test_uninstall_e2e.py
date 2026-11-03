@@ -73,7 +73,6 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path, Path]:
         )
 
     inputs = UninstallInputs(
-        rows=list,
         ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
@@ -132,7 +131,6 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
         )
 
     inputs = UninstallInputs(
-        rows=list,
         ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
@@ -169,7 +167,6 @@ def _error_app(home: Path) -> UnifiedApp:
     service = frozen_service(home)
     service.publish([removable_state(_dl_tool(), [bin_dir / "fd"])])
     inputs = UninstallInputs(
-        rows=list,
         ban_names=list,
         has_path_block=lambda: False,
         remove=_boom,

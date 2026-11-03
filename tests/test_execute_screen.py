@@ -328,7 +328,6 @@ def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),

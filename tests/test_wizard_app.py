@@ -175,7 +175,6 @@ def _uninstall_inputs(
     """The environment inputs keep the plain-value convenience: they are
     predicates, and most tests only care about one fixed reading."""
     return UninstallInputs(
-        rows=list,  # unread since 21-12 task 1; the field goes in task 2
         ban_names=_predicate(ban_names if ban_names is not None else []),
         has_path_block=_predicate(has_path_block),
         remove=remove,

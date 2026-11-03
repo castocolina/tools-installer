@@ -64,7 +64,6 @@ def _family_app(
         fix_preview="preview",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=lambda: [],
             has_path_block=has_path_block,
             remove=lambda _decision: SweepResult(),

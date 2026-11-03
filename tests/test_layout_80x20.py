@@ -53,7 +53,6 @@ def _app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            rows=list,
             ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),

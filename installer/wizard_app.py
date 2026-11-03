@@ -85,7 +85,7 @@ from installer.ui_common import (
     multiline_summary,
     run_live,
 )
-from installer.uninstall import SweepResult, ToolRow, policy_owned, reverse_dependencies
+from installer.uninstall import SweepResult, policy_owned, reverse_dependencies
 from installer.update import UpdateService
 from installer.version_status import (
     ToolState,
@@ -98,36 +98,21 @@ from installer.version_status import (
 
 @dataclass(frozen=True)
 class UninstallInputs:
-    """Everything the UninstallScreen needs: every classified tool (catalog
-    parity, not just the removable ones), the active ban names, whether a managed
-    PATH block exists, the active shell-tweak ids, the live removal closure bound
-    by the composition root, and an optional post-removal invalidate seam.
+    """Everything the UninstallScreen needs besides the published tool state:
+    the active ban names, whether a managed PATH block exists, the active
+    shell-tweak ids, the live removal closure bound by the composition root, and
+    an optional post-removal invalidate seam.
 
-    All four of `rows`/`ban_names`/`has_path_block`/`tweak_ids` are PREDICATES,
-    not their results, for the same reason: each is mutated live by another view
-    in the same process (or, for `rows`, by this screen's own removal action).
-    `rows` used to be documented as a safe snapshot on the claim that nothing
-    installs or removes a tool while the app runs -- that claim became false the
-    moment Phase 13 shipped live in-TUI install execution, and a frozen list is
-    exactly the stale-snapshot failure the other three fields already guard
-    against: the Policies view writes the ban's shims and aliases and toggles
-    the tweaks, the Doctor view writes the very managed PATH block
-    `has_path_block` detects, and an install or removal performed anywhere in
-    the session changes what `rows` should return next. A value frozen at
-    construction goes stale the moment the user does -- stale-False leaves the
-    lever for something they just enabled/installed unreachable, and stale-True
-    offers a lever that removes nothing while the summary claims it did.
-    `UninstallScreen._resync` re-evaluates all four on every entry and on every
-    completed background ownership refresh.
+    `ban_names`, `has_path_block` and `tweak_ids` are PREDICATES, not their
+    results, because each is mutated live by another view in the same process:
+    the Policies view writes the ban's shims and aliases and toggles the tweaks,
+    and the Doctor view writes the very managed PATH block `has_path_block`
+    detects. A value frozen at construction goes stale the moment the user
+    does. `UninstallScreen` re-reads all three on every entry and on every
+    publish. The tool rows are not an input: they are a projection of the
+    published state (`version_status.uninstall_group`, `uninstall_label` and
+    `uninstall_detail`), so no second classification can disagree with it."""
 
-    `rows` is deliberately typed as strictly a callable rather than
-    `list[ToolRow] | Callable[[], list[ToolRow]]`: a union would keep the
-    stale-snapshot shape representable and type-checkable forever, so the next
-    construction site would get to reintroduce exactly the bug this migration
-    removes. Migrating every existing construction site once is cheaper than a
-    permanently ambiguous field (Round-1 review HIGH)."""
-
-    rows: Callable[[], list[ToolRow]]
     ban_names: Callable[[], list[str]]
     has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
