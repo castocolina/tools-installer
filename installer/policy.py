@@ -493,6 +493,16 @@ def ban_policy(
     )
 
 
+def _installed_predicate(
+    installed_tools: Mapping[str, bool] | Callable[[str], bool] | None,
+) -> Callable[[str], bool]:
+    """A live predicate as-is; a mapping (or None) as a lookup that defaults to False."""
+    if callable(installed_tools):
+        return installed_tools
+    snapshot = installed_tools or {}
+    return lambda tool_id: snapshot.get(tool_id, False)
+
+
 def _required_bin_dir(bundle: TweakBundle, bin_dir: Path | None) -> Path | None:
     if bundle.executables and bin_dir is None:
         raise ValueError(f"bundle '{bundle.id}' requires a managed bin_dir")
@@ -504,7 +514,7 @@ def tweak_policy(
     *,
     rc_path: Path,
     bin_dir: Path | None = None,
-    installed_tools: Mapping[str, bool] | None = None,
+    installed_tools: Mapping[str, bool] | Callable[[str], bool] | None = None,
     ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
 ) -> Policy:
     """A curated shell-tweak bundle as a Policy, parallel to ban_policy.
@@ -513,6 +523,9 @@ def tweak_policy(
     is "the bundle's block is present in rc_path". Idempotent (reuses tweaks'
     block machinery). The id is namespaced `tweak:<id>` so it never collides with
     the ban or another bundle in the Policies tab.
+
+    `installed_tools` is a mapping or a live predicate; prerequisites are read
+    when rendered or applied (`missing_requires_now`), not frozen at build time.
 
     `ensure_sourced_from`, when non-empty, is the split-mode rc file list: apply
     also wires each one to `source rc_path` via installer.shellrc.ensure_source —
@@ -583,10 +596,11 @@ def tweak_policy(
             warning=None,
         )
 
-    installed_tools = installed_tools or {}
-    missing_requires = tuple(
-        tool_id for tool_id in bundle.requires if not installed_tools.get(tool_id, False)
-    )
+    is_installed = _installed_predicate(installed_tools)
+
+    def _missing() -> tuple[str, ...]:
+        return tuple(tool_id for tool_id in bundle.requires if not is_installed(tool_id))
+
     return Policy(
         id=f"tweak:{bundle.id}",
         label=bundle.label,
@@ -599,7 +613,8 @@ def tweak_policy(
         # trusted it would move the wrong set.
         is_active=lambda: tweak_present(bundle, rc_path),
         requires=bundle.requires,
-        missing_requires=missing_requires,
+        missing_requires=_missing(),
+        missing_requires_now=_missing,
         link_mode_aware=True,
     )
 
@@ -794,6 +809,7 @@ def omz_plugins_policy(
         active=plugins_owned(state_path),
         apply=_apply,
         remove=_remove,
+        is_active=lambda: plugins_owned(state_path),
         requires=("oh-my-zsh",),
         missing_requires=read_missing_requires(),
         missing_requires_now=read_missing_requires,
@@ -835,7 +851,7 @@ def daemon_policy(
     wrapper_bin_dir: Path,
     script_path: Path,
     state_path: Path,
-    installed_tools: Mapping[str, bool],
+    installed_tools: Mapping[str, bool] | Callable[[str], bool],
     path_value: str,
     tmpdir_value: str,
     home_value: str,
@@ -1001,9 +1017,11 @@ def daemon_policy(
             warning=None,
         )
 
-    missing_requires = tuple(
-        tool_id for tool_id in ("fd", "rg") if not installed_tools.get(tool_id, False)
-    )
+    is_installed = _installed_predicate(installed_tools)
+
+    def _missing() -> tuple[str, ...]:
+        return tuple(tool_id for tool_id in ("fd", "rg") if not is_installed(tool_id))
+
     return Policy(
         id="daemon:prune-tmpdir",
         label="Background tmpdir cleanup",
@@ -1015,7 +1033,8 @@ def daemon_policy(
         apply=_apply,
         remove=_remove,
         requires=("fd", "rg"),
-        missing_requires=missing_requires,
+        missing_requires=_missing(),
+        missing_requires_now=_missing,
         hard_requires=False,
         log_path=log_path,
         set_schedule=_set_schedule,
@@ -1040,7 +1059,7 @@ def linux_daemon_policy(
     wrapper_bin_dir: Path,
     script_path: Path,
     state_path: Path,
-    installed_tools: Mapping[str, bool],
+    installed_tools: Mapping[str, bool] | Callable[[str], bool],
     path_value: str,
     tmpdir_value: str,
     home_value: str,

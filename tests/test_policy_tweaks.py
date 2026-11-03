@@ -238,3 +238,26 @@ def test_tweak_policy_split_mode_alias_resolves_in_a_fresh_shell(tmp_path: Path)
     )
     assert result.returncode == 0, result.stderr
     assert "dangerously-bypass-approvals-and-sandbox" in result.stdout
+
+
+def test_tweak_policy_reads_requirements_live(tmp_path: Path) -> None:
+    installed = {"watch": False}
+    policy = tweak_policy(
+        _bundle("docker"),
+        rc_path=tmp_path / ".zshrc",
+        installed_tools=lambda tool_id: installed.get(tool_id, False),
+    )
+    assert policy.missing_requirements() == ("watch",)
+    installed["watch"] = True
+    assert policy.missing_requirements() == ()
+
+
+def test_tweak_policy_mapping_callers_are_unchanged(tmp_path: Path) -> None:
+    ready = tweak_policy(
+        _bundle("docker"), rc_path=tmp_path / ".zshrc", installed_tools={"watch": True}
+    )
+    assert ready.missing_requires == ()
+    assert ready.missing_requirements() == ()
+    unknown = tweak_policy(_bundle("docker"), rc_path=tmp_path / ".zshrc", installed_tools=None)
+    assert unknown.missing_requires == ("watch",)
+    assert unknown.missing_requirements() == ("watch",)

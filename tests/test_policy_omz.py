@@ -136,6 +136,19 @@ def test_policy_rechecks_oh_my_zsh_presence_live(
     assert policy.missing_requirements() == ()
 
 
+def test_omz_policy_is_active_reads_ownership_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    policy = omz_plugins_policy(
+        zshrc_path=_zshrc(tmp_path), state_path=tmp_path / ".myshellrc", present=True
+    )
+    assert policy.is_active is not None
+    assert policy.is_active() is False
+    policy.apply()
+    assert policy.is_active() is True
+
+
 def test_apply_on_an_inert_zshrc_repairs_the_template_then_enables_plugins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
