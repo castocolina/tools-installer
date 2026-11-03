@@ -74,6 +74,7 @@ from installer.ownership import (
     owner_label,
     query_uv_tool_dir,
     read_inventory,
+    removal_hint,
     removal_label,
     resolve_ownership,
 )
@@ -1890,9 +1891,10 @@ def uninstall_label(state: ToolState | None) -> str:
 
 
 def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[str] = ()) -> str:
-    """The Uninstall detail sentence: proof for a removable row, the health words
-    (`HEALTH_DETAIL`) for nothing to do. Pure: reads only `state`."""
-    del tool, required_by  # used by the managed branch
+    """The Uninstall detail sentence, reusing `removal_hint` and `HEALTH_DETAIL`.
+
+    Pure: reads only `state`. An unknown owner is never attributed (T-21-13).
+    """
     group = uninstall_group(state)
     if state is None or group is None:
         return HEALTH_DETAIL[Health.CHECKING]
@@ -1902,6 +1904,23 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
         return state.reasons[0] if state.reasons else HEALTH_DETAIL[Health.UNAVAILABLE]
     if group is UninstallState.REMOVABLE:
         if ADOPTED_NOTE in state.reasons:
-            return ADOPTED_NOTE
-        return RECEIPT_PROOF_NOTE if state.receipt is not None else LAYOUT_PROOF_NOTE
-    return " · ".join(state.reasons)
+            text = ADOPTED_NOTE
+        else:
+            text = RECEIPT_PROOF_NOTE if state.receipt is not None else LAYOUT_PROOF_NOTE
+    elif state.health is Health.BROKEN:
+        text = BROKEN_REPAIR_NOTE
+    elif state.ownership.owner == "unknown":
+        text = UNKNOWN_OWNER_NOTE
+    else:
+        hint = removal_hint(state.ownership, tool.cmd)
+        if hint is None:
+            text = " · ".join(state.reasons)
+        elif state.ownership.active_path is not None:
+            text = f"{hint} — found at {state.ownership.active_path}"
+        else:
+            text = hint
+    if state.removable.yourself:
+        text += f" · remove it yourself: {', '.join(str(p) for p in state.removable.yourself)}"
+    if required_by:
+        text += f" · required by {', '.join(required_by)}"
+    return text
