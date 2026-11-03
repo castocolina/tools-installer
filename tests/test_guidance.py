@@ -729,3 +729,16 @@ def test_only_broken_links_is_a_problem(tmp_path: Path):
     assert has_problems(report) is True
     items = doctor_guidance(report)
     assert not any("healthy" in item.title.lower() for item in items)
+
+
+def test_node_globals_guidance_meaning_is_unchanged() -> None:
+    report = NodeGlobalsReport(
+        entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),),
+        missing=("mmdc",),
+        managed=("@mermaid-js/mermaid-cli",),
+    )
+    assert node_globals_guidance(report)[0].meaning == (
+        "pnpm still tracks mmdc globally, but the command no longer "
+        "resolves on PATH. A pnpm self-update leaves the globals installed "
+        "by earlier `pnpm add -g` invocations behind in a stale directory."
+    )

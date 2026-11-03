@@ -14,7 +14,7 @@ from installer.diskusage import DISK_FREE_WARN_PERCENT, TMP_USED_WARN_PERCENT, D
 from installer.doctor import DoctorReport, has_problems
 from installer.enums import DaemonState, Severity
 from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
-from installer.pnpm_globals import NodeGlobalsReport
+from installer.pnpm_globals import PNPM_TRACKED_OFF_PATH, NodeGlobalsReport
 from installer.rcclean import PathWriterLine
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, system_scope_warning
 
@@ -313,9 +313,9 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
             Guidance(
                 title="pnpm-managed global set is incomplete",
                 meaning=(
-                    f"pnpm still tracks {names} globally, but the command no longer "
-                    "resolves on PATH. A pnpm self-update leaves the globals installed "
-                    "by earlier `pnpm add -g` invocations behind in a stale directory."
+                    PNPM_TRACKED_OFF_PATH.format(names=names) + " A pnpm self-update leaves the "
+                    "globals installed by earlier `pnpm add -g` invocations behind in a "
+                    "stale directory."
                 ),
                 # The prefix is load-bearing: DoctorScreen._tui_guidance rewrites a
                 # next_step only when it starts with a known literal prefix — today

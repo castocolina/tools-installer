@@ -77,6 +77,8 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import (
+    PNPM_TRACKED_OFF_PATH,
+    audit_node_globals,
     incomplete_install_groups,
     node_install_policy,
     pnpm_global_packages,
@@ -692,6 +694,25 @@ def _pnpm_group_facts(
         fact = _ConfigFacts((f"pnpm group incomplete: missing {names}",), steps)
         facts[tool_id] = facts.get(tool_id, _NO_FACTS).plus(fact)
     return facts
+
+
+def _pnpm_missing_facts(
+    tools: Sequence[Tool], packages: frozenset[str] | None, which: Callable[[str], str | None]
+) -> dict[str, _ConfigFacts]:
+    """D-13: tools pnpm still tracks whose command no longer resolves.
+
+    One call to the Doctor's own rule; `smoke` is stubbed so the pass runs no
+    subprocess.
+    """
+    if packages is None:
+        return {}
+    report = audit_node_globals(
+        tools, which=which, managed=lambda: tuple(packages), smoke=lambda _cmd: None
+    )
+    return {
+        tool_id: _ConfigFacts((PNPM_TRACKED_OFF_PATH.format(names=tool_id),))
+        for tool_id in report.missing
+    }
 
 
 def _run_nothing(cmd: list[str]) -> None:
@@ -1662,10 +1683,12 @@ class VersionRefreshService:
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
-        config = _merge_facts(
-            self._terminal_facts(platform), _pnpm_group_facts(tools, inventory.pnpm_globals)
-        )
         which = self._looked_through
+        config = _merge_facts(
+            self._terminal_facts(platform),
+            _pnpm_group_facts(tools, inventory.pnpm_globals),
+            _pnpm_missing_facts(tools, inventory.pnpm_globals, which),
+        )
         native = self._native_probe
         if native is not None and platform.os != "macos":
             # D-11: ONE batched path query per pass, over the live paths no tracked

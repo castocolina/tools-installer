@@ -4701,7 +4701,7 @@ def _group_service(
         probe_output=lambda _argv: "1.0.0",
         now=lambda: _STATE_NOW,
         managed_bin_dir=tmp_path / "managed",
-        which=lambda _cmd: None,
+        which=lambda cmd: f"/bin/{cmd}" if cmd in present else None,
         artifacts_for=lambda _tool: [],
         read_inventory_fn=inventory,
         read_outdated_fn=_empty_outdated,
@@ -5701,3 +5701,45 @@ def test_evidence_is_read_under_the_lock_as_a_snapshot(tmp_path: Path) -> None:
     assert "late" not in first["rg"].reasons
     service.invalidate(reason="t")
     assert "late" in _settled_states(service, _pending_tools())["rg"].reasons
+
+
+_OFF_PATH = "pnpm still tracks mmdc globally, but the command no longer resolves on PATH."
+
+
+def _off_path_service(
+    tmp_path: Path, pnpm_globals: frozenset[str] | None, *, resolves: bool
+) -> VersionRefreshService:
+    def inventory(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae={},
+            brew_casks={},
+            pnpm_globals=pnpm_globals,
+            uv_tools={},
+            brew_prefix=None,
+        )
+
+    return offline_service(
+        tmp_path / "versions.json",
+        skill_home=tmp_path,
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        which=(lambda cmd: f"/bin/{cmd}") if resolves else (lambda _cmd: None),
+        read_inventory_fn=inventory,
+    )
+
+
+def test_pass_reports_a_pnpm_tracked_command_that_left_path(tmp_path: Path) -> None:
+    service = _off_path_service(tmp_path, frozenset({_MMDC_PKG}), resolves=False)
+    state = _settled_states(service, [_node_pkg_tool("mmdc", _MMDC_PKG)])["mmdc"]
+    assert _OFF_PATH in state.reasons
+    assert state.health is Health.MISSING
+
+
+def test_pass_adds_no_pnpm_fact_when_the_command_resolves_or_pnpm_is_unknown(
+    tmp_path: Path,
+) -> None:
+    tools = [_node_pkg_tool("mmdc", _MMDC_PKG)]
+    resolving = _off_path_service(tmp_path / "a", frozenset({_MMDC_PKG}), resolves=True)
+    assert _OFF_PATH not in _settled_states(resolving, tools)["mmdc"].reasons
+    unknown = _off_path_service(tmp_path / "b", None, resolves=False)
+    assert _OFF_PATH not in _settled_states(unknown, tools)["mmdc"].reasons
