@@ -1548,6 +1548,8 @@ class PoliciesScreen(AppScreen):
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
+        # Each policy's prerequisites as last read; no entry means not (yet) readable.
+        self._missing: dict[str, tuple[str, ...]] = {}
         self.error: str | None = None
         self.detail_text = ""
         # True while the one-shot competing-mechanism warm-up worker runs.
@@ -1573,15 +1575,13 @@ class PoliciesScreen(AppScreen):
         for policy in self._policies:
             effect_kind = "scheduled job" if policy.log_path is not None else "shell config"
             table.add_row(
-                self._state_cell(self.active_state[policy.id]),
+                Text(""),
                 Text(policy.label, style="bold yellow"),
-                self._requires_cell(policy),
+                Text(""),
                 Text(f"{effect_kind}: {policy.description}", style="dim"),
                 key=policy.id,
             )
         table.focus()
-        self._set_detail(self._policies[0] if self._policies else None)
-        self._refresh_link_mode_line()
         if self._competing is not None:
             self.competing_probing = True
             self._probe_competing_worker()
@@ -1610,14 +1610,50 @@ class PoliciesScreen(AppScreen):
             return
         line.update(f"PATH link mode: {self._link_mode()}  (press m to change)")
 
-    def _state_cell(self, active: bool) -> Text:
+    def state_refreshed(self) -> None:
+        """Render every row from a fresh read of the machine (D-04, D-12).
+
+        The AppScreen default `enter_view` calls this on every entry and the
+        app calls it on every publish while Policies is on top.
+        """
+        if not self.is_mounted:
+            return
+        table = self.query_one(DataTable[Any])
+        for policy in self._policies:
+            self._read_live_state(policy)
+            self._read_requirements(policy)
+            table.update_cell(policy.id, "state", self._state_cell(policy.id), update_width=True)
+            table.update_cell(policy.id, "requires", self._requires_cell(policy), update_width=True)
+        self._set_detail(self._highlighted_policy())
+        self._refresh_link_mode_line()
+
+    def _read_live_state(self, policy: Policy) -> None:
+        # A state_cache policy is read on a worker (21-18); one without
+        # is_active keeps the state its last toggle left.
+        if policy.is_active is None or policy.state_cache is not None:
+            return
+        live, _error = run_live(policy.is_active)
+        if live is not None:
+            self.active_state[policy.id] = live
+
+    def _read_requirements(self, policy: Policy) -> None:
+        missing, _error = run_live(policy.missing_requirements)
+        if missing is not None:
+            self._missing[policy.id] = missing
+
+    def _state_cell(self, policy_id: str) -> Text:
         # A ●/○ glyph carries the state independent of color: the lone row is
         # always focused, so the selection highlight flattens the green/dim cue.
+        active = self.active_state.get(policy_id)
+        if active is None:
+            return Text("")
         label = "● [on]" if active else "○ [off]"
         return Text(label, style="green" if active else "dim")
 
     def _requires_cell(self, policy: Policy) -> Text:
-        missing_requires = policy.missing_requirements()
+        missing_requires = self._missing.get(policy.id)
+        if missing_requires is None:
+            return Text("")
         if missing_requires and policy.hard_requires:
             return Text("missing: " + ", ".join(missing_requires), style="bold yellow")
         if missing_requires:
@@ -1632,7 +1668,7 @@ class PoliciesScreen(AppScreen):
         return next((policy for policy in self._policies if policy.id == policy_id), None)
 
     def _policy_detail(self, policy: Policy) -> str:
-        missing_requires = policy.missing_requirements()
+        missing_requires = self._missing.get(policy.id)
         details = {
             "ban": (
                 "Blocks bare pip and pip3, redirects npx to pnpm dlx, and routes"
@@ -1744,7 +1780,7 @@ class PoliciesScreen(AppScreen):
                 f"{', '.join(missing_requires)}. Not required — apply still runs and "
                 "falls back automatically."
             )
-        elif policy.requires:
+        elif policy.requires and missing_requires is not None:
             lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
         lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
         if policy.id.startswith("tweak:"):
@@ -1921,7 +1957,7 @@ class PoliciesScreen(AppScreen):
         self.active_state[policy_id] = resolved
         if self.is_mounted:
             self.query_one(DataTable[Any]).update_cell(
-                policy_id, "state", self._state_cell(resolved)
+                policy_id, "state", self._state_cell(policy_id)
             )
             highlighted = self._highlighted_policy()
             if highlighted is not None and highlighted.id == policy_id:
@@ -1934,7 +1970,9 @@ class PoliciesScreen(AppScreen):
         if self.app.refuse_if_mutating(self):
             return
         active = self.active_state[policy.id]
-        missing_requires = policy.missing_requirements()
+        # Re-read at the mutation point: a prerequisite can land after the render.
+        self._read_requirements(policy)
+        missing_requires = self._missing.get(policy.id)
         if not active and missing_requires and policy.hard_requires:
             self.status.set(
                 "Install required tool(s) first: "
@@ -1988,7 +2026,8 @@ class PoliciesScreen(AppScreen):
             return
         new_active = not active
         self.active_state[policy.id] = new_active
-        self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(new_active))
+        self.query_one(DataTable[Any]).update_cell(policy.id, "state", self._state_cell(policy.id))
+        self._read_requirements(policy)
         self.query_one(DataTable[Any]).update_cell(
             policy.id, "requires", self._requires_cell(policy)
         )

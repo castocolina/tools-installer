@@ -1066,7 +1066,17 @@ class VersionRefreshService:
         return state.present
 
     def installed_or(self, launch: Mapping[str, bool]) -> Callable[[str], bool]:
-        return lambda tool_id: launch.get(tool_id, False)
+        """Presence by id for render-time callers: a known state answers
+        `state.present`, an unknown one the launch snapshot. Unlike `is_present`
+        it never probes, because it runs on the event loop."""
+
+        def installed(tool_id: str) -> bool:
+            state = self.state_of(tool_id)
+            if state is None or state.health is Health.CHECKING:
+                return launch.get(tool_id, False)
+            return state.present
+
+        return installed
 
     def _default_present(self, tool: Tool) -> bool:
         return is_installed(tool, which=self._looked_through, default_bin_dir=self._managed_bin_dir)
