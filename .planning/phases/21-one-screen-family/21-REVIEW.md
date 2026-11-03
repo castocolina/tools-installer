@@ -722,3 +722,137 @@ Batches B to E all edit `installer/wizard_app.py`, in different classes. Run the
 **Not in a batch:**
 - Waiting on the user: C-08, the second half of C-23, C-25, C-26, C-27, C-28.
 - Backlog, pre-existing mechanism: C-22.
+
+
+## Re-review of the fix loop (182e876..HEAD)
+
+**Reviewed:** 2026-11-03, depth standard, by gsd-code-reviewer. The scope is 62 commits (batches A to F) and the 10 source files they touched: `installer/{app,catalog_tui,guidance,policy,render,ui_common,update,version_status,wizard_app}.py` and `pyproject.toml`/CI. The tests and the amended CONTEXT D-06/D-10, UI-SPEC and `.claude/architecture.md` were read against that source.
+
+**Method:** each fix was read against its C-id in the table above and in `21-REVIEW-FIX.md`. Textual 8.2.7 internals were checked where ordering matters (`Screen.dismiss`, `App.pop_screen`, `_replace_screen`, `MessagePump.post_message`, MRO handler dispatch, `App.BINDINGS`). Two findings were proved with throwaway pilots kept outside the repo, built from the existing test helpers (`_removal_app`, `_hold_a_removal`, `frozen_service`, `_family_app`). No source or test file was changed.
+
+### Verdict per fix
+
+- **Fix resolves the finding and no locked rule regresses:** C-01..C-05, C-07, C-09..C-13, C-15..C-17, C-20, C-21, C-23, C-24, C-28, C-30..C-34. Notes:
+  - **C-09:** the epoch is captured on the loop at audit start, and `record_evidence` compares it under the service lock.
+  - **C-30:** every `begin_mutation` site still refuses first, or sits behind a modal.
+  - **C-23:** a REMOVABLE row requires installer proof, so `installer` is never a guess.
+- **Fix works but introduced a defect:** C-26 (RR-01), C-06 (RR-02), C-19 with C-08 (RR-03), C-08 (RR-04), C-14 (RR-05), C-18 (RR-06).
+- **Locked rules:**
+  - "Nothing removed without proof": C-14 is stricter now.
+  - "Unknown owner never attributed": holds.
+  - "One app mutation lock": C-18 defers the pick instead of bypassing the lock, and C-30 makes a double take raise.
+  - "Single refresh owner": the C-04 extra publish comes from the same worker.
+  - "Handlers sync": `_remove_worker` and `_exit_when_done` are workers, not handlers.
+  - "Render only through `_visible_app_screen`": `AppScreen.on_screen_resume` is a second render entry. The C-08 user decision approved it, and its guard (`is_running and app.screen is self`) is equivalent. Not counted.
+- **Checked, no finding:**
+  - **C-26, normal quit:** `q` and the first `ctrl+c` await the worker. The worker resolves only after the thread's `finally` has posted `RemovalFinished`, so the delete and the invalidate are complete.
+  - **C-26, half-written files:** receipts (`receipts.py:149`) and rc edits (`shellrc.py`) go through `atomic_write_text`, so even the forced exit cannot leave a half-written receipt or rc file. It can leave a partly deleted artifact tree, which the warning covers.
+  - **C-26, `clean_rc_duplicates` after a forced exit:** it re-reads the bytes before writing (`app.py:426-433`), so the race window with the abandoned thread is negligible.
+  - **C-08, confirm callback order:** `Screen.dismiss` queues the callback through `requester.call_next` before `pop_screen` posts `ScreenResume`. Both land in the Uninstall screen's own queue, so `_apply_removal` reads `_by_key` as the user saw it in the modal, before the resume repaint.
+  - **C-18, lost or duplicated writes:** the deferred move runs synchronously right after `end_mutation`, and keys were refused until then. No write is lost or doubled. A pick is lost only on quit, which is a documented limit.
+  - **C-21:** blanking happens only in `enter_view`.
+- **Tests:**
+  - Every behavioral fix has a RED commit, and the assertions test outcomes, not durations.
+  - The bounded waits (`release_timeout`, `wait(timeout=…)`) are fail-fast guards, never the pass condition.
+  - No new suppression: the diff only removes one `# type: ignore[method-assign]`.
+  - `faulthandler_timeout` dumps stacks and does not change any verdict.
+  - Gap: no test presses `ctrl+q` during a removal (RR-01).
+
+### High
+
+#### RR-01: `ctrl+q` during a removal exits at once and abandons the delete thread with no warning (C-26 regression)
+
+**File:** `installer/wizard_app.py:1577` (`daemon=True`), `:2751-2757` (BINDINGS), `:3456-3469`; Textual `app.py:455-462` (`Binding("ctrl+q", "quit", priority=True)` → `action_quit` → `self.exit()`).
+
+**Evidence:**
+- `UnifiedApp` does not override the `ctrl+q` binding it inherits from `App`. `UnifiedApp._merge_bindings()` lists `('ctrl+q', ['quit'])` next to `hard_abort`.
+- `action_quit` skips `_quit` and `_exit_after_removal`.
+- Before a0940de, the delete ran on a Textual thread worker, that is the asyncio default executor, which is joined at interpreter exit. So `ctrl+q` closed the UI and the delete still finished. It now runs on a daemon thread, so interpreter exit stops it mid-delete. There is no "some files may remain" message, and the exit code is 0.
+- Proved with a scratch pilot: hold a removal, press `ctrl+q`. The app stops while `remover.release` is unset, and the `uninstall-removal` thread is `daemon=True`.
+- This breaks D-10 ("the first `q` or `ctrl+c` still waits") and `.claude/architecture.md` ("A quit during a removal does not kill it").
+
+**Fix (minimal):** route Textual's quit through the same path. Either add `Binding("ctrl+q", "abort", show=False, priority=True)` to `UnifiedApp.BINDINGS` (`hard_abort` if it should allow the forced second press), or override it:
+```python
+async def action_quit(self) -> None:
+    self._quit()
+```
+Then add one pilot test: `ctrl+q` during a held removal shows `Waiting for the removal to finish…` and the app keeps running.
+
+### Important
+
+#### RR-02: an app state line queued behind another status is never retracted once a show_view flushes it (C-06 regression)
+
+**File:** `installer/wizard_app.py:3062-3083` (`_write_state_line`), `:3178-3182` (`_flush_pending_warnings`), `:3356-3358` (`_install_closed` drain).
+
+**Evidence:**
+- C-06 queues the line in `_pending_warnings` and records `_state_line = (None, line)` whenever the visible status is non-empty. That is now the common case: any refusal, result or standing copy on screen.
+- `show_view` → `_flush_pending_warnings`, or `_install_closed`, writes the line (joined with ` · `) onto the entered view and empties `_pending_warnings`. `_state_line` still says `(None, line)`.
+- On the next clean publish, `_write_state_line(None)` looks for the line only in the now-empty pending list. Nothing is retracted.
+- Proved with a scratch pilot: `FrozenStateService.warning` is set, the catalog status is occupied, a pass runs, then `show_view("user")`, then the warning is cleared and a clean pass runs. The user view still reads `version cache not saved: read-only — marks are current; the next start checks again`. The error variant, `tool state check failed: … — the next change retries it`, sticks the same way after the check has succeeded.
+- Before the fix, the line was written to the visible view and retracted from there.
+
+**Fix:** when a flush writes the queued state line, re-home it, so the retraction can find it:
+```python
+def _flush_pending_warnings(self, screen: AppScreen) -> None:
+    ...
+    pending, self._pending_warnings = self._pending_warnings, []
+    text = " · ".join(pending)
+    screen.status.set(text, "warn")
+    if self._state_line is not None and self._state_line[0] is None and self._state_line[1] in pending:
+        self._state_line = (screen, text)
+```
+Apply the same re-homing in the `_install_closed` drain. Add a RED test following the pilot above.
+
+### Minor
+
+#### RR-03: an unreachable systemd user manager now overwrites every Policies result on the next render (C-19 with C-08)
+
+**File:** `installer/policy.py:1394-1400`; `installer/wizard_app.py:1841-1843`, `:1912-1914`; `installer/ui_common.py:363-371`.
+
+**Evidence:**
+- C-19 turns `DaemonState.UNAVAILABLE` into an `OSError`. This happens whenever `systemctl` is present but the user bus is not, for example over SSH with no lingering.
+- `on_job_states_read` and `state_refreshed` call `status.set(read_error, "error")` without checking for another writer's status.
+- C-08 now re-renders Policies on every modal close, and every toggle ends with a publish. So `Link mode saved: …` (from `m`), `rescheduled …` (from `t`) and a toggle summary are replaced a moment later by `Could not read the policy state: the systemd user manager could not be reached.`
+- Before C-19 this read was shown as a row state with no status. Before C-08 the picker close did not re-render.
+
+**Fix:** write a read error only over an empty status or over this screen's previous `_read_error`, the same rule as `_write_state_line`: `if not self.status.text or self.status.text == previous: self.status.set(...)`.
+
+#### RR-04: the Doctor guard chain renders twice when its last modal closes, doubling the live reads (C-08)
+
+**File:** `installer/wizard_app.py:792-797` (`_finish_guard_chain`); `installer/ui_common.py:363-371`.
+
+**Evidence:**
+- `ConfirmGuardFile` is pushed from Doctor, so its callback is queued on Doctor before `ScreenResume`.
+- The last callback runs `_finish_guard_chain`, which does a rescan plus `_refresh_guidance` (live `guard_state`) and `_refresh_body` (live `fix_preview`).
+- The resume handler then sees `_covered=True` and `app.screen is self`, and runs `state_refreshed`, which does the same two live reads again.
+- It is harmless, because both reads see the same disk, but it is exactly the "double live read" the C-08 decision meant to avoid. Before the fix, Doctor rendered here only once.
+
+**Fix:** keep only the rescan and `post_message(RefreshRequested())` in `_finish_guard_chain`, and let the resume render. Alternatively, leave it and note it in the C-08 amendment.
+
+#### RR-05: a whole-tool refusal labels every previewed path "changed", and a grown plan still reports `removed` (C-14)
+
+**File:** `installer/app.py:699-713`; `installer/uninstall.py:323-325`.
+
+**Evidence:**
+- When one previewed path drops out of the plan, the refusal lines claim `changed since the preview; not removed: {p}` for every previewed path, including the unchanged ones the tool kept.
+- The opposite case: a reinstall between preview and confirm adds a path but keeps the old ones. Every previewed path is removed, so `tool_refused` is empty and the tool lands in `removed` ("1 removed"). Meanwhile `remove_proven` keeps the receipt, because the new path is still on disk, and the next pass shows the tool as REMOVABLE again.
+- Nothing is deleted without proof, so the locked rule holds. Only the reported outcome is untrue.
+
+**Fix:**
+- Name only `[p for p in previewed if p not in named]` in the refusal lines.
+- Treat `set(plan.removable) - set(previewed)` as a refusal too ("installed files changed since the preview"), so the tool goes to `remove_failed` with its receipt kept, the same rule as a dropped path.
+
+#### RR-06: a deferred first-run link pick gives no feedback while it waits (C-18)
+
+**File:** `installer/wizard_app.py:3251-3255`, `:3142-3144`.
+
+**Evidence:**
+- While `DAEMON_DEFAULT` holds the lock, a pick is stored silently. The picker closes and the screen shows nothing.
+- `m` on Policies is refused with "A daemon apply is running…", which reads as if the pick had been rejected.
+- If the user quits before the apply ends, the pick is dropped with no message. The ledger records this limit, but the user never sees it.
+
+**Fix:** when deferring, write one line on `target`: `target.status.set(f"Link mode {value} will be saved when the background apply finishes.", "warn")`. The later `_move_first_link_mode` status replaces it.
+
+---
+
+RE_REVIEW: critical=0 high=1 important=1 minor=4
