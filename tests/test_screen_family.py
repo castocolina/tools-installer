@@ -10,16 +10,19 @@ import pytest
 from textual.screen import ModalScreen
 from textual.widgets import DataTable
 
+from installer import receipts
+from installer import uninstall as uninstall_module
+from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.enums import Severity
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership, OwnershipCandidate
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.ui_common import AppScreen
-from installer.uninstall import SweepResult
+from installer.uninstall import SweepResult, plan_removal, remove_paths
 from installer.update import UpdateOutcome
 from installer.version_status import Health, VersionRefreshService, VersionStatus
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,
@@ -27,8 +30,10 @@ from tests.state_doubles import (
     ScriptedUpdates,
     absent_state,
     frozen_service,
+    held_service,
     offline_service,
     pass_state,
+    plan_state,
     removable_state,
 )
 
@@ -594,21 +599,26 @@ _REFUSAL = "A removal is running; wait for it to finish. Navigation still works.
 
 
 def _removal_app(
-    tmp_path: Path, remover: HeldRemover, *, invalidate: bool = True
+    tmp_path: Path,
+    remover: HeldRemover,
+    *,
+    ban: bool = False,
+    service: FrozenStateService | None = None,
+    app_cls: type[UnifiedApp] = UnifiedApp,
 ) -> tuple[UnifiedApp, FrozenStateService]:
     yq, fd = _tool("yq"), _tool("fd")
-    service = frozen_service(tmp_path)
+    service = service if service is not None else frozen_service(tmp_path)
     service.publish(
         [removable_state(yq, [tmp_path / "yq"]), removable_state(fd, [tmp_path / "fd"])]
     )
     inputs = UninstallInputs(
-        ban_names=lambda: [],
+        ban_names=lambda: ["pip"] if ban else [],
         has_path_block=lambda: False,
         remove=remover,
         tweak_ids=lambda: (),
-        invalidate=(lambda: service.invalidate(reason="test")) if invalidate else None,
     )
-    return _family_app(tools=[yq, fd], version_refresh=service, uninstall=inputs), service
+    app = _family_app(tools=[yq, fd], version_refresh=service, uninstall=inputs, app_cls=app_cls)
+    return app, service
 
 
 def _uninstall_health(app: UnifiedApp, tool_id: str) -> str:
@@ -722,3 +732,283 @@ async def test_removal_outcomes_do_not_change_the_exit_code(tmp_path: Path):
         await settle(app, pilot)
         assert app.view("uninstall").status.text.startswith("1 remove failed")
         assert app.outcomes is None
+
+
+# -- 21-14: failed rows, retry, the service invalidate, one pass per removal --
+
+_FIX_LINE = "1 remove failed. Fix the cause and press enter to try again."
+
+
+def _uninstall_screen(app: UnifiedApp) -> UninstallScreen:
+    screen = app.view("uninstall")
+    assert isinstance(screen, UninstallScreen)
+    return screen
+
+
+async def _select_and_confirm(app: UnifiedApp, pilot: Any, *tool_ids: str) -> None:
+    """Toggle each id on the Uninstall table, accept, and confirm the modal."""
+    table = app.view("uninstall").query_one(DataTable[Any])
+    for tool_id in tool_ids:
+        table.move_cursor(row=table.get_row_index(tool_id))
+        await pilot.press("space")
+    await pilot.press("enter")
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+async def _detail_of(app: UnifiedApp, pilot: Any, tool_id: str) -> str:
+    table = app.view("uninstall").query_one(DataTable[Any])
+    table.move_cursor(row=table.get_row_index(tool_id))
+    await pilot.pause()
+    return _uninstall_screen(app).detail_text
+
+
+def _row_keys(app: UnifiedApp) -> list[str]:
+    table = app.view("uninstall").query_one(DataTable[Any])
+    return [str(key.value) for key in table.rows]
+
+
+def _section_of(app: UnifiedApp, tool_id: str) -> str:
+    keys = _row_keys(app)
+    return [key for key in keys[: keys.index(tool_id)] if key.startswith("#")][-1]
+
+
+async def _fail_fd_and_remove_yq(
+    app: UnifiedApp, pilot: Any, remover: HeldRemover, service: FrozenStateService
+) -> None:
+    await settle(app, pilot)
+    await app.show_view("uninstall")
+    service.queued = (absent_state(_tool("yq")),)
+    await _select_and_confirm(app, pilot, "yq", "fd")
+    await wait_until(pilot, remover.started.is_set)
+    remover.release.set()
+    await settle(app, pilot)
+
+
+async def test_a_failed_removal_keeps_the_row_selected_with_its_reason(tmp_path: Path):
+    remover = HeldRemover(
+        SweepResult(removed=("yq",), remove_failed=(("fd", "permission denied"),))
+    )
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _fail_fd_and_remove_yq(app, pilot, remover, service)
+            screen = _uninstall_screen(app)
+            table = screen.query_one(DataTable[Any])
+            assert screen.selected == {"fd"}
+            assert table.get_cell("fd", "removes").plain == "remove failed"
+            assert (await _detail_of(app, pilot, "fd")).startswith(
+                "remove failed — permission denied"
+            )
+            assert screen.status.text.splitlines()[:2] == ["1 removed, 1 remove failed", _FIX_LINE]
+            assert screen.status.severity is Severity.ERROR
+        finally:
+            remover.release.set()
+
+
+async def test_enter_retries_the_failed_rows(tmp_path: Path):
+    remover = HeldRemover(
+        SweepResult(removed=("yq",), remove_failed=(("fd", "permission denied"),))
+    )
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _fail_fd_and_remove_yq(app, pilot, remover, service)
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: len(remover.calls) == 2)
+            assert [tool.id for tool in remover.calls[1].tools] == ["fd"]
+            await settle(app, pilot)
+        finally:
+            remover.release.set()
+
+
+async def test_the_removal_invalidates_through_the_app_service(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    remover.release.set()
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        before = service.passes
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        assert service.invalidations == (before,)
+        assert service.passes == before + 1
+
+
+async def test_an_invalidate_failure_is_reported_and_the_pass_still_runs(tmp_path: Path):
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    remover.release.set()
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        before = service.passes
+        service.invalidate_error = OSError("disk")
+        await _confirm_removal(app, pilot, "yq")
+        await settle(app, pilot)
+        assert "version cache invalidation failed: disk" in app.view("uninstall").status.text
+        assert service.passes == before + 1
+
+
+async def test_an_env_only_removal_requests_a_pass_without_invalidating(tmp_path: Path):
+    remover = HeldRemover(SweepResult())
+    remover.release.set()
+    app, service = _removal_app(tmp_path, remover, ban=True)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        before = service.passes
+        await _confirm_removal(app, pilot, "#ban")
+        await settle(app, pilot)
+        assert remover.calls[0].remove_ban
+        assert service.invalidations == ()
+        assert service.passes == before + 1
+
+
+async def test_a_permission_failure_stays_selected_after_the_follow_up_pass(tmp_path: Path):
+    remover = HeldRemover(SweepResult(remove_failed=(("fd", "permission denied"),)))
+    fd = _tool("fd")
+    service = held_service(tmp_path, [removable_state(fd, [tmp_path / "fd"])])
+    service.release.set()
+    app, _service = _removal_app(tmp_path, remover, service=service)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            service.release.clear()
+            await _select_and_confirm(app, pilot, "fd")
+            await wait_until(pilot, remover.started.is_set)
+            remover.release.set()
+            await wait_until(pilot, lambda: len(service.calls) == 2)
+            assert _uninstall_screen(app).selected == {"fd"}
+            service.release.set()
+            await settle(app, pilot)
+            assert _uninstall_screen(app).selected == {"fd"}
+            assert _section_of(app, "fd") == "#removable here"
+            assert (await _detail_of(app, pilot, "fd")).startswith(
+                "remove failed — permission denied"
+            )
+        finally:
+            remover.release.set()
+            service.release.set()
+
+
+async def test_a_refused_row_leaves_the_selection_when_its_proof_is_gone(tmp_path: Path):
+    remover = HeldRemover(SweepResult(remove_failed=(("fd", "changed since the preview"),)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            service.queued = (plan_state(_tool("fd"), owner="unknown", confidence="none"),)
+            await _select_and_confirm(app, pilot, "fd")
+            await wait_until(pilot, remover.started.is_set)
+            remover.release.set()
+            await settle(app, pilot)
+            assert _uninstall_screen(app).selected == set()
+            assert _section_of(app, "fd") == "#managed elsewhere"
+            assert (await _detail_of(app, pilot, "fd")).startswith(
+                "remove failed — changed since the preview"
+            )
+        finally:
+            remover.release.set()
+
+
+async def test_a_partial_delete_keeps_its_reason_while_leftovers_remain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    opt = tmp_path / ".local" / "opt" / "fd"
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    (opt / "fd").write_text("binary")
+    (bin_dir / "fd").symlink_to(opt / "fd")
+    fd = replace(
+        _tool("fd"),
+        methods=(
+            Method(
+                kind="github_release",
+                params={"repo": "a/fd", "asset": "x", "member": "fd"},
+            ),
+        ),
+    )
+    plan = plan_removal([fd], bin_dir)
+    assert plan.removable == (bin_dir / "fd", opt)
+    link = receipts.fingerprint(bin_dir / "fd", "link")
+    directory = receipts.fingerprint(opt, "dir", key="fd")
+    assert link is not None and directory is not None
+    real_rmtree = uninstall_module.shutil.rmtree
+
+    def failing_rmtree(path: str | Path, *args: object, **kwargs: object) -> None:
+        if Path(path).name.endswith(".tools-installer.rm"):
+            raise OSError("disk gremlins")
+        real_rmtree(path)
+
+    def remove(decision: UninstallDecision) -> SweepResult:
+        del decision
+        try:
+            remove_paths([link, directory])
+        except OSError as exc:
+            return SweepResult(remove_failed=(("fd", str(exc)),))
+        return SweepResult(removed=("fd",))
+
+    service = frozen_service(tmp_path)
+    service.publish([plan_state(fd, removable=plan)])
+    inputs = UninstallInputs(
+        ban_names=lambda: [],
+        has_path_block=lambda: False,
+        remove=remove,
+        tweak_ids=lambda: (),
+    )
+    app = _family_app(tools=[fd], version_refresh=service, uninstall=inputs)
+    monkeypatch.setattr(uninstall_module.shutil, "rmtree", failing_rmtree)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("uninstall")
+        remainder = plan_removal([fd], bin_dir)
+        assert remainder.removable == () and opt in remainder.yourself
+        service.queued = (plan_state(fd, health=Health.MISSING, removable=remainder),)
+        await _select_and_confirm(app, pilot, "fd")
+        await settle(app, pilot)
+        assert _section_of(app, "fd") == "#nothing to do"
+        detail = await _detail_of(app, pilot, "fd")
+        assert detail.startswith("remove failed — disk gremlins")
+        assert f" · remove it yourself: {opt}" in detail
+        monkeypatch.setattr(uninstall_module.shutil, "rmtree", real_rmtree)
+        real_rmtree(opt)
+        service.queued = (
+            plan_state(fd, health=Health.MISSING, removable=plan_removal([fd], bin_dir)),
+        )
+        app.request_refresh()
+        await settle(app, pilot)
+        assert "remove failed" not in await _detail_of(app, pilot, "fd")
+
+
+async def test_a_failed_reason_survives_leaving_and_reentering_uninstall(tmp_path: Path):
+    remover = HeldRemover(SweepResult(remove_failed=(("fd", "permission denied"),)))
+    app, service = _removal_app(tmp_path, remover)
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _select_and_confirm(app, pilot, "fd")
+            await wait_until(pilot, remover.started.is_set)
+            remover.release.set()
+            await settle(app, pilot)
+            await app.show_view("system")
+            await app.show_view("uninstall")
+            assert (await _detail_of(app, pilot, "fd")).startswith(
+                "remove failed — permission denied"
+            )
+            remover.release.clear()
+            remover.started.clear()
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await wait_until(pilot, remover.started.is_set)
+            assert "remove failed" not in await _detail_of(app, pilot, "fd")
+            assert service.passes >= 1
+        finally:
+            remover.release.set()
