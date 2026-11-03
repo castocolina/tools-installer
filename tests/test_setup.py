@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import importlib
 import inspect
 import io
@@ -802,6 +803,33 @@ def test_the_uninstall_rows_closure_calls_presence_once_per_catalog_tool(
     inputs.rows()
     assert len(calls) == len(tools)
     assert sorted(calls) == sorted(tool.id for tool in tools)
+
+
+def test_the_uninstall_view_reads_the_app_catalog_and_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Uninstall view lists every catalog tool and reads the one service
+    the app holds; `UninstallInputs` carries no rows seam any more (D-16)."""
+    _sandbox(monkeypatch, tmp_path)
+    tools = [
+        Tool(
+            id=f"tool-{i}",
+            name=f"tool-{i}",
+            category="search",
+            cmd=f"tool-{i}",
+            methods=(Method(kind="brew", params={"formula": f"tool-{i}"}),),
+            tier="system",
+        )
+        for i in range(3)
+    ]
+    built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
+    app = setup._build_app(tools, _platform())  # pyright: ignore[reportPrivateUsage]
+    screen = app._views["uninstall"]  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(screen, UninstallScreen)
+    keys = {e.key for e in screen._entries}  # pyright: ignore[reportPrivateUsage]
+    assert {tool.id for tool in tools} <= keys
+    assert screen._version_refresh is built[0]  # pyright: ignore[reportPrivateUsage]
+    assert "rows" not in {field.name for field in dataclasses.fields(UninstallInputs)}
 
 
 def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
