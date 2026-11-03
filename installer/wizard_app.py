@@ -130,7 +130,7 @@ class UninstallInputs:
     # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
     # direct `u` update, unattended installation, the CLI uninstall route,
     # and interactive ExecuteScreen close already reuse. Called from
-    # `_apply_removal` only after `remove` reports a successful sweep, so a
+    # `on_removal_finished` only after `remove` reports a sweep, so a
     # completed removal always leaves terminal shell configuration in sync
     # (or safely reverted when zsh itself was just removed).
     terminal_sync: Callable[[], str | None] | None = None
@@ -2751,7 +2751,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
     ENABLE_COMMAND_PALETTE = False  # replace Textual's dead-ending default palette
     BINDINGS: ClassVar[list[BindingType]] = [
         # ctrl+c is the hard abort: unguarded, so it quits from anywhere — even on
-        # top of the NavScreen modal. q is the soft quit: priority so it fires on
+        # top of the NavScreen modal; during a removal the first one waits and a
+        # second one exits (D-10, C-26). q is the soft quit: priority so it fires on
         # every view, but guarded (see action_abort) to no-op under the palette.
         Binding("ctrl+c", "hard_abort", "quit", show=False, priority=True),
         Binding("q", "abort", "quit", show=True, priority=True),
@@ -3295,7 +3296,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # the base one -- no base/non-base branch needed here, unlike
         # show_view (that method branches because it pushes/pops screens;
         # this callback does neither). Presence is re-read by the refresh pass
-        # `enter_view` starts below, never swept here (D-04, see __init__).
+        # `request_refresh` starts below, never swept here (D-04, see __init__).
         warnings: list[str] = []
         # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after a
         # close event that actually changed installed-tool state -- never
@@ -3304,7 +3305,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # kitty.conf, created a brand-new wezterm.lua (CR-03), and wrote
         # konsolerc for a session that installed nothing). The zsh-removal
         # revert case is independently covered by
-        # UninstallScreen._apply_removal and _run_uninstall, so this gate
+        # UninstallScreen.on_removal_finished and _run_uninstall, so this gate
         # does not lose coverage for that scenario. Through run_live like
         # every other live core read this callback triggers (rule 3): an
         # OSError is a secondary, non-fatal warning and must never flip an
@@ -3325,9 +3326,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # future caller pushing it with this callback from the uninstall or
         # doctor view -- and a KeyError raised inside a Textual screen-result
         # callback takes the message pump down instead of degrading. No
-        # catalog on top means nothing to re-enter (enter_view is a catalog
-        # tier's own version-refresh trigger, not a generic "screen visible"
-        # signal).
+        # catalog on top means the warnings go to the visible view below.
         active = self._catalogs.get(self.current_view)
         # The revealed view renders itself on resume (C-08); ask for the pass
         # that publishes what the run changed (A11: only if it ran something).
