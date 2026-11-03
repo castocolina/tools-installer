@@ -9,7 +9,7 @@ import pytest
 from rich.console import Console
 
 from installer import daemon, shellrc
-from installer.app import run_guard, run_wizard
+from installer.app import UninstallDecision, run_guard, run_wizard
 from installer.checksums import ChecksumMismatch
 from installer.cli import Options
 from installer.diskusage import DiskPressure
@@ -4075,6 +4075,140 @@ def test_perform_uninstall_reproves_per_tool(
     assert result.warnings == (f"changed since the preview; not removed: {bin_dir / 'yq'}",)
     assert (bin_dir / "yq").exists()
     assert receipts.read("yq") is not None
+
+
+def _sweep_two_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Callable[[UninstallDecision], SweepResult], Tool, Tool, Path]:
+    """A scratch HOME holding a receipt-proven raw yq and the layout-proven fd."""
+    from installer.app import perform_uninstall
+    from tests.test_uninstall import plant_raw_yq, plant_removal_fixtures
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    fd = next(t for t in plant_removal_fixtures(tmp_path) if t.id == "fd")
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    myshellrc = tmp_path / ".myshellrc"
+    myshellrc.write_text("")
+
+    def apply(decision: UninstallDecision) -> SweepResult:
+        return perform_uninstall(
+            decision,
+            bin_dir=bin_dir,
+            myshellrc_path=myshellrc,
+            rc_paths=[],
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+            extra_policies=(),
+        )
+
+    return apply, yq, fd, bin_dir
+
+
+def test_perform_uninstall_reports_each_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-08/D-11: each selected tool is removed on its own and named in `removed`."""
+    apply, yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    decision = UninstallDecision(
+        tools=(yq, fd),
+        paths=(bin_dir / "yq", bin_dir / "fd", opt_fd),
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    result = apply(decision)
+    assert result.removed == ("yq", "fd")
+    assert result.remove_failed == ()
+    assert result.warnings == ()
+    assert not (bin_dir / "yq").exists()
+    assert not (bin_dir / "fd").is_symlink()
+    assert not opt_fd.exists()
+
+
+def test_perform_uninstall_reports_a_refused_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool whose proof drifted is `remove_failed` with the refusal line."""
+    apply, yq, _fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    (bin_dir / "yq").write_text("rewritten after install, a different size")
+    decision = UninstallDecision(
+        tools=(yq,), paths=(bin_dir / "yq",), remove_ban=False, remove_path_block=False
+    )
+    result = apply(decision)
+    line = f"changed since the preview; not removed: {bin_dir / 'yq'}"
+    assert result.remove_failed == (("yq", line),)
+    assert result.removed == ()
+    assert result.warnings == (line,)
+
+
+def _raising_remove_proven(monkeypatch: pytest.MonkeyPatch, bad: str, error: OSError) -> None:
+    """Make `installer.app.remove_proven` raise `error` for the tool `bad` only."""
+    from installer import app as app_module
+
+    real = app_module.remove_proven
+
+    def wrapper(
+        tools: list[Tool], paths: list[Path], bin_dir: Path
+    ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+        if tools[0].id == bad:
+            raise error
+        return real(tools, paths, bin_dir)
+
+    monkeypatch.setattr(app_module, "remove_proven", wrapper)
+
+
+def test_perform_uninstall_one_failed_delete_does_not_stop_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-08: fd's delete raises; yq is still removed and the ban lever still runs."""
+    apply, yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    _raising_remove_proven(monkeypatch, "fd", OSError("disk full\nsecond line"))
+    from installer.guards import guard_status, install_shims
+
+    install_shims(bin_dir)
+    assert any(guard_status(bin_dir).values())
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    decision = UninstallDecision(
+        tools=(yq, fd),
+        paths=(bin_dir / "yq", bin_dir / "fd", opt_fd),
+        remove_ban=True,
+        remove_path_block=False,
+    )
+    result = apply(decision)
+    assert result.removed == ("yq",)
+    assert result.remove_failed == (("fd", "disk full"),)
+    assert not (bin_dir / "yq").exists()
+    assert (bin_dir / "fd").is_symlink()
+    assert all(active is False for active in guard_status(bin_dir).values())
+
+
+def test_perform_uninstall_an_empty_error_reads_its_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    apply, _yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    _raising_remove_proven(monkeypatch, "fd", OSError())
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    decision = UninstallDecision(
+        tools=(fd,), paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
+    )
+    assert apply(decision).remove_failed == (("fd", "OSError failed"),)
+
+
+def test_perform_uninstall_a_tool_with_nothing_left_is_remove_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    apply, _yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
+    opt_fd = tmp_path / ".local" / "opt" / "fd"
+    decision = UninstallDecision(
+        tools=(fd,), paths=(bin_dir / "fd", opt_fd), remove_ban=False, remove_path_block=False
+    )
+    (bin_dir / "fd").unlink()
+    shutil.rmtree(opt_fd)
+    result = apply(decision)
+    assert result.remove_failed == (("fd", "changed since the preview; not removed"),)
+    assert any(str(bin_dir / "fd") in w for w in result.warnings)
+    assert any(str(opt_fd) in w for w in result.warnings)
 
 
 def test_perform_uninstall_refuses_paths_changed_since_the_preview(

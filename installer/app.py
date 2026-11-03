@@ -64,6 +64,7 @@ from installer.session import (
     SensitiveInstall,
     build_plan,
     execute_plan,
+    first_line,
 )
 from installer.shellrc import (
     collect_bin_dirs,
@@ -660,7 +661,10 @@ def perform_uninstall(
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
-    partial selection leaves the ban and PATH wiring untouched.
+    partial selection leaves the ban and PATH wiring untouched. Each selected
+    tool is removed on its own: the result's `removed` and `remove_failed`
+    name every tool's outcome, and one refusal or failed delete (`OSError`)
+    never stops the next tool or the environment levers.
 
     Returns what the tweak sweep actually did, so the view reports its effect
     rather than the snapshot it rendered its rows from. Empty when the sweep
@@ -678,7 +682,37 @@ def perform_uninstall(
     # file, dangling, looping, a drifted receipt) is refused and reported
     # through SweepResult.warnings, which the UninstallScreen already renders;
     # the rest go ahead.
-    _removed, refused = remove_proven(list(decision.tools), list(decision.paths), bin_dir)
+    # D-08: tool by tool, so one tool's refusal never stops the next. A path
+    # belongs to the selected tool whose plan names it, `yourself` included: a
+    # path that drifted since the preview is no longer proven, and only the
+    # name match still ties it to its tool.
+    refused: tuple[str, ...] = ()
+    removed: list[str] = []
+    remove_failed: list[tuple[str, str]] = []
+    claimed: set[Path] = set()
+    for tool in decision.tools:
+        plan = plan_removal([tool], bin_dir)
+        named = {*plan.removable, *plan.yourself}
+        mine = [path for path in decision.paths if path in named]
+        claimed.update(mine)
+        if not mine:
+            remove_failed.append((tool.id, "changed since the preview; not removed"))
+            continue
+        try:
+            _gone, tool_refused = remove_proven([tool], mine, bin_dir)
+        except OSError as exc:
+            remove_failed.append((tool.id, first_line(exc)))
+            continue
+        refused += tool_refused
+        if tool_refused:
+            remove_failed.append((tool.id, tool_refused[0]))
+        else:
+            removed.append(tool.id)
+    refused += tuple(
+        f"changed since the preview; not removed: {path}"
+        for path in decision.paths
+        if path not in claimed
+    )
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)
@@ -703,7 +737,12 @@ def perform_uninstall(
             and daemon_policy.clear_decided is not None
         ):
             daemon_policy.clear_decided()
-        return dataclasses.replace(swept, warnings=swept.warnings + refused)
+        return dataclasses.replace(
+            swept,
+            warnings=swept.warnings + refused,
+            removed=tuple(removed),
+            remove_failed=tuple(remove_failed),
+        )
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
     # there was no tweaks row to select at all because the daemon was already
@@ -719,4 +758,4 @@ def perform_uninstall(
         and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
-    return SweepResult(warnings=refused)
+    return SweepResult(warnings=refused, removed=tuple(removed), remove_failed=tuple(remove_failed))
