@@ -12,7 +12,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -20,7 +20,7 @@ from installer import download, executors, receipts, uninstall, version_status
 from installer.app import run_wizard
 from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
-from installer.enums import InstallStatus
+from installer.enums import InstallStatus, UninstallState
 from installer.guards import REDIRECT_SENTINEL
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
@@ -34,6 +34,7 @@ from installer.model import (
     load_tools,
 )
 from installer.ownership import (
+    OWNER_LABELS,
     ManagerInventory,
     ManagerOwnership,
     Owner,
@@ -41,6 +42,7 @@ from installer.ownership import (
     also_installed_note,
     declared_manager_label,
     owner_label,
+    removal_hint,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -62,9 +64,15 @@ from installer.version_cache import (
     should_fetch_managers,
 )
 from installer.version_status import (
+    ADOPTED_NOTE,
+    BROKEN_REPAIR_NOTE,
     BROKEN_SHIM_REASON,
+    LAYOUT_PROOF_NOTE,
     MAX_FETCHES_PER_REFRESH,
     NEEDS_BREW_REASON,
+    RECEIPT_PROOF_NOTE,
+    UNKNOWN_OWNER_NOTE,
+    UNPROVEN_NOTE,
     Health,
     SkillHostStatus,
     ToolState,
@@ -74,6 +82,9 @@ from installer.version_status import (
     resolve_github_release_status,
     resolve_status,
     tool_state,
+    uninstall_detail,
+    uninstall_group,
+    uninstall_label,
     version_notes,
 )
 from installer.versions import Release, VersionError, resolve_github_tag
@@ -5743,3 +5754,171 @@ def test_pass_adds_no_pnpm_fact_when_the_command_resolves_or_pnpm_is_unknown(
     assert _OFF_PATH not in _settled_states(resolving, tools)["mmdc"].reasons
     unknown = _off_path_service(tmp_path / "b", None, resolves=False)
     assert _OFF_PATH not in _settled_states(unknown, tools)["mmdc"].reasons
+
+
+_UNINSTALL_PATH = Path("/x/rg")
+
+
+def _uninstall_state(
+    owner: Owner = "brew",
+    *,
+    present: bool = True,
+    removable: RemovalPlan = _NO_REMOVAL,
+    receipt: Receipt | None = None,
+    notes: tuple[str, ...] = (),
+    checking: tuple[str, ...] = (),
+    broken: bool = False,
+    unavailable: bool = False,
+) -> tuple[Tool, ToolState]:
+    tool = _brew_tool()
+    if unavailable:
+        tool = Tool(
+            id="macapp",
+            name="macapp",
+            category="dev",
+            cmd="macapp",
+            methods=(Method(kind="github_release", params={"repo": "o/macapp"}, os=("macos",)),),
+        )
+    ownership = (
+        _unknown_owner(tool)
+        if owner == "unknown"
+        else _owned(tool, owner, package="ripgrep" if owner == "brew" else None)
+    )
+    platform = (
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+        if unavailable
+        else _platform()
+    )
+    state = tool_state(
+        tool,
+        generation=0,
+        platform=platform,
+        present=present,
+        ownership=replace(ownership, broken=broken),
+        version=None,
+        removable=removable,
+        receipt=receipt,
+        checking=checking,
+        notes=notes,
+    )
+    return tool, state
+
+
+_REMOVABLE = RemovalPlan((_UNINSTALL_PATH,), ())
+
+
+def _receipt(tool: Tool) -> Receipt:
+    return Receipt(
+        tool=tool.id,
+        at="2026-01-01T00:00:00+00:00",
+        method=ReceiptMethod(kind="brew", key="ripgrep"),
+        package=None,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+
+
+def _state_of(**kwargs: Any) -> ToolState:
+    return _uninstall_state(**kwargs)[1]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (None, None),
+        (_state_of(checking=("probing",)), None),
+        (_state_of(present=False), UninstallState.ABSENT),
+        (_state_of(present=False, unavailable=True), UninstallState.UNAVAILABLE),
+        (_state_of(broken=True, removable=_REMOVABLE), UninstallState.MANAGED),
+        (_state_of(removable=_REMOVABLE), UninstallState.REMOVABLE),
+        (_state_of(), UninstallState.MANAGED),
+    ],
+)
+def test_uninstall_group(state: ToolState | None, expected: UninstallState | None) -> None:
+    assert uninstall_group(state) is expected
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (None, "—"),
+        (_state_of(present=False), "—"),
+        (_state_of(present=False, unavailable=True), "—"),
+        (_state_of(), "Homebrew"),
+        (_state_of(owner="unknown", removable=_REMOVABLE), "installer"),
+        (_state_of(owner="unknown"), "unknown"),
+    ],
+)
+def test_uninstall_label(state: ToolState | None, expected: str) -> None:
+    assert uninstall_label(state) == expected
+
+
+def test_uninstall_detail_proof() -> None:
+    tool, adopted = _uninstall_state(removable=_REMOVABLE, notes=(ADOPTED_NOTE,))
+    assert uninstall_detail(tool, adopted) == ADOPTED_NOTE
+    receipted = _uninstall_state(removable=_REMOVABLE, receipt=_receipt(tool))[1]
+    assert uninstall_detail(tool, receipted) == RECEIPT_PROOF_NOTE
+    layout = _uninstall_state(removable=_REMOVABLE)[1]
+    assert uninstall_detail(tool, layout) == LAYOUT_PROOF_NOTE
+
+
+def test_uninstall_detail_nothing_to_do() -> None:
+    tool, missing = _uninstall_state(present=False)
+    assert uninstall_detail(tool, missing) == "not installed"
+    unavailable_tool, unavailable = _uninstall_state(present=False, unavailable=True)
+    assert uninstall_detail(unavailable_tool, unavailable) == unavailable.reasons[0]
+    assert uninstall_detail(tool, None) == "checking…"
+
+
+def test_uninstall_known_owner_shows_the_removal_command() -> None:
+    tool, state = _uninstall_state()
+    hint = removal_hint(state.ownership, tool.cmd)
+    assert hint is not None
+    assert "`" in hint
+    assert uninstall_detail(tool, state) == f"{hint} — found at {state.ownership.active_path}"
+
+
+def test_uninstall_known_owner_without_package_shows_the_sentence() -> None:
+    tool, state = _uninstall_state(owner="dnf")
+    state = replace(state, ownership=replace(state.ownership, active_path=None))
+    detail = uninstall_detail(tool, state)
+    assert detail == removal_hint(state.ownership, tool.cmd)
+    assert "`" not in detail
+
+
+def test_uninstall_unproven_installer_tool_shows_its_reasons() -> None:
+    tool, state = _uninstall_state(owner="installer", notes=(UNPROVEN_NOTE,))
+    assert UNPROVEN_NOTE in uninstall_detail(tool, state)
+    assert uninstall_label(state) == owner_label(state.ownership)
+
+
+def test_uninstall_unknown_owner_names_no_manager() -> None:
+    tool, state = _uninstall_state(owner="unknown")
+    detail = uninstall_detail(tool, state)
+    assert uninstall_label(state) == "unknown"
+    assert detail.startswith(UNKNOWN_OWNER_NOTE)
+    assert "`" not in detail
+    assert not any(label in detail for label in OWNER_LABELS.values())
+
+
+def test_uninstall_broken_shows_the_repair_text() -> None:
+    tool, state = _uninstall_state(broken=True)
+    assert uninstall_group(state) is UninstallState.MANAGED
+    assert uninstall_detail(tool, state).startswith(BROKEN_REPAIR_NOTE)
+
+
+def test_uninstall_detail_keeps_the_yourself_suffix() -> None:
+    tool, state = _uninstall_state(removable=RemovalPlan((), (Path("/x/rg"),)))
+    assert uninstall_detail(tool, state).endswith(" · remove it yourself: /x/rg")
+
+
+def test_uninstall_detail_keeps_the_required_by_suffix() -> None:
+    tool, state = _uninstall_state(removable=RemovalPlan((), (Path("/x/rg"),)))
+    detail = uninstall_detail(tool, state, ("fzf", "bat"))
+    assert detail.endswith(" · remove it yourself: /x/rg · required by fzf, bat")
+
+
+def test_uninstall_removable_detail_keeps_the_yourself_suffix() -> None:
+    tool, state = _uninstall_state(removable=RemovalPlan((_UNINSTALL_PATH,), (Path("/y/rg"),)))
+    assert uninstall_detail(tool, state) == f"{LAYOUT_PROOF_NOTE} · remove it yourself: /y/rg"

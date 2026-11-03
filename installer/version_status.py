@@ -56,6 +56,7 @@ from typing import Literal, cast
 import installer.locations
 from installer import receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
+from installer.enums import UninstallState
 from installer.executors import ExecutorError
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
@@ -73,6 +74,8 @@ from installer.ownership import (
     owner_label,
     query_uv_tool_dir,
     read_inventory,
+    removal_hint,
+    removal_label,
     resolve_ownership,
 )
 from installer.platform import Platform
@@ -196,6 +199,15 @@ HEALTH_MARKS: dict[Health, tuple[str, str]] = {
     Health.OK: ("✓", "green"),
     Health.MISSING: ("○", ""),
     Health.UNAVAILABLE: ("–", "dim"),
+}
+HEALTH_DETAIL: dict[Health, str] = {
+    Health.CHECKING: "checking…",
+    Health.BROKEN: "broken",
+    Health.MISCONFIGURED: "needs configuration",
+    Health.OUTDATED: "update available",
+    Health.OK: "ok",
+    Health.MISSING: "not installed",
+    Health.UNAVAILABLE: "not available on this machine",
 }
 
 
@@ -617,6 +629,10 @@ SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
 # Phase 20 binds `r` on the review screen (D-14, L-20-06).
+RECEIPT_PROOF_NOTE = "installed by this installer: receipt matches"
+LAYOUT_PROOF_NOTE = "installed in userspace — removable here"
+BROKEN_REPAIR_NOTE = "reinstall it from the catalog to repair; nothing to remove here"
+UNKNOWN_OWNER_NOTE = "owner unknown; nothing here can remove it safely"
 UNPROVEN_NOTE = "not proven: select it, then press r on the review to reinstall and adopt"
 # D-16, L-19-10: a drifted terminal -> (the row it lands on, its label). Konsole
 # has no catalog row; the zsh row carries it.
@@ -1847,3 +1863,64 @@ class VersionRefreshService:
                     self._warning = None
 
             self._write_or_queue(save_pass)
+
+
+def uninstall_group(state: ToolState | None) -> UninstallState | None:
+    """The Uninstall group of one published state, `None` while it is not known
+    yet (no state, or CHECKING). Pure: reads only `state`."""
+    if state is None or state.health is Health.CHECKING:
+        return None
+    if state.health is Health.MISSING:
+        return UninstallState.ABSENT
+    if state.health is Health.UNAVAILABLE:
+        return UninstallState.UNAVAILABLE
+    if state.health is Health.BROKEN:
+        return UninstallState.MANAGED
+    return UninstallState.REMOVABLE if state.removable.removable else UninstallState.MANAGED
+
+
+def uninstall_label(state: ToolState | None) -> str:
+    """The Installed-via cell, reusing `removal_label` then `owner_label`. Pure."""
+    group = uninstall_group(state)
+    if state is None or group in (None, UninstallState.ABSENT, UninstallState.UNAVAILABLE):
+        return "—"
+    label = removal_label(state.ownership) or owner_label(state.ownership)
+    if label is not None:
+        return label
+    return "installer" if group is UninstallState.REMOVABLE else "unknown"
+
+
+def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[str] = ()) -> str:
+    """The Uninstall detail sentence, reusing `removal_hint` and `HEALTH_DETAIL`.
+
+    Pure: reads only `state`. An unknown owner is never attributed (T-21-13).
+    """
+    group = uninstall_group(state)
+    if state is None or group is None:
+        return HEALTH_DETAIL[Health.CHECKING]
+    if group is UninstallState.ABSENT:
+        return HEALTH_DETAIL[Health.MISSING]
+    if group is UninstallState.UNAVAILABLE:
+        return state.reasons[0] if state.reasons else HEALTH_DETAIL[Health.UNAVAILABLE]
+    if group is UninstallState.REMOVABLE:
+        if ADOPTED_NOTE in state.reasons:
+            text = ADOPTED_NOTE
+        else:
+            text = RECEIPT_PROOF_NOTE if state.receipt is not None else LAYOUT_PROOF_NOTE
+    elif state.health is Health.BROKEN:
+        text = BROKEN_REPAIR_NOTE
+    elif state.ownership.owner == "unknown":
+        text = UNKNOWN_OWNER_NOTE
+    else:
+        hint = removal_hint(state.ownership, tool.cmd)
+        if hint is None:
+            text = " · ".join(state.reasons)
+        elif state.ownership.active_path is not None:
+            text = f"{hint} — found at {state.ownership.active_path}"
+        else:
+            text = hint
+    if state.removable.yourself:
+        text += f" · remove it yourself: {', '.join(str(p) for p in state.removable.yourself)}"
+    if required_by:
+        text += f" · required by {', '.join(required_by)}"
+    return text
