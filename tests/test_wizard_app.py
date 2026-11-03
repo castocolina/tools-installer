@@ -453,10 +453,11 @@ def _guard_doctor(
     writer_lines: Sequence[PathWriterLine] = (),
     rescan: Callable[[], Sequence[PathWriterLine]] | None = None,
     guard_file: Callable[[Path, Sequence[PathWriterLine]], PathGuardOutcome] | None = None,
+    guard_state: Callable[[], tuple[dict[str, bool], str | None]] | None = None,
 ) -> DoctorScreen:
     return DoctorScreen(
         report or DoctorReport(missing=(), broken=(), duplicated=()),
-        lambda: ({"pip": False, "npm": False}, None),
+        guard_state or (lambda: ({"pip": False, "npm": False}, None)),
         "preview",
         fix or (lambda: None),
         node_globals=lambda: NodeGlobalsReport(entries=(), missing=(), managed=()),
@@ -568,6 +569,36 @@ async def test_doctor_fix_with_a_guard_file_requests_its_pass_after_the_confirma
         await pilot.pause()
         assert calls == [rc]
         assert app.passes == 1
+
+
+async def test_doctor_guard_chain_end_reads_the_live_state_once() -> None:
+    """RR-04: the last modal's close renders Doctor once (on resume), not once
+    from the callback and again from the resume."""
+    rc = Path("tmp/.bashrc")
+    record = _writer_line(rc)
+    reads: list[int] = []
+
+    def guard_state() -> tuple[dict[str, bool], str | None]:
+        reads.append(1)
+        return {"pip": False, "npm": False}, None
+
+    screen = _guard_doctor(
+        writer_lines=[record],
+        rescan=lambda: [record],
+        guard_file=lambda _path, _lines: PathGuardOutcome("guarded"),
+        guard_state=guard_state,
+    )
+    app = _DoctorHost(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _ready_doctor(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _guard_modal_text(app.screen)
+        before = len(reads)
+        await pilot.press("y")
+        doctor = await _ready_doctor(app, pilot)
+        assert f"guarded {rc}" in str(doctor.query_one("#doctor-body", Static).render())
+        assert len(reads) == before + 1
 
 
 async def test_doctor_guard_no_skips_without_calling_guard_file() -> None:
