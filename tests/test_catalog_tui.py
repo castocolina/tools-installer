@@ -291,7 +291,7 @@ async def test_starts_in_category_view_with_section_rows():
     app = _app()
     async with app.run_test(size=(100, 30)):
         assert app.catalog.view == "category"
-        table = app.query_one(DataTable[Any])
+        table = app.screen.query_one(DataTable[Any])
         assert table.row_count == 5  # 2 section rows + 3 tool rows
 
 
@@ -340,7 +340,7 @@ async def test_select_all_and_invert():
         assert app.catalog.selected == {"rg", "fd", "lazygit"}
         # select-all must not reset the cursor or blank the detail bar
         assert "lazygit" in app.catalog.detail_text
-        assert app.query_one(DataTable[Any]).cursor_row == 1
+        assert app.screen.query_one(DataTable[Any]).cursor_row == 1
         await pilot.press("i")
         assert app.catalog.selected == set()
         await pilot.press("space", "i")  # space toggles lazygit ON; invert gives {rg, fd}
@@ -456,7 +456,7 @@ async def test_header_click_sorts_only_in_table_view():
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("left")  # wrap straight to the table view
         assert app.catalog.view == "table"
-        table = app.query_one(DataTable[Any])
+        table = app.screen.query_one(DataTable[Any])
         app.catalog.on_data_table_header_selected(
             DataTable.HeaderSelected(table, ColumnKey("tool"), 2, Text("Tool"))
         )
@@ -1790,7 +1790,7 @@ def _dim_legend_text(legend: Static) -> str:
 async def test_legend_widget_paints_every_marker_at_full_width() -> None:
     app = _app()
     async with app.run_test(size=(100, 30)):
-        legend = app.query_one("#browser-legend", Static)
+        legend = app.screen.query_one("#browser-legend", Static)
         painted = _painted_legend(legend)
         markers = (
             "✓ ok",
@@ -1912,7 +1912,7 @@ async def test_owner_column_starts_inside_the_viewport_at_the_minimum_size() -> 
         catalog._owner_cell = lambda _tool, _painted=None: Text("Homebrew cask")  # type: ignore[method-assign]
         catalog._browser.reload(catalog._adapter())  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
-        table = app.query_one(DataTable[Any])
+        table = app.screen.query_one(DataTable[Any])
         offsets: dict[str, int] = {}
         total = 0
         for column in table.columns.values():
