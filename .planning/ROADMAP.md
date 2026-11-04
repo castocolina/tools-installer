@@ -332,7 +332,7 @@ Plans:
   4. A brew bootstrap with an unwritable prefix becomes a manual handoff, native dnf/apt/pacman installs are handed off as the exact command, and a grep test finds zero `sudo` argv in any executor.
   5. Uninstall offers "delete config too" only for tools with `config_paths` (default keep; CLI `--yes` never deletes config), a `config_paths` entry under `~/.claude`, `~/.cursor`, `~/.gemini` or `~/.codex` is rejected at load, and the container e2e harness compares file listings before and after uninstall, not only exit codes.
 
-**Plans:** 6/13 plans executed
+**Plans:** 9/13 plans executed
 
 Plans:
 **Wave 1**
@@ -348,9 +348,9 @@ Plans:
 - [x] 22-06-PLAN.md — `removal_plan` levels (L1 manager by receipt, L2, L3 recipe) and one ordered remover for CLI and TUI
 
 **Wave 4**
-- [ ] 22-07-PLAN.md — Uninstall rows by removal level; native hints name the package; SDKMAN hint carries the version
-- [ ] 22-08-PLAN.md — Vendor-verified lifecycle data for all 18 script stanzas, pi re-dated, first `config_paths`
-- [ ] 22-09-PLAN.md — Config deletion as removal step 4 (shared-path rule, CLI never deletes); pnpm co-install group warning
+- [x] 22-07-PLAN.md — Uninstall rows by removal level; native hints name the package; SDKMAN hint carries the version
+- [x] 22-08-PLAN.md — Vendor-verified lifecycle data for all 18 script stanzas, pi re-dated, first `config_paths`
+- [x] 22-09-PLAN.md — Config deletion as removal step 4 (shared-path rule, CLI never deletes); pnpm co-install group warning
 
 **Wave 5**
 - [ ] 22-10-PLAN.md — Uninstall "delete config too" toggle on `c`
@@ -447,7 +447,7 @@ Plans:
 | 19. One tool state with health plus receipts | 0/TBD | Not started | - |
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
 | 21. One screen family | 21/21 | In Progress | - |
-| 22. Method lifecycle contract | 6/13 | In Progress | - |
+| 22. Method lifecycle contract | 9/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
