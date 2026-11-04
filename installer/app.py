@@ -3,16 +3,18 @@
 import contextlib
 import dataclasses
 import os
+import shlex
 import shutil
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
 
-from installer import shellrc
+from installer import receipts, shellrc
 from installer.atomic import atomic_write_text
 from installer.cli import Options
+from installer.deps import resolve_dependencies
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport, audit_path, scan_bin_links
 from installer.engine import install_tool
@@ -23,6 +25,7 @@ from installer.guards import (
     install_global_redirect_shims,
     install_redirect_shims,
     install_shims,
+    real_pnpm,
     remove_ban_aliases,
     remove_shims,
     write_ban_aliases,
@@ -78,8 +81,9 @@ from installer.tweaks import TweakBundle
 from installer.uninstall import (
     SweepResult,
     active_policies,
-    plan_removal,
     policy_owned,
+    removal_plan,
+    remove_paths,
     remove_proven,
     sweep_policies,
     sweep_tweaks,
@@ -495,6 +499,92 @@ def _has_daemon_id(ids: tuple[str, ...]) -> bool:
     return any(policy_id.startswith("daemon:") for policy_id in ids)
 
 
+@dataclass(frozen=True)
+class ToolRemoval:
+    """One tool's removal outcome. `detail` is its one-line reason when it was not removed."""
+
+    tool_id: str
+    removed: bool
+    detail: str = ""
+    refused: tuple[str, ...] = ()
+
+
+def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
+    """The line the CLI and the preview print before a vendor or manager command runs."""
+    return f"{tool_id}: runs {shlex.join(argv)}"
+
+
+def removal_order(tools: Sequence[Tool]) -> list[Tool]:
+    """Dependents first: a tool comes before every selected tool it requires (review R1-09).
+
+    Reuses the dependency resolver on the selection as its own catalog, so nothing is
+    dragged in or blocked; independents keep the order they were given."""
+    selected = list(tools)
+    resolution = resolve_dependencies(
+        list(reversed(selected)),
+        selected,
+        available=lambda _tool: True,
+        is_installed=lambda _tool: True,
+    )
+    return list(reversed(resolution.closure))
+
+
+def remove_tool(
+    tool: Tool,
+    *,
+    paths: tuple[Path, ...],
+    argv: tuple[str, ...],
+    bin_dir: Path,
+    runner: Runner,
+) -> ToolRemoval:
+    """Remove one tool: its command, then its proven paths, then its receipt (D-07).
+
+    `paths` and `argv` are what the user saw before the confirm. The fresh plan is
+    proven again here, so the CLI and the TUI share the same post-confirm check: a
+    previewed path that moved, a command that changed, or a command whose paths shrank
+    refuses the whole tool before anything runs. A failed command deletes nothing and
+    keeps the receipt, so a later plan still sees the tool."""
+    try:
+        fresh = removal_plan(tool, bin_dir, verify=True)
+        named = {*fresh.removable, *fresh.yourself}
+        # A command runs only on the proof it was previewed against: with a command, every
+        # previewed path must still be removable, not merely named (review R2-02).
+        changed = [p for p in paths if p not in named or (bool(argv) and p not in fresh.removable)]
+        changed += [p for p in fresh.removable if p not in paths]
+        if changed or argv != fresh.argv or not (paths or argv):
+            refused = tuple(f"changed since the preview; not removed: {p}" for p in changed)
+            return ToolRemoval(tool.id, False, "changed since the preview; not removed", refused)
+        if argv:
+            command = argv
+            if argv[0] == "pnpm":
+                # The PATH shim may be this installer's own wrapper (see guards.real_pnpm).
+                resolved = real_pnpm()
+                if resolved is None:
+                    return ToolRemoval(tool.id, False, "pnpm not found on PATH")
+                command = (resolved, *argv[1:])
+            try:
+                runner(list(command))
+            except CommandError as exc:
+                line = next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
+                return ToolRemoval(tool.id, False, line)
+            trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
+            # The vendor command may have removed part of what the receipt recorded; only
+            # what is still there is re-proven, so a path it already removed is not a refusal.
+            still_there = [
+                fresh.artifacts[p] for p in fresh.removable if p.exists() or p.is_symlink()
+            ]
+            refused_paths = remove_paths(still_there, trees=trees)
+            refused = tuple(f"changed since the preview; not removed: {p}" for p in refused_paths)
+        else:
+            _removed, refused = remove_proven([tool], list(paths), bin_dir)
+        if refused:
+            return ToolRemoval(tool.id, False, refused[0], refused)
+        receipts.delete(tool.id)
+        return ToolRemoval(tool.id, True)
+    except OSError as exc:
+        return ToolRemoval(tool.id, False, first_line(exc))
+
+
 def run_uninstall(
     tools: list[Tool],
     console: Console,
@@ -507,14 +597,17 @@ def run_uninstall(
     zshrc_path: Path,
     daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
-) -> list[Path]:
-    """Preview userspace artifacts, confirm, then remove them, the PATH block,
-    any pip/npm-ban artifacts (shims + alias blocks), and still-enabled shell
-    tweaks (the background maintenance daemon included, when active).
+    runner: Runner,
+) -> tuple[list[Path], tuple[str, ...]]:
+    """Preview each tool's removal, confirm, then remove the tools in dependency order,
+    the PATH block, any pip/npm-ban artifacts (shims + alias blocks), and still-enabled
+    shell tweaks (the background maintenance daemon included, when active).
 
-    Returns the removed proven paths ([] if nothing to remove or declined).
-    Only plan_removal's proven artifacts are removed; unproven name matches
-    are listed via render_remove_yourself and left on disk (SAFE-03/D-04).
+    Returns (the removed proven paths, the ids whose removal failed), both in removal
+    order; ([], ()) when nothing is to be removed or the user declined. Each tool goes
+    through `remove_tool`, the remover the TUI uses too. Only each plan's proven artifacts
+    are removed; unproven name matches are listed via render_remove_yourself and left on
+    disk (SAFE-03/D-04).
 
     `bundles`, `zshrc_path`, `daemon_policy`, and `extra_policies` are required,
     unlike on the uninstall primitives they forward to. There the defaults are
@@ -535,8 +628,12 @@ def run_uninstall(
     is the only path that deletes the user's shell config, so the invariant is
     held by construction rather than by that argument staying true.
     """
-    plan = plan_removal(tools, default_bin_dir)
-    paths = list(plan.removable)
+    ordered = [(tool, removal_plan(tool, default_bin_dir)) for tool in removal_order(tools)]
+    paths = list(dict.fromkeys(p for _tool, plan in ordered for p in plan.removable))
+    yourself = list(
+        dict.fromkeys(p for _tool, plan in ordered for p in plan.yourself if p not in paths)
+    )
+    commands = [(tool.id, plan.argv) for tool, plan in ordered if plan.argv]
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
     # Built once and held across the teardown: the preview below and the sweep
     # at the end act on these same objects, so nothing removed in between can
@@ -554,10 +651,10 @@ def run_uninstall(
     tweaks = tuple(policy.id for policy in policies)
     # A machine whose only tools-installer footprint is an enabled tweak must
     # not be told there is nothing to uninstall.
-    if not paths and not shimmed and not tweaks:
+    if not paths and not commands and not shimmed and not tweaks:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
         # Even here the user learns what matched by name and was left alone.
-        render_remove_yourself(plan.yourself, console)
+        render_remove_yourself(yourself, console)
         # A daemon with no footprint left never appears in `tweaks`
         # (active_policies includes it only when policy_owned() is True) and
         # needs no confirm --
@@ -566,10 +663,13 @@ def run_uninstall(
         # #13's "already disabled, nothing to sweep" case).
         if daemon_policy is not None and daemon_policy.clear_decided is not None:
             daemon_policy.clear_decided()
-        return []
+        return [], ()
     if paths:
         render_uninstall(paths, console)
-    render_remove_yourself(plan.yourself, console)
+    for tool_id, argv in commands:
+        # Shown before the confirm: the user sees the exact command that will run.
+        console.print(removal_runs_line(tool_id, argv), markup=False, soft_wrap=True)
+    render_remove_yourself(yourself, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:
@@ -585,14 +685,30 @@ def run_uninstall(
         if detail is not None:
             console.print(f"  omz-plugins {detail}.")
     if not confirm("Remove these artifacts?"):
-        return []
-    # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. The
-    # proof is recomputed NOW, at deletion time, with a re-hash, and only
-    # paths still proven are deleted; anything that changed since the preview
-    # is reported and left on disk (the one remover shared with the TUI).
-    removed, refused = remove_proven(tools, paths, default_bin_dir)
-    for line in refused:
-        console.print(line)
+        return [], ()
+    # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. Each tool
+    # re-proves itself at deletion time inside remove_tool (the remover shared with
+    # the TUI): a path or command that changed since the preview is reported and
+    # refused, and a failed command or delete keeps that tool's receipt.
+    removed: list[Path] = []
+    failed: list[str] = []
+    for tool, plan in ordered:
+        if plan.level == "none":
+            continue
+        outcome = remove_tool(
+            tool,
+            paths=plan.removable,
+            argv=plan.argv,
+            bin_dir=default_bin_dir,
+            runner=runner,
+        )
+        for line in outcome.refused:
+            console.print(line)
+        if outcome.removed:
+            removed.extend(plan.removable)
+        else:
+            console.print(f"{tool.id}: remove failed — {outcome.detail}")
+            failed.append(tool.id)
     remove_managed_block(myshellrc_path)
     remove_shims(default_bin_dir)
     remove_ban_aliases(myshellrc_path)
@@ -631,7 +747,7 @@ def run_uninstall(
         and daemon_policy.clear_decided is not None
     ):
         daemon_policy.clear_decided()
-    return list(removed)
+    return removed, tuple(failed)
 
 
 @dataclass(frozen=True)
@@ -647,6 +763,8 @@ class UninstallDecision:
     remove_ban: bool
     remove_path_block: bool
     remove_tweaks: bool = False
+    # The vendor or manager command each tool's preview showed (empty when it has none).
+    argv: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
 
 
 def perform_uninstall(
@@ -659,6 +777,7 @@ def perform_uninstall(
     zshrc_path: Path,
     daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
+    runner: Runner,
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
@@ -693,28 +812,19 @@ def perform_uninstall(
     refused: tuple[str, ...] = ()
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
-    for tool in decision.tools:
-        previewed = decision.paths.get(tool.id, ())
-        try:
-            # Planning reads the disk too (a non-searchable parent raises).
-            plan = plan_removal([tool], bin_dir)
-            named = {*plan.removable, *plan.yourself}
-            # A path that dropped out, or one a reinstall added, is a change.
-            changed = [p for p in previewed if p not in named]
-            changed += [p for p in plan.removable if p not in previewed]
-            if not previewed or changed:
-                refused += tuple(f"changed since the preview; not removed: {p}" for p in changed)
-                remove_failed.append((tool.id, "changed since the preview; not removed"))
-                continue
-            _gone, tool_refused = remove_proven([tool], list(previewed), bin_dir)
-        except OSError as exc:
-            remove_failed.append((tool.id, first_line(exc)))
-            continue
-        refused += tool_refused
-        if tool_refused:
-            remove_failed.append((tool.id, tool_refused[0]))
-        else:
+    for tool in removal_order(decision.tools):
+        outcome = remove_tool(
+            tool,
+            paths=decision.paths.get(tool.id, ()),
+            argv=decision.argv.get(tool.id, ()),
+            bin_dir=bin_dir,
+            runner=runner,
+        )
+        refused += outcome.refused
+        if outcome.removed:
             removed.append(tool.id)
+        else:
+            remove_failed.append((tool.id, outcome.detail))
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)

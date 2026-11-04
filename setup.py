@@ -53,6 +53,7 @@ from installer.locations import (
 )
 from installer.model import Tool, load_categories, load_tools
 from installer.omz import omz_present
+from installer.ownership import read_inventory
 from installer.platform import Platform, detect
 from installer.policy import (
     DAEMON_DEFAULT_WAIT_SECONDS,
@@ -772,7 +773,13 @@ def _build_services(
         # D-04: the engine's already-installed short-circuit reads the same
         # published state that build_plan used to choose the row disposition.
         return install_tool(
-            tool, platform, runner, resolve_tag, present=version_refresh.is_present, **options
+            tool,
+            platform,
+            runner,
+            resolve_tag,
+            present=version_refresh.is_present,
+            read_inventory_fn=read_inventory,
+            **options,
         )
 
     return version_refresh, updates, policy, _install
@@ -856,6 +863,7 @@ def _build_app(
         # The sweep result is returned so the view reports what came off.
         return perform_uninstall(
             decision,
+            runner=run_captured,
             bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
             rc_paths=_RC_PATHS,
@@ -1308,9 +1316,10 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # CLI teardown path gates fd/rg-aware daemon construction on the SAME
     # real-installed-status map the interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
-    run_uninstall(
+    _removed, failed = run_uninstall(
         tools,
         console,
+        runner=run_captured,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
         rc_paths=_RC_PATHS,
@@ -1327,7 +1336,8 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # that just removed zsh corrects the terminals the same way any other
     # completion route does.
     _sync_terminals_and_report(console, platform)
-    return 0
+    # A removal that failed is a failed teardown, whatever else the sweep did (review R1-24).
+    return 1 if failed else 0
 
 
 def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:

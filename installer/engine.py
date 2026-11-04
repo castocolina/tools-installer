@@ -2,7 +2,7 @@
 
 import os
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -13,7 +13,7 @@ from installer.download import ExecContext
 from installer.enums import InstallStatus
 from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
-from installer.ownership import method_package, method_removal_command
+from installer.ownership import ManagerInventory, method_package, method_removal_command
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction, run_post_install
 from installer.postinstall import run_postinstall
@@ -21,6 +21,7 @@ from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
 from installer.skill_lifecycle import perform_action
 from installer.status import is_installed
+from installer.uninstall import MANAGER_UNINSTALL_ARGV
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 
 Status = InstallStatus
@@ -150,6 +151,7 @@ def install_tool(
     confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     repair: bool = False,
     present: Callable[[Tool], bool] | None = None,
+    read_inventory_fn: Callable[..., ManagerInventory] | None = None,
 ) -> InstallOutcome:
     """Try each applicable method in ladder order; stop at the first success.
 
@@ -212,6 +214,18 @@ def install_tool(
     )
     errors: list[Exception] = []
     leftovers: list[str] = []
+    # Read at most once per call, and only when a manager method reaches the ladder.
+    inventory_read: list[ManagerInventory | None] = []
+
+    def manager_inventory() -> ManagerInventory | None:
+        if not inventory_read:
+            inventory_read.append(
+                read_inventory_fn(has_brew=platform.has_brew)
+                if read_inventory_fn is not None
+                else None
+            )
+        return inventory_read[0]
+
     for method in methods:
         if installed and repair and method.params.get("refuses_existing") is True:
             post_install_handoff, warning = _dispatch_post_install(
@@ -239,6 +253,16 @@ def install_tool(
             )
         if isinstance(runner, MethodAwareRunner):
             runner.method_started(method.kind)
+        # Taken before the method runs: what it may not claim as its own (22-03, R1-05),
+        # and whether the manager already listed the package (SPEC R4, review R3-02).
+        preexisting: frozenset[Path] | None
+        try:
+            preexisting = receipts.preexisting_paths(method)
+        except OSError:
+            preexisting = None  # unknown: record then fails closed inside its own guard
+        package = method_package(method)
+        previous = receipts.read(tool.id)
+        already_there = _package_already_there(method, package, manager_inventory)
         path_before = os.environ.get("PATH", "")
         try:
             verified, unverified_reason, handoff = _perform(tool, method, ctx)
@@ -282,15 +306,19 @@ def install_tool(
             smoked_artifact = method.kind in download.DOWNLOAD_KINDS or (
                 method.kind in apps.APP_KINDS and method.params.get("cli") is not None
             )
-            try:
-                receipts.record(
-                    tool,
-                    method,
-                    package=method_package(method),
-                    smoke="ok" if smoked_artifact or smoked else None,
-                )
-            except OSError as exc:
-                leftovers.append(f"install receipt not written: {exc}")
+            # A package the manager already had is not this install's to claim, unless the
+            # previous receipt already proved that same package (review R3-02).
+            if not already_there or _proves_package(previous, method, package):
+                try:
+                    receipts.record(
+                        tool,
+                        method,
+                        package=package,
+                        smoke="ok" if smoked_artifact or smoked else None,
+                        preexisting=preexisting,
+                    )
+                except OSError as exc:
+                    leftovers.append(f"install receipt not written: {exc}")
             warning = None
             if tool.postinstall:
                 try:
@@ -315,6 +343,39 @@ def install_tool(
                 post_install_handoff=post_install_handoff,
             )
     return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))
+
+
+def _package_already_there(
+    method: Method, package: str | None, inventory: Callable[[], ManagerInventory | None]
+) -> bool:
+    """Whether a manager method's package was on the machine before the method ran.
+
+    Only a readable listing that lacks the package proves it was absent. No reader, a
+    missing inventory or an unreadable field counts as already there (fail closed)."""
+    if method.kind not in MANAGER_UNINSTALL_ARGV or package is None:
+        return False
+    snapshot = inventory()
+    if snapshot is None:
+        return True
+    listed = _listing(snapshot, method.kind)
+    return listed is None or package in listed
+
+
+def _listing(inventory: ManagerInventory, kind: str) -> Collection[str] | None:
+    if kind == "brew":
+        return inventory.brew_formulae
+    if kind == "cask":
+        return inventory.brew_casks
+    if kind == "uv-tool":
+        return inventory.uv_tools
+    return inventory.pnpm_globals
+
+
+def _proves_package(previous: receipts.Receipt | None, method: Method, package: str | None) -> bool:
+    """Whether the previous receipt already proved this same kind and package."""
+    return (
+        previous is not None and previous.method.kind == method.kind and previous.package == package
+    )
 
 
 def _dispatch_post_install(
