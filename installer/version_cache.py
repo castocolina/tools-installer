@@ -339,14 +339,15 @@ def _decode_outdated(raw: object) -> OutdatedReport:
     mapping = _as_object(raw)
     if mapping is None:
         return OutdatedReport(brew=None, cask=None, pnpm=None, uv=None, greedy=None)
-    # A cache written before `greedy` existed reads as no auto-updating cask; JSON null is unknown.
+    # A cache written before `greedy` existed reads as no auto-updating cask; JSON null or a
+    # malformed value is unknown, so the pass re-reads it (review C-16).
     greedy_raw = mapping.get("greedy", [])
     return OutdatedReport(
         brew=_version_map(mapping.get("brew")),
         cask=_version_map(mapping.get("cask")),
         pnpm=_version_map(mapping.get("pnpm")),
         uv=_version_map(mapping.get("uv")),
-        greedy=None if greedy_raw is None else (_str_set(greedy_raw) or frozenset()),
+        greedy=_str_set(greedy_raw),
     )
 
 

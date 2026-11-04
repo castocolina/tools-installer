@@ -339,11 +339,15 @@ def test_greedy_round_trips_through_the_cache() -> None:
         assert decoded.outdated.greedy == greedy
 
 
-def test_a_missing_or_malformed_cached_greedy_decodes_empty() -> None:
-    for outdated in ({}, {"greedy": "visual-studio-code"}, {"greedy": [1]}):
+def test_a_missing_cached_greedy_decodes_empty_and_a_malformed_one_unknown() -> None:
+    """Review C-16: only a pre-greedy cache means none; a corrupt value forces a re-read."""
+    decoded = decode_manager_snapshot({"outdated": {}})
+    assert decoded is not None
+    assert decoded.outdated.greedy == frozenset()
+    for outdated in ({"greedy": "visual-studio-code"}, {"greedy": [1]}):
         decoded = decode_manager_snapshot({"outdated": outdated})
         assert decoded is not None
-        assert decoded.outdated.greedy == frozenset()
+        assert decoded.outdated.greedy is None
 
 
 def test_manager_snapshot_wrong_inventory_type_degrades_to_none() -> None:
