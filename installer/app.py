@@ -81,6 +81,8 @@ from installer.tweaks import TweakBundle
 from installer.uninstall import (
     SweepResult,
     active_policies,
+    config_targets,
+    delete_config_path,
     policy_owned,
     removal_plan,
     remove_paths,
@@ -765,6 +767,42 @@ class UninstallDecision:
     remove_tweaks: bool = False
     # The vendor or manager command each tool's preview showed (empty when it has none).
     argv: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
+    # Per tool id: the declared config paths (expanded) the user chose to delete (D-11).
+    # Empty by default, and the CLI never sets it: only the Uninstall view does.
+    config: Mapping[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
+
+
+def _config_step(
+    decision: UninstallDecision, catalog: Sequence[Tool], removed: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """D-07 step 4 (SPEC R6): delete each listed config path once, after its removal.
+
+    A path goes only when every catalog tool that declares it was removed and lists it, so
+    a shared path survives while any owner stays (UI-SPEC A5). A path no catalog tool
+    declares is never deleted. Returns (the ids whose listed config is gone, the warnings)."""
+    deleted: list[str] = []
+    warnings: list[str] = []
+    for path in dict.fromkeys(p for paths in decision.config.values() for p in paths):
+        owners = [
+            (tool, entry)
+            for tool in catalog
+            for entry, expanded in config_targets(tool)
+            if expanded == path
+        ]
+        if not owners:
+            warnings.append(f"config {path} is not declared by any tool; not deleted")
+            continue
+        if not all(
+            tool.id in removed and path in decision.config.get(tool.id, ()) for tool, _ in owners
+        ):
+            continue
+        try:
+            delete_config_path(path)
+        except OSError as exc:
+            warnings.append(f"could not delete config {owners[0][1]} — {first_line(exc)}")
+            continue
+        deleted.extend(tool.id for tool, _ in owners)
+    return tuple(dict.fromkeys(deleted)), tuple(warnings)
 
 
 def perform_uninstall(
@@ -778,9 +816,12 @@ def perform_uninstall(
     daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
     runner: Runner,
+    catalog: Sequence[Tool],
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
-    removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
+    removers. `catalog` is the whole registry (review R1-15): a config path is shared with
+    every tool that declares it, selected or not, so the shared-owner rule cannot narrow.
+    Unlike `run_uninstall`, nothing is removed all-or-nothing: a
     partial selection leaves the ban and PATH wiring untouched. Each selected
     tool is removed on its own: the result's `removed` and `remove_failed`
     name every tool's outcome, and one refusal or failed delete (`OSError`)
@@ -825,6 +866,14 @@ def perform_uninstall(
             removed.append(tool.id)
         else:
             remove_failed.append((tool.id, outcome.detail))
+    # Step 4 runs once, after every tool's removal (D-07). A tool whose removal failed or was
+    # refused keeps its config, and a failed delete is a warning that never restores a receipt.
+    config_deleted, config_warnings = _config_step(decision, catalog, removed)
+    config_not_deleted = tuple(
+        tool.id
+        for tool in decision.tools
+        if decision.config.get(tool.id) and tool.id not in removed
+    )
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)
@@ -851,9 +900,11 @@ def perform_uninstall(
             daemon_policy.clear_decided()
         return dataclasses.replace(
             swept,
-            warnings=swept.warnings + refused,
+            warnings=swept.warnings + refused + config_warnings,
             removed=tuple(removed),
             remove_failed=tuple(remove_failed),
+            config_deleted=config_deleted,
+            config_not_deleted=config_not_deleted,
         )
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
@@ -870,4 +921,10 @@ def perform_uninstall(
         and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
-    return SweepResult(warnings=refused, removed=tuple(removed), remove_failed=tuple(remove_failed))
+    return SweepResult(
+        warnings=refused + config_warnings,
+        removed=tuple(removed),
+        remove_failed=tuple(remove_failed),
+        config_deleted=config_deleted,
+        config_not_deleted=config_not_deleted,
+    )

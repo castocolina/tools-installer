@@ -436,6 +436,18 @@ def remove_proven(
     return tuple(path for path in kept if path in removed), refused
 
 
+def delete_config_path(path: Path) -> None:
+    """Delete one declared config path: a link is unlinked, a file unlinked, a directory removed.
+
+    A missing path is a no-op. Other OSErrors propagate; the caller turns them into a warning."""
+    if not _exists(path):
+        return
+    if path.is_symlink() or not path.is_dir():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
+
+
 def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:
     # Per CONTEXT D-04/D-05/D-06: present drives missing_requires, which gates
     # ENABLING the tweak (D-05/D-06); a teardown must never be gated on it,
@@ -471,6 +483,10 @@ class SweepResult:
     removed: tuple[str, ...] = ()
     # (tool id, first line) of each tool that was refused or whose delete raised.
     remove_failed: tuple[tuple[str, str], ...] = ()
+    # Tool ids whose listed config was deleted, or was already gone (D-07 step 4).
+    config_deleted: tuple[str, ...] = ()
+    # Tool ids that asked for their config to go, but whose removal failed (SPEC R6).
+    config_not_deleted: tuple[str, ...] = ()
 
 
 def policy_owned(policy: Policy) -> bool:

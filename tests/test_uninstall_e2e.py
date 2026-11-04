@@ -88,6 +88,7 @@ def _build_real_app(
             daemon_policy=None,
             extra_policies=(),
             runner=_no_removal_runner,
+            catalog=decision.tools,
         )
 
     inputs = UninstallInputs(
@@ -147,6 +148,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
             daemon_policy=None,
             extra_policies=(),
             runner=_no_removal_runner,
+            catalog=decision.tools,
         )
 
     inputs = UninstallInputs(
@@ -412,6 +414,7 @@ def test_a_package_already_in_the_manager_gets_no_receipt(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         runner=_no_removal_runner,
+        catalog=(tool,),
         extra_policies=(),
     )
     assert "gh" not in result.removed
@@ -494,6 +497,7 @@ def test_a_declared_path_present_before_the_install_is_never_adopted(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         runner=_no_removal_runner,
+        catalog=(tool,),
         extra_policies=(),
     )
     assert result.removed == ("t",)
@@ -611,6 +615,7 @@ def test_every_receipt_kind_installs_and_removes_in_both_directions(
             zshrc_path=tmp_path / ".zshrc",
             daemon_policy=None,
             runner=calls.append,
+            catalog=(tool,),
             extra_policies=(),
         )
         assert result.removed == ("kt",)
