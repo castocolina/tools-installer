@@ -341,7 +341,9 @@ Net effect: `remove` argv ships for opencode only. Every other script tool is "r
 | A7 | bun, pnpm, volta, fnm, antigravity layouts and update commands | Vendor table | Wrong `paths`/`update`; mitigated by the per-tool verify task |
 | A8 | Tarball pinned (`{ver}` url) should be refused like app | Open Question 4 | SPEC only names `app` |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All seven are answered in the `| 22 |` rows of `.planning/RUN-LEDGER.md` ("Research open questions" and "UI-SPEC open questions"): Q1 `--force` appended; Q2 the handoff ends the ladder (no silent brew switch); Q3 type-only tree/leaf receipts with the recorded link target; Q4 method-derived pinned gate in `update_refusal`; Q5 `--greedy-auto-updates`; Q6 `22-UI-SPEC.md` approved; Q7 the resolver order as is (`$ZSH` first).
 
 1. **OpenCode `remove` string.** SPEC anchor is `opencode uninstall --keep-config --keep-data`; I recommend appending `--force`, and accept that OpenCode 2 installs fail closed. Alternatively declare no `remove` and rely on paths. Needs a user call (one line in discuss) or planner default = with `--force`.
 2. **Native-first ladder with brew fallback** (Pitfall 4). Literal SPEC: handoff ends the ladder. Alternative: when a later userspace/brew method applies, skip the native method instead of handing off. Recommendation: follow the SPEC literally and show the dependents as blocked at plan time; confirm with the user because this changes what `git`/`jq`/`zsh` do on Fedora-with-brew.
