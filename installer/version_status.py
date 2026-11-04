@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import threading
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -69,6 +70,7 @@ from installer.ownership import (
     also_installed_note,
     attribute_path,
     declared_manager_label,
+    manager_kind_label,
     owner_detail,
     owner_dirs,
     owner_label,
@@ -103,7 +105,7 @@ from installer.skill_lifecycle import (
 )
 from installer.status import is_installed
 from installer.terminal_shell import TerminalShellResult
-from installer.uninstall import RemovalPlan, plan_removal, plan_uninstall
+from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
 from installer.version_cache import (
     ManagerSnapshot,
     VersionCacheEntry,
@@ -1816,7 +1818,10 @@ class VersionRefreshService:
             )
             if tool.skill_lifecycle is not None:
                 # Built at commit, from the host answers held then.
-                packs.append((tool, ownership, status, plan_removal([tool], self._managed_bin_dir)))
+                plan = removal_plan(
+                    tool, self._managed_bin_dir, hint=removal_hint(ownership, tool.cmd)
+                )
+                packs.append((tool, ownership, status, plan))
             else:
                 present = self._present(tool)
                 # Before the removal plan, so an adopted tool is removable now.
@@ -1826,7 +1831,9 @@ class VersionRefreshService:
                     entry=new_entry if new_entry is not None else entry,
                     platform=platform,
                 )
-                removable = plan_removal([tool], self._managed_bin_dir)
+                removable = removal_plan(
+                    tool, self._managed_bin_dir, hint=removal_hint(ownership, tool.cmd)
+                )
                 if (
                     present
                     and ownership.owner == "installer"
@@ -1944,19 +1951,27 @@ def uninstall_group(state: ToolState | None) -> UninstallState | None:
         return UninstallState.UNAVAILABLE
     if state.health is Health.BROKEN:
         return UninstallState.MANAGED
-    return UninstallState.REMOVABLE if state.removable.removable else UninstallState.MANAGED
+    removable = state.removable.removable or state.removable.argv
+    return UninstallState.REMOVABLE if removable else UninstallState.MANAGED
+
+
+def _l1_manager(state: ToolState) -> str | None:
+    """The manager an L1 row removes through (its receipt kind's label), else None."""
+    if state.receipt is None or state.removable.level != "manager":
+        return None
+    return manager_kind_label(state.receipt.method.kind)
 
 
 def uninstall_label(state: ToolState | None) -> str:
     """The Installed-via cell: the owner of the copy this row would remove. A
     removable row's paths are all this installer's (UI-SPEC:107-109), so it
-    reads `installer`; any other row reuses `removal_label` then `owner_label`.
-    Pure."""
+    reads `installer`, or the manager label for an L1 row (UI-SPEC A7); any other
+    row reuses `removal_label` then `owner_label`. Pure."""
     group = uninstall_group(state)
     if state is None or group in (None, UninstallState.ABSENT, UninstallState.UNAVAILABLE):
         return "—"
     if group is UninstallState.REMOVABLE:
-        return "installer"
+        return _l1_manager(state) or "installer"
     return removal_label(state.ownership) or owner_label(state.ownership) or "unknown"
 
 
@@ -1972,7 +1987,11 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
         return HEALTH_DETAIL[Health.MISSING]
     if group is UninstallState.UNAVAILABLE:
         return state.reasons[0] if state.reasons else HEALTH_DETAIL[Health.UNAVAILABLE]
-    if group is UninstallState.REMOVABLE:
+    if group is UninstallState.REMOVABLE and (manager := _l1_manager(state)) is not None:
+        # L1 (UI-SPEC A7): the sentence names the manager and the command it runs.
+        text = f"installed by this installer through {manager}: receipt matches"
+        text += f" — runs `{shlex.join(state.removable.argv)}`"
+    elif group is UninstallState.REMOVABLE:
         if ADOPTED_NOTE in state.reasons:
             text = ADOPTED_NOTE
         else:

@@ -73,7 +73,7 @@ from installer.pnpm_globals import pnpm_global_packages
 from installer.resolve import resolve_methods
 from installer.run import CommandError, run_query
 from installer.status import dangling_shim, is_installed
-from installer.uninstall import manager_name
+from installer.uninstall import MANAGER_UNINSTALL_ARGV, manager_name
 from installer.versions import meets_minimum
 
 Owner = Literal[
@@ -1634,3 +1634,12 @@ def removal_label(ownership: ManagerOwnership) -> str | None:
     if ownership.owner in _NO_REMOVAL_HINT:
         return None
     return owner_label(ownership)
+
+
+def manager_kind_label(kind: str) -> str | None:
+    """The Installed-via label of a receipt kind L1 can remove (`MANAGER_UNINSTALL_ARGV`).
+
+    Only those kinds: `sdkman` is in `_KIND_TO_OWNER` but never an L1 row."""
+    if kind not in MANAGER_UNINSTALL_ARGV:
+        return None
+    return OWNER_LABELS[_KIND_TO_OWNER[kind]]

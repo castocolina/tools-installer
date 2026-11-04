@@ -6155,3 +6155,48 @@ def test_uninstall_removable_detail_keeps_the_yourself_suffix() -> None:
         "installer", removable=RemovalPlan((_UNINSTALL_PATH,), (Path("/y/rg"),))
     )
     assert uninstall_detail(tool, state) == f"{LAYOUT_PROOF_NOTE} · remove it yourself: /y/rg"
+
+
+# -- 22-07 Task 1: the Uninstall projection reads the removal level. ----------
+
+_L1_ARGV = ("brew", "uninstall", "ripgrep")
+_L1_RECEIPT = Receipt(
+    tool="rg",
+    at="2026-11-04T00:00:00Z",
+    method=ReceiptMethod(kind="brew", key="brew"),
+    package="ripgrep",
+    artifacts=(),
+    smoke=None,
+    hooks={},
+)
+
+
+@pytest.mark.parametrize(
+    ("plan", "group"),
+    [
+        (RemovalPlan((), (), level="manager", argv=_L1_ARGV), UninstallState.REMOVABLE),
+        (RemovalPlan((_UNINSTALL_PATH,), (), level="artifacts"), UninstallState.REMOVABLE),
+        (
+            RemovalPlan((_UNINSTALL_PATH,), (), level="recipe", argv=("/x/rg", "remove")),
+            UninstallState.REMOVABLE,
+        ),
+        (RemovalPlan((_UNINSTALL_PATH,), (), level="recipe"), UninstallState.REMOVABLE),
+        (RemovalPlan((_UNINSTALL_PATH,), ()), UninstallState.REMOVABLE),
+        (RemovalPlan((), ()), UninstallState.MANAGED),
+    ],
+)
+def test_uninstall_group_reads_the_level(plan: RemovalPlan, group: UninstallState) -> None:
+    _tool, state = _uninstall_state(removable=plan)
+    assert uninstall_group(state) is group
+
+
+def test_the_pass_publishes_removal_plan_levels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = Tool(id="gh", name="gh", category="dev", cmd="gh", methods=(method,), tier="user")
+    assert receipts.record(gh, method, package="gh", smoke=None, default_bin_dir=bin_dir)
+    state = _settled(_receipt_service(tmp_path, bin_dir), gh)
+    assert state.removable.level == "manager"
+    assert state.removable.argv == ("brew", "uninstall", "gh")
