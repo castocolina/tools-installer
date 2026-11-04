@@ -543,6 +543,16 @@ def _uv_tool(method: Method, runner: Runner) -> None:
     runner(["uv", "tool", "install", pypi_pkg])
 
 
+def sdk_pipeline(argv: Sequence[str]) -> list[str]:
+    """The one argv that runs an `sdk` command: `sdk` is a shell function, so it
+    must be sourced from sdkman-init.sh in the same shell that calls it."""
+    return [
+        "bash",
+        "-c",
+        f'{_path_prefix()}. "$HOME/.sdkman/bin/sdkman-init.sh" && {shlex.join(argv)}',
+    ]
+
+
 def _sdkman(method: Method, runner: Runner) -> None:
     # `sdk` is a shell function defined by sourcing sdkman-init.sh, not a PATH
     # binary — it must be sourced in the same shell invocation that calls it.
@@ -560,8 +570,7 @@ def _sdkman(method: Method, runner: Runner) -> None:
     install = ["sdk", "install", candidate]
     if isinstance(version, str) and version:
         install.append(version)
-    pipeline = f'{_path_prefix()}. "$HOME/.sdkman/bin/sdkman-init.sh" && {shlex.join(install)}'
-    runner(["bash", "-c", pipeline])
+    runner(sdk_pipeline(install))
 
 
 def _cask(method: Method, runner: Runner) -> None:

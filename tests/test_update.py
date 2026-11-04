@@ -1825,6 +1825,20 @@ def test_an_update_never_adopts_a_path_that_existed_before_it(
     assert bin_dir / "t" not in recorded
 
 
+def test_sdkman_bootstrap_update_runs_selfupdate_sourced() -> None:
+    """LIFE-06: `u` on the SDKMAN bootstrap runs `sdk selfupdate` through the sourced invocation."""
+    method = Method(
+        kind="script",
+        params={"url": "https://get.sdkman.io", "shell": "bash", "update": ["sdk", "selfupdate"]},
+    )
+    calls: list[list[str]] = []
+    outcome = _perform(_target(_tool("sdkman", method), "installer", method=method), calls.append)
+    assert outcome.status == "updated"
+    assert len(calls) == 1
+    assert calls[0][:2] == ["bash", "-c"]
+    assert calls[0][2].endswith('. "$HOME/.sdkman/bin/sdkman-init.sh" && sdk selfupdate')
+
+
 def _no_inventory(**_kwargs: object) -> ManagerInventory:
     return ManagerInventory(
         brew_formulae={}, brew_casks={}, pnpm_globals=frozenset(), uv_tools={}, brew_prefix=None

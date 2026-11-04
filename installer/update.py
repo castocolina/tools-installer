@@ -428,7 +428,8 @@ def _update_installer_owned(
             if expanded is None:
                 raise UpdateError(f"cannot resolve {token} for the {tool_id} update")
             argv.append(expanded)
-        runner(argv)
+        # `sdk` is a shell function: only the sourced invocation can run it.
+        runner(executors.sdk_pipeline(argv) if argv[:1] == ["sdk"] else argv)
         return ()
     raise UpdateError(f"no installer-owned update path for method kind '{method.kind}'")
 
