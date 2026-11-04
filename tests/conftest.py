@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from installer import executors, locations, receipts, version_status
+from installer import app, executors, locations, receipts, version_status
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
@@ -329,6 +329,17 @@ def sandboxed_puppeteer_cache(empty_browser_cache: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(empty_browser_cache))
     monkeypatch.delenv("PUPPETEER_EXECUTABLE_PATH", raising=False)
     monkeypatch.setattr(executors, "launch_puppeteer", lambda: NO_BROWSER_DETAIL)
+
+
+@pytest.fixture(autouse=True)
+def no_manager_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The remover's fresh manager listing reads as unknown, so no test queries the host's
+    brew, uv or pnpm; a test that exercises the re-check sets its own listing."""
+
+    def unknown(_kind: str) -> None:
+        return None
+
+    monkeypatch.setattr(app, "manager_listing", unknown)
 
 
 @pytest.fixture

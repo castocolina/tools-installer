@@ -3047,3 +3047,20 @@ def test_method_package_reads_the_kind_param() -> None:
             assert ownership.method_removal_command(method, tool.cmd) == expected
             compared += expected is not None
     assert compared > 0
+
+
+def test_manager_listing_asks_only_the_one_manager_a_kind_names() -> None:
+    """Review C-02: the remover's re-check reads one manager now, never the whole inventory."""
+    from installer.ownership import manager_listing
+
+    asked: list[list[str]] = []
+
+    def query(cmd: list[str], **_kwargs: object) -> str:
+        asked.append(cmd)
+        return "jq 1.7.1\n" if cmd[:2] == ["brew", "list"] else ""
+
+    assert manager_listing("brew", query=query, pnpm_packages=lambda: None) == {"jq": "1.7.1"}
+    assert asked == [["brew", "list", "--versions", "--formula"]]
+    assert manager_listing("node", query=query, pnpm_packages=lambda: ("a",)) == {"a"}
+    assert manager_listing("node", query=query, pnpm_packages=lambda: None) is None
+    assert manager_listing("dnf", query=query, pnpm_packages=lambda: ("a",)) is None

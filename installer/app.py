@@ -32,6 +32,7 @@ from installer.guards import (
 )
 from installer.locations import path_scan_rc_paths
 from installer.model import Tool
+from installer.ownership import listed_name, manager_listing
 from installer.platform import Platform
 from installer.pnpm_globals import audit_node_globals, co_install_warnings, pnpm_global_packages
 from installer.policy import Policy, omz_removal_detail
@@ -505,7 +506,7 @@ def _has_daemon_id(ids: tuple[str, ...]) -> bool:
 
 @dataclass(frozen=True)
 class ToolRemoval:
-    """One tool's removal outcome. `detail` is its one-line reason when it was not removed."""
+    """One tool's removal outcome. `detail` is its one-line reason, or `already removed`."""
 
     tool_id: str
     removed: bool
@@ -518,8 +519,7 @@ def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
     return f"{tool_id}: runs {shlex.join(argv)}"
 
 
-# pnpm's code for a global removal whose package is not installed (measured on pnpm 12.16.1).
-PNPM_GLOBAL_PKG_NOT_FOUND = "ERR_PNPM_GLOBAL_PKG_NOT_FOUND"
+ALREADY_REMOVED = "already removed"
 
 
 def pnpm_removal_packages(plans: Iterable[RemovalPlan]) -> frozenset[str]:
@@ -558,8 +558,9 @@ def remove_tool(
     `paths` and `argv` are what the user saw before the confirm. The fresh plan is
     proven again here, so the CLI and the TUI share the same post-confirm check: a
     previewed path that moved, a command that changed, or a command whose paths shrank
-    refuses the whole tool before anything runs. A failed command deletes nothing and
-    keeps the receipt, so a later plan still sees the tool."""
+    refuses the whole tool before anything runs. A manager package that a readable fresh
+    listing no longer shows runs nothing and retires its receipt (`already removed`). A failed
+    command deletes nothing and keeps the receipt, so a later plan still sees the tool."""
     try:
         fresh = removal_plan(tool, bin_dir, verify=True)
         named = {*fresh.removable, *fresh.yourself}
@@ -570,6 +571,16 @@ def remove_tool(
         if changed or argv != fresh.argv or not (paths or argv):
             refused = tuple(f"changed since the preview; not removed: {p}" for p in changed)
             return ToolRemoval(tool.id, False, "changed since the preview; not removed", refused)
+        manager = next(
+            (kind for kind, prefix in MANAGER_UNINSTALL_ARGV.items() if argv[:-1] == prefix), None
+        )
+        if fresh.level == "manager" and manager is not None:
+            # A readable fresh listing that lacks the package proves it is gone (review C-02);
+            # e.g. pnpm took a whole group with an earlier member (22-13 D-1). Unknown runs it.
+            listed = manager_listing(manager)
+            if listed is not None and listed_name(manager, argv[-1]) not in listed:
+                receipts.delete(tool.id)
+                return ToolRemoval(tool.id, True, ALREADY_REMOVED)
         if argv:
             command = argv
             if argv[0] == "pnpm":
@@ -581,16 +592,8 @@ def remove_tool(
             try:
                 runner(list(command))
             except CommandError as exc:
-                # pnpm removes a whole global group from any member (22-13 D-1), so a member an
-                # earlier removal took is "not found": pnpm's own proof the package is gone.
-                gone = argv[:-1] == MANAGER_UNINSTALL_ARGV["node"] and (
-                    PNPM_GLOBAL_PKG_NOT_FOUND in exc.detail
-                )
-                if not gone:
-                    line = next(
-                        (ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc)
-                    )
-                    return ToolRemoval(tool.id, False, line)
+                line = next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
+                return ToolRemoval(tool.id, False, line)
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
             # The vendor command may have removed part of what the receipt recorded; only
             # what is still there is re-proven, so a path it already removed is not a refusal.
@@ -750,6 +753,8 @@ def run_uninstall(
             console.print(line)
         if outcome.removed:
             removed.extend(plan.removable)
+            if outcome.detail:
+                console.print(f"{tool.id}: {outcome.detail}")
         else:
             console.print(f"{tool.id}: remove failed — {outcome.detail}")
             failed.append(tool.id)

@@ -5500,20 +5500,23 @@ def _mmdc_and_puppeteer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tupl
 def test_a_group_member_pnpm_already_removed_is_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """22-13 D-1: the first member's removal took the whole group, so pnpm reports the second
-    member not found. The end state holds: the tool is removed and its receipt retired."""
+    """22-13 D-1: the first member's removal took the whole group. The fresh pnpm listing no
+    longer lists the second member, so nothing runs for it and its receipt is retired."""
+    from installer import app as app_module
     from installer import receipts
     from installer.app import run_uninstall
 
     mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
+    group = {"@mermaid-js/mermaid-cli", "puppeteer"}
+    monkeypatch.setattr(app_module, "manager_listing", _listing(group))
     console, buf = _console()
     calls: list[list[str]] = []
     kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", lambda _m: True)
-    kwargs["runner"] = _pnpm_group_runner({"@mermaid-js/mermaid-cli", "puppeteer"}, calls)
+    kwargs["runner"] = _pnpm_group_runner(group, calls)
     _removed, failed = run_uninstall([mmdc, puppeteer], console, **kwargs)
-    assert [cmd[-1] for cmd in calls] == ["@mermaid-js/mermaid-cli", "puppeteer"]
+    assert [cmd[-1] for cmd in calls] == ["@mermaid-js/mermaid-cli"]
     assert failed == ()
-    assert "remove failed" not in buf.getvalue()
+    assert "puppeteer: already removed" in buf.getvalue()
     assert receipts.read("mmdc") is None
     assert receipts.read("puppeteer") is None
 
@@ -5538,27 +5541,120 @@ def test_another_pnpm_error_still_fails_the_tool(
     assert receipts.read("puppeteer") is not None
 
 
-def test_a_not_found_from_a_non_pnpm_command_still_fails(
+def test_a_pnpm_not_found_is_no_proof_without_a_readable_listing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The not-found code is pnpm's: the same text from brew is no proof of anything."""
+    """Review C-02 (CR-04): pnpm's not-found may come from another pnpm's global dir, so only a
+    readable listing that lacks the package retires the receipt; the error alone keeps it."""
     from installer import receipts
     from installer.app import remove_tool
 
-    monkeypatch.setenv("HOME", str(tmp_path))
-    method = Method(kind="brew", params={"formula": "gh"})
-    gh = _manager_tool("gh", method)
-    receipts.record(gh, method, package="gh", smoke=None)
+    _mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
 
     def runner(cmd: list[str]) -> None:
-        raise CommandError(cmd, 1, detail=_PNPM_NOT_FOUND.format("gh"))
+        raise CommandError(cmd, 1, detail=_PNPM_NOT_FOUND.format("puppeteer"))
 
     outcome = remove_tool(
-        gh,
+        puppeteer,
         paths=(),
-        argv=("brew", "uninstall", "gh"),
+        argv=("pnpm", "remove", "--global", "puppeteer"),
         bin_dir=tmp_path / ".local" / "bin",
         runner=runner,
     )
     assert outcome.removed is False
-    assert receipts.read("gh") is not None
+    assert receipts.read("puppeteer") is not None
+
+
+def _listing(names: set[str]) -> Callable[[str], frozenset[str]]:
+    """A fresh manager listing that reads `names` at call time, whatever the kind."""
+
+    def listing(_kind: str) -> frozenset[str]:
+        return frozenset(names)
+
+    return listing
+
+
+def _jq_brew_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tool:
+    from installer import receipts
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "jq"})
+    jq = _manager_tool("jq", method)
+    receipts.record(jq, method, package="jq", smoke=None)
+    return jq
+
+
+def test_a_manager_package_the_user_already_removed_runs_nothing_and_retires_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review C-02: a readable fresh listing without the package means it is already gone."""
+    from installer import app as app_module
+    from installer import receipts
+    from installer.app import remove_tool
+
+    jq = _jq_brew_receipt(tmp_path, monkeypatch)
+    asked: list[str] = []
+
+    def listing(kind: str) -> frozenset[str]:
+        asked.append(kind)
+        return frozenset({"git"})
+
+    monkeypatch.setattr(app_module, "manager_listing", listing)
+    calls: list[list[str]] = []
+    outcome = remove_tool(
+        jq,
+        paths=(),
+        argv=("brew", "uninstall", "jq"),
+        bin_dir=tmp_path / ".local" / "bin",
+        runner=calls.append,
+    )
+    assert (outcome.removed, outcome.detail) == (True, "already removed")
+    assert asked == ["brew"]
+    assert calls == []
+    assert receipts.read("jq") is None
+
+
+def test_a_manager_package_still_listed_runs_its_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import receipts
+    from installer.app import remove_tool
+
+    jq = _jq_brew_receipt(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "manager_listing", _listing({"jq"}))
+    calls: list[list[str]] = []
+    outcome = remove_tool(
+        jq,
+        paths=(),
+        argv=("brew", "uninstall", "jq"),
+        bin_dir=tmp_path / ".local" / "bin",
+        runner=calls.append,
+    )
+    assert (outcome.removed, outcome.detail) == (True, "")
+    assert calls == [["brew", "uninstall", "jq"]]
+    assert receipts.read("jq") is None
+
+
+def test_an_unreadable_listing_runs_the_uninstall_and_a_failure_keeps_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed: no listing proves nothing, so the previewed command runs as shown."""
+    from installer import receipts
+    from installer.app import remove_tool
+
+    jq = _jq_brew_receipt(tmp_path, monkeypatch)
+    keg = "Error: No such keg: /opt/homebrew/Cellar/jq"
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail=keg)
+
+    outcome = remove_tool(
+        jq,
+        paths=(),
+        argv=("brew", "uninstall", "jq"),
+        bin_dir=tmp_path / ".local" / "bin",
+        runner=runner,
+    )
+    assert (outcome.removed, outcome.detail) == (False, keg)
+    assert receipts.read("jq") is not None

@@ -52,7 +52,7 @@ import os
 import re
 import shlex
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
@@ -401,6 +401,23 @@ def read_inventory(
         uv_tools=uv_tools,
         brew_prefix=brew_prefix,
     )
+
+
+def manager_listing(
+    kind: str,
+    *,
+    query: Callable[..., str] = run_query,
+    pnpm_packages: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
+) -> Collection[str] | None:
+    """The package names one L1 manager kind lists right now; None when it cannot answer."""
+    if kind in ("brew", "cask"):
+        return _query_brew_list(query, "--formula" if kind == "brew" else "--cask")
+    if kind == "uv-tool":
+        return _query_uv_tools(query)
+    if kind == "node":
+        packages = pnpm_packages()
+        return None if packages is None else frozenset(packages)
+    return None
 
 
 def listed_name(kind: str, package: str) -> str:
