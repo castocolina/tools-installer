@@ -1,3 +1,4 @@
+import os
 import re
 import tomllib
 from collections import Counter
@@ -6,12 +7,15 @@ from typing import cast
 
 import pytest
 
+from installer import receipts
+from installer.app import remove_tool
 from installer.deps import requires_integrity_errors, resolve_dependencies
-from installer.download import pinned_url
-from installer.model import Method, Tool, load_categories, load_tools
+from installer.download import Artifact, artifact_paths, pinned_url
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.skill_lifecycle import inspect_project_pack
+from installer.uninstall import removal_plan
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -423,11 +427,11 @@ def test_registry_includes_homebrew_with_os_targeted_install() -> None:
     # Look up by os membership so the test survives a reordering of the os lists.
     mac = next(m for m in brew.methods if "macos" in m.os)
     assert mac.params["bin_dir"] == "/opt/homebrew/bin"
-    assert mac.params["env"] == {"NONINTERACTIVE": "1"}
+    assert mac.params["env"] == {"NONINTERACTIVE": "1", "HOMEBREW_NO_SUDO": "1"}
     assert mac.params["shell"] == "bash"
     linux = next(m for m in brew.methods if "debian" in m.os)
     assert linux.params["bin_dir"] == "/home/linuxbrew/.linuxbrew/bin"
-    assert linux.params["env"] == {"NONINTERACTIVE": "1"}
+    assert linux.params["env"] == {"NONINTERACTIVE": "1", "HOMEBREW_NO_SUDO": "1"}
     assert linux.params["shell"] == "bash"
 
 
@@ -2610,3 +2614,237 @@ def test_registry_rows_carry_no_dead_attribution_keys() -> None:
         rows = cast(list[dict[str, object]], tomllib.load(fh)["tool"])
     dead = {"source", "owner", "uninstall"}
     assert [row["id"] for row in rows if dead & row.keys()] == []
+
+
+# Per script stanza: (tool id, os, arch) -> the lifecycle data the vendor documents.
+# None means the key is absent. Empty os/arch is the single-stanza case. The key set
+# must equal the registry's script stanzas (test_every_script_stanza_has_lifecycle_data).
+SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[str, object]] = {
+    ("opencode", (), ()): {
+        "paths": ["~/.opencode/bin/opencode"],
+        "remove": None,
+        "update": ["opencode", "upgrade"],
+    },
+    ("oh-my-zsh", (), ()): {
+        "paths": None,
+        "remove": None,
+        "update": ["{omz_root}/tools/upgrade.sh"],
+    },
+    ("sdkman", (), ()): {
+        "paths": None,
+        "remove": None,
+        "update": ["sdk", "selfupdate"],
+    },
+    ("uv", (), ()): {
+        "paths": ["~/.local/bin/uv", "~/.local/bin/uvx"],
+        "remove": None,
+        "update": ["uv", "self", "update"],
+    },
+    ("claude", (), ()): {
+        "paths": ["~/.local/bin/claude", "~/.local/share/claude/"],
+        "remove": None,
+        "update": ["claude", "update"],
+    },
+    ("codex", (), ()): {
+        "paths": [
+            "~/.codex/packages/standalone/releases/",
+            "~/.codex/packages/standalone/current",
+            "~/.local/bin/codex",
+            "~/.local/bin/codex-code-mode-host",
+        ],
+        "remove": None,
+        "update": None,
+    },
+    ("cursor-agent", (), ()): {
+        "paths": [
+            "~/.local/share/cursor-agent/versions/",
+            "~/.local/bin/agent",
+            "~/.local/bin/cursor-agent",
+        ],
+        "remove": None,
+        "update": ["cursor-agent", "update"],
+    },
+    ("antigravity", (), ()): {
+        "paths": ["~/.local/bin/agy"],
+        "remove": None,
+        "update": None,
+    },
+    ("bun", (), ()): {
+        "paths": ["~/.bun/bin/bun"],
+        "remove": None,
+        "update": ["bun", "upgrade"],
+    },
+    ("volta", (), ()): {
+        "paths": ["~/.volta/bin/volta", "~/.volta/bin/volta-shim", "~/.volta/bin/volta-migrate"],
+        "remove": None,
+        "update": None,
+    },
+    ("fnm", ("debian", "arch", "fedora"), ()): {
+        "paths": ["~/.local/share/fnm/fnm"],
+        "remove": None,
+        "update": None,
+    },
+    ("pnpm", ("debian", "arch", "fedora"), ()): {
+        "paths": ["~/.local/share/pnpm/bin/pnpm"],
+        "remove": None,
+        "update": ["pnpm", "self-update"],
+    },
+    ("pnpm", ("macos",), ()): {
+        "paths": ["~/Library/pnpm/bin/pnpm"],
+        "remove": None,
+        "update": ["pnpm", "self-update"],
+    },
+    ("kitty", ("debian", "arch", "fedora"), ()): {
+        "paths": ["~/.local/kitty.app/"],
+        "remove": None,
+        "update": None,
+    },
+    ("kitty", ("macos",), ()): {
+        "paths": None,
+        "remove": None,
+        "update": None,
+    },
+    ("brew", ("macos",), ("arm64",)): {
+        "paths": None,
+        "remove": None,
+        "update": ["brew", "update"],
+    },
+    ("brew", ("macos",), ("amd64",)): {
+        "paths": None,
+        "remove": None,
+        "update": ["brew", "update"],
+    },
+    ("brew", ("debian", "arch", "fedora"), ()): {
+        "paths": None,
+        "remove": None,
+        "update": ["brew", "update"],
+    },
+}
+
+
+def _script_stanza(tool_id: str, os: tuple[str, ...], arch: tuple[str, ...]) -> Method:
+    found = [
+        method
+        for tool in load_tools(REGISTRY)
+        if tool.id == tool_id
+        for method in tool.methods
+        if method.kind == "script" and method.os == os and method.arch == arch
+    ]
+    assert len(found) == 1, (tool_id, os, arch)
+    return found[0]
+
+
+@pytest.mark.parametrize("key", sorted(SCRIPT_LIFECYCLE_DATA))
+def test_script_lifecycle_data(key: tuple[str, tuple[str, ...], tuple[str, ...]]) -> None:
+    method = _script_stanza(*key)
+    for param, expected in SCRIPT_LIFECYCLE_DATA[key].items():
+        assert method.params.get(param) == expected, (key, param)
+
+
+def test_anchor_artifacts_expand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))  # expanduser() on the declared ~/ path
+    opencode = _script_stanza("opencode", (), ())
+    assert artifact_paths(opencode, tmp_path / ".local" / "bin") == (
+        Artifact(tmp_path / ".opencode" / "bin" / "opencode", "leaf"),
+    )
+
+
+def test_uv_declares_its_documented_config_dir() -> None:
+    # docs.astral.sh/uv/concepts/configuration-files: user-level config in ~/.config/uv/uv.toml
+    assert _tools_by_id()["uv"].config_paths == ("~/.config/uv",)
+
+
+def test_no_declared_path_is_or_contains_a_harness_marker() -> None:
+    markers = [tuple(m.split("/")) for group in HARNESS_MARKER_DIRS.values() for m in group]
+    for tool in load_tools(REGISTRY):
+        for method in tool.methods:
+            if method.kind != "script":
+                continue
+            for entry in cast(list[str], method.params.get("paths", [])):
+                parts = tuple(entry.removeprefix("~/").rstrip("/").split("/"))
+                # A path equal to or above a marker dir would delete the harness state with it.
+                assert not any(marker[: len(parts)] == parts for marker in markers), (
+                    tool.id,
+                    entry,
+                )
+
+
+def test_every_script_stanza_has_lifecycle_data_or_a_reason() -> None:
+    stanzas = {
+        (tool.id, method.os, method.arch)
+        for tool in load_tools(REGISTRY)
+        for method in tool.methods
+        if method.kind == "script"
+    }
+    assert stanzas == set(SCRIPT_LIFECYCLE_DATA)
+
+
+def test_no_manager_stanza_declares_a_store_as_a_tree() -> None:
+    for tool_id in ("pnpm", "bun", "volta", "fnm"):
+        for method in _tools_by_id()[tool_id].methods:
+            if method.kind == "script":
+                entries = cast(list[str], method.params.get("paths", []))
+                assert not [entry for entry in entries if entry.endswith("/")], tool_id
+
+
+def test_every_brew_stanza_sets_homebrew_no_sudo() -> None:
+    brews = [m for t in load_tools(REGISTRY) if t.id == "brew" for m in t.methods]
+    assert len(brews) == 3
+    for method in brews:
+        env = cast(dict[str, str], method.params["env"])
+        assert env["HOMEBREW_NO_SUDO"] == "1"
+
+
+# The store file each manager keeps (global packages, toolchains, caches) must survive its removal.
+_STORE_FILES: dict[tuple[str, tuple[str, ...], tuple[str, ...]], str] = {
+    ("pnpm", ("debian", "arch", "fedora"), ()): (
+        "~/.local/share/pnpm/global/5/node_modules/x/package.json"
+    ),
+    ("bun", (), ()): "~/.bun/install/global/node_modules/x/package.json",
+    ("volta", (), ()): "~/.volta/tools/image/node/20.0.0/bin/node",
+    ("fnm", ("debian", "arch", "fedora"), ()): (
+        "~/.local/share/fnm/node-versions/v20.0.0/installation/bin/node"
+    ),
+}
+
+
+@pytest.mark.parametrize("key", sorted(_STORE_FILES))
+def test_a_manager_removal_keeps_its_global_packages(
+    key: tuple[str, tuple[str, ...], tuple[str, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))  # expanduser() on every declared ~/ path
+    tool = _tools_by_id()[key[0]]
+    method = _script_stanza(*key)
+    for entry in cast(list[str], method.params["paths"]):
+        leaf = Path(os.path.expanduser(entry))
+        leaf.parent.mkdir(parents=True, exist_ok=True)
+        leaf.write_text("vendor leaf")
+    store = Path(os.path.expanduser(_STORE_FILES[key]))
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text("global package")
+    receipts.record(tool, method, package=None, smoke=None, preexisting=frozenset())
+    bin_dir = tmp_path / ".local" / "bin"
+    plan = removal_plan(tool, bin_dir, verify=True)
+    assert not [p for p in plan.removable if p == store or p in store.parents]
+    commands: list[list[str]] = []
+    remove_tool(tool, paths=plan.removable, argv=plan.argv, bin_dir=bin_dir, runner=commands.append)
+    assert commands == []
+    declared = cast(list[str], method.params["paths"])
+    assert not any(os.path.lexists(Path(os.path.expanduser(e))) for e in declared)
+    assert store.read_text() == "global package"
+
+
+@pytest.mark.parametrize(
+    ("tool_id", "config"),
+    [
+        ("gh", ("~/.config/gh",)),
+        ("kitty", ("~/.config/kitty",)),
+        ("pnpm", ("~/.config/pnpm", "~/Library/Preferences/pnpm")),
+    ],
+)
+def test_script_tools_declare_their_documented_config_dirs(
+    tool_id: str, config: tuple[str, ...]
+) -> None:
+    assert _tools_by_id()[tool_id].config_paths == config

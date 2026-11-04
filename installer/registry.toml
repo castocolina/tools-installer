@@ -67,14 +67,23 @@ cmd = "uv"
 priority = "P0"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast Python package and venv manager"
+config_paths = ["~/.config/uv"]
 [[tool.method]]
 kind = "script"
 url = "https://astral.sh/uv/install.sh"
 shell = "sh"
 bin_dir = "~/.local/bin"
 env = { UV_NO_MODIFY_PATH = "1" }
+# Verified 2026-11-04: astral.sh/uv/install.sh installs uv and uvx into $HOME/.local/bin (the _bins
+# case table, lines 232-471). Its env file is written only when rc edits are on, and
+# UV_NO_MODIFY_PATH=1 turns them off, so `paths` is the two binaries. `update` is `uv self update`
+# (docs.astral.sh/uv, installation page). No `remove`: the uninstall docs clear uv's data and then
+# remove the binaries by hand, with no command of its own. config_paths ~/.config/uv: user-level
+# config is ~/.config/uv/uv.toml (docs.astral.sh/uv/concepts/configuration-files).
+paths = ["~/.local/bin/uv", "~/.local/bin/uvx"]
+update = ["uv", "self", "update"]
 [[tool.method]]
 kind = "brew"
 formula = "uv"
@@ -167,27 +176,33 @@ os = ["macos"]
 arch = ["arm64"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
-env = { NONINTERACTIVE = "1" }
+# Verified 2026-11-04 (all three brew stanzas): install.sh reads HOMEBREW_NO_SUDO (lines 282-321), so each env sets
+# it to 1 (defense in depth, the zero-sudo rule). update is brew update. No paths and no remove: Homebrew's
+# uninstaller is a curl-piped script that removes the whole prefix (research Pitfall 5).
+env = { NONINTERACTIVE = "1", HOMEBREW_NO_SUDO = "1" }
 bin_dir = "/opt/homebrew/bin"
 writable_prefix = "/opt/homebrew"
+update = ["brew", "update"]
 [[tool.method]]
 kind = "script"
 os = ["macos"]
 arch = ["amd64"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
-env = { NONINTERACTIVE = "1" }
+env = { NONINTERACTIVE = "1", HOMEBREW_NO_SUDO = "1" }
 bin_dir = "/usr/local/bin"
 writable_prefix = "/usr/local/Homebrew"
+update = ["brew", "update"]
 # Preflight hands off an unwritable prefix: Homebrew's installer would escalate to create it.
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
-env = { NONINTERACTIVE = "1" }
+env = { NONINTERACTIVE = "1", HOMEBREW_NO_SUDO = "1" }
 bin_dir = "/home/linuxbrew/.linuxbrew/bin"
 writable_prefix = "/home/linuxbrew"
+update = ["brew", "update"]
 
 [[tool]]
 id = "fd"
@@ -445,8 +460,10 @@ cmd = "gh"
 priority = "P0"
 audience = "both"
 tier = "user"
-verified = 2026-11-03
+verified = 2026-11-04
 desc = "Uses GitHub from the terminal so agents and users can inspect PRs, issues, and auth state."
+# Verified 2026-11-04: GH_CONFIG_DIR defaults to $HOME/.config/gh (cli.github.com/manual/gh_help_environment).
+config_paths = ["~/.config/gh"]
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -581,7 +598,7 @@ cmd = "omz"
 priority = "P2"
 audience = "human"
 tier = "system"
-verified = 2026-09-06
+verified = 2026-11-04
 requires = ["zsh", "git"]
 post_install = ["set_login_shell"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
@@ -594,6 +611,11 @@ detect_path = "~/.oh-my-zsh/oh-my-zsh.sh"
 # Verified 2026-10-18: upstream install.sh exits 1 when $ZSH already exists;
 # no flag or environment variable bypasses the check.
 refuses_existing = true
+# Verified 2026-11-04: tools/upgrade.sh is git mode 100755 with a
+# `#!/usr/bin/env zsh` shebang in the ohmyzsh/ohmyzsh tree (GitHub git trees API,
+# master), so `update` runs it directly. No `paths` and no `remove`: tools/uninstall.sh
+# renames the user's ~/.zshrc, and that edit is not ours to make.
+update = ["{omz_root}/tools/upgrade.sh"]
 
 # Verified 2026-09-06: the real Homebrew formula name is bash, not gnu-bash
 # (confirmed live, formulae.brew.sh/api/formula/bash.json, stable 5.3.15,
@@ -1430,7 +1452,7 @@ cmd = "codex"
 priority = "P0"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "OpenAI coding agent for the user; coordinates local coding sessions rather than serving as an agent subtool."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1451,6 +1473,21 @@ url = "https://chatgpt.com/codex/install.sh"
 shell = "sh"
 env = { CODEX_NON_INTERACTIVE = "1" }
 bin_dir = "~/.codex/packages/standalone/current/bin"
+# Verified 2026-11-04: chatgpt.com/codex/install.sh sets RELEASES_DIR=$CODEX_HOME/packages/standalone/releases,
+# CURRENT_LINK=.../standalone/current, LOCK_FILE=.../standalone/install.lock and AUTO_UPDATE_VERSION=
+# .../standalone/auto-update-version (lines 16-35), links ~/.local/bin/codex to CURRENT_LINK (line 1232), and on
+# darwin also links ~/.local/bin/codex-code-mode-host (lines 1234-1241). `paths` is the releases tree (its
+# versions) plus the current link and the two launchers as leaves. install.lock and auto-update-version sit
+# beside releases and stay for 22-13's must-clear check (review R3-03). No `update`: the CLI docs
+# (developers.openai.com/codex/cli, checked 2026-11-04) name no `codex update`, and the CLI self-updates
+# (auto-update-version logic). No `remove`: the script's only uninstall commands remove another manager's copy
+# (brew, bun, npm), never the standalone install.
+paths = [
+  "~/.codex/packages/standalone/releases/",
+  "~/.codex/packages/standalone/current",
+  "~/.local/bin/codex",
+  "~/.local/bin/codex-code-mode-host",
+]
 [[tool.method]]
 kind = "cask"
 os = ["macos"]
@@ -1470,7 +1507,7 @@ cmd = "claude"
 priority = "P0"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "Anthropic coding agent for the user; complements Codex and needs clear install ownership."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1482,6 +1519,15 @@ recommends = ["codegraph", "graphify", "rtk"]
 kind = "script"
 url = "https://claude.ai/install.sh"
 shell = "bash"
+# Verified 2026-11-04: the native launcher is ~/.local/bin/claude (a link) into ~/.local/share/claude/versions/.
+# Its uninstall (code.claude.com/docs/en/setup, "Uninstall a native installation") removes exactly
+# `~/.local/bin/claude` and `~/.local/share/claude`, "the Claude Code binary and version files", so both
+# are declared and the tree is whole because the docs delete it whole. Its config (~/.claude, ~/.claude.json)
+# is a harness marker and is not declared. `update` is `claude update` (setup docs, launcher section).
+# No `remove`: the documented uninstall commands are `rm`, which names no declared leaf first (review R2-03),
+# so the receipt-proven paths are the whole removal.
+paths = ["~/.local/bin/claude", "~/.local/share/claude/"]
+update = ["claude", "update"]
 [[tool.method]]
 kind = "cask"
 os = ["macos"]
@@ -1495,7 +1541,7 @@ cmd = "opencode"
 priority = "P0"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1507,12 +1553,21 @@ owner_probes = ["pacman"]
 # Verified 2026-10-10: https://opencode.ai/install hardcodes
 # INSTALL_DIR=$HOME/.opencode/bin and moves the binary there. Live host has
 # the file at that path.
+# Verified 2026-11-04: the install script writes the binary to ~/.opencode/bin/opencode
+# (INSTALL_DIR lines 80-81, install lines 367-375), so `paths` is that binary, a leaf.
+# `update` is `opencode upgrade` (anomalyco/opencode v1.19.5, packages/opencode/src/cli/cmd/upgrade.ts);
+# without --major it stays on OpenCode 1. No `remove`: v1.19.5 cli/cmd/uninstall.ts on a curl
+# install rewrites the shell rc (cleanShellConfig, whatever --keep-config says), always deletes the
+# cache and state dirs, and only prints an `rm` hint for the binary. None of that is receipt-proven,
+# so the receipt-proven binary is the whole removal.
 [[tool.method]]
 kind = "script"
 url = "https://opencode.ai/install"
 shell = "bash"
 args = ["--no-modify-path"]
 bin_dir = "~/.opencode/bin"
+paths = ["~/.opencode/bin/opencode"]
+update = ["opencode", "upgrade"]
 [[tool.method]]
 kind = "pacman"
 package = "opencode"
@@ -1550,7 +1605,7 @@ cmd = "cursor-agent"
 priority = "P0"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "Cursor's terminal coding agent; installs via its own official curl|bash script, no brew/cask CLI equivalent exists."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1562,6 +1617,19 @@ recommends = ["codegraph", "graphify", "rtk"]
 kind = "script"
 url = "https://cursor.com/install"
 shell = "bash"
+# Verified 2026-11-04: cursor.com/install extracts the package into ~/.local/share/cursor-agent/versions/<version>
+# (lines 77-111) and symlinks ~/.local/bin/agent and ~/.local/bin/cursor-agent to its binary (lines 124-126).
+# `paths` is the versions tree plus the two links as leaves. The parent ~/.local/share/cursor-agent/ is a harness
+# marker (HARNESS_MARKER_DIRS) that also holds the CLI's runtime logs/ and worker.lock, so it is never declared.
+# `update` is `cursor-agent update`: the installation docs (cursor.com/docs/cli/installation, "Updates") give
+# `agent update`, and the registry keeps the collision-safe name `cursor-agent` (test_cursor_agent_uses_the_legacy_collision_safe_cmd_name).
+# No `remove`: neither the install script nor the installation docs name an uninstall command.
+paths = [
+  "~/.local/share/cursor-agent/versions/",
+  "~/.local/bin/agent",
+  "~/.local/bin/cursor-agent",
+]
+update = ["cursor-agent", "update"]
 
 # Verified 2026-09-06: the install script was fetched live (curl -fsSL
 # https://antigravity.google/cli/install.sh) and read verbatim this session;
@@ -1592,13 +1660,19 @@ cmd = "agy"
 priority = "P1"
 audience = "human"
 tier = "user"
-verified = 2026-09-06
+verified = 2026-11-04
 desc = "Google's terminal-based Antigravity agent CLI; installs via its own official curl|bash script, self-verifying the download's SHA-512 against a signed manifest."
 [[tool.method]]
 kind = "script"
 url = "https://antigravity.google/cli/install.sh"
 shell = "bash"
 bin_dir = "~/.local/bin"
+# Verified 2026-11-04: the script writes one binary, agy, to $HOME/.local/bin (BINARY_PATH, lines 54 and 218-224),
+# so `paths` is that leaf. Its native handoff (`agy install`, lines 231-239) writes harness state the registry
+# does not declare (the harness marker ~/.gemini/antigravity). No `update`: the CLI self-updates in the background
+# (script line 59) and the script documents no manual update command. No `remove`: the script documents no
+# uninstall command.
+paths = ["~/.local/bin/agy"]
 
 # Verified 2026-09-05 against release tag v1.6.0 via the GitHub Releases API
 # (repos/colbymchenry/codegraph/releases/latest): the release publishes
@@ -1863,7 +1937,7 @@ cmd = "sdkman-init.sh"
 priority = "P1"
 audience = "both"
 tier = "system"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "User-space manager for Java and JVM tools; after sourcing sdkman-init.sh it exposes the sdk shell function."
 [[tool.method]]
 kind = "script"
@@ -1874,6 +1948,11 @@ detect_path = "~/.sdkman/bin/sdkman-init.sh"
 # Verified 2026-10-13: ~/.sdkman/var/version read as 5.23.2 on this host; requires zip and unzip.
 # installer/version_status.py::_version_file (plan 16-06) reads that file.
 version_file = "~/.sdkman/var/version"
+# Verified 2026-11-04: `sdk selfupdate` is the documented self-update (sdkman.io/usage,
+# "Self-Update"); it runs through the sourced `sdk` invocation 22-05 reuses. No `paths` and no
+# `remove`: the install docs (sdkman.io/install, "Uninstallation") remove ~/.sdkman by hand and
+# the rc init snippet is the user's, not ours.
+update = ["sdk", "selfupdate"]
 
 # Verified 2026-09-06 (Tier-3 container, colima+docker, ubuntu:24.04; SDKMAN
 # script 5.23.0 / native 0.7.34 — see 06-01-SUMMARY.md for the verbatim
@@ -2074,13 +2153,18 @@ cmd = "bun"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast all-in-one JavaScript runtime and toolkit"
 [[tool.method]]
 kind = "script"
 url = "https://bun.sh/install"
 shell = "bash"
 bin_dir = "~/.bun/bin"
+# Verified 2026-11-04: bun.sh/install writes $install_dir/bin/bun (install_dir from BUN_INSTALL; lines 137-161),
+# so `paths` is that leaf. ~/.bun also holds install/global and the cache, so it is never a tree (review R1-13).
+# update is bun upgrade (github.com/oven-sh/bun README). No remove: the install script names no uninstall command.
+paths = ["~/.bun/bin/bun"]
+update = ["bun", "upgrade"]
 [[tool.method]]
 kind = "brew"
 formula = "bun"
@@ -2093,20 +2177,31 @@ cmd = "pnpm"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast, disk-space-efficient Node.js package manager"
+# Config dirs per pnpm's npmrc docs (pnpm.io/npmrc): ~/.config/pnpm/ on Linux, ~/Library/Preferences/pnpm/ on macOS.
+config_paths = ["~/.config/pnpm", "~/Library/Preferences/pnpm"]
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
     url = "https://get.pnpm.io/install.sh"
     shell = "sh"
     bin_dir = "~/.local/share/pnpm/bin"
+# Verified 2026-11-04: get.pnpm.io/install.sh runs the downloaded binary's `pnpm setup --force` (run_setup), which
+# puts pnpm in $PNPM_HOME/bin, the bin_dir. `paths` is the executable only: $PNPM_HOME also holds global packages,
+# so no tree (review R1-13). pnpm's dist/ tree sits beside the executable and is not declared, so 22-13's must-clear
+# check reports it if it survives. update is pnpm self-update (pnpm.io/cli/self-update). No remove: the script's
+# own uninstall note is to delete PNPM_HOME, which holds the global store.
+paths = ["~/.local/share/pnpm/bin/pnpm"]
+update = ["pnpm", "self-update"]
     [[tool.method]]
     kind = "script"
     os = ["macos"]
     url = "https://get.pnpm.io/install.sh"
     shell = "sh"
     bin_dir = "~/Library/pnpm/bin"
+    paths = ["~/Library/pnpm/bin/pnpm"]
+    update = ["pnpm", "self-update"]
 [[tool.method]]
 kind = "brew"
 formula = "pnpm"
@@ -2135,7 +2230,7 @@ cmd = "volta"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Node toolchain manager; owns globally installed Node CLIs in its own shim dir"
 # Verified 2026-10-13: upstream is unmaintained and recommends mise for new installs.
 # get.volta.sh supports macOS (Darwin tarballs) as well as Linux.
@@ -2149,6 +2244,12 @@ kind = "script"
 url = "https://get.volta.sh"
 shell = "bash"
 bin_dir = "~/.volta/bin"
+# Verified 2026-11-04: the release tarball (volta-2.0.2-linux.tar.gz, listed without extraction) holds volta,
+# volta-shim and volta-migrate, which get.volta.sh extracts into ~/.volta/bin (line 345). `paths` names those
+# three leaves only: ~/.volta also holds tools/ (global packages and toolchains), so it is never a tree (review
+# R1-13). The default shims come from `volta --version` at run time (line 230) and are not declared; 22-13's
+# must-clear check reports them if they survive. No update and no remove: the install script names neither.
+paths = ["~/.volta/bin/volta", "~/.volta/bin/volta-shim", "~/.volta/bin/volta-migrate"]
 [[tool.method]]
 kind = "brew"
 formula = "volta"
@@ -2162,7 +2263,7 @@ cmd = "fnm"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast and simple Node.js version manager"
 # macOS: the official installer delegates to Homebrew, so install via brew there.
 [[tool.method]]
@@ -2171,6 +2272,11 @@ os = ["debian", "arch", "fedora"]
 url = "https://fnm.vercel.app/install"
 shell = "bash"
 bin_dir = "~/.local/share/fnm"
+# Verified 2026-11-04: fnm.vercel.app/install sets INSTALL_DIR to ~/.local/share/fnm by default (lines 12-19) and
+# moves the binary to $INSTALL_DIR/fnm (lines 111-117), so `paths` is that leaf. Its Node versions live in
+# node-versions under the same dir (fnm src/config.rs, installations_dir), so the dir is never a tree (review R1-13).
+# No update and no remove: the install script names neither.
+paths = ["~/.local/share/fnm/fnm"]
 [[tool.method]]
 kind = "brew"
 formula = "fnm"
@@ -2708,9 +2814,11 @@ cmd = "kitty"
 priority = "P3"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "GPU-accelerated terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+# Config dir per the kitty docs (sw.kovidgoyal.net/kitty/conf): ~/.config/kitty/kitty.conf.
+config_paths = ["~/.config/kitty"]
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
@@ -2718,6 +2826,10 @@ url = "https://sw.kovidgoyal.net/kitty/installer.sh"
 shell = "sh"
 args = ["launch=n"]
 bin_dir = "~/.local/kitty.app/bin"
+# Verified 2026-11-04: installer.sh writes only the kitty.app tree under --dest (default ~/.local, lines 66-82):
+# it creates no bin links and no desktop entries (no ln, symlink or desktop lines in the script), so `paths` is that
+# tree. No update and no remove: the installer names no uninstall command.
+paths = ["~/.local/kitty.app/"]
 # installer.sh installs to /Applications/kitty.app on macOS without sudo; non-admin
 # users fall through to the cask when the script cannot write /Applications.
 [[tool.method]]
@@ -2727,6 +2839,7 @@ url = "https://sw.kovidgoyal.net/kitty/installer.sh"
 shell = "sh"
 args = ["launch=n"]
 bin_dir = "/Applications/kitty.app/Contents/MacOS"
+# No `paths`: /Applications is an absolute system path, which the registry does not accept (only ~/ or a named root).
 [[tool.method]]
 kind = "dnf"
 package = "kitty"
@@ -2878,7 +2991,9 @@ priority = "P1"
 audience = "human"
 desc = "Minimal coding-agent harness; setup remains interactive, and uninstall uses pnpm remove."
 tier = "user"
-verified = 2026-10-13
+verified = 2026-11-04
+# Verified 2026-11-04: the host-setup handoff installs @earendil-works/pi-coding-agent through pnpm
+# (installer/host_setup.py); that package is on the npm registry (latest 1.5.0). No script keys.
 requires = ["pnpm"]
 owner_probes = ["host-setup"]
 [[tool.method]]
