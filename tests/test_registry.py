@@ -8,7 +8,7 @@ import pytest
 
 from installer.deps import requires_integrity_errors, resolve_dependencies
 from installer.download import Artifact, artifact_paths, pinned_url
-from installer.model import Method, Tool, load_categories, load_tools
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.skill_lifecycle import inspect_project_pack
@@ -2631,6 +2631,40 @@ SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[s
         "remove": None,
         "update": ["sdk", "selfupdate"],
     },
+    ("uv", (), ()): {
+        "paths": ["~/.local/bin/uv", "~/.local/bin/uvx"],
+        "remove": None,
+        "update": ["uv", "self", "update"],
+    },
+    ("claude", (), ()): {
+        "paths": ["~/.local/bin/claude", "~/.local/share/claude/"],
+        "remove": None,
+        "update": ["claude", "update"],
+    },
+    ("codex", (), ()): {
+        "paths": [
+            "~/.codex/packages/standalone/releases/",
+            "~/.codex/packages/standalone/current",
+            "~/.local/bin/codex",
+            "~/.local/bin/codex-code-mode-host",
+        ],
+        "remove": None,
+        "update": None,
+    },
+    ("cursor-agent", (), ()): {
+        "paths": [
+            "~/.local/share/cursor-agent/versions/",
+            "~/.local/bin/agent",
+            "~/.local/bin/cursor-agent",
+        ],
+        "remove": None,
+        "update": ["cursor-agent", "update"],
+    },
+    ("antigravity", (), ()): {
+        "paths": ["~/.local/bin/agy"],
+        "remove": None,
+        "update": None,
+    },
 }
 
 
@@ -2659,3 +2693,23 @@ def test_anchor_artifacts_expand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert artifact_paths(opencode, tmp_path / ".local" / "bin") == (
         Artifact(tmp_path / ".opencode" / "bin" / "opencode", "leaf"),
     )
+
+
+def test_uv_declares_its_documented_config_dir() -> None:
+    # docs.astral.sh/uv/concepts/configuration-files: user-level config in ~/.config/uv/uv.toml
+    assert _tools_by_id()["uv"].config_paths == ("~/.config/uv",)
+
+
+def test_no_declared_path_is_or_contains_a_harness_marker() -> None:
+    markers = [tuple(m.split("/")) for group in HARNESS_MARKER_DIRS.values() for m in group]
+    for tool in load_tools(REGISTRY):
+        for method in tool.methods:
+            if method.kind != "script":
+                continue
+            for entry in cast(list[str], method.params.get("paths", [])):
+                parts = tuple(entry.removeprefix("~/").rstrip("/").split("/"))
+                # A path equal to or above a marker dir would delete the harness state with it.
+                assert not any(marker[: len(parts)] == parts for marker in markers), (
+                    tool.id,
+                    entry,
+                )
