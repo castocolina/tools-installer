@@ -332,7 +332,7 @@ Plans:
   4. A brew bootstrap with an unwritable prefix becomes a manual handoff, native dnf/apt/pacman installs are handed off as the exact command, and a grep test finds zero `sudo` argv in any executor.
   5. Uninstall offers "delete config too" only for tools with `config_paths` (default keep; CLI `--yes` never deletes config), a `config_paths` entry under `~/.claude`, `~/.cursor`, `~/.gemini` or `~/.codex` is rejected at load, and the container e2e harness compares file listings before and after uninstall, not only exit codes.
 
-**Plans:** 10/13 plans executed
+**Plans:** 12/13 plans executed
 
 Plans:
 **Wave 1**
@@ -356,8 +356,8 @@ Plans:
 - [x] 22-10-PLAN.md — Uninstall "delete config too" toggle on `c`
 
 **Wave 6**
-- [ ] 22-11-PLAN.md — ConfirmUninstall becomes the full review; config result lines
-- [ ] 22-12-PLAN.md — Greedy auto-updating casks on macOS (`--greedy-auto-updates`)
+- [x] 22-11-PLAN.md — ConfirmUninstall becomes the full review; config result lines
+- [x] 22-12-PLAN.md — Greedy auto-updating casks on macOS (`--greedy-auto-updates`)
 
 **Wave 7**
 - [ ] 22-13-PLAN.md — Container e2e HOME listings before install and after uninstall; one recorded Fedora run
@@ -447,7 +447,7 @@ Plans:
 | 19. One tool state with health plus receipts | 0/TBD | Not started | - |
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
 | 21. One screen family | 21/21 | In Progress | - |
-| 22. Method lifecycle contract | 10/13 | In Progress | - |
+| 22. Method lifecycle contract | 12/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
