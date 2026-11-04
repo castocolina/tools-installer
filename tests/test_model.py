@@ -1,5 +1,5 @@
 import typing
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from datetime import date
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from installer.enums import Audience, Priority, Tier
 from installer.model import (
     METHOD_KINDS,
     METHOD_PARAMS,
+    POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
     SKILL_HARNESSES,
     SMOKE_CHECK_NAMES,
@@ -1746,3 +1747,197 @@ def test_project_pack_rejects_a_global_target(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="demo-pack") as exc_info:
         load_tools(manifest)
     assert "global" in str(exc_info.value)
+
+
+def _tool_block(tool_id: str, config: str = "") -> str:
+    return f"""
+[[tool]]
+id = "{tool_id}"
+category = "search"
+tier = "user"
+{config}
+[[tool.method]]
+kind = "brew"
+formula = "{tool_id}"
+"""
+
+
+def test_config_paths_parses_in_declared_order(tmp_path: Path) -> None:
+    declared = _write(
+        tmp_path, _tool_block("demo", 'config_paths = ["~/.config/gh", "~/.local/share/gh"]')
+    )
+    assert load_tools(declared)[0].config_paths == ("~/.config/gh", "~/.local/share/gh")
+    (tmp_path / "bare").mkdir()
+    assert load_tools(_write(tmp_path / "bare", _tool_block("demo")))[0].config_paths == ()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "~/.claude/x",
+        "~/.cursor/x",
+        "~/.gemini/x",
+        "~/.codex/x",
+        "~/.gemini/antigravity/x",
+        "~/.local/share",
+    ],
+)
+def test_config_paths_rejects_a_harness_dir(tmp_path: Path, entry: str) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", f'config_paths = ["{entry}"]'))
+    with pytest.raises(ValueError, match="tool 'demo'.*config_paths"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["/etc/x", "~", "~/", "~/.bashrc", "~/a/../b", "~/a//b", "~/./a/b", "relative/x"],
+)
+def test_config_paths_rejects_entries_outside_two_levels_of_home(
+    tmp_path: Path, entry: str
+) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", f'config_paths = ["{entry}"]'))
+    with pytest.raises(ValueError, match="tool 'demo'.*config_paths"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize("raw", ['"~/.config/gh"', "[1]"])
+def test_config_paths_must_be_a_list_of_strings(tmp_path: Path, raw: str) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", f"config_paths = {raw}"))
+    with pytest.raises(ValueError, match="tool 'demo'.*config_paths"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("~/.config/shared", "~/.config/shared/plugin"),
+        ("~/.config/shared/plugin", "~/.config/shared"),
+    ],
+)
+def test_config_paths_refuse_an_overlap_across_tools(
+    tmp_path: Path, first: str, second: str
+) -> None:
+    manifest = _write(
+        tmp_path,
+        _tool_block("a", f'config_paths = ["{first}"]')
+        + _tool_block("b", f'config_paths = ["{second}"]'),
+    )
+    with pytest.raises(ValueError) as exc_info:
+        load_tools(manifest)
+    message = str(exc_info.value)
+    assert "config_paths" in message
+    assert "tool 'a'" in message
+    assert "tool 'b'" in message
+
+
+def test_config_paths_allow_a_shared_entry_and_one_tools_own_nesting(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        _tool_block("a", 'config_paths = ["~/.config/shared"]')
+        + _tool_block("b", 'config_paths = ["~/.config/shared"]')
+        + _tool_block("c", 'config_paths = ["~/.config/x", "~/.config/x/y"]'),
+    )
+    tools = {tool.id: tool for tool in load_tools(manifest)}
+    assert tools["a"].config_paths == tools["b"].config_paths == ("~/.config/shared",)
+    assert tools["c"].config_paths == ("~/.config/x", "~/.config/x/y")
+
+
+def _script_tool(extra: str) -> str:
+    return f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+{extra}
+"""
+
+
+def test_script_lifecycle_keys_load(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        _script_tool(
+            'paths = ["~/.local/bin/x", "~/.local/share/x/", "{omz_root}/custom/"]\n'
+            'remove = ["x", "uninstall", "--force"]\n'
+            'update = ["{omz_root}/tools/upgrade.sh"]\n'
+            'writable_prefix = "/home/linuxbrew"'
+        ),
+    )
+    params = load_tools(manifest)[0].methods[0].params
+    assert params["paths"] == ["~/.local/bin/x", "~/.local/share/x/", "{omz_root}/custom/"]
+    assert params["remove"] == ["x", "uninstall", "--force"]
+    assert params["update"] == ["{omz_root}/tools/upgrade.sh"]
+    assert params["writable_prefix"] == "/home/linuxbrew"
+
+
+@pytest.mark.parametrize(
+    ("key", "line"),
+    [
+        ("update", 'update = ["{zsh_root}/tools/upgrade.sh"]'),
+        ("remove", 'remove = ["{zsh_root}/x"]'),
+        ("paths", 'paths = ["{zsh_root}/x"]'),
+    ],
+)
+def test_script_tokens_reject_an_unknown_placeholder(tmp_path: Path, key: str, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match=f"tool 'demo': method 'script' key '{key}'.*zsh_root"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ['paths = ["/usr/local/bin/x"]', 'paths = ["~/a/../b"]', 'paths = ["x"]', 'paths = ["~"]'],
+)
+def test_script_paths_stay_under_home(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="method 'script' key 'paths'"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["remove = []", 'remove = "x"', "update = [1]", 'remove = ["x;rm"]'],
+)
+def test_script_argv_keys_are_non_empty_string_lists(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="method 'script' key '(remove|update)'"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'writable_prefix = "relative"',
+        'writable_prefix = "/a/../b"',
+        'writable_prefix = ""',
+        'writable_prefix = ["/a"]',
+    ],
+)
+def test_writable_prefix_is_an_absolute_path(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="method 'script' key 'writable_prefix'"):
+        load_tools(manifest)
+
+
+def test_unknown_script_key_is_still_rejected(tmp_path: Path) -> None:
+    manifest = _write(tmp_path, _script_tool('uninstall_cmd = ["x"]'))
+    with pytest.raises(ValueError, match="has unknown key 'uninstall_cmd'"):
+        load_tools(manifest)
+
+
+def test_post_install_actions_are_the_live_ones() -> None:
+    assert POST_INSTALL_ACTIONS == ("configure_path", "set_login_shell")
+
+
+@pytest.mark.parametrize("name", ["source", "owner", "uninstall"])
+def test_tool_has_no_dead_attribution_fields(name: str) -> None:
+    assert name not in {field.name for field in fields(Tool)}
+
+
+def test_post_install_rejects_a_deleted_action(tmp_path: Path) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["pnpm_setup"]'))
+    with pytest.raises(ValueError, match="unknown post-install action 'pnpm_setup'"):
+        load_tools(manifest)

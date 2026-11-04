@@ -14,6 +14,7 @@ from typing import Literal, cast
 
 from installer.atomic import read_capped
 from installer.model import (
+    HARNESS_MARKER_DIRS,
     SKILL_HARNESSES,
     ConfigStep,
     SkillLifecycle,
@@ -232,24 +233,29 @@ SKILL_LOCK_HARNESS_DIRS: dict[str, str] = {
 # kilo, and kimi dirs are the opengsd resolver defaults in
 # .claude/gsd-core/references/gsd-run-resolver.md. Devin/Grok/Qwen/Hermes/Muse
 # docs disagree on a config dir, so those disk tuples stay empty.
+_HARNESS_COMMANDS: dict[str, tuple[str, ...]] = {
+    "antigravity": ("agy",),
+    "claude": ("claude",),
+    "codex": ("codex",),
+    "copilot": ("copilot",),
+    "cursor": ("cursor-agent", "cursor"),
+    "devin": ("devin",),
+    "factory-droid": ("droid",),
+    "gemini-cli": ("gemini",),
+    "grok": ("grok",),
+    "hermes": ("hermes",),
+    "kilo": (),
+    "kimi": (),
+    "muse": ("muse",),
+    "opencode": ("opencode",),
+    "pi": ("pi",),
+    "qwen": ("qwen",),
+    "windsurf": (),
+}
+# Marker dirs come from model.HARNESS_MARKER_DIRS, the same denylist config_paths uses.
 HARNESS_PRESENCE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "antigravity": (("agy",), (".gemini/antigravity",)),
-    "claude": (("claude",), (".claude",)),
-    "codex": (("codex",), (".codex",)),
-    "copilot": (("copilot",), (".copilot",)),
-    "cursor": (("cursor-agent", "cursor"), (".cursor", ".local/share/cursor-agent")),
-    "devin": (("devin",), ()),
-    "factory-droid": (("droid",), (".factory",)),
-    "gemini-cli": (("gemini",), (".gemini",)),
-    "grok": (("grok",), ()),
-    "hermes": (("hermes",), ()),
-    "kilo": ((), (".config/kilo",)),
-    "kimi": ((), (".kimi-code",)),
-    "muse": (("muse",), ()),
-    "opencode": (("opencode",), (".config/opencode", ".opencode")),
-    "pi": (("pi",), (".pi",)),
-    "qwen": (("qwen",), ()),
-    "windsurf": ((), (".codeium/windsurf",)),
+    harness: (commands, HARNESS_MARKER_DIRS[harness])
+    for harness, commands in _HARNESS_COMMANDS.items()
 }
 
 _NO_HOST_HEADER = (

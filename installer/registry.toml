@@ -1697,7 +1697,6 @@ tier = "ai"
 verified = 2026-10-14
 requires = ["uv"]
 desc = "Turns a codebase (plus docs, SQL schemas, configs, PDFs) into a queryable local knowledge graph for AI agents."
-uninstall = "graphify uninstall; uv tool uninstall graphifyy"
 # Verified 2026-10-14: postinstall removed (Phase 17, SAFE-02). Every graphify
 # <host> install is project/CWD-scoped, not a global registration.
 # host-registration form tested in a disposable container writes into the
@@ -2877,10 +2876,7 @@ desc = "Minimal coding-agent harness; setup remains interactive, and uninstall u
 tier = "user"
 verified = 2026-10-13
 requires = ["pnpm"]
-source = "https://github.com/earendil-works/pi"
-owner = "pnpm"
 owner_probes = ["host-setup"]
-uninstall = "Remove with the manager that installed it (e.g. pnpm remove -g @earendil-works/pi-coding-agent, or volta uninstall @earendil-works/pi-coding-agent)"
 [[tool.method]]
 kind = "host_setup"
 setup_id = "pi"
@@ -2897,9 +2893,6 @@ audience = "both"
 desc = "Official draw.io Desktop release with export CLI; uninstall removes its managed app or AppImage."
 tier = "user"
 verified = 2026-11-03
-source = "https://github.com/jgraph/drawio-desktop"
-owner = "tools-installer managed release"
-uninstall = "Remove ~/.local/bin/drawio or ~/Applications/draw.io.app"
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]

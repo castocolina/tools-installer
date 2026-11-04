@@ -2348,3 +2348,33 @@ def test_capped_config_reads_use_read_capped(
     followed = {path: follow for path, follow in seen}
     assert followed[tmp_path / ".claude" / "plugins" / "installed_plugins.json"] is True
     assert followed[tmp_path / ".claude" / "settings.json"] is True
+
+
+def test_harness_presence_markers_come_from_the_model() -> None:
+    from installer.model import HARNESS_MARKER_DIRS
+
+    expected: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+        "antigravity": (("agy",), (".gemini/antigravity",)),
+        "claude": (("claude",), (".claude",)),
+        "codex": (("codex",), (".codex",)),
+        "copilot": (("copilot",), (".copilot",)),
+        "cursor": (("cursor-agent", "cursor"), (".cursor", ".local/share/cursor-agent")),
+        "devin": (("devin",), ()),
+        "factory-droid": (("droid",), (".factory",)),
+        "gemini-cli": (("gemini",), (".gemini",)),
+        "grok": (("grok",), ()),
+        "hermes": (("hermes",), ()),
+        "kilo": ((), (".config/kilo",)),
+        "kimi": ((), (".kimi-code",)),
+        "muse": (("muse",), ()),
+        "opencode": (("opencode",), (".config/opencode", ".opencode")),
+        "pi": (("pi",), (".pi",)),
+        "qwen": (("qwen",), ()),
+        "windsurf": ((), (".codeium/windsurf",)),
+    }
+    assert expected == skill_lifecycle.HARNESS_PRESENCE
+    assert HARNESS_MARKER_DIRS.keys() == skill_lifecycle.HARNESS_PRESENCE.keys()
+    assert all(
+        skill_lifecycle.HARNESS_PRESENCE[h][1] == HARNESS_MARKER_DIRS[h]
+        for h in skill_lifecycle.HARNESS_PRESENCE
+    )
