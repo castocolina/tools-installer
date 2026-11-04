@@ -243,6 +243,10 @@ def _recipe_argv(
 ) -> tuple[str, ...]:
     """L3: the vendor `remove`, its first word bound to a receipt-proven leaf (R2-03).
 
+    shortcut: no registry method declares `remove` today (opencode's was dropped, UI-SPEC
+    amendment 2026-11-04), so only test-local recipes reach this; kept by that recorded
+    decision (review PT-04), delete it if no vendor ships a safe uninstall.
+
     Needs a script receipt that proves at least one artifact (an empty legacy receipt
     never authorizes the vendor command, R1-08). The first word must name a proven leaf,
     by its absolute path or by a bare name only one leaf has; it is then replaced by that

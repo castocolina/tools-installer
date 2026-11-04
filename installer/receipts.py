@@ -642,6 +642,10 @@ def _leaf_matches(artifact: ReceiptArtifact, trees: Sequence[Path]) -> bool:
     holds once the tree is gone; any other retarget is drift (ledger Q3)."""
     path = artifact.path
     if not path.is_symlink():
+        # shortcut: a regular-file leaf is proven by type alone (ledger Q3: vendor self-updates
+        # rewrite it), so another installer's file at that path in a shared bin dir such as
+        # ~/.local/bin also matches (review C-07); upgrade when receipts record a size/hash
+        # that every installer-run update re-takes.
         return artifact.target is None and stat_module.S_ISREG(path.lstat().st_mode)
     if artifact.target is None:
         return False
