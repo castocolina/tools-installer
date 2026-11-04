@@ -25,13 +25,19 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
 from installer import daemon, env_redirect
-from installer.app import UninstallDecision, path_writer_lines_for
+from installer.app import (
+    UninstallDecision,
+    path_writer_lines_for,
+    pnpm_removal_packages,
+    removal_runs_line,
+)
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -56,6 +62,7 @@ from installer.pnpm_globals import (
     PNPM_SMOKE_FAILED,
     PNPM_SPLIT_GROUP,
     NodeGlobalsReport,
+    co_install_warnings,
     reinstall_preview,
 )
 from installer.pnpm_globals import node_globals as declared_node_globals
@@ -67,7 +74,7 @@ from installer.policy import (
     move_link_mode,
 )
 from installer.rcclean import PathWriterLine, group_writer_lines
-from installer.render import guidance_text, outcome_detail_text, outcome_word
+from installer.render import fold_reason, guidance_text, outcome_detail_text, outcome_word
 from installer.resolve import UnavailableReason
 from installer.run import CommandError
 from installer.sanitize import sanitize_log_line
@@ -1071,6 +1078,16 @@ def config_split(
     return deleted, kept
 
 
+_REVIEW_COLUMN = 54  # the confirm modal's text column: width 60 less the border and padding
+
+
+def _review_line(text: str, style: str = "") -> Text:
+    """One review line, folded at the text column with a 2-cell hanging indent (UI-SPEC)."""
+    line = fold_reason(Text(), text, 2, _REVIEW_COLUMN)
+    line.stylize(style)
+    return line
+
+
 class RemovalFinished(Message):
     """The removal worker ended. `swept` is None when the remover failed or raised
     (then `error` says why); `invalidate_error` is the post-removal cache failure."""
@@ -1539,11 +1556,57 @@ class UninstallScreen(AppScreen):
             return
         # Built now, before the modal opens, so a publish during the confirm cannot
         # change what the user confirmed (review R1-20).
-        decision = self._decision(event.ids)
+        decision, kept, flagged = self._decision(event.ids)
         self.app.push_screen(
-            ConfirmUninstall(self._accept_summary(event.ids)),
+            ConfirmUninstall(
+                self._accept_summary(event.ids), self._review(decision, kept, flagged)
+            ),
             self._on_confirm(decision),
         )
+
+    def _review(
+        self,
+        decision: UninstallDecision,
+        kept: Mapping[str, tuple[str, ...]],
+        flagged: frozenset[str],
+    ) -> tuple[Text, ...]:
+        """Blocks 3-7 of the review (UI-SPEC, ConfirmUninstall), built from the one snapshot
+        `_decision` took: the decision, the `config_split` kept map and the flagged ids. Nothing
+        is recomputed after the confirm (review R1-20). Every id, command and path is data:
+        it goes through `sanitize_log_line` and is appended as plain `Text`, never markup."""
+        lines: list[Text] = []
+        for tool in decision.tools:
+            if argv := decision.argv.get(tool.id):
+                lines.append(_review_line(sanitize_log_line(removal_runs_line(tool.id, argv))))
+        deleted = [
+            _review_line(sanitize_log_line(f"  {entry} ({tool.id})"))
+            for tool in decision.tools
+            for entry, path in config_targets(tool)
+            if path in decision.config.get(tool.id, ())
+        ]
+        shared = [
+            _review_line(sanitize_log_line(f"  {entry} kept, also used by {', '.join(ids)}"), "dim")
+            for entry, ids in kept.items()
+        ]
+        if deleted or shared:
+            lines.append(_review_line("Config deleted too:", "bold red"))
+            lines.extend(deleted)
+            lines.extend(shared)
+        unflagged = [
+            tool.id for tool in decision.tools if tool.config_paths and tool.id not in flagged
+        ]
+        if unflagged:
+            lines.append(_review_line(sanitize_log_line(f"Config kept: {', '.join(unflagged)}.")))
+        plans = [
+            state.removable
+            for tool in decision.tools
+            if (state := self._state_of(tool)) is not None
+        ]
+        for warning in co_install_warnings(pnpm_removal_packages(plans), self._tools):
+            line = _review_line(sanitize_log_line(warning))
+            line.stylize("yellow", 0, len("Warning:"))
+            lines.append(line)
+        return tuple(lines)
 
     def _highlighted_entry(self) -> _UninstallEntry | None:
         key = self._browser.highlighted_id()
@@ -1588,23 +1651,30 @@ class UninstallScreen(AppScreen):
             parts.append("the shell tweaks")
         return ", ".join(parts)
 
-    def _decision(self, ids: list[str]) -> UninstallDecision:
-        """The removal the selected ids name, with the config the flags agreed to delete."""
+    def _decision(
+        self, ids: list[str]
+    ) -> tuple[UninstallDecision, Mapping[str, tuple[str, ...]], frozenset[str]]:
+        """The removal the selected ids name, with the config the flags agreed to delete.
+
+        Also returns the config `config_split` kept and the flagged ids, from the same
+        `config_split` call, so the review and the decision cannot disagree."""
         tools: dict[str, Tool] = {}  # by id, in selection order; env rows carry no tool
         for key in ids:
             entry = self._by_key[key]
             if entry.tool is not None:
                 tools.setdefault(entry.tool.id, entry.tool)
         flagged = [tool for tool in tools.values() if tool.id in self._config_on]
-        return UninstallDecision(
+        deleted, kept = config_split(flagged, self._tools, self._state_of)
+        decision = UninstallDecision(
             tools=tuple(tools.values()),
             paths={tool_id: self._by_key[tool_id].paths for tool_id in tools},
             argv={tool_id: self._by_key[tool_id].argv for tool_id in tools},
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
-            config=config_split(flagged, self._tools, self._state_of)[0],
+            config=deleted,
         )
+        return decision, kept, frozenset(tool.id for tool in flagged)
 
     def _on_confirm(self, decision: UninstallDecision) -> Callable[[bool | None], None]:
         # Callable[[bool | None], None] is the correct pyright-strict type:
@@ -1627,6 +1697,29 @@ class UninstallScreen(AppScreen):
         self._repaint()
         self.status.set("Removing…", "warn")
         self._remove_worker(decision)
+
+    def _config_lines(self, decision: UninstallDecision, swept: SweepResult) -> list[str]:
+        """UI-SPEC Removal results: what became of each tool's config, in the order deleted,
+        kept, not deleted. Kept means a removed tool whose declared config is still on disk and
+        was not flagged. The check reads the disk now: the cache invalidation that follows a
+        removal leaves no published state to read it from (its epoch moved on)."""
+        kept = [
+            tool.id
+            for tool in decision.tools
+            if tool.id in swept.removed
+            and tool.id not in decision.config
+            and any(path.is_symlink() or path.exists() for _, path in config_targets(tool))
+        ]
+        lines: list[str] = []
+        if swept.config_deleted:
+            lines.append(f"Config deleted for {', '.join(swept.config_deleted)}.")
+        if kept:
+            lines.append(f"Config kept for {', '.join(kept)}.")
+        if swept.config_not_deleted:
+            lines.append(
+                f"Config not deleted for {', '.join(swept.config_not_deleted)}: the removal failed."
+            )
+        return [sanitize_log_line(line) for line in lines]
 
     def _applied_summary(self, decision: UninstallDecision, swept: SweepResult) -> str:
         parts: list[str] = []
@@ -1669,7 +1762,7 @@ class UninstallScreen(AppScreen):
             if not swept.swept and not swept.failed:
                 parts.append("no shell tweaks were still enabled — nothing to disable.")
         # Refused paths travel here too, so they show whatever levers were chosen.
-        parts.extend(f"warning: {warning}." for warning in swept.warnings)
+        parts.extend(f"warning: {sanitize_log_line(warning)}." for warning in swept.warnings)
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return multiline_summary(parts)
@@ -1755,6 +1848,7 @@ class UninstallScreen(AppScreen):
         fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
         if failed:
             summary_parts.append(fix_here)
+        summary_parts.extend(self._config_lines(message.decision, swept))
         # Empty when no lever was chosen; a blank line would cost a status row.
         if applied := self._applied_summary(message.decision, swept):
             summary_parts.append(applied)
@@ -1770,7 +1864,12 @@ class UninstallScreen(AppScreen):
         terminal_warning = terminal_sync_warning(self._terminal_sync)
         if terminal_warning:
             summary_parts.append(terminal_warning)
-        severity = "error" if swept.remove_failed else "warn" if terminal_warning else "ok"
+        if swept.remove_failed or swept.config_not_deleted:
+            severity = "error"
+        elif terminal_warning or swept.warnings:  # a config delete warning is a warn too
+            severity = "warn"
+        else:
+            severity = "ok"
         summary = multiline_summary(summary_parts)
         fix_elsewhere = (
             f"{failed} remove failed. Fix the cause, then open Uninstall and press enter"
@@ -2675,21 +2774,30 @@ class ConfirmUninstall(ModalScreen[bool]):
     ]
     DEFAULT_CSS = """
     ConfirmUninstall { align: center middle; }
-    ConfirmUninstall > Static { width: 60; border: round red; padding: 1 2; }
+    ConfirmUninstall > Vertical {
+        width: 60; height: auto; max-height: 18; border: round red; padding: 1 2;
+    }
+    ConfirmUninstall #confirm-body { height: auto; max-height: 13; }
     """
 
-    def __init__(self, summary: str) -> None:
+    def __init__(self, summary: str, review: Sequence[Text] = ()) -> None:
         super().__init__()
         self.summary = summary  # public test seam
+        self.review = tuple(review)  # public test seam: blocks 3-7, each folded `Text`
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            Text.from_markup(
-                f"[bold red]Remove {self.summary}?[/]\n\n"
-                "This deletes installed artifacts and is not undoable.\n"
-                "[dim]enter remove · esc cancel[/]"
-            )
+        body = Text("\n").join(
+            [
+                Text(f"Remove {self.summary}?", style="bold red"),
+                Text(""),
+                Text("This deletes installed artifacts and is not undoable."),
+                *self.review,
+            ]
         )
+        with Vertical(id="confirm-box"):
+            with VerticalScroll(id="confirm-body"):
+                yield Static(body)
+            yield Static(Text("enter remove · esc cancel", style="dim"), id="confirm-keys")
 
     def action_confirm(self) -> None:
         self.dismiss(True)

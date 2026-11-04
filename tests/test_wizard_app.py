@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
+from rich.text import Text
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, Static
@@ -8458,3 +8459,396 @@ async def test_flags_start_off_on_every_visit() -> None:
         await settle(app, pilot)
     assert len(captured) == 1
     assert captured[0].config == {}
+
+
+# -- 22-11: the confirm modal is the review (UI-04, LIFE-08) ------------------
+
+
+def _confirm(app: App[Any]) -> ConfirmUninstall:
+    screen = app.screen
+    assert isinstance(screen, ConfirmUninstall)
+    return screen
+
+
+async def test_the_review_lists_exactly_the_paths_the_removal_deletes() -> None:
+    """22-11 tracer: the review names each command and the config it deletes, and the
+    confirm hands the remover those same paths."""
+    gh = _config_tool("gh", "~/.config/gh")
+    gh_dir = Path.home() / ".config" / "gh"
+    gh_removable = RemovalPlan(
+        (Path("/opt/gh"),), (), config=(gh_dir,), level="manager", argv=("brew", "uninstall", "gh")
+    )
+    vend_method = Method(
+        kind="script", params={"paths": ["~/.local/bin/vend"], "remove": ["vend", "uninstall"]}
+    )
+    vend = Tool(id="vend", name="vend", category="dev", cmd="vend", methods=(vend_method,))
+    vend_removable = RemovalPlan(
+        (Path("/opt/vend/bin/vend"),),
+        (),
+        level="recipe",
+        argv=("/opt/vend/bin/vend", "uninstall", "--force"),
+    )
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[
+            (gh, plan_state(gh, removable=gh_removable)),
+            (vend, plan_state(vend, removable=vend_removable)),
+        ],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("c")  # the highlighted row is gh: flagged, so marked too
+        await pilot.press("down")
+        await pilot.press("space")  # vend: marked, no config
+        await pilot.press("enter")  # the modal opens and shows the review
+        await pilot.pause()
+        # The order is the order the rows were marked: gh first, then vend.
+        assert [line.plain for line in _confirm(app).review] == [
+            "gh: runs brew uninstall gh",
+            "vend: runs /opt/vend/bin/vend uninstall --force",
+            "Config deleted too:",
+            "  ~/.config/gh (gh)",
+        ]
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {"gh": (gh_dir,)}
+
+
+async def test_an_empty_review_reads_as_before() -> None:
+    """22-11: a review with no runs, no config and no pnpm group reads as Phase 21 did."""
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _confirm(app).review == ()
+        body = app.screen.query_one("#confirm-body Static", Static)
+        assert str(body.render()) == (
+            "Remove 1 tool(s)?\n\nThis deletes installed artifacts and is not undoable."
+        )
+        keys = app.screen.query_one("#confirm-keys", Static)
+        assert str(keys.render()) == "enter remove · esc cancel"
+
+
+async def test_the_review_body_is_plain_text() -> None:
+    """22-11 (T-22-27): a config path with markup renders literally, never as style."""
+    odd = _config_tool("gh", "~/.config/[red]x[/]")
+    odd_dir = Path.home() / ".config" / "[red]x[/]"
+    app = _app(
+        cases=[(odd, _removable_with_config(odd, [odd_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("c")
+        await pilot.press("enter")
+        await pilot.pause()
+        review = _confirm(app).review
+        assert "  ~/.config/[red]x[/] (gh)" in [line.plain for line in review]
+        assert "[red]x[/]" in str(app.screen.query_one("#confirm-body Static", Static).render())
+        assert not any(span.style == "red" for line in review for span in line.spans)
+
+
+async def _mark_rows(app: App[Any], pilot: Pilot[Any], *marks: tuple[str, bool]) -> None:
+    """Mark the named rows in turn; `True` presses `c`, which marks the row and flags its config."""
+    table = app.screen.query_one(DataTable[Any])
+    for tool_id, flagged in marks:
+        table.move_cursor(row=table.get_row_index(tool_id))
+        await pilot.pause()
+        await pilot.press("c" if flagged else "space")
+
+
+def _flat(review: Sequence[Text]) -> list[str]:
+    """Each review line on one row: a folded line joins back with single spaces."""
+    return [" ".join(line.plain.split()) for line in review]
+
+
+async def test_a_shared_path_is_reviewed_as_kept() -> None:
+    """22-11 (UI-SPEC partial): a path another tool still uses is listed as kept, never deleted."""
+    a = _config_tool("a", "~/.config/shared")
+    b = _config_tool("b", "~/.config/shared")
+    shared = Path.home() / ".config" / "shared"
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(a, _removable_with_config(a, [shared])), (b, _removable_with_config(b, [shared]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("a", True))  # b stays unmarked, so it keeps the path
+        await pilot.press("enter")
+        await pilot.pause()
+        assert [line.plain for line in _confirm(app).review] == [
+            "Config deleted too:",
+            "  ~/.config/shared kept, also used by b",
+        ]
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
+
+
+async def test_unflagged_config_is_reviewed_as_kept() -> None:
+    """22-11 (UI-SPEC block 6): a marked tool with config and the flag off reads as kept."""
+    gh = _config_tool("gh", "~/.config/gh")
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")  # marked, the config flag stays off
+        await pilot.press("enter")
+        await pilot.pause()
+        assert [line.plain for line in _confirm(app).review] == ["Config kept: gh."]
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
+
+
+def _pnpm_tool(tool_id: str, npm_pkg: str, *co_install: str) -> Tool:
+    """A tool installed as a pnpm global, optionally a member of a co-install group."""
+    method = Method(kind="node", params={"npm_pkg": npm_pkg, "co_install": list(co_install)})
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(method,),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+
+
+def _pnpm_removal(tool: Tool, package: str) -> ToolState:
+    """A removable row whose only removal is `pnpm remove --global <package>`."""
+    removable = RemovalPlan(
+        (Path(f"/opt/{tool.id}"),),
+        (),
+        level="manager",
+        argv=("pnpm", "remove", "--global", package),
+    )
+    return plan_state(tool, removable=removable)
+
+
+async def test_pnpm_group_lines_in_the_review() -> None:
+    """22-11 (LIFE-08, UI-SPEC block 7): a member removed while others stay names them; every
+    member removed gives one line; a package outside any group gives none."""
+    mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
+    puppeteer = _pnpm_tool("puppeteer", "puppeteer")
+    group = [
+        (mmdc, _pnpm_removal(mmdc, "@mermaid-js/mermaid-cli")),
+        (puppeteer, _pnpm_removal(puppeteer, "puppeteer")),
+    ]
+    # One member removed: the other stays, and the warning names it.
+    app = _app(cases=group, uninstall=_uninstall_inputs(remove=_recorder([])))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("mmdc", False))
+        await pilot.press("enter")
+        await pilot.pause()
+        review = _confirm(app).review
+        assert _flat(review) == [
+            "mmdc: runs pnpm remove --global @mermaid-js/mermaid-cli",
+            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli "
+            "leaves puppeteer installed.",
+        ]
+        assert any(
+            span.style == "yellow" and (span.start, span.end) == (0, 8) for span in review[-1].spans
+        )
+        await pilot.press("escape")
+        await pilot.pause()
+    # Every member removed in this run: one line for the group.
+    app = _app(cases=group, uninstall=_uninstall_inputs(remove=_recorder([])))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("mmdc", False), ("puppeteer", False))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _flat(_confirm(app).review)[-1] == (
+            "Warning: pnpm group mmdc: all its members are removed together."
+        )
+        await pilot.press("escape")
+        await pilot.pause()
+    # A brew row is in no pnpm group: no warning line.
+    rg = _tool("rg")
+    brew = RemovalPlan((Path("/opt/rg"),), (), level="manager", argv=("brew", "uninstall", "rg"))
+    app = _app(cases=[(rg, plan_state(rg, removable=brew))], uninstall=_uninstall_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _flat(_confirm(app).review) == ["rg: runs brew uninstall rg"]
+        await pilot.press("escape")
+        await pilot.pause()
+
+
+async def test_the_review_blocks_come_in_order() -> None:
+    """22-11 (UI-SPEC UI Considerations, populated): runs, deleted, kept, config kept, the
+    pnpm warning, then the keys line below the body."""
+    gh = _config_tool("gh", "~/.config/gh")
+    a = _config_tool("a", "~/.config/shared")
+    b = _config_tool("b", "~/.config/shared")
+    k = _config_tool("k", "~/.config/k")
+    mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
+    puppeteer = _pnpm_tool("puppeteer", "puppeteer")
+    shared = Path.home() / ".config" / "shared"
+    gh_brew = RemovalPlan(
+        (Path("/opt/gh"),),
+        (),
+        config=(Path.home() / ".config" / "gh",),
+        level="manager",
+        argv=("brew", "uninstall", "gh"),
+    )
+    app = _app(
+        cases=[
+            (gh, plan_state(gh, removable=gh_brew)),
+            (a, _removable_with_config(a, [shared])),
+            (b, _removable_with_config(b, [shared])),
+            (k, _removable_with_config(k, [Path.home() / ".config" / "k"])),
+            (mmdc, _pnpm_removal(mmdc, "@mermaid-js/mermaid-cli")),
+            (puppeteer, _pnpm_removal(puppeteer, "puppeteer")),
+        ],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("gh", True), ("a", True), ("k", False), ("mmdc", False))
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = _confirm(app)
+        assert _flat(screen.review) == [
+            "gh: runs brew uninstall gh",
+            "mmdc: runs pnpm remove --global @mermaid-js/mermaid-cli",
+            "Config deleted too:",
+            "~/.config/gh (gh)",
+            "~/.config/shared kept, also used by b",
+            "Config kept: k.",
+            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli "
+            "leaves puppeteer installed.",
+        ]
+        keys = screen.query_one("#confirm-keys", Static)
+        assert str(keys.render()) == "enter remove · esc cancel"
+        assert screen.query_one("#confirm-body").region.y < keys.region.y
+        await pilot.press("escape")
+        await pilot.pause()
+
+
+async def test_config_result_lines_follow_the_counts() -> None:
+    """22-11 (UI-SPEC Removal results): deleted and kept config lines follow the counts."""
+    gh = _config_tool("gh", "~/.config/gh")
+    uv = _config_tool("uv", "~/.config/uv")
+    (Path.home() / ".config" / "uv").mkdir(parents=True)  # still on disk after the removal
+    app = _app(
+        cases=[
+            (gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"])),
+            (uv, _removable_with_config(uv, [Path.home() / ".config" / "uv"])),
+        ],
+        uninstall=_uninstall_inputs(
+            remove=lambda _decision: SweepResult(removed=("gh", "uv"), config_deleted=("gh",))
+        ),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("gh", True), ("uv", False))  # uv keeps its config
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert screen.status.text == ("2 removed\nConfig deleted for gh.\nConfig kept for uv.")
+        assert screen.status.severity is Severity.OK
+
+
+async def test_a_failed_vendor_remove_keeps_config_and_says_so() -> None:
+    """22-11 (UI-SPEC Removal results, error): a failed removal keeps its config and says so."""
+    vend = _config_tool("vend", "~/.config/vend")
+    failed = SweepResult(
+        remove_failed=(("vend", "Error: vend uninstall failed"),),
+        config_not_deleted=("vend",),
+    )
+    app = _app(
+        cases=[(vend, _removable_with_config(vend, [Path.home() / ".config" / "vend"]))],
+        uninstall=_uninstall_inputs(remove=lambda _decision: failed),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("vend", True))
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert screen.status.severity is Severity.ERROR
+        assert screen.status.text.splitlines()[-1] == (
+            "Config not deleted for vend: the removal failed."
+        )
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, "vend", "sel") == "[c]"  # the choice survives the failure
+        assert "remove failed" in _uninstall_cell(table, "vend", "removes")
+
+
+async def test_a_config_delete_warning_is_shown() -> None:
+    """22-11 (review R1-21): a config delete warning is a warn line, and its absence reads ok."""
+    gh = _config_tool("gh", "~/.config/gh")
+    gh_dir = Path.home() / ".config" / "gh"
+    warned = SweepResult(
+        removed=("gh",),
+        config_deleted=("gh",),
+        warnings=("could not delete config ~/.config/gh — denied",),
+    )
+    for result, severity, line in (
+        (warned, Severity.WARN, "warning: could not delete config ~/.config/gh — denied."),
+        (
+            SweepResult(removed=("gh",), config_deleted=("gh",)),
+            Severity.OK,
+            "Config deleted for gh.",
+        ),
+    ):
+        app = _app(
+            cases=[(gh, _removable_with_config(gh, [gh_dir]))],
+            uninstall=_uninstall_inputs(remove=lambda _decision, result=result: result),
+        )
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.press("5")
+            await _mark_rows(app, pilot, ("gh", True))
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await settle(app, pilot)
+            screen = app.view("uninstall")
+            assert isinstance(screen, UninstallScreen)
+            assert screen.status.text.splitlines()[-1] == line
+            assert screen.status.severity is severity
+
+
+async def test_status_data_is_literal() -> None:
+    """22-11 (T-22-27): a path and an error with markup or escape bytes stay literal in status."""
+    odd = _config_tool("gh", "~/.config/[red]x[/]")
+    odd_dir = Path.home() / ".config" / "[red]x[/]"
+    warned = SweepResult(
+        removed=("gh",),
+        config_deleted=("gh",),
+        warnings=("could not delete config ~/.config/[red]x[/] — \x1b[31mdenied",),
+    )
+    app = _app(
+        cases=[(odd, _removable_with_config(odd, [odd_dir]))],
+        uninstall=_uninstall_inputs(remove=lambda _decision: warned),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("gh", True))
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert "could not delete config ~/.config/[red]x[/] — [31mdenied." in screen.status.text
+        assert "\x1b" not in screen.status.text
