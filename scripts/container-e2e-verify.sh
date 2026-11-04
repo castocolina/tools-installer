@@ -419,7 +419,7 @@ dependency_failures_explained() {
   while IFS= read -r blocker_line; do
     blockers_csv="${blocker_line#*dependency failed — }"
     IFS=',' read -ra blockers <<<"$blockers_csv"
-    for blocker in "${blockers[@]}"; do
+    for blocker in ${blockers[@]+"${blockers[@]}"}; do
       blocker="${blocker#"${blocker%%[![:space:]]*}"}"
       blocker="${blocker%"${blocker##*[![:space:]]}"}"
       [[ "$blocker" == "an earlier failure" ]] && return 1
@@ -619,19 +619,19 @@ new_leftovers() {
   while IFS= read -r entry; do [[ -n "$entry" ]] || continue; recorded_list+=("$entry"); done <"$recorded"
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
-    for entry in "${recorded_list[@]}"; do
+    for entry in ${recorded_list[@]+"${recorded_list[@]}"}; do
       if [[ "$path" == "$entry" || "$path" == "$entry"/* ]]; then leftovers+=("$path"); break; fi
     done
   done <"$after"
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
     flagged=""
-    for entry in "${must_list[@]}"; do
+    for entry in ${must_list[@]+"${must_list[@]}"}; do
       if [[ "$path" == "$entry" || "$path" == "$entry"/* ]]; then flagged=1; break; fi
     done
     if [[ -z "$flagged" ]]; then
       covered=""
-      for entry in "${allowed_list[@]}"; do
+      for entry in ${allowed_list[@]+"${allowed_list[@]}"}; do
         if [[ "$path" == "$entry" || "$path" == "$entry"/* || "$entry" == "$path"/* ]]; then
           covered=1
           break
@@ -645,13 +645,13 @@ new_leftovers() {
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
     kept=""
-    for root in "${roots[@]}"; do
+    for root in ${roots[@]+"${roots[@]}"}; do
       if [[ "$path" == "$root"/* ]]; then kept=1; break; fi
     done
     [[ -n "$kept" ]] || roots+=("$path")
-  done < <(printf '%s\n' "${leftovers[@]}" | LC_ALL=C sort -u)
+  done < <(printf '%s\n' ${leftovers[@]+"${leftovers[@]}"} | LC_ALL=C sort -u)
   if [[ ${#roots[@]} -eq 0 ]]; then return 0; fi
-  printf '%s\n' "${roots[@]}"
+  printf '%s\n' ${roots[@]+"${roots[@]}"}
   return 1
 }
 

@@ -1016,3 +1016,12 @@ def test_pre_uninstall_check_survives_a_spaced_workspace(
     ok = _run(script, scratch)
     assert ok.returncode == 0, ok.stdout + ok.stderr
     assert f"TRACER_RECEIPT_PRE_UNINSTALL_OK tool={PROBE_TOOL}" in ok.stdout
+
+
+def test_every_array_expansion_survives_bash_3_2_under_set_u() -> None:
+    """Review PT-07: bash < 4.4 aborts on `"${arr[@]}"` of an empty array under `set -u`,
+    and a macOS host's /bin/bash is 3.2; every expansion uses the `${arr[@]+...}` guard."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    bare = re.findall(r'"\$\{(\w+)\[@\]\}"', text)
+    guarded = re.findall(r'\$\{(\w+)\[@\]\+"\$\{\1\[@\]\}"\}', text)
+    assert sorted(bare) == sorted(guarded)
