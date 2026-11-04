@@ -877,10 +877,27 @@ def test_home_listing_prunes_the_workspace(tmp_path: Path) -> None:
     scratch = tmp_path / "home"
     (scratch / "workspace" / ".venv").mkdir(parents=True)
     (scratch / ".config" / "gh").mkdir(parents=True)
+    (scratch / ".config" / "gh" / "hosts.yml").write_text("", encoding="utf-8")
     (scratch / ".bashrc").write_text("", encoding="utf-8")
     result = _run(_harness("home_listing") + "\nhome_listing\n", scratch)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [".bashrc", ".config", ".config/gh"]
+    assert result.stdout.splitlines() == [
+        ".bashrc",
+        ".config",
+        ".config/gh",
+        ".config/gh/hosts.yml",
+    ]
+
+
+def test_home_listing_skips_empty_directories(tmp_path: Path) -> None:
+    """An emptied directory holds no artifact, so it is not listed; a file beside it is."""
+    scratch = tmp_path / "home"
+    (scratch / ".local" / "bin").mkdir(parents=True)
+    (scratch / ".local" / "bin" / "tool").write_text("", encoding="utf-8")
+    (scratch / ".local" / "opt").mkdir()
+    result = _run(_harness("home_listing") + "\nhome_listing\n", scratch)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [".local", ".local/bin", ".local/bin/tool"]
 
 
 def test_receipt_paths_records_the_home_relative_artifacts(

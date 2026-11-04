@@ -530,11 +530,11 @@ cmd_pass1() {
   return 1
 }
 
-# The tester's HOME-relative listing, the workspace checkout pruned. `~` is expanded by
-# the container shell, so the single-quoted text names no host variable.
+# The tester's HOME-relative listing, workspace pruned, empty dirs skipped (shortcut: a surviving
+# empty must-clear or receipt dir goes unreported; list dirs to close it). `~` is expanded by the container shell.
 home_listing() {
   local workspace="${TESTER_WORKSPACE#/home/tester/}"
-  exec_tester 'cd ~ && find . -mindepth 1 \( -path "./'"$workspace"'" -prune \) -o -print | sed "s|^\./||" | LC_ALL=C sort'
+  exec_tester 'cd ~ && find . -mindepth 1 \( -path "./'"$workspace"'" -prune \) -o \( -type d -empty \) -o -print | sed "s|^\./||" | LC_ALL=C sort'
 }
 
 # Before --uninstall --yes: the paths each receipt records (HOME-relative; paths outside
