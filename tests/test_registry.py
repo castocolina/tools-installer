@@ -7,7 +7,7 @@ from typing import cast
 import pytest
 
 from installer.deps import requires_integrity_errors, resolve_dependencies
-from installer.download import pinned_url
+from installer.download import Artifact, artifact_paths, pinned_url
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
@@ -2610,3 +2610,52 @@ def test_registry_rows_carry_no_dead_attribution_keys() -> None:
         rows = cast(list[dict[str, object]], tomllib.load(fh)["tool"])
     dead = {"source", "owner", "uninstall"}
     assert [row["id"] for row in rows if dead & row.keys()] == []
+
+
+# Per script stanza: (tool id, os, arch) -> the lifecycle data the vendor documents.
+# None means the key is absent. Empty os/arch is the single-stanza case. The key set
+# must equal the registry's script stanzas (test_every_script_stanza_has_lifecycle_data).
+SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[str, object]] = {
+    ("opencode", (), ()): {
+        "paths": ["~/.opencode/bin/opencode"],
+        "remove": None,
+        "update": ["opencode", "upgrade"],
+    },
+    ("oh-my-zsh", (), ()): {
+        "paths": None,
+        "remove": None,
+        "update": ["{omz_root}/tools/upgrade.sh"],
+    },
+    ("sdkman", (), ()): {
+        "paths": None,
+        "remove": None,
+        "update": ["sdk", "selfupdate"],
+    },
+}
+
+
+def _script_stanza(tool_id: str, os: tuple[str, ...], arch: tuple[str, ...]) -> Method:
+    found = [
+        method
+        for tool in load_tools(REGISTRY)
+        if tool.id == tool_id
+        for method in tool.methods
+        if method.kind == "script" and method.os == os and method.arch == arch
+    ]
+    assert len(found) == 1, (tool_id, os, arch)
+    return found[0]
+
+
+@pytest.mark.parametrize("key", sorted(SCRIPT_LIFECYCLE_DATA))
+def test_script_lifecycle_data(key: tuple[str, tuple[str, ...], tuple[str, ...]]) -> None:
+    method = _script_stanza(*key)
+    for param, expected in SCRIPT_LIFECYCLE_DATA[key].items():
+        assert method.params.get(param) == expected, (key, param)
+
+
+def test_anchor_artifacts_expand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))  # expanduser() on the declared ~/ path
+    opencode = _script_stanza("opencode", (), ())
+    assert artifact_paths(opencode, tmp_path / ".local" / "bin") == (
+        Artifact(tmp_path / ".opencode" / "bin" / "opencode", "leaf"),
+    )

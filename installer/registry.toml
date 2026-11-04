@@ -581,7 +581,7 @@ cmd = "omz"
 priority = "P2"
 audience = "human"
 tier = "system"
-verified = 2026-09-06
+verified = 2026-11-04
 requires = ["zsh", "git"]
 post_install = ["set_login_shell"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
@@ -594,6 +594,11 @@ detect_path = "~/.oh-my-zsh/oh-my-zsh.sh"
 # Verified 2026-10-18: upstream install.sh exits 1 when $ZSH already exists;
 # no flag or environment variable bypasses the check.
 refuses_existing = true
+# Verified 2026-11-04: tools/upgrade.sh is git mode 100755 with a
+# `#!/usr/bin/env zsh` shebang in the ohmyzsh/ohmyzsh tree (GitHub git trees API,
+# master), so `update` runs it directly. No `paths` and no `remove`: tools/uninstall.sh
+# renames the user's ~/.zshrc, and that edit is not ours to make.
+update = ["{omz_root}/tools/upgrade.sh"]
 
 # Verified 2026-09-06: the real Homebrew formula name is bash, not gnu-bash
 # (confirmed live, formulae.brew.sh/api/formula/bash.json, stable 5.3.15,
@@ -1495,7 +1500,7 @@ cmd = "opencode"
 priority = "P0"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1507,12 +1512,21 @@ owner_probes = ["pacman"]
 # Verified 2026-10-10: https://opencode.ai/install hardcodes
 # INSTALL_DIR=$HOME/.opencode/bin and moves the binary there. Live host has
 # the file at that path.
+# Verified 2026-11-04: the install script writes the binary to ~/.opencode/bin/opencode
+# (INSTALL_DIR lines 80-81, install lines 367-375), so `paths` is that binary, a leaf.
+# `update` is `opencode upgrade` (anomalyco/opencode v1.19.5, packages/opencode/src/cli/cmd/upgrade.ts);
+# without --major it stays on OpenCode 1. No `remove`: v1.19.5 cli/cmd/uninstall.ts on a curl
+# install rewrites the shell rc (cleanShellConfig, whatever --keep-config says), always deletes the
+# cache and state dirs, and only prints an `rm` hint for the binary. None of that is receipt-proven,
+# so the receipt-proven binary is the whole removal.
 [[tool.method]]
 kind = "script"
 url = "https://opencode.ai/install"
 shell = "bash"
 args = ["--no-modify-path"]
 bin_dir = "~/.opencode/bin"
+paths = ["~/.opencode/bin/opencode"]
+update = ["opencode", "upgrade"]
 [[tool.method]]
 kind = "pacman"
 package = "opencode"
@@ -1863,7 +1877,7 @@ cmd = "sdkman-init.sh"
 priority = "P1"
 audience = "both"
 tier = "system"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "User-space manager for Java and JVM tools; after sourcing sdkman-init.sh it exposes the sdk shell function."
 [[tool.method]]
 kind = "script"
@@ -1874,6 +1888,11 @@ detect_path = "~/.sdkman/bin/sdkman-init.sh"
 # Verified 2026-10-13: ~/.sdkman/var/version read as 5.23.2 on this host; requires zip and unzip.
 # installer/version_status.py::_version_file (plan 16-06) reads that file.
 version_file = "~/.sdkman/var/version"
+# Verified 2026-11-04: `sdk selfupdate` is the documented self-update (sdkman.io/usage,
+# "Self-Update"); it runs through the sourced `sdk` invocation 22-05 reuses. No `paths` and no
+# `remove`: the install docs (sdkman.io/install, "Uninstallation") remove ~/.sdkman by hand and
+# the rc init snippet is the user's, not ours.
+update = ["sdk", "selfupdate"]
 
 # Verified 2026-09-06 (Tier-3 container, colima+docker, ubuntu:24.04; SDKMAN
 # script 5.23.0 / native 0.7.34 — see 06-01-SUMMARY.md for the verbatim
