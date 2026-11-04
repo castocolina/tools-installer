@@ -23,7 +23,7 @@ actuals:
 commits: 2
 plan_head_before: 892f4ff5a34ccf1c70afb05a8420c341cc328bbf
 plan_head_after: 5cd762b
-status: halted
+status: complete
 ---
 
 # Phase 22 Plan 13: Container e2e leftover and receipt checks Summary
