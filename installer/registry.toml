@@ -176,27 +176,33 @@ os = ["macos"]
 arch = ["arm64"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
-env = { NONINTERACTIVE = "1" }
+# Verified 2026-11-04 (all three brew stanzas): install.sh reads HOMEBREW_NO_SUDO (lines 282-321), so each env sets
+# it to 1 (defense in depth, the zero-sudo rule). update is brew update. No paths and no remove: Homebrew's
+# uninstaller is a curl-piped script that removes the whole prefix (research Pitfall 5).
+env = { NONINTERACTIVE = "1", HOMEBREW_NO_SUDO = "1" }
 bin_dir = "/opt/homebrew/bin"
 writable_prefix = "/opt/homebrew"
+update = ["brew", "update"]
 [[tool.method]]
 kind = "script"
 os = ["macos"]
 arch = ["amd64"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
-env = { NONINTERACTIVE = "1" }
+env = { NONINTERACTIVE = "1", HOMEBREW_NO_SUDO = "1" }
 bin_dir = "/usr/local/bin"
 writable_prefix = "/usr/local/Homebrew"
+update = ["brew", "update"]
 # Preflight hands off an unwritable prefix: Homebrew's installer would escalate to create it.
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
 url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
-env = { NONINTERACTIVE = "1" }
+env = { NONINTERACTIVE = "1", HOMEBREW_NO_SUDO = "1" }
 bin_dir = "/home/linuxbrew/.linuxbrew/bin"
 writable_prefix = "/home/linuxbrew"
+update = ["brew", "update"]
 
 [[tool]]
 id = "fd"
@@ -454,8 +460,10 @@ cmd = "gh"
 priority = "P0"
 audience = "both"
 tier = "user"
-verified = 2026-11-03
+verified = 2026-11-04
 desc = "Uses GitHub from the terminal so agents and users can inspect PRs, issues, and auth state."
+# Verified 2026-11-04: GH_CONFIG_DIR defaults to $HOME/.config/gh (cli.github.com/manual/gh_help_environment).
+config_paths = ["~/.config/gh"]
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -2145,13 +2153,18 @@ cmd = "bun"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast all-in-one JavaScript runtime and toolkit"
 [[tool.method]]
 kind = "script"
 url = "https://bun.sh/install"
 shell = "bash"
 bin_dir = "~/.bun/bin"
+# Verified 2026-11-04: bun.sh/install writes $install_dir/bin/bun (install_dir from BUN_INSTALL; lines 137-161),
+# so `paths` is that leaf. ~/.bun also holds install/global and the cache, so it is never a tree (review R1-13).
+# update is bun upgrade (github.com/oven-sh/bun README). No remove: the install script names no uninstall command.
+paths = ["~/.bun/bin/bun"]
+update = ["bun", "upgrade"]
 [[tool.method]]
 kind = "brew"
 formula = "bun"
@@ -2164,20 +2177,31 @@ cmd = "pnpm"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast, disk-space-efficient Node.js package manager"
+# Config dirs per pnpm's npmrc docs (pnpm.io/npmrc): ~/.config/pnpm/ on Linux, ~/Library/Preferences/pnpm/ on macOS.
+config_paths = ["~/.config/pnpm", "~/Library/Preferences/pnpm"]
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
     url = "https://get.pnpm.io/install.sh"
     shell = "sh"
     bin_dir = "~/.local/share/pnpm/bin"
+# Verified 2026-11-04: get.pnpm.io/install.sh runs the downloaded binary's `pnpm setup --force` (run_setup), which
+# puts pnpm in $PNPM_HOME/bin, the bin_dir. `paths` is the executable only: $PNPM_HOME also holds global packages,
+# so no tree (review R1-13). pnpm's dist/ tree sits beside the executable and is not declared, so 22-13's must-clear
+# check reports it if it survives. update is pnpm self-update (pnpm.io/cli/self-update). No remove: the script's
+# own uninstall note is to delete PNPM_HOME, which holds the global store.
+paths = ["~/.local/share/pnpm/bin/pnpm"]
+update = ["pnpm", "self-update"]
     [[tool.method]]
     kind = "script"
     os = ["macos"]
     url = "https://get.pnpm.io/install.sh"
     shell = "sh"
     bin_dir = "~/Library/pnpm/bin"
+    paths = ["~/Library/pnpm/bin/pnpm"]
+    update = ["pnpm", "self-update"]
 [[tool.method]]
 kind = "brew"
 formula = "pnpm"
@@ -2206,7 +2230,7 @@ cmd = "volta"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Node toolchain manager; owns globally installed Node CLIs in its own shim dir"
 # Verified 2026-10-13: upstream is unmaintained and recommends mise for new installs.
 # get.volta.sh supports macOS (Darwin tarballs) as well as Linux.
@@ -2220,6 +2244,12 @@ kind = "script"
 url = "https://get.volta.sh"
 shell = "bash"
 bin_dir = "~/.volta/bin"
+# Verified 2026-11-04: the release tarball (volta-2.0.2-linux.tar.gz, listed without extraction) holds volta,
+# volta-shim and volta-migrate, which get.volta.sh extracts into ~/.volta/bin (line 345). `paths` names those
+# three leaves only: ~/.volta also holds tools/ (global packages and toolchains), so it is never a tree (review
+# R1-13). The default shims come from `volta --version` at run time (line 230) and are not declared; 22-13's
+# must-clear check reports them if they survive. No update and no remove: the install script names neither.
+paths = ["~/.volta/bin/volta", "~/.volta/bin/volta-shim", "~/.volta/bin/volta-migrate"]
 [[tool.method]]
 kind = "brew"
 formula = "volta"
@@ -2233,7 +2263,7 @@ cmd = "fnm"
 priority = "P2"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Fast and simple Node.js version manager"
 # macOS: the official installer delegates to Homebrew, so install via brew there.
 [[tool.method]]
@@ -2242,6 +2272,11 @@ os = ["debian", "arch", "fedora"]
 url = "https://fnm.vercel.app/install"
 shell = "bash"
 bin_dir = "~/.local/share/fnm"
+# Verified 2026-11-04: fnm.vercel.app/install sets INSTALL_DIR to ~/.local/share/fnm by default (lines 12-19) and
+# moves the binary to $INSTALL_DIR/fnm (lines 111-117), so `paths` is that leaf. Its Node versions live in
+# node-versions under the same dir (fnm src/config.rs, installations_dir), so the dir is never a tree (review R1-13).
+# No update and no remove: the install script names neither.
+paths = ["~/.local/share/fnm/fnm"]
 [[tool.method]]
 kind = "brew"
 formula = "fnm"
@@ -2779,9 +2814,11 @@ cmd = "kitty"
 priority = "P3"
 audience = "human"
 tier = "user"
-verified = 2026-10-10
+verified = 2026-11-04
 desc = "GPU-accelerated terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+# Config dir per the kitty docs (sw.kovidgoyal.net/kitty/conf): ~/.config/kitty/kitty.conf.
+config_paths = ["~/.config/kitty"]
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
@@ -2789,6 +2826,10 @@ url = "https://sw.kovidgoyal.net/kitty/installer.sh"
 shell = "sh"
 args = ["launch=n"]
 bin_dir = "~/.local/kitty.app/bin"
+# Verified 2026-11-04: installer.sh writes only the kitty.app tree under --dest (default ~/.local, lines 66-82):
+# it creates no bin links and no desktop entries (no ln, symlink or desktop lines in the script), so `paths` is that
+# tree. No update and no remove: the installer names no uninstall command.
+paths = ["~/.local/kitty.app/"]
 # installer.sh installs to /Applications/kitty.app on macOS without sudo; non-admin
 # users fall through to the cask when the script cannot write /Applications.
 [[tool.method]]
@@ -2798,6 +2839,7 @@ url = "https://sw.kovidgoyal.net/kitty/installer.sh"
 shell = "sh"
 args = ["launch=n"]
 bin_dir = "/Applications/kitty.app/Contents/MacOS"
+# No `paths`: /Applications is an absolute system path, which the registry does not accept (only ~/ or a named root).
 [[tool.method]]
 kind = "dnf"
 package = "kitty"
@@ -2949,7 +2991,9 @@ priority = "P1"
 audience = "human"
 desc = "Minimal coding-agent harness; setup remains interactive, and uninstall uses pnpm remove."
 tier = "user"
-verified = 2026-10-13
+verified = 2026-11-04
+# Verified 2026-11-04: the host-setup handoff installs @earendil-works/pi-coding-agent through pnpm
+# (installer/host_setup.py); that package is on the npm registry (latest 1.5.0). No script keys.
 requires = ["pnpm"]
 owner_probes = ["host-setup"]
 [[tool.method]]
