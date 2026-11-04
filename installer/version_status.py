@@ -1848,7 +1848,9 @@ class VersionRefreshService:
                     generation=started_epoch,
                     seq=seq,
                     platform=platform,
-                    present=present,
+                    # R1-11: a receipt whose recorded file or link no longer matches is
+                    # presence for health, so an interrupted removal reads BROKEN, not MISSING.
+                    present=present or bool(broken),
                     ownership=ownership,
                     version=status,
                     removable=removable,
@@ -1983,13 +1985,18 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
     if state is None or group is None:
         return HEALTH_DETAIL[Health.CHECKING]
     if group is UninstallState.ABSENT:
-        return HEALTH_DETAIL[Health.MISSING]
+        return HEALTH_DETAIL[Health.MISSING] + _yourself_suffix(state)
     if group is UninstallState.UNAVAILABLE:
         return state.reasons[0] if state.reasons else HEALTH_DETAIL[Health.UNAVAILABLE]
     if group is UninstallState.REMOVABLE and (manager := _l1_manager(state)) is not None:
         # L1 (UI-SPEC A7): the sentence names the manager and the command it runs.
         text = f"installed by this installer through {manager}: receipt matches"
         text += f" — runs `{shlex.join(state.removable.argv)}`"
+    elif group is UninstallState.REMOVABLE and state.removable.level == "recipe":
+        # L3 (UI-SPEC): a vendor `remove` names its command, then the proven paths go.
+        text = RECEIPT_PROOF_NOTE
+        if state.removable.argv:
+            text += f" — runs `{shlex.join(state.removable.argv)}`, then deletes the proven paths"
     elif group is UninstallState.REMOVABLE:
         if ADOPTED_NOTE in state.reasons:
             text = ADOPTED_NOTE
@@ -2012,8 +2019,14 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
             text = f"{hint} — found at {state.ownership.active_path}"
         else:
             text = hint
-    if state.removable.yourself:
-        text += f" · remove it yourself: {', '.join(str(p) for p in state.removable.yourself)}"
+    text += _yourself_suffix(state)
     if required_by:
         text += f" · required by {', '.join(required_by)}"
     return text
+
+
+def _yourself_suffix(state: ToolState) -> str:
+    """` · remove it yourself: …` for the leftovers no receipt proves (UI-SPEC A12); else empty."""
+    if not state.removable.yourself:
+        return ""
+    return f" · remove it yourself: {', '.join(str(p) for p in state.removable.yourself)}"

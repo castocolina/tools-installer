@@ -8084,3 +8084,41 @@ async def test_an_l1_brew_row_is_removable_and_names_its_command() -> None:
     assert len(captured) == 1
     assert captured[0].argv == {"gh": ("brew", "uninstall", "gh")}
     assert captured[0].paths == {"gh": ()}
+
+
+async def test_an_l3_row_shows_the_vendor_command_then_the_paths() -> None:
+    """22-07: an L3 row names its vendor command, then its proven paths, cut to 40 cells."""
+    vend_method = Method(
+        kind="script", params={"paths": ["~/.local/bin/vend"], "remove": ["vend", "uninstall"]}
+    )
+    vend = Tool(id="vend", name="vend", category="dev", cmd="vend", methods=(vend_method,))
+    argv = ("/opt/vend/bin/vend", "uninstall", "--force")
+    leaf = Path("/opt/vend/bin/vend")
+    removable = RemovalPlan((leaf,), (), level="recipe", argv=argv)
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(vend, plan_state(vend, removable=removable))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        removes = _uninstall_cell(table, "vend", "removes")
+        assert len(removes) == 40
+        assert removes.endswith("…")
+        assert "/opt/vend/bin/vend uninstall --force, /opt/vend/bin/vend".startswith(removes[:-1])
+        assert _uninstall_cell(table, "vend", "via") == "installer"
+        assert screen.detail_text == (
+            "installed by this installer: receipt matches — runs "
+            "`/opt/vend/bin/vend uninstall --force`, then deletes the proven paths"
+        )
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    # The remover gets the argv the row showed, so the post-confirm proof can match it.
+    assert len(captured) == 1
+    assert captured[0].argv == {"vend": argv}
+    assert captured[0].paths == {"vend": (leaf,)}

@@ -46,7 +46,7 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
-from installer.receipts import Receipt, ReceiptMethod
+from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
@@ -94,6 +94,7 @@ from tests.state_doubles import (
     absent_state,
     frozen_service,
     offline_service,
+    pass_state,
     plan_state,
 )
 from tests.test_download import fixture_runner
@@ -6253,3 +6254,275 @@ def test_the_pass_fills_the_sdkman_version_from_its_own_status(
     state = _settled(service, tool)
     assert state.removable.hint == "managed by SDKMAN — `sdk uninstall springboot 4.1.0`"
     assert probes == []
+
+
+# -- 22-07 Task 3: L3 copy, visible leftovers, and an interrupted removal. -----
+
+_VEND_ARGV = ("/opt/vend/bin/vend", "uninstall", "--force")
+_VEND_METHOD = Method(
+    kind="script", params={"paths": ["~/.local/bin/vend"], "remove": ["vend", "uninstall"]}
+)
+
+
+def _receipt_of(kind: str, package: str | None = None) -> Receipt:
+    return Receipt(
+        tool="x",
+        at="2026-11-04T00:00:00Z",
+        method=ReceiptMethod(kind=kind, key=kind),
+        package=package,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+
+
+def _with_tool(tool_id: str, method: Method) -> Tool:
+    return Tool(
+        id=tool_id, name=tool_id, category="dev", cmd=tool_id, methods=(method,), tier="user"
+    )
+
+
+def _l1_brew() -> tuple[Tool, ToolState]:
+    gh = _with_tool("gh", Method(kind="brew", params={"formula": "gh"}))
+    removable = RemovalPlan((), (), level="manager", argv=("brew", "uninstall", "gh"))
+    owner = replace(_owned(gh, "brew", package="gh"), active_path=None)
+    state = pass_state(
+        gh, platform=_platform(), ownership=owner, removable=removable, receipt=_receipt_of("brew")
+    )
+    return gh, state
+
+
+def _l2_download() -> tuple[Tool, ToolState]:
+    yq = _with_tool("yq", Method(kind="github_release", params={"repo": "mikefarah/yq"}))
+    removable = RemovalPlan((_UNINSTALL_PATH,), ())
+    owner = _owned(yq, "installer")
+    receipt = _receipt_of("github_release")
+    return yq, pass_state(
+        yq, platform=_platform(), ownership=owner, removable=removable, receipt=receipt
+    )
+
+
+def _l3_with_remove() -> tuple[Tool, ToolState]:
+    vend = _with_tool("vend", _VEND_METHOD)
+    removable = RemovalPlan((_UNINSTALL_PATH,), (), level="recipe", argv=_VEND_ARGV)
+    owner = _owned(vend, "installer")
+    receipt = _receipt_of("script")
+    return vend, pass_state(
+        vend, platform=_platform(), ownership=owner, removable=removable, receipt=receipt
+    )
+
+
+def _l3_without_remove() -> tuple[Tool, ToolState]:
+    vend = _with_tool("vend", _VEND_METHOD)
+    removable = RemovalPlan((_UNINSTALL_PATH,), (), level="recipe")
+    owner = _owned(vend, "installer")
+    receipt = _receipt_of("script")
+    return vend, pass_state(
+        vend, platform=_platform(), ownership=owner, removable=removable, receipt=receipt
+    )
+
+
+def _unreceipted_brew() -> tuple[Tool, ToolState]:
+    rg = _brew_tool()
+    owner = replace(_owned(rg, "brew", package="ripgrep"), active_path=None)
+    return rg, pass_state(rg, platform=_platform(), ownership=owner)
+
+
+def _native(package: str | None) -> tuple[Tool, ToolState]:
+    rg = _with_tool("rg", Method(kind="dnf", params={"package": "ripgrep"}))
+    owner = replace(_owned(rg, "dnf", package=package), active_path=None)
+    return rg, pass_state(rg, platform=_platform(), ownership=owner)
+
+
+def _native_with_package() -> tuple[Tool, ToolState]:
+    return _native("ripgrep")
+
+
+def _native_without_package() -> tuple[Tool, ToolState]:
+    return _native(None)
+
+
+def _sdkman(installed: str | None) -> tuple[Tool, ToolState]:
+    java = _with_tool("java", Method(kind="sdkman", params={"candidate": "java"}))
+    owner = replace(_owned(java, "sdkman", package="java"), active_path=None)
+    version = VersionStatus(
+        tool_id="java",
+        installed=installed,
+        latest=None,
+        outdated=None,
+        stale=False,
+        source="sdkman",
+    )
+    return java, pass_state(java, platform=_platform(), ownership=owner, version=version)
+
+
+def _sdkman_with_version() -> tuple[Tool, ToolState]:
+    return _sdkman("21.0.5-tem")
+
+
+def _sdkman_without_version() -> tuple[Tool, ToolState]:
+    return _sdkman(None)
+
+
+def _volta() -> tuple[Tool, ToolState]:
+    demo = _with_tool("demo", Method(kind="node", params={"npm_pkg": "demo"}))
+    owner = replace(_owned(demo, "volta", package="demo"), active_path=None)
+    return demo, pass_state(demo, platform=_platform(), ownership=owner)
+
+
+def _missing_with_leftovers() -> tuple[Tool, ToolState]:
+    rg = _brew_tool()
+    removable = RemovalPlan((), (_UNINSTALL_PATH,))
+    return rg, pass_state(rg, platform=_platform(), present=False, removable=removable)
+
+
+@pytest.mark.parametrize(
+    ("builder", "label", "detail"),
+    [
+        pytest.param(
+            _l1_brew,
+            "Homebrew",
+            "installed by this installer through Homebrew: receipt matches "
+            "— runs `brew uninstall gh`",
+            id="L1-brew",
+        ),
+        pytest.param(
+            _l2_download,
+            "installer",
+            "installed by this installer: receipt matches",
+            id="L2-download",
+        ),
+        pytest.param(
+            _l3_with_remove,
+            "installer",
+            "installed by this installer: receipt matches — runs "
+            "`/opt/vend/bin/vend uninstall --force`, then deletes the proven paths",
+            id="L3-with-remove",
+        ),
+        pytest.param(
+            _l3_without_remove,
+            "installer",
+            "installed by this installer: receipt matches",
+            id="L3-without-remove",
+        ),
+        pytest.param(
+            _unreceipted_brew,
+            "Homebrew",
+            "managed by Homebrew — `brew uninstall ripgrep`",
+            id="unreceipted-brew-hint",
+        ),
+        pytest.param(
+            _native_with_package,
+            "dnf",
+            "managed by dnf — this installer will not remove the package ripgrep",
+            id="native-with-package",
+        ),
+        pytest.param(
+            _native_without_package,
+            "dnf",
+            "managed by dnf — remove rg with dnf (no verified package name)",
+            id="native-without-package",
+        ),
+        pytest.param(
+            _sdkman_with_version,
+            "SDKMAN",
+            "managed by SDKMAN — `sdk uninstall java 21.0.5-tem`",
+            id="sdkman-with-version",
+        ),
+        pytest.param(
+            _sdkman_without_version,
+            "SDKMAN",
+            "managed by SDKMAN — `sdk uninstall java <version>`; "
+            "the installed version was not read",
+            id="sdkman-without-version",
+        ),
+        pytest.param(_volta, "Volta", "managed by Volta — `volta uninstall demo`", id="volta"),
+        pytest.param(
+            _missing_with_leftovers,
+            "—",
+            f"not installed · remove it yourself: {_UNINSTALL_PATH}",
+            id="missing-with-leftovers",
+        ),
+    ],
+)
+def test_l1_l2_l3_and_hint_rows_match_the_ui_spec_table(
+    builder: Callable[[], tuple[Tool, ToolState]], label: str, detail: str
+) -> None:
+    tool, state = builder()
+    assert uninstall_label(state) == label
+    assert uninstall_detail(tool, state) == detail
+
+
+def test_an_l3_row_without_a_remove_lists_its_paths() -> None:
+    tool, state = _l3_without_remove()
+    assert uninstall_detail(tool, state) == RECEIPT_PROOF_NOTE
+    assert uninstall_label(state) == "installer"
+
+
+def test_a_missing_tool_keeps_its_unproven_leftovers() -> None:
+    tool, state = _uninstall_state(present=False, removable=RemovalPlan((), (_UNINSTALL_PATH,)))
+    assert uninstall_group(state) is UninstallState.ABSENT
+    assert uninstall_detail(tool, state) == f"not installed · remove it yourself: {_UNINSTALL_PATH}"
+
+
+def test_a_foreign_file_stays_listed_before_and_after_the_removal() -> None:
+    foreign = Path("/x/foreign")
+    tool, state = _uninstall_state(
+        owner="installer",
+        receipt=_receipt_of("script"),
+        removable=RemovalPlan((_UNINSTALL_PATH,), (foreign,), level="recipe", argv=_VEND_ARGV),
+    )
+    assert f"remove it yourself: {foreign}" in uninstall_detail(tool, state)
+    _gone_tool, gone = _uninstall_state(present=False, removable=RemovalPlan((), (foreign,)))
+    assert uninstall_detail(tool, gone) == f"not installed · remove it yourself: {foreign}"
+
+
+def _interrupted_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Tool, Path, VersionRefreshService]:
+    """A script tool `t` with two recorded leaves, its receipt written, then a refresh service."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    # Script paths expand through $HOME, the receipts dir through Path.home(): set both.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(
+        kind="script",
+        params={
+            "paths": ["~/.local/bin/t", "~/.local/bin/t-agent"],
+            "remove": ["t", "uninstall"],
+        },
+    )
+    tool = _with_tool("t", method)
+    (bin_dir / "t").write_text("t")
+    (bin_dir / "t-agent").write_text("agent")
+    assert receipts.record(
+        tool, method, package=None, smoke=None, default_bin_dir=bin_dir, preexisting=frozenset()
+    )
+    return tool, bin_dir, _receipt_service(tmp_path, bin_dir)
+
+
+def test_an_interrupted_recipe_removal_is_never_removable_on_the_next_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-11: a vendor remove that deleted one recorded file and stopped before the
+    receipt was retired reads BROKEN and is never offered again (no removable plan)."""
+    tool, bin_dir, service = _interrupted_recipe(tmp_path, monkeypatch)
+    (bin_dir / "t").unlink()  # the vendor remove deleted `t`, then was interrupted
+    state = _settled(service, tool)
+    assert state.health is Health.BROKEN
+    assert CHANGED_SINCE_INSTALL in state.reasons
+    assert (state.removable.level, state.removable.argv) == ("none", ())
+    assert receipts.receipt_exists("t")
+
+
+def test_an_interrupted_recipe_removal_with_nothing_left_retires_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 19 G10: once every recorded artifact is gone the receipt is retired and the
+    tool reads MISSING, with no removable plan."""
+    tool, bin_dir, service = _interrupted_recipe(tmp_path, monkeypatch)
+    (bin_dir / "t").unlink()
+    (bin_dir / "t-agent").unlink()
+    state = _settled(service, tool)
+    assert state.health is Health.MISSING
+    assert (state.removable.level, state.removable.argv) == ("none", ())
+    assert not receipts.receipt_exists("t")
