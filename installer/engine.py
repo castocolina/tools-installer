@@ -82,6 +82,8 @@ class InstallOutcome:
     # Reviewed instruction lines from plural post_install actions. Never
     # executed by the installer; the user runs them after leaving Textual.
     post_install_handoff: tuple[str, ...] = ()
+    # Only on MANUAL_REQUIRED from a native-package method: the exact command the user runs.
+    manual_command: str | None = None
 
     def __init__(
         self,
@@ -95,6 +97,7 @@ class InstallOutcome:
         postinstall_warning: str | None = None,
         handoff: tuple[str, ...] = (),
         post_install_handoff: tuple[str, ...] = (),
+        manual_command: str | None = None,
     ) -> None:
         object.__setattr__(self, "tool_id", tool_id)
         object.__setattr__(self, "status", InstallStatus(status))
@@ -106,6 +109,7 @@ class InstallOutcome:
         object.__setattr__(self, "postinstall_warning", postinstall_warning)
         object.__setattr__(self, "handoff", handoff)
         object.__setattr__(self, "post_install_handoff", post_install_handoff)
+        object.__setattr__(self, "manual_command", manual_command)
 
 
 def _perform(

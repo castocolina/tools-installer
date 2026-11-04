@@ -687,6 +687,7 @@ def test_render_plan_words_and_marks_come_from_the_tables(
         Disposition.REINSTALL: Health.OK,
         Disposition.SKIP: Health.OK,
         Disposition.BLOCKED: Health.UNAVAILABLE,
+        Disposition.MANUAL: Health.MISSING,
         Disposition.REMOVE: Health.OK,
         Disposition.WAIT: None,
     }[disposition]

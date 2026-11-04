@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 from typing import cast
@@ -598,6 +599,37 @@ def host_setup_approval_disclosures(method: Method) -> tuple[str, ...]:
     if setup is None:
         raise ExecutorError(f"unknown reviewed host setup '{setup_id}'")
     return setup.approval_disclosures
+
+
+@dataclass(frozen=True)
+class ManualHandoff:
+    """A native install the installer will not run: why, and the exact command to show."""
+
+    reason: str
+    command: str
+
+
+# Native kind -> (why it is not run here, command template). Display strings only;
+# nothing in this table is ever executed.
+_MANUAL_COMMANDS: dict[str, tuple[str, str]] = {
+    "dnf": ("needs sudo (never run here)", "sudo dnf install {package}"),
+    "apt": ("needs sudo (never run here)", "sudo apt-get install {package}"),
+    "pacman": ("needs sudo (never run here)", "sudo pacman -S --needed {package}"),
+    "rpm_ostree": (
+        "needs admin rights and a reboot (never run here)",
+        "rpm-ostree install {package}",
+    ),
+}
+
+
+def needs_manual(method: Method) -> ManualHandoff | None:
+    """The manual handoff for a native-package method, or None when the installer may run it."""
+    template = _MANUAL_COMMANDS.get(method.kind)
+    if template is None:
+        return None
+    why, pattern = template
+    command = pattern.format(package=require_str(method, "package"))
+    return ManualHandoff(f"{why}; you run: `{command}`", command)
 
 
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {

@@ -8,6 +8,8 @@ from typing import cast
 
 import pytest
 
+from installer.engine import InstallOutcome
+from installer.enums import InstallStatus
 from installer.model import ConfigStep, Method, Tool
 from installer.ownership import UNMANAGEABLE_OWNERS, Owner, owner_label
 from installer.platform import Platform
@@ -19,7 +21,11 @@ from installer.session import (
     Disposition,
     PlanRow,
     Result,
+    RunContext,
     build_plan,
+    execute_plan,
+    exit_code,
+    retained,
     review_counts,
 )
 from installer.version_status import BROKEN_SHIM_REASON, Health, ToolState, VersionStatus
@@ -1034,3 +1040,86 @@ def test_build_plan_never_emits_remove(health: Health):
         for reinstall in (frozenset[str](), frozenset({"rg"})):
             rows = build_plan(["rg"], [rg], _state_of(state), MACOS, reinstall=reinstall)
             assert all(row.disposition is not Disposition.REMOVE for row in rows)
+
+
+_FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+
+
+def _native_tool(tool_id: str, kind: str, *, requires: tuple[str, ...] = ()) -> Tool:
+    return _tool(tool_id, requires=requires, methods=(Method(kind=kind, params={"package": "jq"}),))
+
+
+def _no_install(*_args: object, **_kwargs: object) -> InstallOutcome:
+    raise AssertionError("a MANUAL row never reaches the install engine")
+
+
+def test_a_native_only_tool_is_planned_manual_with_its_exact_command():
+    jq = _native_tool("jq", "dnf")
+    state = plan_state(jq, platform=_FEDORA, health=Health.MISSING, present=False)
+
+    rows = build_plan(["jq"], [jq], _state_of({"jq": state}), _FEDORA, reinstall=frozenset())
+
+    assert (rows[0].disposition, rows[0].reason, rows[0].manual_command) == (
+        Disposition.MANUAL,
+        "needs sudo (never run here); you run: `sudo dnf install jq`",
+        "sudo dnf install jq",
+    )
+    calls: list[list[str]] = []
+    context = RunContext(
+        catalog={"jq": jq},
+        platform=_FEDORA,
+        runner=calls.append,
+        resolve_tag=lambda _repo: pytest.fail("a MANUAL row resolves no tag"),
+        install=_no_install,
+    )
+    outcomes = execute_plan(rows, context)
+
+    assert [outcome.result for outcome in outcomes] == ["manual"]
+    install = outcomes[0].install
+    assert install is not None
+    assert (install.status, install.handoff) == (
+        InstallStatus.MANUAL_REQUIRED,
+        ("sudo dnf install jq",),
+    )
+    assert calls == []
+    assert exit_code(outcomes) == 0
+    assert "jq" in retained(outcomes)
+
+
+@pytest.mark.parametrize(
+    ("kind", "os_name", "command"),
+    [
+        ("apt", "debian", "sudo apt-get install jq"),
+        ("pacman", "arch", "sudo pacman -S --needed jq"),
+    ],
+)
+def test_apt_and_pacman_commands_are_exact(kind: str, os_name: str, command: str):
+    jq = _native_tool("jq", kind)
+    platform = Platform(os=os_name, arch="amd64", immutable=False, has_brew=False)
+    state = plan_state(jq, platform=platform, health=Health.MISSING, present=False)
+
+    row = build_plan(["jq"], [jq], _state_of({"jq": state}), platform, reinstall=frozenset())[0]
+
+    assert (row.disposition, row.manual_command) == (Disposition.MANUAL, command)
+
+
+def test_a_dependent_of_a_manual_row_is_blocked_at_plan_time():
+    zsh = _native_tool("zsh", "dnf")
+    omz = _tool("oh-my-zsh", requires=("zsh",))
+    states = {
+        "zsh": plan_state(zsh, platform=_FEDORA, health=Health.MISSING, present=False),
+        "oh-my-zsh": plan_state(omz, platform=_FEDORA, health=Health.MISSING, present=False),
+    }
+
+    rows = build_plan(["oh-my-zsh"], [zsh, omz], _state_of(states), _FEDORA, reinstall=frozenset())
+    by_id = {row.tool_id: row for row in rows}
+
+    assert (
+        by_id["zsh"].disposition,
+        by_id["oh-my-zsh"].disposition,
+        by_id["oh-my-zsh"].reason,
+    ) == (
+        Disposition.MANUAL,
+        Disposition.BLOCKED,
+        "needs zsh",
+    )
