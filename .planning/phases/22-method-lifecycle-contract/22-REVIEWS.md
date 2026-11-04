@@ -162,3 +162,39 @@ None. Every concern held up under source grounding: 16 CONFIRMED, 9 PARTIAL, 0 R
 Unscored reviewer suggestions (not concerns, so no plan change is required): make `HOMEBREW_NO_SUDO` mandatory in 22-08, name the `tests/state_doubles.py` `plan_state` change in 22-04, add the registry-verification tests to 22-05's targeted verify, and extend the 22-06 every-kind test to the Uninstall projection.
 
 CYCLE_SUMMARY: current_high=16 current_actionable=25
+
+## Cycle 1 resolution
+
+Replanned in reviews mode against this file at `b8dad84`. Plan count (13), task count (39), wave count (7) and every plan ID are unchanged; same-wave `files_modified` sets stay disjoint and every cross-wave file overlap has a dependency path (checked mechanically). New `files_modified` entries: 22-04 `tests/state_doubles.py`; 22-06 `installer/engine.py`, `tests/test_setup.py`; 22-07 `tests/test_setup.py`; 22-09 `setup.py`, `tests/test_uninstall_e2e.py`. New `depends_on` edges (no wave moved): 22-06 on 22-04 (both edit `engine.install_tool`), 22-08 on 22-06 (its store test removes through `remove_tool`). Each affected plan carries a `## Review Dispositions Ledger` round for `b8dad84`.
+
+| ID | Plan(s) changed | How resolved |
+|---|---|---|
+| R1-01 | all 13, 22-VALIDATION | Every "commit the RED tests" step is gone: RED output goes to the SUMMARY only, each task lands as one `feat(22-NN)` commit holding tests and code, `make validate && make test` exit 0 on every commit (ledger row 31); the advisory TDD checkpoint is noted as expected. VALIDATION "File Exists" and sign-off wording follow |
+| R1-02 | 22-01 | The `config_paths` acceptance greps are anchored: the 4-space dataclass field and the 8-space `__init__` keyword, each expected once |
+| R1-03 | 22-02 | `render_handoff` prints `sanitize_log_line(line)` with `markup=False, soft_wrap=True`; new long-command plus escape-byte test; Task 2 names the executor tests to rewrite (`tests/test_executors.py:38-53`, `:83-87`, `:96-107`) |
+| R1-04 | 22-03 | Readers reject only non-null `sha256`/`size`/`mtime_ns`/`key` (absent or null is no value) and a non-null tree `target`; the writer is unchanged; the round-trip test pins the raw JSON shape |
+| R1-05 | 22-03, 22-05, 22-06, 22-13 | `record(..., preexisting=)` plus `preexisting_paths(method)`: a declared path that existed before the install or update is recorded only when the previous receipt proved it (repair and reinstall keep their proof); `None` fails closed. Wired in `engine.install_tool` (22-06) and `update._perform` (22-05); fixtures with the helper present before the install at the receipt, engine and update levels. Pre-phase receipts stay unproven until a remove-and-reinstall (truth updated) |
+| R1-06 | 22-04 | Mocked tests for a foreign-owned writable parent and an `lstat` `OSError` (both not writable); `pass_state`/`plan_state` gain `unwritable` |
+| R1-07 | 22-05 | `_update_installer_owned` gains a required `tool_id` keyword passed by its one caller `_perform`; the error is raised there and the "inside `_perform`" wording is fixed |
+| R1-08 | 22-06 | The L3 argv needs at least one receipt-proven artifact (`plan.by_tool` non-empty); `test_an_empty_legacy_script_receipt_never_runs_remove` |
+| R1-09 | 22-06 | `removal_order` (reuses `deps.resolve_dependencies`, dependents first, independents keep their order) in both `perform_uninstall` and `run_uninstall`; TUI and CLI tests run `uv tool uninstall ruff` while `uv` exists. Manager kind is covered by `requires` (registry tests force it for uv-tool and node; brew is never removable here) |
+| R1-10 | 22-06 | The post-confirm `removal_plan(verify=True)` comparison of paths and argv moves into `remove_tool`, shared by CLI and TUI; `test_the_cli_re_proves_after_the_confirm` |
+| R1-11 | 22-06, 22-07 | `_pass` counts a receipt's broken drift as presence for health, so a partly removed tool reads BROKEN and level `none`; an all-gone receipt is retired (G10) and reads MISSING, level `none`; both tested through `VersionRefreshService.refresh`. Planner reading recorded in 22-07's ledger: SPEC:165 "broken" applies when anything recorded is left (see open item below) |
+| R1-12 | 22-07 | `tests/test_ownership.py:1844-1860` and `:2662-2677` rewritten to the package-naming hint and `None` with `ripgrep`/`glab` coverage kept; the same change's other breakages are named too (`_FROZEN_REMOVAL` at `:2924-2958`, `tests/test_setup.py:2294`/`:2321`) |
+| R1-13 | 22-08, 22-13 | pnpm, bun, Volta and fnm declare only their executables as leaves, never a store root; two registry tests (no store tree; a global package or toolchain survives the manager's removal); 22-08's SUMMARY lists the kept stores and 22-13's allowlist names them, their executables still must-clear |
+| R1-14 | 22-08 | Recorded decision: OMZ, SDKMAN and Homebrew stay hint-less this phase (no locked input requires a hint; one would need a new registry key or a per-tool `removal_hint` branch) |
+| R1-15 | 22-09 | `perform_uninstall` requires `catalog`; step 4 deletes a path only when every catalog declarer was removed with it listed; `setup._do_uninstall` passes the registry; unselected-owner and flag-off test |
+| R1-16 | 22-01, 22-09 | `_refuse_config_overlap` refuses cross-tool ancestor/descendant `config_paths` at load, so 22-09's exact-equality shared-path rule is complete |
+| R1-17 | 22-09 | `delete_config_path` resolves the parent with `realpath` and refuses outside the real HOME or under a harness marker; final symlinks stay unlink-only; in-HOME dotfiles links allowed; test |
+| R1-18 | 22-10, 22-11 | `config_split(flagged, catalog, state_of)`; the screen passes `self._state_of`; both plans use the three-argument form |
+| R1-19 | 22-10 | `UninstallScreen.clear_transient` clears every flag on leave (the one `show_view` path); a modal cover keeps them; `test_flags_start_off_on_every_visit` |
+| R1-20 | 22-10, 22-11 | `_decision(ids)` builds the decision (and the kept map) once before `ConfirmUninstall` opens; the confirm hands that object to `_apply_removal`; the review renders from it; `test_a_refresh_while_the_modal_is_open_keeps_the_decision` |
+| R1-21 | 22-11 | Severity: `error` on `remove_failed` or `config_not_deleted`, else `warn` on a terminal warning or `swept.warnings`, else `ok`; tested |
+| R1-22 | 22-12 | `_pass` computes the tracked cask tokens and passes them through `_load_or_query_snapshot(..., casks=)` to `read_outdated`; `greedy_casks()` reads `_greedy`, written in the publish block under the epoch guard; `invalidate` deliberately leaves it (it names casks that auto-update, which no mutation changes); test |
+| R1-23 | 22-12 | A failed greedy read returns `greedy=None` and `cask=None`, `_partial_manager_failure` reports it, the previous facts are kept with the 30-minute retry; two tests |
+| R1-24 | 22-06, 22-13 | `run_uninstall` returns the failed ids and `_run_uninstall` exits 1; the harness writes `removable-receipts.txt` before the uninstall and `assert_removed_receipts_gone` fails on a left one (self-test with a left manager receipt); Task 3's verify requires `TRACER_RECEIPTS_GONE_OK` |
+| R1-25 | 22-13 | Recorded receipt paths are checked against the whole after listing, baseline or not; declared paths stay new-only; the bootstrap exception list is explicit and empty, with the reason (a receipt never records a pre-existing path, R1-05); test |
+
+Open items for the orchestrator:
+- R1-11: with nothing recorded left (the opencode anchor's single path, deleted by its own `remove`), the pass retires the receipt and the tool reads MISSING, not BROKEN. Not removable and nothing re-run hold in both cases. SPEC:165 may be amended to "broken when anything recorded is left; retired when nothing is", or the reading accepted as is.
+- R1-14 and R1-22's "invalidation on mutation" were resolved by recorded decisions rather than new code; each plan's ledger gives the reason.
