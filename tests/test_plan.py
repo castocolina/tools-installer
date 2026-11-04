@@ -1123,3 +1123,75 @@ def test_a_dependent_of_a_manual_row_is_blocked_at_plan_time():
         Disposition.BLOCKED,
         "needs zsh",
     )
+
+
+def _bootstrap_tool(prefix: Path) -> Tool:
+    method = Method(
+        kind="script",
+        params={
+            "url": "https://example.invalid/install.sh",
+            "shell": "bash",
+            "env": {"NONINTERACTIVE": "1"},
+            "writable_prefix": str(prefix),
+        },
+    )
+    return _tool("brew", methods=(method,))
+
+
+def test_an_unwritable_prefix_is_planned_manual_and_nothing_runs(tmp_path: Path):
+    prefix = tmp_path / "home" / "linuxbrew"
+    brew = _bootstrap_tool(prefix)
+    state = plan_state(
+        brew,
+        platform=_FEDORA,
+        health=Health.MISSING,
+        present=False,
+        unwritable=(str(prefix),),
+    )
+
+    rows = build_plan(["brew"], [brew], _state_of({"brew": state}), _FEDORA, reinstall=frozenset())
+
+    command = 'bash -c "$(curl -fsSL https://example.invalid/install.sh)"'
+    assert (rows[0].disposition, rows[0].reason, rows[0].manual_command) == (
+        Disposition.MANUAL,
+        f"{prefix} is not writable by you; you run: `{command}`",
+        command,
+    )
+    calls: list[list[str]] = []
+    context = RunContext(
+        catalog={"brew": brew},
+        platform=_FEDORA,
+        runner=calls.append,
+        resolve_tag=lambda _repo: pytest.fail("a MANUAL row resolves no tag"),
+        install=_no_install,
+    )
+    outcomes = execute_plan(rows, context)
+
+    assert [outcome.result for outcome in outcomes] == ["manual"]
+    assert calls == []
+
+
+def test_a_writable_prefix_plans_an_install(tmp_path: Path):
+    brew = _bootstrap_tool(tmp_path / "home" / "linuxbrew")
+    state = plan_state(brew, platform=_FEDORA, health=Health.MISSING, present=False)
+
+    rows = build_plan(["brew"], [brew], _state_of({"brew": state}), _FEDORA, reinstall=frozenset())
+    assert rows[0].disposition is Disposition.INSTALL
+
+    seen: list[str] = []
+
+    def install(tool: Tool, *_args: object, **_kwargs: object) -> InstallOutcome:
+        seen.append(tool.id)
+        return InstallOutcome(tool.id, InstallStatus.INSTALLED)
+
+    context = RunContext(
+        catalog={"brew": brew},
+        platform=_FEDORA,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=install,
+    )
+    outcomes = execute_plan(rows, context)
+
+    assert seen == ["brew"]
+    assert [outcome.result for outcome in outcomes] == ["done"]
