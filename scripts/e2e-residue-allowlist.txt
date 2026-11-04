@@ -1,0 +1,18 @@
+# Residue classes the container e2e leftover check accepts (scripts/container-e2e-verify.sh).
+# One HOME-relative path per line, two spaces, `#`, and a one-line reason. Every entry needs a
+# reason. A tool's own files belong in its registry `paths` or `config_paths`, not here. An
+# entry never exempts a must-clear path: a declared script path or a receipt-recorded path.
+.bashrc  # shell rc file the installer appends PATH and brew lines to
+.bash_profile  # login shell rc the installer appends PATH and brew lines to
+.zshrc  # zsh rc the installer edits and leaves in place
+.myshellrc  # the installer's own shell rc block, left for the user to review
+.profile  # login profile some vendor installers append to
+.local/state/tools-installer  # the installer's own state; a left receipt is caught by assert_removed_receipts_gone
+.cache  # runtime cache root (uv, brew, vendor installers); caches hold no tool config
+.oh-my-zsh  # hint-only tree: its uninstaller rewrites rc files, so the user removes it (research Pitfall 5)
+.sdkman  # hint-only tree: its uninstaller rewrites rc files (research Pitfall 7)
+.local/share/pnpm/global  # pnpm global packages kept on purpose (22-08 store roots)
+.bun/install  # bun global packages and install cache kept on purpose (22-08 store roots)
+.volta/tools  # volta toolchains kept on purpose (22-08 store roots)
+.local/share/fnm/node-versions  # fnm node versions kept on purpose (22-08 store roots)
+.local/share/uv  # uv tool and Python stores kept on purpose (22-08 store roots)
