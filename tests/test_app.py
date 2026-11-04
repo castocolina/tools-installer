@@ -4594,3 +4594,273 @@ def test_a_drifted_previewed_path_fails_the_tool_and_keeps_its_receipt(
     assert refused.remove_failed[0][0] == "vend"
     assert (recipe_bin / "vend").is_symlink()
     assert receipts.receipt_path("vend").exists()
+
+
+def _manager_tool(tool_id: str, method: Method, *, requires: tuple[str, ...] = ()) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(method,),
+        requires=requires,
+    )
+
+
+def test_a_receipt_proven_brew_package_runs_brew_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = _manager_tool("gh", method)
+    receipts.record(gh, method, package="gh", smoke=None)
+    plan = removal_plan(gh, tmp_path / ".local" / "bin")
+    assert (plan.level, plan.argv) == ("manager", ("brew", "uninstall", "gh"))
+    calls: list[list[str]] = []
+    result = _perform(gh, tmp_path, paths=(), argv=plan.argv, runner=calls.append)
+    assert calls == [["brew", "uninstall", "gh"]]
+    assert result.removed == ("gh",)
+    assert not receipts.receipt_path("gh").exists()
+
+
+def test_a_brew_package_without_a_receipt_runs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    gh = _manager_tool("gh", Method(kind="brew", params={"formula": "gh"}))
+    plan = removal_plan(gh, tmp_path / ".local" / "bin")
+    assert (plan.level, plan.argv) == ("none", ())
+    result = _perform(gh, tmp_path, paths=(), argv=(), runner=_no_removal_runner)
+    assert result.removed == ()
+    assert result.remove_failed == (("gh", "changed since the preview; not removed"),)
+
+
+def test_a_receipt_for_another_package_is_no_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = _manager_tool("gh", method)
+    receipts.record(gh, method, package="other", smoke=None)
+    assert removal_plan(gh, tmp_path / ".local" / "bin").level == "none"
+
+
+def test_cask_uv_and_pnpm_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer import app as app_module
+    from installer import receipts
+    from installer.model import method_package
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    cases = [
+        (
+            Method(kind="cask", params={"cask": "visual-studio-code"}),
+            ("brew", "uninstall", "--cask", "visual-studio-code"),
+        ),
+        (Method(kind="uv-tool", params={"pypi_pkg": "ruff"}), ("uv", "tool", "uninstall", "ruff")),
+        (
+            Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),
+            ("pnpm", "remove", "--global", "@mermaid-js/mermaid-cli"),
+        ),
+    ]
+    for method, argv in cases:
+        tool = _manager_tool(f"t-{method.kind}", method)
+        receipts.record(tool, method, package=method_package(method), smoke=None)
+        assert (removal_plan(tool, bin_dir).level, removal_plan(tool, bin_dir).argv) == (
+            "manager",
+            argv,
+        )
+
+    fake_pnpm = tmp_path / "pnpm"
+    fake_pnpm.write_text("")
+    monkeypatch.setattr(app_module, "real_pnpm", lambda: str(fake_pnpm))
+    node = _manager_tool("t-node", cases[2][0])
+    calls: list[list[str]] = []
+    _perform(
+        node,
+        tmp_path,
+        paths=(),
+        argv=("pnpm", "remove", "--global", "@mermaid-js/mermaid-cli"),
+        runner=calls.append,
+    )
+    # The bare `pnpm` in the preview becomes the executor's absolute pnpm at run time.
+    assert calls == [[str(fake_pnpm), "remove", "--global", "@mermaid-js/mermaid-cli"]]
+
+    monkeypatch.setattr(app_module, "real_pnpm", lambda: None)
+    # The first removal retired the receipt; the second case starts from the same proof again.
+    receipts.record(node, cases[2][0], package="@mermaid-js/mermaid-cli", smoke=None)
+    refused: list[list[str]] = []
+    result = _perform(
+        node,
+        tmp_path,
+        paths=(),
+        argv=("pnpm", "remove", "--global", "@mermaid-js/mermaid-cli"),
+        runner=refused.append,
+    )
+    assert refused == []
+    assert result.remove_failed == (("t-node", "pnpm not found on PATH"),)
+
+
+def test_a_native_owned_tool_has_no_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    dnf = _manager_tool("jq", Method(kind="dnf", params={"package": "jq"}))
+    assert (removal_plan(dnf, bin_dir).level, removal_plan(dnf, bin_dir).argv) == ("none", ())
+    sdk_method = Method(kind="sdkman", params={"candidate": "java"})
+    sdk = _manager_tool("sdk", sdk_method)
+    receipts.record(sdk, sdk_method, package="java", smoke=None)
+    plan = removal_plan(sdk, bin_dir)
+    assert (plan.level, plan.argv) == ("none", ())
+
+
+def test_removing_an_already_removed_script_tool_runs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+    _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=lambda _cmd: None)
+    again = removal_plan(tool, bin_dir)
+    assert (again.level, again.argv) == ("none", ())
+
+
+def test_an_interrupt_after_the_vendor_remove_keeps_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+
+    def vendor(_cmd: list[str]) -> None:
+        (bin_dir / "vend").unlink()  # the vendor removed the binary, then the user hit Ctrl+C
+
+    def interrupted(_artifacts: object, **_kwargs: object) -> tuple[Path, ...]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app_module, "remove_paths", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=vendor)
+    assert receipts.receipt_path("vend").exists()
+    receipt = receipts.read("vend")
+    assert receipt is not None
+    assert receipts.broken_drift(receipt)
+    after = removal_plan(tool, bin_dir)
+    assert (after.level, after.argv) == ("none", ())
+
+
+def test_an_old_script_receipt_lists_declared_paths_as_yours_to_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tool = _vend_tool(remove=())
+    binary = bin_dir / "vend"
+    binary.write_text("vend, installed before this phase")
+    # Pre-phase shape: the path existed before the install, so no proof was recorded.
+    receipts.record(
+        tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset({binary})
+    )
+    plan = removal_plan(tool, bin_dir)
+    assert plan.removable == ()
+    assert binary in plan.yourself
+    assert (plan.level, plan.argv) == ("none", ())
+
+
+def test_an_empty_legacy_script_receipt_never_runs_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tool = _vend_tool()  # declares a vendor `remove`
+    binary = bin_dir / "vend"
+    binary.write_text("vend, installed before this phase")
+    receipts.record(
+        tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset({binary})
+    )
+    plan = removal_plan(tool, bin_dir)
+    assert (plan.level, plan.argv) == ("none", ())
+    calls: list[list[str]] = []
+    _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=calls.append)
+    assert calls == []
+    assert binary.exists()
+
+
+def test_removal_order_puts_dependents_first() -> None:
+    from installer.app import removal_order
+
+    uv = _manager_tool("uv", Method(kind="brew", params={"formula": "uv"}))
+    ruff = _manager_tool("ruff", Method(kind="brew", params={"formula": "ruff"}), requires=("uv",))
+    jq = _manager_tool("jq", Method(kind="brew", params={"formula": "jq"}))
+    assert [t.id for t in removal_order([uv, ruff, jq])] == ["ruff", "uv", "jq"]
+    independent = [uv, jq]
+    assert [t.id for t in removal_order(independent)] == ["uv", "jq"]
+
+
+def test_perform_uninstall_removes_a_dependent_before_its_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import UninstallDecision, perform_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    uv_binary = bin_dir / "uv"
+    uv_binary.write_text("uv")
+    uv_method = Method(kind="script", params={"paths": ["~/.local/bin/uv"]})
+    uv = _manager_tool("uv", uv_method)
+    receipts.record(uv, uv_method, package=None, smoke=None, preexisting=frozenset())
+    ruff_method = Method(kind="uv-tool", params={"pypi_pkg": "ruff"})
+    ruff = _manager_tool("ruff", ruff_method, requires=("uv",))
+    receipts.record(ruff, ruff_method, package="ruff", smoke=None)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        assert uv_binary.exists(), "the dependent ran after its manager was removed"
+
+    decision = UninstallDecision(
+        tools=(uv, ruff),
+        paths={"uv": (uv_binary,), "ruff": ()},
+        argv={"ruff": ("uv", "tool", "uninstall", "ruff")},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    result = perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        runner=runner,
+        extra_policies=(),
+    )
+    assert calls == [["uv", "tool", "uninstall", "ruff"]]
+    assert result.removed == ("ruff", "uv")
+    assert not uv_binary.exists()

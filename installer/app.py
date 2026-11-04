@@ -14,6 +14,7 @@ from rich.console import Console
 from installer import receipts, shellrc
 from installer.atomic import atomic_write_text
 from installer.cli import Options
+from installer.deps import resolve_dependencies
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport, audit_path, scan_bin_links
 from installer.engine import install_tool
@@ -24,6 +25,7 @@ from installer.guards import (
     install_global_redirect_shims,
     install_redirect_shims,
     install_shims,
+    real_pnpm,
     remove_ban_aliases,
     remove_shims,
     write_ban_aliases,
@@ -513,6 +515,21 @@ def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
     return f"{tool_id}: runs {shlex.join(argv)}"
 
 
+def removal_order(tools: Sequence[Tool]) -> list[Tool]:
+    """Dependents first: a tool comes before every selected tool it requires (review R1-09).
+
+    Reuses the dependency resolver on the selection as its own catalog, so nothing is
+    dragged in or blocked; independents keep the order they were given."""
+    selected = list(tools)
+    resolution = resolve_dependencies(
+        list(reversed(selected)),
+        selected,
+        available=lambda _tool: True,
+        is_installed=lambda _tool: True,
+    )
+    return list(reversed(resolution.closure))
+
+
 def remove_tool(
     tool: Tool,
     *,
@@ -539,8 +556,15 @@ def remove_tool(
             refused = tuple(f"changed since the preview; not removed: {p}" for p in changed)
             return ToolRemoval(tool.id, False, "changed since the preview; not removed", refused)
         if argv:
+            command = argv
+            if argv[0] == "pnpm":
+                # The PATH shim may be this installer's own wrapper (see guards.real_pnpm).
+                resolved = real_pnpm()
+                if resolved is None:
+                    return ToolRemoval(tool.id, False, "pnpm not found on PATH")
+                command = (resolved, *argv[1:])
             try:
-                runner(list(argv))
+                runner(list(command))
             except CommandError as exc:
                 line = next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
                 return ToolRemoval(tool.id, False, line)
@@ -763,7 +787,7 @@ def perform_uninstall(
     refused: tuple[str, ...] = ()
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
-    for tool in decision.tools:
+    for tool in removal_order(decision.tools):
         outcome = remove_tool(
             tool,
             paths=decision.paths.get(tool.id, ()),
