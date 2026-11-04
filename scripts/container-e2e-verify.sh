@@ -405,7 +405,7 @@ accumulate_summaries() {
     fi
   done <"$file"
   [[ -z "$dep_row" ]] || printf '%s\n' "$dep_row" >>"$ACC_DEP_LINES_FILE"
-  sed -nE 's/^[^ ]+ +([^ ]+) +manual — see the setup steps in the log$/\1/p' \
+  sed -nE 's/^[^ ]+ +([^ ]+) +manual — (see the setup steps in the log|you run: .*)$/\1/p' \
     "$file" >>"$ACC_MANUAL_NAMES_FILE" || true
 }
 

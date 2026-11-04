@@ -403,6 +403,33 @@ def test_a_two_space_report_line_is_not_joined_to_a_row(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_the_manual_name_parser_reads_you_run_rows(tmp_path: Path) -> None:
+    """A native handoff row (`manual — you run:`) counts as an explained blocker too."""
+    harness = _summary_harness(
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+    )
+    transcript = "\n".join(
+        (
+            "Summary — 2 installed, 2 manual, 1 dependency failed",
+            "✖ mmdc  dependency failed — zsh",
+            "○ zsh  manual — you run: `sudo dnf install zsh`",
+            "○ pi  manual — see the setup steps in the log",
+        )
+    )
+    result = _summary_run(
+        harness,
+        tmp_path,
+        transcript,
+        "accumulate_summaries $TRANSCRIPT; install_step_ok 1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    names = (tmp_path / "manual-names").read_text(encoding="utf-8")
+    assert names.splitlines() == ["zsh", "pi"]
+
+
 def test_the_gate_reads_the_post_run_lines_setup_prints() -> None:
     setup = (ROOT / "setup.py").read_text(encoding="utf-8")
     accumulate = _function("accumulate_summaries")
