@@ -332,27 +332,33 @@ Plans:
   4. A brew bootstrap with an unwritable prefix becomes a manual handoff, native dnf/apt/pacman installs are handed off as the exact command, and a grep test finds zero `sudo` argv in any executor.
   5. Uninstall offers "delete config too" only for tools with `config_paths` (default keep; CLI `--yes` never deletes config), a `config_paths` entry under `~/.claude`, `~/.cursor`, `~/.gemini` or `~/.codex` is rejected at load, and the container e2e harness compares file listings before and after uninstall, not only exit codes.
 
-**Plans:** 13 plans
+**Plans:** 2/13 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 22-01-PLAN.md — Registry schema: `config_paths` with the single harness denylist, script `paths`/`remove`/`update`/`writable_prefix` with closed roots, dead fields deleted
-- [ ] 22-02-PLAN.md — Native installs become a plan-time MANUAL handoff; the sudo executors are deleted; AST zero-sudo test
+- [x] 22-01-PLAN.md — Registry schema: `config_paths` with the single harness denylist, script `paths`/`remove`/`update`/`writable_prefix` with closed roots, dead fields deleted
+- [x] 22-02-PLAN.md — Native installs become a plan-time MANUAL handoff; the sudo executors are deleted; AST zero-sudo test
+
 **Wave 2**
 - [ ] 22-03-PLAN.md — Type-only receipt proof for script `paths` (tree/leaf), deleted only when recorded and still matching
 - [ ] 22-04-PLAN.md — `writable_prefix` preflight: pass-time evidence, plan-time MANUAL, engine re-check; brew prefixes declared
+
 **Wave 3**
 - [ ] 22-05-PLAN.md — Update contract: declared vendor `update` argv (OMZ `upgrade.sh`, `sdk selfupdate`), pinned-app refusal
 - [ ] 22-06-PLAN.md — `removal_plan` levels (L1 manager by receipt, L2, L3 recipe) and one ordered remover for CLI and TUI
+
 **Wave 4**
 - [ ] 22-07-PLAN.md — Uninstall rows by removal level; native hints name the package; SDKMAN hint carries the version
 - [ ] 22-08-PLAN.md — Vendor-verified lifecycle data for all 18 script stanzas, pi re-dated, first `config_paths`
 - [ ] 22-09-PLAN.md — Config deletion as removal step 4 (shared-path rule, CLI never deletes); pnpm co-install group warning
+
 **Wave 5**
 - [ ] 22-10-PLAN.md — Uninstall "delete config too" toggle on `c`
+
 **Wave 6**
 - [ ] 22-11-PLAN.md — ConfirmUninstall becomes the full review; config result lines
 - [ ] 22-12-PLAN.md — Greedy auto-updating casks on macOS (`--greedy-auto-updates`)
+
 **Wave 7**
 - [ ] 22-13-PLAN.md — Container e2e HOME listings before install and after uninstall; one recorded Fedora run
 
@@ -441,7 +447,7 @@ Plans:
 | 19. One tool state with health plus receipts | 0/TBD | Not started | - |
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
 | 21. One screen family | 21/21 | In Progress | - |
-| 22. Method lifecycle contract | 0/TBD | Not started | - |
+| 22. Method lifecycle contract | 2/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
