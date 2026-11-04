@@ -310,6 +310,42 @@ def test_manager_snapshot_round_trips_none_fields() -> None:
     assert decoded.checked_at == "2026-09-07T00:00:00+00:00"
 
 
+def _with_greedy(greedy: frozenset[str] | None) -> ManagerSnapshot:
+    base = _snapshot()
+    outdated = base.outdated
+    return ManagerSnapshot(
+        inventory=base.inventory,
+        outdated=OutdatedReport(
+            brew=outdated.brew,
+            cask=outdated.cask,
+            pnpm=outdated.pnpm,
+            uv=outdated.uv,
+            greedy=greedy,
+        ),
+        checked_at=base.checked_at,
+        failed_at=base.failed_at,
+    )
+
+
+def test_greedy_round_trips_through_the_cache() -> None:
+    greedies: tuple[frozenset[str] | None, ...] = (
+        frozenset({"visual-studio-code"}),
+        frozenset(),
+        None,
+    )
+    for greedy in greedies:
+        decoded = decode_manager_snapshot(encode_manager_snapshot(_with_greedy(greedy)))
+        assert decoded is not None
+        assert decoded.outdated.greedy == greedy
+
+
+def test_a_missing_or_malformed_cached_greedy_decodes_empty() -> None:
+    for outdated in ({}, {"greedy": "visual-studio-code"}, {"greedy": [1]}):
+        decoded = decode_manager_snapshot({"outdated": outdated})
+        assert decoded is not None
+        assert decoded.outdated.greedy == frozenset()
+
+
 def test_manager_snapshot_wrong_inventory_type_degrades_to_none() -> None:
     decoded = decode_manager_snapshot(
         {

@@ -49,6 +49,7 @@ from installer.platform import Platform
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError
+from installer.session import Disposition, build_plan
 from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
@@ -6680,6 +6681,22 @@ def test_a_greedy_failure_after_invalidate_reads_unknown_not_current(tmp_path: P
     assert saved is not None
     assert saved.failed_at is not None
     assert service.greedy_casks() == frozenset({"visual-studio-code"})
+
+
+def test_a_current_greedy_cask_is_skipped_and_runs_nothing(tmp_path: Path) -> None:
+    clock = [_VSCODE_NOW]
+    brew = _BrewFake()
+    brew.greedy = '{"formulae": [], "casks": []}'
+    service = _vscode_service(tmp_path, clock, brew)
+    service.refresh([_vscode_tool()])
+    state = service.state_of("vscode")
+    assert state is not None
+    assert state.health is Health.OK
+    rows = build_plan(
+        ["vscode"], [_vscode_tool()], service.state_of, service.platform, reinstall=frozenset()
+    )
+    assert [row.disposition for row in rows] == [Disposition.SKIP]
+    assert not [c for c in brew.calls if "upgrade" in c]
 
 
 def test_a_reloaded_snapshot_keeps_the_greedy_outdated_row(tmp_path: Path) -> None:
