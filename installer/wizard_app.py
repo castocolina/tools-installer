@@ -95,7 +95,7 @@ from installer.ui_common import (
     multiline_summary,
     run_live,
 )
-from installer.uninstall import SweepResult, policy_owned, reverse_dependencies
+from installer.uninstall import SweepResult, config_targets, policy_owned, reverse_dependencies
 from installer.update import UpdateService
 from installer.version_status import (
     Health,
@@ -1040,6 +1040,37 @@ def _has_daemon_id(ids: tuple[str, ...]) -> bool:
     return any(policy_id.startswith("daemon:") for policy_id in ids)
 
 
+def config_split(
+    flagged: Sequence[Tool],
+    catalog: Sequence[Tool],
+    state_of: Callable[[Tool], ToolState | None],
+) -> tuple[dict[str, tuple[Path, ...]], dict[str, tuple[str, ...]]]:
+    """Which declared config each flagged tool deletes, and which it keeps (UI-SPEC A5).
+
+    The first map is tool id -> its existing expanded config paths that every catalog
+    tool declaring the path has flagged. The second maps a kept path's declared `~`
+    form to the declaring tool ids that stay. Existence comes from each flagged tool's
+    published state, so this never touches the filesystem on the UI thread.
+    """
+    flagged_ids = {tool.id for tool in flagged}
+    deleted: dict[str, tuple[Path, ...]] = {}
+    kept: dict[str, tuple[str, ...]] = {}
+    for tool in flagged:
+        state = state_of(tool)
+        if state is None:
+            continue
+        for entry, path in config_targets(tool):
+            if path not in state.removable.config:
+                continue
+            declaring = [other for other in catalog if path in dict(config_targets(other)).values()]
+            staying = tuple(other.id for other in declaring if other.id not in flagged_ids)
+            if staying:
+                kept[entry] = tuple(dict.fromkeys((*kept.get(entry, ()), *staying)))
+            else:
+                deleted[tool.id] = (*deleted.get(tool.id, ()), path)
+    return deleted, kept
+
+
 class RemovalFinished(Message):
     """The removal worker ended. `swept` is None when the remover failed or raised
     (then `error` says why); `invalidate_error` is the post-removal cache failure."""
@@ -1063,6 +1094,10 @@ class UninstallScreen(AppScreen):
     removability state; only removable tools (and the env rows) toggle. Enter
     removes exactly the selected artifacts + env levers, applied live."""
 
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("c", "toggle_config", "config"),
+    ]
+
     # Narrow .app from App[Unknown] (MessagePump default) to the concrete host
     # app so push_screen() is typed without an Unknown generic param.
     # UnifiedApp is defined later in this module; the string forward reference is
@@ -1080,6 +1115,9 @@ class UninstallScreen(AppScreen):
         version_refresh: VersionRefreshService | None = None,
     ) -> None:
         super().__init__(view="uninstall", accent="red")
+        # Tool ids whose "delete config too" flag is on (D-11). Never persisted:
+        # cleared on leave (`clear_transient`) and kept in step with the marks.
+        self._config_on: set[str] = set()
         self._version_refresh = version_refresh
         self._tools = list(tools)
         # The catalog does not change in a session, so this is computed once.
@@ -1143,8 +1181,10 @@ class UninstallScreen(AppScreen):
         paths = state.removable.removable if selectable else ()
         argv = state.removable.argv if selectable else ()
         shown = ([shlex.join(argv)] if argv else []) + [str(path) for path in paths]
-        removes = Text(", ".join(shown) or "—", style=style)
+        flagged = selectable and tool.id in self._config_on
+        removes = Text(("config + " if flagged else "") + (", ".join(shown) or "—"), style=style)
         removes.truncate(_REMOVES_CELL_MAX, overflow="ellipsis")
+        config = self._config_clause(tool, state, flagged) if selectable else ""
         entry = _UninstallEntry(
             key=tool.id,
             cells=[
@@ -1157,7 +1197,7 @@ class UninstallScreen(AppScreen):
             ],
             selectable=selectable,
             detail=sanitize_log_line(
-                uninstall_detail(tool, state, self._required_by.get(tool.id, ()))
+                uninstall_detail(tool, state, self._required_by.get(tool.id, ()), config=config)
             ),
             paths=tuple(paths),
             is_ban=False,
@@ -1168,6 +1208,22 @@ class UninstallScreen(AppScreen):
         )
         self._painted[tool.id] = entry
         return entry
+
+    def _config_clause(self, tool: Tool, state: ToolState, flagged: bool) -> str:
+        """The detail clause for a removable row's declared config (UI-SPEC, How a row shows it)."""
+        if not tool.config_paths:
+            return ""
+        existing = [entry for entry, path in config_targets(tool) if path in state.removable.config]
+        where = ", ".join(existing) or "none on disk"
+        if flagged:
+            return f"config deleted too: {where} (c keeps it)"
+        return f"config kept: {where} (c deletes it too)"
+
+    def _mark_cell(self, item_id: str, selected: bool) -> Text:
+        """The sel cell: `[c]` on a marked row whose config flag is on (UI-SPEC A2)."""
+        if selected and item_id in self._config_on:
+            return Text("[c]", style="bold red")
+        return mark(selected)
 
     def _with_failure(self, entry: _UninstallEntry, tool: Tool) -> _UninstallEntry:
         """The row of a tool whose last removal failed: the failed word and the
@@ -1322,6 +1378,7 @@ class UninstallScreen(AppScreen):
             views=(("all", "All"),),
             detail_is_markup=False,
             selectable=lambda entry: entry.selectable,
+            mark_cell=self._mark_cell,
         )
 
     def _groups(self, _view: str) -> list[Section[_UninstallEntry]]:
@@ -1347,6 +1404,8 @@ class UninstallScreen(AppScreen):
 
     def _repaint(self) -> None:
         """Rebuild the entries from the stored values and repaint the browser."""
+        # A flag follows its mark (UI-SPEC A1): every repaint drops the flags of unmarked rows.
+        self._config_on.intersection_update(self._browser.selected)
         self._entries = self._build_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
         self._browser.reload(self._adapter(), keep_cursor=not self._placeholders)
@@ -1411,6 +1470,11 @@ class UninstallScreen(AppScreen):
         if self.is_mounted:
             self._show_standing_status()
 
+    def clear_transient(self) -> None:
+        """Leaving the view forgets every config flag: a destructive choice is never remembered."""
+        super().clear_transient()
+        self._config_on.clear()
+
     def _nothing_to_uninstall(self) -> bool:
         """True only when every tool's state is known and none is removable or
         managed, and there is no environment row (RESEARCH P7)."""
@@ -1458,6 +1522,9 @@ class UninstallScreen(AppScreen):
         # A mark is for the next removal; the running one keeps its status (D-05).
         if self.app.mutation_holder is not MutationHolder.REMOVAL:
             self.status.clear()
+        # An unmarked row loses its flag, so its detail and cells must be repainted.
+        if self._config_on - self._browser.selected:
+            self._repaint()
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
@@ -1470,10 +1537,43 @@ class UninstallScreen(AppScreen):
         # mutation can start while the modal is open.
         if self.app.refuse_if_mutating(self):
             return
+        # Built now, before the modal opens, so a publish during the confirm cannot
+        # change what the user confirmed (review R1-20).
+        decision = self._decision(event.ids)
         self.app.push_screen(
             ConfirmUninstall(self._accept_summary(event.ids)),
-            self._on_confirm(event.ids),
+            self._on_confirm(decision),
         )
+
+    def _highlighted_entry(self) -> _UninstallEntry | None:
+        key = self._browser.highlighted_id()
+        return None if key is None else self._by_key.get(key)
+
+    def action_toggle_config(self) -> None:
+        """`c`: flag a removable row's config on (marking it too) or off (D-11, UI-SPEC A1).
+
+        A flag is not a mutation, so the lock never refuses it.
+        """
+        entry = self._highlighted_entry()
+        if entry is None or entry.tool is None:
+            self._config_refused("This row has no config to delete.")
+        elif entry.group is not UninstallState.REMOVABLE:
+            self._config_refused(f"{entry.key} cannot be removed here, so its config stays.")
+        elif not entry.tool.config_paths:
+            self._config_refused(f"{entry.key} declares no config to delete.")
+        else:
+            if entry.key in self._config_on:
+                self._config_on.discard(entry.key)
+            else:
+                if entry.key not in self._browser.selected:
+                    self._browser.action_toggle_selected()
+                self._config_on.add(entry.key)
+            self._repaint()  # the row's cells and detail bar name the flag
+
+    def _config_refused(self, text: str) -> None:
+        """A refusal is a warn line, but it never replaces `Removing…` (D-05)."""
+        if self.app.mutation_holder is not MutationHolder.REMOVAL:
+            self.status.set(text, "warn")
 
     def _accept_summary(self, ids: list[str]) -> str:
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)
@@ -1488,30 +1588,35 @@ class UninstallScreen(AppScreen):
             parts.append("the shell tweaks")
         return ", ".join(parts)
 
-    def _on_confirm(self, ids: list[str]) -> Callable[[bool | None], None]:
-        # Callable[[bool | None], None] is the correct pyright-strict type:
-        # ScreenResultCallbackType (textual/screen.py:83) passes Optional[ScreenResultType]
-        # to the callback, i.e. bool | None for ModalScreen[bool].
-        def run(confirmed: bool | None) -> None:
-            if confirmed:
-                self._apply_removal(ids)
-
-        return run
-
-    def _apply_removal(self, ids: list[str]) -> None:
+    def _decision(self, ids: list[str]) -> UninstallDecision:
+        """The removal the selected ids name, with the config the flags agreed to delete."""
         tools: dict[str, Tool] = {}  # by id, in selection order; env rows carry no tool
         for key in ids:
             entry = self._by_key[key]
             if entry.tool is not None:
                 tools.setdefault(entry.tool.id, entry.tool)
-        decision = UninstallDecision(
+        flagged = [tool for tool in tools.values() if tool.id in self._config_on]
+        return UninstallDecision(
             tools=tuple(tools.values()),
             paths={tool_id: self._by_key[tool_id].paths for tool_id in tools},
             argv={tool_id: self._by_key[tool_id].argv for tool_id in tools},
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
+            config=config_split(flagged, self._tools, self._state_of)[0],
         )
+
+    def _on_confirm(self, decision: UninstallDecision) -> Callable[[bool | None], None]:
+        # Callable[[bool | None], None] is the correct pyright-strict type:
+        # ScreenResultCallbackType (textual/screen.py:83) passes Optional[ScreenResultType]
+        # to the callback, i.e. bool | None for ModalScreen[bool].
+        def run(confirmed: bool | None) -> None:
+            if confirmed:
+                self._apply_removal(decision)
+
+        return run
+
+    def _apply_removal(self, decision: UninstallDecision) -> None:
         if self.app.refuse_if_mutating(self):
             return
         self.app.begin_mutation(MutationHolder.REMOVAL)

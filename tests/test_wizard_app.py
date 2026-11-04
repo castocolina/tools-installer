@@ -56,12 +56,13 @@ from installer.run import CommandError, Runner
 from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
-from installer.ui_common import BASE_VIEW
+from installer.ui_common import BASE_VIEW, VIEW_BY_NAME
 from installer.uninstall import RemovalPlan, SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     BROKEN_REPAIR_NOTE,
     BROKEN_SHIM_REASON,
+    LAYOUT_PROOF_NOTE,
     UNKNOWN_OWNER_NOTE,
     Health,
     ToolState,
@@ -86,8 +87,9 @@ from installer.wizard_app import (
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
+    config_split,
 )
-from tests.screen_family import settle, wait_until
+from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,
     HeldRefreshService,
@@ -8122,3 +8124,337 @@ async def test_an_l3_row_shows_the_vendor_command_then_the_paths() -> None:
     assert len(captured) == 1
     assert captured[0].argv == {"vend": argv}
     assert captured[0].paths == {"vend": (leaf,)}
+
+
+# -- 22-10: the per-row "delete config too" toggle (UI-04, D-11) --------------
+
+
+def _config_tool(tool_id: str, *config_paths: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(Method(kind="brew", params={"formula": tool_id}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+        config_paths=config_paths,
+    )
+
+
+def _removable_with_config(tool: Tool, config: Sequence[Path] = ()) -> ToolState:
+    """A published removable row whose declared config currently exists as `config`."""
+    removable = RemovalPlan((Path(f"/opt/{tool.id}"),), (), config=tuple(config))
+    return plan_state(tool, removable=removable)
+
+
+async def test_c_turns_the_flag_on_and_the_removal_deletes_the_config() -> None:
+    """22-10 tracer: `c` marks a removable row; the confirmed removal carries its config."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [config_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("c")
+        assert screen.selected == {"gh"}
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {"gh": (config_dir,)}
+
+
+async def test_an_unflagged_row_sends_no_config() -> None:
+    """22-10: a row marked with `space` alone sends no config to the remover."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [config_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
+
+
+def test_config_split_keeps_a_path_another_tool_needs() -> None:
+    """22-10 (T-22-24): a shared config path is deleted only when every declarer goes."""
+    a = _config_tool("a", "~/.config/shared")
+    b = _config_tool("b", "~/.config/shared")
+    shared = Path.home() / ".config" / "shared"
+    states = {tool.id: _removable_with_config(tool, [shared]) for tool in (a, b)}
+    catalog = [a, b]
+
+    def state_of(tool: Tool) -> ToolState | None:
+        return states.get(tool.id)
+
+    assert config_split([a], catalog, state_of) == ({}, {"~/.config/shared": ("b",)})
+    assert config_split([a, b], catalog, state_of) == ({"a": (shared,), "b": (shared,)}, {})
+    # A path missing from the flagged tool's published state is in neither map.
+    assert config_split([a], catalog, lambda tool: _removable_with_config(tool)) == ({}, {})
+
+
+async def test_a_refresh_while_the_modal_is_open_keeps_the_decision(tmp_path: Path) -> None:
+    """22-10 (T-22-41, review R1-20): the confirm carries the decision built before it opened."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    service = frozen_service(tmp_path)
+    service.publish([_removable_with_config(gh)])
+    captured: list[UninstallDecision] = []
+    app = _app(
+        tools=[gh],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+        initial_view="uninstall",
+        version_refresh=service,
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("c")
+        await pilot.press("enter")  # the confirm opens; the decision is built here
+        service.queued = (_removable_with_config(gh, [config_dir]),)
+        app.request_refresh()
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
+
+
+async def test_a_flagged_row_shows_c_config_prefix_and_suffix() -> None:
+    """22-10: a flagged row reads [c], `config + ` and the deleted-too suffix."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [config_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        kept = f"{LAYOUT_PROOF_NOTE} · config kept: ~/.config/gh (c deletes it too)"
+        assert screen.detail_text == kept
+        await pilot.press("c")
+        sel = table.get_cell("gh", "sel")
+        assert (sel.plain, sel.style) == ("[c]", "bold red")
+        removes = _uninstall_cell(table, "gh", "removes")
+        assert removes.startswith("config + ")
+        assert len(removes) <= 40
+        assert screen.detail_text == (
+            f"{LAYOUT_PROOF_NOTE} · config deleted too: ~/.config/gh (c keeps it)"
+        )
+        await pilot.press("c")
+        assert _uninstall_cell(table, "gh", "sel") == "[x]"
+        assert not _uninstall_cell(table, "gh", "removes").startswith("config + ")
+        assert screen.detail_text == kept
+
+
+async def test_declared_config_with_nothing_on_disk_reads_none_on_disk() -> None:
+    """22-10 (UI-SPEC empty): the toggle is offered; the suffix reads `none on disk`."""
+    gh = _config_tool("gh", "~/.config/gh")
+    app = _app(cases=[(gh, _removable_with_config(gh))], uninstall=_uninstall_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (
+            screen.detail_text
+            == f"{LAYOUT_PROOF_NOTE} · config kept: none on disk (c deletes it too)"
+        )
+        await pilot.press("c")
+        assert screen.detail_text == (
+            f"{LAYOUT_PROOF_NOTE} · config deleted too: none on disk (c keeps it)"
+        )
+
+
+async def test_c_explains_why_it_does_nothing() -> None:
+    """22-10: `c` answers why on a row it cannot apply to, and changes no mark or flag."""
+    rg, yq = _tool("rg"), _tool("yq")
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(rg, removable_state(rg, [Path("/opt/rg")])), (yq, managed_state(yq))],
+        uninstall=_uninstall_inputs(has_path_block=True, remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("c")  # rg is removable but declares no config
+        assert (screen.status.text, screen.status.severity) == (
+            "rg declares no config to delete.",
+            "warn",
+        )
+        await pilot.press("down")  # the "managed elsewhere" section title
+        await pilot.press("c")
+        assert (screen.status.text, screen.status.severity) == (
+            "This row has no config to delete.",
+            "warn",
+        )
+        await pilot.press("down")  # yq, managed elsewhere
+        await pilot.press("c")
+        assert (screen.status.text, screen.status.severity) == (
+            "yq cannot be removed here, so its config stays.",
+            "warn",
+        )
+        await pilot.press("down", "down")  # the environment title, then PATH wiring
+        await pilot.press("c")
+        assert (screen.status.text, screen.status.severity) == (
+            "This row has no config to delete.",
+            "warn",
+        )
+        assert screen.selected == set()
+    assert captured == []
+
+
+def test_the_uninstall_footer_names_c() -> None:
+    assert VIEW_BY_NAME["uninstall"].actions == (
+        "space mark | enter remove | a all | i invert | c config"
+    )
+
+
+async def test_unmarking_clears_the_flag_and_a_never_sets_one() -> None:
+    """22-10 (T-22-24): a flag follows its mark; `a` and `c` never turn a flag on by themselves."""
+    gh = _config_tool("gh", "~/.config/gh")
+    yq = _config_tool("yq", "~/.config/yq")
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[
+            (gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"])),
+            (yq, _removable_with_config(yq, [Path.home() / ".config" / "yq"])),
+        ],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        await pilot.press("c")  # gh is marked and flagged
+        assert _uninstall_cell(table, "gh", "sel") == "[c]"
+        await pilot.press("space")  # unmarking gh clears its flag
+        assert _uninstall_cell(table, "gh", "sel") == "[ ]"
+        assert not _uninstall_cell(table, "gh", "removes").startswith("config + ")
+        await pilot.press("a")  # select-all marks every row and sets no flag
+        assert _uninstall_cell(table, "gh", "sel") == "[x]"
+        assert _uninstall_cell(table, "yq", "sel") == "[x]"
+        await pilot.press("c")  # gh flagged again, still marked
+        assert _uninstall_cell(table, "gh", "sel") == "[c]"
+        await pilot.press("i")  # invert unmarks every row, so gh's flag goes too
+        assert screen.selected == set()
+        assert _uninstall_cell(table, "gh", "sel") == "[ ]"
+        await pilot.press("space")  # gh marked alone: no flag
+        assert _uninstall_cell(table, "gh", "sel") == "[x]"
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
+
+
+async def test_c_works_during_a_removal_and_keeps_removing_status() -> None:
+    """22-10 (UI-SPEC loading): `c` flags another row while a removal runs and keeps `Removing…`."""
+    gh = _config_tool("gh", "~/.config/gh")
+    yq = _config_tool("yq", "~/.config/yq")
+    remover = HeldRemover(SweepResult(removed=("gh",)))
+    app = _app(
+        cases=[
+            (gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"])),
+            (yq, _removable_with_config(yq, [Path.home() / ".config" / "yq"])),
+        ],
+        uninstall=_uninstall_inputs(remove=remover),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            await pilot.press("5")
+            screen = app.screen
+            assert isinstance(screen, UninstallScreen)
+            table = screen.query_one(DataTable[Any])
+            await pilot.press("space")  # gh alone goes to the held removal
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await wait_until(pilot, remover.started.is_set)
+            assert (screen.status.text, screen.status.severity) == ("Removing…", "warn")
+            await pilot.press("down")  # yq, the next removable row
+            await pilot.press("c")
+            assert _uninstall_cell(table, "yq", "sel") == "[c]"
+            assert (screen.status.text, screen.status.severity) == ("Removing…", "warn")
+        finally:
+            remover.release.set()
+            await settle(app, pilot)
+
+
+async def test_a_successful_removal_clears_the_flag_and_a_failed_one_keeps_it() -> None:
+    """22-10: a removed row loses its flag with its mark; a failed row keeps both (retry)."""
+    gh = _config_tool("gh", "~/.config/gh")
+    yq = _config_tool("yq", "~/.config/yq")
+    captured: list[UninstallDecision] = []
+    result = SweepResult(removed=("gh",), remove_failed=(("yq", "boom"),))
+    app = _app(
+        cases=[
+            (gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"])),
+            (yq, _removable_with_config(yq, [Path.home() / ".config" / "yq"])),
+        ],
+        uninstall=_uninstall_inputs(remove=_recorder(captured, result)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        await pilot.press("c")  # gh
+        await pilot.press("down")
+        await pilot.press("c")  # yq
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert _uninstall_cell(table, "gh", "sel") == "[ ]"
+        assert _uninstall_cell(table, "yq", "sel") == "[c]"
+        await pilot.press("up")  # back on gh: its flag left with its mark, so a new mark has none
+        await pilot.press("space")
+        assert _uninstall_cell(table, "gh", "sel") == "[x]"
+    assert len(captured) == 1
+    assert set(captured[0].config) == {"gh", "yq"}
+
+
+async def test_flags_start_off_on_every_visit() -> None:
+    """22-10 (T-22-42, review R1-19): a modal keeps the flags; leaving the view clears them."""
+    gh = _config_tool("gh", "~/.config/gh")
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        table = app.view("uninstall").query_one(DataTable[Any])
+        await pilot.press("c")
+        await pilot.press("ctrl+p")  # the navigation palette covers the view
+        await wait_until(pilot, lambda: isinstance(app.screen, NavScreen))
+        await pilot.press("escape")  # cancelled: the view is back and the flag stays
+        await wait_until(pilot, lambda: not isinstance(app.screen, NavScreen))
+        assert _uninstall_cell(table, "gh", "sel") == "[c]"
+        await pilot.press("1")  # leaving the view through the one navigation path
+        await wait_until(pilot, lambda: app.current_view == "system")
+        await pilot.press("5")
+        await wait_until(pilot, lambda: app.current_view == "uninstall")
+        assert _uninstall_cell(table, "gh", "sel") == "[x]"  # the mark stays; the flag does not
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}

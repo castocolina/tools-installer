@@ -659,3 +659,30 @@ async def test_reload_after_app_exit_skips_the_rebuild() -> None:
         await pilot.pause()
         browser.reload(_adapter(selectable=_reject("alpha")))
         assert browser.selected == set()
+
+
+async def test_mark_cell_hook_survives_every_restamp() -> None:
+    """22-10: the adapter's mark_cell draws the sel cell on every re-stamp."""
+
+    def mark_cell(item_id: str, selected: bool) -> Text:
+        if item_id == "alpha" and selected:
+            return Text("[c]", style="bold red")
+        return Text("[x]" if selected else "[ ]")
+
+    adapter = replace(_adapter(), mark_cell=mark_cell)
+    app = _Host(adapter)
+    async with app.run_test(size=(80, 20)) as pilot:
+        browser = app.query_one(ToolBrowser[_Item])
+        table = app.query_one(DataTable[Any])
+        await pilot.press("space")  # alpha is marked: the hook reads [c]
+        assert table.get_cell("alpha", "sel").plain == "[c]"
+        await pilot.press("a")  # select-all re-stamps every row
+        assert table.get_cell("alpha", "sel").plain == "[c]"
+        assert table.get_cell("beta", "sel").plain == "[x]"
+        await pilot.press("i")  # invert unmarks alpha: the hook falls back to [ ]
+        assert table.get_cell("alpha", "sel").plain == "[ ]"
+        await pilot.press("space")  # alpha marked again
+        browser.reload(replace(_adapter(), mark_cell=mark_cell))
+        await pilot.pause()  # the rebuild re-stamps after it paints
+        assert table.get_cell("alpha", "sel").plain == "[c]"
+        assert table.get_cell("beta", "sel").plain == "[ ]"  # invert emptied the selection
