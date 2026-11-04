@@ -9,6 +9,7 @@ from rich.console import Console
 import installer.executors as executors
 from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
+from installer.enums import InstallStatus
 from installer.executors import ExecutorError
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
@@ -16,6 +17,7 @@ from installer.render import (
     outcome_mark,
     outcome_row_text,
     outcome_word,
+    plan_row_text,
     render_done_notes,
     render_failure_details,
     render_guard,
@@ -687,6 +689,7 @@ def test_render_plan_words_and_marks_come_from_the_tables(
         Disposition.REINSTALL: Health.OK,
         Disposition.SKIP: Health.OK,
         Disposition.BLOCKED: Health.UNAVAILABLE,
+        Disposition.MANUAL: Health.MISSING,
         Disposition.REMOVE: Health.OK,
         Disposition.WAIT: None,
     }[disposition]
@@ -1256,3 +1259,61 @@ def test_outcome_words_for_removal() -> None:
     assert "\x1b" not in outcome_detail_text(dirty)
     # C-34: a removal failure never falls back to install wording.
     assert outcome_detail_text(RowOutcome(row, "remove_failed")) == "not removed"
+
+
+def test_a_manual_row_finishes_with_its_command() -> None:
+    command = "sudo dnf install jq"
+    row = PlanRow("jq", Disposition.MANUAL, "needs sudo", manual_command=command)
+    install = InstallOutcome(
+        "jq",
+        InstallStatus.MANUAL_REQUIRED,
+        handoff=(command,),
+        manual_command=command,
+    )
+    outcome = RowOutcome(row, "manual", install=install, detail="needs sudo")
+    assert outcome_detail_text(outcome) == "you run: `sudo dnf install jq`"
+    bare = RowOutcome(PlanRow("x", Disposition.RECONFIGURE, ""), "manual")
+    assert outcome_detail_text(bare) == "see the setup steps in the log"
+
+
+def test_render_handoff_prints_the_command_alone_with_markup_off() -> None:
+    command = "sudo dnf install [red]x[/]"
+    outcome = InstallOutcome(
+        "jq",
+        InstallStatus.MANUAL_REQUIRED,
+        handoff=(command,),
+        manual_command=command,
+    )
+    console, buf = _console()
+    render_handoff([outcome], console)
+    assert buf.getvalue().splitlines() == [
+        "jq — manual setup required:",
+        "  sudo dnf install [red]x[/]",
+    ]
+
+
+def test_render_handoff_keeps_a_long_command_on_one_line_without_escapes() -> None:
+    command = "sudo dnf install " + "p" * 120 + " \x1b[31m[red]y[/]"
+    assert len(command) >= 150
+    outcome = InstallOutcome(
+        "jq",
+        InstallStatus.MANUAL_REQUIRED,
+        handoff=(command,),
+        manual_command=command,
+    )
+    buf = io.StringIO()
+    render_handoff([outcome], Console(file=buf, width=80, no_color=True))
+    assert "\x1b" not in buf.getvalue()
+    assert buf.getvalue().splitlines() == [
+        "jq — manual setup required:",
+        "  " + command.replace("\x1b", ""),
+    ]
+
+
+def test_the_review_row_folds_a_long_manual_reason() -> None:
+    reason = "needs sudo (never run here); you run: `sudo dnf install " + "p" * 84 + "`"
+    assert cell_len(reason) == 141
+    row = PlanRow("jq", Disposition.MANUAL, reason, health=Health.MISSING)
+    lines = plan_row_text(row, 12, 78, hint=False).plain.splitlines()
+    assert len(lines) > 1
+    assert all(cell_len(line) <= 78 for line in lines)

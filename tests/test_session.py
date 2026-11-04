@@ -25,6 +25,7 @@ from installer.post_install import ConfirmSensitiveAction
 from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
+    WORDS,
     Disposition,
     MismatchChoice,
     OnMismatch,
@@ -39,6 +40,7 @@ from installer.session import (
     order_for_install,
     ran_anything,
     retained,
+    review_counts,
     summary_counts,
 )
 from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
@@ -1478,3 +1480,13 @@ def test_remove_is_not_runnable():
 def test_first_line_is_the_message_or_the_type():
     assert first_line(OSError("a\nb")) == "a"
     assert first_line(OSError()) == "OSError failed"
+
+
+@pytest.mark.parametrize("disposition", list(Disposition))
+def test_every_disposition_has_words_and_a_review_place(disposition: Disposition):
+    assert review_counts([PlanRow("x", disposition, "")]) == f"1 {WORDS[disposition].review}"
+
+
+def test_every_disposition_manual_is_reviewed_right_after_blocked():
+    members = list(Disposition)
+    assert members.index(Disposition.MANUAL) == members.index(Disposition.BLOCKED) + 1

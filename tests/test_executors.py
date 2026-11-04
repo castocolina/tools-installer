@@ -1,3 +1,4 @@
+import ast
 import os
 import shlex
 from collections.abc import Callable
@@ -35,22 +36,28 @@ def _script_of(calls: list[list[str]], shell: str = "sh") -> str:
     return rest
 
 
-def test_dnf_executor_builds_sudo_install():
+@pytest.mark.parametrize(
+    ("kind", "command"),
+    [
+        ("dnf", "sudo dnf install jq"),
+        ("apt", "sudo apt-get install jq"),
+        ("pacman", "sudo pacman -S --needed jq"),
+        ("rpm_ostree", "rpm-ostree install jq"),
+    ],
+)
+def test_native_kind_is_a_manual_handoff_and_never_executed(kind: str, command: str):
     calls, runner = _record()
-    execute(Method(kind="dnf", params={"package": "jq"}), runner)
-    assert calls == [["sudo", "dnf", "install", "-y", "jq"]]
+    method = Method(kind=kind, params={"package": "jq"})
+    handoff = executors.needs_manual(method)
+    assert handoff is not None
+    assert handoff.command == command
+    with pytest.raises(ExecutorError, match=f"no executor for method kind '{kind}'"):
+        execute(method, runner)
+    assert calls == []
 
 
-def test_apt_executor_builds_sudo_install():
-    calls, runner = _record()
-    execute(Method(kind="apt", params={"package": "jq"}), runner)
-    assert calls == [["sudo", "apt-get", "install", "-y", "jq"]]
-
-
-def test_pacman_executor_builds_sudo_install():
-    calls, runner = _record()
-    execute(Method(kind="pacman", params={"package": "jq"}), runner)
-    assert calls == [["sudo", "pacman", "-S", "--noconfirm", "--needed", "jq"]]
+def test_only_native_kinds_are_manual_handoffs():
+    assert executors.needs_manual(Method(kind="brew", params={"formula": "jq"})) is None
 
 
 def test_brew_executor_builds_install():
@@ -82,8 +89,8 @@ def test_script_executor_quotes_url_with_special_chars():
 
 def test_missing_required_param_raises():
     calls, runner = _record()
-    with pytest.raises(ExecutorError, match="package"):
-        execute(Method(kind="dnf", params={}), runner)
+    with pytest.raises(ExecutorError, match="formula"):
+        execute(Method(kind="brew", params={}), runner)
     assert calls == []
 
 
@@ -94,17 +101,27 @@ def test_unsupported_kind_raises():
 
 
 def test_every_command_kind_has_an_executor():
-    assert set(EXECUTORS) == {
-        "script",
-        "node",
-        "uv-tool",
-        "sdkman",
-        "dnf",
-        "apt",
-        "pacman",
-        "brew",
-        "cask",
-    }
+    assert set(EXECUTORS) == {"script", "node", "uv-tool", "sdkman", "brew", "cask"}
+
+
+def test_native_kinds_have_no_executor():
+    assert {"dnf", "apt", "pacman", "rpm_ostree"}.isdisjoint(EXECUTORS)
+
+
+_ELEVATION_WORDS = frozenset({"sudo", "pkexec", "doas"})
+
+
+def test_no_argv_literal_starts_with_an_elevation_command():
+    """SPEC R3: a list or tuple literal that starts with sudo, pkexec or doas would be a run."""
+    root = Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+    for path in [*sorted((root / "installer").rglob("*.py")), root / "setup.py"]:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+                first = node.elts[0]
+                if isinstance(first, ast.Constant) and first.value in _ELEVATION_WORDS:
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert offenders == []
 
 
 def test_uv_tool_executor_builds_uv_tool_install() -> None:

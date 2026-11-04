@@ -1,6 +1,7 @@
 """Per-method-kind executors: build an argv and hand it to the injected runner.
 
-Only command-based kinds live here (script, node, native package managers, brew, cask).
+Only command-based kinds live here (script, node, uv-tool, sdkman, brew, cask). Native
+package managers never run here: `needs_manual` hands their command to the user.
 Download-based kinds (github_release, tarball) live in `installer.download`.
 """
 
@@ -8,6 +9,7 @@ import os
 import re
 import shlex
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 from typing import cast
@@ -445,18 +447,6 @@ def _script(method: Method, runner: Runner) -> None:
     runner(["sh", "-c", pipeline])
 
 
-def _dnf(method: Method, runner: Runner) -> None:
-    runner(["sudo", "dnf", "install", "-y", require_str(method, "package")])
-
-
-def _apt(method: Method, runner: Runner) -> None:
-    runner(["sudo", "apt-get", "install", "-y", require_str(method, "package")])
-
-
-def _pacman(method: Method, runner: Runner) -> None:
-    runner(["sudo", "pacman", "-S", "--noconfirm", "--needed", require_str(method, "package")])
-
-
 def _brew(method: Method, runner: Runner) -> None:
     runner(["brew", "install", require_str(method, "formula")])
 
@@ -600,14 +590,42 @@ def host_setup_approval_disclosures(method: Method) -> tuple[str, ...]:
     return setup.approval_disclosures
 
 
+@dataclass(frozen=True)
+class ManualHandoff:
+    """A native install the installer will not run: why, and the exact command to show."""
+
+    reason: str
+    command: str
+
+
+# Native kind -> (why it is not run here, command template). Display strings only;
+# nothing in this table is ever executed.
+_MANUAL_COMMANDS: dict[str, tuple[str, str]] = {
+    "dnf": ("needs sudo (never run here)", "sudo dnf install {package}"),
+    "apt": ("needs sudo (never run here)", "sudo apt-get install {package}"),
+    "pacman": ("needs sudo (never run here)", "sudo pacman -S --needed {package}"),
+    "rpm_ostree": (
+        "needs admin rights and a reboot (never run here)",
+        "rpm-ostree install {package}",
+    ),
+}
+
+
+def needs_manual(method: Method) -> ManualHandoff | None:
+    """The manual handoff for a native-package method, or None when the installer may run it."""
+    template = _MANUAL_COMMANDS.get(method.kind)
+    if template is None:
+        return None
+    why, pattern = template
+    command = pattern.format(package=require_str(method, "package"))
+    return ManualHandoff(f"{why}; you run: `{command}`", command)
+
+
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
     "script": _script,
     "node": _node,
     "uv-tool": _uv_tool,
     "sdkman": _sdkman,
-    "dnf": _dnf,
-    "apt": _apt,
-    "pacman": _pacman,
     "brew": _brew,
     "cask": _cask,
 }

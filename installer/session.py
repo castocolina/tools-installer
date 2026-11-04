@@ -95,6 +95,7 @@ class Disposition(StrEnum):
     REINSTALL = "reinstall"
     SKIP = "skip"
     BLOCKED = "blocked"
+    MANUAL = "manual"
     REMOVE = "remove"
 
 
@@ -142,6 +143,7 @@ WORDS: dict[Disposition, Words] = {
     Disposition.REINSTALL: Words("will be reinstalled", "reinstalled", "yellow"),
     Disposition.SKIP: Words("skipped", "skipped", "dim", done_style="dim"),
     Disposition.BLOCKED: Words("blocked", "blocked", "red", done_style="red"),
+    Disposition.MANUAL: Words("manual", "manual", "yellow", done_style="yellow"),
     Disposition.REMOVE: Words("will remove", "removed", "red", done_style="green"),
 }
 
@@ -171,6 +173,8 @@ class PlanRow:
     can_reinstall: bool = False
     steps: tuple[ConfigStep, ...] = ()
     ownership: ManagerOwnership | None = None
+    # Only on MANUAL: the exact command the user runs, from executors.needs_manual.
+    manual_command: str | None = None
 
 
 @dataclass(frozen=True)
@@ -480,6 +484,21 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
             outcome = RowOutcome(row, "skipped", detail=row.reason)
         elif row.disposition is Disposition.BLOCKED:
             outcome = RowOutcome(row, "blocked", detail=row.reason)
+        elif row.disposition is Disposition.MANUAL:
+            # The handoff is the outcome: nothing runs, and dependents of this row are blocked.
+            command = row.manual_command or ""
+            unresolved.add(row.tool_id)
+            outcome = RowOutcome(
+                row,
+                "manual",
+                install=InstallOutcome(
+                    row.tool_id,
+                    InstallStatus.MANUAL_REQUIRED,
+                    handoff=(command,),
+                    manual_command=command,
+                ),
+                detail=row.reason,
+            )
         elif halted or (ctx.should_continue is not None and not ctx.should_continue()):
             halted = True
             outcome = RowOutcome(row, "not_attempted", detail="run stopped before this row")
@@ -648,6 +667,7 @@ def _row(
         *,
         can_reinstall: bool = False,
         steps: tuple[ConfigStep, ...] = (),
+        manual_command: str | None = None,
     ) -> PlanRow:
         return PlanRow(
             tool.id,
@@ -658,11 +678,22 @@ def _row(
             ownership=state.ownership,
             can_reinstall=can_reinstall,
             steps=steps,
+            manual_command=manual_command,
         )
+
+    def install_row(
+        disposition: Disposition, reason: str, *, can_reinstall: bool = False
+    ) -> PlanRow:
+        """An INSTALL, REPAIR or REINSTALL row; MANUAL when its first method is native."""
+        methods = resolve_methods(tool, platform)
+        handoff = executors.needs_manual(methods[0]) if methods else None
+        if handoff is None:
+            return make(disposition, reason, can_reinstall=can_reinstall)
+        return make(Disposition.MANUAL, handoff.reason, manual_command=handoff.command)
 
     if state.health is Health.MISSING:
         reason = "not installed" if requester is None else f"needed by {requester}"
-        return make(Disposition.INSTALL, reason)
+        return install_row(Disposition.INSTALL, reason)
     if state.health is Health.BROKEN:
         if state.ownership.owner in UNMANAGEABLE_OWNERS:
             label = owner_label(state.ownership) or state.ownership.owner
@@ -673,7 +704,7 @@ def _row(
         reason = _broken_reason(state)
         if requester is not None:
             reason += f"; needed by {requester}"
-        return make(Disposition.REPAIR, reason)
+        return install_row(Disposition.REPAIR, reason)
     if state.health is Health.MISCONFIGURED:
         if not direct:
             return make(Disposition.SKIP, _already_present_reason(state))
@@ -703,13 +734,13 @@ def _row(
         if ownership.off_policy:
             return make(Disposition.SKIP, _off_policy_reason(tool, ownership, platform))
         if ownership.owner == "installer":
-            disposition = Disposition.REINSTALL if tool.id in reinstall else Disposition.SKIP
-            reason = (
-                "reinstall requested; r again to undo"
-                if tool.id in reinstall
-                else "already current"
-            )
-            return make(disposition, reason, can_reinstall=True)
+            if tool.id in reinstall:
+                return install_row(
+                    Disposition.REINSTALL,
+                    "reinstall requested; r again to undo",
+                    can_reinstall=True,
+                )
+            return make(Disposition.SKIP, "already current", can_reinstall=True)
         if ownership.owner == "unknown":
             reason = "already current; owner unknown"
         else:
@@ -782,7 +813,8 @@ def build_plan(
     unsatisfied = {
         row.tool_id
         for row in rows
-        if row.disposition is Disposition.BLOCKED and not _settled(state_of(row.tool_id))
+        if row.disposition in {Disposition.BLOCKED, Disposition.MANUAL}
+        and not _settled(state_of(row.tool_id))
     }
     for index, row in enumerate(rows):
         if row.disposition not in RUNNABLE:
@@ -800,7 +832,7 @@ def build_plan(
             candidate for candidate in rows if row.tool_id in by_id[candidate.tool_id].requires
         ]
         if requiring_rows and all(
-            candidate.disposition is Disposition.BLOCKED
+            candidate.disposition in {Disposition.BLOCKED, Disposition.MANUAL}
             or candidate.reason.startswith("not needed while ")
             for candidate in requiring_rows
         ):
