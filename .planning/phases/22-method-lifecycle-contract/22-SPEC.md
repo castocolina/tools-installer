@@ -34,7 +34,7 @@ Scouted 2026-10-13:
      - If `remove` exits non-zero, the row ends failed with the vendor's error, nothing more is deleted, and the tool stays installed.
      - All 16 script tools get their data (TA: the 14 script tools plus pi), each with a `verified` date key.
    - Acceptance:
-     - With a fake runner, `opencode` removal runs `opencode uninstall --keep-config --keep-data`.
+     - A script method's declared `remove` runs from its receipt-proven executable before its proven paths are deleted (fake runner); `opencode` declares no `remove` (its vendor uninstall edits shell rc files and deletes unrecorded dirs) and is removed by its receipt-proven binary alone [amended 2026-11-04, review R2-05].
      - A foreign file at a declared path that is not in the receipt survives removal.
      - A failing `remove` leaves every path in place and the row failed.
 
@@ -141,7 +141,7 @@ Scouted 2026-10-13:
 ## Acceptance Criteria
 
 - [ ] For each kind, install → receipt → Uninstall removable → removal leaves zero receipt paths (scratch HOME)
-- [ ] `opencode` removal runs `opencode uninstall --keep-config --keep-data` (fake runner)
+- [ ] a script method's declared `remove` runs from its receipt-proven executable before its proven paths are deleted (fake runner); `opencode` declares no `remove` (its vendor uninstall edits shell rc files and deletes unrecorded dirs) and is removed by its receipt-proven binary alone [amended 2026-11-04, review R2-05]
 - [ ] A foreign file at a declared path that is not in the receipt survives removal and is listed as "remove it yourself"
 - [ ] A failing `remove` argv leaves every path and the config in place and ends the row failed
 - [ ] No `sudo`/`pkexec`/`doas` argv in `installer/` (grep test); a native-only tool yields a handoff with the exact command

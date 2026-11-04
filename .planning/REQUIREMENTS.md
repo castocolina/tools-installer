@@ -71,7 +71,7 @@
 
 ### Method lifecycle
 
-- [ ] **LIFE-01**: Script methods declare the paths they write, a remove command and an update command; removal deletes only declared paths that exist [TA §4.2, 999.8 L3]
+- [ ] **LIFE-01**: Script methods declare the paths they write, an update command and optionally a remove command (run from the receipt-proven executable; none ships for opencode, review R2-05); removal deletes only declared paths that exist [TA §4.2, 999.8 L3]
 - [ ] **LIFE-02**: Native package installs (dnf/apt/pacman) are handed off as the exact command; no executor ever runs sudo [O1, D-I]
 - [ ] **LIFE-03**: brew/uv/pnpm uninstall runs only when a receipt proves the installer put the package there; otherwise a hint [O3]
 - [ ] **LIFE-04**: Tools declare `config_paths`; shared harness dirs (`~/.claude`, `~/.cursor`, `~/.gemini`, `~/.codex`) can never be listed [TA §4.2]

@@ -1,5 +1,8 @@
 # Phase 22: Method lifecycle contract - Context
 
+> **Amendment 2026-11-04 (cross-AI review R2-05, orchestrator sign-off):** `opencode` declares no vendor `remove`. Upstream `opencode uninstall` (v1.19.5) rewrites the user's shell rc file regardless of `--keep-config`, deletes `~/.cache/opencode` and `~/.local/state/opencode`, and never deletes the binary, so it breaks "nothing removed or edited without proof". Its removal is the receipt-proven `~/.opencode/bin/opencode`; the vendor-`remove` mechanism (D-05/D-06) stays, tested on a test-local recipe, and recipe commands run from their receipt-proven absolute executable. Anchors naming `opencode uninstall --keep-config --keep-data` below are superseded. See 22-REVIEWS.md "Decision needing orchestrator sign-off".
+
+
 **Gathered:** 2026-10-14 (assumptions mode, `--analyze --all --batch`, jev ladder, best-over-easy)
 **Status:** Ready for planning
 
