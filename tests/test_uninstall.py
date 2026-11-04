@@ -2326,3 +2326,90 @@ def test_a_leaf_link_into_a_deleted_tree_is_still_removed(
     shutil.rmtree(tree)
     assert remove_paths([link_artifact], trees=(tree,)) == ()
     assert not os.path.lexists(link)
+
+
+def test_a_config_path_under_a_symlinked_parent_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import delete_config_path
+
+    home = tmp_path / "home"
+    (home / ".claude" / "cfg" / "gh").mkdir(parents=True)
+    (home / ".claude" / "cfg" / "gh" / "hosts.yml").write_text("token")
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".config").symlink_to(home / ".claude" / "cfg")  # the parent is a harness dir
+    with pytest.raises(OSError):
+        delete_config_path(home / ".config" / "gh")
+    assert (home / ".claude" / "cfg" / "gh" / "hosts.yml").exists()
+
+    outside = tmp_path / "outside" / "gh"
+    outside.mkdir(parents=True)
+    (outside / "hosts.yml").write_text("token")
+    (home / ".config").unlink()
+    (home / ".config").symlink_to(tmp_path / "outside")  # the parent resolves outside HOME
+    with pytest.raises(OSError):
+        delete_config_path(home / ".config" / "gh")
+    assert (outside / "hosts.yml").exists()
+
+    dotfiles = home / "dotfiles" / "config" / "gh"
+    dotfiles.mkdir(parents=True)
+    (dotfiles / "hosts.yml").write_text("token")
+    (home / ".config").unlink()
+    (home / ".config").symlink_to(home / "dotfiles" / "config")  # a dotfiles layout inside HOME
+    delete_config_path(home / ".config" / "gh")
+    assert not dotfiles.exists()
+
+
+def test_a_config_dir_a_harness_marker_points_to_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import delete_config_path
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    gh = home / ".config" / "gh"
+    gh.mkdir(parents=True)
+    (gh / "hosts.yml").write_text("token")
+    (home / ".claude").symlink_to(gh)  # the harness marker resolves to the config dir
+    with pytest.raises(OSError):
+        delete_config_path(gh)
+    assert (gh / "hosts.yml").exists()
+    assert (home / ".claude").resolve() == gh.resolve()
+
+    (home / ".claude").unlink()
+    (gh / "sub").mkdir()
+    (home / ".claude").symlink_to(gh / "sub")  # the marker lies inside the config dir
+    with pytest.raises(OSError):
+        delete_config_path(gh)
+    assert (gh / "sub").is_dir()
+
+    (home / ".claude").unlink()
+    dotfiles = home / "dotfiles" / "claude"
+    dotfiles.mkdir(parents=True)
+    (dotfiles / "settings.json").write_text("{}")
+    (home / ".claude").symlink_to(dotfiles)  # unrelated to the config dir
+    delete_config_path(gh)
+    assert not gh.exists()
+
+    (home / ".config" / "gh").symlink_to(dotfiles)  # a config link to a harness dir: unlinked only
+    delete_config_path(home / ".config" / "gh")
+    assert not (home / ".config" / "gh").is_symlink()
+    assert (dotfiles / "settings.json").exists()
+
+
+def test_symlinked_config_is_unlinked_not_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import delete_config_path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep").write_text("kept")
+    link = tmp_path / ".config" / "gh"
+    link.parent.mkdir()
+    link.symlink_to(elsewhere)
+    delete_config_path(link)
+    assert not link.is_symlink()
+    assert (elsewhere / "keep").exists()

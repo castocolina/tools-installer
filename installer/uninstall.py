@@ -21,7 +21,7 @@ from installer.download import (
     expand_script_token,
     is_still_proven,
 )
-from installer.model import Method, Tool, method_package
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
@@ -437,15 +437,39 @@ def remove_proven(
 
 
 def delete_config_path(path: Path) -> None:
-    """Delete one declared config path: a link is unlinked, a file unlinked, a directory removed.
+    """Delete one declared config path, or refuse (SPEC R6, review R1-17 and R2-06).
 
-    A missing path is a no-op. Other OSErrors propagate; the caller turns them into a warning."""
+    The parent is resolved first: it must stay inside the real HOME and must not be, or lie
+    under, a harness marker dir, so a symlinked `~/.config` cannot route a delete into one.
+    A missing path is a no-op. A link is unlinked and never followed. A real file or directory
+    is refused when a harness marker resolves to it or under it (a dotfiles layout that points
+    a harness dir at a config dir). Other OSErrors propagate; the caller turns them into a
+    warning."""
+    real_home = Path(os.path.realpath(Path.home()))
+    markers = tuple(
+        Path(os.path.realpath(Path.home() / marker))
+        for group in HARNESS_MARKER_DIRS.values()
+        for marker in group
+    )
+    parent = Path(os.path.realpath(path.parent))
+    if not parent.is_relative_to(real_home) or any(
+        parent.is_relative_to(marker) for marker in markers
+    ):
+        raise OSError(
+            f"a parent of {path} resolves outside HOME or into a harness directory; not deleted"
+        )
     if not _exists(path):
         return
-    if path.is_symlink() or not path.is_dir():
+    if path.is_symlink():
         path.unlink()
-    else:
+        return
+    target = Path(os.path.realpath(path))
+    if any(marker.is_relative_to(target) for marker in markers):
+        raise OSError(f"{path} is or holds a harness directory; not deleted")
+    if path.is_dir():
         shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:

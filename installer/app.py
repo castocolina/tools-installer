@@ -686,6 +686,22 @@ def run_uninstall(
         detail = omz_removal_detail(zshrc_path=zshrc_path, state_path=myshellrc_path)
         if detail is not None:
             console.print(f"  omz-plugins {detail}.")
+    # SPEC R6 / UI-SPEC A11: the CLI never deletes config, and it says so before the confirm.
+    kept_config = [
+        entry
+        for tool, plan in ordered
+        if plan.level != "none"
+        for entry, path in config_targets(tool)
+        if path in plan.config
+    ]
+    if kept_config:
+        console.print(
+            "Config kept; only the Uninstall view deletes config (press c on a row):",
+            markup=False,
+            soft_wrap=True,
+        )
+        for entry in kept_config:
+            console.print(f"  {entry}", markup=False, soft_wrap=True)
     if not confirm("Remove these artifacts?"):
         return [], ()
     # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. Each tool

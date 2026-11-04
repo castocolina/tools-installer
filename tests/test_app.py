@@ -5092,6 +5092,9 @@ def test_a_failed_cli_removal_is_reported_and_keeps_its_receipt(
     assert receipts.receipt_exists("gh")
 
 
+SHARED = ("~/.config/shared",)
+
+
 def _brew_config_tool(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5230,3 +5233,193 @@ def test_a_refused_removal_keeps_the_config(
     assert result.config_not_deleted == ("yq",)
     assert (config / "hosts.yml").exists()
     assert receipts.read("yq") is not None
+
+
+def test_a_shared_config_path_needs_every_owner_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+
+    deleted: list[Path] = []
+    real_delete = app_module.delete_config_path
+
+    def spy(path: Path) -> None:
+        deleted.append(path)
+        real_delete(path)
+
+    monkeypatch.setattr(app_module, "delete_config_path", spy)
+    both = tmp_path / "both"
+    both.mkdir()
+    a = _brew_config_tool(both, monkeypatch, "a", config_paths=SHARED)
+    b = _brew_config_tool(both, monkeypatch, "b", config_paths=SHARED)
+    shared = _plant_config(both, ".config/shared")
+    decision = _decision([a, b], both, config={"a": (shared,), "b": (shared,)})
+    result = _apply(decision, both, runner=lambda _cmd: None, catalog=[a, b])
+    assert deleted == [shared]  # one delete for two owners
+    assert not shared.exists()
+    assert sorted(result.config_deleted) == ["a", "b"]
+
+    one = tmp_path / "one"
+    one.mkdir()
+    a = _brew_config_tool(one, monkeypatch, "a", config_paths=SHARED)
+    b = _brew_config_tool(one, monkeypatch, "b", config_paths=SHARED)
+    shared = _plant_config(one, ".config/shared")
+    deleted.clear()
+
+    def fail_b(cmd: list[str]) -> None:
+        if cmd[-1] == "b":
+            raise CommandError(cmd, 1, detail="Error: b failed")
+
+    decision = _decision([a, b], one, config={"a": (shared,), "b": (shared,)})
+    result = _apply(decision, one, runner=fail_b, catalog=[a, b])
+    assert deleted == []
+    assert (shared / "hosts.yml").exists()
+    assert result.config_not_deleted == ("b",)
+
+
+def test_a_shared_config_path_needs_every_catalog_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # c declares the path too but is not always selected: an unselected or flag-off owner keeps it.
+    def tools(home: Path) -> tuple[Tool, Tool, Tool]:
+        home.mkdir()
+        a = _brew_config_tool(home, monkeypatch, "a", config_paths=SHARED)
+        b = _brew_config_tool(home, monkeypatch, "b", config_paths=())
+        c = _brew_config_tool(home, monkeypatch, "c", config_paths=SHARED)
+        return a, b, c
+
+    home = tmp_path / "unselected"
+    a, b, c = tools(home)
+    shared = _plant_config(home, ".config/shared")
+    decision = _decision([a, b], home, config={"a": (shared,)})
+    _apply(decision, home, runner=lambda _cmd: None, catalog=[a, b, c])
+    assert (shared / "hosts.yml").exists()
+
+    home = tmp_path / "flag-off"
+    a, b, c = tools(home)
+    shared = _plant_config(home, ".config/shared")
+    decision = _decision([a, c], home, config={"a": (shared,)})
+    _apply(decision, home, runner=lambda _cmd: None, catalog=[a, b, c])
+    assert (shared / "hosts.yml").exists()
+
+    home = tmp_path / "both-flagged"
+    a, b, c = tools(home)
+    shared = _plant_config(home, ".config/shared")
+    decision = _decision([a, c], home, config={"a": (shared,), "c": (shared,)})
+    _apply(decision, home, runner=lambda _cmd: None, catalog=[a, b, c])
+    assert not shared.exists()
+
+
+def test_a_config_path_already_gone_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    gone = tmp_path / ".config" / "gh"  # never created
+    decision = _decision([gh], tmp_path, config={"gh": (gone,)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert result.warnings == ()
+    assert result.config_deleted == ("gh",)
+    assert result.removed == ("gh",)
+
+
+def test_an_undeclared_config_path_is_never_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text("key")
+    decision = _decision([gh], tmp_path, config={"gh": (ssh,)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert (ssh / "id_ed25519").exists()
+    assert result.warnings == (f"config {ssh} is not declared by any tool; not deleted",)
+
+
+def test_a_config_delete_failure_is_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import receipts
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+
+    def deny(_path: Path) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(app_module, "delete_config_path", deny)
+    decision = _decision([gh], tmp_path, config={"gh": (config,)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert result.removed == ("gh",)
+    assert not receipts.receipt_exists("gh")
+    assert result.warnings == ("could not delete config ~/.config/gh — denied",)
+
+
+def test_a_refused_config_parent_is_a_warning_and_the_tool_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    harness_cfg = tmp_path / ".claude" / "cfg" / "gh"
+    harness_cfg.mkdir(parents=True)
+    (harness_cfg / "hosts.yml").write_text("token")
+    (tmp_path / ".config").symlink_to(tmp_path / ".claude" / "cfg")  # ~/.config -> a harness dir
+    decision = _decision([gh], tmp_path, config={"gh": (tmp_path / ".config" / "gh",)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert result.removed == ("gh",)
+    assert (harness_cfg / "hosts.yml").exists()
+    assert len(result.warnings) == 1
+    assert result.warnings[0].startswith("could not delete config ~/.config/gh — ")
+
+
+def test_an_interrupt_before_step_4_leaves_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+
+    def interrupted(_path: Path) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app_module, "delete_config_path", interrupted)
+    decision = _decision([gh], tmp_path, config={"gh": (config,)})
+    with pytest.raises(KeyboardInterrupt):
+        _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert (config / "hosts.yml").exists()
+
+
+def test_the_cli_never_deletes_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.app import run_uninstall
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+    console, buf = _console()
+    shown: list[str] = []
+    calls: list[list[str]] = []
+
+    def confirm(_message: str) -> bool:
+        shown.append(buf.getvalue())  # what the user sees before the confirm
+        return True
+
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", confirm)
+    kwargs["runner"] = calls.append
+    _removed, failed = run_uninstall([gh], console, **kwargs)
+    assert calls == [["brew", "uninstall", "gh"]]
+    assert failed == ()
+    assert (config / "hosts.yml").exists()
+    assert "Config kept; only the Uninstall view deletes config (press c on a row):\n" in shown[0]
+    assert "row):\n  ~/.config/gh\n" in shown[0]
+
+
+def test_the_cli_prints_no_config_block_without_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)  # ~/.config/gh is never created
+    console, buf = _console()
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", lambda _m: True)
+    kwargs["runner"] = lambda _cmd: None
+    run_uninstall([gh], console, **kwargs)
+    assert "Config kept" not in buf.getvalue()
