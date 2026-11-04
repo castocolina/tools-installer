@@ -168,3 +168,38 @@ Not run: the plan's optional second and third runs. The defect is deterministic,
 - The e2e container is gone (`podman ps -a` empty after the run).
 - No file under `.planning/` other than this SUMMARY was modified. STATE.md and ROADMAP.md are untouched.
 - Branch `worktree-agent-a61d0170e621aea3e`, HEAD not on a protected branch, sentinel matched at each commit.
+
+## Re-run after fix
+
+Fix for D-1: `4190481` (`fix(22): pnpm group removal treats an already-removed member as removed`). Measured first in a disposable `fedora:latest` podman container (node 22.23.1, pnpm 12.16.1, the executor's exact argv `pnpm add -g --allow-build=puppeteer puppeteer@^25`, then `pnpm add -g --allow-build=puppeteer @mermaid-js/mermaid-cli,puppeteer@^25`): after the group install `pnpm ls --global` lists one group (`@mermaid-js/mermaid-cli`, `puppeteer`). `pnpm remove --global @mermaid-js/mermaid-cli` exits 0 and the list then shows neither package. `pnpm remove --global puppeteer` then exits 1 with `Error: ERR_PNPM_GLOBAL_PKG_NOT_FOUND` / `Cannot remove 'puppeteer': not found in global packages`. Removing `puppeteer` first gives the mirror result (both gone, then `@mermaid-js/mermaid-cli` not found). So any member's removal removes the whole group. `remove_tool` now reads that code on a pnpm removal as the package already gone, and the group warning says `removing {removed} removes the whole group, {others} included.` (UI-SPEC amendment 2026-11-04, A13 superseded).
+
+Run: `make e2e` from the main checkout, 2026-11-04 04:05–04:37, head `4190481`, log `.e2e-artifacts/make-e2e-rerun.log` (gitignored).
+
+```
+PASS1_COUNTS installed=67 updated=0 skipped=5 failed=0 dependency_failed=0 mismatched=0 blocked=3 manual=14 not_attempted=0 crashed=0 post_run_errors=0 summaries=1 runs=1 setup_exit=0
+TRACER_CLEAN_INSTALL_OK installed=67 updated=0 skipped=5 failed=0 blocked=3 manual=14
+TRACER_RECEIPT_OK tool=yq
+TRACER_RERUN_OK installed=0 updated=1 skipped=71 failed=0 dependency_failed=0 blocked=3 manual=14
+TRACER_RECEIPT_PRE_UNINSTALL_OK tool=yq
+TRACER_RECEIPT_PATHS_OK recorded=103 removable=61
+mmdc: runs pnpm remove --global @mermaid-js/mermaid-cli
+puppeteer: runs pnpm remove --global puppeteer
+Warning: pnpm group mmdc: all its members are removed together.
+TRACER_UNINSTALL_OK
+TRACER_RECEIPT_REMOVAL_OK tool=yq
+TRACER_RECEIPTS_GONE_OK count=61
+TRACER_LEFTOVER path=...   (27 roots, listed below)
+make: *** [Makefile:57: e2e] Error 1      (make exit 2)
+```
+
+D-1 is closed: no `remove failed` line, uninstall exit 0, every removable receipt gone. `TRACER_LEFTOVER_OK` did **not** appear: the run stopped at `assert_no_leftovers`, so reinstall and `TRACER_CONTAINER_TEARDOWN_OK` were not reached. Container check after the run: `podman ps -a --filter name=tools-installer-e2e` printed nothing.
+
+### D-2. Leftovers after a clean uninstall (new, not a pnpm group defect)
+
+27 top-most roots that are new against the HOME baseline and outside the allowlist (`home-after.txt`). None is allowlisted here. Classified from the listing:
+
+- **Undeclared sibling executables** (real removal gaps: the method's `paths` names only the main binary): `.bun/bin` (`bunx`), `.local/share/pnpm/bin` (`pn`, `pnpx`, `pnx`), `.volta/bin` (volta's `node`, `npm`, `npx`, `pnpm`, `yarn` default shims).
+- **Tool runtime state and caches written while the tools ran** (residue classes need a decision: declare or allowlist with a reason): `.claude.json`, `.codegraph`, `.config/draw.io`, `.config/glow`, `.config/google-chrome-for-testing`, `.config/rtk`, `.gradle`, `.npm`, `.local/share/opencode`, `.local/share/rtk`, `.local/share/pnpm/store`, `.local/state/claude`, `.local/state/fnm_multishells`, `.local/state/gh`, `.local/state/opencode`, `.local/state/pnpm`, `.volta/cache`, `.volta/layout.v4`, `.volta/log`, `.volta/tmp`, `.volta/volta.lock`.
+- **Emptied parents or lock stubs**: `.local/opt` (empty), `.local/share/fnm/aliases` (empty), `.homebrew` (`trust.json.lock` only).
+
+D-2 needs registry `paths` declarations for the sibling executables and a residue-class decision for the rest. That is 22-13's data scope across about 15 tools, not the D-1 remover fix, so it is recorded and not fixed here. Needed next: classify and fix D-2, then one more `make e2e`.
