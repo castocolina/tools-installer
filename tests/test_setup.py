@@ -24,6 +24,7 @@ from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
 from installer.guards import install_shims
+from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
 from installer.platform import Platform
@@ -4069,6 +4070,59 @@ def test_update_service_reads_the_live_platform_through_the_service(
     updates.run(target)
     assert [platform.has_brew for platform in seen] == [False, True]
     assert seen[1] == service.platform
+
+
+def test_the_composition_root_binds_greedy_casks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """LIFE-10: `u` hands the update the greedy set the refresh service last published."""
+    _sandbox(monkeypatch, tmp_path)
+    tool = Tool(
+        id="vscode",
+        name="VS Code",
+        category="dev",
+        cmd="code",
+        methods=(Method(kind="cask", params={"cask": "visual-studio-code"}),),
+    )
+
+    def greedy_read(**_kwargs: object) -> OutdatedReport:
+        return OutdatedReport(
+            brew={}, cask={}, pnpm={}, uv={}, greedy=frozenset({"visual-studio-code"})
+        )
+
+    def no_query(*_args: object, **_kwargs: object) -> str:
+        return ""
+
+    def no_which(_cmd: str) -> str | None:
+        return None
+
+    built = _bind_refresh(
+        monkeypatch,
+        _BrewOwnedRefresh,
+        which=no_which,
+        cache_path=tmp_path / "versions.json",
+        read_inventory_fn=empty_inventory,
+        read_outdated_fn=greedy_read,
+        query=no_query,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        native_probe=None,
+        terminal_drift=None,
+    )
+    seen: list[frozenset[str]] = []
+
+    def record(
+        target: UpdateTarget, *, greedy_casks: frozenset[str], **_kwargs: object
+    ) -> UpdateOutcome:
+        seen.append(greedy_casks)
+        return UpdateOutcome(tool_id=target.tool.id, status="failed", owner=target.ownership.owner)
+
+    monkeypatch.setattr("installer.update.perform_update", record)
+    updates = _wired(monkeypatch, [tool])["updates"]
+    assert isinstance(updates, UpdateService)
+    built[0].refresh([])
+    updates.run(UpdateTarget(tool=tool, ownership=_brew_owned(tool)))
+    assert seen == [frozenset({"visual-studio-code"})]
 
 
 # -- plan 20-10 Task 2: the one exit rule reads outcomes and run errors --
