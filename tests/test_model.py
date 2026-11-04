@@ -1790,6 +1790,37 @@ def test_config_paths_rejects_a_harness_dir(tmp_path: Path, entry: str) -> None:
 
 @pytest.mark.parametrize(
     "entry",
+    [
+        "~/.local/bin",
+        "~/.local/bin/uv",
+        "~/.local/share",
+        "~/.local/state",
+        "~/.config/systemd",
+        "~/.config/autostart",
+        "~/Library/Preferences",
+        "~/Library/Application Support",
+        "~/.ssh/id_ed25519",
+        "~/.gnupg/pubring.kbx",
+    ],
+)
+def test_config_paths_rejects_a_shared_well_known_dir(tmp_path: Path, entry: str) -> None:
+    """Review C-09: one `c` + confirm must never rmtree a directory every tool shares."""
+    manifest = _write(tmp_path, _tool_block("demo", f'config_paths = ["{entry}"]'))
+    with pytest.raises(ValueError, match=f"tool 'demo': config_paths entry '{entry}'"):
+        load_tools(manifest)
+
+
+def test_config_paths_keep_a_tool_dir_under_a_shared_root(tmp_path: Path) -> None:
+    entries = (
+        '["~/.local/share/demo", "~/.config/systemd/user/demo.service", '
+        '"~/Library/Preferences/demo"]'
+    )
+    manifest = _write(tmp_path, _tool_block("demo", f"config_paths = {entries}"))
+    assert len(load_tools(manifest)[0].config_paths) == 3
+
+
+@pytest.mark.parametrize(
+    "entry",
     ["/etc/x", "~", "~/", "~/.bashrc", "~/a/../b", "~/a//b", "~/./a/b", "relative/x"],
 )
 def test_config_paths_rejects_entries_outside_two_levels_of_home(

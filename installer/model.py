@@ -509,6 +509,20 @@ def _relative_parts(rest: str) -> tuple[str, ...] | None:
     return parts
 
 
+# Directories every tool shares (review C-09): a config entry may sit under one, never be one.
+_SHARED_CONFIG_DIRS = frozenset(
+    {
+        (".local", "bin"),
+        (".local", "share"),
+        (".local", "state"),
+        (".config", "systemd"),
+        (".config", "autostart"),
+    }
+)
+# Never config at all: executables and keys.
+_NO_CONFIG_UNDER = ((".local", "bin"), (".ssh",), (".gnupg",))
+
+
 def _config_path_flaw(entry: str, markers: tuple[tuple[str, tuple[str, ...]], ...]) -> str | None:
     if not entry.startswith("~/"):
         return "must start with ~/"
@@ -517,6 +531,11 @@ def _config_path_flaw(entry: str, markers: tuple[tuple[str, tuple[str, ...]], ..
         return "must not contain empty, . or .. parts"
     if len(parts) < 2:
         return "must be at least two levels under ~"
+    if parts in _SHARED_CONFIG_DIRS or (len(parts) == 2 and parts[0] == "Library"):
+        return "is a directory other tools share"
+    for root in _NO_CONFIG_UNDER:
+        if parts[: len(root)] == root:
+            return f"is inside ~/{'/'.join(root)}, which holds no config"
     for marker, marker_parts in markers:
         if parts[: len(marker_parts)] == marker_parts:
             return f"is inside the harness directory ~/{marker}"
