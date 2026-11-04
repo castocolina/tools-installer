@@ -1,6 +1,6 @@
 ---
 phase: 22-method-lifecycle-contract
-verified: 2026-11-04T12:00:00Z
+verified: 2026-11-04T10:50:09Z
 status: human_needed
 score: 5/5 must-haves verified (1 via override)
 covered_files:
@@ -30,6 +30,7 @@ covered_files:
   - ".planning/phases/22-method-lifecycle-contract/22-12-SUMMARY.md"
   - ".planning/phases/22-method-lifecycle-contract/22-13-PLAN.md"
   - ".planning/phases/22-method-lifecycle-contract/22-13-SUMMARY.md"
+  - ".planning/phases/22-method-lifecycle-contract/22-UAT.md"
   - "installer/app.py"
   - "installer/apps.py"
   - "installer/atomic.py"
@@ -81,7 +82,7 @@ covered_files:
   - "scripts/lib/prune-tmp-common.sh"
   - "scripts/prune-tmp-linux.sh"
   - "setup.py"
-covered_digest: "v3:sha256:8a75f53a3f2f50dcb2071fba1e8e0bf09f2b852b42ac8442e55c55516a686db4"
+covered_digest: "v3:sha256:9774e2fc0785da116ff60c4e2357da60a4a93707c86fe4c074dfd52373efd423"
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
@@ -89,6 +90,13 @@ overrides:
     reason: "Review R2-05: opencode v1.19.5 uninstall on a curl install rewrites the shell rc regardless of --keep-config, deletes unrecorded cache/state dirs and never deletes the binary. opencode declares no vendor `remove` and is removed by its receipt-proven binary alone. SPEC:37/:144, CONTEXT, UI-SPEC and LIFE-01 amended; the declared-`remove` mechanism itself stays and is tested with a fake runner."
     accepted_by: "orchestrator (RUN-LEDGER 2026-11-04, 22 replan cycle 3, R2-05 sign-off)"
     accepted_at: "2026-11-04T00:00:00Z"
+re_verification:
+  previous_status: human_needed
+  previous_score: 5/5
+  reason: "stale digest: covered files changed by 4727d2f (e2e allowlist) and the UAT fixes eb14872 (F-2), dd73476 (F-3), cae8aa5 (F-1)"
+  gaps_closed: []
+  gaps_remaining: []
+  regressions: []
 human_verification:
   - test: "Open Uninstall in a NO_COLOR 80x20 tmux pane, press `c` on a row with config_paths (gh, uv, kitty) and on one without (rg); then open the confirm review modal"
     expected: "Flagged row shows the `c` config prefix/suffix; rg shows 'rg declares no config to delete.' in the detail bar; the review modal lists removals, config to delete, config kept, and fits 80x20 without clipping"
@@ -105,6 +113,9 @@ human_verification:
   - test: "On a real (non-container) host, uninstall one receipt-proven tool through the Uninstall view"
     expected: "Only the receipt's paths are removed, config kept unless `c` was pressed, receipt retired"
     why_human: "Project rule forbids mutating the developer host from an agent; container e2e covers Fedora only"
+  - test: "In a disposable container with real pnpm, install mmdc (with its puppeteer co-install), remove only mmdc from the Uninstall view, then reopen Uninstall and run the review again"
+    expected: "Status shows `puppeteer: removed with the mmdc group` after the counts, the puppeteer receipt is gone, and a later review names no absent group member"
+    why_human: "The F-2/F-3 fixes landed after the last container UAT (83cb0dc) and the last make e2e (4727d2f); only fake-runner tests cover them, and real pnpm group semantics are a container-only check"
 ---
 
 # Phase 22: Method lifecycle contract Verification Report
@@ -112,7 +123,7 @@ human_verification:
 **Phase Goal:** Update and removal follow one per-method contract: nothing is removed without proof, no executor runs sudo, and config stays unless the user asks.
 **Verified:** 2026-11-04
 **Status:** human_needed
-**Re-verification:** No (initial verification)
+**Re-verification:** Yes. Incremental, after the stale digest (allowlist 4727d2f, UAT fixes eb14872, dd73476, cae8aa5) at HEAD 6164583. Unchanged evidence is carried forward from the initial report (970f830).
 
 ## Goal Achievement
 
@@ -121,10 +132,10 @@ human_verification:
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
 | 1 | Every kind, both directions (scratch HOME): install writes a receipt, Uninstall shows removable, removal leaves none of the receipt's paths; a foreign file at a declared script path is never deleted | VERIFIED | `tests/test_uninstall_e2e.py::test_every_receipt_kind_installs_and_removes_in_both_directions` parametrized over github_release, tarball, app, script, brew, cask, uv-tool, node, two rounds each, asserts receipt, `plan.level != "none"`, removed, receipt gone, no proven path left. Foreign file: `test_a_declared_path_present_before_the_install_is_never_adopted`, `tests/test_uninstall.py::test_a_foreign_file_at_a_declared_path_survives`, `tests/test_app.py::test_a_foreign_file_at_a_declared_path_survives_the_cli_removal`, `tests/test_receipts.py` replaced/retargeted cases. All pass. |
-| 2 | opencode removal (override); brew/uv/pnpm uninstall only on receipt proof, otherwise a hint; pnpm co-install member warns about its group | PASSED (override) + VERIFIED | opencode: registry stanza declares `paths = ["~/.opencode/bin/opencode"]`, no `remove` (R2-05 override). Receipt gate: `test_app.py::test_a_brew_package_without_a_receipt_runs_nothing`, manager_listing C-02/C-04 tests; `remove_tool` shared by CLI and TUI. Group warning: `pnpm_globals.py:308` "removes the whole group, X included", `test_app.py::test_the_cli_prints_the_group_warning_before_the_confirm`, `test_wizard_app.py::test_the_pnpm_group_warning_reads_the_frozen_decision`. Real-pnpm group semantics measured in a container (22-13 D-1). |
-| 3 | `u` on OMZ runs `upgrade.sh`, on SDKMAN `sdk selfupdate`; `u` on a pinned app without version source refused with reason | VERIFIED | `registry.toml:618` `update = ["{omz_root}/tools/upgrade.sh"]` (resolver per C-17, SPEC R8 amended), `:1957` `update = ["sdk", "selfupdate"]`; `update.py:270` pinned refusal with `PINNED_DETAIL`. Tests `test_update.py::test_omz_update_*` (4), `test_sdkman_bootstrap_update_runs_selfupdate_sourced`, `test_a_pinned_app_is_refused_by_update_refusal`, `test_perform_update_on_a_pinned_app_runs_nothing`, `test_catalog_tui.py::test_u_on_a_pinned_app_is_refused_before_the_lock`. |
+| 2 | opencode removal (override); brew/uv/pnpm uninstall only on receipt proof, otherwise a hint; pnpm co-install member warns about its group | PASSED (override) + VERIFIED | opencode: registry stanza declares `paths = ["~/.opencode/bin/opencode"]`, no `remove` (R2-05 override). Receipt gate: `test_app.py::test_a_brew_package_without_a_receipt_runs_nothing`, manager_listing C-02/C-04 tests; `remove_tool` shared by CLI and TUI. Group warning: `pnpm_globals.py:308` "removes the whole group, X included", `test_app.py::test_the_cli_prints_the_group_warning_before_the_confirm`, `test_wizard_app.py::test_the_pnpm_group_warning_reads_the_frozen_decision`. Real-pnpm group semantics measured in a container (22-13 D-1). Re-checked after the UAT fixes. F-2: `app.retire_group_members` (`app.py:538`) runs only after a node `MANAGER_UNINSTALL_ARGV` removal and retires a member receipt only when a readable fresh `manager_listing("node")` lacks it (unreadable listing or failed delete retires nothing). Wired into CLI `run_uninstall` (`app.py:813`) and TUI `perform_uninstall` (`app.py:980`), surfaced through `SweepResult.with_group` in `wizard_app.py:1851`. F-3: `co_install_warnings(..., present=...)` is keyword-only and both callers pass it (`app.py:753`, `wizard_app.py:1606`, codegraph + grep). Tests pass: `test_app::test_a_group_member_pnpm_already_removed_is_removed`, `..._tui_group_removal_retires_the_unselected_members_receipt`, `..._group_member_pnpm_still_lists_keeps_its_receipt`, `..._unreadable_listing_keeps_the_group_members_receipt`, `..._cli_group_warning_skips_a_member_already_gone`, `test_pnpm_globals::test_a_member_known_gone_is_not_named`, `test_wizard_app::test_the_group_warning_skips_a_member_shown_absent`, `..._a_member_removed_with_its_group_is_reported_after_the_counts`. |
+| 3 | `u` on OMZ runs `upgrade.sh`, on SDKMAN `sdk selfupdate`; `u` on a pinned app without version source refused with reason | VERIFIED | `registry.toml:618` `update = ["{omz_root}/tools/upgrade.sh"]` (resolver per C-17, SPEC R8 amended), `:1957` `update = ["sdk", "selfupdate"]`; `update.py:270` pinned refusal with `PINNED_DETAIL`. Tests `test_update.py::test_omz_update_*` (4), `test_sdkman_bootstrap_update_runs_selfupdate_sourced`, `test_a_pinned_app_is_refused_by_update_refusal`, `test_perform_update_on_a_pinned_app_runs_nothing`, `test_catalog_tui.py::test_u_on_a_pinned_app_is_refused_before_the_lock`. Re-checked after F-1 (cae8aa5): `version_status.version_notes` (`version_status.py:937`) now calls the same `update.update_refusal` predicate `u` uses, so a pinned tool's note reads `u does not update it: pinned; ...` instead of promising the install path; `test_version_status::test_a_pinned_install_note_matches_the_u_refusal` passes. No import cycle (`update.py` does not import `version_status`). Container UAT test 6 (`u` on pinned sublime) PASS. |
 | 4 | Unwritable brew prefix becomes a manual handoff; native dnf/apt/pacman handed off as the exact command; grep test finds zero sudo argv | VERIFIED | `executors.needs_manual` (`executors.py:644`) with native command table (`:613-615`, strings only, never run); `engine.py:250` returns MANUAL_REQUIRED (FAILED when earlier errors, C-01) with `manual_command`. `writable_prefix` declared for the three brew bootstraps (`registry.toml:184/194/204`). Tests: `test_plan.py::test_an_unwritable_prefix_is_planned_manual_and_nothing_runs`, `test_engine.py::test_the_engine_re_checks_a_prefix_that_became_unwritable`, `test_plan.py::test_a_native_only_tool_is_planned_manual_with_its_exact_command`, AST tests `test_executors.py::test_no_argv_literal_starts_with_an_elevation_command`, `test_no_registry_argv_starts_with_an_elevation_command`, `test_plan.py::test_no_sudo_argv_on_the_plan_path`, load-time `ELEVATION_COMMANDS` refusal (`model.py:599`). |
-| 5 | "delete config too" only for tools with config_paths (default keep; CLI `--yes` never deletes config); harness dir in config_paths rejected at load; container e2e compares listings before/after uninstall | VERIFIED | `wizard_app.py:1619-1633` refuses `c` without config_paths; tests `test_c_turns_the_flag_on_and_the_removal_deletes_the_config`, `test_an_unflagged_row_sends_no_config`, `test_unflagged_config_is_reviewed_as_kept`, refusal text asserted at `test_wizard_app.py:8300/8427`; `test_app.py::test_the_cli_never_deletes_config`. Load-time denylist: `model._parse_config_paths` over `HARNESS_MARKER_DIRS`, tests `test_config_paths_rejects_a_harness_dir`, `..._shared_well_known_dir`. E2E: `container-e2e-verify.sh` `home_listing` baseline (line 232) and `assert_no_leftovers`/`new_leftovers` (613-672) wired into pass 2 (781); recorded run (22-13 D-2 closure) `TRACER_RECEIPTS_GONE_OK count=61`, `TRACER_LEFTOVER_OK`, `make e2e exit=0`. |
+| 5 | "delete config too" only for tools with config_paths (default keep; CLI `--yes` never deletes config); harness dir in config_paths rejected at load; container e2e compares listings before/after uninstall | VERIFIED | `wizard_app.py:1619-1633` refuses `c` without config_paths; tests `test_c_turns_the_flag_on_and_the_removal_deletes_the_config`, `test_an_unflagged_row_sends_no_config`, `test_unflagged_config_is_reviewed_as_kept`, refusal text asserted at `test_wizard_app.py:8300/8427`; `test_app.py::test_the_cli_never_deletes_config`. Load-time denylist: `model._parse_config_paths` over `HARNESS_MARKER_DIRS`, tests `test_config_paths_rejects_a_harness_dir`, `..._shared_well_known_dir`. E2E: `container-e2e-verify.sh` `home_listing` baseline (line 232) and `assert_no_leftovers`/`new_leftovers` (613-672) wired into pass 2 (781); recorded run (22-13 D-2 closure) `TRACER_RECEIPTS_GONE_OK count=61`, `TRACER_LEFTOVER_OK`, `make e2e exit=0`. New: 4727d2f adds `.local/share/pki` (the Chromium NSS db, browser runtime state) to `e2e-residue-allowlist.txt`, a narrow single-dir entry with its reason. The final orchestrator `make e2e` on 4727d2f exited 0 with TRACER_CLEAN_INSTALL_OK, TRACER_RERUN_OK, TRACER_UNINSTALL_OK, TRACER_RECEIPTS_GONE_OK, TRACER_LEFTOVER_OK, TRACER_REINSTALL_OK, TRACER_CONTAINER_TEARDOWN_OK, and the container was removed. Container UAT (22-UAT.md) tests 2-4 (`c` toggle, review modal, CLI `--yes` keeps config) PASS. |
 
 **Score:** 5/5 truths verified (1 part via override, 0 present-behavior-unverified)
 
@@ -159,7 +170,11 @@ human_verification:
 |----------|---------|--------|--------|
 | Phase test files (app, cli, container_e2e_receipts, engine, executors, model, ownership, plan, receipts, registry, uninstall, uninstall_e2e, update, version_cache, version_status, manager_versions, run, wizard_app) | `uv run pytest <files> --no-cov -n auto` | 2203 passed, exit 0 | PASS |
 | catalog_tui, pnpm_globals, render, guidance, download, omz | `uv run pytest <files> --no-cov -n auto` | 656 passed | PASS |
-| Container e2e | not run by the verifier (orchestrator re-run in progress) | recorded in 22-13-SUMMARY D-2 closure: `make e2e exit=0`, `TRACER_LEFTOVER_OK` | PASS (recorded) |
+| Re-verification: changed-file tests (app, pnpm_globals, version_status, wizard_app, uninstall, uninstall_e2e, update, container_e2e_receipts) at 6164583 | `uv run pytest <files> --no-cov -n auto` | 1176 passed, exit 0 | PASS |
+| Re-verification: UAT-fix named tests (F-1..F-3, 11 tests) | `uv run pytest <4 files> -k "group_member or ... or pinned_install_note" -v` | 11 passed | PASS |
+| Re-verification: regression (catalog_tui, engine, executors, model, plan, receipts, registry, manager_versions, ownership) | `uv run pytest <files> --no-cov -n auto` | 1240 passed | PASS |
+| Container e2e | final orchestrator `make e2e` on 4727d2f (not run by the verifier) | exit 0; all seven TRACER_*_OK lines incl. TRACER_LEFTOVER_OK and TRACER_CONTAINER_TEARDOWN_OK; container removed | PASS (recorded) |
+| Container UAT | 22-UAT.md, run at 83cb0dc | 6/6 PASS; findings F-1..F-3 fixed afterwards (see its "UAT fixes" section) | PASS (recorded) |
 
 ### Probe Execution
 
@@ -171,15 +186,15 @@ No `scripts/*/tests/probe-*.sh` declared for this phase. Not applicable.
 |-------------|-------------|--------|----------|
 | LIFE-01 | Script paths, update, optional remove from proven exe; opencode no remove; delete only declared existing paths | SATISFIED | SC1, SC2 (override); `test_a_recipe_tool_is_removed_by_its_vendor_command_first`, `test_script_lifecycle_data` |
 | LIFE-02 | Native installs handed off as exact command; no sudo | SATISFIED | SC4 |
-| LIFE-03 | brew/uv/pnpm uninstall only on receipt proof, else hint | SATISFIED | SC2; manager receipt only when package absent pre-install (R3-02) |
+| LIFE-03 | brew/uv/pnpm uninstall only on receipt proof, else hint | SATISFIED | SC2; manager receipt only when package absent pre-install (R3-02); F-2 retirement deletes only receipts (no extra pnpm argv) and only on a readable listing proving the member gone |
 | LIFE-04 | config_paths; harness dirs never listed | SATISFIED | SC5; one `HARNESS_MARKER_DIRS` source shared with skill_lifecycle |
-| LIFE-05 | `u` refused for pinned app with reason | SATISFIED | SC3 |
+| LIFE-05 | `u` refused for pinned app with reason | SATISFIED | SC3; the version note now agrees with the refusal (F-1) |
 | LIFE-06 | Vendor updates use vendor command | SATISFIED | SC3 |
 | LIFE-07 | Unwritable prefix becomes handoff after preflight | SATISFIED | SC4 |
-| LIFE-08 | pnpm co-install group warning | SATISFIED | SC2; copy amended to measured semantics (UI-SPEC D-1) |
-| LIFE-09 | Container e2e compares file listings | SATISFIED | SC5; recorded run exit 0 |
+| LIFE-08 | pnpm co-install group warning | SATISFIED | SC2; copy amended to measured semantics (UI-SPEC D-1); re-verified: warning names only present members (F-3), members pnpm took along have their receipts retired (F-2) |
+| LIFE-09 | Container e2e compares file listings | SATISFIED | SC5; final `make e2e` on 4727d2f exit 0, TRACER_LEFTOVER_OK |
 | LIFE-10 | macOS greedy auto-updating casks | SATISFIED (code) / human on real macOS | `test_manager_versions.py` greedy tests, `test_update.py::test_u_on_an_auto_updating_cask_runs_the_greedy_upgrade` |
-| UI-04 | Uninstall "delete config too"; default keep; CLI never deletes | SATISFIED | SC5 |
+| UI-04 | Uninstall "delete config too"; default keep; CLI never deletes | SATISFIED | SC5; container UAT tests 2-4 PASS |
 
 No orphaned requirements: every ID mapped to Phase 22 in REQUIREMENTS.md is claimed by a plan.
 
@@ -187,7 +202,7 @@ No orphaned requirements: every ID mapped to Phase 22 in REQUIREMENTS.md is clai
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| phase-changed installer/, scripts/, setup.py | - | TBD/FIXME/XXX/TODO/HACK added in phase diff | none found | - |
+| phase-changed installer/, scripts/, setup.py | - | TBD/FIXME/XXX/TODO/HACK added in phase diff (re-scanned over 970f830..HEAD) | none found | - |
 | `receipts._leaf_matches`, `uninstall._recipe_argv`, `container-e2e-verify.sh home_listing` | - | `shortcut:` comments (C-07, C-21, D-2 empty-dir skip) | Info | documented limits, accepted in 22-REVIEW-FIX |
 
 ### Accepted Residuals and Deviations (not gaps)
@@ -197,7 +212,8 @@ No orphaned requirements: every ID mapped to Phase 22 in REQUIREMENTS.md is clai
 - C-17 accepted: one `omz_root` resolver; SPEC R8 amended (d4bcfd8).
 - R1-11, R1-14, R1-22 signed off (ledger).
 - C-12 residual (Info): the e2e does not assert absence for level-`none` receipts (oh-my-zsh, sdkman, brew bootstrap survive by design) and the empty-dir skip can hide an empty must-clear dir. LIFE-09's listing comparison itself is delivered.
-- Bookkeeping (Info): ROADMAP still shows 22-13 unchecked (12/13) and REQUIREMENTS.md rows read Pending; the orchestrator updates these at phase close. 22-13-SUMMARY frontmatter `status: halted` predates its appended D-2 closure section.
+- Bookkeeping (Info): ROADMAP now shows 22-13 checked (6164583). REQUIREMENTS.md rows for LIFE-01..10 and UI-04 still read Pending; the orchestrator updates these at phase close. 22-UAT.md frontmatter still reads `status: issues_found` although its "UAT fixes" section records F-1..F-3 fixed.
+- Evidence ordering (Info): the final `make e2e` (4727d2f) and the container UAT (83cb0dc) both predate the F-1..F-3 code (eb14872, dd73476, cae8aa5). The fixes are proven by fake-runner unit tests only; a real-pnpm container re-check is listed as human item 6. F-2 only deletes receipts and runs no extra command, so it cannot add filesystem residue to the e2e.
 
 ### Human Verification Required
 
@@ -206,12 +222,13 @@ No orphaned requirements: every ID mapped to Phase 22 in REQUIREMENTS.md is clai
 3. **Real macOS greedy casks and `brew list` tap short names** — expected greedy outdated/upgrade argv and short-name matching. Why human: real Homebrew.
 4. **macOS bash 3.2 harness run** — expected no `set -u` unbound errors. Why human: needs bash 3.2.
 5. **Real-host removal of a receipt-proven tool** — expected only receipt paths removed, config kept by default. Why human: agents never mutate the host.
+6. **Real-pnpm group removal after the UAT fixes** — in a disposable container remove only mmdc from the Uninstall view. Expected: `puppeteer: removed with the mmdc group`, puppeteer receipt gone, a later review names no absent member. Why human: the F-2/F-3 fixes postdate the last container runs.
 
 ### Gaps Summary
 
-No blocking gaps. All five roadmap success criteria and all eleven requirements have code, wiring and passing tests; the opencode clause of SC2 is satisfied through the recorded R2-05 override. Status is human_needed only for the five human-only checks above.
+No blocking gaps. All five roadmap success criteria and all eleven requirements have code, wiring and passing tests; the opencode clause of SC2 is satisfied through the recorded R2-05 override. The re-verification found no regression from the allowlist entry or the F-1..F-3 fixes: the new code is wired at every caller and its tests pass. Status is human_needed only for the six human-only checks above.
 
 ---
 
-_Verified: 2026-11-04_
+_Verified: 2026-11-04 (re-verified at 6164583)_
 _Verifier: Claude (gsd-verifier)_
