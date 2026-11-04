@@ -12,6 +12,7 @@ import pytest
 from rich.cells import cell_len
 from rich.console import Console
 from rich.text import Text
+from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import DataTable, Rule
@@ -19,14 +20,25 @@ from textual.widgets import DataTable, Rule
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.enums import MutationHolder
-from installer.model import Tool, load_categories, load_tools
+from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.policy import Policy, PolicyResult
 from installer.resolve import resolve_methods
 from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
 from installer.uninstall import RemovalPlan, SweepResult
-from installer.version_status import LAYOUT_PROOF_NOTE, VersionRefreshService, VersionStatus
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
+from installer.version_status import (
+    LAYOUT_PROOF_NOTE,
+    ToolState,
+    VersionRefreshService,
+    VersionStatus,
+)
+from installer.wizard_app import (
+    ConfirmUninstall,
+    PolicyInputs,
+    UnifiedApp,
+    UninstallInputs,
+    UninstallScreen,
+)
 from tests.screen_family import settle
 from tests.state_doubles import (
     HeldRefreshService,
@@ -419,3 +431,105 @@ async def test_the_toggle_fits_80x20(tmp_path: Path) -> None:
         head = " ".join(" ".join(line.plain.split()) for line in lines[:2])
         assert LAYOUT_PROOF_NOTE in head
         assert "config deleted too: ~/.config/gh (c keeps it)" in head
+
+
+def _node_tool(tool_id: str, npm_pkg: str, *co_install: str) -> Tool:
+    method = Method(kind="node", params={"npm_pkg": npm_pkg, "co_install": list(co_install)})
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(method,),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+
+
+def _node_state(tool: Tool, npm_pkg: str) -> ToolState:
+    argv = ("pnpm", "remove", "--global", npm_pkg)
+    removable = RemovalPlan((Path(f"/opt/{tool.id}"),), (), level="manager", argv=argv)
+    return plan_state(tool, removable=removable)
+
+
+async def test_a_long_review_scrolls_and_keeps_its_keys_line(tmp_path: Path) -> None:
+    """22-11 (UI-SPEC overflow backstop): 12 config paths and 2 pnpm warnings fit at 80x20."""
+    paths = tuple(f"~/.config/review-{n:02d}" for n in range(12))
+    gh = Tool(
+        id="gh",
+        name="gh",
+        category="dev",
+        cmd="gh",
+        methods=(Method(kind="brew", params={"formula": "gh"}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+        config_paths=paths,
+    )
+    gh_removable = RemovalPlan(
+        (tmp_path / "gh",),
+        (),
+        level="manager",
+        argv=("brew", "uninstall", "gh"),
+        config=tuple(Path(entry).expanduser() for entry in paths),
+    )
+    mmdc = _node_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
+    tsx = _node_tool("tsx", "tsx", "esbuild")
+    service = frozen_service(tmp_path)
+    service.publish(
+        [
+            plan_state(gh, removable=gh_removable),
+            _node_state(mmdc, "@mermaid-js/mermaid-cli"),
+            _node_state(tsx, "tsx"),
+        ]
+    )
+    app = UnifiedApp(
+        [gh, mmdc, tsx],
+        {"search": "find things"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
+        ),
+        policies=PolicyInputs(policies=[], link_mode=lambda: "symlink"),
+        version_refresh=service,
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        table = screen.query_one(DataTable[Any])
+        for tool_id, key in (("gh", "c"), ("mmdc", "space"), ("tsx", "space")):
+            table.move_cursor(row=table.get_row_index(tool_id))
+            await pilot.pause()
+            await pilot.press(key)
+        await pilot.press("enter")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ConfirmUninstall)
+        review = [line.plain for line in modal.review]
+        for path in paths:  # every path appears whole in the body
+            assert any(f"  {path} (gh)" in line for line in review), path
+        assert sum(line.startswith("Warning:") for line in review) == 2
+        mmdc_warning = next(line for line in review if line.startswith("Warning: pnpm group mmdc"))
+        assert "\n  " in mmdc_warning  # folded with the 2-cell hanging indent, not cut
+        box = modal.query_one("#confirm-box")
+        assert box.region.width == 60
+        assert box.region.height <= 18
+        keys = modal.query_one("#confirm-keys")
+        assert rows_of(modal, keys)
+        assert max(rows_of(modal, keys)) < box.region.y + box.region.height - 1  # inside the border
+        body = modal.query_one("#confirm-body", VerticalScroll)
+        assert body.max_scroll_y > 0
+        for _ in range(12):  # pgdn reaches the end of the body
+            if body.scroll_y >= body.max_scroll_y:
+                break
+            await pilot.press("pagedown")
+            await pilot.pause()
+        assert body.scroll_y == body.max_scroll_y
+        assert rows_of(modal, keys)  # the keys line stays on screen after scrolling
+        await pilot.press("escape")
+        await pilot.pause()
