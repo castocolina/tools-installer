@@ -1879,10 +1879,6 @@ def test_removal_hint_reproduces_the_cask_sentence_byte_for_byte() -> None:
     [
         ("pnpm", "@scope/demo", "pnpm remove --global @scope/demo"),
         ("uv", "demo-tool", "uv tool uninstall demo-tool"),
-        ("dnf", "ripgrep", "dnf remove ripgrep"),
-        ("apt", "ripgrep", "apt remove ripgrep"),
-        ("pacman", "ripgrep", "pacman -R ripgrep"),
-        ("rpm-ostree", "ripgrep", "rpm-ostree uninstall ripgrep"),
     ],
 )
 def test_removal_hint_names_each_managers_own_command(
@@ -1891,6 +1887,44 @@ def test_removal_hint_names_each_managers_own_command(
     hint = removal_hint(_record(owner, package=package), "rg")
     assert hint is not None
     assert f"`{expected_fragment}`" in hint
+
+
+@pytest.mark.parametrize(
+    ("owner", "package"),
+    [
+        ("dnf", "ripgrep"),
+        ("apt", "ripgrep"),
+        ("pacman", "ripgrep"),
+        ("rpm-ostree", "ripgrep"),
+        ("dnf", "glab"),
+    ],
+)
+def test_a_native_owner_row_names_the_package_and_no_command(owner: Owner, package: str) -> None:
+    """22-07 (D-08, SPEC R4): a native owner names its package and never a command."""
+    hint = removal_hint(_record(owner, package=package), "rg")
+    assert hint is not None
+    assert hint == (
+        f"managed by {OWNER_LABELS[owner]} — this installer will not remove the package {package}"
+    )
+    assert "`" not in hint
+
+
+def test_native_removal_commands_are_gone() -> None:
+    for owner in ("dnf", "apt", "pacman", "rpm-ostree"):
+        assert _REMOVAL_COMMANDS[owner] is None
+    native = Method(kind="dnf", params={"package": "x"})
+    assert ownership.method_removal_command(native, "x") is None
+
+
+def test_the_sdkman_hint_carries_the_installed_version() -> None:
+    """22-07 (D-09): the version the pass read fills the SDKMAN hint; unread, it says so."""
+    record = _record("sdkman", package="java")
+    assert removal_hint(record, "java", version="21.0.5-tem") == (
+        "managed by SDKMAN — `sdk uninstall java 21.0.5-tem`"
+    )
+    assert removal_hint(record, "java", version=None) == (
+        "managed by SDKMAN — `sdk uninstall java <version>`; the installed version was not read"
+    )
 
 
 def test_removal_hint_for_os_package_names_the_package_with_no_command() -> None:
@@ -2702,7 +2736,7 @@ def test_script_location_without_active_path_stays_by_elimination(tmp_path: Path
             Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),
             "pnpm remove --global @mermaid-js/mermaid-cli",
         ),
-        (Method(kind="dnf", params={"package": "glab"}), "dnf remove glab"),
+        (Method(kind="dnf", params={"package": "glab"}), None),
         (Method(kind="sdkman", params={"candidate": "java"}), "sdk uninstall java <version>"),
         (Method(kind="script", params={"url": "u"}), None),
     ],
@@ -2956,16 +2990,17 @@ def test_host_setup_unverified_probe_stays_unknown(
 
 
 # The pre-19-05 `method_removal_command` formula, frozen: kind -> (param, template).
-_FROZEN_REMOVAL: dict[str, tuple[str, str]] = {
+# 22-07 (D-08): native kinds have no command; their template is None.
+_FROZEN_REMOVAL: dict[str, tuple[str, str | None]] = {
     "brew": ("formula", "brew uninstall {}"),
     "cask": ("cask", "brew uninstall --cask {}"),
     "node": ("npm_pkg", "pnpm remove --global {}"),
     "uv-tool": ("pypi_pkg", "uv tool uninstall {}"),
     "sdkman": ("candidate", "sdk uninstall {} <version>"),
-    "dnf": ("package", "dnf remove {}"),
-    "apt": ("package", "apt remove {}"),
-    "pacman": ("package", "pacman -R {}"),
-    "rpm_ostree": ("package", "rpm-ostree uninstall {}"),
+    "dnf": ("package", None),
+    "apt": ("package", None),
+    "pacman": ("package", None),
+    "rpm_ostree": ("package", None),
 }
 
 
@@ -2988,7 +3023,8 @@ def test_method_package_reads_the_kind_param() -> None:
             frozen = _FROZEN_REMOVAL.get(method.kind)
             value = method.params.get(frozen[0]) if frozen is not None else None
             name = value if isinstance(value, str) and value else tool.cmd
-            expected = None if frozen is None else frozen[1].format(name)
+            template = None if frozen is None else frozen[1]
+            expected = None if template is None else template.format(name)
             assert ownership.method_removal_command(method, tool.cmd) == expected
             compared += expected is not None
     assert compared > 0

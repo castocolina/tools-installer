@@ -2340,7 +2340,9 @@ def test_build_app_uninstall_detail_changes_when_the_published_state_changes(
     service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
     screen.state_refreshed()
 
-    assert "dnf remove ripgrep" in _uninstall_detail_of(screen, "rg")
+    assert "this installer will not remove the package ripgrep" in _uninstall_detail_of(
+        screen, "rg"
+    )
 
 
 def test_build_app_uninstall_detail_reverts_after_the_service_is_invalidated(
@@ -2367,7 +2369,9 @@ def test_build_app_uninstall_detail_reverts_after_the_service_is_invalidated(
 
     service.publish([pass_state(tool, platform=platform, ownership=_dnf_owned_rg())])
     screen.state_refreshed()
-    assert "dnf remove ripgrep" in _uninstall_detail_of(screen, "rg")
+    assert "this installer will not remove the package ripgrep" in _uninstall_detail_of(
+        screen, "rg"
+    )
 
     service.invalidate(reason="test")
     screen.state_refreshed()

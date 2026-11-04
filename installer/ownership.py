@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -73,7 +74,7 @@ from installer.pnpm_globals import pnpm_global_packages
 from installer.resolve import resolve_methods
 from installer.run import CommandError, run_query
 from installer.status import dangling_shim, is_installed
-from installer.uninstall import manager_name
+from installer.uninstall import MANAGER_UNINSTALL_ARGV, manager_name
 from installer.versions import meets_minimum
 
 Owner = Literal[
@@ -1476,25 +1477,30 @@ def active_path_note(ownership: ManagerOwnership) -> str | None:
 # record's OWN verified package name -- never the tool's own registry
 # command, which is exactly the wrong string for a split package (Round-3
 # review HIGH: `dnf remove rg` for `ripgrep`, `dnf remove git` for
-# `git-core`). `None` for `os-package`: its removal command is the HOST's own
-# and differs by host, so this module can never emit one -- the entry still
-# exists as a KEY so the exhaustiveness gate below still requires it to carry
-# a `_REMOVAL_DESCRIPTIONS` entry.
+# `git-core`).
+#
+# brew, cask, pnpm and uv are built from `uninstall.MANAGER_UNINSTALL_ARGV`, the argv
+# the L1 removal runs, so a hint and the removal that follows it are one command
+# (22-REUSE 07-1). The cask phrase stays byte-identical to the pinned cask sentence
+# (Round-2 review MEDIUM): see `_LABEL_AGREEMENT_EXEMPT` below for why it says
+# "Homebrew", not the Owner column's "Homebrew cask" label.
+#
+# `None` means the owner has no command this module can emit, for two reasons: the
+# native owners (dnf, apt, pacman, rpm-ostree) name the package and never a command
+# (D-08, SPEC R4), and `os-package`'s command is the HOST's own and differs by host.
+# Each such key stays, so the exhaustiveness gate below still requires it to carry a
+# `_REMOVAL_DESCRIPTIONS` entry.
 _REMOVAL_COMMANDS: dict[Owner, str | None] = {
-    "brew": "brew uninstall {package}",
-    # PINNED byte-identical to `installer/uninstall.py`'s current cask
-    # sentence (Round-2 review MEDIUM): see `_LABEL_AGREEMENT_EXEMPT` below
-    # for why this phrase deliberately says "Homebrew", not the Owner
-    # column's "Homebrew cask" label, for this one owner.
-    "cask": "brew uninstall --cask {package}",
-    "pnpm": "pnpm remove --global {package}",
-    "uv": "uv tool uninstall {package}",
+    **{
+        _KIND_TO_OWNER[kind]: f"{shlex.join(argv)} {{package}}"
+        for kind, argv in MANAGER_UNINSTALL_ARGV.items()
+    },
     "sdkman": "sdk uninstall {package} <version>",
     "volta": "volta uninstall {package}",
-    "dnf": "dnf remove {package}",
-    "apt": "apt remove {package}",
-    "pacman": "pacman -R {package}",
-    "rpm-ostree": "rpm-ostree uninstall {package}",
+    "dnf": None,
+    "apt": None,
+    "pacman": None,
+    "rpm-ostree": None,
     "os-package": None,
 }
 
@@ -1568,7 +1574,9 @@ def method_removal_command(method: Method, fallback: str) -> str | None:
     return template.format(package=method_package(method) or fallback)
 
 
-def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
+def removal_hint(
+    ownership: ManagerOwnership, fallback_name: str, *, version: str | None = None
+) -> str | None:
     """The Uninstall screen's per-owner removal phrase, built over the shared
     `owner_label` result plus the per-owner tables declared above.
 
@@ -1585,6 +1593,10 @@ def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
     `fallback_name` is a prose identifier for the tool, never a stand-in for
     the package name in a command -- the tool's own registry command is
     exactly the wrong string for a split package (Round-3 review HIGH).
+
+    A native owner (or `os-package`) with a package names it and carries no
+    command (D-08). `version` is the SDKMAN version the refresh pass already
+    read (D-09); it fills the SDKMAN command and is ignored for other owners.
     """
     owner = ownership.owner
     if owner in _NO_REMOVAL_HINT:
@@ -1597,15 +1609,17 @@ def removal_hint(ownership: ManagerOwnership, fallback_name: str) -> str | None:
     command_template = _REMOVAL_COMMANDS[owner]
     if command_template is not None and ownership.package is not None:
         command = command_template.format(package=ownership.package)
+        if owner == "sdkman":
+            if version is None:
+                return f"managed by {prefix} — `{command}`; the installed version was not read"
+            command = command.replace("<version>", version)
         return f"managed by {prefix} — `{command}`"
-    if owner == "os-package":
-        # The REAL package name, never `fallback_name`: `_os_package_owner`
-        # only ever synthesizes a record once the inverse query resolved one,
-        # so this is reachable with `package=None` only from a test building
-        # a `ManagerOwnership` directly -- degrading to `fallback_name` there
-        # keeps the phrase non-empty rather than raising a KeyError.
+    if command_template is None and (owner == "os-package" or ownership.package is not None):
+        # The REAL package name, never `fallback_name`, when one is known: a native record
+        # carries its package from the inverse query. `fallback_name` only keeps the
+        # phrase non-empty for a package-less `os-package` record a test builds directly.
         package = ownership.package if ownership.package is not None else fallback_name
-        return _REMOVAL_DESCRIPTIONS[owner].format(label=prefix, package=package)
+        return _REMOVAL_DESCRIPTIONS["os-package"].format(label=prefix, package=package)
     return _REMOVAL_DESCRIPTIONS[owner].format(name=fallback_name, label=prefix)
 
 
@@ -1634,3 +1648,12 @@ def removal_label(ownership: ManagerOwnership) -> str | None:
     if ownership.owner in _NO_REMOVAL_HINT:
         return None
     return owner_label(ownership)
+
+
+def manager_kind_label(kind: str) -> str | None:
+    """The Installed-via label of a receipt kind L1 can remove (`MANAGER_UNINSTALL_ARGV`).
+
+    Only those kinds: `sdkman` is in `_KIND_TO_OWNER` but never an L1 row."""
+    if kind not in MANAGER_UNINSTALL_ARGV:
+        return None
+    return OWNER_LABELS[_KIND_TO_OWNER[kind]]

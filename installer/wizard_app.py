@@ -14,6 +14,7 @@ root at the bottom: the stack is always `[root, <one view>]` once mounted.
 
 import asyncio
 import contextlib
+import shlex
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -1003,6 +1004,8 @@ class _UninstallEntry:
     is_tweaks: bool = False
     tool: Tool | None = None
     group: UninstallState | None = None
+    # The command the row's preview showed (L1/L3); the decision hands it back to the remover.
+    argv: tuple[str, ...] = ()
 
 
 # Section titles per state, in display order. The "environment" section holds the
@@ -1138,7 +1141,9 @@ class UninstallScreen(AppScreen):
         selectable = group is UninstallState.REMOVABLE
         style = "" if selectable else "dim"
         paths = state.removable.removable if selectable else ()
-        removes = Text(", ".join(str(path) for path in paths) or "—", style=style)
+        argv = state.removable.argv if selectable else ()
+        shown = ([shlex.join(argv)] if argv else []) + [str(path) for path in paths]
+        removes = Text(", ".join(shown) or "—", style=style)
         removes.truncate(_REMOVES_CELL_MAX, overflow="ellipsis")
         entry = _UninstallEntry(
             key=tool.id,
@@ -1159,6 +1164,7 @@ class UninstallScreen(AppScreen):
             is_path_block=False,
             tool=tool,
             group=group,
+            argv=argv,
         )
         self._painted[tool.id] = entry
         return entry
@@ -1501,6 +1507,7 @@ class UninstallScreen(AppScreen):
         decision = UninstallDecision(
             tools=tuple(tools.values()),
             paths={tool_id: self._by_key[tool_id].paths for tool_id in tools},
+            argv={tool_id: self._by_key[tool_id].argv for tool_id in tools},
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
