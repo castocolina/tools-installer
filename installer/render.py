@@ -167,7 +167,10 @@ def outcome_detail_text(outcome: RowOutcome) -> str:
     if outcome.result == "crashed":
         return outcome.detail
     if outcome.result == "manual":
-        return "see the setup steps in the log"
+        command = outcome.install.manual_command if outcome.install is not None else None
+        if command is None:
+            return "see the setup steps in the log"
+        return f"you run: `{sanitize_log_line(command)}`"
     if outcome.result == "skipped":
         return outcome.detail or outcome.row.reason.removesuffix(" (r: reinstall)")
     if outcome.result == "blocked":
@@ -342,8 +345,9 @@ def render_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
         if outcome.status is not InstallStatus.MANUAL_REQUIRED or not outcome.handoff:
             continue
         console.print(f"[cyan]{outcome.tool_id} — manual setup required:[/]")
+        # Copy-safe: no markup, and never wrapped by the app, so a pasted line is the command.
         for line in outcome.handoff:
-            console.print(f"  {line}")
+            console.print(f"  {sanitize_log_line(line)}", markup=False, soft_wrap=True)
 
 
 def render_post_install_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
