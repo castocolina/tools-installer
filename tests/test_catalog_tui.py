@@ -2286,6 +2286,79 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
     assert runner_calls == []
 
 
+async def test_u_on_a_pinned_app_is_refused_before_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UI-SPEC A10 / LIFE-05: the pinned refusal is checked before the lock, the
+    re-resolve and the worker, and ends with one refresh pass."""
+    pinned = Method(
+        kind="app",
+        params={
+            "app": "draw.io.app",
+            "url": "https://example.test/drawio-{ver}.dmg",
+            "version": "26.0.2",
+            "sha256": "0" * 64,
+        },
+    )
+    tool = replace(_tool("drawio-desktop"), methods=(pinned,))
+    ownership = _ownership(tool, owner="installer")
+    service = frozen_service(tmp_path)
+    reresolve_calls: list[str] = []
+    runner_calls: list[list[str]] = []
+    refreshes: list[bool] = []
+
+    def reresolve(target: Tool) -> ManagerOwnership:
+        reresolve_calls.append(target.id)
+        return ownership
+
+    def no_download(method: object, runner: object) -> None:
+        raise AssertionError("a pinned app must not be re-downloaded")
+
+    monkeypatch.setattr("installer.apps.update_app", no_download)
+    updates = UpdateService(
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+        runner=runner_calls.append,
+        resolve_tag=lambda _repo: "v1",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=reresolve,
+    )
+    app = _unified_app(
+        [tool], {"drawio-desktop": True}, _BLURBS, version_refresh=service, updates=updates
+    )
+    monkeypatch.setattr(app, "request_refresh", lambda: refreshes.append(True))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _mount_and_settle(app, pilot)
+        service.publish(
+            [
+                pass_state(
+                    tool,
+                    platform=service.platform,
+                    ownership=ownership,
+                    version=VersionStatus(
+                        tool_id="drawio-desktop",
+                        installed="26.0.2",
+                        latest="26.1.0",
+                        outdated=True,
+                        stale=False,
+                        source="unknown",
+                    ),
+                )
+            ]
+        )
+        baseline = len(refreshes)
+        await pilot.press("u")
+        await wait_until(pilot, lambda: len(refreshes) > baseline)
+        assert len(refreshes) == baseline + 1
+    assert app.catalog.status_text == (
+        "cannot update drawio-desktop: pinned; update outside or re-pin"
+    )
+    assert not app.mutation_in_flight
+    assert reresolve_calls == []
+    assert runner_calls == []
+
+
 def test_pinned_spec_appears_in_detail_line(tmp_path: Path) -> None:
     tool = _tool("mmdc")
     service = frozen_service(tmp_path)

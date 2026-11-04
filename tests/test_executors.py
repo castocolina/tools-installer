@@ -1047,6 +1047,13 @@ def test_sdkman_appends_version_when_given():
     )
 
 
+def test_sdk_pipeline_matches_the_candidate_installer():
+    """One sourced invocation: a candidate install and the bootstrap update share it."""
+    calls, runner = _record()
+    execute(Method(kind="sdkman", params={"candidate": "java"}), runner)
+    assert calls == [executors.sdk_pipeline(["sdk", "install", "java"])]
+
+
 def test_sdkman_without_candidate_raises_executor_error():
     with pytest.raises(ExecutorError, match="candidate"):
         execute(Method(kind="sdkman", params={}), lambda _cmd: None)

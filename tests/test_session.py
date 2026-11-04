@@ -44,7 +44,7 @@ from installer.session import (
     summary_counts,
 )
 from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
-from installer.update import UpdateOutcome
+from installer.update import UpdateOutcome, UpdateService
 from installer.versions import TagResolver
 from tests.state_doubles import RunRecorder, ScriptedUpdates
 
@@ -77,7 +77,7 @@ def _run_context(
     catalog: Mapping[str, Tool] | None = None,
     confirm_sensitive: ConfirmSensitiveAction | None = None,
     on_mismatch: OnMismatch | None = None,
-    updates: ScriptedUpdates | None = None,
+    updates: UpdateService | None = None,
     runner: Runner | None = None,
     terminal_sync: Callable[[], str | None] | None = None,
     should_continue: Callable[[], bool] | None = None,
@@ -326,6 +326,60 @@ def test_update_refused_at_run_time_is_blocked_with_the_detail(
     )
     assert outcomes[0].result == "blocked"
     assert outcomes[0].detail == "refused"
+
+
+def test_a_headless_update_row_on_a_pinned_app_reads_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIFE-05: the engine's pinned refusal is the headless answer; nothing is downloaded."""
+    from installer.ownership import ManagerOwnership
+
+    pinned = Method(
+        kind="app",
+        params={
+            "app": "draw.io.app",
+            "url": "https://example.test/drawio-{ver}.dmg",
+            "version": "26.0.2",
+            "sha256": "0" * 64,
+        },
+    )
+
+    def no_download(method: object, runner: object) -> None:
+        raise AssertionError("a pinned app must not be re-downloaded")
+
+    monkeypatch.setattr("installer.apps.update_app", no_download)
+    ownership = ManagerOwnership(
+        tool_id="drawio-desktop",
+        owner="installer",
+        method=pinned,
+        package=None,
+        current_version="26.0.2",
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate="installer",
+        active_path=None,
+        unknown_reason=None,
+    )
+    updates = UpdateService(
+        platform=_platform(),
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "1.0.0",
+        tools={},
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: ownership,
+    )
+    outcomes = execute_plan(
+        [PlanRow("drawio-desktop", Disposition.UPDATE, "", ownership=ownership)],
+        _run_context(
+            RunRecorder(),
+            catalog={"drawio-desktop": _tool("drawio-desktop")},
+            updates=updates,
+        ),
+    )
+    assert outcomes[0].result == "blocked"
+    assert outcomes[0].detail == "pinned; update outside or re-pin"
 
 
 def test_update_latch_refusal_is_blocked():

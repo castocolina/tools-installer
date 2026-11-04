@@ -19,6 +19,7 @@ from textual.message import Message
 from textual.widgets import DataTable
 
 from installer.deps import missing_requires
+from installer.download import pinned_method
 from installer.enums import Audience, MutationHolder, Priority
 from installer.model import Tool
 from installer.ownership import (
@@ -34,7 +35,7 @@ from installer.skill_lifecycle import SKILL_HARNESS_LABELS
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, AppScreen, StatusLine, mark, run_live
-from installer.update import UpdateOutcome, UpdateService, UpdateTarget
+from installer.update import PINNED_DETAIL, UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     HEALTH_DETAIL,
     HEALTH_MARKS,
@@ -671,6 +672,11 @@ class CatalogScreen(AppScreen):
             if note:
                 line += f" — {note}"
             self.status.set(line, "warn")
+            self.post_message(RefreshRequested())
+            return
+        if ownership.method is not None and pinned_method(ownership.method):
+            # UI-SPEC A10: refused before the lock, so no worker starts and nothing re-downloads.
+            self.status.set(f"cannot update {tool_id}: {PINNED_DETAIL}", "warn")
             self.post_message(RefreshRequested())
             return
         # A bare guard: every holder of the update service also holds the app
