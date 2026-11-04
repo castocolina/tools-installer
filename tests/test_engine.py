@@ -180,9 +180,10 @@ def test_a_native_method_is_handed_off_with_zero_runner_calls(
     assert calls == []
 
 
-def test_a_native_method_after_a_failed_method_is_handed_off(
+def test_a_native_method_after_a_failed_method_fails_with_the_error_and_the_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Review C-01: an earlier failure is never masked as manual; the handoff rides along."""
     _patch_not_installed(monkeypatch)
     calls: list[list[str]] = []
 
@@ -199,8 +200,10 @@ def test_a_native_method_after_a_failed_method_is_handed_off(
         Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
         runner=runner,
     )
-    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert outcome.status is InstallStatus.FAILED
+    assert [type(error) for error in outcome.errors] == [CommandError]
     assert outcome.handoff == ("sudo dnf install ripgrep",)
+    assert outcome.manual_command == "sudo dnf install ripgrep"
     assert calls == [["uv", "tool", "install", "ripgrep"]]
 
 

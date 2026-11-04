@@ -1276,6 +1276,24 @@ def test_a_manual_row_finishes_with_its_command() -> None:
     assert outcome_detail_text(bare) == "see the setup steps in the log"
 
 
+def test_a_failed_row_with_a_native_handoff_shows_the_error_and_the_command() -> None:
+    """Review C-01: the earlier method's error stays visible next to the command to run."""
+    command = "sudo dnf install kitty"
+    install = InstallOutcome(
+        "kitty",
+        InstallStatus.FAILED,
+        errors=(RuntimeError("download failed\nmore"),),
+        handoff=(command,),
+        manual_command=command,
+    )
+    outcome = RowOutcome(PlanRow("kitty", Disposition.INSTALL, ""), "failed", install=install)
+    assert outcome_detail_text(outcome) == "download failed; you run: `sudo dnf install kitty`"
+    console, buf = _console()
+    render_handoff([install], console)
+    assert "kitty" in buf.getvalue()
+    assert command in buf.getvalue()
+
+
 def test_render_handoff_prints_the_command_alone_with_markup_off() -> None:
     command = "sudo dnf install [red]x[/]"
     outcome = InstallOutcome(

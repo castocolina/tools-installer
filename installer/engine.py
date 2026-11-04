@@ -244,9 +244,12 @@ def install_tool(
             )
         manual = executors.needs_manual(method, writable=executors.prefix_writable)
         if manual is not None:
+            # An earlier method's failure is never masked as manual (review C-01): the run
+            # fails with that error, and the command the user can run rides along.
             return InstallOutcome(
                 tool.id,
-                InstallStatus.MANUAL_REQUIRED,
+                InstallStatus.FAILED if errors else InstallStatus.MANUAL_REQUIRED,
+                errors=tuple(errors),
                 method_kind=method.kind,
                 handoff=(manual.command,),
                 manual_command=manual.command,

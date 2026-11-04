@@ -160,6 +160,9 @@ def outcome_detail_text(outcome: RowOutcome) -> str:
             if outcome.detail
             else fallback
         )
+        command = outcome.install.manual_command if outcome.install is not None else None
+        if command is not None:
+            error = f"{error}; you run: `{command}`"
         return sanitize_log_line(error)
     if outcome.result == "dependency_failed":
         blockers = outcome.install.blocked_by if outcome.install is not None else ()
@@ -335,14 +338,15 @@ def render_postinstall_warnings(outcomes: list[InstallOutcome], console: Console
 
 
 def render_handoff(outcomes: list[InstallOutcome], console: Console) -> None:
-    """Print each MANUAL_REQUIRED tool's reviewed setup instructions, in full.
+    """Print each handed-off tool's reviewed setup instructions, in full.
 
     This is where the actual steps the user must run after the installer
-    releases the terminal live. Silent when nothing needs a handoff, matching
-    the other report renderers' restraint.
+    releases the terminal live: a MANUAL_REQUIRED tool, or a FAILED one whose
+    ladder then reached a native method. Silent when nothing needs a handoff,
+    matching the other report renderers' restraint.
     """
     for outcome in outcomes:
-        if outcome.status is not InstallStatus.MANUAL_REQUIRED or not outcome.handoff:
+        if not outcome.handoff:
             continue
         console.print(f"[cyan]{outcome.tool_id} — manual setup required:[/]")
         # Copy-safe: no markup, and never wrapped by the app, so a pasted line is the command.
