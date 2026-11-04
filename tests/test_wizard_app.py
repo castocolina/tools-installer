@@ -86,6 +86,7 @@ from installer.wizard_app import (
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
+    config_split,
 )
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
@@ -8122,3 +8123,111 @@ async def test_an_l3_row_shows_the_vendor_command_then_the_paths() -> None:
     assert len(captured) == 1
     assert captured[0].argv == {"vend": argv}
     assert captured[0].paths == {"vend": (leaf,)}
+
+
+# -- 22-10: the per-row "delete config too" toggle (UI-04, D-11) --------------
+
+
+def _config_tool(tool_id: str, *config_paths: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(Method(kind="brew", params={"formula": tool_id}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+        config_paths=config_paths,
+    )
+
+
+def _removable_with_config(tool: Tool, config: Sequence[Path] = ()) -> ToolState:
+    """A published removable row whose declared config currently exists as `config`."""
+    removable = RemovalPlan((Path(f"/opt/{tool.id}"),), (), config=tuple(config))
+    return plan_state(tool, removable=removable)
+
+
+async def test_c_turns_the_flag_on_and_the_removal_deletes_the_config() -> None:
+    """22-10 tracer: `c` marks a removable row; the confirmed removal carries its config."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [config_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("c")
+        assert screen.selected == {"gh"}
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {"gh": (config_dir,)}
+
+
+async def test_an_unflagged_row_sends_no_config() -> None:
+    """22-10: a row marked with `space` alone sends no config to the remover."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [config_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
+
+
+def test_config_split_keeps_a_path_another_tool_needs() -> None:
+    """22-10 (T-22-24): a shared config path is deleted only when every declarer goes."""
+    a = _config_tool("a", "~/.config/shared")
+    b = _config_tool("b", "~/.config/shared")
+    shared = Path.home() / ".config" / "shared"
+    states = {tool.id: _removable_with_config(tool, [shared]) for tool in (a, b)}
+    catalog = [a, b]
+
+    def state_of(tool: Tool) -> ToolState | None:
+        return states.get(tool.id)
+
+    assert config_split([a], catalog, state_of) == ({}, {"~/.config/shared": ("b",)})
+    assert config_split([a, b], catalog, state_of) == ({"a": (shared,), "b": (shared,)}, {})
+    # A path missing from the flagged tool's published state is in neither map.
+    assert config_split([a], catalog, lambda tool: _removable_with_config(tool)) == ({}, {})
+
+
+async def test_a_refresh_while_the_modal_is_open_keeps_the_decision(tmp_path: Path) -> None:
+    """22-10 (T-22-41, review R1-20): the confirm carries the decision built before it opened."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    service = frozen_service(tmp_path)
+    service.publish([_removable_with_config(gh)])
+    captured: list[UninstallDecision] = []
+    app = _app(
+        tools=[gh],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+        initial_view="uninstall",
+        version_refresh=service,
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("c")
+        await pilot.press("enter")  # the confirm opens; the decision is built here
+        service.queued = (_removable_with_config(gh, [config_dir]),)
+        app.request_refresh()
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {}
