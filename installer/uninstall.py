@@ -21,7 +21,7 @@ from installer.download import (
     expand_script_token,
     is_still_proven,
 )
-from installer.model import Method, Tool, method_package
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
@@ -436,6 +436,42 @@ def remove_proven(
     return tuple(path for path in kept if path in removed), refused
 
 
+def delete_config_path(path: Path) -> None:
+    """Delete one declared config path, or refuse (SPEC R6, review R1-17 and R2-06).
+
+    The parent is resolved first: it must stay inside the real HOME and must not be, or lie
+    under, a harness marker dir, so a symlinked `~/.config` cannot route a delete into one.
+    A missing path is a no-op. A link is unlinked and never followed. A real file or directory
+    is refused when a harness marker resolves to it or under it (a dotfiles layout that points
+    a harness dir at a config dir). Other OSErrors propagate; the caller turns them into a
+    warning."""
+    real_home = Path(os.path.realpath(Path.home()))
+    markers = tuple(
+        Path(os.path.realpath(Path.home() / marker))
+        for group in HARNESS_MARKER_DIRS.values()
+        for marker in group
+    )
+    parent = Path(os.path.realpath(path.parent))
+    if not parent.is_relative_to(real_home) or any(
+        parent.is_relative_to(marker) for marker in markers
+    ):
+        raise OSError(
+            f"a parent of {path} resolves outside HOME or into a harness directory; not deleted"
+        )
+    if not _exists(path):
+        return
+    if path.is_symlink():
+        path.unlink()
+        return
+    target = Path(os.path.realpath(path))
+    if any(marker.is_relative_to(target) for marker in markers):
+        raise OSError(f"{path} is or holds a harness directory; not deleted")
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def _omz_policy(zshrc_path: Path, state_path: Path) -> Policy:
     # Per CONTEXT D-04/D-05/D-06: present drives missing_requires, which gates
     # ENABLING the tweak (D-05/D-06); a teardown must never be gated on it,
@@ -471,6 +507,10 @@ class SweepResult:
     removed: tuple[str, ...] = ()
     # (tool id, first line) of each tool that was refused or whose delete raised.
     remove_failed: tuple[tuple[str, str], ...] = ()
+    # Tool ids whose listed config was deleted, or was already gone (D-07 step 4).
+    config_deleted: tuple[str, ...] = ()
+    # Tool ids that asked for their config to go, but whose removal failed (SPEC R6).
+    config_not_deleted: tuple[str, ...] = ()
 
 
 def policy_owned(policy: Policy) -> bool:

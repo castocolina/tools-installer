@@ -16,6 +16,7 @@ from installer.pnpm_globals import (
     NodeInstallPolicy,
     PnpmUnavailable,
     audit_node_globals,
+    co_install_warnings,
     node_globals,
     node_install_policy,
     parse_global_groups,
@@ -431,6 +432,27 @@ def test_shipped_registry_declares_no_conflicting_version_pins() -> None:
                 f"conflicting pins for {name}: {previous!r} vs {range_!r}"
             )
             seen[name] = range_
+
+
+def _mmdc_catalog() -> list[Tool]:
+    method = Method(kind="node", params={"npm_pkg": MMDC_NPM, "co_install": ["puppeteer"]})
+    return [Tool(id="mmdc", name="mmdc", category="dev", cmd="mmdc", methods=(method,))]
+
+
+def test_removing_one_member_warns_with_the_group() -> None:
+    assert co_install_warnings({MMDC_NPM}, _mmdc_catalog()) == (
+        "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli leaves puppeteer installed.",
+    )
+
+
+def test_removing_every_member_warns_once() -> None:
+    assert co_install_warnings({MMDC_NPM, "puppeteer"}, _mmdc_catalog()) == (
+        "Warning: pnpm group mmdc: all its members are removed together.",
+    )
+
+
+def test_a_package_outside_any_group_warns_nothing() -> None:
+    assert co_install_warnings({"typescript"}, _mmdc_catalog()) == ()
 
 
 def test_node_install_policy_skips_node_method_without_npm_pkg() -> None:

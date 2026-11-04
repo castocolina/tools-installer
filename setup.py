@@ -871,6 +871,7 @@ def _build_app(
             zshrc_path=_ZSHRC,
             daemon_policy=daemon,
             extra_policies=redirects,
+            catalog=tools,
         )
 
     def _ban_apply_rc_paths() -> list[Path]:

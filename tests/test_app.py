@@ -2452,6 +2452,7 @@ def test_perform_uninstall_removes_only_chosen_levers(
         daemon_policy=None,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
 
     assert not artifact.is_symlink()
@@ -2479,6 +2480,7 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
         daemon_policy=None,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
 
     assert "tools-installer path" not in myshellrc.read_text()  # block stripped
@@ -2556,6 +2558,7 @@ def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -
         daemon_policy=None,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
 
     assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
@@ -3046,6 +3049,7 @@ def test_perform_uninstall_forwards_daemon_policy_and_clears_the_marker(tmp_path
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
     assert "daemon:prune-tmpdir" in result.swept
     assert not plist_path.exists()
@@ -3080,6 +3084,7 @@ def test_perform_uninstall_clears_marker_for_disabled_daemon_with_no_tweaks_row(
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
     assert result.swept == ()
     assert daemon.decided(state_path) is False
@@ -3115,6 +3120,7 @@ def test_perform_uninstall_preserves_the_decided_marker_for_an_active_daemon_lef
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
     assert result.swept == ()
     assert plist_path.exists()  # untouched: the user did not select removal
@@ -3458,6 +3464,7 @@ def test_perform_uninstall_clears_the_linux_marker_for_an_already_inactive_daemo
         daemon_policy=policy,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -3533,6 +3540,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         daemon_policy=bare,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=(),
     )
 
     def active() -> bool:
@@ -3567,6 +3575,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         daemon_policy=swept,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=(),
     )
 
 
@@ -3630,6 +3639,7 @@ def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
         daemon_policy=None,
         extra_policies=(again,),
         runner=_no_removal_runner,
+        catalog=(),
     )
     assert "cache-redirect:bun" in result.swept
 
@@ -4112,6 +4122,7 @@ def test_perform_uninstall_reproves_per_tool(
             daemon_policy=None,
             extra_policies=(),
             runner=_no_removal_runner,
+            catalog=decision.tools,
         )
 
     yq, bin_dir = plant_raw_yq(tmp_path)
@@ -4154,6 +4165,7 @@ def _sweep_two_tools(
             daemon_policy=None,
             extra_policies=(),
             runner=_no_removal_runner,
+            catalog=decision.tools,
         )
 
     return apply, yq, fd, bin_dir
@@ -4379,6 +4391,7 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
         daemon_policy=None,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
     assert (bin_dir / "fd").read_text() == "foreign file"  # the replacement survives
     assert opt_fd.exists()  # without its link, the opt dir is unproven too
@@ -4405,6 +4418,7 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
         daemon_policy=None,
         extra_policies=(),
         runner=_no_removal_runner,
+        catalog=decision.tools,
     )
     assert result.warnings == ()
     assert not (bin_dir / "fd").is_symlink()
@@ -4473,6 +4487,7 @@ def _perform(
         zshrc_path=home / ".zshrc",
         daemon_policy=None,
         runner=runner,
+        catalog=(tool,),
         extra_policies=(),
     )
 
@@ -4896,6 +4911,7 @@ def test_perform_uninstall_removes_a_dependent_before_its_manager(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         runner=runner,
+        catalog=decision.tools,
         extra_policies=(),
     )
     assert calls == [["uv", "tool", "uninstall", "ruff"]]
@@ -5074,3 +5090,365 @@ def test_a_failed_cli_removal_is_reported_and_keeps_its_receipt(
     assert failed == ("gh",)
     assert "gh: remove failed — Error: No such formula" in buf.getvalue()
     assert receipts.receipt_exists("gh")
+
+
+SHARED = ("~/.config/shared",)
+
+
+def _brew_config_tool(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_id: str = "gh",
+    *,
+    config_paths: tuple[str, ...] = ("~/.config/gh",),
+) -> Tool:
+    """A brew tool whose receipt proves its package, declaring `config_paths` (LIFE-04 shape)."""
+    from installer import receipts
+
+    monkeypatch.setenv("HOME", str(home))
+    method = Method(kind="brew", params={"formula": tool_id})
+    tool = Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(method,),
+        config_paths=config_paths,
+    )
+    receipts.record(tool, method, package=tool_id, smoke=None)
+    return tool
+
+
+def _plant_config(home: Path, rel: str) -> Path:
+    config = home / rel
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "hosts.yml").write_text("token")
+    return config
+
+
+def _decision(
+    tools: Sequence[Tool], home: Path, *, config: Mapping[str, tuple[Path, ...]] | None = None
+) -> UninstallDecision:
+    """The preview a user would confirm: each tool's proven paths and manager argv."""
+    from installer.uninstall import removal_plan
+
+    bin_dir = home / ".local" / "bin"
+    plans = {tool.id: removal_plan(tool, bin_dir) for tool in tools}
+    return UninstallDecision(
+        tools=tuple(tools),
+        paths={tool_id: plan.removable for tool_id, plan in plans.items()},
+        argv={tool_id: plan.argv for tool_id, plan in plans.items()},
+        remove_ban=False,
+        remove_path_block=False,
+        config=dict(config or {}),
+    )
+
+
+def _apply(
+    decision: UninstallDecision, home: Path, *, runner: Runner, catalog: Sequence[Tool]
+) -> SweepResult:
+    from installer.app import perform_uninstall
+
+    return perform_uninstall(
+        decision,
+        bin_dir=home / ".local" / "bin",
+        myshellrc_path=home / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=runner,
+        catalog=catalog,
+    )
+
+
+def test_toggled_config_is_deleted_after_the_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+    seen: list[bool] = []
+
+    def runner(_cmd: list[str]) -> None:
+        seen.append(config.exists())  # the config is still there while the removal runs
+
+    decision = _decision([gh], tmp_path, config={"gh": (config,)})
+    result = _apply(decision, tmp_path, runner=runner, catalog=[gh])
+    assert seen == [True]
+    assert not config.exists()
+    assert result.removed == ("gh",)
+    assert result.config_deleted == ("gh",)
+
+
+def test_config_survives_with_the_toggle_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+    result = _apply(_decision([gh], tmp_path), tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert (config / "hosts.yml").exists()
+    assert result.removed == ("gh",)
+    assert result.config_deleted == ()
+
+
+def test_a_failed_removal_keeps_the_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="Error: No such formula")
+
+    decision = _decision([gh], tmp_path, config={"gh": (config,)})
+    result = _apply(decision, tmp_path, runner=runner, catalog=[gh])
+    assert (config / "hosts.yml").exists()
+    assert result.remove_failed == (("gh", "Error: No such formula"),)
+    assert result.config_not_deleted == ("gh",)
+    assert result.config_deleted == ()
+
+
+def test_a_refused_removal_keeps_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from tests.test_uninstall import plant_raw_yq
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    raw, bin_dir = plant_raw_yq(tmp_path)
+    yq = Tool(
+        id=raw.id,
+        name=raw.name,
+        category="dev",
+        cmd=raw.cmd,
+        methods=raw.methods,
+        config_paths=("~/.config/yq",),
+    )
+    config = _plant_config(tmp_path, ".config/yq")
+    decision = _decision([yq], tmp_path, config={"yq": (config,)})
+    # Rewritten after the preview: the fresh proof refuses the whole tool (review R2-02).
+    (bin_dir / "yq").write_text("rewritten after the preview, a different size")
+    result = _apply(decision, tmp_path, runner=_no_removal_runner, catalog=[yq])
+    assert result.removed == ()
+    assert result.config_not_deleted == ("yq",)
+    assert (config / "hosts.yml").exists()
+    assert receipts.read("yq") is not None
+
+
+def test_a_shared_config_path_needs_every_owner_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+
+    deleted: list[Path] = []
+    real_delete = app_module.delete_config_path
+
+    def spy(path: Path) -> None:
+        deleted.append(path)
+        real_delete(path)
+
+    monkeypatch.setattr(app_module, "delete_config_path", spy)
+    both = tmp_path / "both"
+    both.mkdir()
+    a = _brew_config_tool(both, monkeypatch, "a", config_paths=SHARED)
+    b = _brew_config_tool(both, monkeypatch, "b", config_paths=SHARED)
+    shared = _plant_config(both, ".config/shared")
+    decision = _decision([a, b], both, config={"a": (shared,), "b": (shared,)})
+    result = _apply(decision, both, runner=lambda _cmd: None, catalog=[a, b])
+    assert deleted == [shared]  # one delete for two owners
+    assert not shared.exists()
+    assert sorted(result.config_deleted) == ["a", "b"]
+
+    one = tmp_path / "one"
+    one.mkdir()
+    a = _brew_config_tool(one, monkeypatch, "a", config_paths=SHARED)
+    b = _brew_config_tool(one, monkeypatch, "b", config_paths=SHARED)
+    shared = _plant_config(one, ".config/shared")
+    deleted.clear()
+
+    def fail_b(cmd: list[str]) -> None:
+        if cmd[-1] == "b":
+            raise CommandError(cmd, 1, detail="Error: b failed")
+
+    decision = _decision([a, b], one, config={"a": (shared,), "b": (shared,)})
+    result = _apply(decision, one, runner=fail_b, catalog=[a, b])
+    assert deleted == []
+    assert (shared / "hosts.yml").exists()
+    assert result.config_not_deleted == ("b",)
+
+
+def test_a_shared_config_path_needs_every_catalog_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # c declares the path too but is not always selected: an unselected or flag-off owner keeps it.
+    def tools(home: Path) -> tuple[Tool, Tool, Tool]:
+        home.mkdir()
+        a = _brew_config_tool(home, monkeypatch, "a", config_paths=SHARED)
+        b = _brew_config_tool(home, monkeypatch, "b", config_paths=())
+        c = _brew_config_tool(home, monkeypatch, "c", config_paths=SHARED)
+        return a, b, c
+
+    home = tmp_path / "unselected"
+    a, b, c = tools(home)
+    shared = _plant_config(home, ".config/shared")
+    decision = _decision([a, b], home, config={"a": (shared,)})
+    _apply(decision, home, runner=lambda _cmd: None, catalog=[a, b, c])
+    assert (shared / "hosts.yml").exists()
+
+    home = tmp_path / "flag-off"
+    a, b, c = tools(home)
+    shared = _plant_config(home, ".config/shared")
+    decision = _decision([a, c], home, config={"a": (shared,)})
+    _apply(decision, home, runner=lambda _cmd: None, catalog=[a, b, c])
+    assert (shared / "hosts.yml").exists()
+
+    home = tmp_path / "both-flagged"
+    a, b, c = tools(home)
+    shared = _plant_config(home, ".config/shared")
+    decision = _decision([a, c], home, config={"a": (shared,), "c": (shared,)})
+    _apply(decision, home, runner=lambda _cmd: None, catalog=[a, b, c])
+    assert not shared.exists()
+
+
+def test_a_config_path_already_gone_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    gone = tmp_path / ".config" / "gh"  # never created
+    decision = _decision([gh], tmp_path, config={"gh": (gone,)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert result.warnings == ()
+    assert result.config_deleted == ("gh",)
+    assert result.removed == ("gh",)
+
+
+def test_an_undeclared_config_path_is_never_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text("key")
+    decision = _decision([gh], tmp_path, config={"gh": (ssh,)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert (ssh / "id_ed25519").exists()
+    assert result.warnings == (f"config {ssh} is not declared by any tool; not deleted",)
+
+
+def test_a_config_delete_failure_is_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import receipts
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+
+    def deny(_path: Path) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(app_module, "delete_config_path", deny)
+    decision = _decision([gh], tmp_path, config={"gh": (config,)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert result.removed == ("gh",)
+    assert not receipts.receipt_exists("gh")
+    assert result.warnings == ("could not delete config ~/.config/gh — denied",)
+
+
+def test_a_refused_config_parent_is_a_warning_and_the_tool_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    harness_cfg = tmp_path / ".claude" / "cfg" / "gh"
+    harness_cfg.mkdir(parents=True)
+    (harness_cfg / "hosts.yml").write_text("token")
+    (tmp_path / ".config").symlink_to(tmp_path / ".claude" / "cfg")  # ~/.config -> a harness dir
+    decision = _decision([gh], tmp_path, config={"gh": (tmp_path / ".config" / "gh",)})
+    result = _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert result.removed == ("gh",)
+    assert (harness_cfg / "hosts.yml").exists()
+    assert len(result.warnings) == 1
+    assert result.warnings[0].startswith("could not delete config ~/.config/gh — ")
+
+
+def test_an_interrupt_before_step_4_leaves_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+
+    def interrupted(_path: Path) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app_module, "delete_config_path", interrupted)
+    decision = _decision([gh], tmp_path, config={"gh": (config,)})
+    with pytest.raises(KeyboardInterrupt):
+        _apply(decision, tmp_path, runner=lambda _cmd: None, catalog=[gh])
+    assert (config / "hosts.yml").exists()
+
+
+def test_the_cli_never_deletes_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.app import run_uninstall
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)
+    config = _plant_config(tmp_path, ".config/gh")
+    console, buf = _console()
+    shown: list[str] = []
+    calls: list[list[str]] = []
+
+    def confirm(_message: str) -> bool:
+        shown.append(buf.getvalue())  # what the user sees before the confirm
+        return True
+
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", confirm)
+    kwargs["runner"] = calls.append
+    _removed, failed = run_uninstall([gh], console, **kwargs)
+    assert calls == [["brew", "uninstall", "gh"]]
+    assert failed == ()
+    assert (config / "hosts.yml").exists()
+    assert "Config kept; only the Uninstall view deletes config (press c on a row):\n" in shown[0]
+    assert "row):\n  ~/.config/gh\n" in shown[0]
+
+
+def test_the_cli_prints_no_config_block_without_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+
+    gh = _brew_config_tool(tmp_path, monkeypatch)  # ~/.config/gh is never created
+    console, buf = _console()
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", lambda _m: True)
+    kwargs["runner"] = lambda _cmd: None
+    run_uninstall([gh], console, **kwargs)
+    assert "Config kept" not in buf.getvalue()
+
+
+def test_the_cli_prints_the_group_warning_before_the_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(
+        kind="node",
+        params={"npm_pkg": "@mermaid-js/mermaid-cli", "co_install": ["puppeteer"]},
+    )
+    mmdc = _manager_tool("mmdc", method)
+    receipts.record(mmdc, method, package="@mermaid-js/mermaid-cli", smoke=None)
+    console, buf = _console()
+    shown: list[str] = []
+    calls: list[list[str]] = []
+
+    def confirm(_message: str) -> bool:
+        shown.append(buf.getvalue())
+        return False  # declined: nothing runs
+
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", confirm)
+    kwargs["runner"] = calls.append
+    run_uninstall([mmdc], console, **kwargs)
+    line = "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli leaves puppeteer installed."
+    assert line in shown[0]
+    assert calls == []

@@ -33,7 +33,7 @@ from installer.guards import (
 from installer.locations import path_scan_rc_paths
 from installer.model import Tool
 from installer.platform import Platform
-from installer.pnpm_globals import audit_node_globals, pnpm_global_packages
+from installer.pnpm_globals import audit_node_globals, co_install_warnings, pnpm_global_packages
 from installer.policy import Policy, omz_removal_detail
 from installer.prompt import Prompter
 from installer.rcclean import (
@@ -79,8 +79,12 @@ from installer.shellrc import (
 from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
+    MANAGER_UNINSTALL_ARGV,
+    RemovalPlan,
     SweepResult,
     active_policies,
+    config_targets,
+    delete_config_path,
     policy_owned,
     removal_plan,
     remove_paths,
@@ -514,6 +518,13 @@ def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
     return f"{tool_id}: runs {shlex.join(argv)}"
 
 
+def pnpm_removal_packages(plans: Iterable[RemovalPlan]) -> frozenset[str]:
+    """The packages the pnpm removals in `plans` name. Each `pnpm remove --global <pkg>` removes
+    only that package (ledger), so this set is what the group warnings check against."""
+    prefix = MANAGER_UNINSTALL_ARGV["node"]
+    return frozenset(plan.argv[-1] for plan in plans if plan.argv[:-1] == prefix)
+
+
 def removal_order(tools: Sequence[Tool]) -> list[Tool]:
     """Dependents first: a tool comes before every selected tool it requires (review R1-09).
 
@@ -669,6 +680,10 @@ def run_uninstall(
     for tool_id, argv in commands:
         # Shown before the confirm: the user sees the exact command that will run.
         console.print(removal_runs_line(tool_id, argv), markup=False, soft_wrap=True)
+    # LIFE-08: a co-install member's removal warns about its group before anything runs.
+    pnpm_packages = pnpm_removal_packages(plan for _tool, plan in ordered)
+    for line in co_install_warnings(pnpm_packages, tools):
+        console.print(line, markup=False, soft_wrap=True)
     render_remove_yourself(yourself, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
@@ -684,6 +699,22 @@ def run_uninstall(
         detail = omz_removal_detail(zshrc_path=zshrc_path, state_path=myshellrc_path)
         if detail is not None:
             console.print(f"  omz-plugins {detail}.")
+    # SPEC R6 / UI-SPEC A11: the CLI never deletes config, and it says so before the confirm.
+    kept_config = [
+        entry
+        for tool, plan in ordered
+        if plan.level != "none"
+        for entry, path in config_targets(tool)
+        if path in plan.config
+    ]
+    if kept_config:
+        console.print(
+            "Config kept; only the Uninstall view deletes config (press c on a row):",
+            markup=False,
+            soft_wrap=True,
+        )
+        for entry in kept_config:
+            console.print(f"  {entry}", markup=False, soft_wrap=True)
     if not confirm("Remove these artifacts?"):
         return [], ()
     # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. Each tool
@@ -765,6 +796,42 @@ class UninstallDecision:
     remove_tweaks: bool = False
     # The vendor or manager command each tool's preview showed (empty when it has none).
     argv: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
+    # Per tool id: the declared config paths (expanded) the user chose to delete (D-11).
+    # Empty by default, and the CLI never sets it: only the Uninstall view does.
+    config: Mapping[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
+
+
+def _config_step(
+    decision: UninstallDecision, catalog: Sequence[Tool], removed: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """D-07 step 4 (SPEC R6): delete each listed config path once, after its removal.
+
+    A path goes only when every catalog tool that declares it was removed and lists it, so
+    a shared path survives while any owner stays (UI-SPEC A5). A path no catalog tool
+    declares is never deleted. Returns (the ids whose listed config is gone, the warnings)."""
+    deleted: list[str] = []
+    warnings: list[str] = []
+    for path in dict.fromkeys(p for paths in decision.config.values() for p in paths):
+        owners = [
+            (tool, entry)
+            for tool in catalog
+            for entry, expanded in config_targets(tool)
+            if expanded == path
+        ]
+        if not owners:
+            warnings.append(f"config {path} is not declared by any tool; not deleted")
+            continue
+        if not all(
+            tool.id in removed and path in decision.config.get(tool.id, ()) for tool, _ in owners
+        ):
+            continue
+        try:
+            delete_config_path(path)
+        except OSError as exc:
+            warnings.append(f"could not delete config {owners[0][1]} — {first_line(exc)}")
+            continue
+        deleted.extend(tool.id for tool, _ in owners)
+    return tuple(dict.fromkeys(deleted)), tuple(warnings)
 
 
 def perform_uninstall(
@@ -778,9 +845,12 @@ def perform_uninstall(
     daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
     runner: Runner,
+    catalog: Sequence[Tool],
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
-    removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
+    removers. `catalog` is the whole registry (review R1-15): a config path is shared with
+    every tool that declares it, selected or not, so the shared-owner rule cannot narrow.
+    Unlike `run_uninstall`, nothing is removed all-or-nothing: a
     partial selection leaves the ban and PATH wiring untouched. Each selected
     tool is removed on its own: the result's `removed` and `remove_failed`
     name every tool's outcome, and one refusal or failed delete (`OSError`)
@@ -825,6 +895,14 @@ def perform_uninstall(
             removed.append(tool.id)
         else:
             remove_failed.append((tool.id, outcome.detail))
+    # Step 4 runs once, after every tool's removal (D-07). A tool whose removal failed or was
+    # refused keeps its config, and a failed delete is a warning that never restores a receipt.
+    config_deleted, config_warnings = _config_step(decision, catalog, removed)
+    config_not_deleted = tuple(
+        tool.id
+        for tool in decision.tools
+        if decision.config.get(tool.id) and tool.id not in removed
+    )
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)
@@ -851,9 +929,11 @@ def perform_uninstall(
             daemon_policy.clear_decided()
         return dataclasses.replace(
             swept,
-            warnings=swept.warnings + refused,
+            warnings=swept.warnings + refused + config_warnings,
             removed=tuple(removed),
             remove_failed=tuple(remove_failed),
+            config_deleted=config_deleted,
+            config_not_deleted=config_not_deleted,
         )
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
@@ -870,4 +950,10 @@ def perform_uninstall(
         and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
-    return SweepResult(warnings=refused, removed=tuple(removed), remove_failed=tuple(remove_failed))
+    return SweepResult(
+        warnings=refused + config_warnings,
+        removed=tuple(removed),
+        remove_failed=tuple(remove_failed),
+        config_deleted=config_deleted,
+        config_not_deleted=config_not_deleted,
+    )
