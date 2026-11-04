@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import pytest
 from rich.console import Console
@@ -2447,6 +2447,7 @@ def test_perform_uninstall_removes_only_chosen_levers(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
 
     assert not artifact.is_symlink()
@@ -2473,6 +2474,7 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
 
     assert "tools-installer path" not in myshellrc.read_text()  # block stripped
@@ -2549,6 +2551,7 @@ def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
 
     assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
@@ -3024,6 +3027,7 @@ def test_perform_uninstall_forwards_daemon_policy_and_clears_the_marker(tmp_path
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert "daemon:prune-tmpdir" in result.swept
     assert not plist_path.exists()
@@ -3057,6 +3061,7 @@ def test_perform_uninstall_clears_marker_for_disabled_daemon_with_no_tweaks_row(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert result.swept == ()
     assert daemon.decided(state_path) is False
@@ -3091,6 +3096,7 @@ def test_perform_uninstall_preserves_the_decided_marker_for_an_active_daemon_lef
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert result.swept == ()
     assert plist_path.exists()  # untouched: the user did not select removal
@@ -3109,6 +3115,7 @@ def test_perform_uninstall_requires_daemon_policy() -> None:
             rc_paths=[],
             bundles=(),
             zshrc_path=Path("/tmp/.zshrc"),
+            runner=_no_removal_runner,
         )
 
 
@@ -3426,6 +3433,7 @@ def test_perform_uninstall_clears_the_linux_marker_for_an_already_inactive_daemo
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=policy,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -3498,6 +3506,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=bare,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
 
     def active() -> bool:
@@ -3530,6 +3539,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=swept,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
 
 
@@ -3591,6 +3601,7 @@ def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(again,),
+        runner=_no_removal_runner,
     )
     assert "cache-redirect:bun" in result.swept
 
@@ -3620,6 +3631,7 @@ def test_uninstall_entry_points_require_extra_policies(tmp_path: Path) -> None:
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
             daemon_policy=None,
+            runner=_no_removal_runner,
         )
 
 
@@ -4062,6 +4074,7 @@ def test_perform_uninstall_reproves_per_tool(
             zshrc_path=tmp_path / ".zshrc",
             daemon_policy=None,
             extra_policies=(),
+            runner=_no_removal_runner,
         )
 
     yq, bin_dir = plant_raw_yq(tmp_path)
@@ -4103,6 +4116,7 @@ def _sweep_two_tools(
             zshrc_path=tmp_path / ".zshrc",
             daemon_policy=None,
             extra_policies=(),
+            runner=_no_removal_runner,
         )
 
     return apply, yq, fd, bin_dir
@@ -4195,14 +4209,15 @@ def test_perform_uninstall_a_planning_error_does_not_stop_the_rest(
     from installer.guards import guard_status, install_shims
 
     apply, yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
-    real = app_module.plan_removal
+    real = app_module.removal_plan
 
-    def plan(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
-        if tools[0].id == "fd":
+    def plan(tool: Tool, default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
+        if tool.id == "fd":
             raise PermissionError("permission denied: opt")
-        return real(tools, default_bin_dir, verify=verify)
+        return real(tool, default_bin_dir, verify=verify)
 
-    monkeypatch.setattr(app_module, "plan_removal", plan)
+    # remove_tool plans through removal_plan (the post-confirm proof, review R1-10).
+    monkeypatch.setattr(app_module, "removal_plan", plan)
     install_shims(bin_dir)
     opt_fd = tmp_path / ".local" / "opt" / "fd"
     decision = UninstallDecision(
@@ -4326,6 +4341,7 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert (bin_dir / "fd").read_text() == "foreign file"  # the replacement survives
     assert opt_fd.exists()  # without its link, the opt dir is unproven too
@@ -4351,7 +4367,230 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert result.warnings == ()
     assert not (bin_dir / "fd").is_symlink()
     assert not opt_fd.exists()
+
+
+def _no_removal_runner(cmd: list[str]) -> None:
+    raise AssertionError(f"no removal command expected: {cmd}")
+
+
+def _vend_tool(
+    *,
+    tool_id: str = "vend",
+    paths: tuple[str, ...] = ("~/.local/bin/vend",),
+    remove: tuple[str, ...] = ("vend", "uninstall", "--force"),
+) -> Tool:
+    """A test-local recipe: one script method with a vendor `remove` (not registry data)."""
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(Method(kind="script", params={"paths": list(paths), "remove": list(remove)}),),
+    )
+
+
+def _vend_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, tool: Tool | None = None
+) -> tuple[Tool, Path]:
+    """Plant the tool's declared paths under HOME, record its receipt; return (tool, bin dir)."""
+    from installer import receipts
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = tool or _vend_tool()
+    for entry in cast(list[str], tool.methods[0].params["paths"]):
+        planted = tmp_path / str(entry).removeprefix("~/")
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text(tool.id)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    return tool, tmp_path / ".local" / "bin"
+
+
+def _perform(
+    tool: Tool,
+    home: Path,
+    *,
+    paths: tuple[Path, ...],
+    argv: tuple[str, ...],
+    runner: Runner,
+) -> SweepResult:
+    from installer.app import UninstallDecision, perform_uninstall
+
+    decision = UninstallDecision(
+        tools=(tool,),
+        paths={tool.id: paths},
+        argv={tool.id: argv},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    return perform_uninstall(
+        decision,
+        bin_dir=home / ".local" / "bin",
+        myshellrc_path=home / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=home / ".zshrc",
+        daemon_policy=None,
+        runner=runner,
+        extra_policies=(),
+    )
+
+
+def test_a_recipe_tool_is_removed_by_its_vendor_command_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    binary = bin_dir / "vend"
+    plan = removal_plan(tool, bin_dir)
+    assert plan.level == "recipe"
+    assert plan.argv == (str(binary), "uninstall", "--force")
+    assert binary in plan.removable
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)  # the fake vendor command deletes nothing
+
+    result = _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
+    assert calls == [[str(binary), "uninstall", "--force"]]
+    assert not binary.exists()
+    assert receipts.read("vend") is None
+    assert result.removed == ("vend",)
+
+
+def test_the_vendor_command_runs_before_any_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+    seen: list[bool] = []
+
+    def runner(_cmd: list[str]) -> None:
+        seen.append((bin_dir / "vend").exists())
+
+    _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
+    assert seen == [True]
+
+
+def test_a_failing_remove_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="Error: vend uninstall failed")
+
+    result = _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
+    assert (bin_dir / "vend").exists()
+    assert receipts.receipt_path("vend").exists()
+    assert result.remove_failed == (("vend", "Error: vend uninstall failed"),)
+    assert result.removed == ()
+
+
+def test_a_vendor_remove_that_deleted_the_binary_is_a_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+
+    def runner(_cmd: list[str]) -> None:
+        (bin_dir / "vend").unlink()
+
+    result = _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
+    assert result.removed == ("vend",)
+    assert result.remove_failed == ()
+    assert not receipts.receipt_path("vend").exists()
+
+
+def test_a_changed_argv_is_refused_like_a_changed_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import removal_plan
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+
+    stale = ("/elsewhere/vend", "uninstall", "--force")
+    result = _perform(tool, tmp_path, paths=plan.removable, argv=stale, runner=runner)
+    assert calls == []
+    assert (bin_dir / "vend").exists()
+    assert result.remove_failed == (("vend", "changed since the preview; not removed"),)
+
+
+def test_a_recipe_command_that_names_no_proven_path_has_no_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.uninstall import removal_plan
+
+    # The command's first word names no leaf the receipt proves: nothing is bound, nothing runs.
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch, tool=_vend_tool(remove=("othercli", "x")))
+    plan = removal_plan(tool, bin_dir)
+    assert plan.level == "recipe"
+    assert plan.argv == ()
+    assert (bin_dir / "vend") in plan.removable
+
+    # The receipt proves a leaf named `other`, but the command's first word is `vend`.
+    other_tool = _vend_tool(
+        tool_id="vend2", paths=("~/.local/bin/other",), remove=("vend", "uninstall")
+    )
+    other, _same_bin = _vend_recorded(tmp_path, monkeypatch, tool=other_tool)
+    assert removal_plan(other, bin_dir).argv == ()
+
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+
+    _perform(tool, tmp_path, paths=plan.removable, argv=(), runner=runner)
+    assert calls == []
+
+
+def test_a_drifted_previewed_path_fails_the_tool_and_keeps_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_raw_yq
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    yq, bin_dir = plant_raw_yq(tmp_path)
+    previewed = (bin_dir / "yq",)
+    (bin_dir / "yq").write_text("rewritten after the preview, a different size")
+    result = _perform(yq, tmp_path, paths=previewed, argv=(), runner=_no_removal_runner)
+    assert result.removed == ()
+    assert result.remove_failed == (
+        ("yq", f"changed since the preview; not removed: {bin_dir / 'yq'}"),
+    )
+    assert (bin_dir / "yq").exists()
+    assert receipts.read("yq") is not None
+
+    # A recipe leaf replaced after the preview: refused before the command runs. Script
+    # leaves are proven by type only (ledger Q3), so the replacement is a symlink, not bytes.
+    recipe, recipe_bin = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(recipe, recipe_bin)
+    (recipe_bin / "vend").unlink()
+    (recipe_bin / "vend").symlink_to(tmp_path / "elsewhere")
+    refused = _perform(
+        recipe, tmp_path, paths=plan.removable, argv=plan.argv, runner=_no_removal_runner
+    )
+    assert refused.removed == ()
+    assert refused.remove_failed[0][0] == "vend"
+    assert (recipe_bin / "vend").is_symlink()
+    assert receipts.receipt_path("vend").exists()

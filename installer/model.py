@@ -100,6 +100,20 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
     "brew": frozenset({"formula", "detect_path", "min_os_version", "bin_dir", "smoke_argv"}),
     "cask": frozenset({"cask", "app", "min_os_version", "smoke_argv"}),
 }
+# The param that names a manager method's package, by kind (the one reader is method_package).
+KIND_PACKAGE_PARAM: dict[str, str] = {
+    "brew": "formula",
+    "cask": "cask",
+    "node": "npm_pkg",
+    "uv-tool": "pypi_pkg",
+    "sdkman": "candidate",
+    "dnf": "package",
+    "apt": "package",
+    "pacman": "package",
+    "rpm_ostree": "package",
+}
+
+
 # Named roots a script token may use as `{name}`, resolved in Python at run time, never by a shell.
 SCRIPT_ROOTS: frozenset[str] = frozenset({"omz_root"})
 
@@ -329,6 +343,13 @@ class Method:
     params: dict[str, object] = field(default_factory=_empty_params)
     os: tuple[str, ...] = ()
     arch: tuple[str, ...] = ()
+
+
+def method_package(method: Method) -> str | None:
+    """The manager package name a method declares, or None: the one reader."""
+    param = KIND_PACKAGE_PARAM.get(method.kind)
+    value = method.params.get(param) if param is not None else None
+    return value if isinstance(value, str) and value else None
 
 
 @dataclass(frozen=True)

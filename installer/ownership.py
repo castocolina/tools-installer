@@ -67,7 +67,7 @@ from installer.install_ownership import (
     path_owner_package,
 )
 from installer.locations import applications_dir, opt_dir
-from installer.model import Method, Tool
+from installer.model import KIND_PACKAGE_PARAM, Method, Tool, method_package
 from installer.platform import Platform
 from installer.pnpm_globals import pnpm_global_packages
 from installer.resolve import resolve_methods
@@ -1549,17 +1549,6 @@ _NO_REMOVAL_HINT: frozenset[Owner] = frozenset({"unknown", "installer"})
 # just do not share a substring.
 _LABEL_AGREEMENT_EXEMPT: frozenset[Owner] = frozenset({"cask"})
 
-_KIND_PACKAGE_PARAM: dict[str, str] = {
-    "brew": "formula",
-    "cask": "cask",
-    "node": "npm_pkg",
-    "uv-tool": "pypi_pkg",
-    "sdkman": "candidate",
-    "dnf": "package",
-    "apt": "package",
-    "pacman": "package",
-    "rpm_ostree": "package",
-}
 _NATIVE_KIND_TO_OWNER: dict[str, Owner] = {
     "dnf": "dnf",
     "apt": "apt",
@@ -1568,17 +1557,10 @@ _NATIVE_KIND_TO_OWNER: dict[str, Owner] = {
 }
 
 
-def method_package(method: Method) -> str | None:
-    """The manager package name a method declares, or None: the one reader."""
-    param = _KIND_PACKAGE_PARAM.get(method.kind)
-    value = method.params.get(param) if param is not None else None
-    return value if isinstance(value, str) and value else None
-
-
 def method_removal_command(method: Method, fallback: str) -> str | None:
     """Return the exact removal command for a method kind, or None for vendor scripts."""
     owner = _KIND_TO_OWNER.get(method.kind) or _NATIVE_KIND_TO_OWNER.get(method.kind)
-    if owner is None or method.kind not in _KIND_PACKAGE_PARAM:
+    if owner is None or method.kind not in KIND_PACKAGE_PARAM:
         return None
     template = _REMOVAL_COMMANDS.get(owner)
     if template is None:

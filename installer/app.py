@@ -3,14 +3,15 @@
 import contextlib
 import dataclasses
 import os
+import shlex
 import shutil
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
 
-from installer import shellrc
+from installer import receipts, shellrc
 from installer.atomic import atomic_write_text
 from installer.cli import Options
 from installer.diskusage import DiskPressure
@@ -80,6 +81,8 @@ from installer.uninstall import (
     active_policies,
     plan_removal,
     policy_owned,
+    removal_plan,
+    remove_paths,
     remove_proven,
     sweep_policies,
     sweep_tweaks,
@@ -495,6 +498,70 @@ def _has_daemon_id(ids: tuple[str, ...]) -> bool:
     return any(policy_id.startswith("daemon:") for policy_id in ids)
 
 
+@dataclass(frozen=True)
+class ToolRemoval:
+    """One tool's removal outcome. `detail` is its one-line reason when it was not removed."""
+
+    tool_id: str
+    removed: bool
+    detail: str = ""
+    refused: tuple[str, ...] = ()
+
+
+def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
+    """The line the CLI and the preview print before a vendor or manager command runs."""
+    return f"{tool_id}: runs {shlex.join(argv)}"
+
+
+def remove_tool(
+    tool: Tool,
+    *,
+    paths: tuple[Path, ...],
+    argv: tuple[str, ...],
+    bin_dir: Path,
+    runner: Runner,
+) -> ToolRemoval:
+    """Remove one tool: its command, then its proven paths, then its receipt (D-07).
+
+    `paths` and `argv` are what the user saw before the confirm. The fresh plan is
+    proven again here, so the CLI and the TUI share the same post-confirm check: a
+    previewed path that moved, a command that changed, or a command whose paths shrank
+    refuses the whole tool before anything runs. A failed command deletes nothing and
+    keeps the receipt, so a later plan still sees the tool."""
+    try:
+        fresh = removal_plan(tool, bin_dir, verify=True)
+        named = {*fresh.removable, *fresh.yourself}
+        # A command runs only on the proof it was previewed against: with a command, every
+        # previewed path must still be removable, not merely named (review R2-02).
+        changed = [p for p in paths if p not in named or (bool(argv) and p not in fresh.removable)]
+        changed += [p for p in fresh.removable if p not in paths]
+        if changed or argv != fresh.argv or not (paths or argv):
+            refused = tuple(f"changed since the preview; not removed: {p}" for p in changed)
+            return ToolRemoval(tool.id, False, "changed since the preview; not removed", refused)
+        if argv:
+            try:
+                runner(list(argv))
+            except CommandError as exc:
+                line = next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
+                return ToolRemoval(tool.id, False, line)
+            trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
+            # The vendor command may have removed part of what the receipt recorded; only
+            # what is still there is re-proven, so a path it already removed is not a refusal.
+            still_there = [
+                fresh.artifacts[p] for p in fresh.removable if p.exists() or p.is_symlink()
+            ]
+            refused_paths = remove_paths(still_there, trees=trees)
+            refused = tuple(f"changed since the preview; not removed: {p}" for p in refused_paths)
+        else:
+            _removed, refused = remove_proven([tool], list(paths), bin_dir)
+        if refused:
+            return ToolRemoval(tool.id, False, refused[0], refused)
+        receipts.delete(tool.id)
+        return ToolRemoval(tool.id, True)
+    except OSError as exc:
+        return ToolRemoval(tool.id, False, first_line(exc))
+
+
 def run_uninstall(
     tools: list[Tool],
     console: Console,
@@ -647,6 +714,8 @@ class UninstallDecision:
     remove_ban: bool
     remove_path_block: bool
     remove_tweaks: bool = False
+    # The vendor or manager command each tool's preview showed (empty when it has none).
+    argv: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
 
 
 def perform_uninstall(
@@ -659,6 +728,7 @@ def perform_uninstall(
     zshrc_path: Path,
     daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
+    runner: Runner,
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. Unlike `run_uninstall`, nothing is removed all-or-nothing: a
@@ -694,27 +764,18 @@ def perform_uninstall(
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
     for tool in decision.tools:
-        previewed = decision.paths.get(tool.id, ())
-        try:
-            # Planning reads the disk too (a non-searchable parent raises).
-            plan = plan_removal([tool], bin_dir)
-            named = {*plan.removable, *plan.yourself}
-            # A path that dropped out, or one a reinstall added, is a change.
-            changed = [p for p in previewed if p not in named]
-            changed += [p for p in plan.removable if p not in previewed]
-            if not previewed or changed:
-                refused += tuple(f"changed since the preview; not removed: {p}" for p in changed)
-                remove_failed.append((tool.id, "changed since the preview; not removed"))
-                continue
-            _gone, tool_refused = remove_proven([tool], list(previewed), bin_dir)
-        except OSError as exc:
-            remove_failed.append((tool.id, first_line(exc)))
-            continue
-        refused += tool_refused
-        if tool_refused:
-            remove_failed.append((tool.id, tool_refused[0]))
-        else:
+        outcome = remove_tool(
+            tool,
+            paths=decision.paths.get(tool.id, ()),
+            argv=decision.argv.get(tool.id, ()),
+            bin_dir=bin_dir,
+            runner=runner,
+        )
+        refused += outcome.refused
+        if outcome.removed:
             removed.append(tool.id)
+        else:
+            remove_failed.append((tool.id, outcome.detail))
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)

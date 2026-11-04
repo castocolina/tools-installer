@@ -12,10 +12,16 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Literal, cast
 
 from installer import receipts
-from installer.download import DOWNLOAD_KINDS, artifact_paths, is_still_proven
-from installer.model import Method, Tool
+from installer.download import (
+    DOWNLOAD_KINDS,
+    artifact_paths,
+    expand_script_token,
+    is_still_proven,
+)
+from installer.model import Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
@@ -52,6 +58,9 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
+RemovalLevel = Literal["manager", "artifacts", "recipe", "none"]
+
+
 @dataclass(frozen=True)
 class RemovalPlan:
     """The strict split of a tool set's on-disk matches (CONTEXT D-04).
@@ -75,6 +84,29 @@ class RemovalPlan:
     artifacts: Mapping[Path, receipts.ReceiptArtifact] = field(
         default_factory=dict[Path, receipts.ReceiptArtifact]
     )
+    # How the tool is removed (D-06): `manager` (argv = the manager's uninstall for the
+    # receipt's package), `recipe` (argv = the vendor `remove`, bound to a proven leaf,
+    # or none, plus the proven paths), `artifacts` (proven paths only), or `none`.
+    level: RemovalLevel = "none"
+    argv: tuple[str, ...] = ()
+    # Declared config entries that exist now, expanded; never deleted by this module.
+    config: tuple[Path, ...] = ()
+    hint: str | None = None
+
+
+# The argv prefix that uninstalls a package of each manager kind (L1, D-06). The package
+# is appended from the receipt, and only when that receipt names a package the tool declares.
+MANAGER_UNINSTALL_ARGV: dict[str, tuple[str, ...]] = {
+    "brew": ("brew", "uninstall"),
+    "cask": ("brew", "uninstall", "--cask"),
+    "uv-tool": ("uv", "tool", "uninstall"),
+    "node": ("pnpm", "remove", "--global"),
+}
+
+
+def config_targets(tool: Tool) -> tuple[tuple[str, Path], ...]:
+    """Each declared config entry as (its `~` form, its expanded path), in declaration order."""
+    return tuple((entry, Path(entry).expanduser()) for entry in tool.config_paths)
 
 
 def _receipt_proof(
@@ -191,6 +223,78 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
         if p not in seen
     )
     return RemovalPlan(tuple(removable), yourself, by_tool, artifacts)
+
+
+def _manager_argv(tool: Tool, receipt: receipts.Receipt | None) -> tuple[str, ...]:
+    """L1: the manager's uninstall, only for a package this receipt names and the tool declares."""
+    if receipt is None or receipt.method.kind not in MANAGER_UNINSTALL_ARGV or not receipt.package:
+        return ()
+    declared = any(
+        method.kind == receipt.method.kind and method_package(method) == receipt.package
+        for method in tool.methods
+    )
+    if not declared:
+        return ()
+    return (*MANAGER_UNINSTALL_ARGV[receipt.method.kind], receipt.package)
+
+
+def _recipe_argv(
+    tool: Tool, receipt: receipts.Receipt | None, plan: RemovalPlan
+) -> tuple[str, ...]:
+    """L3: the vendor `remove`, its first word bound to a receipt-proven leaf (R2-03).
+
+    Needs a script receipt that proves at least one artifact (an empty legacy receipt
+    never authorizes the vendor command, R1-08). The first word must name a proven leaf,
+    by its absolute path or by a bare name only one leaf has; it is then replaced by that
+    leaf's absolute path, so no PATH copy ever runs."""
+    if receipt is None or receipt.method.kind != "script" or not plan.by_tool.get(tool.id):
+        return ()
+    scripts = [method for method in tool.methods if method.kind == "script"]
+    keyed = [m for m in scripts if receipts.method_key(m) == receipt.method.key]
+    method = keyed[0] if keyed else (scripts[0] if len(scripts) == 1 else None)
+    remove = method.params.get("remove") if method is not None else None
+    if not isinstance(remove, list) or not remove:
+        return ()
+    words: list[str] = []
+    for token in cast(list[object], remove):
+        expanded = expand_script_token(str(token))
+        if expanded is None:
+            return ()
+        words.append(expanded)
+    leaves = [plan.artifacts[p] for p in plan.by_tool[tool.id] if plan.artifacts[p].type == "leaf"]
+    head, *rest = words
+    if "/" in head:
+        matches = [leaf for leaf in leaves if str(leaf.path) == head]
+    else:
+        matches = [leaf for leaf in leaves if leaf.path.name == head]
+    if len(matches) != 1:
+        return ()
+    return (str(matches[0].path), *rest)
+
+
+def removal_plan(
+    tool: Tool, default_bin_dir: Path, *, verify: bool = False, hint: str | None = None
+) -> RemovalPlan:
+    """The one per-tool removal decision: its level, its argv, and what it proves (D-06).
+
+    Built on `plan_removal`, so every path still comes from receipt proof or the archive
+    layout. A manager argv needs this installer's own receipt to name a package the tool
+    declares; a recipe argv needs a script receipt with a proven artifact. Everything else
+    is `artifacts` (proven paths) or `none` (nothing to remove, hint only). `verify=True`
+    re-hashes what the proof rests on, which is the post-confirm re-plan."""
+    base = plan_removal([tool], default_bin_dir, verify=verify)
+    receipt = receipts.read(tool.id)
+    config = tuple(path for _entry, path in config_targets(tool) if _exists(path))
+    manager = _manager_argv(tool, receipt)
+    recipe = () if manager else _recipe_argv(tool, receipt, base)
+    level: RemovalLevel = "none"
+    if manager:
+        level = "manager"
+    elif base.removable and receipt is not None and receipt.method.kind == "script":
+        level = "recipe"
+    elif base.removable:
+        level = "artifacts"
+    return replace(base, level=level, argv=manager or recipe, config=config, hint=hint)
 
 
 def manager_name(method: Method, param: str, fallback: str) -> str:

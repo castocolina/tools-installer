@@ -856,6 +856,7 @@ def _build_app(
         # The sweep result is returned so the view reports what came off.
         return perform_uninstall(
             decision,
+            runner=run_captured,
             bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
             rc_paths=_RC_PATHS,

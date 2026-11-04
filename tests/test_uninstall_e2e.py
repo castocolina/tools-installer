@@ -21,6 +21,11 @@ from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, Unin
 from tests.screen_family import settle
 from tests.state_doubles import frozen_service, pass_state, removable_state
 
+
+def _no_removal_runner(cmd: list[str]) -> None:
+    raise AssertionError(f"no removal command expected: {cmd}")
+
+
 _LINUX = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
 
 _ARTIFACTS = Path(__file__).resolve().parent.parent / ".e2e-artifacts"
@@ -79,6 +84,7 @@ def _build_real_app(
             zshrc_path=home / ".zshrc",
             daemon_policy=None,
             extra_policies=(),
+            runner=_no_removal_runner,
         )
 
     inputs = UninstallInputs(
@@ -137,6 +143,7 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
             zshrc_path=zshrc,
             daemon_policy=None,
             extra_policies=(),
+            runner=_no_removal_runner,
         )
 
     inputs = UninstallInputs(
