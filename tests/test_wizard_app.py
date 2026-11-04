@@ -56,12 +56,13 @@ from installer.run import CommandError, Runner
 from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
-from installer.ui_common import BASE_VIEW
+from installer.ui_common import BASE_VIEW, VIEW_BY_NAME
 from installer.uninstall import RemovalPlan, SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     BROKEN_REPAIR_NOTE,
     BROKEN_SHIM_REASON,
+    LAYOUT_PROOF_NOTE,
     UNKNOWN_OWNER_NOTE,
     Health,
     ToolState,
@@ -8231,3 +8232,96 @@ async def test_a_refresh_while_the_modal_is_open_keeps_the_decision(tmp_path: Pa
         await settle(app, pilot)
     assert len(captured) == 1
     assert captured[0].config == {}
+
+
+async def test_a_flagged_row_shows_c_config_prefix_and_suffix() -> None:
+    """22-10: a flagged row reads [c], `config + ` and the deleted-too suffix."""
+    gh = _config_tool("gh", "~/.config/gh")
+    config_dir = Path.home() / ".config" / "gh"
+    app = _app(
+        cases=[(gh, _removable_with_config(gh, [config_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        kept = f"{LAYOUT_PROOF_NOTE} · config kept: ~/.config/gh (c deletes it too)"
+        assert screen.detail_text == kept
+        await pilot.press("c")
+        sel = table.get_cell("gh", "sel")
+        assert (sel.plain, sel.style) == ("[c]", "bold red")
+        removes = _uninstall_cell(table, "gh", "removes")
+        assert removes.startswith("config + ")
+        assert len(removes) <= 40
+        assert screen.detail_text == (
+            f"{LAYOUT_PROOF_NOTE} · config deleted too: ~/.config/gh (c keeps it)"
+        )
+        await pilot.press("c")
+        assert _uninstall_cell(table, "gh", "sel") == "[x]"
+        assert not _uninstall_cell(table, "gh", "removes").startswith("config + ")
+        assert screen.detail_text == kept
+
+
+async def test_declared_config_with_nothing_on_disk_reads_none_on_disk() -> None:
+    """22-10 (UI-SPEC empty): the toggle is offered; the suffix reads `none on disk`."""
+    gh = _config_tool("gh", "~/.config/gh")
+    app = _app(cases=[(gh, _removable_with_config(gh))], uninstall=_uninstall_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (
+            screen.detail_text
+            == f"{LAYOUT_PROOF_NOTE} · config kept: none on disk (c deletes it too)"
+        )
+        await pilot.press("c")
+        assert screen.detail_text == (
+            f"{LAYOUT_PROOF_NOTE} · config deleted too: none on disk (c keeps it)"
+        )
+
+
+async def test_c_explains_why_it_does_nothing() -> None:
+    """22-10: `c` answers why on a row it cannot apply to, and changes no mark or flag."""
+    rg, yq = _tool("rg"), _tool("yq")
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(rg, removable_state(rg, [Path("/opt/rg")])), (yq, managed_state(yq))],
+        uninstall=_uninstall_inputs(has_path_block=True, remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("c")  # rg is removable but declares no config
+        assert (screen.status.text, screen.status.severity) == (
+            "rg declares no config to delete.",
+            "warn",
+        )
+        await pilot.press("down")  # the "managed elsewhere" section title
+        await pilot.press("c")
+        assert (screen.status.text, screen.status.severity) == (
+            "This row has no config to delete.",
+            "warn",
+        )
+        await pilot.press("down")  # yq, managed elsewhere
+        await pilot.press("c")
+        assert (screen.status.text, screen.status.severity) == (
+            "yq cannot be removed here, so its config stays.",
+            "warn",
+        )
+        await pilot.press("down", "down")  # the environment title, then PATH wiring
+        await pilot.press("c")
+        assert (screen.status.text, screen.status.severity) == (
+            "This row has no config to delete.",
+            "warn",
+        )
+        assert screen.selected == set()
+    assert captured == []
+
+
+def test_the_uninstall_footer_names_c() -> None:
+    assert VIEW_BY_NAME["uninstall"].actions == (
+        "space mark | enter remove | a all | i invert | c config"
+    )

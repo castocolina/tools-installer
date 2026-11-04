@@ -1181,8 +1181,10 @@ class UninstallScreen(AppScreen):
         paths = state.removable.removable if selectable else ()
         argv = state.removable.argv if selectable else ()
         shown = ([shlex.join(argv)] if argv else []) + [str(path) for path in paths]
-        removes = Text(", ".join(shown) or "—", style=style)
+        flagged = selectable and tool.id in self._config_on
+        removes = Text(("config + " if flagged else "") + (", ".join(shown) or "—"), style=style)
         removes.truncate(_REMOVES_CELL_MAX, overflow="ellipsis")
+        config = self._config_clause(tool, state, flagged) if selectable else ""
         entry = _UninstallEntry(
             key=tool.id,
             cells=[
@@ -1195,7 +1197,7 @@ class UninstallScreen(AppScreen):
             ],
             selectable=selectable,
             detail=sanitize_log_line(
-                uninstall_detail(tool, state, self._required_by.get(tool.id, ()))
+                uninstall_detail(tool, state, self._required_by.get(tool.id, ()), config=config)
             ),
             paths=tuple(paths),
             is_ban=False,
@@ -1206,6 +1208,22 @@ class UninstallScreen(AppScreen):
         )
         self._painted[tool.id] = entry
         return entry
+
+    def _config_clause(self, tool: Tool, state: ToolState, flagged: bool) -> str:
+        """The detail clause for a removable row's declared config (UI-SPEC, How a row shows it)."""
+        if not tool.config_paths:
+            return ""
+        existing = [entry for entry, path in config_targets(tool) if path in state.removable.config]
+        where = ", ".join(existing) or "none on disk"
+        if flagged:
+            return f"config deleted too: {where} (c keeps it)"
+        return f"config kept: {where} (c deletes it too)"
+
+    def _mark_cell(self, item_id: str, selected: bool) -> Text:
+        """The sel cell: `[c]` on a marked row whose config flag is on (UI-SPEC A2)."""
+        if selected and item_id in self._config_on:
+            return Text("[c]", style="bold red")
+        return mark(selected)
 
     def _with_failure(self, entry: _UninstallEntry, tool: Tool) -> _UninstallEntry:
         """The row of a tool whose last removal failed: the failed word and the
@@ -1360,6 +1378,7 @@ class UninstallScreen(AppScreen):
             views=(("all", "All"),),
             detail_is_markup=False,
             selectable=lambda entry: entry.selectable,
+            mark_cell=self._mark_cell,
         )
 
     def _groups(self, _view: str) -> list[Section[_UninstallEntry]]:
@@ -1523,20 +1542,20 @@ class UninstallScreen(AppScreen):
     def action_toggle_config(self) -> None:
         """`c`: flag a removable row's config on (marking it too) or off (D-11, UI-SPEC A1)."""
         entry = self._highlighted_entry()
-        if (
-            entry is None
-            or entry.tool is None
-            or entry.group is not UninstallState.REMOVABLE
-            or not entry.tool.config_paths
-        ):
-            return
-        if entry.key in self._config_on:
-            self._config_on.discard(entry.key)
+        if entry is None or entry.tool is None:
+            self.status.set("This row has no config to delete.", "warn")
+        elif entry.group is not UninstallState.REMOVABLE:
+            self.status.set(f"{entry.key} cannot be removed here, so its config stays.", "warn")
+        elif not entry.tool.config_paths:
+            self.status.set(f"{entry.key} declares no config to delete.", "warn")
         else:
-            if entry.key not in self._browser.selected:
-                self._browser.action_toggle_selected()
-            self._config_on.add(entry.key)
-        self._browser.refresh_marks()
+            if entry.key in self._config_on:
+                self._config_on.discard(entry.key)
+            else:
+                if entry.key not in self._browser.selected:
+                    self._browser.action_toggle_selected()
+                self._config_on.add(entry.key)
+            self._repaint()  # the row's cells and detail bar name the flag
 
     def _accept_summary(self, ids: list[str]) -> str:
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)

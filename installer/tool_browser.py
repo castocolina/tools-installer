@@ -77,6 +77,9 @@ class BrowserAdapter(Generic[T]):
     selectable: Callable[[T], bool] = field(default_factory=lambda: lambda _item: True)
     # The detail bar's text when the current view has no item rows (an empty tier).
     empty_detail: str | None = None
+    # The sel cell of a row, for an adapter that adds a marker beyond [x]/[ ] (the
+    # Uninstall `[c]`). Absent: every re-stamp uses the shared two-state `mark`.
+    mark_cell: Callable[[str, bool], Text] | None = None
 
 
 def _cut_rows(text: Text, rows: int, width: int, console: Console) -> Text:
@@ -324,7 +327,13 @@ class ToolBrowser(Widget, Generic[T]):
             if item is None or not self._adapter.selectable(item):
                 continue  # section rows / non-selectable rows keep their rendered cell
             item_id = self._adapter.item_id(item)
-            table.update_cell(item_id, "sel", mark(item_id in self.selected))
+            table.update_cell(item_id, "sel", self._sel_cell(item_id))
+
+    def _sel_cell(self, item_id: str) -> Text:
+        """The sel cell of a selectable row: the adapter's own marker when it has one."""
+        if self._adapter.mark_cell is not None:
+            return self._adapter.mark_cell(item_id, item_id in self.selected)
+        return mark(item_id in self.selected)
 
     def action_toggle_selected(self) -> None:
         item = self._highlighted_item()
@@ -334,7 +343,7 @@ class ToolBrowser(Widget, Generic[T]):
             return
         item_id = self._adapter.item_id(item)
         self.selected.symmetric_difference_update({item_id})
-        self.query_one(DataTable[Any]).update_cell(item_id, "sel", mark(item_id in self.selected))
+        self.query_one(DataTable[Any]).update_cell(item_id, "sel", self._sel_cell(item_id))
         self.post_message(self.SelectionChanged(item_id, item_id in self.selected))
 
     def action_select_all(self) -> None:

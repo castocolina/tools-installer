@@ -176,7 +176,7 @@ VIEWS: tuple[View, ...] = (
         glyph="o",
         style="red",
         hint="space marks; enter removes marked items (you'll confirm)",
-        actions="space mark | enter remove | a all | i invert",
+        actions="space mark | enter remove | a all | i invert | c config",
     ),
     View(
         name="policies",

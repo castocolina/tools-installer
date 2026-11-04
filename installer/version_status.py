@@ -1976,10 +1976,14 @@ def uninstall_label(state: ToolState | None) -> str:
     return removal_label(state.ownership) or owner_label(state.ownership) or "unknown"
 
 
-def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[str] = ()) -> str:
+def uninstall_detail(
+    tool: Tool, state: ToolState | None, required_by: Sequence[str] = (), *, config: str = ""
+) -> str:
     """The Uninstall detail sentence, reusing `removal_hint` and `HEALTH_DETAIL`.
 
-    Pure: reads only `state`. An unknown owner is never attributed (T-21-13).
+    `config` is the removable row's config clause (UI-SPEC: how a row shows it); it
+    follows the proof sentence. Pure: reads only `state`. An unknown owner is never
+    attributed (T-21-13).
     """
     group = uninstall_group(state)
     if state is None or group is None:
@@ -2019,6 +2023,8 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
             text = f"{hint} — found at {state.ownership.active_path}"
         else:
             text = hint
+    if config:
+        text += f" · {config}"
     text += _yourself_suffix(state)
     if required_by:
         text += f" · required by {', '.join(required_by)}"
