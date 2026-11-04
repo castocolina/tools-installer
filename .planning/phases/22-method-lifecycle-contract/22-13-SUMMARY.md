@@ -203,3 +203,60 @@ D-1 is closed: no `remove failed` line, uninstall exit 0, every removable receip
 - **Emptied parents or lock stubs**: `.local/opt` (empty), `.local/share/fnm/aliases` (empty), `.homebrew` (`trust.json.lock` only).
 
 D-2 needs registry `paths` declarations for the sibling executables and a residue-class decision for the rest. That is 22-13's data scope across about 15 tools, not the D-1 remover fix, so it is recorded and not fixed here. Needed next: classify and fix D-2, then one more `make e2e`.
+
+## D-2 closure
+
+Fix commit `9cf3a69` (`fix(22-13): declare sibling executables and classify e2e runtime residue`), on top of base `1b10477`. One `make e2e` run from the worktree (disposable `tools-installer-e2e` Fedora container, removed afterwards). No second or third run was needed.
+
+```
+PASS1_COUNTS installed=67 updated=0 skipped=5 failed=0 dependency_failed=0 mismatched=0 blocked=3 manual=14 not_attempted=0 crashed=0 post_run_errors=0 summaries=1 runs=1 setup_exit=0
+TRACER_CLEAN_INSTALL_OK installed=67 updated=0 skipped=5 failed=0 blocked=3 manual=14
+TRACER_RECEIPT_OK tool=yq
+TRACER_RERUN_OK installed=0 updated=1 skipped=71 failed=0 dependency_failed=0 blocked=3 manual=14
+TRACER_RECEIPT_PRE_UNINSTALL_OK tool=yq
+TRACER_RECEIPT_PATHS_OK recorded=113 removable=61
+TRACER_UNINSTALL_OK
+TRACER_RECEIPT_REMOVAL_OK tool=yq
+TRACER_RECEIPTS_GONE_OK count=61
+TRACER_LEFTOVER_OK
+TRACER_REINSTALL_OK installed=61 updated=0 skipped=11 failed=0 dependency_failed=0 blocked=3 manual=14
+TRACER_CONTAINER_TEARDOWN_OK
+make e2e exit=0
+```
+
+`podman ps -a --filter name=tools-installer-e2e` is empty after the run.
+
+### How each of the 27 roots was classified
+
+| Root | Classification |
+|------|----------------|
+| `.bun/bin` | declared leaf: bun `paths` gains `~/.bun/bin/bunx` (created by the script's `completions` step); dir empty after |
+| `.local/share/pnpm/bin` | declared leaves: pnpm `paths` gains `pn`, `pnpx`, `pnx`; dir empty after |
+| `.volta/bin` | declared leaves: volta `paths` gains `node`, `npm`, `npx`, `pnpm`, `yarn`, `yarnpkg`; dir empty after |
+| `.config/glow` | `config_paths` for glow (`glow.yml` in `XDG_CONFIG_HOME/glow`, per glow main.go) |
+| `.local/opt`, `.local/share/fnm/aliases` | harness rule: `home_listing` skips empty directories (both empty after uninstall) |
+| `.claude.json`, `.codegraph`, `.gradle`, `.npm` | allowlist: runtime state or cache written by tool runs |
+| `.config/draw.io` | allowlist: Electron profile (caches, GPU and local storage), not clearly config |
+| `.config/google-chrome-for-testing` | allowlist: browser profile and crash reports written by a browser run |
+| `.config/rtk`, `.local/share/rtk` | allowlist: rtk runtime state; rtk removal is a later user phase (not declared) |
+| `.homebrew` | allowlist `.homebrew/trust.json.lock` only: brew lock file |
+| `.local/share/opencode`, `.local/state/claude`, `.local/state/gh`, `.local/state/opencode` | allowlist: tool runtime state |
+| `.local/share/pnpm/store`, `.local/state/pnpm`, `.local/state/fnm_multishells` | allowlist: pnpm store (22-08 store roots) and runtime state |
+| `.volta/cache`, `.volta/layout.v4`, `.volta/log`, `.volta/tmp`, `.volta/volta.lock` | allowlist: volta cache, layout, log, temp and lock files |
+
+Counts: 3 declared leaf sets, 1 `config_paths`, 2 harness-rule cases, 21 allowlist entries.
+
+### Decisions and trade-offs
+
+- **Empty parents (harness rule, not allowlist).** Allowlisting `.local/opt` would have covered its whole subtree and hidden any undeclared install under it, which is exactly what this check exists to catch. Skipping empty directories in `home_listing` (one line) only hides directories that hold no file. Trade-off: a surviving empty must-clear or receipt-recorded directory is no longer reported. This is recorded as a shortcut in the function comment.
+- **Extra leaf `yarnpkg`.** The brief listed five volta shims. The after-listing and the disposable-container run both show `yarnpkg` too, so it is declared.
+- **`bunx`.** The bun install script does not write it directly. Its `$exe completions` call makes the bun binary link `bunx` beside itself, so it is declared with that cited.
+- **draw.io.** Its profile directory is mostly Electron caches and storage, so it is allowlisted rather than declared as `config_paths`.
+- **Allowlist header.** The header says a tool's own files belong in `paths` or `config_paths`. The runtime-state entries above are not install artifacts; they are the residue classes the brief's decision 2 names. This is noted as a deliberate reading of the header.
+- **Not verified.** The macOS pnpm stanza does not get the `pn`, `pnpx`, `pnx` leaves, because those aliases were not checked on macOS. 22-08's phrase "plus any other ~/.volta/ content beyond the three leaves" is superseded for the shim leaves by this decision.
+
+### Tests
+
+- RED (before the change, same commit's tests): 5 failing, `test_script_lifecycle_data[bun/volta/pnpm]`, `test_glow_declares_its_documented_config_dir`, `test_home_listing_skips_empty_directories`.
+- GREEN: `make validate` exit 0. `make test`: `5543 passed, 4 skipped`, coverage 96.32%, exit 0. Shellcheck notes on the harness stay at 3, and the harness line count is unchanged, so the classified PATH line numbers hold.
+- A dry run of the pure `new_leftovers` check on the real 22-13 listings, with the new declarations applied, passed before the e2e (`TRACER_LEFTOVER_OK`). The same listings produced 27 roots before the change.
