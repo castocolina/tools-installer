@@ -31,7 +31,7 @@ from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
 from installer import daemon, env_redirect
-from installer.app import UninstallDecision, path_writer_lines_for
+from installer.app import UninstallDecision, path_writer_lines_for, removal_runs_line
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -1541,9 +1541,29 @@ class UninstallScreen(AppScreen):
         # change what the user confirmed (review R1-20).
         decision = self._decision(event.ids)
         self.app.push_screen(
-            ConfirmUninstall(self._accept_summary(event.ids)),
+            ConfirmUninstall(self._accept_summary(event.ids), self._review(decision)),
             self._on_confirm(decision),
         )
+
+    def _review(self, decision: UninstallDecision) -> tuple[Text, ...]:
+        """Blocks 3-4 of the review: what each command runs, and the config it deletes.
+
+        Every id, command and path is data: it goes through `sanitize_log_line` and is
+        appended as plain `Text`, never interpolated into markup (UI-SPEC, Data)."""
+        lines: list[Text] = []
+        for tool in decision.tools:
+            if argv := decision.argv.get(tool.id):
+                lines.append(Text(sanitize_log_line(removal_runs_line(tool.id, argv))))
+        deleted = [
+            Text(f"  {sanitize_log_line(entry)} ({sanitize_log_line(tool.id)})")
+            for tool in decision.tools
+            for entry, path in config_targets(tool)
+            if path in decision.config.get(tool.id, ())
+        ]
+        if deleted:
+            lines.append(Text("Config deleted too:", style="bold red"))
+            lines.extend(deleted)
+        return tuple(lines)
 
     def _highlighted_entry(self) -> _UninstallEntry | None:
         key = self._browser.highlighted_id()
@@ -2678,18 +2698,20 @@ class ConfirmUninstall(ModalScreen[bool]):
     ConfirmUninstall > Static { width: 60; border: round red; padding: 1 2; }
     """
 
-    def __init__(self, summary: str) -> None:
+    def __init__(self, summary: str, review: Sequence[Text] = ()) -> None:
         super().__init__()
         self.summary = summary  # public test seam
+        self.review = tuple(review)  # public test seam: the review blocks, all `Text`
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            Text.from_markup(
-                f"[bold red]Remove {self.summary}?[/]\n\n"
-                "This deletes installed artifacts and is not undoable.\n"
-                "[dim]enter remove · esc cancel[/]"
-            )
-        )
+        lines = [
+            Text(f"Remove {self.summary}?", style="bold red"),
+            Text(""),
+            Text("This deletes installed artifacts and is not undoable."),
+            *self.review,
+            Text("enter remove · esc cancel", style="dim"),
+        ]
+        yield Static(Text("\n").join(lines))
 
     def action_confirm(self) -> None:
         self.dismiss(True)

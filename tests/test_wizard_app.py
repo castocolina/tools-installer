@@ -8458,3 +8458,92 @@ async def test_flags_start_off_on_every_visit() -> None:
         await settle(app, pilot)
     assert len(captured) == 1
     assert captured[0].config == {}
+
+
+# -- 22-11: the confirm modal is the review (UI-04, LIFE-08) ------------------
+
+
+def _confirm(app: App[Any]) -> ConfirmUninstall:
+    screen = app.screen
+    assert isinstance(screen, ConfirmUninstall)
+    return screen
+
+
+async def test_the_review_lists_exactly_the_paths_the_removal_deletes() -> None:
+    """22-11 tracer: the review names each command and the config it deletes, and the
+    confirm hands the remover those same paths."""
+    gh = _config_tool("gh", "~/.config/gh")
+    gh_dir = Path.home() / ".config" / "gh"
+    gh_removable = RemovalPlan(
+        (Path("/opt/gh"),), (), config=(gh_dir,), level="manager", argv=("brew", "uninstall", "gh")
+    )
+    vend_method = Method(
+        kind="script", params={"paths": ["~/.local/bin/vend"], "remove": ["vend", "uninstall"]}
+    )
+    vend = Tool(id="vend", name="vend", category="dev", cmd="vend", methods=(vend_method,))
+    vend_removable = RemovalPlan(
+        (Path("/opt/vend/bin/vend"),),
+        (),
+        level="recipe",
+        argv=("/opt/vend/bin/vend", "uninstall", "--force"),
+    )
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[
+            (gh, plan_state(gh, removable=gh_removable)),
+            (vend, plan_state(vend, removable=vend_removable)),
+        ],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("c")  # the highlighted row is gh: flagged, so marked too
+        await pilot.press("down")
+        await pilot.press("space")  # vend: marked, no config
+        await pilot.press("enter")  # the modal opens and shows the review
+        await pilot.pause()
+        # The order is the order the rows were marked: gh first, then vend.
+        assert [line.plain for line in _confirm(app).review] == [
+            "gh: runs brew uninstall gh",
+            "vend: runs /opt/vend/bin/vend uninstall --force",
+            "Config deleted too:",
+            "  ~/.config/gh (gh)",
+        ]
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].config == {"gh": (gh_dir,)}
+
+
+async def test_an_empty_review_reads_as_before() -> None:
+    """22-11: a review with no runs, no config and no pnpm group reads as Phase 21 did."""
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _confirm(app).review == ()
+        assert str(app.screen.query_one(Static).render()) == (
+            "Remove 1 tool(s)?\n\nThis deletes installed artifacts and is not undoable.\n"
+            "enter remove · esc cancel"
+        )
+
+
+async def test_the_review_body_is_plain_text() -> None:
+    """22-11 (T-22-27): a config path with markup renders literally, never as style."""
+    odd = _config_tool("gh", "~/.config/[red]x[/]")
+    odd_dir = Path.home() / ".config" / "[red]x[/]"
+    app = _app(
+        cases=[(odd, _removable_with_config(odd, [odd_dir]))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("c")
+        await pilot.press("enter")
+        await pilot.pause()
+        review = _confirm(app).review
+        assert "  ~/.config/[red]x[/] (gh)" in [line.plain for line in review]
+        assert "[red]x[/]" in str(app.screen.query_one(Static).render())
+        assert not any(span.style == "red" for line in review for span in line.spans)
