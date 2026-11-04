@@ -1,8 +1,8 @@
 ---
 phase: 22
 reviewers: [opencode-referee-one]
-reviewed_at: 2026-11-04T01:34:56Z
-cycle: 1
+reviewed_at: 2026-11-04T02:52:00Z
+cycle: 2
 plans_reviewed: [22-01-PLAN.md, 22-02-PLAN.md, 22-03-PLAN.md, 22-04-PLAN.md, 22-05-PLAN.md, 22-06-PLAN.md, 22-07-PLAN.md, 22-08-PLAN.md, 22-09-PLAN.md, 22-10-PLAN.md, 22-11-PLAN.md, 22-12-PLAN.md, 22-13-PLAN.md]
 models:
   opencode-referee-one: "router-env/my-referee-one"
@@ -16,7 +16,7 @@ model_sources:
 ## Plan-Revision Conflicts
 <!-- gsd:plan-revision-conflicts:end -->
 
-## Cycle 1 (current) — reviewed at HEAD 8639fda
+## Cycle 1 — reviewed at HEAD 8639fda
 
 Reviewer: opencode-referee-one (`opencode run --model router-env/my-referee-one`). It was the only reviewer, so there is no consensus gate. It read all 13 plans and the locked inputs (22-SPEC, 22-CONTEXT, 22-UI-SPEC, 22-RESEARCH, 22-REUSE, 22-VALIDATION and the `| 22 |` RUN-LEDGER rows). It grounded its claims with `codegraph explore` against HEAD `8639fda`, modified no file, and ran no tests, containers or UAT. The raw output is `.review-diagnostics/20261104T013456Z-plan-review-cycle1/opencode-referee-one/lane.out` (gitignored).
 
@@ -198,3 +198,67 @@ Replanned in reviews mode against this file at `b8dad84`. Plan count (13), task 
 Open items for the orchestrator:
 - R1-11: with nothing recorded left (the opencode anchor's single path, deleted by its own `remove`), the pass retires the receipt and the tool reads MISSING, not BROKEN. Not removable and nothing re-run hold in both cases. SPEC:165 may be amended to "broken when anything recorded is left; retired when nothing is", or the reading accepted as is.
 - R1-14 and R1-22's "invalidation on mutation" were resolved by recorded decisions rather than new code; each plan's ledger gives the reason.
+
+## Cycle 2 Review (opencode-referee-one)
+
+Reviewer: opencode-referee-one (`opencode run --model router-env/my-referee-one`), detached run, the only reviewer. It reviewed the 13 cycle-2 plans at HEAD `eed34cf` against the locked inputs and the working-tree ledger sign-offs (rows 254-256), grounded its claims in source and in upstream OpenCode v1.19.5, edited nothing, and ran no tests, containers or UAT. Raw output: `.review-diagnostics/20261104T025200Z-plan-review-cycle2/opencode-referee-one/lane.out` (gitignored, `lane.rc` 0). Its mechanical checks need no change: the `files_modified` sets are disjoint within all 7 waves, the dependencies are acyclic, every cross-wave overlap has a dependency path, and all 63 referenced paths exist.
+
+### R1 disposition
+
+All 25 cycle-1 items are **RESOLVED** in the plans (R1-01..R1-25), with R1-11, R1-14 and R1-22 resolved by the binding sign-off in ledger row 256. The reviewer re-raised none of them; the all-gone → MISSING reading (R1-11) and the hint deferral (R1-14) are explicitly not re-raised. Two new items sit beside R1 items without reopening them: R2-02 is distinct from R1-10 (the path refusal, not the argv re-proof), and R2-06 is the reverse alias of R1-17 (a harness marker pointing at the target, not a config ancestor pointing into a harness dir).
+
+### New concerns, source-verified
+
+The planner re-checked each concern with `codegraph explore` and a Read of the cited lines at `115253a` (no code changed since `eed34cf`), and the two OpenCode concerns against upstream `anomalyco/opencode` v1.19.5.
+
+| ID | Plan | Severity | Verdict | Evidence | Required plan change |
+|---|---|---|---|---|---|
+| R2-01 | 22-03 (22-05) | HIGH | CONFIRMED | `ownership._collect_candidates` (`installer/ownership.py:1058-1087`) picks `installer_method` only among download and app kinds and creates the `installer` artifact candidate before the location branch, whose `setdefault` cannot replace it. Its `artifacts` come from `VersionRefreshService._artifacts` (`installer/version_status.py:1560-1563`) = `plan_uninstall`, which reads `artifact_paths`; 22-03's script branch fills it. A script-only tool then gets `method=None` and `u` fails at `installer/update.py:386-387`. No registry tool mixes script with download/app kinds (checked: uv, codex, claude, opencode, bun, pnpm, volta, fnm, kitty) | Fix the method choice in the commit that adds script artifacts; prove refresh → `resolve_owner` → `UpdateService.run` without a handcrafted ownership record |
+| R2-02 | 22-06 | HIGH | CONFIRMED | `22-06-PLAN.md:113` step 2 handed `remove_proven` the fresh `plan.removable`; `remove_proven` writes refusal lines only for paths it is handed (`installer/uninstall.py:315-326`). A drifted receipted raw file drops out of `removable` (`_receipt_proof` returns `()` on drift) into `yourself`, passes the "in removable or yourself" check, gets no refusal, and step 3 deletes the receipt; 22-09 would then delete its config. Today `installer/app.py:709` passes the previewed list, and `tests/test_app.py:4041-4079` and `:4132-4145` require the refusal | Re-prove the previewed paths; any refusal fails the tool and keeps receipt and config |
+| R2-03 | 22-06 | HIGH | CONFIRMED | The plan ran the bare word `opencode`. Upstream v1.19.5 `installation/index.ts` `method()` returns `curl` only when `process.execPath` contains `.opencode/bin` or `.local/bin`, otherwise queries npm, yarn, pnpm, bun, brew, scoop and choco inventories, and `cli/cmd/uninstall.ts` then runs that manager's uninstall. A PATH-shadowing manager copy would remove a package with no receipt. The concern holds for any recipe `remove`, not only opencode | Run a recipe command from its receipt-proven absolute executable; fail closed otherwise |
+| R2-04 | 22-06 | MEDIUM | CONFIRMED | `installer/run.py:50-57` `run_command` inherits stdin and the session and raises `CommandError` with an empty `detail`; `run_output_with_stderr` (`:87-104`, behind `run_captured`) sets `stdin=DEVNULL`, `start_new_session=True` and puts stderr in `detail`. T-22-16 claimed the latter for the CLI path bound to the former | Bind `run_captured` for the CLI remover too and test the binding |
+| R2-05 | 22-08 (22-06, 22-07, 22-11) | HIGH | CONFIRMED | Upstream v1.19.5 `cli/cmd/uninstall.ts`: for a curl install, `getShellConfigFile` returns the first rc file (by `$SHELL`) containing `# opencode` or `.opencode/bin`, and `cleanShellConfig` runs whenever that target exists, with no reference to `--keep-config`/`--keep-data`; it deletes the `# opencode` line, `export PATH=` lines containing `.opencode/bin` and `fish_add_path` lines containing `.opencode`, then rewrites the file. No flag skips it except `--dry-run`. Beyond the reviewer's finding: the same command always deletes the Cache and State dirs (only Data and Config honor the keep flags), and it never deletes the binary (curl installs get only an `rm "<binary>"` hint). The registry installs with `--no-modify-path` (`installer/registry.toml:1503-1511`), so any such rc line is the user's | Keep the principle: no vendor `remove` for opencode; its removal is the receipt-proven binary. Needs orchestrator sign-off (it amends the SPEC anchor) |
+| R2-06 | 22-09 | HIGH | CONFIRMED | The predicate at `22-09-PLAN.md:98` resolves only `path.parent` and compares it with resolved markers. With a real `~/.config/gh` and `~/.claude -> ~/.config/gh`, `realpath(~/.config)` is `~/.config`, the check passes, and `rmtree` deletes the harness data; the same holds for `~/.claude -> ~/.config/gh/sub` | Resolve a non-symlink target and refuse when a resolved marker is it or under it; keep final symlinks unlink-only; add fixtures |
+| R2-07 | 22-12 | HIGH | CONFIRMED | Task 1's transient test (`22-12-PLAN.md:122`) calls `greedy_casks()`, implemented in Task 2 (`:168`); the cache encoder (`installer/version_cache.py:376-381`) drops `greedy` until Task 3. Task 1 cannot be GREEN on its own tree, against the per-task green-commit rule (`:102`) | Move the accessor and the cache encoding into Task 1; Task 2 keeps only the upgrade argv |
+| R2-08 | 22-12 | MEDIUM | CONFIRMED | `invalidate` sets `_managers_invalid` and writes `managers={}` (`installer/version_status.py:1248-1258`); the next pass starts with `snapshot=None` (`:1619`), so `_merge_outdated` falls back to `_EMPTY_OUTDATED` and cannot keep the previous cask map the test expected. Publishing `outdated.greedy or frozenset()` would also erase a retained greedy set after a failed read with no previous snapshot | Specify the aged-snapshot and invalidated-snapshot cases separately; never publish a None greedy read; keep the R1-22 sign-off |
+
+### Rejected
+
+None. All 8 concerns held up: 8 CONFIRMED, 0 PARTIAL, 0 REFUTED (6 HIGH, 2 MEDIUM, 0 LOW).
+
+Reviewer suggestions not adopted (not concerns): an adversarial container fixture with a pre-existing shell PATH line (22-08). Once opencode runs no vendor uninstall, no removal command touches a shell rc file, so the fixture would test nothing. It becomes necessary when a `remove` lands for any tool. The other suggestions are already in the plans (the AST test's scope in 22-02, `HOMEBREW_NO_SUDO` in 22-08, the frozen decision's paths in 22-11's tracer, the blocking recorded run in 22-13).
+
+CYCLE_SUMMARY: current_high=6 current_actionable=8
+
+## Cycle 2 resolution
+
+Replanned in reviews mode against this file. Plan count (13), task count (39), wave count (7), every plan ID and every `depends_on` edge are unchanged. Same-wave `files_modified` sets stay disjoint. The only new entries are 22-03's `installer/ownership.py` and `tests/test_ownership.py` (wave 2, beside 22-04, which touches neither). Their later users, 22-06 (wave 3) and 22-07 (wave 4), already reach 22-03 through `depends_on`. Each affected plan carries a `### Round 2 — cycle 2 review at eed34cf` ledger. 22-VALIDATION's rows follow; the task-to-test mapping changed only inside existing rows.
+
+| ID | Plan(s) changed | How resolved |
+|---|---|---|
+| R2-01 | 22-03, 22-05, 22-VALIDATION | 22-03 Task 1 (the commit that adds script artifacts) chooses the artifact candidate's method from `_INSTALLER_KINDS` (script included); `test_a_script_tools_declared_path_keeps_its_script_method`; T-22-45. 22-05 Task 1 adds `test_a_script_tool_found_by_its_declared_paths_runs_its_declared_update`: refresh → `resolve_owner` → `UpdateService.run`, with no `artifacts_for` override and no handcrafted ownership |
+| R2-02 | 22-06, 22-09 | `remove_tool` step 2 without an argv hands `remove_proven` the previewed `paths` (as `app.py:709` does today). With an argv, a previewed path missing from the fresh `removable` refuses the tool before the command runs. Any step-2 refusal fails the tool and skips step 3; `test_a_drifted_previewed_path_fails_the_tool_and_keeps_its_receipt`; the two existing refusal tests are named regressions in Task 1's verify; T-22-46. 22-09 adds `test_a_refused_removal_keeps_the_config` |
+| R2-03 | 22-06, 22-07, 22-08, 22-11 | `removal_plan` binds the L3 argv's first word to a receipt-proven leaf's absolute path (exact path, or the bare name of exactly one proven leaf), else no argv; the preview shows the bound command; `test_a_recipe_command_that_names_no_proven_path_has_no_argv`; T-22-47. 22-08 requires a landed `remove` to name a declared leaf. The UI fixtures in 22-07 and 22-11 use the bound argv |
+| R2-04 | 22-06 | Both removers bind `run_captured`; `test_both_removers_bind_run_captured`; acceptance greps (`runner=run_captured` at least 3, `run_command` 0 in `setup.py`); T-22-16 rewritten |
+| R2-05 | 22-08 (fallout 22-06, 22-07, 22-11, 22-VALIDATION) | Decision below: `opencode` declares `paths = ["~/.opencode/bin/opencode"]` and its `update`, no `remove`. The Task 1 verify-first step reads `uninstall.ts` at the fetched tag and stops if a skip-every-edit flag exists. The one-liner asserts no `remove`. A general rule allows a `remove` only with source evidence that it stays inside the declared `paths`; T-22-48. The 22-06/07/11 tests use the test-local recipe `vend` instead of an opencode anchor |
+| R2-06 | 22-09 | `delete_config_path` resolves a non-symlink target and refuses when a resolved marker `is_relative_to` it; final symlinks stay unlink-only; `test_a_config_dir_a_harness_marker_points_to_is_refused` (target, descendant, unrelated marker, final symlink); acceptance greps; T-22-40 extended |
+| R2-07 | 22-12 | Tasks re-cut: Task 1 holds the readers, the pass wiring, `_greedy`/`greedy_casks()` and the cache encode/decode (5 files). Task 2 holds only the upgrade argv and its binding (it no longer touches `version_status.py`). Task 3 pins the cache edge cases and the current-cask SKIP (test-only unless RED shows a gap). The accessor and reload tests move into Task 1 |
+| R2-08 | 22-12 | Two cases with two tests: an aged snapshot keeps the previous cask map and greedy set, reloaded from the cache; after `invalidate` the cask reads unknown (`outdated is None`, `stale`), never current. `_EMPTY_OUTDATED.greedy` is None and `_greedy` is written only from a non-None greedy (acceptance grep: no `greedy or frozenset()`); T-22-43 updated; the R1-22 sign-off is kept |
+
+### Decision needing orchestrator sign-off
+
+**R2-05: no vendor `remove` for opencode.** The binding principle is that nothing is removed or edited without proof, and that the installer never edits user shell rc lines it does not own. Upstream offers no way to keep the vendor command within it. On the curl install this registry makes, `opencode uninstall --keep-config --keep-data --force`:
+- rewrites the user's rc file;
+- deletes `~/.cache/opencode` and `~/.local/state/opencode` unconditionally;
+- does not delete the binary at all.
+
+Every useful part of the removal is therefore the receipt-proven binary delete this installer already does. Chosen design: `opencode` declares `paths` and `update` only, and its removal is the receipt-proven `~/.opencode/bin/opencode` (level `recipe`, no argv). The L3 vendor-command mechanism (D-05/D-06) is kept and tested on the test-local recipe `vend`. No registry tool ships a `remove` this phase; one may be added only with source evidence that it stays inside its declared `paths`.
+
+This changes the following lines (the planner did not edit these locked files; they wait for sign-off):
+- `22-SPEC.md:37` (R1 acceptance) and `:144` (AC 2), "`opencode` removal runs `opencode uninstall --keep-config --keep-data` (fake runner)". Proposed: "a script method's declared `remove` runs from its receipt-proven executable before its proven paths are deleted (fake runner); `opencode` declares no `remove` (its vendor uninstall edits shell rc files and deletes unrecorded dirs) and is removed by its receipt-proven binary alone".
+- `22-CONTEXT.md:55` and `:171`, the anchor named as an acceptance anchor.
+- `22-UI-SPEC.md:130` and `:152` (the opencode row and review-line examples) and A17 (`:385`). A recipe command now displays its bound absolute executable.
+- `.planning/REQUIREMENTS.md:74` LIFE-01, "Script methods declare the paths they write, a remove command and an update command". This is met by the `remove` parameter and its tested mechanism (SPEC R1 already reads "may declare `remove`"), with no registry `remove` this phase.
+- Ledger row 246 (Q1, "opencode remove argv adds `--force`") is superseded.
+
+The alternative was to keep `remove` with the bound executable and accept the vendor's rc edit and cache/state deletion. It was not chosen because it weakens the principle. If the orchestrator rejects this decision, revert the 22-08 opencode row and the 22-06 truth to the anchor; the binding (R2-03) and the runner (R2-04) stand either way.
