@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 from collections import deque
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, MutableMapping
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -27,6 +27,19 @@ class MethodAwareRunner(Protocol):
     def __call__(self, cmd: list[str]) -> None: ...
 
     def method_started(self, method: str) -> None: ...
+
+
+# What every child inherits (reviews C-10, C-18; Homebrew 7.0.12 source): brew's own sudo
+# calls fail under HOMEBREW_NO_SUDO, and `brew uninstall`/`cleanup` keep dependency formulae
+# no receipt proves under HOMEBREW_NO_AUTOREMOVE. SUDO_ASKPASS is dropped so no child gets
+# a silent `sudo -A`. NOPASSWD sudo inside a vendor script stays a residual.
+CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
+
+
+def apply_child_env(environ: MutableMapping[str, str]) -> None:
+    """Set the child-process policy once, at the composition root, for every runner."""
+    environ.pop("SUDO_ASKPASS", None)
+    environ.update(CHILD_ENV)
 
 
 class CommandError(RuntimeError):

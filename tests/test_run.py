@@ -745,3 +745,39 @@ def test_stdbuf_wrapper_is_applied_end_to_end() -> None:
 
     lines = [line for _tool, line in seen]
     assert "L" in lines, f"stdbuf wrapper did not set _STDBUF_O=L. Lines: {lines}"
+
+
+def test_every_child_runs_without_askpass_brew_sudo_or_brew_autoremove(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reviews C-10/C-18 (Homebrew 7.0.12 source): brew's own sudo calls fail under
+    HOMEBREW_NO_SUDO, `-A` needs SUDO_ASKPASS, and `brew uninstall` removes unused
+    dependency formulae unless HOMEBREW_NO_AUTOREMOVE is set. The CLI and the TUI runners
+    both inherit the process environment, so one policy covers brew and cask removals."""
+    import os
+
+    from installer.run import apply_child_env, run_output
+
+    # setenv first, so monkeypatch restores the real values after the policy mutates them.
+    monkeypatch.setenv("SUDO_ASKPASS", "/tmp/askpass")
+    monkeypatch.setenv("HOMEBREW_NO_SUDO", "")
+    monkeypatch.setenv("HOMEBREW_NO_AUTOREMOVE", "")
+    apply_child_env(os.environ)
+    probe = (
+        "import os; print(os.environ.get('SUDO_ASKPASS'), os.environ['HOMEBREW_NO_SUDO'], "
+        "os.environ['HOMEBREW_NO_AUTOREMOVE'])"
+    )
+    assert run_output([sys.executable, "-c", probe]).split() == ["None", "1", "1"]
+
+
+def test_setup_applies_the_child_env_before_main_runs() -> None:
+    import ast
+
+    tree = ast.parse((Path(__file__).resolve().parents[1] / "setup.py").read_text("utf-8"))
+    guard = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.If) and "__main__" in ast.unparse(node.test)
+    )
+    calls = [ast.unparse(stmt) for stmt in guard.body if isinstance(stmt, ast.Expr)]
+    assert "apply_child_env(os.environ)" in calls

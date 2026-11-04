@@ -71,7 +71,7 @@ from installer.postinstall import BREW_BIN_DIRS
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
-from installer.run import OutputRunner, Runner, run_captured, run_query
+from installer.run import OutputRunner, Runner, apply_child_env, run_captured, run_query
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -1486,6 +1486,7 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     drop_project_venv_from_path(Path(__file__).resolve().parent)
+    apply_child_env(os.environ)
     try:
         raise SystemExit(main(sys.argv[1:]))
     except KeyboardInterrupt:
