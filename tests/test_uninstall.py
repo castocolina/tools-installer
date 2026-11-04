@@ -2243,3 +2243,81 @@ def test_a_foreign_file_at_a_declared_path_survives(
     assert removed == (bin_dir / "t",)
     assert refused == ()
     assert helper.read_text() == "a foreign file"
+
+
+def test_a_tree_swapped_for_a_symlink_after_planning_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _script_tool("~/.local/bin/t", "~/.local/share/t/")
+    tree, _version, _link = _plant_script_install(tmp_path)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    artifact = plan_removal([tool], tmp_path / ".local" / "bin").artifacts[tree]
+    tree.rename(tmp_path / "verified-tree")
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    (decoy / "sentinel").write_text("not ours")
+    tree.symlink_to(decoy, target_is_directory=True)
+    assert remove_paths([artifact]) == (tree,)
+    assert tree.is_symlink()
+    assert (decoy / "sentinel").read_text() == "not ours"
+
+
+def test_an_interrupted_tree_removal_puts_the_tree_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import installer.uninstall as uninstall_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _script_tool("~/.local/bin/t", "~/.local/share/t/")
+    tree, _version, _link = _plant_script_install(tmp_path)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    artifact = plan_removal([tool], tmp_path / ".local" / "bin").artifacts[tree]
+
+    def interrupted_rmtree(path: str | os.PathLike[str], **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(uninstall_module.shutil, "rmtree", interrupted_rmtree)
+    with pytest.raises(KeyboardInterrupt):
+        remove_paths([artifact])
+    assert (tree / "versions" / "1" / "t").read_text() == "t binary"
+    assert [p for p in tree.parent.iterdir() if p.name.endswith(_QUARANTINE_SUFFIX)] == []
+
+
+def test_a_tree_quarantine_sibling_is_listed_never_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _script_tool("~/.local/bin/t", "~/.local/share/t/")
+    tree, _version, _link = _plant_script_install(tmp_path)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    leftover = tree.parent / f".{tree.name}.1a2b3c{_QUARANTINE_SUFFIX}"
+    leftover.mkdir()
+    (leftover / "sentinel").write_text("left by a killed run")
+    plan = plan_removal([tool], tmp_path / ".local" / "bin")
+    assert leftover in plan.yourself
+    assert leftover not in plan.removable
+    remove_proven([tool], list(plan.removable), tmp_path / ".local" / "bin")
+    assert (leftover / "sentinel").read_text() == "left by a killed run"
+
+
+def test_a_leaf_link_into_a_deleted_tree_is_still_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The link was retargeted inside the tree by a self-update, then a vendor
+    `remove` deleted the tree; the lexical rule still proves the link."""
+    import shutil
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _script_tool("~/.local/bin/t", "~/.local/share/t/")
+    tree, _version, link = _plant_script_install(tmp_path)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    link_artifact = plan_removal([tool], tmp_path / ".local" / "bin").artifacts[link]
+    newer = tree / "versions" / "2" / "t"
+    newer.parent.mkdir(parents=True)
+    newer.write_text("t binary v2")
+    link.unlink()
+    link.symlink_to(newer)
+    shutil.rmtree(tree)
+    assert remove_paths([link_artifact], trees=(tree,)) == ()
+    assert not os.path.lexists(link)
