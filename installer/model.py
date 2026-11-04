@@ -110,11 +110,7 @@ SCRIPT_ROOTS: frozenset[str] = frozenset({"omz_root"})
 # tool.
 POST_INSTALL_ACTIONS = (
     "configure_path",
-    "source_shell_init",
     "set_login_shell",
-    "enable_corepack",
-    "pnpm_setup",
-    "write_agent_reference",
 )
 SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell",)
 OWNER_PROBES = (
@@ -435,9 +431,6 @@ class Tool:
     # Ownership/skill-lifecycle attribution, dispatched by
     # installer/install_ownership.py and installer/skill_lifecycle.py.
     owner_probes: tuple[str, ...] = ()
-    source: str = ""
-    owner: str = ""
-    uninstall: str = ""
     skill_lifecycle: "SkillLifecycle | None" = None
     # Declared `~/` config paths, validated by _parse_config_paths at load.
     config_paths: tuple[str, ...] = ()
@@ -459,9 +452,6 @@ class Tool:
         post_install: tuple[str, ...] = (),
         default_enabled_sensitive_actions: tuple[str, ...] = (),
         owner_probes: tuple[str, ...] = (),
-        source: str = "",
-        owner: str = "",
-        uninstall: str = "",
         skill_lifecycle: "SkillLifecycle | None" = None,
         config_paths: tuple[str, ...] = (),
     ) -> None:
@@ -486,9 +476,6 @@ class Tool:
             self, "default_enabled_sensitive_actions", default_enabled_sensitive_actions
         )
         object.__setattr__(self, "owner_probes", owner_probes)
-        object.__setattr__(self, "source", source)
-        object.__setattr__(self, "owner", owner)
-        object.__setattr__(self, "uninstall", uninstall)
         object.__setattr__(self, "skill_lifecycle", skill_lifecycle)
         object.__setattr__(self, "config_paths", config_paths)
 
@@ -1145,17 +1132,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                 post_install=post_install,
                 default_enabled_sensitive_actions=default_enabled_sensitive_actions,
                 owner_probes=owner_probes,
-                source=(
-                    skill_lifecycle.source if skill_lifecycle is not None else row.get("source", "")
-                ),
-                owner=(
-                    skill_lifecycle.owner if skill_lifecycle is not None else row.get("owner", "")
-                ),
-                uninstall=(
-                    skill_lifecycle.removal.instructions[-1]
-                    if skill_lifecycle is not None
-                    else row.get("uninstall", "")
-                ),
                 skill_lifecycle=skill_lifecycle,
                 config_paths=config_paths,
             )

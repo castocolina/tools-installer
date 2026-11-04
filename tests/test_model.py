@@ -1,5 +1,5 @@
 import typing
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from datetime import date
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from installer.enums import Audience, Priority, Tier
 from installer.model import (
     METHOD_KINDS,
     METHOD_PARAMS,
+    POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
     SKILL_HARNESSES,
     SMOKE_CHECK_NAMES,
@@ -1924,4 +1925,19 @@ def test_writable_prefix_is_an_absolute_path(tmp_path: Path, line: str) -> None:
 def test_unknown_script_key_is_still_rejected(tmp_path: Path) -> None:
     manifest = _write(tmp_path, _script_tool('uninstall_cmd = ["x"]'))
     with pytest.raises(ValueError, match="has unknown key 'uninstall_cmd'"):
+        load_tools(manifest)
+
+
+def test_post_install_actions_are_the_live_ones() -> None:
+    assert POST_INSTALL_ACTIONS == ("configure_path", "set_login_shell")
+
+
+@pytest.mark.parametrize("name", ["source", "owner", "uninstall"])
+def test_tool_has_no_dead_attribution_fields(name: str) -> None:
+    assert name not in {field.name for field in fields(Tool)}
+
+
+def test_post_install_rejects_a_deleted_action(tmp_path: Path) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["pnpm_setup"]'))
+    with pytest.raises(ValueError, match="unknown post-install action 'pnpm_setup'"):
         load_tools(manifest)

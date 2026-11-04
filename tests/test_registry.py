@@ -1,4 +1,5 @@
 import re
+import tomllib
 from collections import Counter
 from pathlib import Path
 from typing import cast
@@ -2436,14 +2437,6 @@ def test_audit_fix_e10_glab_has_native_fallbacks() -> None:
     ]
 
 
-def test_audit_fix_e11_pi_uninstall_text_does_not_assume_pnpm() -> None:
-    pi = _tools_by_id()["pi"]
-    text = pi.uninstall.lower()
-    assert "pnpm" in text
-    assert "volta" in text
-    assert "manager that installed" in text
-
-
 def test_audit_fix_e8_kitty_script_covers_macos() -> None:
     kitty = _tools_by_id()["kitty"]
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
@@ -2465,13 +2458,11 @@ def test_audit_fix_e8_kitty_script_covers_macos() -> None:
     assert linux.os == ("debian", "arch", "fedora")
 
 
-def test_audit_fix_f1_graphify_records_the_cwd_scope_and_uninstall() -> None:
-    graphify = _tools_by_id()["graphify"]
+def test_audit_fix_f1_graphify_records_the_cwd_scope() -> None:
     block = (
         REGISTRY.read_text(encoding="utf-8").split('id = "graphify"', 1)[1].split("[[tool]]", 1)[0]
     )
     assert "project/CWD-scoped" in block or "CWD-scoped" in block
-    assert graphify.uninstall == "graphify uninstall; uv tool uninstall graphifyy"
 
 
 def test_audit_fix_f2_codegraph_comment_records_1_6_2() -> None:
@@ -2588,7 +2579,6 @@ def test_opengsd_handoff_text_matches_scope_and_pin(tmp_path: Path) -> None:
     for line in (*install, *update):
         assert "--global" not in line and "npx" not in line and "@latest" not in line
     assert removal[-1] == "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --uninstall"
-    assert opengsd.uninstall == removal[-1]
 
 
 def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
@@ -2598,3 +2588,11 @@ def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
     assert "linux-arm64" in block
     assert "@puppeteer/browsers" in block
     assert "linux64" in block
+
+
+def test_registry_rows_carry_no_dead_attribution_keys() -> None:
+    # skill_lifecycle tables keep their own source/owner; only top-level tool keys are dead.
+    with REGISTRY.open("rb") as fh:
+        rows = cast(list[dict[str, object]], tomllib.load(fh)["tool"])
+    dead = {"source", "owner", "uninstall"}
+    assert [row["id"] for row in rows if dead & row.keys()] == []
