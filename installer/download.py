@@ -175,6 +175,18 @@ def pinned_url(method: Method) -> str:
     return url.replace("{ver}", version)
 
 
+def pinned_method(method: Method) -> bool:
+    """Whether a download method is pinned: an app or tarball whose url holds `{ver}`."""
+    if method.kind not in ("app", "tarball"):
+        return False
+    url = method.params.get("url")
+    if not isinstance(url, str) or "{ver}" not in url:
+        return False
+    version = method.params.get("version")
+    sha256 = method.params.get("sha256")
+    return isinstance(version, str) and bool(version) and isinstance(sha256, str) and bool(sha256)
+
+
 def link_name(method: Method, member: str) -> str:
     """The bin link name a download method creates: `bin_name` when set, else
     the basename of `member`. The one rule for install, update and uninstall,

@@ -1894,3 +1894,71 @@ def test_a_script_tool_found_by_its_declared_paths_runs_its_declared_update(
     )
     assert outcome.status == "updated"
     assert calls == [["t", "upgrade"]]
+
+
+# -- LIFE-05 (SPEC R7, D-14, ledger Q4): a pinned app or tarball is refused before
+# anything runs; an unpinned app still updates. ----
+
+_PINNED_APP = Method(
+    kind="app",
+    params={
+        "app": "draw.io.app",
+        "url": "https://example.test/drawio-{ver}.dmg",
+        "version": "26.0.2",
+        "sha256": "0" * 64,
+    },
+)
+
+
+def test_a_pinned_app_is_refused_by_update_refusal() -> None:
+    tool = _tool("drawio-desktop", _PINNED_APP)
+    refusal = update_refusal(tool, _ownership(tool, "installer", method=_PINNED_APP))
+    assert refusal is not None
+    assert refusal.status == "unsupported"
+    assert refusal.detail == "pinned; update outside or re-pin"
+    tarball = Method(
+        kind="tarball",
+        params={"url": "https://example.test/t-{ver}.tgz", "version": "1.2.3", "sha256": "1" * 64},
+    )
+    tarball_tool = _tool("t", tarball)
+    pinned_tarball = update_refusal(
+        tarball_tool, _ownership(tarball_tool, "installer", method=tarball)
+    )
+    assert pinned_tarball is not None
+    assert pinned_tarball.detail == "pinned; update outside or re-pin"
+    unpinned = Method(
+        kind="app", params={"app": "Code.app", "url": "https://example.test/code.zip"}
+    )
+    code = _tool("code", unpinned)
+    assert update_refusal(code, _ownership(code, "installer", method=unpinned)) is None
+
+
+def test_perform_update_on_a_pinned_app_runs_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(method: Method, runner: object) -> AppUpdateExecResult:
+        raise AssertionError("a pinned app must not be re-downloaded")
+
+    monkeypatch.setattr(update.apps, "update_app", boom)
+    tool = _tool("drawio-desktop", _PINNED_APP)
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "installer", method=_PINNED_APP), calls.append)
+    assert outcome.status == "unsupported"
+    assert outcome.detail == "pinned; update outside or re-pin"
+    assert calls == []
+
+
+def test_an_unpinned_app_still_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+    unpinned = Method(
+        kind="app", params={"app": "Code.app", "url": "https://example.test/code.zip"}
+    )
+    seen: list[Method] = []
+
+    def fake_update(method: Method, runner: object) -> AppUpdateExecResult:
+        seen.append(method)
+        return AppUpdateExecResult(warnings=())
+
+    monkeypatch.setattr(update.apps, "update_app", fake_update)
+    outcome = _perform(
+        _target(_tool("code", unpinned), "installer", method=unpinned), lambda _cmd: None
+    )
+    assert outcome.status == "updated"
+    assert seen == [unpinned]

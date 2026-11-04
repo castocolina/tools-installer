@@ -107,6 +107,9 @@ from installer.versions import TagResolver, VersionError, release_resolver, reso
 PostinstallFn = Callable[[str, Method, Runner, Mapping[str, Tool]], str | None]
 
 _FALLBACK_UNKNOWN = "no manager claimed this tool"
+# D-14 / ledger Q4: `u` never re-downloads a pinned release (SPEC R7); the review
+# and the catalog key read this same text.
+PINNED_DETAIL = "pinned; update outside or re-pin"
 _SDKMAN_DETAIL = (
     "SDKMAN owns this tool; this installer does not run SDKMAN's interactive upgrade "
     "— update it with `sdk upgrade {candidate}` in your own terminal"
@@ -258,6 +261,13 @@ def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | N
             status="unsupported",
             owner=ownership.owner,
             detail=_SDKMAN_DETAIL.format(candidate=ownership.package or tool.id),
+        )
+    if method is not None and download.pinned_method(method):
+        return UpdateOutcome(
+            tool_id=tool.id,
+            status="unsupported",
+            owner=ownership.owner,
+            detail=PINNED_DETAIL,
         )
     if ownership.owner in UNMANAGEABLE_OWNERS:
         # D-05/T-15-15/15.4-01: this branch must precede the owner-dispatch

@@ -38,6 +38,7 @@ from installer.download import (
     UNPINNED_REASON,
     DownloadTarget,
     ExecContext,
+    pinned_method,
     pinned_url,
     resolve_target,
 )
@@ -1070,21 +1071,8 @@ def _merge_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
     )
 
 
-def _is_pinned_method(method: Method) -> bool:
-    if method.kind not in ("app", "tarball"):
-        return False
-    url = method.params.get("url")
-    if not isinstance(url, str) or "{ver}" not in url:
-        return False
-    version = method.params.get("version")
-    sha256 = method.params.get("sha256")
-    return isinstance(version, str) and bool(version) and isinstance(sha256, str) and bool(sha256)
-
-
 def _pinned_method_entries(tool: Tool) -> list[tuple[int, Method]]:
-    return [
-        (index, method) for index, method in enumerate(tool.methods) if _is_pinned_method(method)
-    ]
+    return [(index, method) for index, method in enumerate(tool.methods) if pinned_method(method)]
 
 
 def _pinned_version(tool: Tool) -> str:
