@@ -443,6 +443,20 @@ def test_homebrew_resolves_per_platform() -> None:
     ]
 
 
+def test_brew_bootstrap_stanzas_declare_their_prefix() -> None:
+    tools = load_tools(REGISTRY)
+    brew = next(t for t in tools if t.id == "brew")
+    macos_arm = next(m for m in brew.methods if "macos" in m.os and "arm64" in m.arch)
+    macos_amd = next(m for m in brew.methods if "macos" in m.os and "amd64" in m.arch)
+    linux = next(m for m in brew.methods if "debian" in m.os)
+    assert macos_arm.params["writable_prefix"] == "/opt/homebrew"
+    assert macos_amd.params["writable_prefix"] == "/usr/local/Homebrew"
+    assert linux.params["writable_prefix"] == "/home/linuxbrew"
+    assert all("writable_prefix" in m.params for m in brew.methods)
+    declaring = {t.id for t in tools if any("writable_prefix" in m.params for m in t.methods)}
+    assert declaring == {"brew"}
+
+
 def test_fd_resolves_per_platform() -> None:
     fd = next(t for t in load_tools(REGISTRY) if t.id == "fd")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)

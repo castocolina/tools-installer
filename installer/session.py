@@ -686,7 +686,13 @@ def _row(
     ) -> PlanRow:
         """An INSTALL, REPAIR or REINSTALL row; MANUAL when its first method is native."""
         methods = resolve_methods(tool, platform)
-        handoff = executors.needs_manual(methods[0]) if methods else None
+        handoff = (
+            executors.needs_manual(
+                methods[0], writable=lambda prefix: prefix not in state.unwritable
+            )
+            if methods
+            else None
+        )
         if handoff is None:
             return make(disposition, reason, can_reinstall=can_reinstall)
         return make(Disposition.MANUAL, handoff.reason, manual_command=handoff.command)

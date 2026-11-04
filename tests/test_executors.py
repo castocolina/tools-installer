@@ -48,7 +48,7 @@ def _script_of(calls: list[list[str]], shell: str = "sh") -> str:
 def test_native_kind_is_a_manual_handoff_and_never_executed(kind: str, command: str):
     calls, runner = _record()
     method = Method(kind=kind, params={"package": "jq"})
-    handoff = executors.needs_manual(method)
+    handoff = executors.needs_manual(method, writable=lambda _prefix: True)
     assert handoff is not None
     assert handoff.command == command
     with pytest.raises(ExecutorError, match=f"no executor for method kind '{kind}'"):
@@ -57,7 +57,42 @@ def test_native_kind_is_a_manual_handoff_and_never_executed(kind: str, command: 
 
 
 def test_only_native_kinds_are_manual_handoffs():
-    assert executors.needs_manual(Method(kind="brew", params={"formula": "jq"})) is None
+    brew = Method(kind="brew", params={"formula": "jq"})
+    assert executors.needs_manual(brew, writable=lambda _prefix: True) is None
+
+
+def test_needs_manual_ignores_a_script_without_a_prefix():
+    method = Method(kind="script", params={"url": "https://example.invalid/install.sh"})
+    assert executors.needs_manual(method, writable=lambda _prefix: False) is None
+
+
+def test_prefix_writable_follows_the_nearest_existing_parent(tmp_path: Path):
+    readonly = tmp_path / "readonly"
+    readonly.mkdir()
+    readonly.chmod(0o555)
+    try:
+        assert executors.prefix_writable(str(tmp_path)) is True
+        assert executors.prefix_writable(str(tmp_path / "a" / "b")) is True
+        assert executors.prefix_writable(str(readonly)) is False
+        assert executors.prefix_writable(str(readonly / "child")) is False
+    finally:
+        readonly.chmod(0o755)
+
+
+def test_prefix_writable_fails_closed_on_a_foreign_owner_or_a_probe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    prefix = str(tmp_path / "home" / "linuxbrew")
+    other_uid = os.getuid() + 1
+    with monkeypatch.context() as patched:
+        patched.setattr(executors.os, "getuid", lambda: other_uid)
+        assert executors.prefix_writable(prefix) is False
+
+    def refuse(path: str) -> os.stat_result:
+        raise PermissionError(13, "denied", path)
+
+    monkeypatch.setattr(executors.os, "lstat", refuse)
+    assert executors.prefix_writable(prefix) is False
 
 
 def test_brew_executor_builds_install():

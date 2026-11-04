@@ -399,6 +399,7 @@ def pass_state(
     notes: tuple[str, ...] = (),
     removable: RemovalPlan | None = None,
     receipt: Receipt | None = None,
+    unwritable: tuple[str, ...] = (),
 ) -> ToolState:
     """A state built the way the refresh pass builds one: the owner and
     version sentences come first among the notes."""
@@ -419,6 +420,7 @@ def pass_state(
         broken=broken,
         misconfigured=misconfigured,
         unconfigured=unconfigured,
+        unwritable=unwritable,
         notes=pass_notes + notes,
     )
 
@@ -438,6 +440,7 @@ def plan_state(
     present: bool = True,
     package: str | None = None,
     removable: RemovalPlan | None = None,
+    unwritable: tuple[str, ...] = (),
 ) -> ToolState:
     """A published state for one tool with the health and owner a plan test needs.
 
@@ -482,6 +485,7 @@ def plan_state(
         misconfigured=misconfigured,
         notes=notes,
         removable=removable,
+        unwritable=unwritable,
     )
 
 

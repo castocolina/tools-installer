@@ -203,6 +203,34 @@ def test_a_native_method_after_a_failed_method_is_handed_off(
     assert calls == [["uv", "tool", "install", "ripgrep"]]
 
 
+def test_the_engine_re_checks_a_prefix_that_became_unwritable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    method = Method(
+        kind="script",
+        params={
+            "url": "https://example.invalid/install.sh",
+            "writable_prefix": str(home / "linuxbrew"),
+        },
+    )
+    calls: list[list[str]] = []
+    home.chmod(0o555)
+    try:
+        outcome = install_tool(
+            _tool(method, tool_id="brew"),
+            _platform(),
+            runner=lambda cmd: calls.append(cmd),
+        )
+    finally:
+        home.chmod(0o755)
+    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert outcome.manual_command == 'sh -c "$(curl -fsSL https://example.invalid/install.sh)"'
+    assert calls == []
+
+
 def test_no_applicable_methods(monkeypatch: pytest.MonkeyPatch):
     def fake_not_installed(tool: Tool) -> bool:
         return False

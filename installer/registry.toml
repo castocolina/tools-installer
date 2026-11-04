@@ -159,7 +159,7 @@ cmd = "brew"
 priority = "P0"
 audience = "both"
 tier = "system"
-verified = 2026-10-13
+verified = 2026-11-04
 desc = "Homebrew supplies user-space packages on macOS and immutable Linux when native writes are unsafe."
 [[tool.method]]
 kind = "script"
@@ -169,6 +169,7 @@ url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
 env = { NONINTERACTIVE = "1" }
 bin_dir = "/opt/homebrew/bin"
+writable_prefix = "/opt/homebrew"
 [[tool.method]]
 kind = "script"
 os = ["macos"]
@@ -177,6 +178,8 @@ url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
 env = { NONINTERACTIVE = "1" }
 bin_dir = "/usr/local/bin"
+writable_prefix = "/usr/local/Homebrew"
+# Preflight hands off an unwritable prefix: Homebrew's installer would escalate to create it.
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
@@ -184,6 +187,7 @@ url = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 shell = "bash"
 env = { NONINTERACTIVE = "1" }
 bin_dir = "/home/linuxbrew/.linuxbrew/bin"
+writable_prefix = "/home/linuxbrew"
 
 [[tool]]
 id = "fd"

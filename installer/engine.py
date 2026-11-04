@@ -228,7 +228,7 @@ def install_tool(
                 postinstall_warning=warning,
                 post_install_handoff=post_install_handoff,
             )
-        manual = executors.needs_manual(method)
+        manual = executors.needs_manual(method, writable=executors.prefix_writable)
         if manual is not None:
             return InstallOutcome(
                 tool.id,

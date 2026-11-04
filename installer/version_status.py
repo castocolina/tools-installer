@@ -57,7 +57,7 @@ import installer.locations
 from installer import receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
-from installer.executors import ExecutorError
+from installer.executors import ExecutorError, prefix_writable
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
@@ -778,6 +778,8 @@ class ToolState:
     receipt: Receipt | None
     removable: RemovalPlan
     unconfigured: tuple[ConfigStep, ...]
+    # Declared writable_prefix values the user cannot write, as the pass found them.
+    unwritable: tuple[str, ...] = ()
 
     @property
     def present(self) -> bool:
@@ -802,6 +804,7 @@ def tool_state(
     misconfigured: tuple[str, ...] = (),
     unconfigured: tuple[ConfigStep, ...] = (),
     notes: tuple[str, ...] = (),
+    unwritable: tuple[str, ...] = (),
 ) -> ToolState:
     """Gather one tool's facts into Evidence and let `tool_health` decide. Pure.
 
@@ -846,7 +849,18 @@ def tool_state(
         receipt=receipt,
         removable=removable,
         unconfigured=unconfigured,
+        unwritable=unwritable,
     )
+
+
+def _unwritable_prefixes(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    """The declared writable_prefix of each applicable script method the user cannot write."""
+    found: list[str] = []
+    for method in resolve_methods(tool, platform):
+        prefix = method.params.get("writable_prefix")
+        if isinstance(prefix, str) and not prefix_writable(prefix):
+            found.append(prefix)
+    return tuple(found)
 
 
 def _is_skill_pack(tool: Tool) -> bool:
@@ -1836,6 +1850,7 @@ class VersionRefreshService:
                     broken=broken + found_broken,
                     misconfigured=facts.misconfigured,
                     unconfigured=facts.steps,
+                    unwritable=_unwritable_prefixes(tool, platform),
                     notes=ownership_notes(tool, ownership, platform)
                     + version_notes(tool, status, ownership, present=present)
                     + receipt_notes

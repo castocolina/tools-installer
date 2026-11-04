@@ -1100,6 +1100,65 @@ def test_pinned_spec_populated_for_registry_pin() -> None:
     assert unpinned_status.pinned_spec is None
 
 
+def _bootstrap_tool(prefix: Path | None) -> Tool:
+    params: dict[str, object] = {"url": "https://example.invalid/install.sh"}
+    if prefix is not None:
+        params["writable_prefix"] = str(prefix)
+    return Tool(
+        id="brew",
+        name="Homebrew",
+        category="pkg-mgr",
+        cmd="brew",
+        methods=(Method(kind="script", params=params),),
+    )
+
+
+def _bootstrap_service(tmp_path: Path) -> VersionRefreshService:
+    query, _calls = _counting_query()
+    return VersionRefreshService(
+        platform=_platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v0",
+        probe_output=lambda _argv: "14.1.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=_MANAGED,
+        which=_which_for_fixture,
+        artifacts_for=lambda _tool: [],
+        query=query,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+    )
+
+
+@pytest.mark.parametrize("shape", ["unwritable", "writable", "no-key"])
+def test_the_pass_records_an_unwritable_prefix(tmp_path: Path, shape: str) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    prefix = home / "linuxbrew"
+    service = _bootstrap_service(tmp_path)
+    home.chmod(0o555 if shape == "unwritable" else 0o755)
+    try:
+        service.refresh([_bootstrap_tool(None if shape == "no-key" else prefix)])
+    finally:
+        home.chmod(0o755)
+    state = service.state_of("brew")
+    assert state is not None
+    assert state.unwritable == ((str(prefix),) if shape == "unwritable" else ())
+
+
+def test_the_pass_stats_each_prefix_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    probed: list[str] = []
+
+    def counting(prefix: str) -> bool:
+        probed.append(prefix)
+        return True
+
+    monkeypatch.setattr(version_status, "prefix_writable", counting)
+    prefix = tmp_path / "home" / "linuxbrew"
+    _bootstrap_service(tmp_path).refresh([_bootstrap_tool(prefix)])
+    assert probed == [str(prefix)]
+
+
 def test_state_of_returns_last_pass_and_none_for_missing(tmp_path: Path) -> None:
     now = datetime(2026, 9, 7, tzinfo=UTC)
     path = tmp_path / "versions.json"

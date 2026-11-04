@@ -611,8 +611,42 @@ _MANUAL_COMMANDS: dict[str, tuple[str, str]] = {
 }
 
 
-def needs_manual(method: Method) -> ManualHandoff | None:
-    """The manual handoff for a native-package method, or None when the installer may run it."""
+def prefix_writable(prefix: str) -> bool:
+    """Whether this user can create `prefix` without elevation. Any OSError answers False.
+
+    An existing prefix answers its own write bit. A missing one answers its nearest existing
+    parent, which must also be owned by this user: a foreign-owned parent needs root to change.
+    """
+    existing = Path(prefix)
+    try:
+        while True:
+            try:
+                os.lstat(existing)
+                break
+            except FileNotFoundError:
+                existing = existing.parent
+        if existing == Path(prefix):
+            return os.access(existing, os.W_OK)
+        return os.lstat(existing).st_uid == os.getuid() and os.access(existing, os.W_OK)
+    except OSError:
+        return False
+
+
+def needs_manual(method: Method, *, writable: Callable[[str], bool]) -> ManualHandoff | None:
+    """The manual handoff for a method the installer will not run, or None when it may run.
+
+    Native packages always hand off. A script declaring `writable_prefix` hands off when
+    `writable` says the prefix is not writable: its vendor installer would escalate to create it.
+    """
+    if method.kind == "script":
+        prefix = method.params.get("writable_prefix")
+        if not isinstance(prefix, str) or writable(prefix):
+            return None
+        shell = method.params.get("shell")
+        shell = shell if isinstance(shell, str) and shell else "sh"
+        url = require_str(method, "url")
+        command = f'{shell} -c "$(curl -fsSL {url})"'
+        return ManualHandoff(f"{prefix} is not writable by you; you run: `{command}`", command)
     template = _MANUAL_COMMANDS.get(method.kind)
     if template is None:
         return None
