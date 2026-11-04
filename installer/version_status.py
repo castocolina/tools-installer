@@ -62,7 +62,7 @@ from installer.executors import ExecutorError, prefix_writable
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
-from installer.model import SKILL_HARNESSES, ConfigStep, Method, Tool
+from installer.model import SKILL_HARNESSES, ConfigStep, Method, Tool, method_package
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -138,7 +138,7 @@ _EMPTY_INVENTORY = ManagerInventory(
     uv_tools=None,
     brew_prefix=None,
 )
-_EMPTY_OUTDATED = OutdatedReport(brew=None, cask=None, pnpm=None, uv=None)
+_EMPTY_OUTDATED = OutdatedReport(brew=None, cask=None, pnpm=None, uv=None, greedy=None)
 
 
 def _merge_inventory(fresh: ManagerInventory, previous: ManagerSnapshot | None) -> ManagerInventory:
@@ -165,6 +165,17 @@ def _merge_outdated(fresh: OutdatedReport, previous: ManagerSnapshot | None) -> 
         cask=fresh.cask if fresh.cask is not None else fallback.cask,
         pnpm=fresh.pnpm if fresh.pnpm is not None else fallback.pnpm,
         uv=fresh.uv if fresh.uv is not None else fallback.uv,
+        greedy=fresh.greedy if fresh.greedy is not None else fallback.greedy,
+    )
+
+
+def _tracked_casks(tools: Sequence[Tool]) -> frozenset[str]:
+    """The cask tokens the registry installs through (the pass asks brew only on macOS)."""
+    return frozenset(
+        package
+        for tool in tools
+        for method in tool.methods
+        if method.kind == "cask" and (package := method_package(method))
     )
 
 
@@ -1025,6 +1036,8 @@ class VersionRefreshService:
         self._skills_unsaved = False
         # The cleared manager snapshot may not have reached disk (invalidate).
         self._managers_invalid = False
+        # Tracked casks that auto-update, as the last published pass saw them (LIFE-10).
+        self._greedy: frozenset[str] = frozenset()
         self._skills_pass_lock = threading.Lock()
         self._epoch = 0
         self._seq = 0
@@ -1095,6 +1108,11 @@ class VersionRefreshService:
         if state is None or state.generation != self._epoch:
             return None
         return state
+
+    def greedy_casks(self) -> frozenset[str]:
+        """The tracked casks that auto-update, as the last published pass saw them."""
+        with self._lock:
+            return self._greedy
 
     def is_present(self, tool: Tool) -> bool:
         """The current state's presence; probe when there is no settled state."""
@@ -1623,7 +1641,7 @@ class VersionRefreshService:
         )
 
     def _load_or_query_snapshot(
-        self, *, now: datetime, platform: Platform
+        self, *, now: datetime, platform: Platform, casks: frozenset[str]
     ) -> tuple[ManagerSnapshot | None, bool, bool]:
         """Return (snapshot, persist, failed). persist means this pass queried.
 
@@ -1650,6 +1668,7 @@ class VersionRefreshService:
                 has_brew=platform.has_brew,
                 query=self._query,
                 resolve_pnpm=self._resolve_pnpm,
+                casks=casks,
             )
         except (CommandError, OSError):
             previous = snapshot
@@ -1705,6 +1724,7 @@ class VersionRefreshService:
             or inventory.brew_prefix is None
             or outdated.brew is None
             or outdated.cask is None
+            or outdated.greedy is None
         ):
             return True
         if self._resolve_pnpm() is not None and (
@@ -1759,8 +1779,9 @@ class VersionRefreshService:
         uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
         now = self._now()
         cache = load_version_cache(self._cache_path)
+        casks = _tracked_casks(tools) if platform.os == "macos" else frozenset[str]()
         snapshot, persist_snapshot, _failed = self._load_or_query_snapshot(
-            now=now, platform=platform
+            now=now, platform=platform, casks=casks
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
@@ -1879,6 +1900,9 @@ class VersionRefreshService:
                 # the mutation (Round-3 review HIGH #1); with this branch
                 # silent, every published state names the pass that produced it.
                 return
+            if outdated.greedy is not None:
+                # A failed greedy read keeps the last published set (LIFE-10).
+                self._greedy = outdated.greedy
             for tool, ownership, status, removable in packs:
                 states[tool.id] = self._skill_state(
                     tool,

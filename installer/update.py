@@ -166,10 +166,12 @@ class UpdateOutcome:
     cleanup_warnings: tuple[str, ...] = ()
 
 
-def resolve_update_argv(target: UpdateTarget) -> list[str] | None:
+def resolve_update_argv(target: UpdateTarget, *, greedy: bool = False) -> list[str] | None:
     """Manager argv for brew/cask/uv; None for pnpm and installer (sentinels).
 
     `"unknown"` is never a valid call: `perform_update` short-circuits first.
+    `greedy` (LIFE-10) adds `--greedy-auto-updates` to a cask upgrade only; it is
+    narrower than `--greedy`, so `version :latest` casks keep the plain path.
     """
     owner = target.ownership.owner
     if owner == "unknown":
@@ -182,7 +184,8 @@ def resolve_update_argv(target: UpdateTarget) -> list[str] | None:
     if owner == "brew":
         return ["brew", "upgrade", package]
     if owner == "cask":
-        return ["brew", "upgrade", "--cask", f"--appdir={applications_dir()}", package]
+        flags = ["--greedy-auto-updates"] if greedy else []
+        return ["brew", "upgrade", "--cask", *flags, f"--appdir={applications_dir()}", package]
     if owner == "uv":
         return ["uv", "tool", "upgrade", package]
     raise UpdateError(f"no update argv for owner {owner!r}")
@@ -205,6 +208,7 @@ def perform_update(
     resolve_tag: TagResolver,
     tools: Mapping[str, Tool],
     postinstall: PostinstallFn = run_postinstall,
+    greedy_casks: frozenset[str] = frozenset(),
 ) -> UpdateOutcome:
     """Dispatch an update on resolved ownership. Never raises.
 
@@ -221,6 +225,7 @@ def perform_update(
             resolve_tag=resolve_tag,
             tools=tools,
             postinstall=postinstall,
+            greedy_casks=greedy_casks,
         )
     except (
         CommandError,
@@ -330,6 +335,7 @@ def _perform(
     resolve_tag: TagResolver,
     tools: Mapping[str, Tool],
     postinstall: PostinstallFn,
+    greedy_casks: frozenset[str],
 ) -> UpdateOutcome:
     ownership = target.ownership
     refusal = update_refusal(target.tool, ownership)
@@ -344,7 +350,8 @@ def _perform(
     # proven only by the previous receipt).
     preexisting = receipts.preexisting_paths(method) if method is not None else None
     if owner in ("brew", "cask", "uv"):
-        argv = resolve_update_argv(target)
+        # `greedy` matters to a cask owner only; resolve_update_argv reads it there alone.
+        argv = resolve_update_argv(target, greedy=ownership.package in greedy_casks)
         if argv is None:
             raise UpdateError(f"missing argv for {owner} update")
         runner(argv)
@@ -516,10 +523,13 @@ class UpdateService:
         invalidate: InvalidateFn | None = None,
         terminal_follow_up: TerminalFollowUpFn | None = None,
         live_platform: Callable[[], Platform] | None = None,
+        greedy_casks: Callable[[], frozenset[str]] | None = None,
     ) -> None:
         self.platform = platform
         # D-14: the refresh service's platform, read at run time (brew may appear mid-session).
         self._live_platform = live_platform
+        # LIFE-10: the refresh service's published greedy set, read at run time.
+        self._greedy_casks = greedy_casks
         self._runner = runner
         self._resolve_tag = resolve_tag
         self._tools = tools
@@ -600,6 +610,7 @@ class UpdateService:
             runner=self._runner,
             resolve_tag=self._resolve_tag,
             tools=self._tools,
+            greedy_casks=self._greedy_casks() if self._greedy_casks is not None else frozenset(),
         )
         detail = outcome.detail
         replayed: tuple[str, ...] = ()

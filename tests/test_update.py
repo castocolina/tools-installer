@@ -439,6 +439,63 @@ def test_cask_argv_includes_appdir(monkeypatch: pytest.MonkeyPatch) -> None:
     assert argv[-1] == "rectangle"
 
 
+def test_u_on_an_auto_updating_cask_runs_the_greedy_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(update, "applications_dir", lambda: Path("/Users/me/Applications"))
+    method = Method(kind="cask", params={"cask": "visual-studio-code"})
+    tool = _tool("vscode", method)
+    commands: list[list[str]] = []
+    service = _service(
+        reresolve=lambda _tool: _ownership(
+            tool, "cask", method=method, package="visual-studio-code"
+        ),
+        runner=commands.append,
+        greedy_casks=lambda: frozenset({"visual-studio-code"}),
+    )
+    service.run(_target(tool, "cask", method=method, package="visual-studio-code"))
+    assert commands == [
+        [
+            "brew",
+            "upgrade",
+            "--cask",
+            "--greedy-auto-updates",
+            "--appdir=/Users/me/Applications",
+            "visual-studio-code",
+        ]
+    ]
+
+
+def test_a_non_auto_updating_cask_never_gets_the_greedy_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(update, "applications_dir", lambda: Path("/Users/me/Applications"))
+    method = Method(kind="cask", params={"cask": "wezterm"})
+    tool = _tool("wezterm", method)
+    commands: list[list[str]] = []
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "cask", method=method, package="wezterm"),
+        runner=commands.append,
+        greedy_casks=lambda: frozenset({"visual-studio-code"}),
+    )
+    service.run(_target(tool, "cask", method=method, package="wezterm"))
+    assert len(commands) == 1
+    assert not any("greedy" in part for part in commands[0])
+
+
+def test_greedy_is_cask_only() -> None:
+    method = Method(kind="brew", params={"formula": "ripgrep"})
+    tool = _tool("rg", method, cmd="rg")
+    commands: list[list[str]] = []
+    service = _service(
+        reresolve=lambda _tool: _ownership(tool, "brew", method=method, package="ripgrep"),
+        runner=commands.append,
+        greedy_casks=lambda: frozenset({"ripgrep"}),
+    )
+    service.run(_target(tool, "brew", method=method, package="ripgrep"))
+    assert commands == [["brew", "upgrade", "ripgrep"]]
+
+
 @pytest.mark.parametrize(
     "exc",
     [
@@ -728,6 +785,7 @@ def _service(
     invalidate: InvalidateFn | None = None,
     runner: Callable[[list[str]], None] | None = None,
     terminal_follow_up: Callable[[], str | None] | None = None,
+    greedy_casks: Callable[[], frozenset[str]] | None = None,
 ) -> UpdateService:
     from collections.abc import Sequence as Seq
 
@@ -744,6 +802,7 @@ def _service(
         reresolve_ownership=reresolve,
         invalidate=invalidate,
         terminal_follow_up=terminal_follow_up,
+        greedy_casks=greedy_casks,
     )
 
 

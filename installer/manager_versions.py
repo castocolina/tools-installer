@@ -41,12 +41,14 @@ class ManagerVersion:
 @dataclass(frozen=True)
 class OutdatedReport:
     """Per-manager outdated maps. `brew` and `cask` share one query, so a
-    failed brew call sets BOTH to `None`."""
+    failed brew call sets BOTH to `None`. `greedy` is the tracked casks that
+    auto-update (LIFE-10); `None` when that read failed, and `cask` is then `None`."""
 
     brew: Mapping[str, ManagerVersion] | None
     cask: Mapping[str, ManagerVersion] | None
     pnpm: Mapping[str, ManagerVersion] | None
     uv: Mapping[str, ManagerVersion] | None
+    greedy: frozenset[str] | None = frozenset()
 
 
 def parse_brew_outdated_json(
@@ -165,6 +167,74 @@ def brew_outdated(
     return parse_brew_outdated_json(raw)
 
 
+def parse_brew_cask_auto_updates(raw: str) -> frozenset[str] | None:
+    """Tokens of the installed casks that declare `auto_updates: true`. Any
+    malformed entry makes the whole answer `None`, never a partial set."""
+    try:
+        data: object = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    casks_raw = cast(dict[str, object], data).get("casks")
+    if not isinstance(casks_raw, list):
+        return None
+    auto: set[str] = set()
+    for entry in cast(list[object], casks_raw):
+        if not isinstance(entry, dict):
+            return None
+        item = cast(dict[str, object], entry)
+        token = item.get("token")
+        flag = item.get("auto_updates")
+        if not isinstance(token, str) or not token or not isinstance(flag, bool):
+            return None
+        if flag:
+            auto.add(token)
+    return frozenset(auto)
+
+
+def brew_cask_auto_updates(*, query: Callable[..., str] = run_query) -> frozenset[str] | None:
+    try:
+        raw = query(["brew", "info", "--cask", "--installed", "--json=v2"], env=_BREW_ENV)
+    except (CommandError, OSError):
+        return None
+    return parse_brew_cask_auto_updates(raw)
+
+
+def brew_greedy_outdated(
+    *, query: Callable[..., str] = run_query
+) -> dict[str, ManagerVersion] | None:
+    """Casks outdated once auto-updating casks count (`--greedy-auto-updates`, not `--greedy`)."""
+    try:
+        raw = query(
+            ["brew", "outdated", "--cask", "--greedy-auto-updates", "--json=v2"], env=_BREW_ENV
+        )
+    except (CommandError, OSError):
+        return None
+    parsed = parse_brew_outdated_json(raw)
+    return None if parsed is None else parsed[1]
+
+
+def _greedy_cask_read(
+    casks: frozenset[str], cask: Mapping[str, ManagerVersion], *, query: Callable[..., str]
+) -> tuple[frozenset[str], Mapping[str, ManagerVersion]] | None:
+    """The tracked casks that auto-update, and the cask map with their greedy
+    outdated rows merged in. Greedy `brew outdated` is asked only when one of ours
+    auto-updates. `None` when a read failed: the cask side is incomplete without it."""
+    if not casks:
+        return frozenset(), cask
+    auto = brew_cask_auto_updates(query=query)
+    if auto is None:
+        return None
+    greedy = casks & auto
+    if not greedy:
+        return greedy, cask
+    outdated = brew_greedy_outdated(query=query)
+    if outdated is None:
+        return None
+    return greedy, {**cask, **{t: v for t, v in outdated.items() if t in greedy}}
+
+
 def pnpm_outdated_global(
     *,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
@@ -193,15 +263,26 @@ def read_outdated(
     has_brew: bool,
     query: Callable[..., str] = run_query,
     resolve_pnpm: Callable[[], str | None] = real_pnpm,
+    casks: frozenset[str] = frozenset(),
 ) -> OutdatedReport:
+    """`casks` are the tracked cask tokens; empty off macOS, so Linux asks nothing new."""
     brew_maps = brew_outdated(query=query) if has_brew else None
-    if brew_maps is None:
-        brew, cask = None, None
-    else:
+    brew: Mapping[str, ManagerVersion] | None = None
+    cask: Mapping[str, ManagerVersion] | None = None
+    greedy: frozenset[str] | None = frozenset()
+    if brew_maps is not None:
         brew, cask = brew_maps
+        read = _greedy_cask_read(casks, cask, query=query)
+        if read is None:
+            cask, greedy = None, None
+        else:
+            greedy, cask = read
+    elif has_brew:
+        greedy = None
     return OutdatedReport(
         brew=brew,
         cask=cask,
         pnpm=pnpm_outdated_global(resolve_pnpm=resolve_pnpm, query=query),
         uv=uv_tool_outdated(query=query),
+        greedy=greedy,
     )

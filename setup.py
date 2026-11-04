@@ -765,6 +765,8 @@ def _build_services(
         # D-01/15.6-05: a direct `u` update and a committed OMZ plugin edit both
         # end in the one shared synchronizer, never two.
         terminal_follow_up=_terminal_follow_up,
+        # LIFE-10: `u` upgrades the casks that auto-update with the greedy flag.
+        greedy_casks=version_refresh.greedy_casks,
     )
 
     def _install(

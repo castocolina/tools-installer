@@ -48,6 +48,8 @@ from installer.ownership import (
 from installer.platform import Platform
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
+from installer.run import CommandError
+from installer.session import Disposition, build_plan
 from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
@@ -648,6 +650,8 @@ def _counting_query() -> tuple[Callable[..., str], list[list[str]]]:
             if "--outdated" in cmd:
                 return ""
             return "ruff v0.6.0\n"
+        if cmd[:3] == ["brew", "info", "--cask"]:
+            return '{"formulae": [], "casks": []}'
         if cmd[0] == "brew" and "outdated" in cmd:
             return '{"formulae": [], "casks": []}'
         return "{}"
@@ -736,7 +740,8 @@ def test_stale_manager_snapshot_requeries_seven_plus_one(tmp_path: Path) -> None
         resolve_pnpm=lambda: "/opt/homebrew/bin/pnpm",
     )
     service.refresh([_brew_tool(), _cask_tool(), _node_tool(), _uv_tool()])
-    assert len(calls) == 7
+    # 7 plus the macOS `brew info --cask` read, which a cask tool in the pass adds (LIFE-10).
+    assert len(calls) == 8
     assert pnpm_calls["n"] == 1
     loaded = load_manager_snapshot(path)
     assert loaded is not None
@@ -4998,7 +5003,8 @@ def test_group_check_makes_no_extra_query(tmp_path: Path) -> None:
         present=lambda _tool: True,
     )
     service.refresh([_brew_tool(), _cask_tool(), _mmdc_group(), _uv_tool()])
-    assert len(calls) == 7
+    # 7 plus the macOS `brew info --cask` read, which a cask tool in the pass adds (LIFE-10).
+    assert len(calls) == 8
     assert pnpm_calls["n"] == 1
     mmdc = service.state_of("mmdc")
     assert mmdc is not None
@@ -6526,3 +6532,182 @@ def test_an_interrupted_recipe_removal_with_nothing_left_retires_its_receipt(
     assert state.health is Health.MISSING
     assert (state.removable.level, state.removable.argv) == ("none", ())
     assert not receipts.receipt_exists("t")
+
+
+_INFO_ARGV = ["brew", "info", "--cask", "--installed", "--json=v2"]
+_GREEDY_ARGV = ["brew", "outdated", "--cask", "--greedy-auto-updates", "--json=v2"]
+_AUTO_INFO = '{"formulae": [], "casks": [{"token": "visual-studio-code", "auto_updates": true}]}'
+_NO_AUTO_INFO = (
+    '{"formulae": [], "casks": [{"token": "visual-studio-code", "auto_updates": false}]}'
+)
+_GREEDY_VSCODE = (
+    '{"formulae": [], "casks": [{"name": "visual-studio-code", '
+    '"installed_versions": ["1.100"], "current_version": "1.101"}]}'
+)
+_VSCODE_NOW = datetime(2026, 9, 7, tzinfo=UTC)
+
+
+class _BrewFake:
+    """A fake brew: answers the greedy pass queries, can fail the greedy read, and
+    can run a hook on the info read (to race an invalidate into a pass)."""
+
+    def __init__(self) -> None:
+        self.info = _AUTO_INFO
+        self.greedy: str | Exception = _GREEDY_VSCODE
+        self.on_info: Callable[[], None] | None = None
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd: list[str], **_kwargs: object) -> str:
+        self.calls.append(cmd)
+        if cmd == _INFO_ARGV:
+            if self.on_info is not None:
+                self.on_info()
+            return self.info
+        if cmd == _GREEDY_ARGV:
+            if isinstance(self.greedy, Exception):
+                raise self.greedy
+            return self.greedy
+        if cmd[:2] == ["brew", "outdated"]:
+            return '{"formulae": [], "casks": []}'
+        return ""
+
+
+def _vscode_tool() -> Tool:
+    return Tool(
+        id="vscode",
+        name="VS Code",
+        category="dev",
+        cmd="code",
+        methods=(Method(kind="cask", params={"cask": "visual-studio-code"}),),
+    )
+
+
+def _vscode_inventory(**_kwargs: object) -> ManagerInventory:
+    return ManagerInventory(
+        brew_formulae={},
+        brew_casks={"visual-studio-code": "1.100"},
+        pnpm_globals=frozenset(),
+        uv_tools={},
+        brew_prefix=Path("/opt/homebrew"),
+    )
+
+
+def _vscode_service(
+    tmp_path: Path, clock: list[datetime], brew: _BrewFake
+) -> VersionRefreshService:
+    """A macOS service whose manager reads run through the real `read_outdated`
+    over the fake brew, with one cask-owned VS Code in the inventory."""
+    return VersionRefreshService(
+        platform=_platform(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v0",
+        probe_output=lambda argv: "1.100",
+        now=lambda: clock[0],
+        managed_bin_dir=tmp_path / "managed",
+        which=lambda cmd: f"/opt/homebrew/bin/{cmd}" if cmd in {"brew", "code"} else None,
+        artifacts_for=lambda tool: [],
+        query=brew,
+        read_inventory_fn=_vscode_inventory,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+    )
+
+
+def test_a_greedy_outdated_cask_is_outdated_on_its_tier(tmp_path: Path) -> None:
+    clock = [_VSCODE_NOW]
+    service = _vscode_service(tmp_path, clock, _BrewFake())
+    service.refresh([_vscode_tool()])
+    state = service.state_of("vscode")
+    assert state is not None
+    assert state.health is Health.OUTDATED
+
+
+def test_greedy_casks_follows_the_published_pass(tmp_path: Path) -> None:
+    clock = [_VSCODE_NOW]
+    brew = _BrewFake()
+    service = _vscode_service(tmp_path, clock, brew)
+    assert service.greedy_casks() == frozenset()
+    service.refresh([_vscode_tool()])
+    assert service.greedy_casks() == frozenset({"visual-studio-code"})
+    service.invalidate(reason="test")
+    assert service.greedy_casks() == frozenset({"visual-studio-code"})
+    # A pass whose query races an invalidate is discarded whole, so it publishes nothing.
+    brew.info = _NO_AUTO_INFO
+
+    def race() -> None:
+        service.invalidate(reason="race")
+
+    brew.on_info = race
+    service.refresh([_vscode_tool()])
+    assert service.greedy_casks() == frozenset({"visual-studio-code"})
+    brew.on_info = None
+    service.refresh([_vscode_tool()])
+    assert service.greedy_casks() == frozenset()
+
+
+def test_a_transient_greedy_failure_on_an_aged_snapshot_keeps_the_previous_result(
+    tmp_path: Path,
+) -> None:
+    clock = [_VSCODE_NOW]
+    brew = _BrewFake()
+    service = _vscode_service(tmp_path, clock, brew)
+    service.refresh([_vscode_tool()])
+    clock[0] = _VSCODE_NOW + MANAGER_STALE_AFTER + timedelta(minutes=1)
+    brew.greedy = CommandError(_GREEDY_ARGV, 1, detail="transient")
+    service.refresh([_vscode_tool()])
+    state = service.state_of("vscode")
+    assert state is not None
+    assert state.health is Health.OUTDATED
+    saved = load_manager_snapshot(tmp_path / "versions.json")
+    assert saved is not None
+    assert saved.failed_at is not None
+    assert service.greedy_casks() == frozenset({"visual-studio-code"})
+
+
+def test_a_greedy_failure_after_invalidate_reads_unknown_not_current(tmp_path: Path) -> None:
+    clock = [_VSCODE_NOW]
+    brew = _BrewFake()
+    service = _vscode_service(tmp_path, clock, brew)
+    service.refresh([_vscode_tool()])
+    service.invalidate(reason="test")
+    brew.greedy = CommandError(_GREEDY_ARGV, 1, detail="transient")
+    service.refresh([_vscode_tool()])
+    state = service.state_of("vscode")
+    assert state is not None
+    assert state.version is not None
+    assert state.version.outdated is None
+    assert state.version.stale is True
+    saved = load_manager_snapshot(tmp_path / "versions.json")
+    assert saved is not None
+    assert saved.failed_at is not None
+    assert service.greedy_casks() == frozenset({"visual-studio-code"})
+
+
+def test_a_current_greedy_cask_is_skipped_and_runs_nothing(tmp_path: Path) -> None:
+    clock = [_VSCODE_NOW]
+    brew = _BrewFake()
+    brew.greedy = '{"formulae": [], "casks": []}'
+    service = _vscode_service(tmp_path, clock, brew)
+    service.refresh([_vscode_tool()])
+    state = service.state_of("vscode")
+    assert state is not None
+    assert state.health is Health.OK
+    rows = build_plan(
+        ["vscode"], [_vscode_tool()], service.state_of, service.platform, reinstall=frozenset()
+    )
+    assert [row.disposition for row in rows] == [Disposition.SKIP]
+    assert not [c for c in brew.calls if "upgrade" in c]
+
+
+def test_a_reloaded_snapshot_keeps_the_greedy_outdated_row(tmp_path: Path) -> None:
+    clock = [_VSCODE_NOW]
+    _vscode_service(tmp_path, clock, _BrewFake()).refresh([_vscode_tool()])
+    clock[0] = _VSCODE_NOW + timedelta(minutes=1)
+    later = _BrewFake()
+    reloaded = _vscode_service(tmp_path, clock, later)
+    reloaded.refresh([_vscode_tool()])
+    state = reloaded.state_of("vscode")
+    assert state is not None
+    assert state.health is Health.OUTDATED
+    assert reloaded.greedy_casks() == frozenset({"visual-studio-code"})
+    assert not [c for c in later.calls if c[:2] in (["brew", "info"], ["brew", "outdated"])]

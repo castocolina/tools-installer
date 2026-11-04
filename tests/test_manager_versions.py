@@ -1,4 +1,6 @@
-from collections.abc import Collection
+from collections.abc import Callable, Collection
+
+import pytest
 
 from installer.manager_versions import (
     ManagerVersion,
@@ -235,3 +237,106 @@ def test_uv_tool_outdated_none_on_command_error() -> None:
         raise CommandError(cmd, 127)
 
     assert uv_tool_outdated(query=query) is None
+
+
+_OUTDATED_ARGV = ["brew", "outdated", "--json=v2"]
+_INFO_ARGV = ["brew", "info", "--cask", "--installed", "--json=v2"]
+_GREEDY_ARGV = ["brew", "outdated", "--cask", "--greedy-auto-updates", "--json=v2"]
+_NO_OUTDATED = '{"formulae": [], "casks": []}'
+_AUTO_INFO = (
+    '{"formulae": [], "casks": ['
+    '{"token": "visual-studio-code", "auto_updates": true},'
+    '{"token": "wezterm", "auto_updates": false}]}'
+)
+_WEZTERM_ONLY = '{"formulae": [], "casks": [{"token": "wezterm", "auto_updates": false}]}'
+_GREEDY_VSCODE = (
+    '{"formulae": [], "casks": [{"name": "visual-studio-code", '
+    '"installed_versions": ["1.100"], "current_version": "1.101"}]}'
+)
+_FORMULA_OUTDATED = (
+    '{"formulae": [{"name": "ripgrep", "installed_versions": ["14.1.0"], '
+    '"current_version": "14.1.1"}], "casks": []}'
+)
+
+
+def _brew_fake(
+    answers: dict[tuple[str, ...], str | Exception],
+) -> tuple[Callable[..., str], list[list[str]]]:
+    calls: list[list[str]] = []
+
+    def query(cmd: list[str], **_kwargs: object) -> str:
+        calls.append(cmd)
+        answer = answers.get(tuple(cmd), "")
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return query, calls
+
+
+def test_an_auto_updating_cask_reads_greedy_outdated() -> None:
+    query, calls = _brew_fake(
+        {
+            tuple(_OUTDATED_ARGV): _NO_OUTDATED,
+            tuple(_INFO_ARGV): _AUTO_INFO,
+            tuple(_GREEDY_ARGV): _GREEDY_VSCODE,
+        }
+    )
+    report = read_outdated(
+        has_brew=True,
+        query=query,
+        resolve_pnpm=lambda: None,
+        casks=frozenset({"visual-studio-code", "wezterm"}),
+    )
+    assert report.cask == {"visual-studio-code": ManagerVersion("1.100", "1.101")}
+    assert report.greedy == frozenset({"visual-studio-code"})
+    assert [c for c in calls if c[0] == "brew"] == [_OUTDATED_ARGV, _INFO_ARGV, _GREEDY_ARGV]
+
+
+def test_no_auto_updating_tracked_cask_means_no_greedy_query() -> None:
+    query, calls = _brew_fake(
+        {tuple(_OUTDATED_ARGV): _NO_OUTDATED, tuple(_INFO_ARGV): _WEZTERM_ONLY}
+    )
+    report = read_outdated(
+        has_brew=True, query=query, resolve_pnpm=lambda: None, casks=frozenset({"wezterm"})
+    )
+    assert report.greedy == frozenset()
+    assert _GREEDY_ARGV not in calls
+
+
+def test_linux_makes_no_greedy_query() -> None:
+    query, calls = _brew_fake({tuple(_OUTDATED_ARGV): _NO_OUTDATED})
+    report = read_outdated(has_brew=True, query=query, resolve_pnpm=lambda: None)
+    assert [c for c in calls if c[0] == "brew"] == [_OUTDATED_ARGV]
+    assert report.greedy == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("info_answer", "greedy_answer"),
+    [
+        ("not json", ""),
+        ('{"formulae": [], "casks": [{"auto_updates": true}]}', ""),
+        (_AUTO_INFO, CommandError(_GREEDY_ARGV, 1, detail="transient")),
+        (_AUTO_INFO, "not json"),
+    ],
+    ids=["info-not-json", "entry-without-token", "greedy-raises", "greedy-not-json"],
+)
+def test_a_failed_greedy_read_is_not_nothing_outdated(
+    info_answer: str, greedy_answer: str | Exception
+) -> None:
+    query, _calls = _brew_fake(
+        {
+            tuple(_OUTDATED_ARGV): _FORMULA_OUTDATED,
+            tuple(_INFO_ARGV): info_answer,
+            tuple(_GREEDY_ARGV): greedy_answer,
+        }
+    )
+    report = read_outdated(
+        has_brew=True,
+        query=query,
+        resolve_pnpm=lambda: None,
+        casks=frozenset({"visual-studio-code"}),
+    )
+    assert report.greedy is None
+    assert report.cask is None
+    assert report.brew == {"ripgrep": ManagerVersion("14.1.0", "14.1.1")}

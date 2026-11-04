@@ -338,12 +338,15 @@ def _decode_inventory(raw: object) -> ManagerInventory:
 def _decode_outdated(raw: object) -> OutdatedReport:
     mapping = _as_object(raw)
     if mapping is None:
-        return OutdatedReport(brew=None, cask=None, pnpm=None, uv=None)
+        return OutdatedReport(brew=None, cask=None, pnpm=None, uv=None, greedy=None)
+    # A cache written before `greedy` existed reads as no auto-updating cask; JSON null is unknown.
+    greedy_raw = mapping.get("greedy", [])
     return OutdatedReport(
         brew=_version_map(mapping.get("brew")),
         cask=_version_map(mapping.get("cask")),
         pnpm=_version_map(mapping.get("pnpm")),
         uv=_version_map(mapping.get("uv")),
+        greedy=None if greedy_raw is None else (_str_set(greedy_raw) or frozenset()),
     )
 
 
@@ -378,6 +381,7 @@ def encode_manager_snapshot(snapshot: ManagerSnapshot) -> dict[str, object]:
             "cask": versions(outdated.cask),
             "pnpm": versions(outdated.pnpm),
             "uv": versions(outdated.uv),
+            "greedy": sorted(outdated.greedy) if outdated.greedy is not None else None,
         },
         "checked_at": snapshot.checked_at,
         "failed_at": snapshot.failed_at,

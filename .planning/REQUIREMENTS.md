@@ -80,7 +80,7 @@
 - [ ] **LIFE-07**: A bootstrap that needs an unwritable prefix becomes a handoff after a preflight [C G2]
 - [ ] **LIFE-08**: Removing a pnpm package that is part of a co-install group warns about the group [A #6, T-05-22]
 - [ ] **LIFE-09**: The container end-to-end check compares file listings before and after uninstall, not only exit codes [A #3]
-- [ ] **LIFE-10**: On macOS, casks that update themselves (`auto_updates: true`, e.g. VS Code) report and apply updates through `brew outdated --greedy` / `brew upgrade --cask --greedy <cask>`; otherwise they show as current while outdated, and turning off their own updater would leave them stale [found 2026-10-13: Homebrew API reports `visual-studio-code` auto_updates=true; no `greedy` anywhere in installer/]
+- [ ] **LIFE-10**: On macOS, casks that update themselves (`auto_updates: true`, e.g. VS Code) report and apply updates through `brew outdated --cask --greedy-auto-updates` / `brew upgrade --cask --greedy-auto-updates <cask>`; otherwise they show as current while outdated, and turning off their own updater would leave them stale [found 2026-10-13: Homebrew API reports `visual-studio-code` auto_updates=true; no `greedy` anywhere in installer/]
 
 ### Configuration
 
