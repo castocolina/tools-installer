@@ -88,7 +88,7 @@ Scouted 2026-10-13:
 
 8. **Vendor update commands (LIFE-06)**: When a script method declares `update`, `u` runs that argv. Otherwise it re-runs the vendor script.
    - Current: OMZ exits 1, and SDKMAN does nothing.
-   - Acceptance: With a fake runner, `u` on OMZ runs `<omz root>/tools/upgrade.sh`, and `u` on SDKMAN runs `sdk selfupdate`. The OMZ root is `$ZSH` when set, otherwise `~/.oh-my-zsh`, resolved in Python by the existing `$ZSH`-aware resolver with no shell (clarified 2026-10-14).
+   - Acceptance: With a fake runner, `u` on OMZ runs `<omz root>/tools/upgrade.sh`, and `u` on SDKMAN runs `sdk selfupdate`. The OMZ root is the one `omz_root` resolver's answer (`~/.oh-my-zsh` when it exists, otherwise `$ZSH`), the same copy the row and the receipt describe, resolved in Python with no shell (clarified 2026-10-14; amended 2026-11-04, code review C-17: one resolver for detection and update).
 
 9. **Writable-prefix preflight (LIFE-07)**: A script method with `writable_prefix` is checked before it runs.
    - Current: The brew bootstrap aborts on `sudo -n`.
@@ -149,7 +149,7 @@ Scouted 2026-10-13:
 - [ ] `config_paths` entries `~/.claude/x`, `~` and `/etc/x` are rejected at load; `~/.config/gh` is accepted
 - [ ] "Delete config too" appears only for tools with `config_paths`, is off by default, and deletes exactly the listed paths; `--yes` never deletes config
 - [ ] `u` on a pinned `app` runs nothing and shows "pinned; update outside or re-pin"
-- [ ] `u` on OMZ runs `$ZSH/tools/upgrade.sh`; on SDKMAN, `sdk selfupdate` (fake runner)
+- [ ] `u` on OMZ runs `<omz_root>/tools/upgrade.sh` (one resolver, C-17); on SDKMAN, `sdk selfupdate` (fake runner)
 - [ ] An unwritable `writable_prefix` yields a handoff with zero executions
 - [ ] Removing a pnpm group member warns with the group; a non-member gives no warning
 - [ ] The e2e harness fails on a planted leftover and passes clean; one Fedora podman run recorded
