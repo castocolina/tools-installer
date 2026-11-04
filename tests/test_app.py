@@ -5457,6 +5457,29 @@ def test_the_cli_prints_the_group_warning_before_the_confirm(
     assert calls == []
 
 
+def test_the_cli_group_warning_skips_a_member_already_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """22-UAT F-3: mmdc has no receipt and is not on disk (a group removal whose listing was
+    unreadable kept puppeteer's receipt), so the warning names nothing that is gone."""
+    from installer import app as app_module
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
+    receipts.delete("mmdc")
+
+    def on_disk(tool: Tool, **_kw: object) -> bool:
+        return tool.id != "mmdc"
+
+    monkeypatch.setattr(app_module, "is_installed", on_disk)
+    console, buf = _console()
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", lambda _m: False)
+    run_uninstall([mmdc, puppeteer], console, **kwargs)
+    assert "puppeteer: runs pnpm remove --global puppeteer" in buf.getvalue()
+    assert "Warning: pnpm group" not in buf.getvalue()
+
+
 _PNPM_NOT_FOUND = (
     "Error: ERR_PNPM_GLOBAL_PKG_NOT_FOUND\n\n"
     "  \u00d7 Cannot remove '{}': not found in global packages"

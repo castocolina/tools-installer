@@ -8830,6 +8830,24 @@ async def test_config_result_lines_follow_the_counts() -> None:
         assert screen.status.severity is Severity.OK
 
 
+async def test_the_group_warning_skips_a_member_shown_absent() -> None:
+    """22-UAT F-3: the frozen state shows mmdc absent, so removing puppeteer names no one."""
+    mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
+    puppeteer = _pnpm_tool("puppeteer", "puppeteer")
+    app = _app(
+        cases=[(mmdc, absent_state(mmdc)), (puppeteer, _pnpm_removal(puppeteer, "puppeteer"))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("puppeteer", False))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _flat(_confirm(app).review) == ["puppeteer: runs pnpm remove --global puppeteer"]
+        await pilot.press("escape")
+        await pilot.pause()
+
+
 async def test_a_member_removed_with_its_group_is_reported_after_the_counts() -> None:
     """22-UAT F-2: removing mmdc only, the run reports puppeteer as gone with the group."""
     mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")

@@ -294,22 +294,40 @@ def co_install_groups(catalog: Iterable[Tool]) -> tuple[tuple[str, tuple[str, ..
     return tuple(groups)
 
 
-def co_install_warnings(removing: Collection[str], catalog: Iterable[Tool]) -> tuple[str, ...]:
+def co_install_warnings(
+    removing: Collection[str], catalog: Iterable[Tool], *, present: Callable[[Tool], bool]
+) -> tuple[str, ...]:
     """LIFE-08: the warnings for a removal that touches a declared co-install group (D-10).
 
     Reads only the catalog's declared groups, never a live pnpm query. Each group's first
     member is its own `npm_pkg`, its declaring tool is the group name. pnpm removes the whole
     install group from any member (22-13 D-1), so one member removed names the others it
-    takes along; every member removed in this run gives one line."""
+    takes along; every member removed in this run gives one line. A member whose catalog tool
+    `present` (the caller's frozen state) reports gone is not named (22-UAT F-3); a member no
+    catalog tool declares always is."""
+    tools = list(catalog)
+    by_package = {
+        pkg: tool
+        for tool in tools
+        if (method := _node_method(tool)) is not None
+        and isinstance(pkg := method.params.get("npm_pkg"), str)
+    }
     lines: list[str] = []
-    for group, members in co_install_groups(catalog):
+    for group, members in co_install_groups(tools):
         removed = [member for member in members if member in removing]
         if not removed:
             continue
         if len(removed) == len(members):
             lines.append(f"Warning: pnpm group {group}: all its members are removed together.")
             continue
-        others = [member for member in members if member not in removing]
+        others = [
+            member
+            for member in members
+            if member not in removing
+            and ((tool := by_package.get(member)) is None or present(tool))
+        ]
+        if not others:
+            continue
         lines.append(
             f"Warning: pnpm group {group}: removing {', '.join(removed)} "
             f"removes the whole group, {', '.join(others)} included."

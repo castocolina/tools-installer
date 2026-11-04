@@ -439,8 +439,36 @@ def _mmdc_catalog() -> list[Tool]:
     return [Tool(id="mmdc", name="mmdc", category="dev", cmd="mmdc", methods=(method,))]
 
 
+def _everywhere(_tool: Tool) -> bool:
+    return True
+
+
+def test_a_member_known_gone_is_not_named() -> None:
+    """22-UAT F-3: mmdc has no receipt and no presence, so removing puppeteer takes nothing
+    else along; a member no catalog tool declares is still named."""
+    gone = co_install_warnings({"puppeteer"}, _mmdc_catalog(), present=lambda t: t.id != "mmdc")
+    assert gone == ()
+    catalog = [
+        Tool(
+            id="mmdc",
+            name="mmdc",
+            category="dev",
+            cmd="mmdc",
+            methods=(
+                Method(
+                    kind="node",
+                    params={"npm_pkg": MMDC_NPM, "co_install": ["puppeteer", "extra"]},
+                ),
+            ),
+        )
+    ]
+    assert co_install_warnings({"puppeteer"}, catalog, present=lambda t: t.id != "mmdc") == (
+        "Warning: pnpm group mmdc: removing puppeteer removes the whole group, extra included.",
+    )
+
+
 def test_removing_one_member_warns_with_the_group() -> None:
-    assert co_install_warnings({MMDC_NPM}, _mmdc_catalog()) == (
+    assert co_install_warnings({MMDC_NPM}, _mmdc_catalog(), present=_everywhere) == (
         "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli removes the whole group, "
         "puppeteer included.",
     )
@@ -448,20 +476,20 @@ def test_removing_one_member_warns_with_the_group() -> None:
 
 def test_removing_a_later_member_names_the_first() -> None:
     """pnpm removes the whole group from any member (22-13 D-1), the non-first one too."""
-    assert co_install_warnings({"puppeteer"}, _mmdc_catalog()) == (
+    assert co_install_warnings({"puppeteer"}, _mmdc_catalog(), present=_everywhere) == (
         "Warning: pnpm group mmdc: removing puppeteer removes the whole group, "
         "@mermaid-js/mermaid-cli included.",
     )
 
 
 def test_removing_every_member_warns_once() -> None:
-    assert co_install_warnings({MMDC_NPM, "puppeteer"}, _mmdc_catalog()) == (
+    assert co_install_warnings({MMDC_NPM, "puppeteer"}, _mmdc_catalog(), present=_everywhere) == (
         "Warning: pnpm group mmdc: all its members are removed together.",
     )
 
 
 def test_a_package_outside_any_group_warns_nothing() -> None:
-    assert co_install_warnings({"typescript"}, _mmdc_catalog()) == ()
+    assert co_install_warnings({"typescript"}, _mmdc_catalog(), present=_everywhere) == ()
 
 
 def test_node_install_policy_skips_node_method_without_npm_pkg() -> None:

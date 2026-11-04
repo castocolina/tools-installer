@@ -1599,7 +1599,11 @@ class UninstallScreen(AppScreen):
             lines.append(_review_line(sanitize_log_line(f"Config kept: {', '.join(unflagged)}.")))
         # The frozen decision's argv, like the `runs` lines above (review C-13).
         packages = pnpm_removal_packages(decision.argv.values())
-        for warning in co_install_warnings(packages, self._tools):
+
+        def present(tool: Tool) -> bool:  # an unknown state counts as present (22-UAT F-3)
+            return uninstall_group(self._state_of(tool)) is not UninstallState.ABSENT
+
+        for warning in co_install_warnings(packages, self._tools, present=present):
             line = _review_line(sanitize_log_line(warning))
             line.stylize("yellow", 0, len("Warning:"))
             lines.append(line)

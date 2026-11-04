@@ -82,6 +82,7 @@ from installer.shellrc import (
     write_managed_path,
     write_myshellrc,
 )
+from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
@@ -742,7 +743,14 @@ def run_uninstall(
         console.print(removal_runs_line(tool_id, argv), markup=False, soft_wrap=True)
     # LIFE-08: a co-install member's removal warns about its group before anything runs.
     pnpm_packages = pnpm_removal_packages(plan.argv for _tool, plan in ordered)
-    for line in co_install_warnings(pnpm_packages, tools):
+
+    # A member with no receipt is named only when it is on disk (22-UAT F-3).
+    def present(tool: Tool) -> bool:
+        return receipts.receipt_exists(tool.id) or is_installed(
+            tool, default_bin_dir=default_bin_dir
+        )
+
+    for line in co_install_warnings(pnpm_packages, tools, present=present):
         console.print(line, markup=False, soft_wrap=True)
     render_remove_yourself(yourself, console)
     if shimmed:
