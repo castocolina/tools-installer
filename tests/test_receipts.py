@@ -23,6 +23,7 @@ from installer.receipts import (
     receipt_path,
     write,
 )
+from installer.uninstall import plan_removal, remove_proven
 
 _REAL_HOME = Path(os.path.expanduser("~"))
 
@@ -1396,3 +1397,175 @@ def test_record_keys_each_dir_by_its_key_file(
         assert info.read_bytes() == before_plist
     else:
         assert [artifact.type for artifact in written.artifacts] == ["link"]
+
+
+def _script(*paths: str) -> Method:
+    return Method(kind="script", params={"paths": list(paths)})
+
+
+def _script_install(home: Path) -> None:
+    """What a vendor script leaves: a versioned binary, the link to it, and the tree."""
+    version = home / ".local" / "share" / "t" / "versions" / "1" / "t"
+    version.parent.mkdir(parents=True)
+    version.write_text("t binary")
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".local" / "bin" / "t").symlink_to(version)
+
+
+def test_a_retargeted_link_outside_the_tree_is_not_removable(tmp_path: Path) -> None:
+    _script_install(tmp_path)
+    link = tmp_path / ".local" / "bin" / "t"
+    leaf = receipts.fingerprint(link, "leaf")
+    tree = receipts.fingerprint(tmp_path / ".local" / "share" / "t", "tree")
+    assert leaf is not None and tree is not None
+    receipt = _write_receipt((leaf, tree))
+    assert receipts.drifted(receipt) == ()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("not ours")
+    link.unlink()
+    link.symlink_to(elsewhere)
+    assert receipts.broken_drift(receipt) == (leaf,)
+    assert receipts.drifted(receipt) == (leaf,)
+
+
+def test_a_tree_replaced_by_a_symlink_does_not_match(tmp_path: Path) -> None:
+    tree_path = tmp_path / "share" / "t"
+    tree_path.mkdir(parents=True)
+    tree = receipts.fingerprint(tree_path, "tree")
+    assert tree is not None
+    receipt = _write_receipt((tree,))
+    other = tmp_path / "other"
+    other.mkdir()
+    tree_path.rmdir()
+    tree_path.symlink_to(other, target_is_directory=True)
+    assert not receipts.matches(tree)
+    assert receipts.broken_drift(receipt) == ()  # a tree loses its proof, never its health
+    assert receipts.drifted(receipt) == (tree,)
+
+
+def test_a_leaf_file_replaced_by_a_directory_does_not_match(tmp_path: Path) -> None:
+    leaf_path = tmp_path / "t"
+    leaf_path.write_text("t")
+    leaf = receipts.fingerprint(leaf_path, "leaf")
+    assert leaf is not None
+    leaf_path.unlink()
+    leaf_path.mkdir()
+    assert not receipts.matches(leaf)
+    assert receipts.broken_drift(_write_receipt((leaf,))) == (leaf,)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "readable"),
+    [
+        ({"path": "/x/t", "type": "tree", "sha256": "b" * 64}, False),
+        ({"path": "/x/t", "type": "tree", "target": "/x"}, False),
+        ({"path": "/x/t", "type": "leaf", "key": "k"}, False),
+        ({"path": "/x/t", "type": "leaf", "size": 0}, False),
+        ({"path": "/x/t", "type": "leaf", "mtime_ns": 1}, False),
+        ({"path": "/x/t", "type": "leaf", "target": ""}, False),
+        ({"path": "/x/t", "type": "tree"}, True),
+        (
+            {
+                "path": "/x/t",
+                "type": "tree",
+                "sha256": None,
+                "size": None,
+                "mtime_ns": None,
+                "key": None,
+                "target": None,
+            },
+            True,
+        ),
+        ({"path": "/x/t", "type": "leaf"}, True),
+        ({"path": "/x/t", "type": "leaf", "target": "/x/v", "key": None}, True),
+    ],
+)
+def test_tree_and_leaf_artifacts_with_a_hash_or_key_are_rejected(
+    artifact: dict[str, object], readable: bool
+) -> None:
+    _raw_receipt([artifact])
+    assert (receipts.read("yq") is not None) is readable
+
+
+def test_tree_and_leaf_round_trip(tmp_path: Path) -> None:
+    _script_install(tmp_path)
+    version = tmp_path / ".local" / "share" / "t" / "versions" / "1" / "t"
+    tree = receipts.fingerprint(tmp_path / ".local" / "share" / "t", "tree")
+    link = receipts.fingerprint(tmp_path / ".local" / "bin" / "t", "leaf")
+    binary = receipts.fingerprint(version, "leaf")
+    assert tree is not None and link is not None and binary is not None
+    receipt = _write_receipt((tree, link, binary))
+    write(receipt)
+    assert receipts.read("yq") == receipt
+    raw = json.loads(receipt_path("yq").read_text(encoding="utf-8"))
+    for entry in raw["artifacts"]:
+        assert all(entry[name] is None for name in ("sha256", "size", "mtime_ns", "key"))
+    assert [entry["target"] for entry in raw["artifacts"]] == [None, str(version), None]
+
+
+def test_a_declared_path_present_before_the_install_is_not_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    method = _script("~/.local/bin/t", "~/.local/bin/t-helper")
+    tool = _record_tool("t", method)
+    helper = bin_dir / "t-helper"
+    helper.write_text("user file")
+    snapshot = receipts.preexisting_paths(method)
+    assert snapshot == frozenset({helper})
+    (bin_dir / "t").write_text("t")
+    receipt = receipts.record(tool, method, package=None, smoke=None, preexisting=snapshot)
+    assert receipt is not None
+    assert [artifact.path for artifact in receipt.artifacts] == [bin_dir / "t"]
+    plan = plan_removal([tool], bin_dir)
+    assert helper in plan.yourself
+    remove_proven([tool], list(plan.removable), bin_dir)
+    assert helper.read_text() == "user file"
+
+
+def test_a_reinstall_carries_forward_what_the_previous_receipt_proved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = _script("~/.local/bin/t", "~/.local/share/t/")
+    tool = _record_tool("t", method)
+    _script_install(tmp_path)
+    first = receipts.record(tool, method, package=None, smoke=None, preexisting=frozenset())
+    assert first is not None and len(first.artifacts) == 2
+    link = tmp_path / ".local" / "bin" / "t"
+    tree = tmp_path / ".local" / "share" / "t"
+    snapshot = receipts.preexisting_paths(method)
+    assert snapshot == frozenset({link, tree})
+    again = receipts.record(tool, method, package=None, smoke=None, preexisting=snapshot)
+    assert again is not None
+    assert {artifact.path for artifact in again.artifacts} == {link, tree}
+    # A pre-phase receipt proved nothing, so the same snapshot records nothing.
+    write(Receipt("t", "t", ReceiptMethod("script", "k"), None, (), None, {}))
+    bare = receipts.record(tool, method, package=None, smoke=None, preexisting=snapshot)
+    assert bare is not None and bare.artifacts == ()
+
+
+def test_record_without_a_snapshot_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _script_install(tmp_path)
+    method = _script("~/.local/bin/t", "~/.local/share/t/")
+    written = receipts.record(_record_tool("t", method), method, package=None, smoke=None)
+    assert written is not None
+    assert written.artifacts == ()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "yq").write_bytes(b"yq-bytes")
+    raw_method = _raw_yq(bin_dir)
+    hashed = receipts.record(
+        _record_tool("yq", raw_method),
+        raw_method,
+        package=None,
+        smoke=None,
+        default_bin_dir=bin_dir,
+    )
+    assert hashed is not None
+    assert [artifact.type for artifact in hashed.artifacts] == ["file"]

@@ -23,7 +23,7 @@ import os
 import re
 import stat as stat_module
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -32,7 +32,7 @@ from typing import Literal, TypeGuard, cast
 from installer import locations
 from installer.atomic import atomic_write_text, read_capped
 from installer.checksums import sha256_file
-from installer.download import artifact_paths
+from installer.download import Artifact, artifact_paths
 from installer.locations import ensure_dir
 from installer.model import TOOL_ID_RE, Method, Tool
 
@@ -62,7 +62,7 @@ _REHASH_MEMO: dict[tuple[str, int, int], str] = {}
 @dataclass(frozen=True)
 class ReceiptArtifact:
     path: Path
-    type: Literal["dir", "link", "file"]
+    type: Literal["dir", "link", "file", "tree", "leaf"]
     target: str | None = None
     sha256: str | None = None
     size: int | None = None
@@ -254,21 +254,31 @@ def record(
     package: str | None,
     smoke: str | None,
     default_bin_dir: Path | None = None,
+    preexisting: frozenset[Path] | None = None,
 ) -> Receipt | None:
     """Write the receipt for a method that just succeeded; None for a receiptless kind.
 
     Artifacts are `artifact_paths` (D-07) fingerprinted now; one the method did
     not create is dropped, including a dir whose key file is missing, so it is
     never receipt-proven. A dir is keyed by Contents/Info.plist for an app,
-    else by the member its bin link points to. Script and manager kinds get
-    none. When the write fails over an existing receipt, that receipt is deleted
-    (best effort) so it never claims bytes it did not fingerprint, and the raised
-    OSError says
-    what happened to it."""
+    else by the member its bin link points to. A script's declared path is
+    recorded type-only (`tree`/`leaf`) only when this install created it (not
+    in `preexisting`) or the previous receipt already proved it; `preexisting=None`
+    counts every declared path as pre-existing, so it fails closed. Manager
+    kinds get none. When the write fails over an existing receipt, that receipt
+    is deleted (best effort) so it never claims bytes it did not fingerprint,
+    and the raised OSError says what happened to it."""
     if method.kind in RECEIPTLESS_KINDS:
         return None
     base = default_bin_dir or locations.bin_dir(None)
-    created = artifact_paths(method, base)
+    previous = read(tool.id)
+    created = tuple(
+        entry
+        for entry in artifact_paths(method, base)
+        if entry.kind not in ("tree", "leaf")
+        or (preexisting is not None and entry.path not in preexisting)
+        or _proven_before(previous, entry)
+    )
     link = next((a.path for a in created if a.kind == "link"), None)
 
     artifacts = tuple(
@@ -299,6 +309,33 @@ def record(
             ) from exc
         raise OSError(f"{exc}; the previous receipt was removed") from exc
     return receipt
+
+
+def preexisting_paths(method: Method, default_bin_dir: Path | None = None) -> frozenset[Path]:
+    """The declared tree/leaf paths that exist now: the pre-install snapshot for `record`."""
+    base = default_bin_dir or locations.bin_dir(None)
+    return frozenset(
+        entry.path
+        for entry in artifact_paths(method, base)
+        if entry.kind in ("tree", "leaf") and os.path.lexists(entry.path)
+    )
+
+
+def _tree_paths(artifacts: Sequence[ReceiptArtifact]) -> tuple[Path, ...]:
+    return tuple(artifact.path for artifact in artifacts if artifact.type == "tree")
+
+
+def _proven_before(previous: Receipt | None, entry: Artifact) -> bool:
+    """Whether the previous receipt already proved `entry` and it still matches."""
+    if previous is None:
+        return False
+    trees = _tree_paths(previous.artifacts)
+    return any(
+        artifact.path == entry.path
+        and artifact.type == entry.kind
+        and matches(artifact, trees=trees)
+        for artifact in previous.artifacts
+    )
 
 
 def adopt(
@@ -453,7 +490,7 @@ def _dir_key(method: Method, directory: Path, link: Path | None) -> str | None:
 
 def fingerprint(
     path: Path,
-    kind: Literal["dir", "link", "file"],
+    kind: Literal["dir", "link", "file", "tree", "leaf"],
     *,
     key: str | None = None,
     rehash: bool = False,
@@ -467,12 +504,22 @@ def fingerprint(
     the dir a real directory (a symlink never is), and the key file a regular
     file, whose sha256, size and mtime_ns the artifact records. A re-created
     directory with the same key-file bytes matches. Device and inode numbers
-    are never recorded.
+    are never recorded. A `tree` is type-only: a real directory. A `leaf` is
+    type-only too: a regular file, or a symlink with its readlink target.
     Anything else, or an OSError or ValueError (a path `lstat` would refuse),
     is not fingerprintable."""
     try:
         if kind == "file":
             return _file_fingerprint(path, rehash=rehash)
+        if kind == "tree":
+            is_dir = stat_module.S_ISDIR(path.lstat().st_mode)
+            return ReceiptArtifact(path=path, type="tree") if is_dir else None
+        if kind == "leaf":
+            if path.is_symlink():
+                return ReceiptArtifact(path=path, type="leaf", target=os.readlink(path))
+            if stat_module.S_ISREG(path.lstat().st_mode):
+                return ReceiptArtifact(path=path, type="leaf")
+            return None
         if kind == "link":
             if not path.is_symlink():
                 return None
@@ -527,7 +574,7 @@ def _file_fingerprint(path: Path, *, rehash: bool = False) -> ReceiptArtifact | 
     )
 
 
-def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
+def matches(artifact: ReceiptArtifact, *, rehash: bool = False, trees: Sequence[Path] = ()) -> bool:
     """Does the on-disk artifact still equal what the receipt recorded (D-08)?
 
     A link matches on readlink. A dir matches while it is a real directory
@@ -546,6 +593,10 @@ def matches(artifact: ReceiptArtifact, *, rehash: bool = False) -> bool:
     try:
         if artifact.type == "link":
             return path.is_symlink() and os.readlink(path) == artifact.target
+        if artifact.type == "tree":
+            return stat_module.S_ISDIR(path.lstat().st_mode)
+        if artifact.type == "leaf":
+            return _leaf_matches(artifact, trees)
         if artifact.type == "dir":
             if artifact.key is None or not stat_module.S_ISDIR(path.lstat().st_mode):
                 return False
@@ -584,22 +635,42 @@ def _file_matches(target: Path, artifact: ReceiptArtifact, *, rehash: bool) -> b
     return observed == artifact.sha256
 
 
+def _leaf_matches(artifact: ReceiptArtifact, trees: Sequence[Path]) -> bool:
+    """A leaf is a regular file, or a symlink whose readlink still equals its
+    recorded target or lexically resolves inside one of the receipt's trees
+    (claude's auto-update retargets into its own tree). Lexical, so it still
+    holds once the tree is gone; any other retarget is drift (ledger Q3)."""
+    path = artifact.path
+    if not path.is_symlink():
+        return artifact.target is None and stat_module.S_ISREG(path.lstat().st_mode)
+    if artifact.target is None:
+        return False
+    live = os.readlink(path)
+    if live == artifact.target:
+        return True
+    resolved = Path(os.path.normpath(path.parent / live))
+    return any(resolved.is_relative_to(tree) for tree in trees)
+
+
 def drifted(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
     """The receipt's artifacts that no longer match, in receipt order."""
-    return tuple(a for a in receipt.artifacts if not matches(a, rehash=rehash))
+    trees = _tree_paths(receipt.artifacts)
+    return tuple(a for a in receipt.artifacts if not matches(a, rehash=rehash, trees=trees))
 
 
 def broken_drift(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
-    """Return file/link drift that is BROKEN, skipping dirs before any hash.
+    """Return file/link drift that is BROKEN, skipping dirs and trees before any hash.
 
     This owns L-19-31: changed files and links are BROKEN and refused; a
-    changed dir only loses its removal proof (`drifted` reports that). The
-    update gate's `rehash=True` therefore never reads a dir's key file.
+    changed dir or tree only loses its removal proof (`drifted` reports that).
+    The update gate's `rehash=True` therefore never reads a dir's key file.
     """
+    trees = _tree_paths(receipt.artifacts)
     return tuple(
         artifact
         for artifact in receipt.artifacts
-        if artifact.type != "dir" and not matches(artifact, rehash=rehash)
+        if artifact.type not in ("dir", "tree")
+        and not matches(artifact, rehash=rehash, trees=trees)
     )
 
 
@@ -609,13 +680,32 @@ def _artifact_int(artifact: dict[str, object], key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _read_type_only(artifact: dict[str, object], path: Path, kind: str) -> ReceiptArtifact | None:
+    """Decode a `tree` or `leaf`: type-only, so no sha256, size, mtime_ns or key.
+
+    An absent key and a JSON null both read as no value (the writer always
+    emits them as null); any other value is refused. A `tree` has no target; a
+    `leaf` has one only when it is a symlink, and an empty one is refused."""
+    if any(artifact.get(name) is not None for name in ("sha256", "size", "mtime_ns", "key")):
+        return None
+    target = artifact.get("target")
+    if kind == "tree":
+        return None if target is not None else ReceiptArtifact(path=path, type="tree")
+    if target is None:
+        return ReceiptArtifact(path=path, type="leaf")
+    if not isinstance(target, str) or not target:
+        return None
+    return ReceiptArtifact(path=path, type="leaf", target=target)
+
+
 def _read_artifact(raw: object) -> ReceiptArtifact | None:
     """Decode one artifact, enforcing each type's required fields.
 
     Each type keeps only the fields it is checked on: a `file` its 64-hex
     sha256, size and mtime_ns; a `link` its non-empty target; a `dir` its safe
-    relative `key` plus that key file's 64-hex sha256, size and mtime_ns.
-    Anything else — every 19-22 `dev`/`ino` artifact included — returns None,
+    relative `key` plus that key file's 64-hex sha256, size and mtime_ns; a
+    `tree` or `leaf` its path alone (plus a leaf link's target), see
+    `_read_type_only`. Anything else — every 19-22 `dev`/`ino` artifact included — returns None,
     so the receipt is unreadable and unproven."""
     if not isinstance(raw, dict):
         return None
@@ -624,7 +714,7 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
     kind = artifact.get("type")
     if not isinstance(raw_path, str) or not isinstance(kind, str):
         return None
-    if kind not in ("dir", "link", "file"):
+    if kind not in ("dir", "link", "file", "tree", "leaf"):
         return None
     # A path `lstat` would refuse (an embedded NUL, a lone surrogate) is
     # rejected here, at the boundary, so it can never abort a pass or a removal.
@@ -642,6 +732,8 @@ def _read_artifact(raw: object) -> ReceiptArtifact | None:
         if not isinstance(target, str) or not target:
             return None
         return ReceiptArtifact(path=path, type="link", target=target)
+    if kind in ("tree", "leaf"):
+        return _read_type_only(artifact, path, kind)
     sha256 = artifact.get("sha256")
     size = _artifact_int(artifact, "size")
     mtime_ns = _artifact_int(artifact, "mtime_ns")
