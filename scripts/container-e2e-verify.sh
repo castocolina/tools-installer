@@ -229,6 +229,8 @@ cmd_bootstrap() {
   copy_workspace
   bootstrap_homebrew_and_uv
   sync_workspace
+  home_listing >"$PHASE_DIR/home-before.txt"
+  printf 'TRACER_HOME_BASELINE entries=%s\n' "$(wc -l <"$PHASE_DIR/home-before.txt" | tr -d ' ')"
   print_harness_ready
 }
 
@@ -403,7 +405,7 @@ accumulate_summaries() {
     fi
   done <"$file"
   [[ -z "$dep_row" ]] || printf '%s\n' "$dep_row" >>"$ACC_DEP_LINES_FILE"
-  sed -nE 's/^[^ ]+ +([^ ]+) +manual — see the setup steps in the log$/\1/p' \
+  sed -nE 's/^[^ ]+ +([^ ]+) +manual — (see the setup steps in the log|you run: .*)$/\1/p' \
     "$file" >>"$ACC_MANUAL_NAMES_FILE" || true
 }
 
@@ -528,6 +530,186 @@ cmd_pass1() {
   return 1
 }
 
+# The tester's HOME-relative listing, the workspace checkout pruned. `~` is expanded by
+# the container shell, so the single-quoted text names no host variable.
+home_listing() {
+  local workspace="${TESTER_WORKSPACE#/home/tester/}"
+  exec_tester 'cd ~ && find . -mindepth 1 \( -path "./'"$workspace"'" -prune \) -o -print | sed "s|^\./||" | LC_ALL=C sort'
+}
+
+# Before --uninstall --yes: the paths each receipt records (HOME-relative; paths outside
+# HOME dropped) and the ids whose removal_plan is not `none`, both read by the installer's
+# own code in the workspace. Writes receipt-paths.txt and removable-receipts.txt.
+receipt_paths() {
+  local workspace out
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+from pathlib import Path
+from installer import receipts
+from installer.model import load_tools
+from installer.uninstall import removal_plan
+home = Path.home()
+for path in sorted(receipts.default_receipts_dir().glob(\"*.json\")):
+    receipt = receipts.read(path.stem)
+    for artifact in (receipt.artifacts if receipt else ()):
+        if artifact.path.is_relative_to(home):
+            print(\"P \" + artifact.path.relative_to(home).as_posix())
+bin_dir = home / \".local\" / \"bin\"
+for tool in load_tools(\"installer/registry.toml\"):
+    if removal_plan(tool, bin_dir).level != \"none\":
+        print(\"R \" + tool.id)
+'
+")" || { printf 'TRACER_RECEIPT_PATHS_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | sed -n 's/^P //p' >"$PHASE_DIR/receipt-paths.txt"
+  printf '%s\n' "$out" | sed -n 's/^R //p' >"$PHASE_DIR/removable-receipts.txt"
+  printf 'TRACER_RECEIPT_PATHS_OK recorded=%s removable=%s\n' \
+    "$(wc -l <"$PHASE_DIR/receipt-paths.txt" | tr -d ' ')" \
+    "$(wc -l <"$PHASE_DIR/removable-receipts.txt" | tr -d ' ')"
+}
+
+# Host-side and read-only: one `allowed <path>` or `clear <path>` line per registry fact,
+# HOME-relative. Imports the installer's own loader and marker table, never a copy.
+registry_probe() {
+  (cd "$REPO_ROOT" && uv run --no-sync python -c '
+from installer.model import HARNESS_MARKER_DIRS, load_tools
+tools = load_tools("installer/registry.toml")
+def rel(entry):
+    entry = entry.replace("{omz_root}/", ".oh-my-zsh/", 1)
+    return entry[2:] if entry.startswith("~/") else entry
+for tool in tools:
+    for entry in tool.config_paths:
+        print("allowed " + rel(entry).rstrip("/"))
+for group in HARNESS_MARKER_DIRS.values():
+    for entry in group:
+        print("allowed " + entry)
+for tool in tools:
+    for method in tool.methods:
+        if method.kind == "script":
+            for entry in method.params.get("paths", ()):
+                print("clear " + rel(entry).rstrip("/"))
+')
+}
+
+# Config and harness prefixes, then the committed residue allowlist (reasons stripped).
+allowed_prefixes() {
+  registry_probe | sed -n 's/^allowed //p' || return 1
+  sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$REPO_ROOT/scripts/e2e-residue-allowlist.txt"
+}
+
+# Declared script paths: a leftover there is a removal defect, never an allowlist case.
+must_clear_paths() {
+  registry_probe | sed -n 's/^clear //p' || return 1
+}
+
+# Pure (files in, lines out): prints the top-most leftover roots and exits 1 when any remain.
+# A path at or under a receipt-recorded entry is a leftover whatever the baseline holds
+# (review R1-25). A new path (not in the baseline) is a leftover when it lies at or under a
+# must-clear entry, or when it is neither at, under, nor a parent of an allowed prefix (a new
+# .config that only holds .config/gh is fine).
+new_leftovers() {
+  local before="$1" after="$2" allowed="$3" must_clear="$4" recorded="$5"
+  local path entry flagged covered root kept
+  local -a allowed_list=() must_list=() recorded_list=() leftovers=() roots=()
+  while IFS= read -r entry; do [[ -n "$entry" ]] || continue; allowed_list+=("$entry"); done <"$allowed"
+  while IFS= read -r entry; do [[ -n "$entry" ]] || continue; must_list+=("$entry"); done <"$must_clear"
+  while IFS= read -r entry; do [[ -n "$entry" ]] || continue; recorded_list+=("$entry"); done <"$recorded"
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    for entry in "${recorded_list[@]}"; do
+      if [[ "$path" == "$entry" || "$path" == "$entry"/* ]]; then leftovers+=("$path"); break; fi
+    done
+  done <"$after"
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    flagged=""
+    for entry in "${must_list[@]}"; do
+      if [[ "$path" == "$entry" || "$path" == "$entry"/* ]]; then flagged=1; break; fi
+    done
+    if [[ -z "$flagged" ]]; then
+      covered=""
+      for entry in "${allowed_list[@]}"; do
+        if [[ "$path" == "$entry" || "$path" == "$entry"/* || "$entry" == "$path"/* ]]; then
+          covered=1
+          break
+        fi
+      done
+      [[ -n "$covered" ]] || flagged=1
+    fi
+    if [[ -n "$flagged" ]]; then leftovers+=("$path"); fi
+  done < <(LC_ALL=C comm -13 <(LC_ALL=C sort -u "$before") <(LC_ALL=C sort -u "$after"))
+  # Sorted, an ancestor always precedes its descendants, so one pass keeps the roots.
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    kept=""
+    for root in "${roots[@]}"; do
+      if [[ "$path" == "$root"/* ]]; then kept=1; break; fi
+    done
+    [[ -n "$kept" ]] || roots+=("$path")
+  done < <(printf '%s\n' "${leftovers[@]}" | LC_ALL=C sort -u)
+  if [[ ${#roots[@]} -eq 0 ]]; then return 0; fi
+  printf '%s\n' "${roots[@]}"
+  return 1
+}
+
+# After --uninstall --yes, against the baseline cmd_bootstrap took with no installer running.
+# Prints TRACER_LEFTOVER path=... per top-most root (capped at 50, then _MORE), or _OK.
+assert_no_leftovers() {
+  local before="$PHASE_DIR/home-before.txt" after="$PHASE_DIR/home-after.txt"
+  local recorded="$PHASE_DIR/receipt-paths.txt"
+  local allowed="$PHASE_DIR/allowed-prefixes.txt" must_clear="$PHASE_DIR/must-clear-paths.txt"
+  local roots path total=0
+  if [[ ! -f "$before" || ! -f "$recorded" ]]; then
+    printf 'TRACER_LEFTOVER_NO_BASELINE\n'
+    return 1
+  fi
+  home_listing >"$after" || { printf 'TRACER_LEFTOVER_PROBE_FAILED\n'; return 1; }
+  allowed_prefixes >"$allowed" || { printf 'TRACER_LEFTOVER_PROBE_FAILED\n'; return 1; }
+  must_clear_paths >"$must_clear" || { printf 'TRACER_LEFTOVER_PROBE_FAILED\n'; return 1; }
+  if roots="$(new_leftovers "$before" "$after" "$allowed" "$must_clear" "$recorded")"; then
+    printf 'TRACER_LEFTOVER_OK\n'
+    return 0
+  fi
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    total=$((total + 1))
+    if [[ "$total" -le 50 ]]; then printf 'TRACER_LEFTOVER path=%s\n' "$path"; fi
+  done <<<"$roots"
+  if [[ "$total" -gt 50 ]]; then printf 'TRACER_LEFTOVER_MORE count=%s\n' "$((total - 50))"; fi
+  return 1
+}
+
+# After --uninstall --yes: every receipt the pre-uninstall plan could remove must be gone
+# (review R1-24). Prints TRACER_RECEIPT_LEFT per survivor, else TRACER_RECEIPTS_GONE_OK.
+assert_removed_receipts_gone() {
+  local list="$PHASE_DIR/removable-receipts.txt" id receipt left=0 count=0
+  if [[ ! -f "$list" ]]; then
+    printf 'TRACER_RECEIPTS_UNKNOWN\n'
+    return 1
+  fi
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    if [[ ! "$id" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+      printf 'TRACER_RECEIPTS_UNKNOWN\n'
+      return 1
+    fi
+    count=$((count + 1))
+    receipt="\$HOME/.local/state/tools-installer/receipts/${id}.json"
+    if exec_tester "test -e ${receipt} || test -L ${receipt}"; then
+      printf 'TRACER_RECEIPT_LEFT id=%s\n' "$id"
+      left=1
+    fi
+  done <"$list"
+  if [[ "$left" -eq 0 ]]; then
+    printf 'TRACER_RECEIPTS_GONE_OK count=%s\n' "$count"
+    return 0
+  fi
+  return 1
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -578,6 +760,9 @@ cmd_pass2() {
   if ! assert_receipt_ready_for_removal >> "$log"; then
     return 1
   fi
+  if ! receipt_paths >> "$log"; then
+    return 1
+  fi
 
   # Step 2: the full uninstall sweep. --uninstall prints no Summary — line,
   # so only the exit code (and the transcript itself) is evidence here.
@@ -588,6 +773,12 @@ cmd_pass2() {
   fi
   printf 'TRACER_UNINSTALL_OK\n' >> "$log"
   if ! assert_receipt_removed >> "$log"; then
+    return 1
+  fi
+  if ! assert_removed_receipts_gone >> "$log"; then
+    return 1
+  fi
+  if ! assert_no_leftovers >> "$log"; then
     return 1
   fi
 

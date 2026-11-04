@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -402,6 +403,33 @@ def test_a_two_space_report_line_is_not_joined_to_a_row(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_the_manual_name_parser_reads_you_run_rows(tmp_path: Path) -> None:
+    """A native handoff row (`manual — you run:`) counts as an explained blocker too."""
+    harness = _summary_harness(
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+    )
+    transcript = "\n".join(
+        (
+            "Summary — 2 installed, 2 manual, 1 dependency failed",
+            "✖ mmdc  dependency failed — zsh",
+            "○ zsh  manual — you run: `sudo dnf install zsh`",
+            "○ pi  manual — see the setup steps in the log",
+        )
+    )
+    result = _summary_run(
+        harness,
+        tmp_path,
+        transcript,
+        "accumulate_summaries $TRANSCRIPT; install_step_ok 1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    names = (tmp_path / "manual-names").read_text(encoding="utf-8")
+    assert names.splitlines() == ["zsh", "pi"]
+
+
 def test_the_gate_reads_the_post_run_lines_setup_prints() -> None:
     setup = (ROOT / "setup.py").read_text(encoding="utf-8")
     accumulate = _function("accumulate_summaries")
@@ -623,6 +651,306 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
     assert strings_only.returncode != 0
     assert "TRACER_RECEIPT_PRE_UNINSTALL_MISSING" in strings_only.stdout
     assert "valid receipt" in strings_only.stdout
+
+
+def _phase_harness(*names: str) -> str:
+    """`_harness` plus the phase dir and repo root the leftover functions read."""
+    return "\n".join(
+        (
+            'PHASE_DIR="$SCRATCH/phase"',
+            f"REPO_ROOT={shlex.quote(str(ROOT))}",
+            _harness(*names),
+        )
+    )
+
+
+def _write_listing(path: Path, lines: Sequence[str]) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return str(path)
+
+
+def _leftovers(
+    scratch: Path,
+    *,
+    before: Sequence[str],
+    after: Sequence[str],
+    allowed: Sequence[str] = (),
+    must_clear: Sequence[str] = (),
+    recorded: Sequence[str] = (),
+) -> subprocess.CompletedProcess[str]:
+    """new_leftovers over fixture listings: the pure check, no probes, no container."""
+    files = [
+        _write_listing(scratch / f"{name}.txt", lines)
+        for name, lines in (
+            ("before", before),
+            ("after", after),
+            ("allowed", allowed),
+            ("must-clear", must_clear),
+            ("recorded", recorded),
+        )
+    ]
+    command = "new_leftovers " + " ".join(shlex.quote(path) for path in files)
+    return _run(_harness("new_leftovers") + "\n" + command + "\n", scratch)
+
+
+def _no_leftovers(
+    scratch: Path,
+    *,
+    after: Sequence[str],
+    before: Sequence[str] | None = (".bashrc",),
+    allowed: Sequence[str] = (),
+    must_clear: Sequence[str] = (),
+    recorded: Sequence[str] = (),
+) -> subprocess.CompletedProcess[str]:
+    """assert_no_leftovers over fixture listings, the listing and both host probes stubbed."""
+    phase = scratch / "phase"
+    if before is not None:
+        _write_listing(phase / "home-before.txt", before)
+    _write_listing(phase / "receipt-paths.txt", recorded)
+    listing = _write_listing(scratch / "listing.txt", after)
+    allowed_file = _write_listing(scratch / "allowed.txt", allowed)
+    must_file = _write_listing(scratch / "must-clear.txt", must_clear)
+    stubs = (
+        f"home_listing() {{ cat {shlex.quote(listing)}; }}\n"
+        f"allowed_prefixes() {{ cat {shlex.quote(allowed_file)}; }}\n"
+        f"must_clear_paths() {{ cat {shlex.quote(must_file)}; }}\n"
+    )
+    script = _phase_harness("assert_no_leftovers", "new_leftovers") + "\n"
+    return _run(script + stubs + "assert_no_leftovers\n", scratch)
+
+
+def test_a_planted_leftover_fails_the_check(tmp_path: Path) -> None:
+    """A planted file fails the check, and the report names its top-most new root."""
+    after = [".bashrc", ".local", ".local/share", ".local/share/planted-leftover"]
+    pure = _leftovers(tmp_path / "pure", before=[".bashrc"], after=after)
+    assert pure.returncode != 0
+    assert pure.stdout.splitlines() == [".local"]
+    report = _no_leftovers(tmp_path / "report", after=after)
+    assert report.returncode != 0
+    assert report.stdout.splitlines() == ["TRACER_LEFTOVER path=.local"]
+
+
+def test_a_clean_run_passes(tmp_path: Path) -> None:
+    """Declared config, the cache root and the parent of an allowed dir are not leftovers."""
+    after = [
+        ".bashrc",
+        ".cache",
+        ".cache/uv",
+        ".cache/uv/x",
+        ".config",
+        ".config/gh",
+        ".config/gh/hosts.yml",
+    ]
+    allowed = [".config/gh", ".cache"]
+    pure = _leftovers(tmp_path / "pure", before=[".bashrc"], after=after, allowed=allowed)
+    assert pure.returncode == 0, pure.stdout
+    assert pure.stdout == ""
+    report = _no_leftovers(tmp_path / "report", after=after, allowed=allowed)
+    assert report.returncode == 0, report.stderr
+    assert report.stdout.splitlines() == ["TRACER_LEFTOVER_OK"]
+
+
+def test_leftovers_are_reported_as_roots(tmp_path: Path) -> None:
+    result = _leftovers(tmp_path, before=(), after=[".foo", ".foo/a", ".foo/b/c"])
+    assert result.returncode != 0
+    assert result.stdout.splitlines() == [".foo"]
+
+
+def test_a_leftover_install_path_under_a_harness_dir_fails(tmp_path: Path) -> None:
+    """A declared install path under a marker dir fails; the emptied dir and config do not."""
+    allowed = [".opencode", ".local/share/cursor-agent"]
+    must_clear = [".opencode/bin/opencode", ".local/share/cursor-agent"]
+    binary = _leftovers(
+        tmp_path / "binary",
+        before=[".bashrc"],
+        after=[".bashrc", ".opencode/bin", ".opencode/bin/opencode"],
+        allowed=allowed,
+        must_clear=must_clear,
+    )
+    assert binary.returncode != 0
+    assert binary.stdout.splitlines() == [".opencode/bin/opencode"]
+    tree = _leftovers(
+        tmp_path / "tree",
+        before=[".bashrc"],
+        after=[
+            ".bashrc",
+            ".local/share/cursor-agent",
+            ".local/share/cursor-agent/versions",
+            ".local/share/cursor-agent/versions/x",
+        ],
+        allowed=allowed,
+        must_clear=must_clear,
+    )
+    assert tree.returncode != 0
+    assert tree.stdout.splitlines() == [".local/share/cursor-agent"]
+    emptied = _leftovers(
+        tmp_path / "emptied",
+        before=[".bashrc"],
+        after=[".bashrc", ".opencode/bin", ".opencode/opencode.json"],
+        allowed=allowed,
+        must_clear=must_clear,
+    )
+    assert emptied.returncode == 0, emptied.stdout
+    assert emptied.stdout == ""
+
+
+def test_an_allowlist_entry_never_exempts_a_must_clear_path(tmp_path: Path) -> None:
+    result = _leftovers(
+        tmp_path,
+        before=[".bashrc"],
+        after=[".bashrc", ".opencode/bin", ".opencode/bin/opencode"],
+        allowed=[".opencode/bin"],
+        must_clear=[".opencode/bin/opencode"],
+    )
+    assert result.returncode != 0
+    assert result.stdout.splitlines() == [".opencode/bin/opencode"]
+
+
+def test_a_missing_baseline_fails(tmp_path: Path) -> None:
+    result = _no_leftovers(tmp_path, before=None, after=[".bashrc"])
+    assert result.returncode != 0
+    assert result.stdout.splitlines() == ["TRACER_LEFTOVER_NO_BASELINE"]
+
+
+def test_a_receipt_path_in_the_baseline_is_still_checked(tmp_path: Path) -> None:
+    """A recorded path is a leftover even when the baseline holds it; a declared-only one is not."""
+    listing = [".local", ".local/bin", ".local/bin/t"]
+    recorded = _leftovers(
+        tmp_path / "recorded", before=listing, after=listing, recorded=[".local/bin/t"]
+    )
+    assert recorded.returncode != 0
+    assert recorded.stdout.splitlines() == [".local/bin/t"]
+    declared = _leftovers(
+        tmp_path / "declared", before=listing, after=listing, must_clear=[".local/bin/t"]
+    )
+    assert declared.returncode == 0
+    assert declared.stdout == ""
+
+
+def test_a_left_manager_receipt_fails_the_check(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    phase = scratch / "phase"
+    receipts = scratch / ".local" / "state" / "tools-installer" / "receipts"
+    phase.mkdir(parents=True)
+    receipts.mkdir(parents=True)
+    (phase / "removable-receipts.txt").write_text("gh\nuv\n", encoding="utf-8")
+    (receipts / "gh.json").write_text("{}\n", encoding="utf-8")
+    script = _phase_harness("assert_removed_receipts_gone") + "\nassert_removed_receipts_gone\n"
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert "TRACER_RECEIPT_LEFT id=gh" in left.stdout
+    (receipts / "gh.json").unlink()
+    gone = _run(script, scratch)
+    assert gone.returncode == 0, gone.stdout
+    assert "TRACER_RECEIPTS_GONE_OK count=2" in gone.stdout
+    (phase / "removable-receipts.txt").unlink()
+    unknown = _run(script, scratch)
+    assert unknown.returncode != 0
+    assert "TRACER_RECEIPTS_UNKNOWN" in unknown.stdout
+
+
+def test_the_allowlist_gives_every_entry_a_reason() -> None:
+    lines = (ROOT / "scripts" / "e2e-residue-allowlist.txt").read_text(encoding="utf-8")
+    entries = [
+        line for line in lines.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert entries
+    for line in entries:
+        assert re.match(r"^\S+  # \S", line), line
+
+
+def test_the_leftover_check_is_wired_after_the_uninstall_step() -> None:
+    text = _script_text()
+    bootstrap = _function("cmd_bootstrap", text)
+    assert bootstrap.index("home_listing") < bootstrap.index("print_harness_ready")
+    pass2 = _function("cmd_pass2", text)
+    uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
+    assert pass2.index("receipt_paths") < uninstall
+    done = pass2.index("TRACER_UNINSTALL_OK")
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    for check in ("assert_removed_receipts_gone", "assert_no_leftovers"):
+        assert done < pass2.index(check) < reinstall
+
+
+def test_home_listing_prunes_the_workspace(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    (scratch / "workspace" / ".venv").mkdir(parents=True)
+    (scratch / ".config" / "gh").mkdir(parents=True)
+    (scratch / ".bashrc").write_text("", encoding="utf-8")
+    result = _run(_harness("home_listing") + "\nhome_listing\n", scratch)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [".bashrc", ".config", ".config/gh"]
+
+
+def test_receipt_paths_records_the_home_relative_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only artifacts under HOME are recorded, relative to it; outside paths are dropped."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    inside = scratch / "payload"
+    inside.parent.mkdir(parents=True)
+    inside.write_bytes(b"payload")
+    outside = tmp_path / "elsewhere"
+    outside.write_bytes(b"x")
+    artifacts = tuple(
+        ReceiptArtifact(path=path.resolve(), type="file", sha256="b" * 64, size=7, mtime_ns=1)
+        for path in (inside, outside)
+    )
+    receipts.write(
+        Receipt(
+            tool=PROBE_TOOL,
+            at="2026-10-16T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=artifacts,
+            smoke=None,
+            hooks={},
+        )
+    )
+    phase = scratch / "phase"
+    phase.mkdir()
+    script = "\n".join(
+        [
+            _phase_harness("receipt_paths"),
+            _assign("TESTER_WORKSPACE", str(ROOT)),
+            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+            _uv_stub(),
+            "receipt_paths",
+        ]
+    )
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    recorded = (phase / "receipt-paths.txt").read_text(encoding="utf-8")
+    assert recorded.splitlines() == ["payload"]
+    assert (phase / "removable-receipts.txt").exists()
+
+
+def test_the_host_probe_lists_config_harness_and_script_paths(tmp_path: Path) -> None:
+    """The registry's config dirs, harness markers and script paths reach the two lists."""
+    script = "\n".join(
+        [
+            _phase_harness("allowed_prefixes", "must_clear_paths", "registry_probe"),
+            _uv_stub(),
+            "allowed_prefixes",
+            "printf '%s\\n' ---",
+            "must_clear_paths",
+        ]
+    )
+    result = _run(script, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    allowed, _sep, must_clear = result.stdout.partition("---\n")
+    allowed_lines = allowed.splitlines()
+    clear_lines = must_clear.splitlines()
+    for entry in (".config/uv", ".claude", ".local/state/tools-installer", ".local/share/uv"):
+        assert entry in allowed_lines, result.stderr
+    for entry in (".opencode/bin/opencode", ".local/share/claude", ".local/bin/claude"):
+        assert entry in clear_lines, result.stderr
 
 
 def test_pre_uninstall_check_survives_a_spaced_workspace(
