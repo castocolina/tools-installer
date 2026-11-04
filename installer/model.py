@@ -576,8 +576,22 @@ def _is_argv(raw: object, token_ok: Callable[[str], bool]) -> bool:
     return all(isinstance(item, str) and token_ok(item) for item in cast(list[object], raw))
 
 
+# A registry argv must never start a run with one of these (SPEC R3, review C-08).
+ELEVATION_COMMANDS = frozenset({"sudo", "pkexec", "doas"})
+
+
+def _elevation_head(raw: object) -> str | None:
+    """The argv's first word when it (or its basename) is an elevation command, else None."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    head = cast(list[object], raw)[0]
+    return head if isinstance(head, str) and head.rsplit("/", 1)[-1] in ELEVATION_COMMANDS else None
+
+
 def _script_refusal(raw: object) -> str:
     """Name the first refused token of a script argv value, else the shape it must have."""
+    if (head := _elevation_head(raw)) is not None:
+        return f"starts with the elevation command '{head}'"
     if isinstance(raw, list):
         for token in cast(list[object], raw):
             if isinstance(token, str) and (why := _script_token_ok(token)) is not None:
@@ -1057,8 +1071,9 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                 )
             if kind == "script":
                 for key in ("remove", "update"):
-                    if key in params and not _is_argv(
-                        params[key], lambda token: _script_token_ok(token) is None
+                    if key in params and (
+                        not _is_argv(params[key], lambda token: _script_token_ok(token) is None)
+                        or _elevation_head(params[key]) is not None
                     ):
                         raise ValueError(
                             f"tool '{row['id']}': method 'script' key '{key}' "

@@ -3,13 +3,14 @@ import os
 import shlex
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import installer.executors as executors
 from installer.executors import EXECUTORS, SMOKE_CHECKS, ExecutorError, execute
 from installer.guards import REDIRECT_SENTINEL
-from installer.model import SMOKE_CHECK_NAMES, Method
+from installer.model import SMOKE_CHECK_NAMES, Method, load_tools
 from installer.run import TIMEOUT_CODE, CommandError, Runner
 
 
@@ -144,6 +145,19 @@ def test_native_kinds_have_no_executor():
 
 
 _ELEVATION_WORDS = frozenset({"sudo", "pkexec", "doas"})
+
+
+def test_no_registry_argv_starts_with_an_elevation_command():
+    """Review C-08: the registry's `remove`/`update` argv is the other channel to a runner."""
+    offenders = [
+        f"{tool.id}:{key}"
+        for tool in load_tools(Path(__file__).resolve().parents[1] / "installer" / "registry.toml")
+        for method in tool.methods
+        for key in ("remove", "update")
+        if isinstance(argv := method.params.get(key), list)
+        and Path(str(cast(list[object], argv)[0])).name in _ELEVATION_WORDS
+    ]
+    assert offenders == []
 
 
 def test_no_argv_literal_starts_with_an_elevation_command():

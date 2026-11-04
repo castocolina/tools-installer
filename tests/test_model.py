@@ -1887,6 +1887,15 @@ def test_script_tokens_reject_an_unknown_placeholder(tmp_path: Path, key: str, l
         load_tools(manifest)
 
 
+@pytest.mark.parametrize("key", ["remove", "update"])
+@pytest.mark.parametrize("word", ["sudo", "pkexec", "doas", "/usr/bin/sudo"])
+def test_script_argv_refuses_an_elevation_command(tmp_path: Path, key: str, word: str) -> None:
+    """Review C-08 (SPEC R3): a registry argv must never start a run with sudo, pkexec or doas."""
+    manifest = _write(tmp_path, _script_tool(f'{key} = ["{word}", "x", "update"]'))
+    with pytest.raises(ValueError, match=f"method 'script' key '{key}'.*elevation"):
+        load_tools(manifest)
+
+
 @pytest.mark.parametrize(
     "line",
     ['paths = ["/usr/local/bin/x"]', 'paths = ["~/a/../b"]', 'paths = ["x"]', 'paths = ["~"]'],
