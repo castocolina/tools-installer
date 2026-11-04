@@ -153,6 +153,10 @@ def install_tool(
 ) -> InstallOutcome:
     """Try each applicable method in ladder order; stop at the first success.
 
+    A method that needs a manual step (`executors.needs_manual`: a native package
+    manager) hands its exact command off and ends the ladder; nothing runs and the
+    next method is never tried.
+
     A checksum mismatch halts the ladder by default (the security signal must
     not silently degrade to another channel); checksum_policy="continue"
     restores ordinary fall-through and is only ever set by an explicit user
@@ -223,6 +227,15 @@ def install_tool(
                 ),
                 postinstall_warning=warning,
                 post_install_handoff=post_install_handoff,
+            )
+        manual = executors.needs_manual(method)
+        if manual is not None:
+            return InstallOutcome(
+                tool.id,
+                InstallStatus.MANUAL_REQUIRED,
+                method_kind=method.kind,
+                handoff=(manual.command,),
+                manual_command=manual.command,
             )
         if isinstance(runner, MethodAwareRunner):
             runner.method_started(method.kind)

@@ -92,15 +92,15 @@ def test_first_method_succeeds(monkeypatch: pytest.MonkeyPatch):
     calls: list[list[str]] = []
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "ripgrep"}),
             Method(kind="brew", params={"formula": "ripgrep"}),
+            Method(kind="dnf", params={"package": "ripgrep"}),
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=lambda cmd: calls.append(cmd),
     )
     assert outcome.status == "installed"
-    assert outcome.method_kind == "dnf"
-    assert calls == [["sudo", "dnf", "install", "-y", "ripgrep"]]
+    assert outcome.method_kind == "brew"
+    assert calls == [["brew", "install", "ripgrep"]]
 
 
 def test_install_tool_prepends_declared_bin_dir(
@@ -124,8 +124,8 @@ def test_install_tool_prepends_declared_bin_dir(
     dest = tmp_path / "pnpm-bin"
     dest.mkdir()
     outcome = install_tool(
-        _tool(Method(kind="dnf", params={"package": "ripgrep", "bin_dir": str(dest)})),
-        _platform(),
+        _tool(Method(kind="brew", params={"formula": "ripgrep", "bin_dir": str(dest)})),
+        _macos_with_brew(),
         runner=lambda cmd: None,
     )
     assert outcome.status == "installed"
@@ -141,14 +141,14 @@ def test_falls_through_to_next_method_on_failure(monkeypatch: pytest.MonkeyPatch
 
     def runner(cmd: list[str]) -> None:
         attempted.append(cmd[0])
-        if cmd[0] == "sudo":
+        if cmd[0] == "uv":
             raise CommandError(cmd, 1)
         # brew succeeds
 
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "ripgrep"}),
+            Method(kind="uv-tool", params={"pypi_pkg": "ripgrep"}),
             Method(kind="brew", params={"formula": "ripgrep"}),
         ),
         platform,
@@ -156,7 +156,51 @@ def test_falls_through_to_next_method_on_failure(monkeypatch: pytest.MonkeyPatch
     )
     assert outcome.status == "installed"
     assert outcome.method_kind == "brew"
-    assert attempted == ["sudo", "brew"]
+    assert attempted == ["uv", "brew"]
+
+
+def test_a_native_method_is_handed_off_with_zero_runner_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_not_installed(monkeypatch)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "ripgrep"}),
+            Method(kind="brew", params={"formula": "ripgrep"}),
+        ),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        runner=lambda cmd: calls.append(cmd),
+    )
+    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert outcome.method_kind == "dnf"
+    assert outcome.handoff == ("sudo dnf install ripgrep",)
+    assert outcome.manual_command == "sudo dnf install ripgrep"
+    assert calls == []
+
+
+def test_a_native_method_after_a_failed_method_is_handed_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_not_installed(monkeypatch)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if cmd[0] == "uv":
+            raise CommandError(cmd, 1)
+
+    outcome = install_tool(
+        _tool(
+            Method(kind="uv-tool", params={"pypi_pkg": "ripgrep"}),
+            Method(kind="dnf", params={"package": "ripgrep"}),
+        ),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        runner=runner,
+    )
+    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert outcome.handoff == ("sudo dnf install ripgrep",)
+    assert calls == [["uv", "tool", "install", "ripgrep"]]
 
 
 def test_no_applicable_methods(monkeypatch: pytest.MonkeyPatch):
@@ -183,8 +227,8 @@ def test_all_methods_fail_returns_failed(monkeypatch: pytest.MonkeyPatch):
         raise CommandError(cmd, 1)
 
     outcome = install_tool(
-        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
-        _platform(),
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
         runner=runner,
     )
     assert outcome.status == "failed"
@@ -625,8 +669,8 @@ def test_installed_outcome_carries_verified_flag(monkeypatch: pytest.MonkeyPatch
 def test_non_download_install_is_not_marked_verified(monkeypatch: pytest.MonkeyPatch) -> None:
     _not_installed(monkeypatch)
     outcome = install_tool(
-        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
-        _platform(),
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
         runner=lambda cmd: None,
     )
     assert outcome.status == "installed"
@@ -683,7 +727,7 @@ def test_postinstall_hook_dispatches_after_a_successful_install(
         return None
 
     monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
-    method = Method(kind="dnf", params={"package": "codegraph"})
+    method = Method(kind="brew", params={"formula": "codegraph"})
     tools = {"claude": _tool()}
 
     def runner(cmd: list[str]) -> None:
@@ -691,7 +735,7 @@ def test_postinstall_hook_dispatches_after_a_successful_install(
 
     outcome = install_tool(
         _tool(method, postinstall="codegraph-mcp-register"),
-        _platform(),
+        _macos_with_brew(),
         runner=runner,
         tools=tools,
     )
@@ -729,10 +773,10 @@ def test_postinstall_hook_sees_the_same_tools_freshly_prepended_bin_dir(
     monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "ripgrep", "bin_dir": str(dest)}),
+            Method(kind="brew", params={"formula": "ripgrep", "bin_dir": str(dest)}),
             postinstall="codegraph-mcp-register",
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=lambda cmd: None,
     )
     assert outcome.status == "installed"
@@ -749,10 +793,10 @@ def test_postinstall_failure_does_not_fail_the_install(monkeypatch: pytest.Monke
     monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "codegraph"}),
+            Method(kind="brew", params={"formula": "codegraph"}),
             postinstall="codegraph-mcp-register",
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=lambda cmd: None,
     )
     assert outcome.status == "installed"
@@ -777,11 +821,11 @@ def test_postinstall_hook_exception_does_not_fail_the_install_or_crash(
 
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "codegraph"}),
             Method(kind="brew", params={"formula": "codegraph"}),
+            Method(kind="dnf", params={"package": "codegraph"}),
             postinstall="codegraph-mcp-register",
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=runner,
     )
     assert outcome.status == "installed"
@@ -789,8 +833,8 @@ def test_postinstall_hook_exception_does_not_fail_the_install_or_crash(
     assert "crashed" in outcome.postinstall_warning
     assert "hook bug" in outcome.postinstall_warning
     # Only the first (successful) method's own command ran; the fallback
-    # brew method was never attempted once the first method succeeded.
-    assert attempted == ["sudo"]
+    # dnf method was never attempted once the first method succeeded.
+    assert attempted == ["brew"]
 
 
 def test_no_postinstall_field_means_no_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -803,8 +847,8 @@ def test_no_postinstall_field_means_no_dispatch(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
     outcome = install_tool(
-        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
-        _platform(),
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
         runner=lambda cmd: None,
     )
     assert outcome.status == "installed"
@@ -852,10 +896,10 @@ def test_failed_install_never_dispatches_postinstall(monkeypatch: pytest.MonkeyP
 
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "codegraph"}),
+            Method(kind="brew", params={"formula": "codegraph"}),
             postinstall="codegraph-mcp-register",
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=failing_runner,
     )
     assert outcome.status == "failed"
@@ -903,8 +947,8 @@ def test_login_shell_action_is_not_offered_when_tool_declares_no_post_install(
         return True
 
     outcome = install_tool(
-        _tool(Method(kind="dnf", params={"package": "ripgrep"})),
-        _platform(),
+        _tool(Method(kind="brew", params={"formula": "ripgrep"})),
+        _macos_with_brew(),
         runner=lambda cmd: None,
         confirm_sensitive_action=confirm,
     )
@@ -980,11 +1024,11 @@ def test_raising_confirm_degrades_to_named_warning_not_a_crash(
 
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "ripgrep"}),
+            Method(kind="brew", params={"formula": "ripgrep"}),
             post_install=("set_login_shell",),
             tool_id="oh-my-zsh",
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=lambda cmd: None,
         confirm_sensitive_action=boom,
     )
@@ -1006,8 +1050,9 @@ def test_repair_walks_the_ladder_past_already_installed(monkeypatch: pytest.Monk
         runner=lambda cmd: calls.append(cmd),
         repair=True,
     )
-    assert outcome.status == InstallStatus.INSTALLED
-    assert calls == [["sudo", "dnf", "install", "-y", "ripgrep"]]
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
+    assert outcome.handoff == ("sudo dnf install ripgrep",)
+    assert calls == []
 
 
 def test_a_present_tool_whose_installer_refuses_existing_is_not_re_run_on_repair(
@@ -1112,11 +1157,11 @@ def test_repair_dispatches_post_install_like_a_fresh_install(
 
     outcome = install_tool(
         _tool(
-            Method(kind="dnf", params={"package": "ripgrep"}),
+            Method(kind="brew", params={"formula": "ripgrep"}),
             post_install=("set_login_shell",),
             tool_id="oh-my-zsh",
         ),
-        _platform(),
+        _macos_with_brew(),
         runner=lambda cmd: None,
         confirm_sensitive_action=confirm,
         repair=True,
@@ -2006,7 +2051,7 @@ def test_receiptless_install_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> 
         _platform(),
         runner=lambda _cmd: None,
     )
-    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
     _fake_perform(monkeypatch, handoff=("run the reviewed setup",))
     outcome = install_tool(
         _tool(Method(kind="skill_pack", params={})), _platform(), runner=lambda _cmd: None
