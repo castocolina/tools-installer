@@ -2,6 +2,7 @@
 
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -51,6 +52,10 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
             "args",
             "smoke_argv",
             "refuses_existing",
+            "paths",
+            "remove",
+            "update",
+            "writable_prefix",
         }
     ),
     "node": frozenset(
@@ -95,6 +100,8 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
     "brew": frozenset({"formula", "detect_path", "min_os_version", "bin_dir", "smoke_argv"}),
     "cask": frozenset({"cask", "app", "min_os_version", "smoke_argv"}),
 }
+# Named roots a script token may use as `{name}`, resolved in Python at run time, never by a shell.
+SCRIPT_ROOTS: frozenset[str] = frozenset({"omz_root"})
 
 # Multi-hook post-install action names. Distinct from `Tool.postinstall` above:
 # `postinstall` selects a single hook from POSTINSTALL_HOOK_NAMES by name for a
@@ -213,6 +220,8 @@ SKILL_OPERATION_MODES = ("manual-required",)
 SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
 _SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
 _SCRIPT_ARG_RE = re.compile(r"^[A-Za-z0-9=._:/+-]+$")
+_SCRIPT_PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
+_WRITABLE_PREFIX_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 _PINNED_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # A tool id names its receipt file, so it can never hold `/`, `..` or a leading `-`.
 TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
@@ -539,6 +548,49 @@ def _refuse_config_overlap(tools: list[Tool]) -> None:
                     f"tool '{a_id}': config_paths entry '{a_entry}' "
                     f"overlaps '{b_entry}' of tool '{b_id}'"
                 )
+
+
+def _script_token_ok(token: str) -> str | None:
+    """Why a script token is refused (unknown placeholder or non-literal), else None."""
+    for name in _SCRIPT_PLACEHOLDER_RE.findall(token):
+        if name not in SCRIPT_ROOTS:
+            return f"names unknown placeholder '{{{name}}}'"
+    plain = _SCRIPT_PLACEHOLDER_RE.sub("x", token).removeprefix("~")
+    if _SCRIPT_ARG_RE.fullmatch(plain) is None:
+        return f"token '{token}' is not a literal argv element"
+    return None
+
+
+def _is_argv(raw: object, token_ok: Callable[[str], bool]) -> bool:
+    """A non-empty list of strings, each accepted by token_ok."""
+    if not isinstance(raw, list) or not raw:
+        return False
+    return all(isinstance(item, str) and token_ok(item) for item in cast(list[object], raw))
+
+
+def _script_refusal(raw: object) -> str:
+    """Name the first refused token of a script argv value, else the shape it must have."""
+    if isinstance(raw, list):
+        for token in cast(list[object], raw):
+            if isinstance(token, str) and (why := _script_token_ok(token)) is not None:
+                return why
+    return "must be a non-empty list of strings"
+
+
+def _script_paths_refusal(raw: object) -> str | None:
+    """Why a script `paths` value is refused; None when every entry stays under HOME or a root."""
+    if not _is_argv(raw, lambda _token: True):
+        return "must be a non-empty list of strings"
+    roots = {f"{{{root}}}" for root in SCRIPT_ROOTS}
+    for entry in cast(list[str], raw):
+        head, sep, rest = entry.partition("/")
+        if sep != "/" or (head != "~" and head not in roots):
+            return f"entry '{entry}' must start with ~/ or a named root followed by /"
+        if (why := _script_token_ok(entry)) is not None:
+            return why
+        if _relative_parts(rest.removesuffix("/")) is None:
+            return f"entry '{entry}' must not contain empty, . or .. parts"
+    return None
 
 
 def _required_skill_string(raw: dict[str, object], field: str, *, tool_id: object) -> str:
@@ -988,21 +1040,32 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                         f"tool '{row['id']}': script 'args' must be a list of strings "
                         "matching ^[A-Za-z0-9=._:/+-]+$"
                     )
-            if "smoke_argv" in params:
-                smoke_argv = params["smoke_argv"]
-                argv_items = cast(list[object], smoke_argv) if isinstance(smoke_argv, list) else ()
-                if (
-                    not isinstance(smoke_argv, list)
-                    or not smoke_argv
-                    or not all(isinstance(item, str) for item in argv_items)
-                    or any(
-                        _SCRIPT_ARG_RE.fullmatch(item) is None
-                        for item in cast(list[str], argv_items)
-                    )
+            if "smoke_argv" in params and not _is_argv(
+                params["smoke_argv"], lambda token: _SCRIPT_ARG_RE.fullmatch(token) is not None
+            ):
+                raise ValueError(
+                    f"tool '{row['id']}': 'smoke_argv' must be a non-empty list of strings "
+                    "matching ^[A-Za-z0-9=._:/+-]+$"
+                )
+            if kind == "script":
+                for key in ("remove", "update"):
+                    if key in params and not _is_argv(
+                        params[key], lambda token: _script_token_ok(token) is None
+                    ):
+                        raise ValueError(
+                            f"tool '{row['id']}': method 'script' key '{key}' "
+                            f"{_script_refusal(params[key])}"
+                        )
+                if "paths" in params and (why := _script_paths_refusal(params["paths"])):
+                    raise ValueError(f"tool '{row['id']}': method 'script' key 'paths' {why}")
+                if "writable_prefix" in params and not (
+                    isinstance(params["writable_prefix"], str)
+                    and _WRITABLE_PREFIX_RE.fullmatch(params["writable_prefix"])
+                    and _relative_parts(params["writable_prefix"][1:]) is not None
                 ):
                     raise ValueError(
-                        f"tool '{row['id']}': 'smoke_argv' must be a non-empty list of strings "
-                        "matching ^[A-Za-z0-9=._:/+-]+$"
+                        f"tool '{row['id']}': method 'script' key 'writable_prefix' "
+                        "must be an absolute path without . or .. parts"
                     )
             if kind == "host_setup":
                 setup_id = params.get("setup_id")

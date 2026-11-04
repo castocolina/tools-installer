@@ -1839,3 +1839,89 @@ def test_config_paths_allow_a_shared_entry_and_one_tools_own_nesting(tmp_path: P
     tools = {tool.id: tool for tool in load_tools(manifest)}
     assert tools["a"].config_paths == tools["b"].config_paths == ("~/.config/shared",)
     assert tools["c"].config_paths == ("~/.config/x", "~/.config/x/y")
+
+
+def _script_tool(extra: str) -> str:
+    return f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+{extra}
+"""
+
+
+def test_script_lifecycle_keys_load(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        _script_tool(
+            'paths = ["~/.local/bin/x", "~/.local/share/x/", "{omz_root}/custom/"]\n'
+            'remove = ["x", "uninstall", "--force"]\n'
+            'update = ["{omz_root}/tools/upgrade.sh"]\n'
+            'writable_prefix = "/home/linuxbrew"'
+        ),
+    )
+    params = load_tools(manifest)[0].methods[0].params
+    assert params["paths"] == ["~/.local/bin/x", "~/.local/share/x/", "{omz_root}/custom/"]
+    assert params["remove"] == ["x", "uninstall", "--force"]
+    assert params["update"] == ["{omz_root}/tools/upgrade.sh"]
+    assert params["writable_prefix"] == "/home/linuxbrew"
+
+
+@pytest.mark.parametrize(
+    ("key", "line"),
+    [
+        ("update", 'update = ["{zsh_root}/tools/upgrade.sh"]'),
+        ("remove", 'remove = ["{zsh_root}/x"]'),
+        ("paths", 'paths = ["{zsh_root}/x"]'),
+    ],
+)
+def test_script_tokens_reject_an_unknown_placeholder(tmp_path: Path, key: str, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match=f"tool 'demo': method 'script' key '{key}'.*zsh_root"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ['paths = ["/usr/local/bin/x"]', 'paths = ["~/a/../b"]', 'paths = ["x"]', 'paths = ["~"]'],
+)
+def test_script_paths_stay_under_home(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="method 'script' key 'paths'"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["remove = []", 'remove = "x"', "update = [1]", 'remove = ["x;rm"]'],
+)
+def test_script_argv_keys_are_non_empty_string_lists(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="method 'script' key '(remove|update)'"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'writable_prefix = "relative"',
+        'writable_prefix = "/a/../b"',
+        'writable_prefix = ""',
+        'writable_prefix = ["/a"]',
+    ],
+)
+def test_writable_prefix_is_an_absolute_path(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="method 'script' key 'writable_prefix'"):
+        load_tools(manifest)
+
+
+def test_unknown_script_key_is_still_rejected(tmp_path: Path) -> None:
+    manifest = _write(tmp_path, _script_tool('uninstall_cmd = ["x"]'))
+    with pytest.raises(ValueError, match="has unknown key 'uninstall_cmd'"):
+        load_tools(manifest)
