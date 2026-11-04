@@ -441,7 +441,16 @@ def _mmdc_catalog() -> list[Tool]:
 
 def test_removing_one_member_warns_with_the_group() -> None:
     assert co_install_warnings({MMDC_NPM}, _mmdc_catalog()) == (
-        "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli leaves puppeteer installed.",
+        "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli removes the whole group, "
+        "puppeteer included.",
+    )
+
+
+def test_removing_a_later_member_names_the_first() -> None:
+    """pnpm removes the whole group from any member (22-13 D-1), the non-first one too."""
+    assert co_install_warnings({"puppeteer"}, _mmdc_catalog()) == (
+        "Warning: pnpm group mmdc: removing puppeteer removes the whole group, "
+        "@mermaid-js/mermaid-cli included.",
     )
 
 

@@ -5449,6 +5449,116 @@ def test_the_cli_prints_the_group_warning_before_the_confirm(
     kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", confirm)
     kwargs["runner"] = calls.append
     run_uninstall([mmdc], console, **kwargs)
-    line = "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli leaves puppeteer installed."
+    line = (
+        "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli removes the whole group, "
+        "puppeteer included."
+    )
     assert line in shown[0]
     assert calls == []
+
+
+_PNPM_NOT_FOUND = (
+    "Error: ERR_PNPM_GLOBAL_PKG_NOT_FOUND\n\n"
+    "  \u00d7 Cannot remove '{}': not found in global packages"
+)
+
+
+def _pnpm_group_runner(group: set[str], calls: list[list[str]]) -> Runner:
+    """Behaves like pnpm 12.16.1 (22-13 D-1, container-measured): removing any member of a
+    global install group removes the whole group; a name no longer installed is not found."""
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        package = cmd[-1]
+        if package not in group:
+            raise CommandError(cmd, 1, detail=_PNPM_NOT_FOUND.format(package))
+        group.clear()
+
+    return runner
+
+
+def _mmdc_and_puppeteer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Tool, Tool]:
+    from installer import app as app_module
+    from installer import receipts
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_pnpm = tmp_path / "pnpm"
+    fake_pnpm.write_text("")
+    monkeypatch.setattr(app_module, "real_pnpm", lambda: str(fake_pnpm))
+    mmdc_method = Method(
+        kind="node",
+        params={"npm_pkg": "@mermaid-js/mermaid-cli", "co_install": ["puppeteer"]},
+    )
+    puppeteer_method = Method(kind="node", params={"npm_pkg": "puppeteer"})
+    mmdc = _manager_tool("mmdc", mmdc_method)
+    puppeteer = _manager_tool("puppeteer", puppeteer_method)
+    receipts.record(mmdc, mmdc_method, package="@mermaid-js/mermaid-cli", smoke=None)
+    receipts.record(puppeteer, puppeteer_method, package="puppeteer", smoke=None)
+    return mmdc, puppeteer
+
+
+def test_a_group_member_pnpm_already_removed_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """22-13 D-1: the first member's removal took the whole group, so pnpm reports the second
+    member not found. The end state holds: the tool is removed and its receipt retired."""
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
+    console, buf = _console()
+    calls: list[list[str]] = []
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", lambda _m: True)
+    kwargs["runner"] = _pnpm_group_runner({"@mermaid-js/mermaid-cli", "puppeteer"}, calls)
+    _removed, failed = run_uninstall([mmdc, puppeteer], console, **kwargs)
+    assert [cmd[-1] for cmd in calls] == ["@mermaid-js/mermaid-cli", "puppeteer"]
+    assert failed == ()
+    assert "remove failed" not in buf.getvalue()
+    assert receipts.read("mmdc") is None
+    assert receipts.read("puppeteer") is None
+
+
+def test_another_pnpm_error_still_fails_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only pnpm's not-found code proves the package gone; any other failure keeps the receipt."""
+    from installer import receipts
+    from installer.app import remove_tool
+
+    _mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
+    argv = ("pnpm", "remove", "--global", "puppeteer")
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="Error: ERR_PNPM_EACCES\n  permission denied")
+
+    outcome = remove_tool(
+        puppeteer, paths=(), argv=argv, bin_dir=tmp_path / ".local" / "bin", runner=runner
+    )
+    assert (outcome.removed, outcome.detail) == (False, "Error: ERR_PNPM_EACCES")
+    assert receipts.read("puppeteer") is not None
+
+
+def test_a_not_found_from_a_non_pnpm_command_still_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The not-found code is pnpm's: the same text from brew is no proof of anything."""
+    from installer import receipts
+    from installer.app import remove_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = _manager_tool("gh", method)
+    receipts.record(gh, method, package="gh", smoke=None)
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail=_PNPM_NOT_FOUND.format("gh"))
+
+    outcome = remove_tool(
+        gh,
+        paths=(),
+        argv=("brew", "uninstall", "gh"),
+        bin_dir=tmp_path / ".local" / "bin",
+        runner=runner,
+    )
+    assert outcome.removed is False
+    assert receipts.read("gh") is not None

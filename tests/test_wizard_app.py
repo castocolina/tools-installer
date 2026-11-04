@@ -8639,15 +8639,15 @@ def _pnpm_removal(tool: Tool, package: str) -> ToolState:
 
 
 async def test_pnpm_group_lines_in_the_review() -> None:
-    """22-11 (LIFE-08, UI-SPEC block 7): a member removed while others stay names them; every
-    member removed gives one line; a package outside any group gives none."""
+    """22-11 (LIFE-08, UI-SPEC block 7): one member removed names the others pnpm removes with
+    it; every member removed gives one line; a package outside any group gives none."""
     mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
     puppeteer = _pnpm_tool("puppeteer", "puppeteer")
     group = [
         (mmdc, _pnpm_removal(mmdc, "@mermaid-js/mermaid-cli")),
         (puppeteer, _pnpm_removal(puppeteer, "puppeteer")),
     ]
-    # One member removed: the other stays, and the warning names it.
+    # One member removed: pnpm takes the whole group, and the warning names the others.
     app = _app(cases=group, uninstall=_uninstall_inputs(remove=_recorder([])))
     async with app.run_test(size=(80, 20)) as pilot:
         await pilot.press("5")
@@ -8657,8 +8657,8 @@ async def test_pnpm_group_lines_in_the_review() -> None:
         review = _confirm(app).review
         assert _flat(review) == [
             "mmdc: runs pnpm remove --global @mermaid-js/mermaid-cli",
-            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli "
-            "leaves puppeteer installed.",
+            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli removes the whole "
+            "group, puppeteer included.",
         ]
         assert any(
             span.style == "yellow" and (span.start, span.end) == (0, 8) for span in review[-1].spans
@@ -8732,8 +8732,8 @@ async def test_the_review_blocks_come_in_order() -> None:
             "~/.config/gh (gh)",
             "~/.config/shared kept, also used by b",
             "Config kept: k.",
-            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli "
-            "leaves puppeteer installed.",
+            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli removes the whole "
+            "group, puppeteer included.",
         ]
         keys = screen.query_one("#confirm-keys", Static)
         assert str(keys.render()) == "enter remove · esc cancel"

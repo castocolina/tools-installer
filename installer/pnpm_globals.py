@@ -283,8 +283,9 @@ def co_install_warnings(removing: Collection[str], catalog: Iterable[Tool]) -> t
     """LIFE-08: the warnings for a removal that touches a declared co-install group (D-10).
 
     Reads only the catalog's declared groups, never a live pnpm query. Each group's first
-    member is its own `npm_pkg`, its declaring tool is the group name. One member removed
-    while others stay names them; every member removed in this run gives one line."""
+    member is its own `npm_pkg`, its declaring tool is the group name. pnpm removes the whole
+    install group from any member (22-13 D-1), so one member removed names the others it
+    takes along; every member removed in this run gives one line."""
     lines: list[str] = []
     for tool in catalog:
         method = _node_method(tool)
@@ -304,7 +305,7 @@ def co_install_warnings(removing: Collection[str], catalog: Iterable[Tool]) -> t
         others = [member for member in members if member not in removing]
         lines.append(
             f"Warning: pnpm group {tool.id}: removing {', '.join(removed)} "
-            f"leaves {', '.join(others)} installed."
+            f"removes the whole group, {', '.join(others)} included."
         )
     return tuple(lines)
 

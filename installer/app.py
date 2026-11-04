@@ -518,9 +518,14 @@ def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
     return f"{tool_id}: runs {shlex.join(argv)}"
 
 
+# pnpm's code for a global removal whose package is not installed (measured on pnpm 12.16.1).
+PNPM_GLOBAL_PKG_NOT_FOUND = "ERR_PNPM_GLOBAL_PKG_NOT_FOUND"
+
+
 def pnpm_removal_packages(plans: Iterable[RemovalPlan]) -> frozenset[str]:
-    """The packages the pnpm removals in `plans` name. Each `pnpm remove --global <pkg>` removes
-    only that package (ledger), so this set is what the group warnings check against."""
+    """The packages the pnpm removals in `plans` name, which the group warnings check against.
+    `pnpm remove --global <pkg>` removes the whole install group `<pkg>` belongs to (22-13
+    D-1, measured on pnpm 12.16.1), so a later member's removal finds it already gone."""
     prefix = MANAGER_UNINSTALL_ARGV["node"]
     return frozenset(plan.argv[-1] for plan in plans if plan.argv[:-1] == prefix)
 
@@ -576,8 +581,16 @@ def remove_tool(
             try:
                 runner(list(command))
             except CommandError as exc:
-                line = next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
-                return ToolRemoval(tool.id, False, line)
+                # pnpm removes a whole global group from any member (22-13 D-1), so a member an
+                # earlier removal took is "not found": pnpm's own proof the package is gone.
+                gone = argv[:-1] == MANAGER_UNINSTALL_ARGV["node"] and (
+                    PNPM_GLOBAL_PKG_NOT_FOUND in exc.detail
+                )
+                if not gone:
+                    line = next(
+                        (ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc)
+                    )
+                    return ToolRemoval(tool.id, False, line)
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
             # The vendor command may have removed part of what the receipt recorded; only
             # what is still there is re-proven, so a path it already removed is not a refusal.
