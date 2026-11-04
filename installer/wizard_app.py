@@ -1631,9 +1631,12 @@ class UninstallScreen(AppScreen):
             self._repaint()  # the row's cells and detail bar name the flag
 
     def _config_refused(self, text: str) -> None:
-        """A refusal is a warn line, but it never replaces `Removing…` (D-05)."""
+        """A refusal is a warn line, but it never replaces `Removing…` (D-05): during a removal
+        it shows in the detail bar instead, so the key never looks broken (review C-15)."""
         if self.app.mutation_holder is not MutationHolder.REMOVAL:
             self.status.set(text, "warn")
+        else:
+            self._browser.show_detail(text)
 
     def _accept_summary(self, ids: list[str]) -> str:
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)

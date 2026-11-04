@@ -228,7 +228,7 @@ class ToolBrowser(Widget, Generic[T]):
                 table.move_cursor(row=nearest)
         # No item row means no highlight event, so the empty copy is set here.
         if self._nearest_selectable_row() is None and self._adapter.empty_detail is not None:
-            self._show_detail(self._adapter.empty_detail)
+            self.show_detail(self._adapter.empty_detail)
         # DataTable keeps serving render caches measured at the previous column
         # widths after clear(columns=True); a cell mutation arriving in a later
         # render cycle flushes them (textual 8.2.7), so re-mark every row once
@@ -390,9 +390,9 @@ class ToolBrowser(Widget, Generic[T]):
             detail = self.query_one("#browser-detail", Static)
             detail.update(Text(self.detail_text, style=self._adapter.section_detail_style))
             return
-        self._show_detail(self._adapter.detail_text(item))
+        self.show_detail(self._adapter.detail_text(item))
 
-    def _show_detail(self, text: str) -> None:
+    def show_detail(self, text: str) -> None:
         """The 3-row bar: the identity line (up to the first newline) on row 1,
         never wrapped, and the rest cut to rows 2-3. Without a newline the whole
         text gets all three rows. A plain-text adapter's text is never parsed as

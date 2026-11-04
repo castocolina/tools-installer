@@ -8399,6 +8399,37 @@ async def test_c_works_during_a_removal_and_keeps_removing_status() -> None:
             await settle(app, pilot)
 
 
+async def test_a_c_refusal_during_a_removal_shows_in_the_detail_bar() -> None:
+    """Review C-15: `Removing…` keeps the status line, so the refusal goes to the detail bar."""
+    gh = _config_tool("gh", "~/.config/gh")
+    rg = _tool("rg")
+    plain = RemovalPlan((Path("/opt/rg"),), (), level="artifacts")
+    remover = HeldRemover(SweepResult(removed=("gh",)))
+    app = _app(
+        cases=[
+            (gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"])),
+            (rg, plan_state(rg, removable=plain)),
+        ],
+        uninstall=_uninstall_inputs(remove=remover),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            await pilot.press("5")
+            screen = app.screen
+            assert isinstance(screen, UninstallScreen)
+            await pilot.press("space")  # gh alone goes to the held removal
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await wait_until(pilot, remover.started.is_set)
+            await pilot.press("down")  # rg declares no config
+            await pilot.press("c")
+            assert (screen.status.text, screen.status.severity) == ("Removing…", "warn")
+            assert screen.detail_text == "rg declares no config to delete."
+        finally:
+            remover.release.set()
+            await settle(app, pilot)
+
+
 async def test_a_successful_removal_clears_the_flag_and_a_failed_one_keeps_it() -> None:
     """22-10: a removed row loses its flag with its mark; a failed row keeps both (retry)."""
     gh = _config_tool("gh", "~/.config/gh")
