@@ -1746,3 +1746,96 @@ def test_project_pack_rejects_a_global_target(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="demo-pack") as exc_info:
         load_tools(manifest)
     assert "global" in str(exc_info.value)
+
+
+def _tool_block(tool_id: str, config: str = "") -> str:
+    return f"""
+[[tool]]
+id = "{tool_id}"
+category = "search"
+tier = "user"
+{config}
+[[tool.method]]
+kind = "brew"
+formula = "{tool_id}"
+"""
+
+
+def test_config_paths_parses_in_declared_order(tmp_path: Path) -> None:
+    declared = _write(
+        tmp_path, _tool_block("demo", 'config_paths = ["~/.config/gh", "~/.local/share/gh"]')
+    )
+    assert load_tools(declared)[0].config_paths == ("~/.config/gh", "~/.local/share/gh")
+    (tmp_path / "bare").mkdir()
+    assert load_tools(_write(tmp_path / "bare", _tool_block("demo")))[0].config_paths == ()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "~/.claude/x",
+        "~/.cursor/x",
+        "~/.gemini/x",
+        "~/.codex/x",
+        "~/.gemini/antigravity/x",
+        "~/.local/share",
+    ],
+)
+def test_config_paths_rejects_a_harness_dir(tmp_path: Path, entry: str) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", f'config_paths = ["{entry}"]'))
+    with pytest.raises(ValueError, match="tool 'demo'.*config_paths"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["/etc/x", "~", "~/", "~/.bashrc", "~/a/../b", "~/a//b", "~/./a/b", "relative/x"],
+)
+def test_config_paths_rejects_entries_outside_two_levels_of_home(
+    tmp_path: Path, entry: str
+) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", f'config_paths = ["{entry}"]'))
+    with pytest.raises(ValueError, match="tool 'demo'.*config_paths"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize("raw", ['"~/.config/gh"', "[1]"])
+def test_config_paths_must_be_a_list_of_strings(tmp_path: Path, raw: str) -> None:
+    manifest = _write(tmp_path, _tool_block("demo", f"config_paths = {raw}"))
+    with pytest.raises(ValueError, match="tool 'demo'.*config_paths"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("~/.config/shared", "~/.config/shared/plugin"),
+        ("~/.config/shared/plugin", "~/.config/shared"),
+    ],
+)
+def test_config_paths_refuse_an_overlap_across_tools(
+    tmp_path: Path, first: str, second: str
+) -> None:
+    manifest = _write(
+        tmp_path,
+        _tool_block("a", f'config_paths = ["{first}"]')
+        + _tool_block("b", f'config_paths = ["{second}"]'),
+    )
+    with pytest.raises(ValueError) as exc_info:
+        load_tools(manifest)
+    message = str(exc_info.value)
+    assert "config_paths" in message
+    assert "tool 'a'" in message
+    assert "tool 'b'" in message
+
+
+def test_config_paths_allow_a_shared_entry_and_one_tools_own_nesting(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        _tool_block("a", 'config_paths = ["~/.config/shared"]')
+        + _tool_block("b", 'config_paths = ["~/.config/shared"]')
+        + _tool_block("c", 'config_paths = ["~/.config/x", "~/.config/x/y"]'),
+    )
+    tools = {tool.id: tool for tool in load_tools(manifest)}
+    assert tools["a"].config_paths == tools["b"].config_paths == ("~/.config/shared",)
+    assert tools["c"].config_paths == ("~/.config/x", "~/.config/x/y")

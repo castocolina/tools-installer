@@ -178,6 +178,27 @@ SKILL_HARNESSES = (
     "zcode",
     "zed",
 )
+# Harness marker dirs (home-relative): read by the config_paths validator and by
+# skill_lifecycle.HARNESS_PRESENCE, so one denylist governs both.
+HARNESS_MARKER_DIRS: dict[str, tuple[str, ...]] = {
+    "antigravity": (".gemini/antigravity",),
+    "claude": (".claude",),
+    "codex": (".codex",),
+    "copilot": (".copilot",),
+    "cursor": (".cursor", ".local/share/cursor-agent"),
+    "devin": (),
+    "factory-droid": (".factory",),
+    "gemini-cli": (".gemini",),
+    "grok": (),
+    "hermes": (),
+    "kilo": (".config/kilo",),
+    "kimi": (".kimi-code",),
+    "muse": (),
+    "opencode": (".config/opencode", ".opencode"),
+    "pi": (".pi",),
+    "qwen": (),
+    "windsurf": (".codeium/windsurf",),
+}
 SKILL_REVISION_POLICIES = (
     "host-marketplace-current",
     "package-manager-latest",
@@ -409,6 +430,8 @@ class Tool:
     owner: str = ""
     uninstall: str = ""
     skill_lifecycle: "SkillLifecycle | None" = None
+    # Declared `~/` config paths, validated by _parse_config_paths at load.
+    config_paths: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -431,6 +454,7 @@ class Tool:
         owner: str = "",
         uninstall: str = "",
         skill_lifecycle: "SkillLifecycle | None" = None,
+        config_paths: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "id", id)
         object.__setattr__(self, "name", name)
@@ -457,6 +481,64 @@ class Tool:
         object.__setattr__(self, "owner", owner)
         object.__setattr__(self, "uninstall", uninstall)
         object.__setattr__(self, "skill_lifecycle", skill_lifecycle)
+        object.__setattr__(self, "config_paths", config_paths)
+
+
+def _relative_parts(rest: str) -> tuple[str, ...] | None:
+    """Split a home-relative path; None when a part is empty, `.`, `..` or holds a NUL."""
+    parts = tuple(rest.split("/"))
+    if any(part in ("", ".", "..") or "\x00" in part for part in parts):
+        return None
+    return parts
+
+
+def _config_path_flaw(entry: str, markers: tuple[tuple[str, tuple[str, ...]], ...]) -> str | None:
+    if not entry.startswith("~/"):
+        return "must start with ~/"
+    parts = _relative_parts(entry[2:])
+    if parts is None:
+        return "must not contain empty, . or .. parts"
+    if len(parts) < 2:
+        return "must be at least two levels under ~"
+    for marker, marker_parts in markers:
+        if parts[: len(marker_parts)] == marker_parts:
+            return f"is inside the harness directory ~/{marker}"
+        if marker_parts[: len(parts)] == parts:
+            return f"contains the harness directory ~/{marker}"
+    return None
+
+
+def _parse_config_paths(raw: object, *, tool_id: object) -> tuple[str, ...]:
+    if not isinstance(raw, list) or not all(
+        isinstance(item, str) for item in cast(list[object], raw)
+    ):
+        raise ValueError(f"tool '{tool_id}': config_paths must be a list of strings")
+    entries = cast(list[str], raw)
+    markers = tuple(
+        (marker, tuple(marker.split("/")))
+        for group in HARNESS_MARKER_DIRS.values()
+        for marker in group
+    )
+    for entry in entries:
+        if (why := _config_path_flaw(entry, markers)) is not None:
+            raise ValueError(f"tool '{tool_id}': config_paths entry '{entry}' {why}")
+    return tuple(entries)
+
+
+def _refuse_config_overlap(tools: list[Tool]) -> None:
+    """Refuse a config entry that is an ancestor of another tool's entry (equal is fine)."""
+    owned = [
+        (tool.id, entry, _relative_parts(entry[2:]) or ())
+        for tool in tools
+        for entry in tool.config_paths
+    ]
+    for a_id, a_entry, a_parts in owned:
+        for b_id, b_entry, b_parts in owned:
+            if a_id != b_id and a_parts != b_parts and b_parts[: len(a_parts)] == a_parts:
+                raise ValueError(
+                    f"tool '{a_id}': config_paths entry '{a_entry}' "
+                    f"overlaps '{b_entry}' of tool '{b_id}'"
+                )
 
 
 def _required_skill_string(raw: dict[str, object], field: str, *, tool_id: object) -> str:
@@ -933,6 +1015,7 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
         context = f"tool '{row['id']}'"
         requires = _parse_id_list(row.get("requires", []), "requires", context)
+        config_paths = _parse_config_paths(row.get("config_paths", []), tool_id=row["id"])
         recommends = _parse_id_list(row.get("recommends", []), "recommends", context)
         postinstall = row.get("postinstall")
         if postinstall is not None:
@@ -1011,8 +1094,10 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                     else row.get("uninstall", "")
                 ),
                 skill_lifecycle=skill_lifecycle,
+                config_paths=config_paths,
             )
         )
+    _refuse_config_overlap(tools)
     return tools
 
 
