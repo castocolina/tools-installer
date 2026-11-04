@@ -23,7 +23,7 @@ from installer.model import (
     SkillTarget,
     Tool,
 )
-from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner
+from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner, removal_hint
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.receipts import Receipt
@@ -407,6 +407,9 @@ def pass_state(
     pass_notes = ownership_notes(tool, owner, platform)
     if version is not None:
         pass_notes += version_notes(tool, version, owner, present=present)
+    # The pass stores the removal hint in the plan (22-07); a built state does the same.
+    hint = removal_hint(owner, tool.cmd, version=version.installed if version else None)
+    plan = removable if removable is not None else RemovalPlan(removable=(), yourself=())
     return tool_state(
         tool,
         generation=0,
@@ -414,7 +417,7 @@ def pass_state(
         present=present,
         ownership=owner,
         version=version,
-        removable=removable if removable is not None else RemovalPlan(removable=(), yourself=()),
+        removable=replace(plan, hint=hint),
         receipt=receipt,
         skill_hosts=skill_hosts,
         broken=broken,

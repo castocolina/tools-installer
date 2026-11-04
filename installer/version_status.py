@@ -1816,11 +1816,12 @@ class VersionRefreshService:
                 allow_fetch=allow_fetch,
                 unresolved=which(tool.cmd),
             )
+            # D-09: the hint is computed here, once, from the ownership and version this pass
+            # already holds; the projection reads it and never probes again.
+            hint = removal_hint(ownership, tool.cmd, version=status.installed)
             if tool.skill_lifecycle is not None:
                 # Built at commit, from the host answers held then.
-                plan = removal_plan(
-                    tool, self._managed_bin_dir, hint=removal_hint(ownership, tool.cmd)
-                )
+                plan = removal_plan(tool, self._managed_bin_dir, hint=hint)
                 packs.append((tool, ownership, status, plan))
             else:
                 present = self._present(tool)
@@ -1831,9 +1832,7 @@ class VersionRefreshService:
                     entry=new_entry if new_entry is not None else entry,
                     platform=platform,
                 )
-                removable = removal_plan(
-                    tool, self._managed_bin_dir, hint=removal_hint(ownership, tool.cmd)
-                )
+                removable = removal_plan(tool, self._managed_bin_dir, hint=hint)
                 if (
                     present
                     and ownership.owner == "installer"
@@ -2005,7 +2004,8 @@ def uninstall_detail(tool: Tool, state: ToolState | None, required_by: Sequence[
     elif state.ownership.owner == "unknown":
         text = UNKNOWN_OWNER_NOTE
     else:
-        hint = removal_hint(state.ownership, tool.cmd)
+        # The pass stored the hint (R2): the projection never recomputes it.
+        hint = state.removable.hint
         if hint is None:
             text = " · ".join(state.reasons)
         elif state.ownership.active_path is not None:

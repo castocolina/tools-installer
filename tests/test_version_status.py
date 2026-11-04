@@ -5995,6 +5995,9 @@ def _uninstall_state(
         if unavailable
         else _platform()
     )
+    # The pass stores the hint in the plan (22-07); a fixture without its own hint stores that.
+    if removable.hint is None:
+        removable = replace(removable, hint=removal_hint(ownership, tool.cmd))
     state = tool_state(
         tool,
         generation=0,
@@ -6200,3 +6203,53 @@ def test_the_pass_publishes_removal_plan_levels(
     state = _settled(_receipt_service(tmp_path, bin_dir), gh)
     assert state.removable.level == "manager"
     assert state.removable.argv == ("brew", "uninstall", "gh")
+
+
+# -- 22-07 Task 2: native owners name the package; SDKMAN names its version. --
+
+
+def test_uninstall_detail_reads_the_plan_hint() -> None:
+    hint = "managed by Homebrew — `brew uninstall ripgrep`"
+    tool, state = _uninstall_state(owner="brew", removable=RemovalPlan((), (), hint=hint))
+    # Without a package and an active copy, `removal_hint` would say something else: the
+    # detail must come from the stored hint, not a second computation.
+    state = replace(state, ownership=replace(state.ownership, package=None, active_path=None))
+    assert uninstall_group(state) is UninstallState.MANAGED
+    assert uninstall_detail(tool, state) == hint
+    found = replace(state, ownership=replace(state.ownership, active_path=Path("/opt/rg")))
+    assert uninstall_detail(tool, found) == f"{hint} — found at /opt/rg"
+
+
+def test_the_pass_fills_the_sdkman_version_from_its_own_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _springboot_current(tmp_path, "4.1.0", create_target=True)
+    tool, ownership = _sdkman_springboot(bin_dir)
+
+    def resolve_owner(_self: VersionRefreshService, _tool: Tool, **_kw: object) -> ManagerOwnership:
+        return ownership
+
+    monkeypatch.setattr(VersionRefreshService, "_resolve_owner_from", resolve_owner)
+    probes: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str:
+        probes.append(argv)
+        return "9.9.9"
+
+    service = VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "v0",
+        probe_output=probe,
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=bin_dir,
+        which=lambda cmd: str(bin_dir / cmd) if (bin_dir / cmd).is_symlink() else None,
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+    )
+    state = _settled(service, tool)
+    assert state.removable.hint == "managed by SDKMAN — `sdk uninstall springboot 4.1.0`"
+    assert probes == []
