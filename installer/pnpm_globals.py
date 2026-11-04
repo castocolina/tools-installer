@@ -279,6 +279,36 @@ def node_install_policy(tools: Iterable[Tool]) -> NodeInstallPolicy:
     )
 
 
+def co_install_warnings(removing: Collection[str], catalog: Iterable[Tool]) -> tuple[str, ...]:
+    """LIFE-08: the warnings for a removal that touches a declared co-install group (D-10).
+
+    Reads only the catalog's declared groups, never a live pnpm query. Each group's first
+    member is its own `npm_pkg`, its declaring tool is the group name. One member removed
+    while others stay names them; every member removed in this run gives one line."""
+    lines: list[str] = []
+    for tool in catalog:
+        method = _node_method(tool)
+        if method is None:
+            continue
+        pkg = method.params.get("npm_pkg")
+        co_install = _param_pkg_list(method, "co_install")
+        if not isinstance(pkg, str) or not pkg or not co_install:
+            continue
+        members = tuple(dict.fromkeys([pkg, *co_install]))
+        removed = [member for member in members if member in removing]
+        if not removed:
+            continue
+        if len(removed) == len(members):
+            lines.append(f"Warning: pnpm group {tool.id}: all its members are removed together.")
+            continue
+        others = [member for member in members if member not in removing]
+        lines.append(
+            f"Warning: pnpm group {tool.id}: removing {', '.join(removed)} "
+            f"leaves {', '.join(others)} installed."
+        )
+    return tuple(lines)
+
+
 def _load_projects(raw: str) -> list[object] | None:
     try:
         data: object = json.loads(raw)

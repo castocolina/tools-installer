@@ -5423,3 +5423,32 @@ def test_the_cli_prints_no_config_block_without_existing_config(
     kwargs["runner"] = lambda _cmd: None
     run_uninstall([gh], console, **kwargs)
     assert "Config kept" not in buf.getvalue()
+
+
+def test_the_cli_prints_the_group_warning_before_the_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(
+        kind="node",
+        params={"npm_pkg": "@mermaid-js/mermaid-cli", "co_install": ["puppeteer"]},
+    )
+    mmdc = _manager_tool("mmdc", method)
+    receipts.record(mmdc, method, package="@mermaid-js/mermaid-cli", smoke=None)
+    console, buf = _console()
+    shown: list[str] = []
+    calls: list[list[str]] = []
+
+    def confirm(_message: str) -> bool:
+        shown.append(buf.getvalue())
+        return False  # declined: nothing runs
+
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", confirm)
+    kwargs["runner"] = calls.append
+    run_uninstall([mmdc], console, **kwargs)
+    line = "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli leaves puppeteer installed."
+    assert line in shown[0]
+    assert calls == []
