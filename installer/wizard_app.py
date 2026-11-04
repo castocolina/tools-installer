@@ -1404,6 +1404,8 @@ class UninstallScreen(AppScreen):
 
     def _repaint(self) -> None:
         """Rebuild the entries from the stored values and repaint the browser."""
+        # A flag follows its mark (UI-SPEC A1): every repaint drops the flags of unmarked rows.
+        self._config_on.intersection_update(self._browser.selected)
         self._entries = self._build_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
         self._browser.reload(self._adapter(), keep_cursor=not self._placeholders)
@@ -1468,6 +1470,11 @@ class UninstallScreen(AppScreen):
         if self.is_mounted:
             self._show_standing_status()
 
+    def clear_transient(self) -> None:
+        """Leaving the view forgets every config flag: a destructive choice is never remembered."""
+        super().clear_transient()
+        self._config_on.clear()
+
     def _nothing_to_uninstall(self) -> bool:
         """True only when every tool's state is known and none is removable or
         managed, and there is no environment row (RESEARCH P7)."""
@@ -1515,6 +1522,9 @@ class UninstallScreen(AppScreen):
         # A mark is for the next removal; the running one keeps its status (D-05).
         if self.app.mutation_holder is not MutationHolder.REMOVAL:
             self.status.clear()
+        # An unmarked row loses its flag, so its detail and cells must be repainted.
+        if self._config_on - self._browser.selected:
+            self._repaint()
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
@@ -1540,14 +1550,17 @@ class UninstallScreen(AppScreen):
         return None if key is None else self._by_key.get(key)
 
     def action_toggle_config(self) -> None:
-        """`c`: flag a removable row's config on (marking it too) or off (D-11, UI-SPEC A1)."""
+        """`c`: flag a removable row's config on (marking it too) or off (D-11, UI-SPEC A1).
+
+        A flag is not a mutation, so the lock never refuses it.
+        """
         entry = self._highlighted_entry()
         if entry is None or entry.tool is None:
-            self.status.set("This row has no config to delete.", "warn")
+            self._config_refused("This row has no config to delete.")
         elif entry.group is not UninstallState.REMOVABLE:
-            self.status.set(f"{entry.key} cannot be removed here, so its config stays.", "warn")
+            self._config_refused(f"{entry.key} cannot be removed here, so its config stays.")
         elif not entry.tool.config_paths:
-            self.status.set(f"{entry.key} declares no config to delete.", "warn")
+            self._config_refused(f"{entry.key} declares no config to delete.")
         else:
             if entry.key in self._config_on:
                 self._config_on.discard(entry.key)
@@ -1556,6 +1569,11 @@ class UninstallScreen(AppScreen):
                     self._browser.action_toggle_selected()
                 self._config_on.add(entry.key)
             self._repaint()  # the row's cells and detail bar name the flag
+
+    def _config_refused(self, text: str) -> None:
+        """A refusal is a warn line, but it never replaces `Removing…` (D-05)."""
+        if self.app.mutation_holder is not MutationHolder.REMOVAL:
+            self.status.set(text, "warn")
 
     def _accept_summary(self, ids: list[str]) -> str:
         tool_count = sum(1 for key in ids if key not in _ENV_KEYS)

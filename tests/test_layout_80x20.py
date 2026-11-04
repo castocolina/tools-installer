@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 from rich.cells import cell_len
+from rich.console import Console
+from rich.text import Text
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import DataTable, Rule
@@ -22,9 +24,9 @@ from installer.platform import Platform
 from installer.policy import Policy, PolicyResult
 from installer.resolve import resolve_methods
 from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
-from installer.uninstall import SweepResult
-from installer.version_status import VersionRefreshService, VersionStatus
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from installer.uninstall import RemovalPlan, SweepResult
+from installer.version_status import LAYOUT_PROOF_NOTE, VersionRefreshService, VersionStatus
+from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
 from tests.screen_family import settle
 from tests.state_doubles import (
     HeldRefreshService,
@@ -32,6 +34,7 @@ from tests.state_doubles import (
     frozen_service,
     managed_state,
     pass_state,
+    plan_state,
     removable_state,
     seeded_service,
 )
@@ -390,3 +393,29 @@ async def test_a_drifted_policies_table_fits_80x20(tmp_path: Path) -> None:
         # The drift label is the widest State cell; State and Policy stay on screen.
         assert spans["State"][1] <= 78, spans
         assert spans["Policy"][1] <= 78, spans
+
+
+async def test_the_toggle_fits_80x20(tmp_path: Path) -> None:
+    """22-10: a flagged row keeps the chrome, its `[c]` and the config clause on screen."""
+    gh = next(tool for tool in load_tools(REGISTRY) if tool.id == "gh")
+    config = tuple(Path(entry).expanduser() for entry in gh.config_paths)
+    service = frozen_service(tmp_path)
+    service.publish([plan_state(gh, removable=RemovalPlan((tmp_path / "gh",), (), config=config))])
+    app = _app(tmp_path, service)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        await pilot.press("c")
+        await pilot.pause()
+        _assert_chrome(screen)
+        table = screen.query_one(DataTable[Any])
+        assert table.get_cell("gh", "sel").plain == "[c]"
+        assert table.get_cell("gh", "removes").plain.startswith("config + ")
+        uninstall = app.view("uninstall")
+        assert isinstance(uninstall, UninstallScreen)
+        assert len(rows_of(screen, screen.query_one("#browser-detail"))) == 3
+        lines = list(Text(uninstall.detail_text).wrap(Console(width=78), 78))
+        assert all(cell_len(line.plain) <= 78 for line in lines), lines
+        # The proof sentence and the config clause land on the first two rows of the bar.
+        head = " ".join(" ".join(line.plain.split()) for line in lines[:2])
+        assert LAYOUT_PROOF_NOTE in head
+        assert "config deleted too: ~/.config/gh (c keeps it)" in head
