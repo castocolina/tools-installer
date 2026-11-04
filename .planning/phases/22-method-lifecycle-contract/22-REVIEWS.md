@@ -1,13 +1,15 @@
 ---
 phase: 22
-reviewers: [opencode-referee-one]
-reviewed_at: 2026-11-04T02:52:00Z
-cycle: 2
+reviewers: [opencode-referee-one, opencode-referee-three]
+reviewed_at: 2026-11-04T03:46:18Z
+cycle: 3
 plans_reviewed: [22-01-PLAN.md, 22-02-PLAN.md, 22-03-PLAN.md, 22-04-PLAN.md, 22-05-PLAN.md, 22-06-PLAN.md, 22-07-PLAN.md, 22-08-PLAN.md, 22-09-PLAN.md, 22-10-PLAN.md, 22-11-PLAN.md, 22-12-PLAN.md, 22-13-PLAN.md]
 models:
   opencode-referee-one: "router-env/my-referee-one"
+  opencode-referee-three: "router-env/my-referee-three"
 model_sources:
   opencode-referee-one: "pinned"
+  opencode-referee-three: "pinned (auto-failover, cycle 3)"
 ---
 
 # Cross-AI Plan Review — Phase 22
@@ -262,3 +264,42 @@ This changes the following lines (the planner did not edit these locked files; t
 - Ledger row 246 (Q1, "opencode remove argv adds `--force`") is superseded.
 
 The alternative was to keep `remove` with the bound executable and accept the vendor's rc edit and cache/state deletion. It was not chosen because it weakens the principle. If the orchestrator rejects this decision, revert the 22-08 opencode row and the 22-06 truth to the anchor; the binding (R2-03) and the runner (R2-04) stand either way.
+
+## Cycle 3 Review (opencode-referee-three)
+
+Reviewer: opencode-referee-three (`opencode run --model router-env/my-referee-three`). It ran as the auto-failover after opencode-referee-one failed with "Combo has no executable targets", and it was the only reviewer. It reviewed the 13 plans at `8a52fcd`. It edited no tracked file. It applied 22-03's planned `_collect_candidates` predicate in a scratch copy and ran `test_ownership`, `test_version_status` and `test_update` there. It read Homebrew's `install.sh` and OpenCode v1.19.5's `installation/index.ts` without executing them. It ran no full suite, container, e2e or UAT. Raw output: `.review-diagnostics/20261104T034618Z-plan-review-cycle3/opencode-referee-three/lane.out` (gitignored).
+
+Its mechanical checks need no change. Same-wave `files_modified` sets are disjoint, and every file shared across waves has a dependency path. The only elevation commands in source today are `installer/executors.py:449/453/457`, and 22-02 deletes them.
+
+### R2 disposition
+
+All 8 cycle-2 items are **RESOLVED** (R2-01..R2-08), each with plan-line and source evidence in the lane output. One item has fallout: R2-01's fix flips an existing test that 22-03 does not name (R3-01).
+
+### New concerns, source-verified
+
+The planner re-checked R3-02 and R3-03 at `876898b`, where 22-03 and 22-04 are now merged, using `codegraph explore` and Reads of the cited lines. It also checked the vendor install scripts (downloaded into a fresh scratch dir and only grepped), the Claude Code setup docs, and a read-only listing of the three vendor dirs on the planner's host.
+
+| ID | Plan | Severity | Verdict | Evidence | Resolution |
+|---|---|---|---|---|---|
+| R3-01 | 22-03 | MEDIUM | CONFIRMED (the reviewer ran it) | `tests/test_ownership.py:2418-2430` `test_undeclared_script_only_by_elimination_unchanged` asserts `result.method is None`; the `_INSTALLER_KINDS` predicate makes it the script method | Handled by the orchestrator directly with the 22-03 executor (the stale assertion becomes the script method, R2-01's intent). Recorded only; 22-03's plan and summary are not edited here |
+| R3-02 | 22-06 | MEDIUM | CONFIRMED | `installer/engine.py:285-290` calls `receipts.record(tool, method, package=method_package(method), ...)` after any successful method, with no inventory check. `:200-202` skips the ALREADY_INSTALLED short-circuit under `repair`. Presence is `which`-based (`installer/version_status.py:1083-1105`), and `setup._which_with_brew` (CR-04) documents a brew bin missing from this process's PATH. `brew install`, `uv tool install` and `pnpm add -g` exit 0 over an existing install (vendor behavior, not run here). `receipts.record`'s `preexisting` covers only `tree`/`leaf` (`installer/receipts.py:250-281`). The fresh inventory the fix needs already exists: `ownership.read_inventory` (`:379-402`), which `VersionRefreshService.resolve_owner` reads per update (`version_status.py:1565-1588`) | 22-06 decisions and Task 3: `install_tool(read_inventory_fn=...)` reads the inventory and the previous receipt right before a `MANAGER_UNINSTALL_ARGV`-kind method runs. A package already listed, an unreadable field or no reader means no `receipts.record` call, unless the previous receipt proves the same kind and package. The fix writes no receipt rather than `package=None`, because `installer/update.py:355-366` would re-record a same-kind receipt with the package. Production binds `read_inventory_fn=read_inventory` in `setup._build_services._install`, and the default fails closed. Three existing `tests/test_engine.py` receipt tests pass an empty inventory. New tests: `test_a_package_already_in_the_manager_gets_no_receipt` (repair, presence miss, unreadable: no receipt, level `none`, zero runner calls) and `test_a_repair_keeps_the_installers_own_package_proof`. Also a truth, a prohibition and T-22-49 |
+| R3-03 | 22-08 | MEDIUM | CONFIRMED for cursor-agent and codex; PARTIAL for claude | A tree's proof is type-only (`receipts.matches` checks `S_ISDIR`, `installer/receipts.py:596-597`), and `_remove_dir` rmtrees the captured dir (`installer/uninstall.py:225-262`). 22-01's `_script_paths_refusal` (`installer/model.py:567-581`) does not check harness markers; only `config_paths` does (`_config_path_flaw`, `:491-504`). `~/.local/share/cursor-agent` is `HARNESS_MARKER_DIRS["cursor"]` (`:191`). cursor-agent: `https://cursor.com/install` writes only `versions/<ver>` and two links (lines 77-131), yet the live dir holds the CLI's `logs/` and `worker.lock` beside `versions/`. codex: `install.sh` keeps `install.lock` and `auto-update-version` beside `releases/` and `current` (lines 16-35), and the live dir matches. claude: the documented native uninstall is `rm -f ~/.local/bin/claude` plus `rm -rf ~/.local/share/claude`, "the Claude Code binary and version files" (code.claude.com/docs/en/setup); config lives in `~/.claude` and `~/.claude.json`, and the live dir holds only `versions/` | 22-08 truths and Task 2: trees are the narrowest vendor-written dir, cursor-agent `~/.local/share/cursor-agent/versions/` and codex `~/.codex/packages/standalone/releases/`, with the links (`agent`, `cursor-agent`, codex `current`, `~/.local/bin/codex`) as leaves. Claude keeps `~/.local/share/claude/` whole, citing its documented uninstall. New `test_no_declared_path_is_or_contains_a_harness_marker` covers every script stanza. A Task 2 one-liner refuses the whole codex or cursor-agent dir. Also T-22-50. 22-13's must-clear check catches what stays (the parents sit under the `.codex` and cursor harness markers, which are allowed prefixes) |
+
+### Rejected
+
+None. All three concerns held up: R3-01 and R3-02 are CONFIRMED, and R3-03 is CONFIRMED except its claude part, which is PARTIAL (0 HIGH, 3 MEDIUM).
+
+### Noted residuals (the reviewer's "Not checked", carried without a plan change)
+
+- **Cask uninstall and sudo.** `brew uninstall --cask` can call `sudo` itself, for example for an app it cannot write or a cask whose `uninstall` stanza needs root. `run_captured` gives the child stdin from `/dev/null` and a new session with no tty, so a password prompt fails closed and the row reads `remove_failed`. With passwordless sudo (`NOPASSWD`) it would run. That is the manager's own elevation, outside the argv the zero-sudo rule and 22-02's AST test cover. It is not addressed this phase. Revisit if a cask removal must be guaranteed root-free.
+- **Declared `update` argv (22-05) are not bound to the proven executable.** They run their first word from PATH, unlike R2-03's binding for `remove`. This is not a removal or sudo path, and ownership gates `u`, but a shadowing copy earlier on PATH could be the one updated. Candidate follow-up: apply R2-03's leaf binding to `update`. Related, also untraced: OpenCode v1.19.5's curl upgrade fetches `https://opencode.ai/v2/install` (`installation/index.ts:189-196`), and whether that installs OpenCode 2 bears on 22-08's opencode `update` row; 22-08 Task 1's verify-first step reads that source.
+
+## Cycle 3 resolution
+
+Plans changed: 22-06 and 22-08, plus 22-VALIDATION (the LIFE-03 row and the LIFE-01 data row). 22-03 is untouched because the orchestrator handled R3-01. Plan count (13), task count (39), wave count (7), every plan ID and every `depends_on` edge are unchanged. The one new `files_modified` entry is `tests/test_engine.py` for 22-06 (wave 3). 22-05, the other wave-3 plan, does not list it, and no later plan touches it. Each changed plan has a `### Round 3 — cycle 3 review at 8a52fcd` ledger.
+
+No decision needs orchestrator sign-off. The R3-02 design stays inside the plan's discretion: it writes no receipt instead of the reviewer's alternative `package=None`, for the laundering reason in the table. The claude whole-dir tree rests on the vendor's documented uninstall, which is the exception the cycle-3 instruction allows.
+
+CYCLE_SUMMARY: current_high=0 current_actionable=3
+
+CONVERGED: yes
