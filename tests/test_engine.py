@@ -2181,3 +2181,32 @@ def test_app_receipt_records_smoke_only_with_a_cli(
     written = receipts.read("rg")
     assert written is not None
     assert written.smoke == smoke
+
+
+def test_a_tap_formula_brew_already_listed_writes_no_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review C-06: `brew list` shows a tap formula by its short name, so the user's own
+    `anomalyco/tap/opencode` is already there and the install never claims it."""
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _fake_perform(monkeypatch)
+
+    def listed(*, has_brew: bool) -> ManagerInventory:
+        del has_brew
+        return ManagerInventory(
+            brew_formulae={"opencode": "1.19.5"},
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=None,
+        )
+
+    outcome = install_tool(
+        _tool(Method(kind="brew", params={"formula": "anomalyco/tap/opencode"})),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+        read_inventory_fn=listed,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert receipts.read("rg") is None

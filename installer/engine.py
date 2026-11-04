@@ -13,7 +13,12 @@ from installer.download import ExecContext
 from installer.enums import InstallStatus
 from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
-from installer.ownership import ManagerInventory, method_package, method_removal_command
+from installer.ownership import (
+    ManagerInventory,
+    listed_name,
+    method_package,
+    method_removal_command,
+)
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction, run_post_install
 from installer.postinstall import run_postinstall
@@ -361,7 +366,7 @@ def _package_already_there(
     if snapshot is None:
         return True
     listed = _listing(snapshot, method.kind)
-    return listed is None or package in listed
+    return listed is None or listed_name(method.kind, package) in listed
 
 
 def _listing(inventory: ManagerInventory, kind: str) -> Collection[str] | None:

@@ -944,6 +944,25 @@ def test_readable_brew_inventory_listing_git_wins_over_os_package() -> None:
     assert calls == []
 
 
+def test_a_tap_formula_is_found_by_its_short_name_in_the_brew_listing() -> None:
+    """Review C-06: `brew list --versions` prints `opencode`, never `anomalyco/tap/opencode`."""
+    tool = Tool(
+        id="opencode",
+        name="OpenCode",
+        category="ai",
+        cmd="opencode",
+        methods=(Method(kind="brew", params={"formula": "anomalyco/tap/opencode"}),),
+    )
+    result = _resolve(
+        tool,
+        inventory=_readable(brew_formulae={"opencode": "1.19.5"}),
+        which=str(_BREW_PREFIX / "bin" / "opencode"),
+    )
+    assert result.owner == "brew"
+    assert result.package == "anomalyco/tap/opencode"
+    assert result.current_version == "1.19.5"
+
+
 def test_unreadable_brew_inventory_blocks_the_os_package_fallback() -> None:
     """Complete negative evidence means EVERY tracked manager was queried
     successfully and none claimed the tool -- an unreadable brew inventory is

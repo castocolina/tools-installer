@@ -403,6 +403,12 @@ def read_inventory(
     )
 
 
+def listed_name(kind: str, package: str) -> str:
+    """The name a manager's own listing shows for a package: `brew list` prints a tap
+    formula or cask (`anomalyco/tap/opencode`) by its last segment (review C-06)."""
+    return package.rsplit("/", 1)[-1] if kind in ("brew", "cask") else package
+
+
 def _query_brew_prefix(query: Callable[..., str]) -> Path | None:
     try:
         raw = query(["brew", "--prefix"], env=_BREW_ENV)
@@ -1095,22 +1101,22 @@ def _collect_candidates(
             )
         if method.kind == "brew" and inventory.brew_formulae is not None:
             name = manager_name(method, "formula", tool.cmd)
-            if name in inventory.brew_formulae:
+            if (short := listed_name("brew", name)) in inventory.brew_formulae:
                 found["brew"] = OwnershipCandidate(
                     owner="brew",
                     method=method,
                     package=name,
-                    current_version=inventory.brew_formulae[name],
+                    current_version=inventory.brew_formulae[short],
                     evidence=f"Homebrew formula inventory lists {name}",
                 )
         elif method.kind == "cask" and inventory.brew_casks is not None:
             name = manager_name(method, "cask", tool.cmd)
-            if name in inventory.brew_casks:
+            if (short := listed_name("cask", name)) in inventory.brew_casks:
                 found["cask"] = OwnershipCandidate(
                     owner="cask",
                     method=method,
                     package=name,
-                    current_version=inventory.brew_casks[name],
+                    current_version=inventory.brew_casks[short],
                     evidence=f"Homebrew cask inventory lists {name}",
                 )
         elif method.kind == "node" and inventory.pnpm_globals is not None:
