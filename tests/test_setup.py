@@ -588,8 +588,10 @@ def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
         tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: object = None,
         present: object = None,
+        read_inventory_fn: object = None,
     ) -> InstallOutcome:
         del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del read_inventory_fn
         del present
         recorder.append(tool.id)
         return InstallOutcome(tool.id, "installed")
@@ -1295,9 +1297,11 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
     try:
         forwarded: list[dict[str, object]] = []
 
-        def fake_run_uninstall(_tools: object, _console: object, **kwargs: object) -> list[Path]:
+        def fake_run_uninstall(
+            _tools: object, _console: object, **kwargs: object
+        ) -> tuple[list[Path], tuple[str, ...]]:
             forwarded.append(kwargs)
-            return []
+            return [], ()
 
         monkeypatch.setattr(setup, "load_tools", _no_tools)
         monkeypatch.setattr(setup, "detect", _platform)
@@ -1328,9 +1332,11 @@ def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
     _sandbox(monkeypatch, tmp_path)
     forwarded: list[dict[str, object]] = []
 
-    def fake_run_uninstall(_tools: object, _console: object, **kwargs: object) -> list[Path]:
+    def fake_run_uninstall(
+        _tools: object, _console: object, **kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
         forwarded.append(kwargs)
-        return []
+        return [], ()
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
 
@@ -1338,6 +1344,41 @@ def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
     daemon_policy_obj = forwarded[0]["daemon_policy"]
     assert isinstance(daemon_policy_obj, Policy)
     assert daemon_policy_obj.id == "daemon:prune-tmpdir"
+
+
+def test_both_removers_bind_run_captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The CLI remover runs its child on run_captured: no inherited stdin or session,
+    and its stderr reaches the failure line (review R2-04)."""
+    from installer.run import run_captured
+
+    _sandbox(monkeypatch, tmp_path)
+    forwarded: list[dict[str, object]] = []
+
+    def fake_run_uninstall(
+        _tools: object, _console: object, **kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        forwarded.append(kwargs)
+        return [], ()
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert forwarded[0]["runner"] is run_captured
+
+
+def test_a_failed_cli_removal_exits_non_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A removal that failed reaches the exit code (review R1-24)."""
+    _sandbox(monkeypatch, tmp_path)
+
+    def failing_run_uninstall(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ("gh",)
+
+    monkeypatch.setattr(setup, "run_uninstall", failing_run_uninstall)
+    assert setup.main(["--uninstall", "--yes"]) == 1
 
 
 def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
@@ -1369,6 +1410,10 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
         )
     )
     assert forwarded[0]["daemon_policy"] is daemon_in_list
+    # The TUI remover runs its child on run_captured too (review R2-04).
+    from installer.run import run_captured
+
+    assert forwarded[0]["runner"] is run_captured
 
 
 def test_build_app_wires_the_shared_terminal_closure_into_uninstall_inputs(
@@ -1894,8 +1939,10 @@ def test_the_cli_uninstall_route_calls_the_terminal_synchronizer_after_run_unins
     branch)."""
     _sandbox(monkeypatch, tmp_path)
 
-    def fake_run_uninstall(_tools: object, _console: object, **_kwargs: object) -> list[Path]:
-        return []
+    def fake_run_uninstall(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ()
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
     buffer = io.StringIO()
@@ -1943,8 +1990,10 @@ def test_the_cli_uninstall_route_survives_a_raising_terminal_synchronizer(
     command-line teardown route."""
     _sandbox(monkeypatch, tmp_path)
 
-    def fake_run_uninstall(_tools: object, _console: object, **_kwargs: object) -> list[Path]:
-        return []
+    def fake_run_uninstall(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ()
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
     buffer = io.StringIO()
@@ -2847,9 +2896,11 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
     cli: list[dict[str, object]] = []
     interactive: list[dict[str, object]] = []
 
-    def fake_run_uninstall(_tools: object, _console: object, **kwargs: object) -> list[Path]:
+    def fake_run_uninstall(
+        _tools: object, _console: object, **kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
         cli.append(kwargs)
-        return []
+        return [], ()
 
     def fake_perform_uninstall(_decision: object, **kwargs: object) -> SweepResult:
         interactive.append(kwargs)

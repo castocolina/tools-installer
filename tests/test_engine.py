@@ -14,6 +14,7 @@ from installer.download import ExecContext
 from installer.engine import install_tool
 from installer.enums import InstallStatus
 from installer.model import Method, Tool, load_tools
+from installer.ownership import ManagerInventory
 from installer.platform import Platform
 from installer.run import CommandError
 from installer.versions import Release, VersionError
@@ -1970,7 +1971,12 @@ def test_receipt_per_kind(
             (script_bin / "rg").write_text("not-executable", encoding="utf-8")
 
     _fake_perform(monkeypatch, place)
-    outcome = install_tool(_tool(method), _macos_with_brew(), runner=lambda _cmd: None)
+    outcome = install_tool(
+        _tool(method),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+        read_inventory_fn=_empty_inventory,
+    )
     assert outcome.status == InstallStatus.INSTALLED
     written = receipts.read("rg")
     assert written is not None
@@ -1999,11 +2005,20 @@ def test_manager_smoke_status_is_recorded(
         _tool(Method(kind="brew", params={"formula": "ripgrep"})),
         _macos_with_brew(),
         runner=runner,
+        read_inventory_fn=_empty_inventory,
     )
     assert outcome.status == InstallStatus.INSTALLED
     written = receipts.read("rg")
     assert written is not None
     assert written.smoke == ("ok" if smoked else None)
+
+
+def _empty_inventory(*, has_brew: bool) -> ManagerInventory:
+    """A readable inventory that lists no package: the install may record its receipt."""
+    del has_brew
+    return ManagerInventory(
+        brew_formulae={}, brew_casks={}, pnpm_globals=frozenset(), uv_tools={}, brew_prefix=None
+    )
 
 
 def _read_only_write(_receipt: receipts.Receipt) -> None:
@@ -2025,6 +2040,7 @@ def test_receipt_write_failure_keeps_installed(monkeypatch: pytest.MonkeyPatch) 
         ),
         _macos_with_brew(),
         runner=lambda _cmd: None,
+        read_inventory_fn=_empty_inventory,
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.postinstall_warning is not None

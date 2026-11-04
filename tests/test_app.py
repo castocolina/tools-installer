@@ -903,7 +903,7 @@ def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytes
         ),
     )
     console, _buf = _console()
-    removed = run_uninstall(
+    removed, _failed = run_uninstall(
         [tool],
         console,
         default_bin_dir=bin_dir,
@@ -914,6 +914,7 @@ def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytes
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert set(removed) == {opt, bin_dir / "fd"}
     assert not opt.exists()
@@ -940,7 +941,7 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
         ),
     )
     console, _buf = _console()
-    removed = run_uninstall(
+    removed, _failed = run_uninstall(
         [tool],
         console,
         default_bin_dir=bin_dir,
@@ -951,6 +952,7 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert removed == []
     assert opt.exists()  # nothing removed
@@ -1684,7 +1686,7 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
     def fail_confirm(_message: str) -> bool:
         raise AssertionError("confirm must not be called when there is nothing to remove")
 
-    removed = run_uninstall(
+    removed, _failed = run_uninstall(
         [tool],
         console,
         default_bin_dir=bin_dir,
@@ -1695,6 +1697,7 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert removed == []
 
@@ -2401,6 +2404,7 @@ def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert not (shim_dir / "pip").exists()
     assert "tools-installer ban" not in myshellrc.read_text()
@@ -2591,6 +2595,7 @@ def test_run_uninstall_previews_and_sweeps_active_tweaks(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "countdown" in out
@@ -2639,6 +2644,7 @@ def test_run_uninstall_sweeps_the_very_tweaks_it_previewed(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "These shell tweaks will also be disabled" in out
@@ -2668,6 +2674,7 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert "Nothing to uninstall" in buf.getvalue()
 
@@ -2684,6 +2691,7 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert "Nothing to uninstall" not in buf.getvalue()
     assert "countdown" in buf.getvalue()
@@ -2709,6 +2717,7 @@ def test_run_uninstall_declined_removes_nothing(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
@@ -2733,6 +2742,7 @@ def test_run_uninstall_without_bundles_sweeps_nothing(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert helper.exists()
     assert "wait_time()" in rc_path.read_text()
@@ -2767,6 +2777,7 @@ def test_run_uninstall_preview_names_the_plugins_and_the_zshrc(
         zshrc_path=zshrc,
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "omz-plugins" in out
@@ -2798,6 +2809,7 @@ def test_run_uninstall_preview_stays_silent_about_a_zshrc_it_does_not_own(
         zshrc_path=zshrc,
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "countdown" in out
@@ -2824,6 +2836,7 @@ def test_run_uninstall_reports_what_the_sweep_did_not_what_it_previewed(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert "Shell tweaks disabled: tweak:countdown." in buf.getvalue()
 
@@ -2853,6 +2866,7 @@ def test_run_uninstall_names_the_tweaks_it_could_not_disable(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "Could not disable: tweak:countdown." in out
@@ -2923,6 +2937,7 @@ def test_run_uninstall_forwards_daemon_policy_into_the_sweep_and_clears_the_mark
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert not plist_path.exists()
     assert daemon.decided(state_path) is False
@@ -2945,6 +2960,7 @@ def test_run_uninstall_requires_daemon_policy() -> None:
             confirm=lambda _m: True,
             bundles=(),
             zshrc_path=Path("/tmp/.zshrc"),
+            runner=_no_removal_runner,
         )
 
 
@@ -2973,6 +2989,7 @@ def test_run_uninstall_clears_the_decided_marker_for_an_already_disabled_daemon(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert daemon.decided(state_path) is False
 
@@ -3001,6 +3018,7 @@ def test_run_uninstall_preserves_the_decided_marker_when_daemon_removal_fails(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert daemon.decided(state_path) is True  # preserved: the removal genuinely failed
     assert "Could not disable" in buf.getvalue()
@@ -3139,6 +3157,7 @@ def test_run_uninstall_preview_names_the_background_job_when_the_daemon_is_activ
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=daemon_policy_obj,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "background maintenance job" in out
@@ -3164,6 +3183,7 @@ def test_run_uninstall_preview_stays_byte_identical_when_the_daemon_is_absent(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "These shell tweaks will also be disabled (tweak:countdown)." in out
@@ -3279,6 +3299,7 @@ def test_run_uninstall_removes_an_installed_but_not_running_linux_timer(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=policy,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert systemd_daemon.footprint_present(unit_dir) is False
@@ -3341,6 +3362,7 @@ def test_run_uninstall_keeps_the_linux_marker_when_a_running_timer_cannot_be_dis
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=build(),
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert systemd_daemon.units_present(unit_dir) is True
     assert systemd_daemon.decided(state_path) is True
@@ -3368,6 +3390,7 @@ def test_run_uninstall_clears_the_linux_marker_and_leaves_the_macos_one(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=policy,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -3406,6 +3429,7 @@ def test_run_uninstall_clears_the_linux_marker_after_a_successful_sweep(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=active_policy,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert systemd_daemon.decided(state_path) is False
     assert daemon.decided(state_path) is True
@@ -3469,6 +3493,7 @@ def test_run_uninstall_preserves_the_linux_marker_when_removal_fails(tmp_path: P
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=failed,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert systemd_daemon.decided(state_path) is True
     assert "Could not disable" in buf.getvalue()
@@ -3494,6 +3519,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=bare,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     perform_uninstall(
         UninstallDecision(
@@ -3527,6 +3553,7 @@ def test_clear_decided_none_is_a_noop_at_every_uninstall_branch(tmp_path: Path) 
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=swept,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     perform_uninstall(
         UninstallDecision(
@@ -3576,6 +3603,7 @@ def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(extra,),
+        runner=_no_removal_runner,
     )
     assert "cache-redirect:bun" in buf.getvalue()
     assert removed == ["cache-redirect:bun"]
@@ -3621,6 +3649,7 @@ def test_uninstall_entry_points_require_extra_policies(tmp_path: Path) -> None:
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
             daemon_policy=None,
+            runner=_no_removal_runner,
         )
     with pytest.raises(TypeError):
         perform_uninstall(  # type: ignore[call-arg]
@@ -3864,6 +3893,7 @@ class _UninstallKwargs(TypedDict):
     zshrc_path: Path
     daemon_policy: Policy | None
     extra_policies: tuple[Policy, ...]
+    runner: Runner
 
 
 def _uninstall_kwargs(
@@ -3882,6 +3912,7 @@ def _uninstall_kwargs(
         "zshrc_path": tmp_path / ".zshrc",
         "daemon_policy": None,
         "extra_policies": (),
+        "runner": _no_removal_runner,
     }
 
 
@@ -3895,7 +3926,9 @@ def test_run_uninstall_deletes_only_proven_artifacts(
     tools = plant_removal_fixtures(tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
     console, buf = _console()
-    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True))
+    removed, _failed = run_uninstall(
+        tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
+    )
     opt_fd = tmp_path / ".local" / "opt" / "fd"
     assert set(removed) == {bin_dir / "fd", opt_fd}
     assert not (bin_dir / "fd").is_symlink()
@@ -3924,7 +3957,9 @@ def test_run_uninstall_with_only_unproven_matches_still_lists_them(
         raise AssertionError("confirm must not be called with nothing proven")
 
     console, buf = _console()
-    removed = run_uninstall(tools, console, **_uninstall_kwargs(tmp_path, bin_dir, fail_confirm))
+    removed, _failed = run_uninstall(
+        tools, console, **_uninstall_kwargs(tmp_path, bin_dir, fail_confirm)
+    )
     assert removed == []
     text = buf.getvalue()
     assert "Nothing to uninstall" in text
@@ -3941,7 +3976,7 @@ def test_second_yes_run_deletes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     bin_dir = tmp_path / ".local" / "bin"
     kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
     console, _buf = _console()
-    first = run_uninstall(tools, console, **kwargs)
+    first, _ = run_uninstall(tools, console, **kwargs)
     assert first
 
     def snapshot() -> dict[Path, bytes]:
@@ -3960,7 +3995,7 @@ def test_second_yes_run_deletes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
 
     before_files, before_links = snapshot(), link_targets()
     console2, _buf2 = _console()
-    second = run_uninstall(
+    second, _ = run_uninstall(
         tools,
         console2,
         **kwargs,
@@ -3984,7 +4019,7 @@ def test_run_uninstall_survives_a_looping_link(
     (bin_dir / "foo").symlink_to("foo")
     tool = loop_tool("foo")
     console, buf = _console()
-    removed = run_uninstall(
+    removed, _failed = run_uninstall(
         [tool],
         console,
         **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True),
@@ -4017,7 +4052,7 @@ def test_run_uninstall_refuses_paths_changed_since_the_preview(
         return True
 
     console, buf = _console()
-    removed = run_uninstall(
+    removed, _failed = run_uninstall(
         [tool],
         console,
         **_uninstall_kwargs(tmp_path, bin_dir, swap_then_confirm),
@@ -4043,7 +4078,9 @@ def test_run_uninstall_uses_receipt_proof(tmp_path: Path, monkeypatch: pytest.Mo
     yq, bin_dir = plant_raw_yq(tmp_path, with_receipt=False)
     write_receipt(yq, [(bin_dir / "yq", "file"), (key, "file")])
     console, _buf = _console()
-    removed = run_uninstall([yq], console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True))
+    removed, _failed = run_uninstall(
+        [yq], console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
+    )
     assert removed == [bin_dir / "yq"]
     assert not (bin_dir / "yq").exists()
     assert key.read_text() == "PRIVATE KEY"
@@ -4864,3 +4901,176 @@ def test_perform_uninstall_removes_a_dependent_before_its_manager(
     assert calls == [["uv", "tool", "uninstall", "ruff"]]
     assert result.removed == ("ruff", "uv")
     assert not uv_binary.exists()
+
+
+def test_the_cli_previews_and_runs_the_vendor_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    binary = bin_dir / "vend"
+    console, buf = _console()
+    shown: list[str] = []
+    calls: list[list[str]] = []
+
+    def confirm(_message: str) -> bool:
+        shown.append(buf.getvalue())  # what the user saw when asked
+        return True
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        binary.unlink()  # the vendor command removes the binary
+
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, confirm)
+    kwargs["runner"] = runner
+    removed, failed = run_uninstall([tool], console, **kwargs)
+    assert f"vend: runs {binary} uninstall --force" in shown[0]
+    assert calls == [[str(binary), "uninstall", "--force"]]
+    assert removed == [binary]
+    assert failed == ()
+    assert not binary.exists()
+
+
+def test_the_cli_declines_and_runs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.app import run_uninstall
+
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    console, _buf = _console()
+    calls: list[list[str]] = []
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: False)
+    kwargs["runner"] = calls.append
+    assert run_uninstall([tool], console, **kwargs) == ([], ())
+    assert calls == []
+    assert (bin_dir / "vend").exists()
+    assert receipts_exist(tool)
+
+
+def receipts_exist(tool: Tool) -> bool:
+    from installer import receipts
+
+    return receipts.receipt_exists(tool.id)
+
+
+def test_a_foreign_file_at_a_declared_path_survives_the_cli_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _vend_tool()
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    foreign = bin_dir / "vend"
+    foreign.write_text("a file this installer never wrote")  # declared, never recorded
+    console, buf = _console()
+    assert run_uninstall(
+        [tool], console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
+    ) == (
+        [],
+        (),
+    )
+    assert foreign.read_text() == "a file this installer never wrote"
+    assert str(foreign) in buf.getvalue()
+
+
+def test_a_cli_tool_with_only_an_argv_is_not_nothing_to_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = _manager_tool("gh", method)
+    receipts.record(gh, method, package="gh", smoke=None)
+    bin_dir = tmp_path / ".local" / "bin"
+    console, buf = _console()
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: False)
+    run_uninstall([gh], console, **kwargs)
+    assert "gh: runs brew uninstall gh" in buf.getvalue()
+
+
+def test_the_cli_re_proves_after_the_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = _manager_tool("gh", method)
+    receipts.record(gh, method, package="gh", smoke=None)
+    bin_dir = tmp_path / ".local" / "bin"
+    console, buf = _console()
+    calls: list[list[str]] = []
+
+    def confirm(_message: str) -> bool:
+        # The receipt is rewritten between the preview and the answer (a reinstall).
+        receipts.record(gh, method, package="other", smoke=None)
+        return True
+
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, confirm)
+    kwargs["runner"] = calls.append
+    removed, failed = run_uninstall([gh], console, **kwargs)
+    assert calls == []
+    assert removed == []
+    assert failed == ("gh",)
+    assert "gh: remove failed — changed since the preview; not removed" in buf.getvalue()
+
+
+def test_the_cli_removes_a_dependent_before_its_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    uv_binary = bin_dir / "uv"
+    uv_binary.write_text("uv")
+    uv_method = Method(kind="script", params={"paths": ["~/.local/bin/uv"]})
+    uv = _manager_tool("uv", uv_method)
+    receipts.record(uv, uv_method, package=None, smoke=None, preexisting=frozenset())
+    ruff_method = Method(kind="uv-tool", params={"pypi_pkg": "ruff"})
+    ruff = _manager_tool("ruff", ruff_method, requires=("uv",))
+    receipts.record(ruff, ruff_method, package="ruff", smoke=None)
+    console, _buf = _console()
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        assert uv_binary.exists(), "the dependent ran after its manager was removed"
+
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
+    kwargs["runner"] = runner
+    _removed, failed = run_uninstall([uv, ruff], console, **kwargs)
+    assert calls == [["uv", "tool", "uninstall", "ruff"]]
+    assert failed == ()
+    assert not uv_binary.exists()
+
+
+def test_a_failed_cli_removal_is_reported_and_keeps_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = Method(kind="brew", params={"formula": "gh"})
+    gh = _manager_tool("gh", method)
+    receipts.record(gh, method, package="gh", smoke=None)
+    bin_dir = tmp_path / ".local" / "bin"
+    console, buf = _console()
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="Error: No such formula")
+
+    kwargs = _uninstall_kwargs(tmp_path, bin_dir, lambda _m: True)
+    kwargs["runner"] = runner
+    removed, failed = run_uninstall([gh], console, **kwargs)
+    assert removed == []
+    assert failed == ("gh",)
+    assert "gh: remove failed — Error: No such formula" in buf.getvalue()
+    assert receipts.receipt_exists("gh")

@@ -2,6 +2,7 @@
 core against a sandboxed HOME, asserting real artifacts are deleted while the
 real $HOME is never touched. Saves an SVG screenshot for agent inspection."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,8 +10,10 @@ import pytest
 
 from installer.app import UninstallDecision, perform_uninstall
 from installer.doctor import DoctorReport
+from installer.download import artifact_paths
 from installer.guards import guard_status, install_shims, write_ban_aliases
 from installer.model import Method, Tool
+from installer.ownership import ManagerInventory
 from installer.platform import Platform
 from installer.policy import omz_plugins_policy, tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
@@ -329,3 +332,290 @@ async def test_a_tool_only_refusal_is_on_the_status_once(
         assert "1 remove failed" in status
         assert status.count(f"changed since the preview; not removed: {bin_dir / 'fd'}") == 1
     assert (bin_dir / "fd").read_text() == "foreign file"
+
+
+def _brew_gh() -> Tool:
+    return Tool(
+        id="gh",
+        name="gh",
+        category="dev",
+        cmd="gh",
+        methods=(Method(kind="brew", params={"formula": "gh"}),),
+    )
+
+
+def _reads(formulae: dict[str, str] | None) -> Callable[..., ManagerInventory]:
+    """An inventory reader that lists `formulae` and nothing else."""
+
+    def read(**_kw: object) -> ManagerInventory:
+        return _inventory(formulae=formulae)
+
+    return read
+
+
+def _inventory(*, formulae: dict[str, str] | None) -> ManagerInventory:
+    return ManagerInventory(
+        brew_formulae=formulae,
+        brew_casks={},
+        pnpm_globals=frozenset(),
+        uv_tools={},
+        brew_prefix=None,
+    )
+
+
+_MAC_BREW = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+
+@pytest.mark.parametrize(
+    ("repair", "present", "formulae"),
+    [
+        pytest.param(True, True, {"gh": "2.60.0"}, id="repair-of-a-listed-package"),
+        pytest.param(False, False, {"gh": "2.60.0"}, id="presence-miss-of-a-listed-package"),
+        pytest.param(False, False, None, id="presence-miss-with-an-unreadable-inventory"),
+    ],
+)
+def test_a_package_already_in_the_manager_gets_no_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    repair: bool,
+    present: bool,
+    formulae: dict[str, str] | None,
+) -> None:
+    from installer import receipts
+    from installer.engine import install_tool
+    from installer.enums import InstallStatus
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no host gh for the smoke check
+    tool = _brew_gh()
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        tool,
+        _MAC_BREW,
+        calls.append,
+        repair=repair,
+        present=lambda _tool: present,
+        read_inventory_fn=_reads(formulae),
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert calls == [["brew", "install", "gh"]]
+    assert not receipts.receipt_exists("gh")
+    plan = removal_plan(tool, tmp_path / ".local" / "bin")
+    assert (plan.level, plan.argv) == ("none", ())
+    result = perform_uninstall(
+        UninstallDecision(tools=(tool,), paths={}, remove_ban=False, remove_path_block=False),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        runner=_no_removal_runner,
+        extra_policies=(),
+    )
+    assert "gh" not in result.removed
+
+
+def test_a_repair_keeps_the_installers_own_package_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.engine import install_tool
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    tool = _brew_gh()
+    install_tool(
+        tool,
+        _MAC_BREW,
+        lambda _cmd: None,
+        present=lambda _tool: False,
+        read_inventory_fn=_reads({}),
+    )
+    first = receipts.read("gh")
+    assert first is not None
+    assert first.package == "gh"
+    install_tool(
+        tool,
+        _MAC_BREW,
+        lambda _cmd: None,
+        repair=True,
+        present=lambda _tool: True,
+        read_inventory_fn=_reads({"gh": "2.60.0"}),
+    )
+    plan = removal_plan(tool, tmp_path / ".local" / "bin")
+    assert (plan.level, plan.argv) == ("manager", ("brew", "uninstall", "gh"))
+
+
+def test_a_declared_path_present_before_the_install_is_never_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.engine import install_tool
+    from installer.enums import InstallStatus
+    from installer.uninstall import removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    helper = bin_dir / "t-helper"
+    helper.write_text("a user file, present before the install")
+    method = Method(
+        kind="script",
+        params={
+            "url": "https://example.invalid/t.sh",
+            "paths": ["~/.local/bin/t", "~/.local/bin/t-helper"],
+        },
+    )
+    tool = Tool(id="t", name="t", category="dev", cmd="t", methods=(method,))
+
+    def vendor_install(_cmd: list[str]) -> None:
+        (bin_dir / "t").write_text("t binary")
+
+    outcome = install_tool(tool, _LINUX, vendor_install, present=lambda _tool: False)
+    assert outcome.status is InstallStatus.INSTALLED
+    assert receipts.read("t") is not None
+    plan = removal_plan(tool, bin_dir)
+    assert helper in plan.yourself
+    assert helper not in plan.removable
+    result = perform_uninstall(
+        UninstallDecision(
+            tools=(tool,),
+            paths={"t": plan.removable},
+            remove_ban=False,
+            remove_path_block=False,
+        ),
+        bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        runner=_no_removal_runner,
+        extra_policies=(),
+    )
+    assert result.removed == ("t",)
+    assert not (bin_dir / "t").exists()
+    assert helper.read_text() == "a user file, present before the install"
+
+
+def _plant(method: Method, bin_dir: Path) -> None:
+    """What a successful download, app or script install leaves at its artifact paths."""
+    arts = artifact_paths(method, bin_dir)
+    dirs = [art.path for art in arts if art.kind == "dir"]
+    for art in arts:
+        if art.kind == "dir" and method.kind == "app":
+            (art.path / "Contents" / "MacOS").mkdir(parents=True)
+            (art.path / "Contents" / "Info.plist").write_bytes(b"<plist/>")
+            (art.path / "Contents" / "MacOS" / str(method.params["cli"])).write_text("x")
+        elif art.kind == "dir":
+            art.path.mkdir(parents=True)
+            (art.path / str(method.params["member"])).write_text("x")
+        elif art.kind == "link":
+            art.path.parent.mkdir(parents=True, exist_ok=True)
+            target = (
+                dirs[0] / "Contents" / "MacOS" / str(method.params["cli"])
+                if method.kind == "app"
+                else dirs[0] / str(method.params["member"])
+            )
+            art.path.symlink_to(target)
+        else:  # a raw file or a script's leaf
+            art.path.parent.mkdir(parents=True, exist_ok=True)
+            art.path.write_text("x")
+
+
+_KIND_METHODS = [
+    pytest.param(
+        Method(kind="github_release", params={"repo": "a/kt", "asset": "x", "member": "kt"}),
+        id="github_release",
+    ),
+    pytest.param(
+        Method(kind="tarball", params={"url": "https://example.invalid/kt.tgz", "member": "kt"}),
+        id="tarball",
+    ),
+    pytest.param(
+        Method(kind="app", params={"app": "Kt.app", "cli": "kt"}),
+        id="app",
+    ),
+    pytest.param(
+        Method(
+            kind="script",
+            params={"url": "https://example.invalid/kt.sh", "paths": ["~/.local/bin/kt-s"]},
+        ),
+        id="script",
+    ),
+    pytest.param(Method(kind="brew", params={"formula": "kt"}), id="brew"),
+    pytest.param(Method(kind="cask", params={"cask": "kt-cask"}), id="cask"),
+    pytest.param(Method(kind="uv-tool", params={"pypi_pkg": "kt"}), id="uv-tool"),
+    pytest.param(Method(kind="node", params={"npm_pkg": "@a/kt"}), id="node"),
+]
+
+
+@pytest.mark.parametrize("method", _KIND_METHODS)
+def test_every_receipt_kind_installs_and_removes_in_both_directions(
+    method: Method, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import engine, receipts
+    from installer.engine import install_tool
+    from installer.enums import InstallStatus
+    from installer.model import method_package
+    from installer.uninstall import MANAGER_UNINSTALL_ARGV, removal_plan
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no host binary for any smoke
+    monkeypatch.setattr(app_module, "real_pnpm", lambda: "/fake/pnpm")
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = Tool(id="kt", name="kt", category="dev", cmd="kt", methods=(method,))
+    calls: list[list[str]] = []
+
+    def fake_perform(
+        _tool: Tool, _method: Method, ctx: object
+    ) -> tuple[bool, str | None, tuple[str, ...]]:
+        if method.kind in MANAGER_UNINSTALL_ARGV:
+            # The manager's own install command, recorded, never run.
+            calls.append(["install", str(method_package(method))])
+        else:
+            _plant(method, bin_dir)
+        return False, None, ()
+
+    monkeypatch.setattr(engine, "_perform", fake_perform)
+    for _round in range(2):  # install and remove, then the same again
+        outcome = install_tool(
+            tool,
+            _MAC_BREW,
+            calls.append,
+            present=lambda _tool: False,
+            read_inventory_fn=_reads({}),
+        )
+        assert outcome.status is InstallStatus.INSTALLED
+        receipt = receipts.read("kt")
+        assert receipt is not None
+        plan = removal_plan(tool, bin_dir)
+        assert plan.level != "none"
+        proven = [artifact.path for artifact in receipt.artifacts]
+        result = perform_uninstall(
+            UninstallDecision(
+                tools=(tool,),
+                paths={tool.id: plan.removable},
+                argv={tool.id: plan.argv},
+                remove_ban=False,
+                remove_path_block=False,
+            ),
+            bin_dir=bin_dir,
+            myshellrc_path=tmp_path / ".myshellrc",
+            rc_paths=[],
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+            runner=calls.append,
+            extra_policies=(),
+        )
+        assert result.removed == ("kt",)
+        assert not receipts.receipt_exists("kt")
+        for path in proven:
+            assert not path.is_symlink() and not path.exists()
+        if method.kind in MANAGER_UNINSTALL_ARGV:
+            assert calls[-1][1:] == list(plan.argv[1:])

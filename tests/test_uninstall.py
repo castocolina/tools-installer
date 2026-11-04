@@ -36,6 +36,10 @@ from installer.version_status import (
 from tests.state_doubles import pass_state
 
 
+def _no_removal_runner(cmd: list[str]) -> None:
+    raise AssertionError(f"no removal command expected: {cmd}")
+
+
 def _tool(method: Method, *, tool_id: str = "t", cmd: str = "t") -> Tool:
     # methods is tuple[Method, ...]; priority/audience/desc use their defaults.
     return Tool(id=tool_id, name=tool_id, category="dev", cmd=cmd, methods=(method,))
@@ -1118,7 +1122,7 @@ def test_tui_and_cli_delete_the_same_set(tmp_path: Path, monkeypatch: pytest.Mon
     cli_tools = plant_removal_fixtures(cli_home)
     cli_bin = cli_home / ".local" / "bin"
     console, _buf = _uninstall_console()
-    removed = run_uninstall(
+    removed, _failed = run_uninstall(
         cli_tools,
         console,
         default_bin_dir=cli_bin,
@@ -1129,6 +1133,7 @@ def test_tui_and_cli_delete_the_same_set(tmp_path: Path, monkeypatch: pytest.Mon
         zshrc_path=cli_home / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
+        runner=_no_removal_runner,
     )
     assert {p.relative_to(cli_home) for p in removed} == {p.relative_to(tui_home) for p in tui_set}
 
