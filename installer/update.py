@@ -86,7 +86,7 @@ from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
 from installer.host_setup import pnpm_add_command
-from installer.locations import applications_dir
+from installer.locations import applications_dir, bin_dir
 from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
@@ -446,9 +446,28 @@ def _update_installer_owned(
                 raise UpdateError(f"cannot resolve {token} for the {tool_id} update")
             argv.append(expanded)
         # `sdk` is a shell function: only the sourced invocation can run it.
-        runner(executors.sdk_pipeline(argv) if argv[:1] == ["sdk"] else argv)
+        runner(
+            executors.sdk_pipeline(argv) if argv[:1] == ["sdk"] else _declared_leaf(method, argv)
+        )
         return ()
     raise UpdateError(f"no installer-owned update path for method kind '{method.kind}'")
+
+
+def _declared_leaf(method: Method, argv: list[str]) -> list[str]:
+    """A bare first word that names one of the method's declared leaves runs that leaf by its
+    absolute path, never whichever copy PATH finds first (review C-11). Ownership already
+    proved this install's copy; a declared leaf that is gone runs nothing."""
+    head = argv[0]
+    leaves = [
+        artifact.path
+        for artifact in download.artifact_paths(method, bin_dir(None))
+        if artifact.kind == "leaf" and artifact.path.name == head
+    ]
+    if "/" in head or not leaves:
+        return argv
+    if len(leaves) != 1 or not leaves[0].is_file():
+        raise UpdateError(f"{head} is not at its declared path {leaves[0]}; reinstall it")
+    return [str(leaves[0]), *argv[1:]]
 
 
 def _run_postinstall(

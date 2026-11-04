@@ -1884,6 +1884,45 @@ def test_an_update_never_adopts_a_path_that_existed_before_it(
     assert bin_dir / "t" not in recorded
 
 
+def _leaf_update_method() -> Method:
+    return Method(
+        kind="script",
+        params={
+            "url": "https://example.test/install.sh",
+            "shell": "sh",
+            "paths": ["~/.local/bin/t"],
+            "update": ["t", "upgrade"],
+        },
+    )
+
+
+def test_a_declared_update_runs_the_declared_leaf_never_a_path_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review C-11: `t upgrade` runs ~/.local/bin/t, even with another `t` first on PATH."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    leaf = tmp_path / ".local" / "bin" / "t"
+    leaf.parent.mkdir(parents=True)
+    leaf.write_text("bin")
+    method = _leaf_update_method()
+    calls: list[list[str]] = []
+    outcome = _perform(_target(_tool("t", method), "installer", method=method), calls.append)
+    assert outcome.status == "updated"
+    assert calls == [[str(leaf), "upgrade"]]
+
+
+def test_a_declared_update_whose_leaf_is_gone_runs_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    method = _leaf_update_method()
+    calls: list[list[str]] = []
+    outcome = _perform(_target(_tool("t", method), "installer", method=method), calls.append)
+    assert outcome.status == "failed"
+    assert "~/.local/bin/t" in outcome.detail or str(tmp_path) in outcome.detail
+    assert calls == []
+
+
 def test_sdkman_bootstrap_update_runs_selfupdate_sourced() -> None:
     """LIFE-06: `u` on the SDKMAN bootstrap runs `sdk selfupdate` through the sourced invocation."""
     method = Method(
@@ -1952,7 +1991,7 @@ def test_a_script_tool_found_by_its_declared_paths_runs_its_declared_update(
         UpdateTarget(tool=tool, ownership=state.ownership)
     )
     assert outcome.status == "updated"
-    assert calls == [["t", "upgrade"]]
+    assert calls == [[str(leaf), "upgrade"]]
 
 
 # -- LIFE-05 (SPEC R7, D-14, ledger Q4): a pinned app or tarball is refused before
