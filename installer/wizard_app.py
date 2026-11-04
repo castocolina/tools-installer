@@ -1597,12 +1597,9 @@ class UninstallScreen(AppScreen):
         ]
         if unflagged:
             lines.append(_review_line(sanitize_log_line(f"Config kept: {', '.join(unflagged)}.")))
-        plans = [
-            state.removable
-            for tool in decision.tools
-            if (state := self._state_of(tool)) is not None
-        ]
-        for warning in co_install_warnings(pnpm_removal_packages(plans), self._tools):
+        # The frozen decision's argv, like the `runs` lines above (review C-13).
+        packages = pnpm_removal_packages(decision.argv.values())
+        for warning in co_install_warnings(packages, self._tools):
             line = _review_line(sanitize_log_line(warning))
             line.stylize("yellow", 0, len("Warning:"))
             lines.append(line)

@@ -8691,6 +8691,37 @@ async def test_pnpm_group_lines_in_the_review() -> None:
         await pilot.pause()
 
 
+async def test_the_pnpm_group_warning_reads_the_frozen_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review C-13: the warning and the `runs` line both come from the painted decision, so a
+    newer state that has not been repainted cannot drop the warning the argv still needs."""
+    mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
+    puppeteer = _pnpm_tool("puppeteer", "puppeteer")
+    group = [
+        (mmdc, _pnpm_removal(mmdc, "@mermaid-js/mermaid-cli")),
+        (puppeteer, _pnpm_removal(puppeteer, "puppeteer")),
+    ]
+    app = _app(cases=group, uninstall=_uninstall_inputs(remove=_recorder([])))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("mmdc", False))
+
+        def newer_state(_tool: Tool) -> ToolState | None:
+            return None  # a publish that has not been repainted yet
+
+        monkeypatch.setattr(app.screen, "_state_of", newer_state)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _flat(_confirm(app).review) == [
+            "mmdc: runs pnpm remove --global @mermaid-js/mermaid-cli",
+            "Warning: pnpm group mmdc: removing @mermaid-js/mermaid-cli removes the whole "
+            "group, puppeteer included.",
+        ]
+        await pilot.press("escape")
+        await pilot.pause()
+
+
 async def test_the_review_blocks_come_in_order() -> None:
     """22-11 (UI-SPEC UI Considerations, populated): runs, deleted, kept, config kept, the
     pnpm warning, then the keys line below the body."""

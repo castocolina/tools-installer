@@ -81,7 +81,6 @@ from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import TweakBundle
 from installer.uninstall import (
     MANAGER_UNINSTALL_ARGV,
-    RemovalPlan,
     SweepResult,
     active_policies,
     config_targets,
@@ -522,12 +521,12 @@ def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
 ALREADY_REMOVED = "already removed"
 
 
-def pnpm_removal_packages(plans: Iterable[RemovalPlan]) -> frozenset[str]:
-    """The packages the pnpm removals in `plans` name, which the group warnings check against.
+def pnpm_removal_packages(argvs: Iterable[Sequence[str]]) -> frozenset[str]:
+    """The packages the pnpm removal argvs name, which the group warnings check against.
     `pnpm remove --global <pkg>` removes the whole install group `<pkg>` belongs to (22-13
     D-1, measured on pnpm 12.16.1), so a later member's removal finds it already gone."""
     prefix = MANAGER_UNINSTALL_ARGV["node"]
-    return frozenset(plan.argv[-1] for plan in plans if plan.argv[:-1] == prefix)
+    return frozenset(argv[-1] for argv in argvs if tuple(argv[:-1]) == prefix)
 
 
 def removal_order(tools: Sequence[Tool]) -> list[Tool]:
@@ -697,7 +696,7 @@ def run_uninstall(
         # Shown before the confirm: the user sees the exact command that will run.
         console.print(removal_runs_line(tool_id, argv), markup=False, soft_wrap=True)
     # LIFE-08: a co-install member's removal warns about its group before anything runs.
-    pnpm_packages = pnpm_removal_packages(plan for _tool, plan in ordered)
+    pnpm_packages = pnpm_removal_packages(plan.argv for _tool, plan in ordered)
     for line in co_install_warnings(pnpm_packages, tools):
         console.print(line, markup=False, soft_wrap=True)
     render_remove_yourself(yourself, console)
