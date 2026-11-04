@@ -157,13 +157,15 @@
   "model_overrides": {
     "gsd-planner": "opus",
     "gsd-code-reviewer": "opus",
-    "gsd-plan-checker": "sonnet"
+    "gsd-plan-checker": "sonnet",
+    "gsd-executor": "haiku"
   },
   "effort": {
     "default": "high",
     "agent_overrides": {
       "gsd-planner": "xhigh",
-      "gsd-code-reviewer": "high"
+      "gsd-code-reviewer": "high",
+      "gsd-executor": "high"
     },
     "routing_tier_defaults": {
       "light": "low",
