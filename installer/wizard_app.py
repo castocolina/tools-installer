@@ -1698,6 +1698,29 @@ class UninstallScreen(AppScreen):
         self.status.set("Removing…", "warn")
         self._remove_worker(decision)
 
+    def _config_lines(self, decision: UninstallDecision, swept: SweepResult) -> list[str]:
+        """UI-SPEC Removal results: what became of each tool's config, in the order deleted,
+        kept, not deleted. Kept means a removed tool whose declared config is still on disk and
+        was not flagged. The check reads the disk now: the cache invalidation that follows a
+        removal leaves no published state to read it from (its epoch moved on)."""
+        kept = [
+            tool.id
+            for tool in decision.tools
+            if tool.id in swept.removed
+            and tool.id not in decision.config
+            and any(path.is_symlink() or path.exists() for _, path in config_targets(tool))
+        ]
+        lines: list[str] = []
+        if swept.config_deleted:
+            lines.append(f"Config deleted for {', '.join(swept.config_deleted)}.")
+        if kept:
+            lines.append(f"Config kept for {', '.join(kept)}.")
+        if swept.config_not_deleted:
+            lines.append(
+                f"Config not deleted for {', '.join(swept.config_not_deleted)}: the removal failed."
+            )
+        return [sanitize_log_line(line) for line in lines]
+
     def _applied_summary(self, decision: UninstallDecision, swept: SweepResult) -> str:
         parts: list[str] = []
         if decision.remove_ban:
@@ -1739,7 +1762,7 @@ class UninstallScreen(AppScreen):
             if not swept.swept and not swept.failed:
                 parts.append("no shell tweaks were still enabled — nothing to disable.")
         # Refused paths travel here too, so they show whatever levers were chosen.
-        parts.extend(f"warning: {warning}." for warning in swept.warnings)
+        parts.extend(f"warning: {sanitize_log_line(warning)}." for warning in swept.warnings)
         # One line per outcome: a single joined line overflows the terminal width and
         # truncates the reload guidance, so the "needs a new shell" steps go unseen.
         return multiline_summary(parts)
@@ -1825,6 +1848,7 @@ class UninstallScreen(AppScreen):
         fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
         if failed:
             summary_parts.append(fix_here)
+        summary_parts.extend(self._config_lines(message.decision, swept))
         # Empty when no lever was chosen; a blank line would cost a status row.
         if applied := self._applied_summary(message.decision, swept):
             summary_parts.append(applied)
@@ -1840,7 +1864,12 @@ class UninstallScreen(AppScreen):
         terminal_warning = terminal_sync_warning(self._terminal_sync)
         if terminal_warning:
             summary_parts.append(terminal_warning)
-        severity = "error" if swept.remove_failed else "warn" if terminal_warning else "ok"
+        if swept.remove_failed or swept.config_not_deleted:
+            severity = "error"
+        elif terminal_warning or swept.warnings:  # a config delete warning is a warn too
+            severity = "warn"
+        else:
+            severity = "ok"
         summary = multiline_summary(summary_parts)
         fix_elsewhere = (
             f"{failed} remove failed. Fix the cause, then open Uninstall and press enter"

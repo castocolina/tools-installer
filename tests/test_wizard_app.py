@@ -8740,3 +8740,115 @@ async def test_the_review_blocks_come_in_order() -> None:
         assert screen.query_one("#confirm-body").region.y < keys.region.y
         await pilot.press("escape")
         await pilot.pause()
+
+
+async def test_config_result_lines_follow_the_counts() -> None:
+    """22-11 (UI-SPEC Removal results): deleted and kept config lines follow the counts."""
+    gh = _config_tool("gh", "~/.config/gh")
+    uv = _config_tool("uv", "~/.config/uv")
+    (Path.home() / ".config" / "uv").mkdir(parents=True)  # still on disk after the removal
+    app = _app(
+        cases=[
+            (gh, _removable_with_config(gh, [Path.home() / ".config" / "gh"])),
+            (uv, _removable_with_config(uv, [Path.home() / ".config" / "uv"])),
+        ],
+        uninstall=_uninstall_inputs(
+            remove=lambda _decision: SweepResult(removed=("gh", "uv"), config_deleted=("gh",))
+        ),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("gh", True), ("uv", False))  # uv keeps its config
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert screen.status.text == ("2 removed\nConfig deleted for gh.\nConfig kept for uv.")
+        assert screen.status.severity is Severity.OK
+
+
+async def test_a_failed_vendor_remove_keeps_config_and_says_so() -> None:
+    """22-11 (UI-SPEC Removal results, error): a failed removal keeps its config and says so."""
+    vend = _config_tool("vend", "~/.config/vend")
+    failed = SweepResult(
+        remove_failed=(("vend", "Error: vend uninstall failed"),),
+        config_not_deleted=("vend",),
+    )
+    app = _app(
+        cases=[(vend, _removable_with_config(vend, [Path.home() / ".config" / "vend"]))],
+        uninstall=_uninstall_inputs(remove=lambda _decision: failed),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("vend", True))
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert screen.status.severity is Severity.ERROR
+        assert screen.status.text.splitlines()[-1] == (
+            "Config not deleted for vend: the removal failed."
+        )
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, "vend", "sel") == "[c]"  # the choice survives the failure
+        assert "remove failed" in _uninstall_cell(table, "vend", "removes")
+
+
+async def test_a_config_delete_warning_is_shown() -> None:
+    """22-11 (review R1-21): a config delete warning is a warn line, and its absence reads ok."""
+    gh = _config_tool("gh", "~/.config/gh")
+    gh_dir = Path.home() / ".config" / "gh"
+    warned = SweepResult(
+        removed=("gh",),
+        config_deleted=("gh",),
+        warnings=("could not delete config ~/.config/gh — denied",),
+    )
+    for result, severity, line in (
+        (warned, Severity.WARN, "warning: could not delete config ~/.config/gh — denied."),
+        (
+            SweepResult(removed=("gh",), config_deleted=("gh",)),
+            Severity.OK,
+            "Config deleted for gh.",
+        ),
+    ):
+        app = _app(
+            cases=[(gh, _removable_with_config(gh, [gh_dir]))],
+            uninstall=_uninstall_inputs(remove=lambda _decision, result=result: result),
+        )
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.press("5")
+            await _mark_rows(app, pilot, ("gh", True))
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await settle(app, pilot)
+            screen = app.view("uninstall")
+            assert isinstance(screen, UninstallScreen)
+            assert screen.status.text.splitlines()[-1] == line
+            assert screen.status.severity is severity
+
+
+async def test_status_data_is_literal() -> None:
+    """22-11 (T-22-27): a path and an error with markup or escape bytes stay literal in status."""
+    odd = _config_tool("gh", "~/.config/[red]x[/]")
+    odd_dir = Path.home() / ".config" / "[red]x[/]"
+    warned = SweepResult(
+        removed=("gh",),
+        config_deleted=("gh",),
+        warnings=("could not delete config ~/.config/[red]x[/] — \x1b[31mdenied",),
+    )
+    app = _app(
+        cases=[(odd, _removable_with_config(odd, [odd_dir]))],
+        uninstall=_uninstall_inputs(remove=lambda _decision: warned),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("gh", True))
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert "could not delete config ~/.config/[red]x[/] — [31mdenied." in screen.status.text
+        assert "\x1b" not in screen.status.text
