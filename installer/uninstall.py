@@ -119,7 +119,7 @@ def _quarantined(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     for tool in tools:
         for method in tool.methods:
             for artifact in artifact_paths(method, default_bin_dir):
-                if artifact.kind != "dir":
+                if artifact.kind not in ("dir", "tree"):
                     continue
                 for path in sorted(
                     artifact.path.parent.glob(f".{artifact.path.name}.*{_QUARANTINE_SUFFIX}")
@@ -270,27 +270,33 @@ def _remove_dir(artifact: receipts.ReceiptArtifact) -> bool:
     return True
 
 
-def remove_paths(artifacts: Sequence[receipts.ReceiptArtifact]) -> tuple[Path, ...]:
+def remove_paths(
+    artifacts: Sequence[receipts.ReceiptArtifact], *, trees: Sequence[Path] | None = None
+) -> tuple[Path, ...]:
     """Delete each authorized artifact; return the paths it refused.
 
-    The authorized type picks the operation, never what the path is now: only
-    a `dir` artifact is ever removed recursively, and then only after it has
-    been captured under a quarantine sibling and re-verified there (RR-01);
-    a `file` or `link` is only ever unlinked (G1). `receipts.matches` re-checks
-    the artifact right before the delete and re-hashes files; a dir is
-    re-hashed inside its quarantine. A path that changed since the proof is
-    refused and never touched (RR-02). A failed
+    The authorized type picks the operation, never what the path is now: a
+    `dir` or `tree` is removed recursively, and only after it has been captured
+    under a quarantine sibling and re-verified there (RR-01); a `file`, `link`
+    or `leaf` is only ever unlinked (G1). `trees` names the receipt's trees a
+    leaf link may resolve into; None means the `tree` paths among `artifacts`.
+    `receipts.matches` re-checks the artifact right before the delete and
+    re-hashes files; a dir is re-hashed inside its quarantine. A path that
+    changed since the proof is refused and never touched (RR-02). A failed
     delete still raises, before any receipt is touched.
     """
+    tree_paths = (
+        tuple(a.path for a in artifacts if a.type == "tree") if trees is None else tuple(trees)
+    )
     refused: list[Path] = []
     for artifact in artifacts:
         # A dir's authoritative re-hash is inside the quarantine (RR-01); here it
         # only has to remain a real directory whose key file stat-matches, so the
         # rename cannot land on a non-dir. A file keeps its RR-02 re-hash.
-        if not receipts.matches(artifact, rehash=artifact.type != "dir"):
+        if not receipts.matches(artifact, rehash=artifact.type != "dir", trees=tree_paths):
             refused.append(artifact.path)
             continue
-        if artifact.type == "dir":
+        if artifact.type in ("dir", "tree"):
             if not _remove_dir(artifact):
                 refused.append(artifact.path)
         else:

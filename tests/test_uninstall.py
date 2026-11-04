@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from io import StringIO
 from pathlib import Path
 
@@ -1889,7 +1889,9 @@ def _swap_dir_after_final_check(
         (opt / "fd").write_text("vendor build")
         (opt / "decoy").write_text("vendor reinstall")
 
-    def wrapper(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+    def wrapper(
+        candidate: receipts.ReceiptArtifact, *, rehash: bool = False, trees: Sequence[Path] = ()
+    ) -> bool:
         nonlocal swapped, occupied
         if (
             occupy_after_capture
@@ -1899,7 +1901,7 @@ def _swap_dir_after_final_check(
             occupied = True
             opt.mkdir()
             (opt / "newest").write_text("third copy")
-        verdict = real(candidate, rehash=rehash)
+        verdict = real(candidate, rehash=rehash, trees=trees)
         if candidate.path == opt and not swapped:
             swapped = True
             build_vendor_tree()
@@ -1938,9 +1940,11 @@ def _escape_after_final_check(
     real = receipts.matches
     escaped = False
 
-    def wrapper(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+    def wrapper(
+        candidate: receipts.ReceiptArtifact, *, rehash: bool = False, trees: Sequence[Path] = ()
+    ) -> bool:
         nonlocal escaped
-        result = real(candidate, rehash=rehash)
+        result = real(candidate, rehash=rehash, trees=trees)
         if candidate.path == directory and not escaped:
             escaped = True
             directory.rename(aside)
@@ -2108,10 +2112,12 @@ def test_remove_paths_puts_the_tree_back_when_interrupted(
     if where == "after_capture":
         original_matches = uninstall_module.receipts.matches
 
-        def interrupt_recheck(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+        def interrupt_recheck(
+            candidate: receipts.ReceiptArtifact, *, rehash: bool = False, trees: Sequence[Path] = ()
+        ) -> bool:
             if candidate.path.name.endswith(_QUARANTINE_SUFFIX):
                 raise KeyboardInterrupt
-            return original_matches(candidate, rehash=rehash)
+            return original_matches(candidate, rehash=rehash, trees=trees)
 
         monkeypatch.setattr(uninstall_module.receipts, "matches", interrupt_recheck)
     else:
@@ -2146,12 +2152,14 @@ def test_an_interrupted_removal_that_cannot_put_back_names_the_quarantine(
     artifact = plan_removal([fd], bin_dir, verify=True).artifacts[opt]
     original_matches = uninstall_module.receipts.matches
 
-    def interrupt_and_occupy(candidate: receipts.ReceiptArtifact, *, rehash: bool = False) -> bool:
+    def interrupt_and_occupy(
+        candidate: receipts.ReceiptArtifact, *, rehash: bool = False, trees: Sequence[Path] = ()
+    ) -> bool:
         if candidate.path.name.endswith(_QUARANTINE_SUFFIX):
             opt.mkdir()
             (opt / "newest").write_text("third copy")
             raise KeyboardInterrupt
-        return original_matches(candidate, rehash=rehash)
+        return original_matches(candidate, rehash=rehash, trees=trees)
 
     monkeypatch.setattr(uninstall_module.receipts, "matches", interrupt_and_occupy)
     with pytest.raises(OSError, match="changed during removal; it is kept at") as caught:
@@ -2162,3 +2170,76 @@ def test_an_interrupted_removal_that_cannot_put_back_names_the_quarantine(
     assert (kept[0] / "fd").read_text() == "fd binary"
     assert (opt / "newest").read_text() == "third copy"
     assert isinstance(caught.value.__context__, KeyboardInterrupt)
+
+
+def _script_tool(*paths: str) -> Tool:
+    """A script tool whose declared `paths` are its only removal evidence."""
+    return _tool(Method(kind="script", params={"paths": list(paths)}), tool_id="t", cmd="t")
+
+
+def _plant_script_install(home: Path) -> tuple[Path, Path, Path]:
+    """What a vendor script leaves: a versioned binary, a symlink to it, and the tree."""
+    tree = home / ".local" / "share" / "t"
+    version = tree / "versions" / "1" / "t"
+    version.parent.mkdir(parents=True)
+    version.write_text("t binary")
+    link = home / ".local" / "bin" / "t"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(version)
+    return tree, version, link
+
+
+def test_a_script_install_is_removed_by_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))  # `~` in a script path is expanduser's HOME
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = _script_tool("~/.local/bin/t", "~/.local/share/t/")
+    assert receipts.preexisting_paths(tool.methods[0]) == frozenset()
+    tree, _version, link = _plant_script_install(tmp_path)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    plan = plan_removal([tool], bin_dir)
+    assert set(plan.removable) == {link, tree}
+    removed, refused = remove_proven([tool], list(plan.removable), bin_dir)
+    assert set(removed) == {link, tree}
+    assert refused == ()
+    assert not os.path.lexists(link)
+    assert not tree.exists()
+    assert not receipts.receipt_path("t").exists()
+
+
+def test_a_self_update_inside_the_tree_keeps_the_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool = _script_tool("~/.local/bin/t", "~/.local/share/t/")
+    tree, version, link = _plant_script_install(tmp_path)
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    version.write_text("t binary, rewritten by the vendor")
+    newer = tree / "versions" / "2" / "t"
+    newer.parent.mkdir(parents=True)
+    newer.write_text("t binary v2")
+    link.unlink()
+    link.symlink_to(newer)
+    plan = plan_removal([tool], tmp_path / ".local" / "bin")
+    assert set(plan.removable) == {link, tree}
+
+
+def test_a_foreign_file_at_a_declared_path_survives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tool = _script_tool("~/.local/bin/t", "~/.local/bin/t-helper")
+    (bin_dir / "t").write_text("t")
+    receipts.record(tool, tool.methods[0], package=None, smoke=None, preexisting=frozenset())
+    helper = bin_dir / "t-helper"
+    helper.write_text("a foreign file")
+    plan = plan_removal([tool], bin_dir)
+    assert plan.removable == (bin_dir / "t",)
+    assert helper in plan.yourself
+    removed, refused = remove_proven([tool], list(plan.removable), bin_dir)
+    assert removed == (bin_dir / "t",)
+    assert refused == ()
+    assert helper.read_text() == "a foreign file"

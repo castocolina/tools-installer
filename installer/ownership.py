@@ -1062,12 +1062,9 @@ def _collect_candidates(
     artifacts: Sequence[Path],
 ) -> tuple[OwnershipCandidate, ...]:
     found: dict[Owner, OwnershipCandidate] = {}
+    # A script tool found by its declared paths keeps its script method (R2-01).
     installer_method = next(
-        (
-            method
-            for method in applicable
-            if method.kind in DOWNLOAD_KINDS or method.kind in APP_KINDS
-        ),
+        (method for method in applicable if method.kind in _INSTALLER_KINDS),
         None,
     )
     if artifacts:

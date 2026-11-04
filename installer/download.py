@@ -3,10 +3,10 @@
 import os
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, cast
 
 from installer.assets import arch_tokens, render_asset
 from installer.atomic import (
@@ -27,6 +27,7 @@ from installer.executors import (
 )
 from installer.locations import applications_dir, bin_dir, ensure_dir, opt_dir
 from installer.model import Method
+from installer.omz import omz_root
 from installer.platform import Platform
 from installer.run import Runner
 from installer.versions import ReleaseResolver
@@ -234,6 +235,35 @@ def _is_single_name(name: str) -> bool:
     return name not in ("", ".", "..") and PurePosixPath(name).name == name
 
 
+def _zsh_first_omz_root() -> Path | None:
+    """`$ZSH` when it names a directory (SPEC R8), else the default-first `omz_root`."""
+    zsh = os.environ.get("ZSH")
+    if zsh and Path(zsh).is_dir():
+        return Path(zsh)
+    return omz_root(Path.home(), os.environ)
+
+
+# Keys must equal `model.SCRIPT_ROOTS` (a test pins it, D-03).
+SCRIPT_ROOT_RESOLVERS: dict[str, Callable[[], Path | None]] = {"omz_root": _zsh_first_omz_root}
+
+
+def expand_script_token(token: str) -> str | None:
+    """Expand a script `paths`/`remove`/`update` token into a path string.
+
+    Each `{name}` takes its root from `SCRIPT_ROOT_RESOLVERS`; a root that
+    cannot be resolved makes the whole token None. A leading `~` expands with
+    `os.path.expanduser`. Nothing here runs a shell."""
+    expanded = token
+    for name, resolve in SCRIPT_ROOT_RESOLVERS.items():
+        placeholder = f"{{{name}}}"
+        if placeholder in expanded:
+            root = resolve()
+            if root is None:
+                return None
+            expanded = expanded.replace(placeholder, str(root))
+    return os.path.expanduser(expanded)
+
+
 @dataclass(frozen=True)
 class Artifact:
     """One path a method creates, with its shape: evidence only, never the
@@ -241,7 +271,7 @@ class Artifact:
     ours to delete; proof (receipt, adoption or layout) does that."""
 
     path: Path
-    kind: Literal["dir", "link", "file"]
+    kind: Literal["dir", "link", "file", "tree", "leaf"]
 
 
 def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...]:
@@ -252,7 +282,9 @@ def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...
     A download kind maps to (`opt_dir(name)`, dir) and (`<bin>/name`, link)
     when it unpacks an archive, or one (`<bin>/name`, file) when it is raw;
     an app kind maps to the userspace bundle and, when `cli` is declared, the
-    cli link; every other kind creates nothing this formula describes.
+    cli link; a script kind maps each declared `paths` entry to a `tree` (it
+    ends in `/`) or a `leaf`; every other kind creates nothing this formula
+    describes. A script path is evidence only (D-10), never authority.
     `<bin>` is the method's declared `bin_dir` when set, else
     `default_bin_dir`. `bin_name` and `cli_name` are honored. A missing
     member, an unsafe final name (review M2) or an invalid app name yields no
@@ -288,6 +320,17 @@ def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...
         if spec is None:
             return (bundle,)
         return (bundle, Artifact(default_bin_dir / spec[1], "link"))
+    if method.kind == "script":
+        declared = method.params.get("paths")
+        if not isinstance(declared, list):
+            return ()
+        # The registry validated each entry as a `~/` or `{root}/` string at load.
+        found: list[Artifact] = []
+        for entry in cast(list[str], declared):
+            path = expand_script_token(entry)
+            if path is not None:
+                found.append(Artifact(Path(path), "tree" if entry.endswith("/") else "leaf"))
+        return tuple(found)
     return ()
 
 

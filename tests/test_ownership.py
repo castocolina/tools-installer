@@ -41,6 +41,7 @@ from installer.ownership import (
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.run import CommandError
+from installer.uninstall import plan_uninstall
 from installer.update import UpdateTarget, perform_update
 
 _MAC = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
@@ -391,6 +392,38 @@ def test_script_only_with_unreadable_brew_is_unknown(
     assert result.owner == "unknown"
     assert result.unknown_reason
     assert "brew" in result.unknown_reason.lower()
+
+
+def test_a_script_tools_declared_path_keeps_its_script_method(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review R2-01: a script tool found by its declared path keeps its script
+    method; the artifact candidate must not come back with method=None."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "t").write_text("t")
+    script = Method(kind="script", params={"bin_dir": "~/.local/bin", "paths": ["~/.local/bin/t"]})
+    tool = Tool(id="t", name="t", category="dev", cmd="t", methods=(script,))
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        artifacts=plan_uninstall([tool], bin_dir),
+        managed_bin_dir=bin_dir,
+        platform=_LINUX,
+    )
+    assert result.owner == "installer"
+    assert result.method == script
+    download = Method(kind="github_release", params={"repo": "a/t", "asset": "t", "member": "t"})
+    dl_tool = Tool(id="t", name="t", category="dev", cmd="t", methods=(download,))
+    dl_result = _resolve(
+        dl_tool,
+        inventory=_empty_readable(),
+        artifacts=[bin_dir / "t"],
+        managed_bin_dir=bin_dir,
+        platform=_LINUX,
+    )
+    assert dl_result.method == download
 
 
 def test_mutation_grade_is_exactly_direct_and_by_elimination() -> None:
@@ -2427,7 +2460,8 @@ def test_undeclared_script_only_by_elimination_unchanged(tmp_path: Path) -> None
     result = _resolve(tool, inventory=_empty_readable(), artifacts=[tmp_path / "bun"], which=None)
     assert result.owner == "installer"
     assert result.confidence == "by-elimination"
-    assert result.method is None
+    # R2-01: the artifact candidate keeps the script method (it was None before).
+    assert result.method == tool.methods[0]
 
 
 _MMDC_PKG = "@mermaid-js/mermaid-cli"
