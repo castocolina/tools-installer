@@ -212,3 +212,32 @@ and the detail bar carries the full sentence, so test 2 passes.
   non-writable brew prefix (`… is not writable by you; you run: …`).
 - SDKMAN / Oh-My-Zsh vendor updaters on `u` (`updated oh-my-zsh`, `updated sdkman`) and the
   SDKMAN candidate hints, not exercised here.
+
+## UAT fixes
+
+Fixed after triage on `main` (from 83cb0dc). Each commit carries its tests, and
+`make validate && make test` exit 0 on each one. The container behaviour is not re-run here;
+the next `make e2e` / UAT run is its proof.
+
+| Finding | Commit | Tests (RED before the fix → GREEN) |
+|---------|--------|-------------------------------------|
+| F-2 | eb14872 | `test_app::test_a_group_member_pnpm_already_removed_is_removed` (rewritten: printed `puppeteer: already removed`, now `puppeteer: removed with the mmdc group`), `test_app::test_a_tui_group_removal_retires_the_unselected_members_receipt` and `…_group_member_pnpm_still_lists_keeps_its_receipt` (RED: `SweepResult` had no `with_group`), `test_app::test_an_unreadable_listing_keeps_the_group_members_receipt` (fail-closed guard, green before and after), `test_wizard_app::test_a_member_removed_with_its_group_is_reported_after_the_counts` (RED: the status was not `2 removed` + the group line) |
+| F-3 | dd73476 | `test_pnpm_globals::test_a_member_known_gone_is_not_named` (RED: no `present` parameter), `test_app::test_the_cli_group_warning_skips_a_member_already_gone`, `test_wizard_app::test_the_group_warning_skips_a_member_shown_absent` (RED: the review still showed `… @mermaid-js/mermaid-cli included.` for an absent mmdc) |
+| F-1 | cae8aa5 | `test_version_status::test_a_pinned_install_note_matches_the_u_refusal` (RED: the note read `pressing u re-runs the same install path …`) |
+
+- **F-2:** after a pnpm removal ran, the same run (`run_uninstall` and `perform_uninstall`)
+  retires the receipt of every other declared group member that a fresh pnpm listing (the
+  C-02 `manager_listing("node")` reader) no longer shows, and reports
+  `<id>: removed with the <group> group` (CLI line; the Uninstall view adds it after the
+  counts and counts the member as removed). An unreadable listing or a failed receipt delete
+  retires nothing. A member retired this way is not removed again later in the run.
+- **F-3:** after F-2 the stale state still arises from the product's own removal when the
+  listing is unreadable at retirement time (fail closed keeps the member's receipt) or the
+  receipt delete fails, so the restriction was applied. `co_install_warnings` takes a
+  `present` predicate from the caller's frozen state: the CLI counts a receipt or the
+  registry detection (`is_installed`), the Uninstall view its published row state (an unknown
+  state counts as present). A member no catalog tool declares is still named; no live pnpm
+  query is added.
+- **F-1:** `version_notes` consults `update.update_refusal` (which checks
+  `download.pinned_method`); a refused tool reads `… — u does not update it: pinned; update
+  outside or re-pin`, matching the `u` refusal.
