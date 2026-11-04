@@ -16,3 +16,24 @@
 .volta/tools  # volta toolchains kept on purpose (22-08 store roots)
 .local/share/fnm/node-versions  # fnm node versions kept on purpose (22-08 store roots)
 .local/share/uv  # uv tool and Python stores kept on purpose (22-08 store roots)
+.local/share/pnpm/store  # pnpm content store kept on purpose (22-08 store roots)
+.volta/cache  # volta download cache kept on purpose (22-08 store roots)
+.gradle  # gradle caches and native libraries written by gradle runs (manager store, kept)
+.npm  # npm download cache written by npm runs; a cache holds no tool config
+.codegraph  # codegraph telemetry queue and index state written while codegraph ran
+.claude.json  # Claude Code's global state file at HOME, written by the claude runtime, not tool config
+.local/state/claude  # claude runtime state (session and log files) written by claude runs
+.local/state/gh  # gh runtime state (logs and update checks) written by gh runs
+.local/state/opencode  # opencode runtime state written by opencode runs
+.local/share/opencode  # opencode session data, logs and repos written by opencode runs
+.local/state/pnpm  # pnpm runtime state (logs and locks) written by pnpm runs
+.local/state/fnm_multishells  # fnm per-shell runtime directories written by fnm env
+.volta/layout.v4  # volta layout cache written by volta runs
+.volta/log  # volta log written by volta runs
+.volta/tmp  # volta temp dir written by volta runs
+.volta/volta.lock  # volta lock file written by volta runs
+.homebrew/trust.json.lock  # brew trust-state lock file written by brew runs; a lock, not config
+.config/draw.io  # draw.io Electron profile (caches, GPU and local storage) written by its smoke run
+.config/google-chrome-for-testing  # Chrome for Testing profile and crash reports written by a browser run
+.config/rtk  # rtk runtime state; rtk removal is a later user phase
+.local/share/rtk  # rtk runtime state; rtk removal is a later user phase

@@ -2670,12 +2670,22 @@ SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[s
         "update": None,
     },
     ("bun", (), ()): {
-        "paths": ["~/.bun/bin/bun"],
+        "paths": ["~/.bun/bin/bun", "~/.bun/bin/bunx"],
         "remove": None,
         "update": ["bun", "upgrade"],
     },
     ("volta", (), ()): {
-        "paths": ["~/.volta/bin/volta", "~/.volta/bin/volta-shim", "~/.volta/bin/volta-migrate"],
+        "paths": [
+            "~/.volta/bin/volta",
+            "~/.volta/bin/volta-shim",
+            "~/.volta/bin/volta-migrate",
+            "~/.volta/bin/node",
+            "~/.volta/bin/npm",
+            "~/.volta/bin/npx",
+            "~/.volta/bin/pnpm",
+            "~/.volta/bin/yarn",
+            "~/.volta/bin/yarnpkg",
+        ],
         "remove": None,
         "update": None,
     },
@@ -2685,7 +2695,12 @@ SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[s
         "update": None,
     },
     ("pnpm", ("debian", "arch", "fedora"), ()): {
-        "paths": ["~/.local/share/pnpm/bin/pnpm"],
+        "paths": [
+            "~/.local/share/pnpm/bin/pnpm",
+            "~/.local/share/pnpm/bin/pn",
+            "~/.local/share/pnpm/bin/pnpx",
+            "~/.local/share/pnpm/bin/pnx",
+        ],
         "remove": None,
         "update": ["pnpm", "self-update"],
     },
@@ -2752,6 +2767,11 @@ def test_anchor_artifacts_expand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_uv_declares_its_documented_config_dir() -> None:
     # docs.astral.sh/uv/concepts/configuration-files: user-level config in ~/.config/uv/uv.toml
     assert _tools_by_id()["uv"].config_paths == ("~/.config/uv",)
+
+
+def test_glow_declares_its_documented_config_dir() -> None:
+    # charmbracelet/glow main.go (fetched 2026-11-04): glow.yml goes in XDG_CONFIG_HOME/glow.
+    assert _tools_by_id()["glow"].config_paths == ("~/.config/glow",)
 
 
 def test_no_declared_path_is_or_contains_a_harness_marker() -> None:
