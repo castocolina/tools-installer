@@ -4,6 +4,7 @@ import os
 import typing
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.download import UpdateExecResult as DownloadUpdateExecResult
 from installer.executors import ExecutorError
+from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import (
     MUTATION_GRADE,
@@ -23,6 +25,7 @@ from installer.ownership import (
     OS_PACKAGE_OWNER,
     UNMANAGEABLE_OWNERS,
     Confidence,
+    ManagerInventory,
     ManagerOwnership,
     Owner,
     OwnershipCandidate,
@@ -43,6 +46,7 @@ from installer.update import (
     should_replay_node_globals,
     update_refusal,
 )
+from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 from tests.test_download import fixture_runner
 
@@ -1691,3 +1695,188 @@ def test_all_gone_receipt_does_not_block_an_update(
     ).run(_target(tool, "installer", method=method))
     assert outcome.status == "updated"
     assert placed.read_bytes() == b"restored-yq"
+
+
+# -- LIFE-06 (SPEC R8, D-15): a script method that declares `update` runs that
+# vendor argv; `{omz_root}` resolves `$ZSH`-first through expand_script_token. ----
+
+_OMZ_UPDATE = Method(
+    kind="script",
+    params={
+        "url": "https://ohmyz.sh/install.sh",
+        "shell": "sh",
+        "update": ["{omz_root}/tools/upgrade.sh"],
+    },
+)
+
+
+def _omz_tool() -> Tool:
+    return _tool("oh-my-zsh", _OMZ_UPDATE)
+
+
+def test_omz_update_runs_its_upgrade_script_under_zsh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    zsh = tmp_path / "zsh"
+    zsh.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ZSH", str(zsh))
+    calls: list[list[str]] = []
+    outcome = _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), calls.append)
+    assert outcome.status == "updated"
+    assert calls == [[str(zsh / "tools" / "upgrade.sh")]]
+
+
+def test_omz_update_prefers_zsh_when_both_roots_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    zsh = tmp_path / "zsh"
+    zsh.mkdir()
+    (tmp_path / ".oh-my-zsh").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ZSH", str(zsh))
+    calls: list[list[str]] = []
+    _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), calls.append)
+    assert calls == [[str(zsh / "tools" / "upgrade.sh")]]
+
+
+def test_omz_update_falls_back_to_the_default_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    default = tmp_path / ".oh-my-zsh"
+    default.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ZSH", raising=False)
+    calls: list[list[str]] = []
+    _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), calls.append)
+    assert calls == [[str(default / "tools" / "upgrade.sh")]]
+
+
+def test_omz_update_without_a_root_fails_without_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ZSH", raising=False)
+    calls: list[list[str]] = []
+    outcome = _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), calls.append)
+    assert outcome.status == "failed"
+    assert "{omz_root}/tools/upgrade.sh" in outcome.detail
+    assert calls == []
+
+
+def test_a_vendor_update_exit_code_decides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    zsh = tmp_path / "zsh"
+    zsh.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ZSH", str(zsh))
+    seen: list[list[str]] = []
+
+    def failing(argv: list[str]) -> None:
+        seen.append(list(argv))
+        raise CommandError(argv, 1)
+
+    failed = _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), failing)
+    assert failed.status == "failed"
+    assert seen == [[str(zsh / "tools" / "upgrade.sh")]]
+    updated = _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), lambda _argv: None)
+    assert updated.status == "updated"
+
+
+def test_a_script_without_update_reruns_its_installer() -> None:
+    method = Method(kind="script", params={"url": "https://get.pnpm.io/install.sh", "shell": "sh"})
+    calls: list[list[str]] = []
+    outcome = _perform(_target(_tool("pnpm", method), "installer", method=method), calls.append)
+    assert outcome.status == "updated"
+    assert len(calls) == 1
+    assert calls[0][:2] == ["sh", "-c"]
+    assert "curl" in calls[0][2]
+
+
+def test_an_update_never_adopts_a_path_that_existed_before_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """R1-05: the update's receipt records only what the update created."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    method = Method(
+        kind="script",
+        params={
+            "url": "https://example.test/install.sh",
+            "shell": "sh",
+            "paths": ["~/.local/bin/t", "~/.local/bin/t2"],
+            "update": ["t", "upgrade"],
+        },
+    )
+    tool = _tool("t", method)
+    (bin_dir / "t").write_text("old")
+    # A pre-phase receipt that proves nothing: `t2` is absent, so it is not recorded.
+    receipts.record(tool, method, package=None, smoke=None)
+
+    def vendor_update(argv: list[str]) -> None:
+        (bin_dir / "t2").write_text("new")
+
+    outcome = _perform(_target(tool, "installer", method=method), vendor_update)
+    assert outcome.status == "updated"
+    receipt = receipts.read("t")
+    assert receipt is not None
+    recorded = {artifact.path for artifact in receipt.artifacts}
+    assert bin_dir / "t2" in recorded
+    assert bin_dir / "t" not in recorded
+
+
+def _no_inventory(**_kwargs: object) -> ManagerInventory:
+    return ManagerInventory(
+        brew_formulae={}, brew_casks={}, pnpm_globals=frozenset(), uv_tools={}, brew_prefix=None
+    )
+
+
+def _no_outdated(**_kwargs: object) -> OutdatedReport:
+    return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+
+def test_a_script_tool_found_by_its_declared_paths_runs_its_declared_update(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """R2-01: production ownership (refresh -> resolve_owner) reaches the declared update."""
+    home = tmp_path / "home"
+    managed = home / ".local" / "bin"
+    managed.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    leaf = managed / "t"
+    leaf.write_text("bin")
+    method = Method(
+        kind="script",
+        params={
+            "url": "https://example.test/install.sh",
+            "shell": "sh",
+            "bin_dir": "~/.local/bin",
+            "paths": ["~/.local/bin/t"],
+            "update": ["t", "upgrade"],
+        },
+    )
+    tool = _tool("t", method)
+    hits = {"t": str(leaf)}
+    service = VersionRefreshService(
+        platform=_platform(has_brew=False),
+        cache_path=tmp_path / "versions.json",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: datetime(2026, 11, 4, tzinfo=UTC),
+        managed_bin_dir=managed,
+        which=lambda cmd: hits.get(cmd),
+        query=lambda *_args, **_kwargs: "",
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        read_inventory_fn=_no_inventory,
+        read_outdated_fn=_no_outdated,
+        path_value=lambda: "",
+    )
+    service.refresh([tool])
+    state = service.state_of("t")
+    assert state is not None
+    calls: list[list[str]] = []
+    outcome = _service(reresolve=service.resolve_owner, runner=calls.append).run(
+        UpdateTarget(tool=tool, ownership=state.ownership)
+    )
+    assert outcome.status == "updated"
+    assert calls == [["t", "upgrade"]]

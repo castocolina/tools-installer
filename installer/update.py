@@ -37,7 +37,9 @@ cannot drift apart.
 
 An installer-owned `script` method is also the vendor's own documented update
 path, and it is the only update mechanism such a tool has, so it reuses
-`executors.execute` rather than inventing a second script runner.
+`executors.execute` rather than inventing a second script runner. A script that
+declares `update` runs that argv instead: the vendor's own command wins over a
+re-run of its installer (D-15).
 
 `should_replay_node_globals` is true only when `tool.id == "pnpm"`, whatever
 that tool's owner turns out to be. REQUIREMENTS.md's
@@ -76,7 +78,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from installer import apps, download, executors, receipts
 from installer import ownership as ownership_mod
@@ -327,6 +329,10 @@ def _perform(
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
     detail = ""
+    # R1-05: snapshot before the owner branch runs anything, so the receipt
+    # records only what this update created (a path that existed before is
+    # proven only by the previous receipt).
+    preexisting = receipts.preexisting_paths(method) if method is not None else None
     if owner in ("brew", "cask", "uv"):
         argv = resolve_update_argv(target)
         if argv is None:
@@ -347,7 +353,11 @@ def _perform(
         executors.execute(method, runner)
     elif owner == "installer":
         cleanup_warnings = _update_installer_owned(
-            method, platform=platform, runner=runner, resolve_tag=resolve_tag
+            method,
+            platform=platform,
+            runner=runner,
+            resolve_tag=resolve_tag,
+            tool_id=target.tool.id,
         )
     else:
         raise UpdateError(f"unsupported owner {owner!r}")
@@ -361,7 +371,13 @@ def _perform(
         same_kind = existing is not None and existing.method.kind == method.kind
         if owner == "installer" or same_kind:
             try:
-                receipts.record(target.tool, method, package=method_package(method), smoke=None)
+                receipts.record(
+                    target.tool,
+                    method,
+                    package=method_package(method),
+                    smoke=None,
+                    preexisting=preexisting,
+                )
             except OSError as exc:
                 note = f"install receipt not written: {exc}"
                 detail = f"{detail}; {note}" if detail else note
@@ -382,6 +398,7 @@ def _update_installer_owned(
     platform: Platform,
     runner: Runner,
     resolve_tag: TagResolver,
+    tool_id: str,
 ) -> tuple[str, ...]:
     if method is None:
         raise UpdateError("installer-owned update requires a resolved method")
@@ -399,7 +416,19 @@ def _update_installer_owned(
         result = apps.update_app(method, runner)
         return result.warnings
     if method.kind == "script":
-        executors.execute(method, runner)
+        declared = method.params.get("update")
+        if not isinstance(declared, list):
+            executors.execute(method, runner)
+            return ()
+        # D-03: tokens expand through the closed resolvers, and the argv is
+        # handed to the runner as-is (no shell).
+        argv: list[str] = []
+        for token in cast(list[str], declared):
+            expanded = download.expand_script_token(token)
+            if expanded is None:
+                raise UpdateError(f"cannot resolve {token} for the {tool_id} update")
+            argv.append(expanded)
+        runner(argv)
         return ()
     raise UpdateError(f"no installer-owned update path for method kind '{method.kind}'")
 
