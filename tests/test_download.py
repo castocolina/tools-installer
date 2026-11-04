@@ -2230,7 +2230,8 @@ def test_root_resolvers_match_the_model() -> None:
 def test_expand_script_token_resolves_zsh_when_the_default_dir_is_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SPEC R8: `$ZSH` first; `~/.oh-my-zsh` answers only when `$ZSH` names no directory."""
+    """SPEC R8: `$ZSH` when the default dir is absent; with both, the default that presence and
+    ownership read (`omz.omz_root`, review C-17)."""
     home = tmp_path / "home"
     home.mkdir()
     zsh = tmp_path / "zsh"
@@ -2241,7 +2242,7 @@ def test_expand_script_token_resolves_zsh_when_the_default_dir_is_absent(
     monkeypatch.setenv("ZSH", str(zsh))
     assert download.expand_script_token(token) == str(zsh / "tools" / "upgrade.sh")
     default.mkdir()
-    assert download.expand_script_token(token) == str(zsh / "tools" / "upgrade.sh")
+    assert download.expand_script_token(token) == str(default / "tools" / "upgrade.sh")
     monkeypatch.delenv("ZSH")
     assert download.expand_script_token(token) == str(default / "tools" / "upgrade.sh")
     monkeypatch.setenv("ZSH", str(tmp_path / "missing"))

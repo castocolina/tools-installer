@@ -1786,9 +1786,11 @@ def test_omz_update_runs_its_upgrade_script_under_zsh(
     assert calls == [[str(zsh / "tools" / "upgrade.sh")]]
 
 
-def test_omz_update_prefers_zsh_when_both_roots_exist(
+def test_omz_update_runs_the_root_presence_reads_when_both_roots_exist(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Review C-17: one resolver (`omz.omz_root`) for presence, ownership and `u`, so `u`
+    upgrades the copy the row describes and the receipt proves, never a second one."""
     zsh = tmp_path / "zsh"
     zsh.mkdir()
     (tmp_path / ".oh-my-zsh").mkdir()
@@ -1796,7 +1798,7 @@ def test_omz_update_prefers_zsh_when_both_roots_exist(
     monkeypatch.setenv("ZSH", str(zsh))
     calls: list[list[str]] = []
     _perform(_target(_omz_tool(), "installer", method=_OMZ_UPDATE), calls.append)
-    assert calls == [[str(zsh / "tools" / "upgrade.sh")]]
+    assert calls == [[str(tmp_path / ".oh-my-zsh" / "tools" / "upgrade.sh")]]
 
 
 def test_omz_update_falls_back_to_the_default_dir(

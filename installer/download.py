@@ -247,16 +247,11 @@ def _is_single_name(name: str) -> bool:
     return name not in ("", ".", "..") and PurePosixPath(name).name == name
 
 
-def _zsh_first_omz_root() -> Path | None:
-    """`$ZSH` when it names a directory (SPEC R8), else the default-first `omz_root`."""
-    zsh = os.environ.get("ZSH")
-    if zsh and Path(zsh).is_dir():
-        return Path(zsh)
-    return omz_root(Path.home(), os.environ)
-
-
-# Keys must equal `model.SCRIPT_ROOTS` (a test pins it, D-03).
-SCRIPT_ROOT_RESOLVERS: dict[str, Callable[[], Path | None]] = {"omz_root": _zsh_first_omz_root}
+# Keys must equal `model.SCRIPT_ROOTS` (a test pins it, D-03). `{omz_root}` is the one root
+# presence and ownership read, so `u` upgrades the copy the row describes (review C-17).
+SCRIPT_ROOT_RESOLVERS: dict[str, Callable[[], Path | None]] = {
+    "omz_root": lambda: omz_root(Path.home(), os.environ)
+}
 
 
 def expand_script_token(token: str) -> str | None:
