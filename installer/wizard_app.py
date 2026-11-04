@@ -1844,6 +1844,7 @@ class UninstallScreen(AppScreen):
         self.app.unstage(swept.removed)
         self._repaint()
         summary_parts = [summary_counts(outcomes)] if outcomes else []
+        summary_parts.extend(sanitize_log_line(line) for line in swept.with_group)
         failed = len(swept.remove_failed)
         fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
         if failed:

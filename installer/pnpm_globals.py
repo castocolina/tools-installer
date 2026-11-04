@@ -279,6 +279,21 @@ def node_install_policy(tools: Iterable[Tool]) -> NodeInstallPolicy:
     )
 
 
+def co_install_groups(catalog: Iterable[Tool]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Each declared co-install group (D-10): its declaring tool id, which names the group,
+    and its member packages, that tool's own `npm_pkg` first."""
+    groups: list[tuple[str, tuple[str, ...]]] = []
+    for tool in catalog:
+        method = _node_method(tool)
+        if method is None:
+            continue
+        pkg = method.params.get("npm_pkg")
+        co_install = _param_pkg_list(method, "co_install")
+        if isinstance(pkg, str) and pkg and co_install:
+            groups.append((tool.id, tuple(dict.fromkeys([pkg, *co_install]))))
+    return tuple(groups)
+
+
 def co_install_warnings(removing: Collection[str], catalog: Iterable[Tool]) -> tuple[str, ...]:
     """LIFE-08: the warnings for a removal that touches a declared co-install group (D-10).
 
@@ -287,24 +302,16 @@ def co_install_warnings(removing: Collection[str], catalog: Iterable[Tool]) -> t
     install group from any member (22-13 D-1), so one member removed names the others it
     takes along; every member removed in this run gives one line."""
     lines: list[str] = []
-    for tool in catalog:
-        method = _node_method(tool)
-        if method is None:
-            continue
-        pkg = method.params.get("npm_pkg")
-        co_install = _param_pkg_list(method, "co_install")
-        if not isinstance(pkg, str) or not pkg or not co_install:
-            continue
-        members = tuple(dict.fromkeys([pkg, *co_install]))
+    for group, members in co_install_groups(catalog):
         removed = [member for member in members if member in removing]
         if not removed:
             continue
         if len(removed) == len(members):
-            lines.append(f"Warning: pnpm group {tool.id}: all its members are removed together.")
+            lines.append(f"Warning: pnpm group {group}: all its members are removed together.")
             continue
         others = [member for member in members if member not in removing]
         lines.append(
-            f"Warning: pnpm group {tool.id}: removing {', '.join(removed)} "
+            f"Warning: pnpm group {group}: removing {', '.join(removed)} "
             f"removes the whole group, {', '.join(others)} included."
         )
     return tuple(lines)

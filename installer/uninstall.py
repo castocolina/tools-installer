@@ -515,6 +515,9 @@ class SweepResult:
     config_deleted: tuple[str, ...] = ()
     # Tool ids that asked for their config to go, but whose removal failed (SPEC R6).
     config_not_deleted: tuple[str, ...] = ()
+    # "<id>: removed with the <group> group" for each unselected pnpm group member whose
+    # receipt the run retired because pnpm took it along (22-UAT F-2).
+    with_group: tuple[str, ...] = ()
 
 
 def policy_owned(policy: Policy) -> bool:

@@ -5,7 +5,7 @@ import dataclasses
 import os
 import shlex
 import shutil
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,7 +34,12 @@ from installer.locations import path_scan_rc_paths
 from installer.model import Tool
 from installer.ownership import listed_name, manager_listing
 from installer.platform import Platform
-from installer.pnpm_globals import audit_node_globals, co_install_warnings, pnpm_global_packages
+from installer.pnpm_globals import (
+    audit_node_globals,
+    co_install_groups,
+    co_install_warnings,
+    pnpm_global_packages,
+)
 from installer.policy import Policy, omz_removal_detail
 from installer.prompt import Prompter
 from installer.rcclean import (
@@ -529,6 +534,46 @@ def pnpm_removal_packages(argvs: Iterable[Sequence[str]]) -> frozenset[str]:
     return frozenset(argv[-1] for argv in argvs if tuple(argv[:-1]) == prefix)
 
 
+def retire_group_members(
+    argv: Sequence[str], catalog: Sequence[Tool], skip: Collection[str]
+) -> tuple[tuple[str, str], ...]:
+    """22-UAT F-2: after `argv` ran a pnpm removal, retire the receipt of each other member of
+    the package's declared co-install group that pnpm took along (22-13 D-1). Only a readable
+    fresh listing that lacks the member proves it gone (C-02); an unreadable listing or a
+    failed delete keeps the receipt. `skip` names the tools this run already handled.
+    Returns (member id, group id) per retired receipt."""
+    if tuple(argv[:-1]) != MANAGER_UNINSTALL_ARGV["node"]:
+        return ()
+    package = argv[-1]
+    members = {
+        tool.id: (group, receipt.package)
+        for group, packages in co_install_groups(catalog)
+        if package in packages
+        for tool in catalog
+        if tool.id not in skip
+        and (receipt := receipts.read(tool.id)) is not None
+        and receipt.method.kind == "node"
+        and receipt.package in packages
+        and receipt.package != package
+    }
+    listed = manager_listing("node") if members else None
+    if listed is None:
+        return ()
+    retired: list[tuple[str, str]] = []
+    for tool_id, (group, member) in members.items():
+        if member in listed:
+            continue
+        with contextlib.suppress(OSError):
+            receipts.delete(tool_id)
+            retired.append((tool_id, group))
+    return tuple(retired)
+
+
+def removed_with_group_line(tool_id: str, group: str) -> str:
+    """The line the CLI and the Uninstall view print for a member pnpm took with its group."""
+    return f"{tool_id}: removed with the {group} group"
+
+
 def removal_order(tools: Sequence[Tool]) -> list[Tool]:
     """Dependents first: a tool comes before every selected tool it requires (review R1-09).
 
@@ -738,9 +783,11 @@ def run_uninstall(
     # refused, and a failed command or delete keeps that tool's receipt.
     removed: list[Path] = []
     failed: list[str] = []
+    handled: set[str] = set()
     for tool, plan in ordered:
-        if plan.level == "none":
+        if plan.level == "none" or tool.id in handled:
             continue
+        handled.add(tool.id)
         outcome = remove_tool(
             tool,
             paths=plan.removable,
@@ -754,6 +801,10 @@ def run_uninstall(
             removed.extend(plan.removable)
             if outcome.detail:
                 console.print(f"{tool.id}: {outcome.detail}")
+            else:
+                for member, group in retire_group_members(plan.argv, tools, handled):
+                    handled.add(member)
+                    console.print(removed_with_group_line(member, group), markup=False)
         else:
             console.print(f"{tool.id}: remove failed — {outcome.detail}")
             failed.append(tool.id)
@@ -899,11 +950,15 @@ def perform_uninstall(
     refused: tuple[str, ...] = ()
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
+    with_group: list[str] = []
     for tool in removal_order(decision.tools):
+        if tool.id in removed:  # retired with its pnpm group earlier in this run
+            continue
+        argv = decision.argv.get(tool.id, ())
         outcome = remove_tool(
             tool,
             paths=decision.paths.get(tool.id, ()),
-            argv=decision.argv.get(tool.id, ()),
+            argv=argv,
             bin_dir=bin_dir,
             runner=runner,
         )
@@ -912,6 +967,11 @@ def perform_uninstall(
             removed.append(tool.id)
         else:
             remove_failed.append((tool.id, outcome.detail))
+        if outcome.removed and not outcome.detail:
+            handled = {*removed, *(tool_id for tool_id, _ in remove_failed)}
+            for member, group in retire_group_members(argv, catalog, handled):
+                removed.append(member)
+                with_group.append(removed_with_group_line(member, group))
     # Step 4 runs once, after every tool's removal (D-07). A tool whose removal failed or was
     # refused keeps its config, and a failed delete is a warning that never restores a receipt.
     config_deleted, config_warnings = _config_step(decision, catalog, removed)
@@ -951,6 +1011,7 @@ def perform_uninstall(
             remove_failed=tuple(remove_failed),
             config_deleted=config_deleted,
             config_not_deleted=config_not_deleted,
+            with_group=tuple(with_group),
         )
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
@@ -973,4 +1034,5 @@ def perform_uninstall(
         remove_failed=tuple(remove_failed),
         config_deleted=config_deleted,
         config_not_deleted=config_not_deleted,
+        with_group=tuple(with_group),
     )

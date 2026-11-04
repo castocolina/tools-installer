@@ -5500,8 +5500,9 @@ def _mmdc_and_puppeteer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tupl
 def test_a_group_member_pnpm_already_removed_is_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """22-13 D-1: the first member's removal took the whole group. The fresh pnpm listing no
-    longer lists the second member, so nothing runs for it and its receipt is retired."""
+    """22-13 D-1 / 22-UAT F-2: the first member's removal took the whole group. The fresh pnpm
+    listing no longer lists the second member, so nothing runs for it, its receipt is retired
+    in the same step, and it is reported as removed with the group."""
     from installer import app as app_module
     from installer import receipts
     from installer.app import run_uninstall
@@ -5516,9 +5517,74 @@ def test_a_group_member_pnpm_already_removed_is_removed(
     _removed, failed = run_uninstall([mmdc, puppeteer], console, **kwargs)
     assert [cmd[-1] for cmd in calls] == ["@mermaid-js/mermaid-cli"]
     assert failed == ()
-    assert "puppeteer: already removed" in buf.getvalue()
+    assert "puppeteer: removed with the mmdc group" in buf.getvalue()
+    assert "already removed" not in buf.getvalue()
     assert receipts.read("mmdc") is None
     assert receipts.read("puppeteer") is None
+
+
+def test_an_unreadable_listing_keeps_the_group_members_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """22-UAT F-2, fail closed: without a readable pnpm listing nothing proves the other member
+    gone, so its receipt stays and nothing claims it went with the group."""
+    from installer import receipts
+    from installer.app import run_uninstall
+
+    mmdc, _puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)  # the listing is unknown
+    console, buf = _console()
+    calls: list[list[str]] = []
+    kwargs = _uninstall_kwargs(tmp_path, tmp_path / ".local" / "bin", lambda _m: True)
+    kwargs["runner"] = _pnpm_group_runner({"@mermaid-js/mermaid-cli", "puppeteer"}, calls)
+    run_uninstall([mmdc], console, **kwargs)
+    assert receipts.read("mmdc") is None
+    assert receipts.read("puppeteer") is not None
+    assert "removed with" not in buf.getvalue()
+
+
+def test_a_tui_group_removal_retires_the_unselected_members_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """22-UAT F-2: the Uninstall view removes mmdc only; pnpm took puppeteer too, so the same
+    run retires puppeteer's receipt and reports it removed with the group."""
+    from installer import app as app_module
+    from installer import receipts
+
+    mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
+    group = {"@mermaid-js/mermaid-cli", "puppeteer"}
+    monkeypatch.setattr(app_module, "manager_listing", _listing(group))
+    calls: list[list[str]] = []
+    result = _apply(
+        _decision([mmdc], tmp_path),
+        tmp_path,
+        runner=_pnpm_group_runner(group, calls),
+        catalog=[mmdc, puppeteer],
+    )
+    assert [cmd[-1] for cmd in calls] == ["@mermaid-js/mermaid-cli"]
+    assert result.removed == ("mmdc", "puppeteer")
+    assert result.with_group == ("puppeteer: removed with the mmdc group",)
+    assert result.remove_failed == ()
+    assert receipts.read("puppeteer") is None
+
+
+def test_a_group_member_pnpm_still_lists_keeps_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """22-UAT F-2: a member the fresh listing still shows was not taken; its receipt stays."""
+    from installer import app as app_module
+    from installer import receipts
+
+    mmdc, puppeteer = _mmdc_and_puppeteer(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "manager_listing", _listing({"puppeteer"}))
+    result = _apply(
+        _decision([mmdc], tmp_path),
+        tmp_path,
+        runner=lambda _cmd: None,
+        catalog=[mmdc, puppeteer],
+    )
+    assert result.removed == ("mmdc",)
+    assert result.with_group == ()
+    assert receipts.read("puppeteer") is not None
 
 
 def test_another_pnpm_error_still_fails_the_tool(

@@ -8830,6 +8830,34 @@ async def test_config_result_lines_follow_the_counts() -> None:
         assert screen.status.severity is Severity.OK
 
 
+async def test_a_member_removed_with_its_group_is_reported_after_the_counts() -> None:
+    """22-UAT F-2: removing mmdc only, the run reports puppeteer as gone with the group."""
+    mmdc = _pnpm_tool("mmdc", "@mermaid-js/mermaid-cli", "puppeteer")
+    puppeteer = _pnpm_tool("puppeteer", "puppeteer")
+    app = _app(
+        cases=[
+            (mmdc, _pnpm_removal(mmdc, "@mermaid-js/mermaid-cli")),
+            (puppeteer, _pnpm_removal(puppeteer, "puppeteer")),
+        ],
+        uninstall=_uninstall_inputs(
+            remove=lambda _decision: SweepResult(
+                removed=("mmdc", "puppeteer"),
+                with_group=("puppeteer: removed with the mmdc group",),
+            )
+        ),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await _mark_rows(app, pilot, ("mmdc", False))
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        screen = app.view("uninstall")
+        assert isinstance(screen, UninstallScreen)
+        assert screen.status.text == "2 removed\npuppeteer: removed with the mmdc group"
+        assert screen.status.severity is Severity.OK
+
+
 async def test_a_failed_vendor_remove_keeps_config_and_says_so() -> None:
     """22-11 (UI-SPEC Removal results, error): a failed removal keeps its config and says so."""
     vend = _config_tool("vend", "~/.config/vend")
