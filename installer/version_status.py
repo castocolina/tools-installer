@@ -106,6 +106,7 @@ from installer.skill_lifecycle import (
 from installer.status import is_installed
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
+from installer.update import update_refusal
 from installer.version_cache import (
     ManagerSnapshot,
     VersionCacheEntry,
@@ -932,9 +933,15 @@ def version_notes(
     elif present and (status.latest is None or status.outdated is None):
         notes.append("no latest version to compare against")
     if status.source == "installer" and status.outdated is None and ownership.owner == "installer":
+        # The note never promises an update `u` refuses, a pinned app included (22-UAT F-1).
+        refusal = update_refusal(tool, ownership)
         notes.append(
             "latest version cannot be determined for this install method — "
-            "pressing u re-runs the same install path this tool was originally installed with"
+            + (
+                "pressing u re-runs the same install path this tool was originally installed with"
+                if refusal is None
+                else f"u does not update it: {refusal.detail}"
+            )
         )
     if status.pinned_spec:
         notes.append(

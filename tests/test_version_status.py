@@ -3875,6 +3875,29 @@ def test_version_notes() -> None:
     assert version_notes(tool, stale, installer, present=True).count(_STALE_NOTE) == 1
 
 
+def test_a_pinned_install_note_matches_the_u_refusal() -> None:
+    """22-UAT F-1: a pinned tarball's note never promises the update path `u` refuses."""
+    method = Method(
+        kind="tarball",
+        params={
+            "url": "https://example.invalid/subl-{ver}.tar.xz",
+            "version": "4215",
+            "sha256": "0" * 64,
+        },
+    )
+    tool = Tool(id="sublime", name="sublime", category="editor", cmd="subl", methods=(method,))
+    status = _status(tool, latest=None, outdated=None, source="installer")
+    notes = version_notes(tool, status, _owned(tool, "installer"), present=True)
+    assert _INSTALLER_NO_LATEST not in notes
+    assert (
+        notes.count(
+            "latest version cannot be determined for this install method — "
+            "u does not update it: pinned; update outside or re-pin"
+        )
+        == 1
+    )
+
+
 def test_version_unreadable_and_no_comparison_reasons() -> None:
     tool = _gh_tool("alpha")
     ownership = _unknown_owner(tool)
