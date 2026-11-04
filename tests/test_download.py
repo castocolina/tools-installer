@@ -21,7 +21,7 @@ from installer.download import (
     update_download,
 )
 from installer.executors import ExecutorError
-from installer.model import Method, load_tools
+from installer.model import SCRIPT_ROOTS, Method, load_tools
 from installer.platform import Platform
 from installer.run import CommandError, Runner
 from installer.versions import Release, ReleaseResolver, resolve_github_release
@@ -2221,3 +2221,32 @@ def test_artifact_paths_matches_install_placement_for_every_registry_method() ->
                 assert link_name(method, rendered) == names[0], tool.id
                 checked += 1
     assert checked >= 96  # every (method, arch) pair in the registry
+
+
+def test_root_resolvers_match_the_model() -> None:
+    assert set(download.SCRIPT_ROOT_RESOLVERS) == SCRIPT_ROOTS
+
+
+def test_expand_script_token_resolves_zsh_when_the_default_dir_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R8: `$ZSH` first; `~/.oh-my-zsh` answers only when `$ZSH` names no directory."""
+    home = tmp_path / "home"
+    home.mkdir()
+    zsh = tmp_path / "zsh"
+    zsh.mkdir()
+    default = home / ".oh-my-zsh"
+    monkeypatch.setenv("HOME", str(home))
+    token = "{omz_root}/tools/upgrade.sh"
+    monkeypatch.setenv("ZSH", str(zsh))
+    assert download.expand_script_token(token) == str(zsh / "tools" / "upgrade.sh")
+    default.mkdir()
+    assert download.expand_script_token(token) == str(zsh / "tools" / "upgrade.sh")
+    monkeypatch.delenv("ZSH")
+    assert download.expand_script_token(token) == str(default / "tools" / "upgrade.sh")
+    monkeypatch.setenv("ZSH", str(tmp_path / "missing"))
+    default.rmdir()
+    assert download.expand_script_token(token) is None
+    monkeypatch.delenv("ZSH")
+    assert download.expand_script_token(token) is None
+    assert download.expand_script_token("~/.local/bin/uv") == str(home / ".local" / "bin" / "uv")
