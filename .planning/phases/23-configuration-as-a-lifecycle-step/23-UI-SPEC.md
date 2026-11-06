@@ -1,7 +1,7 @@
 ---
 phase: "23"
 slug: "configuration-as-a-lifecycle-step"
-status: draft
+status: approved
 reviewed_at: 2026-11-06
 shadcn_initialized: false
 preset: none
@@ -612,4 +612,4 @@ All resolved by the orchestrator (RUN-LEDGER row `23 | UI-SPEC open decisions`, 
 - [x] Dimension 6 Registry Safety: PASS
 - [x] Dimension 7 Inventory Provenance: PASS
 
-**Approval:** approved 2026-11-06 after the checker revision (BLOCK on the 85-cell Lean tip line fixed; recommendations applied: auto-approve fold width, one key per report line, A8b/A14/A15a/A15b/A28 pinned, StatusLine overflow fixture; O1–O7 resolved per the ledger, O7 alternative)
+**Approval:** approved 2026-11-06 after checker re-check of 6aeed34 (Konsole done note split into a 41-cell note plus a 52-cell path line; O7 width corrected); all 7 dimensions PASS.
