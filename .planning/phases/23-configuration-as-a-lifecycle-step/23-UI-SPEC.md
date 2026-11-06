@@ -1,7 +1,7 @@
 ---
 phase: "23"
 slug: "configuration-as-a-lifecycle-step"
-status: approved
+status: draft
 reviewed_at: 2026-11-06
 shadcn_initialized: false
 preset: none
@@ -108,7 +108,7 @@ Each option row is `{cell} {label} — {effect}`; the cell is `[ ]` off or `[x]`
 
 Keys line while idle, when at least one option row exists: `enter start · space option · r reinstall · up/down move · esc cancel` (68 cells; `r reinstall` only when a row can reinstall, as today). Without option rows the keys line is unchanged.
 
-**Unparsable target file (O7).** The review reads the target files when it paints the options. When an option's file for some listed agent does not parse, the option stays toggleable and a dim continuation line names it: `{id}: {file} is not valid {format}; nothing will be written` (76 cells for the longest, `cursor-agent: cli-config.json …`, plus the 4-cell indent counted; `{file}` is the basename, e.g. `config.toml`). If the user turns the option on anyway, the run writes nothing to that file and the report prints the refusal line under the file heading (section 4). No `≈` and no `blocked` row appear unless the ledger already records keys in that file.
+**Unparsable target file (O7).** The review reads the target files when it paints the options. When an option's file for some listed agent does not parse, the option stays toggleable and a dim continuation line names it: `{id}: {file} is not valid {format}; nothing will be written` (at most 77 cells: the longest is `cursor-agent: cli-config.json …` with the `JSONC` format name, plus the 4-cell indent counted; `{file}` is the basename, e.g. `config.toml`). If the user turns the option on anyway, the run writes nothing to that file and the report prints the refusal line under the file heading (section 4). No `≈` and no `blocked` row appear unless the ledger already records keys in that file.
 
 Fit at 80×20: `#execute-head` (≤ 3 rows), `#plan-rows` (`1fr`, scrolls), status, keys. The option rows scroll with the plan; the heading and every option are reachable with `down`/`end`. Every rendered line is ≤ 78 cells; nothing truncates (rows fold).
 
@@ -249,7 +249,7 @@ Rendered by `render_run_report` into `#execute-log` (TUI) and the headless conso
 
 A section heading is printed only when the section has a line.
 
-**Report width rule.** `#execute-log` is a `RichLog` with `wrap=False` (`execute_screen.py:402`) and the headless console prints with `soft_wrap=True`, so the app never wraps a report line. Every report line built from fixed copy, ids, hosts, key paths and `~` paths is therefore ≤ 78 cells (measured with `rich.cells.cell_len` for the longest real fixtures: the four agent hosts, `workbench.settings.enableNaturalLanguageSearch`, `attribution.attributeCommitsToAgent`, `/home/linuxbrew/.linuxbrew/bin/zsh`, `~/.config/opencode/opencode.jsonc`). Lines that carry key paths print **one key per line** under a per-file heading. The only unbounded part of a report line is a first error line or a user value, as in Phases 20–22.
+**Report width rule.** `#execute-log` is a `RichLog` with `wrap=False` (`execute_screen.py:402`) and the headless console prints with `soft_wrap=True`, so the app never wraps a report line. Every report line built from fixed copy, ids, hosts, key paths and `~` paths is therefore ≤ 78 cells (measured with `rich.cells.cell_len` for the longest real fixtures: the four agent hosts, `workbench.settings.enableNaturalLanguageSearch`, `attribution.attributeCommitsToAgent`, `/home/linuxbrew/.linuxbrew/bin/zsh`, `~/.config/opencode/opencode.jsonc`, `~/.local/share/konsole/tools-installer-zsh.profile`). Lines that carry key paths print **one key per line** under a per-file heading. The only unbounded part of a report line is a first error line or a user value, as in Phases 20–22.
 
 ### Post-install handoff (`{id} — after install:` in cyan, lines indented 2 cells)
 
@@ -300,7 +300,7 @@ An option left off produces no line. `{value}` is the JSON/TOML literal, sanitiz
 
 ### Done notes and the tealdeer step (CONF-06)
 
-- RECONFIGURE `terminal_sync` done note: `{id} reconfigured — zsh region written in {config path}` (69 cells for kitty; the region carries both the shell and the `SHELL` line).
+- RECONFIGURE `terminal_sync` done note: `{id} reconfigured — {terminal} now starts zsh` (longest: `zsh reconfigured — Konsole now starts zsh`, 41 cells), followed by the config path on its own line `  {config path}` (longest: `  ~/.local/share/konsole/tools-installer-zsh.profile`, 52 cells). The region carries both the shell and the `SHELL` line.
 - RECONFIGURE `hook_register` done note: `{id} reconfigured — registered for {hosts}`.
 - RECONFIGURE `zshenv_shell` done note: `zsh reconfigured — ~/.zshenv exports SHELL` (42 cells; the path is in the `Shell` section).
 - tealdeer, before the hook runs (install and `u` from the review): one attributed log line `tealdeer: fetching the tldr page cache — tldr --update` (54 cells).
@@ -512,7 +512,7 @@ Each is a pass/fail check at `size=(80, 20)` with `NO_COLOR=1` in a scratch HOME
 | A24 | `ConfirmUninstall` for codegraph lists `codegraph: runs codegraph uninstall --target claude,codex --location global --yes --keep-cli` before its remove line, folded, untruncated; the CLI preview prints the same string |
 | A25 | An unregister failure ends the row `remove failed — unregister: …`, deletes nothing and keeps the receipt |
 | A26 | Removing starship with its bundle ON shows `starship: turns off its shell init in ~/.myshellrc` in the review and `Shell init turned off for starship.` after |
-| A27 | A kitty config without the `SHELL` line shows `≈ Kitty does not start zsh`; RECONFIGURE prints `kitty reconfigured — zsh region written in ~/.config/kitty/kitty.conf` |
+| A27 | A kitty config without the `SHELL` line shows `≈ Kitty does not start zsh`; RECONFIGURE prints `kitty reconfigured — Kitty now starts zsh` then `  ~/.config/kitty/kitty.conf`; a Konsole profile without the zsh command prints `zsh reconfigured — Konsole now starts zsh` then `  ~/.local/share/konsole/tools-installer-zsh.profile` |
 | A28 | A missing `~/.zshenv` block shows `≈ ~/.zshenv does not export SHELL as zsh` on the zsh row; a zsh RECONFIGURE row ends `done` and the report prints the `Shell` section lines `~/.zshenv now exports SHELL; new terminals start with it.` and `  SHELL={zsh path}` |
 | A29 | tealdeer install prints the `tealdeer: fetching the tldr page cache — tldr --update` line; a failing fake runner yields the `⚠ tealdeer postinstall warning …` line and the row stays `installed`; catalog `u` yields `updated tealdeer — tldr --update failed: …` at `warn` |
 | A30 | A zsh REINSTALL on a host without `chsh` prints `This installer points Konsole, kitty and WezTerm at zsh when this run ends.` and the terminal sync runs; the old sentence is gone from `installer/` |
