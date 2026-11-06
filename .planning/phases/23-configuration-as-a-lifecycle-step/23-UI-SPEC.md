@@ -1,7 +1,8 @@
 ---
 phase: "23"
 slug: "configuration-as-a-lifecycle-step"
-status: draft
+status: approved
+reviewed_at: 2026-11-06
 shadcn_initialized: false
 preset: none
 created: "2026-11-06"
@@ -90,7 +91,7 @@ Each option row is `{cell} {label} — {effect}`; the cell is `[ ]` off or `[x]`
 | `vscode-ext-updates-off` | `[ ] VS Code extension auto-update off — security fixes only on demand` | — |
 | `desktop-shell` | `[ ] SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)` | — |
 
-- `{agents}` are the listed catalog ids, comma-joined, in catalog order. Widest fixture (`claude, codex, opencode, cursor-agent`): 75 cells; longer lists fold at column 4.
+- `{agents}` are the listed catalog ids, comma-joined, in catalog order. Widest fixture (`claude, codex, opencode, cursor-agent`): 86 cells unfolded, so it folds at column 4 (`fold_reason`) onto a second row; every folded row is ≤ 78 cells.
 - Order: the six options in the table order. The heading is never highlighted by the cursor (disabled option).
 
 ### Keys and states
@@ -106,6 +107,8 @@ Each option row is `{cell} {label} — {effect}`; the cell is `[ ]` off or `[x]`
 | Finished | option rows stay, painted `dim`, with their final cell; the report (section 4) says what each one wrote |
 
 Keys line while idle, when at least one option row exists: `enter start · space option · r reinstall · up/down move · esc cancel` (68 cells; `r reinstall` only when a row can reinstall, as today). Without option rows the keys line is unchanged.
+
+**Unparsable target file (O7).** The review reads the target files when it paints the options. When an option's file for some listed agent does not parse, the option stays toggleable and a dim continuation line names it: `{id}: {file} is not valid {format}; nothing will be written` (76 cells for the longest, `cursor-agent: cli-config.json …`, plus the 4-cell indent counted; `{file}` is the basename, e.g. `config.toml`). If the user turns the option on anyway, the run writes nothing to that file and the report prints the refusal line under the file heading (section 4). No `≈` and no `blocked` row appear unless the ledger already records keys in that file.
 
 Fit at 80×20: `#execute-head` (≤ 3 rows), `#plan-rows` (`1fr`, scrolls), status, keys. The option rows scroll with the plan; the heading and every option are reachable with `down`/`end`. Every rendered line is ≤ 78 cells; nothing truncates (rows fold).
 
@@ -173,7 +176,8 @@ Shell-init and desktop `SHELL` rows use the existing three states unchanged. Set
 | YOURS (new, settings rows only) | `● [yours]` | green | every key of the setting already holds the wanted value and the ledger records none of them | nothing is written; status `warn`: `{label}: you set these keys yourself; edit {path} to change them.` |
 | OFF | `○ [off]` | dim | neither of the above | apply: writes only absent keys |
 | DRIFT | `! [drift]` | yellow | the ledger records keys but none holds its value now | apply: writes the keys that are absent again, forgets ledger entries whose value someone changed |
-| unreadable | empty | — | the file does not parse, or the read failed | refused: existing `Could not read the policy state: {reason}.` (`error`) |
+| unreadable | empty | — | the read failed (I/O), or the file does not parse **and** the ledger records keys in it | refused: existing `Could not read the policy state: {reason}.` (`error`) |
+| unparsable, no ledger record (O7) | `○ [off]` | dim | the file does not parse and this installer manages no key in it | apply is refused with `{label} not changed: {path} is not valid {format} ({where}); fix it, then press space.` (`warn`); nothing is written |
 
 `{reason}` for an unparsable file: `{path} is not valid {JSON|JSONC|TOML} ({where}); nothing is written until it parses`, where `{where}` is `line {n}` (plus `, column {c}` when known).
 
@@ -245,23 +249,25 @@ Rendered by `render_run_report` into `#execute-log` (TUI) and the headless conso
 
 A section heading is printed only when the section has a line.
 
+**Report width rule.** `#execute-log` is a `RichLog` with `wrap=False` (`execute_screen.py:402`) and the headless console prints with `soft_wrap=True`, so the app never wraps a report line. Every report line built from fixed copy, ids, hosts, key paths and `~` paths is therefore ≤ 78 cells (measured with `rich.cells.cell_len` for the longest real fixtures: the four agent hosts, `workbench.settings.enableNaturalLanguageSearch`, `attribution.attributeCommitsToAgent`, `/home/linuxbrew/.linuxbrew/bin/zsh`, `~/.config/opencode/opencode.jsonc`). Lines that carry key paths print **one key per line** under a per-file heading. The only unbounded part of a report line is a first error line or a user value, as in Phases 20–22.
+
 ### Post-install handoff (`{id} — after install:` in cyan, lines indented 2 cells)
 
 | Tool / case | Lines |
 |-------------|-------|
 | shell-init tool, answered yes | `  Shell init on: open a new terminal to use it.` |
-| oh-my-zsh ran, no `ZSH_THEME` before | `  Theme: robbyrussell (added because ~/.zshrc had no ZSH_THEME).` |
+| oh-my-zsh ran, no `ZSH_THEME` before | `  Theme: robbyrussell (added because ~/.zshrc had no ZSH_THEME).` (64 cells) |
 | oh-my-zsh ran, starship yes in this run or before | `  Theme: none (ZSH_THEME=""), so starship draws the prompt.` |
 | oh-my-zsh ran, existing theme | `  Theme: {name} (yours; left as is).` |
 | oh-my-zsh ran (always after the theme line) | `  Try a theme in this shell: omz theme use <name>` · `  Keep it: omz theme set <name>` |
-| vscode row done | `  Lean tip: skip resident type-checker extensions (Pylance held 358 MB on this repo).` · `  Run the project's pre-commit as an on-demand task, not on every save.` |
+| vscode row done | `  Lean tip: skip resident type-checkers (Pylance held 358 MB here).` (67 cells) · `  Run the project's pre-commit as an on-demand task, not on every save.` (71 cells) |
 
 ### Agent-host hooks
 
 | Case | Line |
 |------|------|
 | install registered hosts | `{tool}: registered for {hosts}` |
-| end-of-plan re-sync for a new host (CONF-02) | `{tool}: registered for {hosts} (new agent host)` |
+| end-of-plan re-sync for a new host (CONF-02) | `{tool}: registered for {hosts} (new host)` (75 cells with all four hosts) |
 | one host failed | unchanged warning form, section 5: `⚠ {tool} postinstall warning: {host}: {first error line}` |
 | no supported host present | no line |
 
@@ -269,29 +275,34 @@ A section heading is printed only when the section has a line.
 
 ### Agent and editor settings
 
-One line per agent (or `vscode`) and fact, in catalog order:
+Grouped per file. A heading line `{id} — {path}:` (longest: `opencode — ~/.config/opencode/opencode.jsonc:`, 45 cells), then one fact per line, indented 2 cells, **one key per line**:
+
+| Case | Line under the file heading |
+|------|-----------------------------|
+| key written | `  wrote {key}` (longest: `  wrote workbench.settings.enableNaturalLanguageSearch`, 54 cells) |
+| key set by you | `  set by you: {key} = {value} (left as is)` (`{value}` is truncated with `…` so the line stays ≤ 78 cells) |
+| already equal | `  already set: {key}` (61 cells for the longest VS Code key) |
+| cursor default replaced (ledger Q5) | `  replaced CLI default: {key} = true` (66 cells), then once per file `  revert restores the replaced defaults` |
+| unparsable file, user opted in (O7) | `  not valid {format} ({where}); nothing written` |
+| file kept changing (CAS twice) | `  changed while being written; nothing written. Retry in Policies.` (66 cells) |
+
+Lines without a file (one line each):
 
 | Case | Line |
 |------|------|
-| keys written | `{id}: wrote {keys} in {path}` |
-| key set by you | `{id}: {key} is set by you ({value}); left as is` |
-| already equal | `{id}: {keys} already set this way; nothing written` |
-| cursor default replaced (ledger Q5) | `cursor-agent: replaced the CLI default true of {keys}; revert restores it` |
-| cursor caveat (no-attribution on) | `cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)` |
-| no documented key (no-attribution on) | `{ids}: no documented attribution key; nothing written` |
-| pi (auto-approve on, pi in plan) | `pi: nothing written; pi has no approval setting in its core` |
-| unparsable file | `{id}: {path} is not valid {format} ({where}); nothing written` |
-| file kept changing (CAS twice) | `{id}: {path} changed while being written; nothing written. Retry in Policies.` |
-| agent row did not end done | `{id}: not installed by this run; nothing written` |
-| desktop-shell on | `environment.d: wrote {file} with SHELL={zsh path}; log in again to use it` |
+| cursor caveat (no-attribution on) | `cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)` (74 cells) |
+| no documented key (no-attribution on) | `{ids}: no documented attribution key; nothing written` (67 cells for `codex, opencode, pi`) |
+| pi (auto-approve on, pi in plan) | `pi: nothing written; pi has no approval setting in its core` (59 cells) |
+| agent row did not end done | `{id}: not installed by this run; nothing written` (56 cells) |
+| desktop-shell on | heading `environment.d — {path}:` then `  SHELL={zsh path}; log in again to use it` (66 cells) |
 
-An option left off produces no line. `{keys}` are dotted key paths, comma-joined; `{value}` is the JSON/TOML literal, sanitized.
+An option left off produces no line. `{value}` is the JSON/TOML literal, sanitized.
 
 ### Done notes and the tealdeer step (CONF-06)
 
-- RECONFIGURE `terminal_sync` done note: `{id} reconfigured — wrote the zsh region in {config path} (shell and SHELL)`.
+- RECONFIGURE `terminal_sync` done note: `{id} reconfigured — zsh region written in {config path}` (69 cells for kitty; the region carries both the shell and the `SHELL` line).
 - RECONFIGURE `hook_register` done note: `{id} reconfigured — registered for {hosts}`.
-- RECONFIGURE `zshenv_shell` done note: `zsh reconfigured — ~/.zshenv exports SHELL={zsh path}`.
+- RECONFIGURE `zshenv_shell` done note: `zsh reconfigured — ~/.zshenv exports SHELL` (42 cells; the path is in the `Shell` section).
 - tealdeer, before the hook runs (install and `u` from the review): one attributed log line `tealdeer: fetching the tldr page cache — tldr --update` (54 cells).
 - tealdeer failure (never a row failure; the row ends `installed` / `updated`): section 5 `⚠ tealdeer postinstall warning: tldr --update failed: {first line}; run it yourself later`. Catalog `u` reuses `updated {id} — {postinstall_warning}`: `updated tealdeer — tldr --update failed: {first line}; run it yourself later` (`warn`).
 
@@ -299,7 +310,7 @@ An option left off produces no line. `{keys}` are dotted key paths, comma-joined
 
 | Case | Line |
 |------|------|
-| `~/.zshenv` block written or changed | `~/.zshenv exports SHELL={zsh path}; new terminals start with it.` |
+| `~/.zshenv` block written or changed | `~/.zshenv now exports SHELL; new terminals start with it.` (57 cells) then `  SHELL={zsh path}` |
 | the terminal sync failed | the existing `Terminal shell synchronization failed: {error}` warning, unchanged |
 
 ### "Current zsh" copy fix (ROADMAP SC4; drift D12)
@@ -321,7 +332,8 @@ All use the existing focused-row form `{glyph} {label} — {reasons} — to conf
 | hook tool with a present, supported, unrecorded host | `{tool} is not registered for {hosts}` | `register {tool} for {hosts}` | `hook_register` |
 | kitty / WezTerm / Konsole region drifted (now includes the `SHELL` line) | `{label} does not start zsh` (unchanged) | `point {label} at zsh` (unchanged) | `terminal_sync` |
 | zsh, managed `~/.zshenv` block missing or stale | `~/.zshenv does not export SHELL as zsh` | `export SHELL={zsh path} in ~/.zshenv` | `zshenv_shell` |
-| agent or VS Code settings file unparsable | `{path} is not valid {format} ({where}); nothing is written until it parses` | none → the plan row is `blocked — {reason}` (existing MISCONFIGURED-without-steps rule) | — |
+| agent or VS Code settings file unparsable **and** the ledger (or a receipt) records keys this installer manages in it (O7) | `{path} is not valid {format} ({where}); nothing is written until it parses` | none → the plan row is `blocked — {reason}` (existing MISCONFIGURED-without-steps rule) | — |
+| same file unparsable, no ledger/receipt record | no `≈`, no reason, no `blocked`: the file is not the installer's business until the user opts in; the refusal shows only where they opt in (section 3 toggle result, section 1 review, section 4 report) | — | — |
 
 - Every existing kitty/WezTerm region turns `≈` once after the upgrade (research pitfall 11). The reason copy is unchanged on purpose: it states a fact, not an alarm.
 - A terminal or host that is not installed gives no `≈` and no line.
@@ -437,15 +449,15 @@ Focal element: the install review, the plan rows (cursor on the first plan row, 
 | Option refusals | `space toggles run options only; plan rows change with r.` · `A run option is set before start; it cannot change now.` (both `warn`) |
 | Shell-init prompt | `Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. It stays off unless you choose yes; Policies can change it later.` / `Yes, turn it on` / `No, leave it off` |
 | Empty state | A plan without triggers shows no run-options heading. Policies with every agent missing shows the rows with `missing: {id}`. Uninstall without ledger entries shows no `agent/editor settings` row. Unchanged elsewhere |
-| Error state (settings file) | `{label} not changed: {path} is not valid {format} ({where}); fix it, then press space.` · catalog `≈ {path} is not valid {format} ({where}); nothing is written until it parses` · report `{id}: {path} is not valid {format} ({where}); nothing written` |
+| Error state (settings file) | `{label} not changed: {path} is not valid {format} ({where}); fix it, then press space.` · catalog `≈ {path} is not valid {format} ({where}); nothing is written until it parses` (only when the installer manages keys in that file, O7) · review note `{id}: {file} is not valid {format}; nothing will be written` (76 cells for cursor-agent) · report `  not valid {format} ({where}); nothing written` under `{id} — {path}:` |
 | Error state (unregister) | row `remove failed — unregister: {first error line}`; status `{N} remove failed. Fix the cause and press enter to try again.` |
 | Warning (tealdeer) | `⚠ tealdeer postinstall warning: tldr --update failed: {first line}; run it yourself later` · `updated tealdeer — tldr --update failed: {first line}; run it yourself later` |
 | Migration | `Moved {aliases} to agent settings; see Policies.` · `cursor-agent-model alias removed: pick the model with /model in cursor-agent.` · `{alias} alias kept: {path} is not valid {format}; fix it and relaunch.` · detail `Migrated from the {alias} shell alias, which this installer removed from {rc}.` |
 | Set by you | `Set by you: {key} = {value} (left as is).` · `{key} is set by you ({value}); left as is.` · `{label}: you set these keys yourself; edit {path} to change them.` |
 | Destructive confirmation | `ConfirmUninstall` (Phase 22) plus `{id}: runs {unregister command}` · `{id}: removes {keys} from {path}` · `{id}: turns off its shell init in ~/.myshellrc` |
 | Removal results | `Unregistered from agent hosts: {ids}.` · `Settings reverted for {ids}.` · `Kept settings you changed since this installer wrote them: {ids}.` · `warning: could not revert {path} — not valid {format} ({where}).` · `Shell init turned off for {ids}.` |
-| Hooks | `{tool}: registered for {hosts}` · `{tool}: registered for {hosts} (new agent host)` · `{tool} is not registered for {hosts}` · `register {tool} for {hosts}` |
-| Shell | `~/.zshenv exports SHELL={zsh path}; new terminals start with it.` · `~/.zshenv does not export SHELL as zsh` · `export SHELL={zsh path} in ~/.zshenv` |
+| Hooks | `{tool}: registered for {hosts}` · `{tool}: registered for {hosts} (new host)` · `{tool} is not registered for {hosts}` · `register {tool} for {hosts}` |
+| Shell | `~/.zshenv now exports SHELL; new terminals start with it.` + `  SHELL={zsh path}` · `~/.zshenv does not export SHELL as zsh` · `export SHELL={zsh path} in ~/.zshenv` |
 | chsh-absent line 3 | `This installer points Konsole, kitty and WezTerm at zsh when this run ends.` |
 | Headless `--yes` | `Run options left off (--yes never turns them on); change them in Policies.` · `Shell init left off (--yes): {tools}. Turn it on in Policies.` |
 
@@ -479,27 +491,29 @@ Each is a pass/fail check at `size=(80, 20)` with `NO_COLOR=1` in a scratch HOME
 | A5 | `space` after `enter` writes `A run option is set before start; it cannot change now.` and the answers passed to `execute_plan` are unchanged |
 | A6 | A default run (no `space`) writes no agent key, no VS Code key, no `environment.d` file and no shell-init block (prohibition test) |
 | A7 | Unattended `--yes` (TUI and headless) leaves every option off and prints `Run options left off (--yes never turns them on); change them in Policies.` |
-| A8 | Every option row, continuation line, heading and the idle keys line is ≤ 78 cells; the last option is reachable with `end` |
+| A8 | Every option row, continuation line, heading and the idle keys line is ≤ 78 cells; the widest auto-approve row (`claude, codex, opencode, cursor-agent`, 86 cells unfolded) folds at column 4 onto a second row; the last option is reachable with `end` |
+| A8b | Report width: with the longest fixtures (four hosts, the longest VS Code and cursor key paths, `/home/linuxbrew/.linuxbrew/bin/zsh`, `~/.config/opencode/opencode.jsonc`) every line `render_run_report` writes from fixed copy is ≤ 78 cells, including `  Lean tip: skip resident type-checkers (Pylance held 358 MB here).` (67); key-bearing lines carry one key each |
 | A9 | The keyed modal for each of the six shell-init tools shows its `{effect}`, both choices visible without scrolling; `set_login_shell` text is byte-identical to today |
 | A10 | starship "yes" writes the bundle and `ZSH_THEME=""` and the handoff `Shell init on: open a new terminal to use it.`; "no" leaves the row `✓` and no line |
 | A11 | Policies lists none of the four alias rows and lists the 16 new rows in the documented order with labels ≤ 28 cells |
 | A12 | A pre-existing `defaultMode: "acceptEdits"`: enabling `claude auto-approve` writes only `skipDangerousModePermissionPrompt`, shows `● [on]` and the `Set by you: permissions.defaultMode = "acceptEdits" (left as is).` detail line; status severity `warn` |
 | A13 | Both Claude keys already at the wanted values, ledger empty: the row reads `● [yours]`; `space` writes nothing and shows the `you set these keys yourself` status |
-| A14 | A ledger key changed by hand: the row reads `! [drift]` with the settings DRIFT first line; `space` resolves it to ON or OFF |
-| A15 | An unparsable `~/.codex/config.toml`: the codex auto-approve State cell is empty, the status is `Could not read the policy state: … is not valid TOML (line N); nothing is written until it parses.`, the catalog codex row shows `≈`, and its plan row is `blocked — …`; the file is byte-identical |
-| A16 | cursor-agent attribution off with the CLI defaults `true`: report `cursor-agent: replaced the CLI default true of …; revert restores it` plus the caveat line; detail shows the caveat |
+| A14 | A ledger key changed by hand and the other key deleted: the row reads `! [drift]` with the settings DRIFT first line; `space` (apply) rewrites the absent key, the ledger drops the entry the user changed, and the row reads `● [on]` |
+| A15a | An unparsable `~/.codex/config.toml` **with** ledger entries for it: the codex auto-approve State cell is empty, the status is `Could not read the policy state: … is not valid TOML (line N); nothing is written until it parses.`, the catalog codex row shows `≈`, and its plan row is `blocked — …`; the file is byte-identical |
+| A15b | The same file **without** a ledger entry: no `≈`, no `blocked`; the row reads `○ [off]`; `space` shows `codex auto-approve not changed: ~/.codex/config.toml is not valid TOML (line N); fix it, then press space.`; the review shows the dim `codex: config.toml is not valid TOML; nothing will be written` note; an opted-in run prints `  not valid TOML (line N); nothing written` under `codex — ~/.codex/config.toml:`; the file is byte-identical |
+| A16 | cursor-agent attribution off with the CLI defaults `true`: report lines `  replaced CLI default: attribution.attributeCommitsToAgent = true`, the same for `attributePRsToAgent`, and `  revert restores the replaced defaults` plus the caveat line; detail shows the caveat |
 | A17 | The claude attribution detail and report name codex, opencode and pi as having no documented key |
 | A18 | VS Code lean detail on Linux shows `update.mode is not written on Linux: this installer updates VS Code.` and no `update.mode` key is written |
 | A19 | Launch with an enabled `claude-skip` block: the first view's status reads `Moved claude-skip to agent settings; see Policies.`, the claude auto-approve detail starts with the migration line, and the rc has no alias; a second launch prints nothing |
 | A20 | Launch with `cursor-agent-model` enabled: the alias is gone, nothing is written to `cli-config.json`, and the `warn` line names `/model` |
 | A21 | Launch with `claude-skip` enabled and an unparsable `~/.claude/settings.json`: the alias stays and the `alias kept` warning shows |
-| A22 | Installing codex with codegraph present prints `codegraph: registered for codex (new agent host)` once; claude is not listed |
+| A22 | Installing codex with codegraph present prints `codegraph: registered for codex (new host)` once; claude is not listed |
 | A23 | codegraph with recorded `claude` and present unrecorded `codex`: the row shows `≈ … codegraph is not registered for codex`, the plan row reads `will reconfigure — …` + `to configure: register codegraph for codex`; after the run `codegraph reconfigured — registered for codex` |
 | A24 | `ConfirmUninstall` for codegraph lists `codegraph: runs codegraph uninstall --target claude,codex --location global --yes --keep-cli` before its remove line, folded, untruncated; the CLI preview prints the same string |
 | A25 | An unregister failure ends the row `remove failed — unregister: …`, deletes nothing and keeps the receipt |
 | A26 | Removing starship with its bundle ON shows `starship: turns off its shell init in ~/.myshellrc` in the review and `Shell init turned off for starship.` after |
-| A27 | A kitty config without the `SHELL` line shows `≈ Kitty does not start zsh`; RECONFIGURE prints `kitty reconfigured — wrote the zsh region in … (shell and SHELL)` |
-| A28 | A missing `~/.zshenv` block shows `≈ ~/.zshenv does not export SHELL as zsh` on the zsh row; a run that ran a row prints the `Shell` section line |
+| A27 | A kitty config without the `SHELL` line shows `≈ Kitty does not start zsh`; RECONFIGURE prints `kitty reconfigured — zsh region written in ~/.config/kitty/kitty.conf` |
+| A28 | A missing `~/.zshenv` block shows `≈ ~/.zshenv does not export SHELL as zsh` on the zsh row; a zsh RECONFIGURE row ends `done` and the report prints the `Shell` section lines `~/.zshenv now exports SHELL; new terminals start with it.` and `  SHELL={zsh path}` |
 | A29 | tealdeer install prints the `tealdeer: fetching the tldr page cache — tldr --update` line; a failing fake runner yields the `⚠ tealdeer postinstall warning …` line and the row stays `installed`; catalog `u` yields `updated tealdeer — tldr --update failed: …` at `warn` |
 | A30 | A zsh REINSTALL on a host without `chsh` prints `This installer points Konsole, kitty and WezTerm at zsh when this run ends.` and the terminal sync runs; the old sentence is gone from `installer/` |
 | A31 | The oh-my-zsh handoff shows the theme line and both `omz theme use <name>` / `omz theme set <name>` lines |
@@ -510,7 +524,7 @@ Each is a pass/fail check at `size=(80, 20)` with `NO_COLOR=1` in a scratch HOME
 
 ## UI Considerations
 
-Applicable state considerations resolved: 17 covered, 6 backstop, 0 unresolved (ui-consideration-probe run 2026-11-06 over 7 surfaces: the review with options, the keyed modal, Policies, the launch status, the run report, Uninstall with `ConfirmUninstall`, the catalog `≈` rows; 8 categories proposed, all present).
+Applicable state considerations resolved: 19 covered, 6 backstop, 0 unresolved (ui-consideration-probe run 2026-11-06 over 7 surfaces: the review with options, the keyed modal, Policies, the launch status, the run report, Uninstall with `ConfirmUninstall`, the catalog `≈` rows; 8 categories proposed, all present).
 
 | Category | Element(s) | Status | Resolution / Reason |
 |----------|------------|--------|---------------------|
@@ -519,7 +533,8 @@ Applicable state considerations resolved: 17 covered, 6 backstop, 0 unresolved (
 | empty | ledger without entries | ✅ covered | No `agent/editor settings` Uninstall row, no 3b lines, no report section |
 | loading | options during the state-check wait and the run | ✅ covered | `space` refused with the fixed sentence; answers frozen (A5) |
 | loading | shell-init question mid-run | ✅ covered | Existing `Run paused on a question for {tool}; answer the prompt to continue.` status; `esc` = no with the existing log line |
-| error | unparsable agent/VS Code file | ✅ covered | Empty State cell + read error, catalog `≈`, plan `blocked`, file byte-identical (A15) |
+| error | unparsable agent/VS Code file the installer manages keys in | ✅ covered | Empty State cell + read error, catalog `≈`, plan `blocked`, file byte-identical (A15a) |
+| error | unparsable agent/VS Code file the installer never wrote | ✅ covered | No `≈`, no `blocked`; refusal only where the user opts in: review note, Policies `not changed`, report line (A15b) |
 | error | compare-before-commit failed twice | ✅ covered | `{label} not changed: {path} changed while it was being written; press space to retry.` / report line |
 | error | unregister fails | ✅ covered | Row `remove failed — unregister: …`; nothing deleted (A25) |
 | error | `tldr --update` fails | ✅ covered | Warning only; row stays done (A29) |
@@ -531,7 +546,8 @@ Applicable state considerations resolved: 17 covered, 6 backstop, 0 unresolved (
 | zero-one-many | hosts per hook (0 / 1 / many) | ✅ covered | 0 → no line; 1 or many → sorted comma list in one line and one step |
 | zero-one-many | aliases migrated (1 / 3) | ✅ covered | One `Moved {aliases} …` line; the cursor wrapper gets its own warn line |
 | overflow | 92-cell unregister command in the review and CLI | ✅ covered | Folds with the 2-cell hanging indent, never truncated (A24) |
-| overflow | long agent list, long path in a toggle result, three-line launch status at 80×20 | 🧪 backstop | Held-out render test: option rows fold at column 4; status wraps; table header and footer stay visible |
+| overflow | long agent list, long path in a toggle result, three-line StatusLine at 80×20 | 🧪 backstop | Held-out render test over the launch migration status (three lines) and the removal result status including `Kept settings you changed since this installer wrote them: {ids}.` (73 cells with `claude, codex`): option rows fold at column 4; status wraps; table header and footer stay visible |
+| overflow | report lines in the no-wrap `#execute-log` | ✅ covered | Report width rule (section 4): one key per line, every fixed-copy line ≤ 78 cells (A8b) |
 | overflow | Policies with every new row at 80×20 | 🧪 backstop | Held-out test: pane sizes unchanged vs `main`; every detail ≤ 9 wrapped lines; State column ≤ 9 cells |
 | long-text | markup/ANSI in user settings values and errors | 🧪 backstop | Held-out test over review, status, detail, report, modal (A32) |
 | long-text | `NO_COLOR=1` readability of `[x]`, `[yours]`, `[drift]`, `≈`, `⚠` | 🧪 backstop | Human UAT in a UTF-8 terminal with `NO_COLOR=1` at 80×20 (real `setup.py`, scratch HOME, container) |
@@ -556,7 +572,7 @@ Rule: the option most consistent with the ledger answers and the earlier UI cont
 | U8 | In an uninstall the alias migration only strips the block (no key write). | Writing keys that the same uninstall then reverts is pointless (research pitfall 7) |
 | U9 | An alias whose target file does not parse is kept and retried at the next launch. | The user's opt-in behaviour must not silently disappear |
 | U10 | Hosts are displayed by catalog id (`cursor-agent`), never by harness id (`cursor`). | Every other surface names tools by catalog id |
-| U11 | An invalid agent/VS Code settings file shows `≈` even when the user never opted in. | SPEC R8 says "the row shows `≈`"; the agent itself rejects such a file, so it is a real misconfiguration |
+| U11 | An invalid agent/VS Code settings file shows `≈` (and a `blocked` plan row) only when the ledger or a receipt records keys this installer manages in it; otherwise the only signal is the refusal line where the user opts in (review note, Policies, report). | Orchestrator answer O7 (ledger row `23 \| UI-SPEC open decisions`): the installer reports only on files it writes |
 | U12 | The desktop `SHELL` option and row are Linux only. | On macOS `~/.zshenv` already covers GUI-launched zsh; `environment.d` is the Linux branch of `env_redirect` |
 | U13 | The attribution option is hidden when neither claude nor cursor-agent is in the plan; the no-key note lives in that row and in the Policies detail. | Avoids a question that can write nothing |
 
@@ -564,15 +580,17 @@ Rule: the option most consistent with the ledger answers and the earlier UI cont
 
 ## Open decisions (orchestrator)
 
-| # | Decision taken in this draft | Alternative | Why it needs sign-off |
-|---|------------------------------|-------------|-----------------------|
-| O1 | No new CLI flags; headless asks interactively, `--yes` leaves everything off and says so. | Opt-in flags (`--auto-approve`, `--no-attribution`, `--vscode-lean`, …) that count as the explicit "yes" | Scripted installs cannot turn these on without the TUI; flags add surface nobody asked for |
-| O2 | Run options cover only agents with runnable rows (U1). | Also list present, already-current agents in the plan | Changes when the question appears |
-| O3 | New Policies state `● [yours]` for settings rows (U4). | Keep three states; show "already this way" only in the detail | Adds a state word to the shared State cell (settings rows only) |
-| O4 | Unregister failure stops the tool's removal (U5). | Warn and continue the removal | Trade-off between a stale host config and a stuck removal |
-| O5 | A TUI Uninstall `agent/editor settings` pseudo-row plus the CLI sweep revert every ledger write (U6). | Revert only on tool removal and in Policies | A new Uninstall row; full uninstall then also touches agents the installer did not install (only its own keys) |
-| O6 | `~/.zshenv` drift is a `≈` + RECONFIGURE step (U7). | Write the block silently at run end without a health signal | Adds a step kind and a `≈` reason |
-| O7 | Invalid settings files show `≈` without opt-in (U11). | `≈` only when the ledger has entries for the file | The installer then reports on files it never wrote |
+All resolved by the orchestrator (RUN-LEDGER row `23 | UI-SPEC open decisions`, on `67237e8`). The contract above encodes each answer.
+
+| # | Resolution |
+|---|------------|
+| O1 | Resolved as drafted: no new CLI flags; headless asks interactively, `--yes` leaves everything off and says so |
+| O2 | Resolved as drafted: run options list only agents this run installs, updates or reconfigures (U1) |
+| O3 | Resolved as drafted: new state `● [yours]` for settings rows (U4) |
+| O4 | Resolved as drafted: a failed unregister stops that tool's removal (U5) |
+| O5 | Resolved as drafted: the Uninstall `agent/editor settings` row and the CLI uninstall revert every key the installer wrote (U6) |
+| O6 | Resolved as drafted: a missing `~/.zshenv` block shows `≈` + RECONFIGURE (U7) |
+| O7 | Resolved, **alternative taken**: `≈` and `blocked` only when the installer manages keys in the unreadable file; otherwise only the refusal line where the user opts in (U11; section 1, 3, 4, 5; A15a/A15b) |
 
 ---
 
@@ -586,12 +604,12 @@ Rule: the option most consistent with the ledger answers and the earlier UI cont
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
-- [ ] Dimension 7 Inventory Provenance: PASS
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
+- [x] Dimension 7 Inventory Provenance: PASS
 
-**Approval:** pending
+**Approval:** approved 2026-11-06 after the checker revision (BLOCK on the 85-cell Lean tip line fixed; recommendations applied: auto-approve fold width, one key per report line, A8b/A14/A15a/A15b/A28 pinned, StatusLine overflow fixture; O1–O7 resolved per the ledger, O7 alternative)
