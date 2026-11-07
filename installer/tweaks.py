@@ -305,10 +305,14 @@ class LegacyStrip:
             else:
                 text = f"Removed the {alias_id} alias; turn on {agent} auto-approve in Policies."
                 lines.append((text, "ok"))
-        for alias_id, reason in self.failed:
-            text = f"Could not remove the {alias_id} alias from {self.rc}: {reason}."
-            lines.append((text, "warn"))
+        lines.extend((text, "warn") for text in self.failure_lines())
         return tuple(lines)
+
+    def failure_lines(self) -> tuple[str, ...]:
+        return tuple(
+            f"Could not remove the {alias_id} alias from {self.rc}: {reason}."
+            for alias_id, reason in self.failed
+        )
 
     def uninstall_line(self) -> str | None:
         if not self.stripped:

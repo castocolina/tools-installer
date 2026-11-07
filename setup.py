@@ -83,7 +83,7 @@ from installer.settings import (
 from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
-from installer.tweaks import BUNDLES, applicable_bundles
+from installer.tweaks import BUNDLES, applicable_bundles, strip_legacy_aliases
 from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
@@ -894,6 +894,11 @@ def _build_app(
         terminal_sync=_sync_omz_terminals,
     )
 
+    # A legacy alias block is stripped at every launch and its notice rides the startup
+    # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
+    legacy_strip = strip_legacy_aliases(_MYSHELLRC)
+    startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
+    startup_lines += [text for text, _severity in legacy_strip.launch_lines()]
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -1071,7 +1076,7 @@ def _build_app(
         prompt_link_mode=prompt_link_mode,
         # D-11: a damaged settings.json surfaces as the startup warning on the
         # first screen the route opens, carried through the store's flag.
-        startup_warning=settings.warning if settings is not None else None,
+        startup_warning="\n".join(startup_lines) or None,
         # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
         # `updates` above are wired with -- every interactive close
         # re-synchronizes terminal configuration exactly like Policies' own
@@ -1291,6 +1296,12 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # CLI teardown path gates fd/rg-aware daemon construction on the SAME
     # real-installed-status map the interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
+    legacy = strip_legacy_aliases(_MYSHELLRC)
+    notice = legacy.uninstall_line()
+    if notice is not None:
+        console.print(notice, markup=False, soft_wrap=True)
+    for text in legacy.failure_lines():
+        console.print(text, markup=False, soft_wrap=True)
     _removed, failed = run_uninstall(
         tools,
         console,
@@ -1413,6 +1424,8 @@ def main(argv: list[str]) -> int:
             settings=store,
             prompt_link_mode=needs_choice,
         )
+    for text, _severity in strip_legacy_aliases(_MYSHELLRC).launch_lines():
+        console.print(text, markup=False, soft_wrap=True)
     refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(
         tools,
