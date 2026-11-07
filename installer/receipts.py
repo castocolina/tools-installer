@@ -23,7 +23,7 @@ import os
 import re
 import stat as stat_module
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -548,6 +548,30 @@ def receipt_exists(tool_id: str) -> bool:
     except OSError:
         return True
     return True
+
+
+@dataclass(frozen=True)
+class RetiredScan:
+    tools: tuple[Tool, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+def scan_retired(catalog_ids: Collection[str]) -> RetiredScan:
+    """Receipts whose tool id left the catalog, as retired tools. Never deletes or writes."""
+    try:
+        names = sorted(os.listdir(receipts_dir()))
+    except OSError:
+        return RetiredScan()
+    tools: list[Tool] = []
+    for name in names:
+        stem = name.removesuffix(".json")
+        if stem == name or not TOOL_ID_RE.fullmatch(stem) or stem in catalog_ids:
+            continue
+        if read(stem) is not None:
+            tools.append(
+                Tool(id=stem, name=stem, category="retired", cmd=stem, methods=(), retired=True)
+            )
+    return RetiredScan(tools=tuple(tools))
 
 
 def all_gone(receipt: Receipt) -> bool:

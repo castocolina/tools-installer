@@ -1633,3 +1633,33 @@ def test_the_ledger_round_trips_and_fails_closed() -> None:
     receipts.write_ledger(ledger)
     receipts.write_ledger(receipts.ConfigLedger("claude"))
     assert not path.exists()
+
+
+# --- 23.1-11 Task 1: a receipt whose id left the catalog is a retired tool ---
+
+
+def _receipt_for(tool_id: str) -> Receipt:
+    return replace(_write_receipt(()), tool=tool_id)
+
+
+def test_a_receipt_outside_the_catalog_is_a_retired_tool() -> None:
+    write(_receipt_for("rtk"))
+    scan = receipts.scan_retired({"rg"})
+    assert scan.warnings == ()
+    [tool] = scan.tools
+    assert tool.id == tool.name == tool.cmd == "rtk"
+    assert tool.methods == ()
+    assert tool.config_paths == ()
+    assert tool.postinstall is None
+    assert tool.retired is True
+
+
+def test_a_catalog_receipt_is_never_retired() -> None:
+    write(_receipt_for("rg"))
+    assert receipts.scan_retired({"rg"}).tools == ()
+
+
+def test_registry_tools_are_not_retired() -> None:
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    assert all(tool.retired is False for tool in model.load_tools(registry))
+    assert Tool("x", "x", "dev", "x", ()).retired is False
