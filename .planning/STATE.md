@@ -6,10 +6,10 @@ current_phase: "23.1"
 current_phase_name: "Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e"
 status: Verifying — human_needed (UAT fixes in progress)
 stopped_at: Phase 23.1 UI-SPEC approved
-last_updated: "2026-11-07T14:49:45.789Z"
+last_updated: "2026-11-07T16:42:29.977Z"
 last_activity: 2026-11-07
 last_activity_desc: Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
-state_head: fd28c81cab199d0df1048e5acc578cafc34c687b
+state_head: 789b68f301866e6b71cb0bc122f09f6c121d188d
 progress:
   total_phases: 15
   completed_phases: 1

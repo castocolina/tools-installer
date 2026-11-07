@@ -425,32 +425,34 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 23.1-01-PLAN.md — Drop rtk and the seven skill-pack entries from the registry, rtk from four recommends lists and the e2e residue allowlist
-- [ ] 23.1-02-PLAN.md — Move agent-host detection (`present_harnesses`, 17-host table) into postinstall
-- [ ] 23.1-03-PLAN.md — npx redirect shim translates `-p`/`--package`, drops `-y`, refuses every other npx option
-- [ ] 23.1-04-PLAN.md — R7 skip baseline; pure launch allowlist and strict `sh -c` parser in `tests/sandbox.py`
+- [ ] 23.1-01-PLAN.md — Drop rtk and the seven skill-pack entries from the registry, rtk from four recommends lists and the e2e residue allowlist; pack tests read a frozen copy
+- [ ] 23.1-03-PLAN.md — npx redirect shim translates `-p`/`--package`, drops `-y`, refuses every other npx option; the interactive alias block stops aliasing npx
+- [ ] 23.1-04-PLAN.md — R7 skip baseline (base SHA); pure launch allowlist (stdbuf as a prefix) and strict `sh -c` parser in `tests/sandbox.py`
 - [ ] 23.1-05-PLAN.md — Widened real-HOME fingerprint (listing and mtime only) with a per-path diff
 - [ ] 23.1-06-PLAN.md — Container e2e GSD-absent tracer after each pass; Makefile and no-runtime pins
+- [ ] 23.1-11-PLAN.md — `Tool.retired` and `receipts.scan_retired` (corrupt and unreadable receipts warn)
 
 **Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 23.1-02-PLAN.md — Move agent-host detection (`present_harnesses`, 17-host table) into postinstall
 - [ ] 23.1-07-PLAN.md — Engine and session run no skill-pack action; host_setup still hands off
 - [ ] 23.1-08-PLAN.md — Front ends read no skill-pack state (headless pass, refresh worker, Owner cell)
-- [ ] 23.1-09-PLAN.md — Rewrite an outdated npx redirect at every launch route through one `_launch_repairs()`
-- [ ] 23.1-10-PLAN.md — Test PATH/env sandbox before collection; interpreter link dir; with-fd skips recorded
-- [ ] 23.1-11-PLAN.md — `Tool.retired` and `receipts.scan_retired` (corrupt and unreadable receipts warn)
+- [ ] 23.1-09-PLAN.md — Rewrite an outdated npx redirect and guard alias block at every launch route through one `_launch_repairs()`; doctor docs
+- [ ] 23.1-10-PLAN.md — Test PATH/env sandbox before collection; one interpreter link dir per run; with-fd skips recorded
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 23.1-12-PLAN.md — Refresh service and version cache keep no skill-pack state; old caches load; `home` rename
 - [ ] 23.1-13-PLAN.md — Retired receipts removable by placement-shape proof; receipt-only retire; CLI preview section
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 23.1-14-PLAN.md — Switch the suite's Popen guard to the allowlist and fix the fallout
+- [ ] 23.1-14-PLAN.md — Switch the suite's Popen guard to the allowlist, fail swallowed refusals, fix the fallout (alone in its wave)
+
+**Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 23.1-15-PLAN.md — Delete the skill-pack module and kind; targeted `[tool.skill_lifecycle]` refusal; no GSD package in code
 - [ ] 23.1-16-PLAN.md — Headless `--uninstall` removes retired receipts; launch warnings; Uninstall view predicate
 
-**Wave 5** *(blocked on Wave 4 completion)*
+**Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 23.1-17-PLAN.md — Uninstall view retired section, detail clauses and result sentences
-- [ ] 23.1-18-PLAN.md — Socket guard and os-launcher wrappers; phase gate (skip count, full suite)
+- [ ] 23.1-18-PLAN.md — Socket guard and os-launcher wrappers; phase gate (merged tree, skip count, full suite)
 
 ### Phase 23.2: Install-time tuning instead of Policies knobs (INSERTED)
 
