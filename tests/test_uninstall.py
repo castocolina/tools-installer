@@ -2536,3 +2536,83 @@ def test_a_tampered_receipt_host_list_is_filtered(
     )
     assert plan.unregister == ((undo,) if hosts else ())
     assert plan.hook_hosts == hosts
+
+
+def _retired_tool(
+    tool_id: str,
+    artifacts: list[tuple[Path, str]],
+    *,
+    kind: str = "github_release",
+    dir_key: str | None = None,
+) -> Tool:
+    """A receipt for `tool_id` as `receipts.scan_retired` hands it over (id outside the catalog)."""
+    write_receipt(_dl_tool(tool_id, tool_id), artifacts, kind=kind, dir_key=dir_key)
+    (tool,) = [t for t in receipts.scan_retired(set()).tools if t.id == tool_id]
+    assert tool.retired
+    return tool
+
+
+def _run_uninstall_over(
+    tools: list[Tool],
+    home: Path,
+    buf_console: tuple[Console, StringIO],
+    runner: Callable[..., None],
+) -> tuple[list[Path], tuple[str, ...]]:
+    from installer.app import run_uninstall
+
+    console, _buf = buf_console
+    return run_uninstall(
+        tools,
+        console,
+        default_bin_dir=home / ".local" / "bin",
+        myshellrc_path=home / ".myshellrc",
+        rc_paths=[],
+        confirm=lambda _m: True,
+        bundles=(),
+        zshrc_path=home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=runner,
+    )
+
+
+def test_a_retired_raw_download_is_removed_with_its_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tracer: a retired download's bin-dir file and its receipt go through the shared remover."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    tool = _retired_tool("rtk", [(rtk, "file")])
+
+    plan = removal_plan(tool, bin_dir)
+    assert plan.level == "artifacts"
+    assert plan.removable == (rtk,)
+
+    console, buf = _uninstall_console()
+    removed, failed = _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+
+    assert removed == [rtk]
+    assert failed == ()
+    assert not rtk.exists()
+    assert not receipts.receipt_exists("rtk")
+    out = buf.getvalue()
+    assert "retired — no longer in the catalog" in out
+    assert "rtk (retired)" in out
+
+
+def test_a_catalog_tool_proof_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retired shape rule never applies to a catalog tool: a bin file its methods do not name
+    stays unproven, while the registry formula still proves its own (path, type) pair."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "other").write_text("not what the method names")
+    other = _dl_tool("other", "other")
+    write_receipt(other, [(bin_dir / "other", "file")])
+    assert plan_removal([other], bin_dir).removable == ()
+
+    yq, yq_bin = plant_raw_yq(tmp_path)
+    assert plan_removal([yq], yq_bin).removable == (yq_bin / "yq",)

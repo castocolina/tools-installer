@@ -21,6 +21,7 @@ from installer.download import (
     expand_script_token,
     is_still_proven,
 )
+from installer.locations import opt_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.postinstall import hook_method, unregister_argvs, unregister_hosts
@@ -114,6 +115,33 @@ def config_targets(tool: Tool) -> tuple[tuple[str, Path], ...]:
     return tuple((entry, Path(entry).expanduser()) for entry in tool.config_paths)
 
 
+def _safe_name(name: str) -> bool:
+    return name not in ("", ".", "..") and "/" not in name and "\0" not in name
+
+
+def _placement_shape(
+    kind: str,
+    artifact: receipts.ReceiptArtifact,
+    bin_dir: Path,
+    *,
+    link_names: frozenset[str],
+) -> bool:
+    """Is this recorded artifact exactly where `download.artifact_paths` would place one (D-07)?
+
+    A download kind's `link` or `file` is a direct child of `bin_dir`; its `dir` is
+    `opt_dir(N)` for a `link` named `N` recorded beside it (`link_names`), so a bare child of
+    the opt dir proves nothing. Anything else, any other recorded type and every other kind
+    is never proven. The name check rejects `""`, `.`, `..`, a separator and a NUL."""
+    path = artifact.path
+    if not _safe_name(path.name):
+        return False
+    if kind in DOWNLOAD_KINDS:
+        if artifact.type in ("link", "file"):
+            return path.parent == bin_dir
+        return artifact.type == "dir" and path == opt_dir(path.name) and path.name in link_names
+    return False
+
+
 def _receipt_proof(
     tool: Tool, default_bin_dir: Path, *, verify: bool
 ) -> tuple[receipts.ReceiptArtifact, ...]:
@@ -130,6 +158,19 @@ def _receipt_proof(
     receipt = receipts.read(tool.id)
     if receipt is None or receipts.drifted(receipt, rehash=verify):
         return ()
+    if tool.retired:
+        # D-07: a retired tool declares no method, so the registry formula is replaced by the
+        # shape of what install itself places. The drift check above still runs first.
+        link_names = frozenset(
+            a.path.name
+            for a in receipt.artifacts
+            if a.type == "link" and a.path.parent == default_bin_dir and _safe_name(a.path.name)
+        )
+        return tuple(
+            a
+            for a in receipt.artifacts
+            if _placement_shape(receipt.method.kind, a, default_bin_dir, link_names=link_names)
+        )
     allowed = {
         (artifact.path, artifact.kind)
         for method in tool.methods
