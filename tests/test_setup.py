@@ -4614,8 +4614,10 @@ def test_every_route_rewrites_an_outdated_npx_once(
         return buffer.getvalue()
 
     first = shown_notices()
-    assert first.count(_NPX_NOTICE) == 1
-    assert first.count(_GUARD_NOTICE) == 1
+    # C-13 (IN-04): a route about to remove the guards repairs them silently.
+    shown = 0 if argv in (["--uninstall", "--yes"], ["--unguard", "--yes"]) else 1
+    assert first.count(_NPX_NOTICE) == shown
+    assert first.count(_GUARD_NOTICE) == shown
     assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
     assert rc.read_text() == f"user\n{ban_alias_block()}\n"
     second = shown_notices()

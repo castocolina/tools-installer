@@ -795,6 +795,12 @@ def _launch_repairs() -> tuple[LegacyStrip, tuple[tuple[str, str], ...]]:
     )
 
 
+def _warnings_only(repairs: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """A route about to remove the guards keeps its repairs quiet: a "Rewrote ..." notice just
+    before the same file is removed misleads (review C-13). Warnings still print."""
+    return tuple(line for line in repairs if line[1] != "ok")
+
+
 def _print_repairs(
     console: Console, legacy: LegacyStrip, repairs: tuple[tuple[str, str], ...]
 ) -> None:
@@ -1365,7 +1371,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         console.print(notice, markup=False, soft_wrap=True)
     for text in legacy.failure_lines():
         console.print(text, markup=False, soft_wrap=True)
-    for text, _severity in repairs:
+    for text, _severity in _warnings_only(repairs):
         console.print(text, markup=False, soft_wrap=True)
     # Retired receipts join the teardown only; `installed` and the daemon policy stay catalog-only.
     scan = scan_retired(frozenset(tool.id for tool in tools))
@@ -1398,7 +1404,8 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
 def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:
     # The caller picks rc_paths: install targets the link-mode location, removal
     # sweeps every possible location (so it never depends on a link-mode guess).
-    _print_repairs(console, *_launch_repairs())
+    legacy, repairs = _launch_repairs()
+    _print_repairs(console, legacy, _warnings_only(repairs) if remove else repairs)
     confirm = (lambda _message: True) if assume_yes else ask_confirm
     acted = run_guard(
         remove=remove,
