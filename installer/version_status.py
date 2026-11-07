@@ -62,7 +62,7 @@ from installer.executors import ExecutorError, prefix_writable
 from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
 from installer.manager_versions import OutdatedReport, read_outdated
-from installer.model import SKILL_HARNESSES, ConfigStep, Method, Tool, method_package
+from installer.model import ConfigStep, Method, Tool, method_package
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -94,15 +94,6 @@ from installer.postinstall import POSTINSTALL_HOOKS, host_labels, present_harnes
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
-from installer.skill_lifecycle import (
-    SKILL_HARNESS_LABELS,
-    HarnessStatus,
-    ProjectPackReport,
-    inspect_project_pack,
-    inspect_skill_reports,
-    partial_harnesses,
-    partial_steps,
-)
 from installer.status import is_installed
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
@@ -113,7 +104,6 @@ from installer.version_cache import (
     encode_manager_snapshot,
     is_stale,
     load_manager_snapshot,
-    load_skill_statuses,
     load_version_cache,
     save_version_cache,
     should_fetch,
@@ -597,50 +587,10 @@ def resolve_status(
     )
 
 
-def default_skill_home() -> Path:
-    """The home whose skill and project-pack evidence a service reads by
-    default. A function, resolved at construction, so the test suite can
-    redirect it in one place (checker W5)."""
-    return Path.home()
-
-
-@dataclass(frozen=True)
-class SkillHostStatus:
-    """One pack's host answers plus its D-18 reasons and steps.
-
-    Only the hosts are persisted: a cache-seeded status has no reasons or
-    steps until the first `refresh_skills` of the launch.
-    """
-
-    hosts: dict[str, str]
-    stale: bool
-    reasons: tuple[str, ...] = ()
-    steps: tuple[ConfigStep, ...] = ()
-
-
-SKILL_NOT_CHECKED = "skill configuration not checked: "
-
-
-@dataclass(frozen=True)
-class _PackScan:
-    """The lock-free pack inputs of one pass, read from the skill home only.
-
-    `present` are the harnesses on this machine; `projects` each project
-    pack's D-21 report; `failures` the `not checked` note of a pack whose
-    helper raised (review M11).
-    """
-
-    present: frozenset[str]
-    projects: Mapping[str, ProjectPackReport]
-    failures: Mapping[str, str]
-
-
 BROKEN_SHIM_REASON = (
     "shim present, package missing — select it and press enter to reinstall and repair"
 )
 NEEDS_BREW_REASON = "needs Homebrew, which is not on PATH"
-SKILL_CHECKING_REASON = "checking which hosts have it"
-SKILL_SEEDED_NOTE = "host status from the previous run, re-checking"
 # 19-UI-SPEC locked copy (D-09, SPEC R4). CHANGED_SINCE_INSTALL lives in receipts.
 RECEIPT_UNREADABLE_NOTE = "install receipt unreadable — treated as unproven"
 ADOPTED_NOTE = "adopted: the file matches the release checksum"
@@ -838,7 +788,6 @@ class ToolState:
     reasons: tuple[str, ...]
     ownership: ManagerOwnership
     version: VersionStatus | None
-    skill_hosts: SkillHostStatus | None
     receipt: Receipt | None
     removable: RemovalPlan
     unconfigured: tuple[ConfigStep, ...]
@@ -861,7 +810,6 @@ def tool_state(
     version: VersionStatus | None,
     removable: RemovalPlan,
     seq: int = 0,
-    skill_hosts: SkillHostStatus | None = None,
     receipt: Receipt | None = None,
     checking: tuple[str, ...] = (),
     broken: tuple[str, ...] = (),
@@ -909,7 +857,6 @@ def tool_state(
         reasons=reasons,
         ownership=ownership,
         version=version,
-        skill_hosts=skill_hosts,
         receipt=receipt,
         removable=removable,
         unconfigured=unconfigured,
@@ -927,18 +874,8 @@ def _unwritable_prefixes(tool: Tool, platform: Platform) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _is_skill_pack(tool: Tool) -> bool:
-    return any(method.kind == "skill_pack" for method in tool.methods)
-
-
 def ownership_notes(tool: Tool, ownership: ManagerOwnership, platform: Platform) -> tuple[str, ...]:
-    """The catalog detail bar's owner sentences, raw, in its order (D-15).
-
-    A skill pack gets none: they describe a binary on PATH, and the resolver
-    answers `unknown` for every pack (checker W1).
-    """
-    if _is_skill_pack(tool):
-        return ()
+    """The catalog detail bar's owner sentences, raw, in its order (D-15)."""
     notes: list[str] = []
     if ownership.owner != "unknown":
         label = owner_detail(ownership)
@@ -974,9 +911,7 @@ def version_notes(
     tool: Tool, status: VersionStatus, ownership: ManagerOwnership, *, present: bool
 ) -> tuple[str, ...]:
     """The catalog's version sentences plus the facts its dim Ver labels
-    carried (D-15). None for a skill pack (checker W1)."""
-    if _is_skill_pack(tool):
-        return ()
+    carried (D-15)."""
     notes: list[str] = []
     if present and status.installed is None:
         notes.append("version unreadable")
@@ -1030,8 +965,7 @@ class VersionRefreshService:
         read_inventory_fn: Callable[..., ManagerInventory] | None = None,
         read_outdated_fn: Callable[..., OutdatedReport] | None = None,
         native_probe: ProbeRunner | None = None,
-        skill_probe: Callable[[list[str]], str] | None = None,
-        skill_home: Path | None = None,
+        home: Path | None = None,
         present: Callable[[Tool], bool] | None = None,
         path_value: Callable[[], str] | None = None,
         terminal_drift: Callable[[Platform], TerminalShellResult] | None = None,
@@ -1067,8 +1001,7 @@ class VersionRefreshService:
         # forbids ("tests must be deterministic and offline"). Production
         # (setup.py) supplies the real runner explicitly.
         self._native_probe = native_probe
-        self._skill_probe = skill_probe
-        self._skill_home = skill_home if skill_home is not None else default_skill_home()
+        self._home = home if home is not None else Path.home()
         # D-16: a dry run only; production passes `sync_terminal_shells(write=False)`.
         self._terminal_drift = terminal_drift
         self._lock = threading.Lock()
@@ -1084,18 +1017,10 @@ class VersionRefreshService:
         self._pending_ids: set[str] = set()
         # Doctor findings per tool id: (broken, notes), read by every pass (D-13).
         self._evidence: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-        self._skills: dict[str, SkillHostStatus] = {}
-        # Per pack: seq and scan of the pass that published its state;
-        # `refresh_skills` rebuilds each pack with its own (RR-03).
-        self._pack_scans: dict[str, tuple[int, _PackScan]] = {}
-        self._skills_probed = False
-        # Fresh skill answers a failed cache write has not persisted yet (RR3-03).
-        self._skills_unsaved = False
         # The cleared manager snapshot may not have reached disk (invalidate).
         self._managers_invalid = False
         # Tracked casks that auto-update, as the last published pass saw them (LIFE-10).
         self._greedy: frozenset[str] = frozenset()
-        self._skills_pass_lock = threading.Lock()
         self._epoch = 0
         self._seq = 0
         self._inflight: dict[frozenset[str], _Flight] = {}
@@ -1151,7 +1076,7 @@ class VersionRefreshService:
 
     @property
     def warning(self) -> str | None:
-        """Cache-save warning, including skill answers until a later save persists them."""
+        """The cache-save warning, cleared once a later save succeeds."""
         return self._warning
 
     def state_of(self, tool_id: str) -> ToolState | None:
@@ -1200,91 +1125,6 @@ class VersionRefreshService:
             self._which(name), name, shim_dir=self._managed_bin_dir, path_value=self._path_value()
         )
 
-    def seed_skills_from_cache(self) -> None:
-        """Load persisted skill answers as stale. Composition root only, never paint."""
-        loaded = load_skill_statuses(self._cache_path)
-        seeded = {
-            tool_id: SkillHostStatus(hosts=dict(hosts), stale=True)
-            for tool_id, hosts in loaded.items()
-        }
-        with self._lock:
-            self._skills = seeded
-
-    def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
-        """Probe every skill pack once per launch. BLOCKING — worker thread only.
-
-        A second caller waits on `_skills_pass_lock` for the in-flight pass,
-        then returns that pass's map. `invalidate` must not take this lock:
-        a probe may call it, and the pass lock is held across the probe.
-
-        The worker owns host answers only (G9): project facts belong to the
-        pass that published them, so the rebuild uses that pass's scan and
-        never reads the home again.
-        """
-        packs = [tool for tool in tools if tool.skill_lifecycle is not None]
-        probe = self._skill_probe
-        if probe is None or not packs:
-            return dict(self._skills)
-        with self._skills_pass_lock:
-            with self._lock:
-                if self._skills_probed:
-                    return dict(self._skills)
-                started_epoch = self._epoch
-            probed = inspect_skill_reports(packs, probe, self._skill_home)
-            fresh = {
-                tool_id: SkillHostStatus(
-                    hosts=dict(report.hosts),
-                    stale=False,
-                    reasons=report.reasons,
-                    steps=report.steps,
-                )
-                for tool_id, report in probed.items()
-            }
-            with self._lock:
-                if self._epoch != started_epoch:
-                    return dict(self._skills)
-                merged = {**self._skills, **fresh}
-
-                def save_skills() -> None:
-                    try:
-                        save_version_cache(
-                            self._cache_path,
-                            load_version_cache(self._cache_path),
-                            skills={
-                                tool_id: dict(status.hosts) for tool_id, status in merged.items()
-                            },
-                        )
-                    except OSError as exc:
-                        # A failed write never strands the packs in CHECKING (WR2-03).
-                        self._warning = f"version cache not saved: {exc}"
-                        self._skills_unsaved = True
-                    else:
-                        self._skills_unsaved = False
-
-                self._write_or_queue(save_skills)
-                self._skills = merged
-                self._skills_probed = True
-                rebuilt = {
-                    tool.id: self._skill_state(
-                        tool,
-                        generation=state.generation,
-                        seq=state.seq,
-                        platform=self._platform,
-                        ownership=state.ownership,
-                        version=state.version,
-                        removable=state.removable,
-                        scan=entry[1],
-                    )
-                    for tool in packs
-                    if (state := self._states.get(tool.id)) is not None
-                    and state.generation == started_epoch
-                    and (entry := self._pack_scans.get(tool.id)) is not None
-                    and state.seq == entry[0]
-                }
-                if rebuilt:
-                    self._states = {**self._states, **rebuilt}
-                return dict(merged)
-
     def mark_pending(self, tool_ids: Collection[str]) -> None:
         """Hide `tool_ids` until the next epoch (the removal start, D-09).
 
@@ -1324,9 +1164,8 @@ class VersionRefreshService:
     def invalidate(self, *, reason: str) -> int:
         """Bump the epoch and drop the Doctor evidence and the manager snapshot under the lock.
 
-        The in-memory flags change before the cache write, so a failed write
-        still forces the next skill probe and the next manager query; the
-        write's OSError still propagates.
+        The in-memory flag changes before the cache write, so a failed write
+        still forces the next manager query; the write's OSError still propagates.
         """
         del reason
         with self._lock:
@@ -1334,13 +1173,8 @@ class VersionRefreshService:
             self._pending_ids.clear()
             # A mutation may have repaired what Doctor found (C-09).
             self._evidence.clear()
-            # In memory first: a failed write must still force the next probe (WR2-03).
-            self._skills_probed = False
             # In memory first: a failed write must still force the next manager query (WR2-03).
             self._managers_invalid = True
-            self._skills = {
-                tool_id: replace(entry, stale=True) for tool_id, entry in self._skills.items()
-            }
 
             def clear_manager_snapshot() -> None:
                 tools = load_version_cache(self._cache_path)
@@ -1353,171 +1187,9 @@ class VersionRefreshService:
         """The harness hosts, read once per pass (23-REUSE 07-2). A failure is a note, never
         a failed pass: it returns no hosts and the reason."""
         try:
-            return present_harnesses(self._skill_home, self._looked_through), None
+            return present_harnesses(self._home, self._looked_through), None
         except Exception as exc:  # a read-only secondary fact must never fail the pass
             return frozenset(), str(exc)
-
-    def _scan_packs(
-        self, packs: Sequence[Tool], present: frozenset[str], presence_error: str | None
-    ) -> _PackScan:
-        """Harnesses and project reports, read once, outside `_lock` (D-17, D-21).
-
-        Every scan takes `self._skill_home` explicitly (checker W5).
-        """
-        failures: dict[str, str] = {}
-        if not packs:
-            return _PackScan(present=frozenset(), projects={}, failures=failures)
-        if presence_error is not None:
-            failures = {tool.id: f"{SKILL_NOT_CHECKED}{presence_error}" for tool in packs}
-        projects: dict[str, ProjectPackReport] = {}
-        for tool in packs:
-            lifecycle = tool.skill_lifecycle
-            if lifecycle is None or lifecycle.scope != "project":
-                continue
-            try:
-                projects[tool.id] = inspect_project_pack(tool, self._skill_home, present)
-            except Exception as exc:  # a read-only secondary fact must never fail the pass
-                failures.setdefault(tool.id, f"{SKILL_NOT_CHECKED}{exc}")
-        return _PackScan(present=present, projects=projects, failures=failures)
-
-    def _user_pack_facts(
-        self, tool: Tool, hosts: SkillHostStatus | None, present: frozenset[str]
-    ) -> tuple[tuple[str, ...], tuple[ConfigStep, ...], tuple[str, ...]]:
-        """(facts, steps, notes) of a user-scope pack: D-18 first, then D-17 partials."""
-        lifecycle = tool.skill_lifecycle
-        if hosts is None or lifecycle is None or not hosts.hosts:
-            return (), (), ()
-        notes: tuple[str, ...] = ()
-        partial: tuple[tuple[str, ...], tuple[ConfigStep, ...]] = ((), ())
-        try:
-            # A harness whose D-18 fix already has a step is not also partial.
-            fixed = {step.harness for step in hosts.steps}
-            if hosts.reasons:
-                # D-18 reasons are Claude's: an ambiguous or duplicated Claude copy
-                # is not a missing one (RR-04).
-                fixed = fixed | {"claude"}
-            missing = partial_harnesses(
-                cast(Mapping[str, HarnessStatus], hosts.hosts),
-                lifecycle.supported_harnesses,
-                present,
-            )
-            partial = partial_steps(tool, [h for h in missing if h not in fixed])
-        except Exception as exc:  # a read-only secondary fact must never fail the pass
-            notes = (f"{SKILL_NOT_CHECKED}{exc}",)
-        if not hosts.stale:
-            # Review C2-M3: an unreadable answer from a harness this machine has.
-            notes += tuple(
-                f"{SKILL_NOT_CHECKED}no readable answer from "
-                f"{SKILL_HARNESS_LABELS.get(harness, harness)}"
-                for harness in SKILL_HARNESSES
-                if harness in present and hosts.hosts.get(harness) == "unknown"
-            )
-        return hosts.reasons + partial[0], hosts.steps + partial[1], notes
-
-    def _skill_state(
-        self,
-        tool: Tool,
-        *,
-        generation: int,
-        seq: int,
-        platform: Platform,
-        ownership: ManagerOwnership,
-        version: VersionStatus | None,
-        removable: RemovalPlan,
-        scan: _PackScan,
-    ) -> ToolState:
-        """A skill pack's state from the host answers held now (call under
-        `_lock`) and the pass's scan. Every configuration fact goes through
-        here, so `refresh_skills`'s rebuild keeps it.
-
-        A user-scope pack with probes is CHECKING until the current probe has
-        answered for it (G8): stale answers, including a cache-seeded
-        `present`, add only the seeded note. Once it has, presence is any
-        fresh `present` answer, else MISSING; an unreadable present harness
-        adds its not-checked note, so mixed absent/unknown is never a
-        note-less MISSING (G24). This differs from
-        `skill_lifecycle.inspect_status` on purpose: for a fresh map with no
-        `present` answer and at least one `unknown`, that function answers
-        `unknown`, while the state is MISSING plus the not-checked note, so a
-        pack never stays CHECKING after its probe answered (accepted in 19-27,
-        P19-07).
-        """
-        hosts = self._skills.get(tool.id)
-        failure = scan.failures.get(tool.id)
-        notes: tuple[str, ...] = (failure,) if failure is not None else ()
-        report = scan.projects.get(tool.id)
-        if report is not None:
-            # D-21: presence is "installed in N repos" or a global leftover,
-            # never the global install-state hosts.
-            repos = sum(1 for _repo, runtimes in report.repos if runtimes)
-            if repos:
-                notes = (f"installed in {repos} repo{'' if repos == 1 else 's'}",) + notes
-            notes += tuple(f"{SKILL_NOT_CHECKED}cannot read ~/{path}" for path in report.unchecked)
-            return tool_state(
-                tool,
-                generation=generation,
-                seq=seq,
-                platform=platform,
-                present=bool(repos or report.leftovers),
-                ownership=ownership,
-                version=version,
-                removable=removable,
-                skill_hosts=hosts,
-                misconfigured=report.reasons,
-                unconfigured=report.steps,
-                notes=notes,
-            )
-        if tool.skill_lifecycle is not None and not tool.skill_lifecycle.status_probes:
-            # No host probe will ever answer for this pack: presence is the
-            # presence predicate, as for any binary, never CHECKING forever.
-            facts, steps, pack_notes = self._user_pack_facts(tool, hosts, scan.present)
-            return tool_state(
-                tool,
-                generation=generation,
-                seq=seq,
-                platform=platform,
-                present=self._present(tool),
-                ownership=ownership,
-                version=version,
-                removable=removable,
-                misconfigured=facts,
-                unconfigured=steps,
-                notes=notes + pack_notes,
-            )
-        # The current probe has answered only when its answers are stored fresh
-        # (`refresh_skills` writes stale=False; the cache and `invalidate` write
-        # stale=True). Stale answers never settle presence, facts or steps.
-        if hosts is None or hosts.stale:
-            if hosts is not None and hosts.stale:
-                notes = (SKILL_SEEDED_NOTE,) + notes
-            return tool_state(
-                tool,
-                generation=generation,
-                seq=seq,
-                platform=platform,
-                present=True,
-                ownership=ownership,
-                version=version,
-                removable=removable,
-                skill_hosts=hosts,
-                checking=(SKILL_CHECKING_REASON,),
-                notes=notes,
-            )
-        facts, steps, pack_notes = self._user_pack_facts(tool, hosts, scan.present)
-        return tool_state(
-            tool,
-            generation=generation,
-            seq=seq,
-            platform=platform,
-            present="present" in hosts.hosts.values(),
-            ownership=ownership,
-            version=version,
-            removable=removable,
-            skill_hosts=hosts,
-            misconfigured=facts,
-            unconfigured=steps,
-            notes=notes + pack_notes,
-        )
 
     def _receipt_evidence(
         self,
@@ -1903,7 +1575,6 @@ class VersionRefreshService:
             native = native_index(platform.os, paths, native)
         produced: dict[str, VersionCacheEntry] = {}
         states: dict[str, ToolState] = {}
-        packs: list[tuple[Tool, ManagerOwnership, VersionStatus, RemovalPlan]] = []
         fetches = 0
         for tool in tools:
             ownership = self._resolve_owner_from(
@@ -1937,59 +1608,53 @@ class VersionRefreshService:
             # D-09: the hint is computed here, once, from the ownership and version this pass
             # already holds; the projection reads it and never probes again.
             hint = removal_hint(ownership, tool.cmd, version=status.installed)
-            if tool.skill_lifecycle is not None:
-                # Built at commit, from the host answers held then.
-                plan = removal_plan(tool, self._managed_bin_dir, hint=hint)
-                packs.append((tool, ownership, status, plan))
-            else:
-                present = self._present(tool)
-                # Before the removal plan, so an adopted tool is removable now.
-                receipt, broken, receipt_notes = self._receipt_evidence(
-                    tool,
-                    present=present,
-                    entry=new_entry if new_entry is not None else entry,
-                    platform=platform,
-                )
-                removable = removal_plan(tool, self._managed_bin_dir, hint=hint)
-                if (
-                    present
-                    and ownership.owner == "installer"
-                    and receipt is None
-                    and not removable.removable
-                ):
-                    # No receipt, adoption or layout proves it (review C2-M2).
-                    receipt_notes += (UNPROVEN_NOTE,)
-                facts = config.get(tool.id, _NO_FACTS).plus(
-                    _hook_fact(tool, receipt, hosts, presence_error)
-                )
-                found_broken, found_notes = evidence.get(tool.id, ((), ()))
-                states[tool.id] = tool_state(
-                    tool,
-                    generation=started_epoch,
-                    seq=seq,
-                    platform=platform,
-                    # R1-11: a receipt whose recorded file or link no longer matches is
-                    # presence for health, so an interrupted removal reads BROKEN, not MISSING.
-                    present=present or bool(broken),
-                    ownership=ownership,
-                    version=status,
-                    removable=removable,
-                    receipt=receipt,
-                    broken=broken + found_broken,
-                    misconfigured=facts.misconfigured,
-                    unconfigured=facts.steps,
-                    unwritable=_unwritable_prefixes(tool, platform),
-                    notes=ownership_notes(tool, ownership, platform)
-                    + version_notes(tool, status, ownership, present=present)
-                    + receipt_notes
-                    + found_notes
-                    + (facts.unchecked if present else ()),
-                )
+            present = self._present(tool)
+            # Before the removal plan, so an adopted tool is removable now.
+            receipt, broken, receipt_notes = self._receipt_evidence(
+                tool,
+                present=present,
+                entry=new_entry if new_entry is not None else entry,
+                platform=platform,
+            )
+            removable = removal_plan(tool, self._managed_bin_dir, hint=hint)
+            if (
+                present
+                and ownership.owner == "installer"
+                and receipt is None
+                and not removable.removable
+            ):
+                # No receipt, adoption or layout proves it (review C2-M2).
+                receipt_notes += (UNPROVEN_NOTE,)
+            facts = config.get(tool.id, _NO_FACTS).plus(
+                _hook_fact(tool, receipt, hosts, presence_error)
+            )
+            found_broken, found_notes = evidence.get(tool.id, ((), ()))
+            states[tool.id] = tool_state(
+                tool,
+                generation=started_epoch,
+                seq=seq,
+                platform=platform,
+                # R1-11: a receipt whose recorded file or link no longer matches is
+                # presence for health, so an interrupted removal reads BROKEN, not MISSING.
+                present=present or bool(broken),
+                ownership=ownership,
+                version=status,
+                removable=removable,
+                receipt=receipt,
+                broken=broken + found_broken,
+                misconfigured=facts.misconfigured,
+                unconfigured=facts.steps,
+                unwritable=_unwritable_prefixes(tool, platform),
+                notes=ownership_notes(tool, ownership, platform)
+                + version_notes(tool, status, ownership, present=present)
+                + receipt_notes
+                + found_notes
+                + (facts.unchecked if present else ()),
+            )
             if would_fetch:
                 fetches += 1
             if new_entry is not None:
                 produced[tool.id] = new_entry
-        scan = self._scan_packs([pack for pack, *_rest in packs], hosts, presence_error)
         with self._lock:
             if self._epoch != started_epoch:
                 # RACED: an invalidate landed while this pass was resolving,
@@ -2002,17 +1667,6 @@ class VersionRefreshService:
             if outdated.greedy is not None:
                 # A failed greedy read keeps the last published set (LIFE-10).
                 self._greedy = outdated.greedy
-            for tool, ownership, status, removable in packs:
-                states[tool.id] = self._skill_state(
-                    tool,
-                    generation=started_epoch,
-                    seq=seq,
-                    platform=platform,
-                    ownership=ownership,
-                    version=status,
-                    removable=removable,
-                    scan=scan,
-                )
             # Newest pass wins per record (L-19-02): at one epoch a record
             # is replaced only by one from a pass with a higher sequence,
             # so a slower older pass can still fill tools a newer partial
@@ -2028,33 +1682,21 @@ class VersionRefreshService:
             # The ONE publication point, tagged with `started_epoch`, which
             # equals `self._epoch` here.
             self._states = {**self._states, **fresh}
-            self._pack_scans = {
-                **self._pack_scans,
-                **{tool.id: (seq, scan) for tool, *_rest in packs if tool.id in fresh},
-            }
             # Best effort, after the swap and still under the lock (it
             # serializes with `invalidate`'s save): a failed write leaves the
             # published states in place and surfaces as `warning`.
             managers: dict[str, object] | None = None
             if persist_snapshot:
                 managers = encode_manager_snapshot(snapshot) if snapshot is not None else {}
-            # RR3-03: carry answers a failed skill save left unsaved, so the
-            # warning clears only once they are on disk.
-            skills = (
-                {tool_id: dict(status.hosts) for tool_id, status in self._skills.items()}
-                if self._skills_unsaved
-                else None
-            )
 
             def save_pass() -> None:
                 try:
                     merged = load_version_cache(self._cache_path)
                     merged.update({k: v for k, v in produced.items() if k in fresh})
-                    save_version_cache(self._cache_path, merged, managers=managers, skills=skills)
+                    save_version_cache(self._cache_path, merged, managers=managers)
                 except OSError as exc:
                     self._warning = f"version cache not saved: {exc}"
                 else:
-                    self._skills_unsaved = False
                     if persist_snapshot:
                         # Cleared once a snapshot this pass queried is on disk, so the retry
                         # backoff governs a failing manager (RR3-03).

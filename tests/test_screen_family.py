@@ -629,7 +629,7 @@ async def test_a_mutation_during_a_running_pass_supersedes_it(tmp_path: Path):
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=probe,
     )
@@ -2714,7 +2714,7 @@ def _tier_marks(app: UnifiedApp, tool_id: str) -> list[str]:
 def _real_service(tmp_path: Path) -> VersionRefreshService:
     return offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: "1.0",
     )
@@ -3208,7 +3208,7 @@ async def test_a_real_cache_write_failure_after_a_reinstall_is_reported(
     managed = tmp_path / ".local" / "bin"
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: "1.0",
         which=lambda cmd: None if cmd == "brew" else str(managed / cmd),

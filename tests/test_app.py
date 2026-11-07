@@ -493,7 +493,7 @@ def test_headless_all_runs_one_refresh_pass_before_planning(
     tools = [_tool("rg", "search")]
     refresh = offline_service(
         Path.home() / "versions.json",
-        skill_home=Path.home(),
+        home=Path.home(),
         resolve_tag=lambda _repo: (_ for _ in ()).throw(OSError("offline")),
         probe_output=lambda _argv: None,
         present=lambda _tool: False,
@@ -505,11 +505,7 @@ def test_headless_all_runs_one_refresh_pass_before_planning(
         passes.append(batch)
         run_refresh(batch)
 
-    def no_skills_pass(_batch: Sequence[Tool]) -> None:
-        raise AssertionError("the headless route runs no skills pass")
-
     monkeypatch.setattr(refresh, "refresh", counted_refresh)
-    monkeypatch.setattr(refresh, "refresh_skills", no_skills_pass)
     installed, install = _recording_install()
     console, buf = _console()
 

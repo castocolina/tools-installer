@@ -74,7 +74,7 @@ from installer.postinstall import BREW_BIN_DIRS, which_with_brew
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
-from installer.run import OutputRunner, Runner, apply_child_env, run_captured, run_query
+from installer.run import OutputRunner, Runner, apply_child_env, run_captured
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -700,7 +700,6 @@ def _build_services(
         probe_output=probe_version_output,
         managed_bin_dir=_DEFAULT_BIN_DIR,
         native_probe=run_probe,
-        skill_probe=lambda argv: run_query(argv),
         # D-16, T-19-47: the pass only reads drift; it never writes a terminal config.
         terminal_drift=lambda live: sync_terminal_shells(
             home=Path.home(),
@@ -710,7 +709,6 @@ def _build_services(
             write=False,
         ),
     )
-    version_refresh.seed_skills_from_cache()
 
     # Preview and reinstall must receive the SAME policy object: the module's
     # preview-equals-effect guarantee rests on both paths reaching one argv

@@ -9,7 +9,7 @@ import time
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -26,10 +26,6 @@ from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
     ConfigStep,
     Method,
-    SkillLifecycle,
-    SkillOperation,
-    SkillStatusProbe,
-    SkillTarget,
     Tool,
     load_tools,
 )
@@ -51,7 +47,6 @@ from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError
 from installer.session import Disposition, build_plan
-from installer.skill_lifecycle import inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
@@ -61,7 +56,6 @@ from installer.version_cache import (
     VersionCacheEntry,
     encode_manager_snapshot,
     load_manager_snapshot,
-    load_skill_statuses,
     load_version_cache,
     save_version_cache,
     should_fetch_managers,
@@ -77,7 +71,6 @@ from installer.version_status import (
     UNKNOWN_OWNER_NOTE,
     UNPROVEN_NOTE,
     Health,
-    SkillHostStatus,
     ToolState,
     VersionRefreshService,
     VersionStatus,
@@ -104,8 +97,6 @@ from tests.test_download import fixture_runner
 from tests.test_registry import REGISTRY
 
 _MANAGED = Path("/tmp/tools-installer-bin")
-# Frozen copy of the pack entries removed from the shipped registry (23.1-01); deleted in 23.1-15.
-PACK_REGISTRY = Path(__file__).resolve().parent / "retired_skill_packs.toml"
 
 
 def _empty_inventory(**_kwargs: object) -> ManagerInventory:
@@ -131,11 +122,6 @@ def _versions(service: VersionRefreshService, tools: Sequence[Tool]) -> dict[str
         for tool_id, state in states.items()
         if state is not None and state.version is not None
     }
-
-
-def _held_skills(service: VersionRefreshService) -> dict[str, SkillHostStatus]:
-    """The held skill-host answers: `refresh_skills` over no pack probes nothing."""
-    return service.refresh_skills(())
 
 
 def _installer_owned_service(
@@ -1323,41 +1309,24 @@ def test_a_superseded_refresh_publishes_no_ownership_over_a_newer_pass(
 def test_the_service_publishes_one_snapshot_of_tool_states(tmp_path: Path) -> None:
     """D-03: after a pass, the only tool-keyed dict of `ToolState`s on the
     service is the published snapshot, each state carrying its pass's `seq`;
-    the only other tool-keyed dict is the skill-probe input store, and no
-    `VersionStatus` or `ManagerOwnership` map remains. Read through `vars()`,
-    never a private attribute name."""
-    service = _skill_state_service(tmp_path, lambda _argv: _CLAUDE_SUPERPOWERS_JSON)
-    pack, alpha = _claude_pack(), _gh_tool("alpha")
-    service.refresh([pack, alpha])
-    service.refresh_skills([pack])
-    published = {tool_id: service.state_of(tool_id) for tool_id in (pack.id, alpha.id)}
+    nothing else is keyed by tool, and no `VersionStatus` or `ManagerOwnership` map
+    remains. Read through `vars()`, never a private attribute name."""
+    service = _alpha_service(tmp_path)
+    first, alpha = _gh_tool("first"), _gh_tool("alpha")
+    service.refresh([first, alpha])
+    published = {tool_id: service.state_of(tool_id) for tool_id in (first.id, alpha.id)}
     held = cast("dict[str, object]", vars(service))
     maps = [
         cast("dict[object, object]", value) for value in held.values() if isinstance(value, dict)
     ]
-    covered = {pack.id, alpha.id}
+    covered = {first.id, alpha.id}
     keyed = [mapping for mapping in maps if covered & set(mapping)]
     snapshots = [m for m in keyed if all(isinstance(v, ToolState) for v in m.values())]
     assert snapshots == [published]
     for state in published.values():
         assert state is not None
         assert state.seq >= 1
-    others = [m for m in keyed if m is not snapshots[0]]
-    # 19-37 (RR-03): the per-pack scan of the pass that published it is the
-    # third tool-keyed store, beside the state snapshot and the skill answers.
-    assert len(others) == 2
-    status_maps = [m for m in others if all(isinstance(v, SkillHostStatus) for v in m.values())]
-
-    def scan_entry(value: object) -> bool:
-        if not isinstance(value, tuple):
-            return False
-        entry = cast("tuple[object, ...]", value)
-        return len(entry) == 2 and isinstance(entry[0], int)
-
-    scan_maps = [
-        m for m in others if m not in status_maps and all(scan_entry(v) for v in m.values())
-    ]
-    assert others == status_maps + scan_maps
+    assert [m for m in keyed if m is not snapshots[0]] == []
     for mapping in maps:
         for value in mapping.values():
             parts = cast("tuple[object, ...]", value) if isinstance(value, tuple) else (value,)
@@ -1995,217 +1964,6 @@ def test_github_release_probes_at_the_active_path() -> None:
     assert calls == [["/opt/x/bin/codegraph", "--version"]]
 
 
-def _skill_pack(tool_id: str, probes: tuple[SkillStatusProbe, ...]) -> Tool:
-    manual = SkillOperation(
-        mode="manual-required", instructions=("Review and run the official flow.",)
-    )
-    return Tool(
-        id=tool_id,
-        name=tool_id,
-        category="ai",
-        cmd=tool_id,
-        methods=(Method(kind="skill_pack"),),
-        tier="ai",
-        skill_lifecycle=SkillLifecycle(
-            source="https://github.com/example/skills",
-            owner="example",
-            supported_harnesses=tuple(dict.fromkeys(probe.harness for probe in probes)),
-            revision_policy="upstream-latest",
-            targets=(SkillTarget("harness", "<codex-plugin-dir>/demo"),),
-            install=manual,
-            status=manual,
-            update=manual,
-            removal=manual,
-            status_probes=probes,
-        ),
-    )
-
-
-_CLAUDE_SUPERPOWERS_JSON = (
-    '[{"id": "superpowers@claude-plugins-official", "scope": "user", '
-    '"enabled": true, "version": "6.4.1"}]'
-)
-
-
-def test_refresh_skills_persists_once_and_skips_the_second_call(tmp_path: Path) -> None:
-    calls: list[list[str]] = []
-
-    def skill_probe(argv: list[str]) -> str:
-        calls.append(list(argv))
-        if argv == ["claude", "plugin", "list", "--json"]:
-            return _CLAUDE_SUPERPOWERS_JSON
-        return ""
-
-    pack = _skill_pack(
-        "superpowers",
-        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
-    )
-    path = tmp_path / "versions.json"
-    service = VersionRefreshService(
-        platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
-        cache_path=path,
-        skill_probe=skill_probe,
-        skill_home=tmp_path,
-        which=lambda _cmd: None,
-        query=lambda *_args, **_kwargs: "",
-        pnpm_packages=lambda: (),
-        read_inventory_fn=_empty_inventory,
-        read_outdated_fn=_empty_outdated,
-    )
-    landed = service.refresh_skills([pack])
-    status = _held_skills(service).get("superpowers")
-    assert isinstance(status, SkillHostStatus)
-    assert status.hosts == {"claude": "present"}
-    assert status.stale is False
-    assert landed["superpowers"].stale is False
-    assert load_skill_statuses(path) == {"superpowers": {"claude": "present"}}
-
-    calls.clear()
-    service.refresh_skills([pack])
-    assert calls == []
-
-
-def _claude_pack() -> Tool:
-    return _skill_pack(
-        "superpowers",
-        (SkillStatusProbe("claude", "plugin-cli", "superpowers@claude-plugins-official"),),
-    )
-
-
-def _skill_service(
-    path: Path, probe: Callable[[list[str]], str], home: Path
-) -> VersionRefreshService:
-    return VersionRefreshService(
-        platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
-        cache_path=path,
-        skill_probe=probe,
-        skill_home=home,
-        which=lambda _cmd: None,
-        query=lambda *_args, **_kwargs: "",
-        pnpm_packages=lambda: (),
-        read_inventory_fn=_empty_inventory,
-        read_outdated_fn=_empty_outdated,
-    )
-
-
-def test_skill_refresh_from_two_threads_probes_once(tmp_path: Path) -> None:
-    calls = {"n": 0}
-    release = threading.Event()
-    started = threading.Event()
-
-    def skill_probe(_argv: list[str]) -> str:
-        calls["n"] += 1
-        started.set()
-        assert release.wait(timeout=5)
-        return _CLAUDE_SUPERPOWERS_JSON
-
-    service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
-    pack = _claude_pack()
-    results: list[dict[str, SkillHostStatus]] = []
-
-    def caller() -> None:
-        results.append(service.refresh_skills([pack]))
-
-    first = threading.Thread(target=caller)
-    second = threading.Thread(target=caller)
-    first.start()
-    assert started.wait(timeout=5)
-    second.start()
-    second.join(timeout=0.2)
-    assert second.is_alive()
-    release.set()
-    first.join(timeout=5)
-    second.join(timeout=5)
-    assert calls["n"] == 1
-    assert len(results) == 2
-    assert all(result["superpowers"].stale is False for result in results)
-
-
-def test_skill_pass_superseded_by_invalidate_stores_nothing(tmp_path: Path) -> None:
-    calls = {"n": 0}
-    service = _skill_service(tmp_path / "versions.json", lambda _argv: "", tmp_path)
-
-    def skill_probe(_argv: list[str]) -> str:
-        calls["n"] += 1
-        service.invalidate(reason="x")
-        return _CLAUDE_SUPERPOWERS_JSON
-
-    service._skill_probe = skill_probe  # pyright: ignore[reportPrivateUsage]
-    pack = _claude_pack()
-    service.refresh_skills([pack])
-    assert _held_skills(service).get("superpowers") is None
-    assert service._skills_probed is False  # pyright: ignore[reportPrivateUsage]
-    service.refresh_skills([pack])
-    assert calls["n"] == 2
-    assert _held_skills(service).get("superpowers") is None
-
-
-def test_skill_invalidate_marks_every_held_entry_stale(tmp_path: Path) -> None:
-    def skill_probe(_argv: list[str]) -> str:
-        return _CLAUDE_SUPERPOWERS_JSON
-
-    service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
-    service.refresh_skills([_claude_pack()])
-    landed = _held_skills(service).get("superpowers")
-    assert landed is not None
-    assert landed.stale is False
-    service.invalidate(reason="x")
-    held = _held_skills(service).get("superpowers")
-    assert held is not None
-    assert held.stale is True
-
-
-def test_refresh_skills_without_packs_keeps_seeded_answers(tmp_path: Path) -> None:
-    calls: list[list[str]] = []
-    path = tmp_path / "versions.json"
-    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
-    service = _skill_service(path, lambda argv: calls.append(list(argv)) or "", tmp_path)
-    service.seed_skills_from_cache()
-    before = path.read_text()
-    landed = service.refresh_skills([_tool("rg")])
-    assert calls == []
-    assert landed["superpowers"].stale is True
-    held = _held_skills(service).get("superpowers")
-    assert held is not None
-    assert held.stale is True
-    assert service._skills_probed is False  # pyright: ignore[reportPrivateUsage]
-    assert path.read_text() == before
-
-
-def test_second_skill_caller_waits_for_in_flight_pass(tmp_path: Path) -> None:
-    calls = {"n": 0}
-    started = threading.Event()
-    release = threading.Event()
-
-    def skill_probe(_argv: list[str]) -> str:
-        calls["n"] += 1
-        started.set()
-        assert release.wait(timeout=5)
-        return _CLAUDE_SUPERPOWERS_JSON
-
-    service = _skill_service(tmp_path / "versions.json", skill_probe, tmp_path)
-    pack = _claude_pack()
-    results: list[dict[str, SkillHostStatus]] = []
-
-    def caller() -> None:
-        results.append(service.refresh_skills([pack]))
-
-    first = threading.Thread(target=caller)
-    second = threading.Thread(target=caller)
-    first.start()
-    assert started.wait(timeout=5)
-    second.start()
-    second.join(timeout=0.2)
-    assert second.is_alive()
-    assert calls["n"] == 1
-    release.set()
-    first.join(timeout=5)
-    second.join(timeout=5)
-    assert calls["n"] == 1
-    assert len(results) == 2
-    assert all(item["superpowers"].stale is False for item in results)
-
-
 # -- 19-08 Task 1: one ToolState per tool, published in one swap (D-02, D-03). --
 
 # Captured at import, before any test patches HOME (checker W2).
@@ -2435,7 +2193,7 @@ def test_tool_state_builder_is_pure(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_tool_state_forwards_checking_facts() -> None:
-    pack = _claude_pack()
+    pack = _gh_tool("alpha")
     checking = tool_state(
         pack,
         generation=0,
@@ -2815,11 +2573,10 @@ def test_cache_save_failure_keeps_states_and_sets_warning(
         cache: Mapping[str, VersionCacheEntry],
         *,
         managers: Mapping[str, object] | None = None,
-        skills: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         if failing["on"]:
             raise OSError("disk full")
-        save_version_cache(path, cache, managers=managers, skills=skills)
+        save_version_cache(path, cache, managers=managers)
 
     monkeypatch.setattr("installer.version_status.save_version_cache", full)
     service.refresh([_gh_tool("a")])
@@ -2831,115 +2588,6 @@ def test_cache_save_failure_keeps_states_and_sets_warning(
     assert service.warning is None
 
 
-def test_skill_cache_save_failure_still_settles_the_packs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = tmp_path / "home"
-    pack = _superpowers()
-    service = _pack_service(
-        home, _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))), harnesses=frozenset({"claude"})
-    )
-    service.refresh([pack])
-    original = save_version_cache
-
-    def full(
-        path: Path,
-        cache: Mapping[str, VersionCacheEntry],
-        *,
-        managers: Mapping[str, object] | None = None,
-        skills: Mapping[str, Mapping[str, str]] | None = None,
-    ) -> None:
-        if skills is not None:
-            raise OSError("disk full")
-        original(path, cache, managers=managers, skills=skills)
-
-    monkeypatch.setattr("installer.version_status.save_version_cache", full)
-    hosts = service.refresh_skills([pack])
-    assert hosts["superpowers"].stale is False
-    state = service.state_of(pack.id)
-    assert state is not None
-    assert state.health is Health.OK
-    assert service.warning == "version cache not saved: disk full"
-
-
-def test_a_version_pass_persists_unsaved_skill_answers_before_clearing_the_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = tmp_path / "home"
-    cache = tmp_path / "home-versions.json"
-    pack = _superpowers()
-    service = _pack_service(
-        home,
-        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
-        harnesses=frozenset({"claude"}),
-    )
-    service.refresh([pack])
-    original = save_version_cache
-    failing = {"on": True}
-
-    def full(
-        path: Path,
-        cache_entries: Mapping[str, VersionCacheEntry],
-        *,
-        managers: Mapping[str, object] | None = None,
-        skills: Mapping[str, Mapping[str, str]] | None = None,
-    ) -> None:
-        if failing["on"] and skills is not None:
-            raise OSError("disk full")
-        original(path, cache_entries, managers=managers, skills=skills)
-
-    monkeypatch.setattr("installer.version_status.save_version_cache", full)
-    service.refresh_skills([pack])
-    assert service.warning == "version cache not saved: disk full"
-    assert load_skill_statuses(cache) == {}
-
-    service.refresh([pack])
-    assert service.warning == "version cache not saved: disk full"
-    assert load_skill_statuses(cache) == {}
-
-    failing["on"] = False
-    service.refresh([pack])
-    assert service.warning is None
-    assert load_skill_statuses(cache) == {"superpowers": {"claude": "present"}}
-
-
-def test_failed_invalidate_save_still_reprobes_the_skills(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = tmp_path / "home"
-    calls: list[list[str]] = []
-
-    def probe(argv: list[str]) -> str:
-        calls.append(list(argv))
-        return _listing((_SP_ID, "user", True, "6.4.1"))
-
-    pack = _superpowers()
-    service = _pack_service(home, probe, harnesses=frozenset({"claude"}))
-    service.refresh([pack])
-    service.refresh_skills([pack])
-    assert calls.count(["claude", "plugin", "list", "--json"]) == 1
-    original = save_version_cache
-    failing = {"on": True}
-
-    def full(
-        path: Path,
-        cache: Mapping[str, VersionCacheEntry],
-        *,
-        managers: Mapping[str, object] | None = None,
-        skills: Mapping[str, Mapping[str, str]] | None = None,
-    ) -> None:
-        if failing["on"]:
-            raise OSError("disk full")
-        original(path, cache, managers=managers, skills=skills)
-
-    monkeypatch.setattr("installer.version_status.save_version_cache", full)
-    with pytest.raises(OSError, match="disk full"):
-        service.invalidate(reason="test")
-    failing["on"] = False
-    service.refresh_skills([pack])
-    assert calls.count(["claude", "plugin", "list", "--json"]) == 2
-
-
 def _failing_save(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
     original = save_version_cache
     failing = {"on": False}
@@ -2949,11 +2597,10 @@ def _failing_save(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
         cache: Mapping[str, VersionCacheEntry],
         *,
         managers: Mapping[str, object] | None = None,
-        skills: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         if failing["on"]:
             raise OSError("disk full")
-        original(path, cache, managers=managers, skills=skills)
+        original(path, cache, managers=managers)
 
     monkeypatch.setattr("installer.version_status.save_version_cache", full)
     return failing
@@ -2970,7 +2617,7 @@ def test_failed_invalidate_save_still_requeries_the_managers(
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: "1.0",
         which=lambda cmd: None if cmd == "brew" else str(tmp_path / cmd),
@@ -3011,7 +2658,7 @@ def test_a_failed_query_after_a_failed_invalidate_save_clears_the_flag_and_backs
     now = datetime(2026, 9, 7, tzinfo=UTC)
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: "1.0",
         now=lambda: now,
@@ -3056,8 +2703,6 @@ def test_only_published_records_are_cached(tmp_path: Path) -> None:
 # -- 19-08 Task 3: live has_brew per pass, skill packs CHECKING until probed. --
 
 _BREW = "/home/linuxbrew/.linuxbrew/bin/brew"
-_CHECKING_HOSTS = "checking which hosts have it"
-_SEEDED_NOTE = "host status from the previous run, re-checking"
 
 
 def _no_brew_platform() -> Platform:
@@ -3183,9 +2828,7 @@ def test_a_pass_uses_one_platform_throughout(tmp_path: Path) -> None:
     assert service.platform.has_brew is True
 
 
-def _skill_state_service(
-    tmp_path: Path, probe: Callable[[list[str]], str] | None = None
-) -> VersionRefreshService:
+def _alpha_service(tmp_path: Path) -> VersionRefreshService:
     managed = tmp_path / "managed"
     return VersionRefreshService(
         platform=Platform(os="linux", arch="amd64", immutable=True, has_brew=False),
@@ -3194,8 +2837,7 @@ def _skill_state_service(
         probe_output=lambda _argv: "1.0.0",
         now=lambda: _STATE_NOW,
         managed_bin_dir=managed,
-        skill_probe=probe,
-        skill_home=tmp_path,
+        home=tmp_path,
         which=lambda cmd: str(managed / cmd) if cmd == "alpha" else None,
         artifacts_for=lambda tool: [managed / tool.cmd],
         query=lambda *_args, **_kwargs: "",
@@ -3206,94 +2848,8 @@ def _skill_state_service(
     )
 
 
-def test_skill_pack_without_data_is_checking(tmp_path: Path) -> None:
-    service = _skill_state_service(tmp_path)
-    pack = _claude_pack()
-    service.refresh([pack])
-    state = service.state_of(pack.id)
-    assert state is not None
-    assert state.health is Health.CHECKING
-    assert state.present is False
-    built = tool_state(
-        pack,
-        generation=state.generation,
-        seq=state.seq,
-        platform=service.platform,
-        present=True,
-        ownership=state.ownership,
-        version=state.version,
-        removable=state.removable,
-        checking=(_CHECKING_HOSTS,),
-    )
-    assert (state.health, state.reasons) == (built.health, built.reasons)
-    assert state.reasons[0] == _CHECKING_HOSTS
-
-
-def test_skill_pack_states_follow_refresh_skills(tmp_path: Path) -> None:
-    service = _skill_state_service(tmp_path / "a", lambda _argv: _CLAUDE_SUPERPOWERS_JSON)
-    pack, alpha = _claude_pack(), _gh_tool("alpha")
-    service.refresh([pack, alpha])
-    binary = service.state_of("alpha")
-    checking = service.state_of(pack.id)
-    assert binary is not None
-    assert checking is not None
-    assert checking.health is Health.CHECKING
-    service.refresh_skills([pack])
-    probed = service.state_of(pack.id)
-    assert probed is not None
-    assert probed.health is Health.OK
-    assert probed.generation == checking.generation == service.epoch
-    assert probed.seq == checking.seq
-    assert probed.skill_hosts is not None
-    assert probed.skill_hosts.hosts == {"claude": "present"}
-    assert service.state_of("alpha") is binary
-
-    absent = _skill_state_service(tmp_path / "b", lambda _argv: "[]")
-    absent.refresh([pack])
-    absent.refresh_skills([pack])
-    missing = absent.state_of(pack.id)
-    assert missing is not None
-    assert missing.health is Health.MISSING
-
-
-def test_refresh_skills_superseded_rebuilds_nothing(tmp_path: Path) -> None:
-    holder: dict[str, VersionRefreshService] = {}
-
-    def skill_probe(_argv: list[str]) -> str:
-        holder["svc"].invalidate(reason="x")
-        return _CLAUDE_SUPERPOWERS_JSON
-
-    service = _skill_state_service(tmp_path, skill_probe)
-    holder["svc"] = service
-    pack, alpha = _claude_pack(), _gh_tool("alpha")
-    service.refresh([pack, alpha])
-    service.refresh_skills([pack])
-    assert _held_skills(service).get(pack.id) is None
-    assert service.state_of(pack.id) is None
-    assert service.state_of("alpha") is None
-    service.refresh([pack])
-    fresh = service.state_of(pack.id)
-    assert fresh is not None
-    assert fresh.generation == service.epoch
-    assert fresh.health is Health.CHECKING
-
-
-def test_seeded_skill_hosts_are_a_note(tmp_path: Path) -> None:
-    path = tmp_path / "versions.json"
-    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
-    service = _skill_state_service(tmp_path)
-    service.seed_skills_from_cache()
-    pack = _claude_pack()
-    service.refresh([pack])
-    state = service.state_of(pack.id)
-    assert state is not None
-    # A cache-seeded answer is informational only (G8): CHECKING, never OK.
-    assert state.health is Health.CHECKING
-    assert _SEEDED_NOTE in state.reasons
-
-
-def test_absent_pack_keeps_configuration_facts_as_reasons() -> None:
-    pack = _claude_pack()
+def test_absent_tool_keeps_configuration_facts_as_reasons() -> None:
+    pack = _gh_tool("alpha")
     fact = "disabled: superpowers@claude-plugins-official in user scope (6.4.1)"
     step = ConfigStep(
         "enable superpowers@claude-plugins-official in user scope", "plugin_enable", "claude"
@@ -3321,30 +2877,6 @@ def test_absent_pack_keeps_configuration_facts_as_reasons() -> None:
     assert present.health is Health.MISCONFIGURED
     assert present.reasons == (fact, "no manager claimed the tool")
     assert present.unconfigured == (step,)
-
-
-def test_suite_sandbox_redirects_skill_home(tmp_path_factory: pytest.TempPathFactory) -> None:
-    sandbox = version_status.default_skill_home()
-    assert not sandbox.is_relative_to(_REAL_HOME)
-    assert sandbox.is_relative_to(tmp_path_factory.getbasetemp())
-    marker = sandbox / ".claude" / "gsd-install-state.json"
-    marker.parent.mkdir(parents=True)
-    marker.write_text("{}")
-    pack = _skill_pack("opengsd", (SkillStatusProbe("claude", "install-state", "gsd-core"),))
-    service = VersionRefreshService(
-        platform=_no_brew_platform(),
-        cache_path=tmp_path_factory.mktemp("skills") / "versions.json",
-        skill_probe=lambda _argv: "",
-        which=lambda _cmd: None,
-        query=lambda *_args, **_kwargs: "",
-        pnpm_packages=lambda: (),
-        read_inventory_fn=_empty_inventory,
-        read_outdated_fn=_empty_outdated,
-    )
-    service.refresh_skills([pack])
-    status = _held_skills(service).get("opengsd")
-    assert status is not None
-    assert status.hosts == {"claude": "present"}
 
 
 # -- 19-12 Task 1: the pass resolves uv tools by `uv tool dir` and looks
@@ -3916,26 +3448,6 @@ def test_version_unreadable_and_no_comparison_reasons() -> None:
         absent = version_notes(tool, status, ownership, present=False)
         assert "version unreadable" not in absent
         assert "no latest version to compare against" not in absent
-
-
-def test_skill_pack_gets_no_binary_notes(tmp_path: Path) -> None:
-    pack = _skill_pack("superpowers", (SkillStatusProbe("claude", "install-state", "gsd-core"),))
-    ownership = _unknown_owner(pack)
-    unread = _status(pack, installed=None, latest=None, outdated=None, source="unknown")
-    assert ownership_notes(pack, ownership, _platform()) == ()
-    assert version_notes(pack, unread, ownership, present=True) == ()
-
-    service = _owner_pass_service(tmp_path, which=lambda _cmd: None, managed=tmp_path / "managed")
-    service.refresh([pack])
-    state = service.state_of("superpowers")
-    assert state is not None
-    assert state.ownership.owner == "unknown"
-    binary_sentences = {
-        "version unreadable",
-        "no latest version to compare against",
-        state.ownership.unknown_reason,
-    }
-    assert not binary_sentences & set(state.reasons)
 
 
 def _recording_probe() -> tuple[Callable[[list[str]], str | None], list[list[str]]]:
@@ -4917,7 +4429,12 @@ def _hook_receipt(hooks: Mapping[str, tuple[str, ...]], tool_id: str = "codegrap
     )
 
 
-def _hook_service(tmp_path: Path, commands: frozenset[str]) -> VersionRefreshService:
+def _hook_service(
+    tmp_path: Path,
+    commands: frozenset[str],
+    *,
+    which: Callable[[str], str | None] | None = None,
+) -> VersionRefreshService:
     return VersionRefreshService(
         platform=_LINUX,
         cache_path=tmp_path / "versions.json",
@@ -4925,14 +4442,14 @@ def _hook_service(tmp_path: Path, commands: frozenset[str]) -> VersionRefreshSer
         probe_output=lambda _argv: "1.0.0",
         now=lambda: _STATE_NOW,
         managed_bin_dir=tmp_path / "managed",
-        which=lambda cmd: f"/usr/bin/{cmd}" if cmd in commands else None,
+        which=which or (lambda cmd: f"/usr/bin/{cmd}" if cmd in commands else None),
         artifacts_for=lambda _tool: [],
         read_inventory_fn=_empty_inventory,
         read_outdated_fn=_empty_outdated,
         pnpm_packages=lambda: (),
         resolve_pnpm=lambda: None,
         query=lambda *_args, **_kwargs: "",
-        skill_home=tmp_path / "home",
+        home=tmp_path / "home",
         present=lambda _tool: True,
     )
 
@@ -4984,7 +4501,7 @@ def test_the_pass_calls_present_harnesses_once(
     monkeypatch.setattr(version_status, "present_harnesses", counted)
     _hook_receipt({"codegraph-mcp-register": ("claude",)})
     service = _hook_service(tmp_path, frozenset({"claude", "codex"}))
-    service.refresh([_hook_tool(), _claude_pack()])
+    service.refresh([_hook_tool(), _gh_tool("alpha")])
     assert len(calls) == 1
 
 
@@ -5277,216 +4794,23 @@ def test_group_maps_to_the_declaring_tool(tmp_path: Path) -> None:
     assert split["puppeteer"].unconfigured == ()
 
 
-# -- 19-16 Task 3: skill partial/duplicate/disabled and project-pack evidence
-# (D-17, D-18, D-21, checker B1/W1/W5, review M11/C2-M3) --
-
-_SP_ID = "superpowers@claude-plugins-official"
-_SP_MARKET = "superpowers@superpowers-marketplace"
-_FOUR_REASONS = (
-    f"disabled: {_SP_ID} in user scope (6.4.1)",
-    f"duplicate: {_SP_ID} in project scope (6.2.0)",
-    f"duplicate: {_SP_MARKET} in user scope (6.2.0)",
-    f"duplicate: {_SP_MARKET} in project scope (6.2.0)",
-)
-_SKILL_NOT_CHECKED = "skill configuration not checked: "
-_LEFTOVER = "installed globally; this pack is project-local"
+# -- 23.1-12: the refresh service holds no skill-pack state; host detection stays --
 
 
-def _listing(*entries: tuple[str, str, bool, str]) -> str:
-    return json.dumps(
-        [
-            {"id": plugin_id, "scope": scope, "enabled": enabled, "version": version}
-            for plugin_id, scope, enabled, version in entries
-        ]
-    )
+def test_the_refresh_service_has_no_skill_pass(tmp_path: Path) -> None:
+    service = _alpha_service(tmp_path)
+    assert not hasattr(service, "refresh_skills")
+    assert not hasattr(service, "seed_skills_from_cache")
+    assert not any(field.name.startswith("skill") for field in fields(ToolState))
+    # With no skill pass the one pass still publishes one consistent stage.
+    service.refresh([_gh_tool("alpha")])
+    state = service.state_of("alpha")
+    assert state is not None
+    assert state.generation == service.epoch
 
 
-def _four_install_listing(home: Path) -> str:
-    """The 19-07 four-install host: a disabled canonical user copy plus three copies."""
-    official, market = home / "repo-official", home / "repo-market"
-    official.mkdir(parents=True)
-    market.mkdir()
-    plugins = {
-        _SP_ID: [{"scope": "project", "projectPath": str(official)}],
-        _SP_MARKET: [{"scope": "project", "projectPath": str(market)}],
-    }
-    target = home / ".claude" / "plugins"
-    target.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"version": 2, "plugins": plugins})
-    (target / "installed_plugins.json").write_text(payload, encoding="utf-8")
-    return _listing(
-        (_SP_ID, "user", False, "6.4.1"),
-        (_SP_ID, "project", True, "6.2.0"),
-        (_SP_MARKET, "user", True, "6.2.0"),
-        (_SP_MARKET, "project", True, "6.2.0"),
-    )
-
-
-def _superpowers(*, codex: bool = False) -> Tool:
-    probes = (SkillStatusProbe("claude", "plugin-cli", _SP_ID),)
-    if codex:
-        probes += (SkillStatusProbe("codex", "plugin-cli", "superpowers"),)
-    return _skill_pack("superpowers", probes)
-
-
-def _probe_for(claude: str, codex: str = "") -> Callable[[list[str]], str]:
-    def probe(argv: list[str]) -> str:
-        return claude if argv[0] == "claude" else codex
-
-    return probe
-
-
-def _pack_service(
-    home: Path,
-    probe: Callable[[list[str]], str] | None = None,
-    *,
-    harnesses: frozenset[str] = frozenset(),
-    which: Callable[[str], str | None] | None = None,
-    cache_path: Path | None = None,
-) -> VersionRefreshService:
-    def on_path(cmd: str) -> str | None:
-        return f"/usr/bin/{cmd}" if cmd in harnesses else None
-
-    return VersionRefreshService(
-        platform=_LINUX,
-        cache_path=cache_path or home.parent / f"{home.name}-versions.json",
-        resolve_tag=lambda _repo: "1.0.0",
-        probe_output=lambda _argv: "1.0.0",
-        now=lambda: _STATE_NOW,
-        managed_bin_dir=home.parent / f"{home.name}-managed",
-        skill_probe=probe,
-        skill_home=home,
-        which=which if which is not None else on_path,
-        artifacts_for=lambda _tool: [],
-        read_inventory_fn=_empty_inventory,
-        read_outdated_fn=_empty_outdated,
-        pnpm_packages=lambda: (),
-        resolve_pnpm=lambda: None,
-        query=lambda *_args, **_kwargs: "",
-    )
-
-
-def _probed_state(service: VersionRefreshService, pack: Tool) -> ToolState:
-    """The pack's state after a pass and the once-per-launch probe's rebuild."""
-    service.refresh([pack])
-    service.refresh_skills([pack])
-    rebuilt = service.state_of(pack.id)
-    assert rebuilt is not None
-    # Carry-forward from 19-08: the next pass keeps what the rebuild attached.
-    service.refresh([pack])
-    again = service.state_of(pack.id)
-    assert again is not None
-    assert (again.health, again.reasons, again.unconfigured) == (
-        rebuilt.health,
-        rebuilt.reasons,
-        rebuilt.unconfigured,
-    )
-    return rebuilt
-
-
-def _opengsd() -> Tool:
-    return next(tool for tool in load_tools(PACK_REGISTRY) if tool.id == "opengsd")
-
-
-def _gsd_repo(home: Path, name: str = "proj") -> Path:
-    repo = home / "code" / name
-    (repo / ".planning").mkdir(parents=True)
-    (repo / ".planning" / "config.json").write_text("{}", encoding="utf-8")
-    return repo
-
-
-def test_partial_skill_pack_is_misconfigured(tmp_path: Path) -> None:
-    probe = _probe_for(_listing((_SP_ID, "user", True, "6.4.1")))
-    service = _pack_service(tmp_path / "home", probe, harnesses=frozenset({"claude", "codex"}))
-    state = _probed_state(service, _superpowers(codex=True))
-    assert state.skill_hosts is not None
-    assert state.skill_hosts.hosts == {"claude": "present", "codex": "absent"}
-    assert state.health is Health.MISCONFIGURED
-    assert state.reasons[0] == "partial: missing on Codex"
-    assert state.unconfigured == (
-        ConfigStep("install superpowers for Codex", "skill_install", "codex"),
-    )
-
-
-def test_absent_harness_gives_no_partial(tmp_path: Path) -> None:
-    probe = _probe_for(_listing((_SP_ID, "user", True, "6.4.1")))
-    service = _pack_service(tmp_path / "home", probe, harnesses=frozenset({"claude"}))
-    state = _probed_state(service, _superpowers(codex=True))
-    assert state.health is Health.OK
-    assert state.unconfigured == ()
-    assert not any(reason.startswith("partial:") for reason in state.reasons)
-
-
-def test_claude_duplicates_reach_the_state(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    probe = _probe_for(_four_install_listing(home))
-    pack = _superpowers()
-    service = _pack_service(home, probe, harnesses=frozenset({"claude"}))
-    state = _probed_state(service, pack)
-    expected = inspect_skill_reports([pack], probe, home)[pack.id]
-    assert state.health is Health.MISSING
-    assert state.reasons[:4] == _FOUR_REASONS
-    assert state.unconfigured == expected.steps
-    assert state.unconfigured[0].kind == "plugin_enable"
-    assert len(state.unconfigured) == 5
-
-
-def test_claude_duplicates_on_a_present_pack_are_misconfigured(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    probe = _probe_for(_four_install_listing(home), "superpowers@openai-curated  installed\n")
-    pack = _superpowers(codex=True)
-    service = _pack_service(home, probe, harnesses=frozenset({"claude", "codex"}))
-    state = _probed_state(service, pack)
-    expected = inspect_skill_reports([pack], probe, home)[pack.id]
-    assert state.skill_hosts is not None
-    assert state.skill_hosts.hosts == {"claude": "absent", "codex": "present"}
-    assert state.health is Health.MISCONFIGURED
-    assert state.reasons[:4] == _FOUR_REASONS
-    # Claude's D-18 fix already reinstates it there: no second, partial install step.
-    assert state.unconfigured == expected.steps
-    assert state.unconfigured[0].kind == "plugin_enable"
-
-
-def test_ambiguous_claude_duplicates_never_get_a_partial_install_step(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    probe = _probe_for(
-        _listing((_SP_ID, "user", True, "6.4.1"), (_SP_ID, "user", True, "6.2.0")),
-        "superpowers@openai-curated  installed\n",
-    )
-    pack = _superpowers(codex=True)
-    service = _pack_service(home, probe, harnesses=frozenset({"claude", "codex"}))
-    state = _probed_state(service, pack)
-    assert state.skill_hosts is not None
-    assert state.skill_hosts.hosts == {"claude": "absent", "codex": "present"}
-    assert state.health is Health.MISCONFIGURED
-    assert state.reasons[:2] == (
-        f"duplicate: {_SP_ID} in user scope (6.4.1)",
-        f"duplicate: {_SP_ID} in user scope (6.2.0)",
-    )
-    # Ambiguous is not absent: Claude's D-18 reasons carry no install step, so
-    # the partial logic must not add a second one over the ambiguity (RR-04).
-    assert not any(reason.startswith("partial:") for reason in state.reasons)
-    assert not any(step.kind == "skill_install" for step in state.unconfigured)
-
-
-def test_partial_pack_pass_keeps_every_packs_scan(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    superpowers = _superpowers()
-    ponytail = _skill_pack(
-        "ponytail", (SkillStatusProbe("claude", "plugin-cli", "ponytail@claude-plugins-official"),)
-    )
-    service = _pack_service(
-        home, _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))), harnesses=frozenset({"claude"})
-    )
-    service.refresh([superpowers, ponytail])
-    service.refresh([ponytail])  # a later partial pass
-    service.refresh_skills([superpowers, ponytail])
-    sp_state = service.state_of("superpowers")
-    assert sp_state is not None
-    assert sp_state.health is Health.OK
-    pt_state = service.state_of("ponytail")
-    assert pt_state is not None
-    assert pt_state.health is Health.MISSING
+def _raise_boom(*_args: object) -> object:
+    raise OSError("boom")
 
 
 def test_present_harnesses_runs_once_per_pass(tmp_path: Path) -> None:
@@ -5496,402 +4820,20 @@ def test_present_harnesses_runs_once_per_pass(tmp_path: Path) -> None:
         calls.append(cmd)
         return None
 
-    service = _pack_service(tmp_path / "home", which=which)
-    service.refresh([_superpowers(), _skill_pack("ponytail", ()), _opengsd()])
+    service = _hook_service(tmp_path, frozenset(), which=which)
+    service.refresh([_gh_tool("alpha"), _hook_tool()])
     commands = {command for commands, _markers in HARNESS_PRESENCE.values() for command in commands}
     assert calls.count("claude") == 1
     assert all(calls.count(command) <= 1 for command in commands)
-
-
-def _claude_gsd_install(repo: Path) -> None:
-    """A real Claude GSD install in one repo: version plus a command file."""
-    (repo / ".claude" / "gsd-core").mkdir(parents=True)
-    (repo / ".claude" / "gsd-core" / "VERSION").write_text("1.16.0\n", encoding="utf-8")
-    (repo / ".claude" / "commands").mkdir()
-    (repo / ".claude" / "commands" / "gsd-plan-phase.md").write_text("x", encoding="utf-8")
-
-
-def test_skill_rebuild_never_rereads_project_facts(tmp_path: Path) -> None:
-    """The skill worker rebuilds with the pass's scan, never its own (G9).
-
-    A later home change is invisible to `refresh_skills`. The next full pass
-    owns those facts and reports the leftover.
-    """
-    home = tmp_path / "home"
-    repo = _gsd_repo(home)
-    _claude_gsd_install(repo)
-    service = _pack_service(
-        home,
-        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
-        harnesses=frozenset({"claude"}),
-    )
-    packs = [_opengsd(), _superpowers()]
-    service.refresh(packs)
-    published = service.state_of("opengsd")
-    assert published is not None
-    assert published.reasons[0].startswith("installed in 1 repo")
-
-    (repo / ".claude" / "commands" / "gsd-plan-phase.md").unlink()
-    (home / ".claude" / "gsd-core").mkdir(parents=True)
-    service.refresh_skills(packs)
-    rebuilt = service.state_of("opengsd")
-    assert rebuilt is not None
-    assert rebuilt.reasons == published.reasons
-    assert _LEFTOVER not in rebuilt.reasons
-    skills = service.state_of("superpowers")
-    assert skills is not None
-    assert skills.health is Health.OK
-
-    service.refresh(packs)
-    later = service.state_of("opengsd")
-    assert later is not None
-    assert later.reasons[0] == _LEFTOVER
-
-
-def test_skill_rebuild_after_a_newer_pass_keeps_its_facts(tmp_path: Path) -> None:
-    """A probe still in flight never overwrites a newer pass's facts (G9)."""
-    home = tmp_path / "home"
-    repo = _gsd_repo(home)
-    _claude_gsd_install(repo)
-    gate = threading.Event()
-
-    def probe(argv: list[str]) -> str:
-        gate.wait(timeout=5)
-        return _listing((_SP_ID, "user", True, "6.4.1")) if argv[0] == "claude" else ""
-
-    service = _pack_service(home, probe, harnesses=frozenset({"claude"}))
-    packs = [_opengsd(), _superpowers()]
-    service.refresh(packs)
-    worker = threading.Thread(target=service.refresh_skills, args=(packs,))
-    worker.start()
-    (repo / ".claude" / "commands" / "gsd-plan-phase.md").unlink()
-    (home / ".claude" / "gsd-core").mkdir(parents=True)
-    service.refresh(packs)
-    newer = service.state_of("opengsd")
-    assert newer is not None
-    assert newer.reasons[0] == _LEFTOVER
-    gate.set()
-    worker.join(timeout=5)
-    assert not worker.is_alive()
-    kept = service.state_of("opengsd")
-    assert kept is not None
-    assert kept.reasons == newer.reasons
-    assert kept.seq == newer.seq
-    skills = service.state_of("superpowers")
-    assert skills is not None
-    assert skills.health is Health.OK
-
-
-def test_project_pack_present_in_repos(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    repo = _gsd_repo(home)
-    (repo / ".claude" / "gsd-core").mkdir(parents=True)
-    (repo / ".claude" / "gsd-core" / "VERSION").write_text("1.16.0\n", encoding="utf-8")
-    (repo / ".claude" / "commands").mkdir()
-    (repo / ".claude" / "commands" / "gsd-plan.md").write_text("x", encoding="utf-8")
-    service = _pack_service(home, harnesses=frozenset({"claude"}))
-    state = _settled_states(service, [_opengsd()])["opengsd"]
-    assert state.health is Health.OK
-    assert "installed in 1 repo" in state.reasons
-    assert state.unconfigured == ()
-
-
-def test_project_pack_global_leftover_is_misconfigured(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".claude" / "gsd-core").mkdir(parents=True)
-    state = _settled_states(_pack_service(home), [_opengsd()])["opengsd"]
-    assert state.health is Health.MISCONFIGURED
-    assert state.reasons[0] == _LEFTOVER
-    assert [step.kind for step in state.unconfigured] == ["project_pack_global_uninstall"]
-    assert state.unconfigured[0].harness == "claude"
-
-
-def test_project_pack_empty_dirs_is_not_present(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    repo = _gsd_repo(home)
-    (repo / ".claude" / "gsd-core").mkdir(parents=True)
-    (repo / ".claude" / "gsd-core" / "VERSION").write_text("1.16.0\n", encoding="utf-8")
-    (repo / ".claude" / "skills").mkdir()
-    service = _pack_service(home, harnesses=frozenset({"claude"}))
-    state = _settled_states(service, [_opengsd()])["opengsd"]
-    assert state.health is Health.MISSING
-    assert "Claude Code install in proj is empty" in state.reasons
-    assert not any(reason.startswith("installed in") for reason in state.reasons)
-    assert [(step.kind, step.cwd) for step in state.unconfigured] == [
-        ("project_pack_install", repo)
-    ]
-    assert state.unconfigured[0].text == "reinstall opengsd for Claude Code in proj"
-
-
-def test_project_pack_not_installed_anywhere_is_missing_with_steps(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    repo = _gsd_repo(home)
-    service = _pack_service(home, harnesses=frozenset({"claude", "opencode"}))
-    state = _settled_states(service, [_opengsd()])["opengsd"]
-    assert state.health is Health.MISSING
-    assert "not installed in proj" in state.reasons
-    assert [(step.kind, step.harness, step.cwd) for step in state.unconfigured] == [
-        ("project_pack_install", "claude", repo),
-        ("project_pack_install", "opencode", repo),
-    ]
-
-
-def test_project_pack_scan_reads_only_the_skill_home(tmp_path: Path) -> None:
-    (tmp_path / "elsewhere" / ".claude" / "gsd-core").mkdir(parents=True)
-    service = VersionRefreshService(
-        platform=_LINUX,
-        cache_path=tmp_path / "versions.json",
-        which=lambda _cmd: None,
-        query=lambda *_args, **_kwargs: "",
-        pnpm_packages=lambda: (),
-        resolve_pnpm=lambda: None,
-        read_inventory_fn=_empty_inventory,
-        read_outdated_fn=_empty_outdated,
-    )
-    clean = _settled_states(service, [_opengsd()])["opengsd"]
-    assert _LEFTOVER not in clean.reasons
-    assert clean.health is Health.MISSING
-    (version_status.default_skill_home() / ".claude" / "gsd-core").mkdir(parents=True)
-    service.invalidate(reason="test")
-    leftover = _settled_states(service, [_opengsd()])["opengsd"]
-    assert leftover.health is Health.MISCONFIGURED
-    assert leftover.reasons[0] == _LEFTOVER
-
-
-def test_held_cache_saves_wait_for_commit(tmp_path: Path) -> None:
-    from installer.version_cache import load_skill_statuses
-
-    home = tmp_path / "skill-home"
-    home.mkdir()
-    pack = _skill_pack("held-pack", (SkillStatusProbe("codex", "install-state", "codex-plugin"),))
-    cache_path = tmp_path / "versions.json"
-    service = _pack_service(home, probe=lambda _argv: "present", cache_path=cache_path)
-    service.hold_writes()
-    service.refresh([_yq(), pack])
-    service.refresh_skills([pack])
-    service.invalidate(reason="test")
-    assert not cache_path.exists()
-    service.commit_writes()
-    assert cache_path.exists()
-    assert load_skill_statuses(cache_path)[pack.id] == {"codex": "unknown"}
-
-
-def test_seeded_skill_cache_has_hosts_only(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    project = home / "repo"
-    project.mkdir(parents=True)
-    service = _pack_service(
-        home,
-        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"), (_SP_ID, "project", True, "6.2.0"))),
-        harnesses=frozenset({"claude"}),
-    )
-    save_version_cache(
-        home.parent / f"{home.name}-versions.json",
-        {},
-        skills={"superpowers": {"claude": "present"}},
-    )
-    plugins = {_SP_ID: [{"scope": "project", "projectPath": str(project)}]}
-    (home / ".claude" / "plugins").mkdir(parents=True)
-    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(
-        json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8"
-    )
-    service.seed_skills_from_cache()
-    pack = _superpowers()
-    seeded = _settled_states(service, [pack])["superpowers"]
-    # A seeded present answer never settles the pack (G8).
-    assert seeded.health is Health.CHECKING
-    assert _SEEDED_NOTE in seeded.reasons
-    assert seeded.unconfigured == ()
-    service.refresh_skills([pack])
-    probed = service.state_of(pack.id)
-    assert probed is not None
-    assert probed.health is Health.MISCONFIGURED
-    assert probed.reasons[0] == f"duplicate: {_SP_ID} in project scope (6.2.0)"
-    assert [step.kind for step in probed.unconfigured] == ["plugin_uninstall"]
-
-
-def _raise_boom(*_args: object) -> object:
-    raise OSError("boom")
-
-
-@pytest.mark.parametrize("helper", ["inspect_project_pack", "partial_harnesses"])
-def test_skill_helper_failure_is_a_not_checked_note(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper: str
-) -> None:
-    home = tmp_path / "home"
-    service = _pack_service(
-        home,
-        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
-        harnesses=frozenset({"claude"}),
-    )
-    monkeypatch.setattr(version_status, helper, _raise_boom)
-    packs = [_superpowers(), _opengsd(), _skill_pack("ponytail", ())]
-    service.refresh(packs)
-    service.refresh_skills(packs)
-    note = f"{_SKILL_NOT_CHECKED}boom"
-    affected = "opengsd" if helper == "inspect_project_pack" else "superpowers"
-    for pack in packs:
-        state = service.state_of(pack.id)
-        assert state is not None
-        assert (note in state.reasons) is (pack.id == affected)
-    superpowers = service.state_of("superpowers")
-    assert superpowers is not None
-    assert superpowers.health is Health.OK
-
-
-def _raise_called_process_error(argv: list[str]) -> str:
-    raise subprocess.CalledProcessError(1, argv)
-
-
-def _unreadable_probe(answer: str) -> Callable[[list[str]], str]:
-    def probe(argv: list[str]) -> str:
-        return _raise_called_process_error(argv) if answer == "raises" else "not json"
-
-    return probe
-
-
-@pytest.mark.parametrize("answer", ["not-json", "raises"])
-def test_inconclusive_claude_listing_is_a_not_checked_note(tmp_path: Path, answer: str) -> None:
-    note = f"{_SKILL_NOT_CHECKED}no readable answer from Claude Code"
-    for on_machine in (True, False):
-        home = tmp_path / f"home-{on_machine}"
-        if on_machine:
-            _four_install_listing(home)
-        harnesses = frozenset({"claude"} if on_machine else ())
-        service = _pack_service(home, _unreadable_probe(answer), harnesses=harnesses)
-        state = _probed_state(service, _superpowers())
-        assert state.skill_hosts is not None
-        assert state.skill_hosts.hosts == {"claude": "unknown"}
-        assert (note in state.reasons) is on_machine
-        assert not set(_FOUR_REASONS) & set(state.reasons)
-        assert state.unconfigured == ()
-        # A finished all-unknown probe is MISSING, never stuck CHECKING (G8).
-        assert state.health is Health.MISSING
-
-
-@pytest.mark.parametrize("content", ["{", '[{"hooks": {}}]', None])
-def test_inconclusive_hook_config_is_a_not_checked_note(
-    tmp_path: Path, content: str | None
-) -> None:
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    if content is not None:
-        (home / ".claude" / "settings.json").write_text(content, encoding="utf-8")
-    state = _settled_states(_pack_service(home), [_opengsd()])["opengsd"]
-    note = f"{_SKILL_NOT_CHECKED}cannot read ~/.claude/settings.json"
-    assert (note in state.reasons) is (content is not None)
-
-
-def test_stale_cached_present_is_checking_not_ok(tmp_path: Path) -> None:
-    """A cache-seeded `present` never settles the pack (G8).
-
-    CHECKING plus the seeded note until the current probe answers; OK only
-    after that probe lists the canonical user entry; CHECKING again once
-    `invalidate` marks those answers stale.
-    """
-    home = tmp_path / "home"
-    service = _pack_service(
-        home,
-        _probe_for(_listing((_SP_ID, "user", True, "6.4.1"))),
-        harnesses=frozenset({"claude"}),
-    )
-    save_version_cache(
-        home.parent / f"{home.name}-versions.json",
-        {},
-        skills={"superpowers": {"claude": "present"}},
-    )
-    service.seed_skills_from_cache()
-    pack = _superpowers()
-    seeded = _settled_states(service, [pack])["superpowers"]
-    assert seeded.health is Health.CHECKING
-    assert _SEEDED_NOTE in seeded.reasons
-    assert seeded.present is False
-    assert not any(reason.startswith("partial:") for reason in seeded.reasons)
-    assert seeded.unconfigured == ()
-
-    service.refresh_skills([pack])
-    probed = service.state_of(pack.id)
-    assert probed is not None
-    assert probed.health is Health.OK
-
-    service.invalidate(reason="test")
-    stale = _settled_states(service, [pack])["superpowers"]
-    assert stale.health is Health.CHECKING
-    assert _SEEDED_NOTE in stale.reasons
-    service.refresh_skills([pack])
-    again = service.state_of(pack.id)
-    assert again is not None
-    assert again.health is Health.OK
-
-
-def test_all_unknown_after_the_probe_is_missing_with_a_note(tmp_path: Path) -> None:
-    """A finished probe that could not read a present harness is MISSING (G8).
-
-    The note names the harness. With no harness on the machine the same probe
-    is MISSING and note-less: there is nothing to have checked.
-    """
-    note = f"{_SKILL_NOT_CHECKED}no readable answer from Claude Code"
-    pack = _superpowers()
-    present = _pack_service(
-        tmp_path / "present", _unreadable_probe("raises"), harnesses=frozenset({"claude"})
-    )
-    state = _probed_state(present, pack)
-    assert state.health is Health.MISSING
-    assert note in state.reasons
-
-    absent = _pack_service(tmp_path / "absent", _unreadable_probe("raises"), harnesses=frozenset())
-    empty = _probed_state(absent, pack)
-    assert empty.health is Health.MISSING
-    assert note not in empty.reasons
-
-
-def test_mixed_absent_and_unknown_hosts_never_settle_absent(tmp_path: Path) -> None:
-    """One absent host never overrides another host's unknown answer (G24).
-
-    A stale mixed cache stays CHECKING. Once the current probe answers, the
-    pack is MISSING with the unreadable harness's note, never a note-less
-    MISSING and never OK. `inspect_status` answers `unknown` for the same input.
-    """
-    home = tmp_path / "home"
-    pack = _superpowers(codex=True)
-
-    def probe(argv: list[str]) -> str:
-        if argv[0] == "claude":
-            raise subprocess.CalledProcessError(1, argv)
-        return ""
-
-    service = _pack_service(home, probe, harnesses=frozenset({"claude", "codex"}))
-    save_version_cache(
-        home.parent / f"{home.name}-versions.json",
-        {},
-        skills={"superpowers": {"claude": "unknown", "codex": "absent"}},
-    )
-    service.seed_skills_from_cache()
-    seeded = _settled_states(service, [pack])["superpowers"]
-    assert seeded.health is Health.CHECKING
-
-    service.refresh_skills([pack])
-    probed = service.state_of(pack.id)
-    assert probed is not None
-    assert probed.health is Health.MISSING
-    assert f"{_SKILL_NOT_CHECKED}no readable answer from Claude Code" in probed.reasons
-    assert probed.health is not Health.OK
-
-    outcome = inspect_status(pack, probe, home)
-    assert outcome.status == "unknown"
 
 
 def test_present_harnesses_failure_is_a_not_checked_note(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(version_status, "present_harnesses", _raise_boom)
-    packs = [_superpowers(), _opengsd()]
-    service = _pack_service(tmp_path / "home")
-    service.refresh(packs)
-    for pack in packs:
-        state = service.state_of(pack.id)
-        assert state is not None
-        assert f"{_SKILL_NOT_CHECKED}boom" in state.reasons
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    state = _settled_states(_hook_service(tmp_path, frozenset()), [_hook_tool()])["codegraph"]
+    assert "agent hosts not checked: boom" in state.reasons
 
 
 # --- 19-22 Task 2: a NUL artifact path never aborts a refresh pass (G5) ------
@@ -6063,7 +5005,7 @@ def _pending_service(
 ) -> VersionRefreshService:
     return offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "1.0.0",
         probe_output=probe,
     )
@@ -6189,7 +5131,7 @@ def _off_path_service(
 
     return offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "1.0.0",
         probe_output=lambda _argv: "1.0.0",
         which=(lambda cmd: f"/bin/{cmd}") if resolves else (lambda _cmd: None),

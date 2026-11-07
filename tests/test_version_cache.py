@@ -17,7 +17,6 @@ from installer.version_cache import (
     encode_manager_snapshot,
     is_manager_stale,
     is_stale,
-    load_skill_statuses,
     load_version_cache,
     save_version_cache,
     should_fetch,
@@ -412,39 +411,44 @@ def test_managers_and_tools_keys_survive_each_other(tmp_path: Path) -> None:
     assert raw["managers"]["inventory"]["brew_formulae"]["ripgrep"] == "14.1.0"
 
 
-def test_skill_statuses_round_trip_preserve_and_drop_malformed(tmp_path: Path) -> None:
+_OLD_TOOLS = {
+    "codegraph": {
+        "latest_version": "v1.6.0",
+        "checked_at": "2026-09-01T00:00:00+00:00",
+        "failed_at": None,
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (
+        {"skills": {"superpowers": {"claude": "present"}}},
+        {"skills": {}},
+        {},
+    ),
+    ids=("populated", "empty", "absent"),
+)
+def test_an_old_cache_with_a_skills_key_loads(tmp_path: Path, extra: dict[str, object]) -> None:
     path = tmp_path / "versions.json"
-    save_version_cache(path, {}, skills={"superpowers": {"claude": "present"}})
-    assert load_skill_statuses(path) == {"superpowers": {"claude": "present"}}
-    assert json.loads(path.read_text())["skills"]["superpowers"]["claude"] == "present"
+    path.write_text(json.dumps({"version": 1, "tools": _OLD_TOOLS, "managers": {}, **extra}))
+    loaded = load_version_cache(path)
+    assert loaded["codegraph"].latest_version == "v1.6.0"
 
-    save_version_cache(
-        path,
-        {
-            "codegraph": VersionCacheEntry(
-                latest_version="v1.6.0",
-                checked_at="2026-09-01T00:00:00+00:00",
-                failed_at=None,
-            )
-        },
-    )
-    assert load_skill_statuses(path) == {"superpowers": {"claude": "present"}}
 
+def test_the_next_save_drops_the_skills_key(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
     path.write_text(
         json.dumps(
             {
                 "version": 1,
-                "tools": {},
+                "tools": _OLD_TOOLS,
                 "managers": {},
-                "skills": {
-                    "bad-type": "present",
-                    "bad-status": {"claude": "installed"},
-                    "ok": {"pi": "absent"},
-                },
+                "skills": {"superpowers": {"claude": "present"}},
             }
         )
     )
-    loaded = load_skill_statuses(path)
-    assert loaded["bad-type"] == {}
-    assert loaded["bad-status"] == {}
-    assert loaded["ok"] == {"pi": "absent"}
+    save_version_cache(path, load_version_cache(path))
+    raw = json.loads(path.read_text())
+    assert "skills" not in raw
+    assert raw["tools"]["codegraph"]["latest_version"] == "v1.6.0"
