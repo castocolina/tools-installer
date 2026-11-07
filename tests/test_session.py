@@ -1,5 +1,7 @@
 import inspect
 import io
+import json
+import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -24,7 +26,7 @@ from installer.model import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
-from installer.render import render_done_notes
+from installer.render import render_done_notes, render_run_report
 from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
@@ -1742,3 +1744,66 @@ def test_every_disposition_has_words_and_a_review_place(disposition: Disposition
 def test_every_disposition_manual_is_reviewed_right_after_blocked():
     members = list(Disposition)
     assert members.index(Disposition.MANUAL) == members.index(Disposition.BLOCKED) + 1
+
+
+_AGENT_ROWS = [
+    PlanRow("claude", Disposition.INSTALL, "not installed"),
+    PlanRow("codex", Disposition.INSTALL, "not installed"),
+]
+_AGENT_CATALOG = {"claude": _tool("claude"), "codex": _tool("codex")}
+
+
+def _report(outcomes: list[RowOutcome]) -> str:
+    buf = io.StringIO()
+    render_run_report(outcomes, Console(file=buf, width=100, no_color=True))
+    return buf.getvalue()
+
+
+def test_auto_approve_is_applied_to_every_agent_row_that_ended_done() -> None:
+    recorder = RunRecorder()
+    ctx = replace(
+        _run_context(recorder, catalog=_AGENT_CATALOG), options=frozenset({"auto-approve"})
+    )
+    outcomes = execute_plan(_AGENT_ROWS, ctx)
+    claude = json.loads((Path.home() / ".claude" / "settings.json").read_text())
+    assert claude["permissions"]["defaultMode"] == "bypassPermissions"
+    assert claude["skipDangerousModePermissionPrompt"] is True
+    codex = tomllib.loads((Path.home() / ".codex" / "config.toml").read_text())
+    assert codex["approval_policy"] == "never"
+    assert codex["sandbox_mode"] == "danger-full-access"
+    assert [len(outcome.settings) for outcome in outcomes] == [1, 1]
+    text = _report(outcomes)
+    for line in (
+        "Agent and editor settings",
+        "claude — ~/.claude/settings.json:",
+        "  wrote permissions.defaultMode",
+        "  wrote skipDangerousModePermissionPrompt",
+        "codex — ~/.codex/config.toml:",
+        "  wrote approval_policy",
+        "  wrote sandbox_mode",
+    ):
+        assert line in text
+
+
+def test_a_default_run_writes_no_setting() -> None:
+    recorder = RunRecorder()
+    outcomes = execute_plan(_AGENT_ROWS, _run_context(recorder, catalog=_AGENT_CATALOG))
+    home = Path.home()
+    assert not (home / ".claude" / "settings.json").exists()
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".config" / "environment.d").exists()
+    assert all(outcome.settings == () for outcome in outcomes)
+    assert "Agent and editor settings" not in _report(outcomes)
+
+
+def test_a_failed_agent_row_writes_nothing_and_says_so() -> None:
+    recorder = RunRecorder(outcomes={"claude": InstallOutcome("claude", InstallStatus.FAILED)})
+    ctx = replace(
+        _run_context(recorder, catalog={"claude": _tool("claude")}),
+        options=frozenset({"auto-approve"}),
+    )
+    outcomes = execute_plan([PlanRow("claude", Disposition.INSTALL, "not installed")], ctx)
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].settings_skipped
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    assert "claude: not installed by this run; nothing written" in _report(outcomes)

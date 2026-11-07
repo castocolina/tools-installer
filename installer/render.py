@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.text import Text
 
+from installer.agent_settings import FileResult
 from installer.apps import APP_KINDS
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -23,6 +24,7 @@ from installer.guidance import (
     node_globals_guidance,
 )
 from installer.links import TROUBLESHOOTING_URL
+from installer.locations import display_path
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.postinstall import host_labels
 from installer.sanitize import sanitize_log_line
@@ -311,9 +313,42 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_postinstall_warnings(installs, console)
     render_resync_warnings(outcomes, console)
     render_hook_lines(outcomes, console)
+    render_settings_lines(outcomes, console)
     render_done_notes(outcomes, console)
     render_verification(installs, console)
     render_shell_section(outcomes, console)
+
+
+def render_settings_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print the Agent and editor settings section (UI-SPEC section 4); silent when empty."""
+    lines = _settings_lines(outcomes)
+    if not lines:
+        return
+    console.print("Agent and editor settings", style="bold", markup=False, highlight=False)
+    for line in lines:
+        console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
+
+
+def _settings_lines(outcomes: Sequence[RowOutcome]) -> list[str]:
+    """One block per settings file in first-seen order, then the lines that have no file."""
+    blocks: dict[tuple[str, Path], list[str]] = {}
+    for outcome in outcomes:
+        for written in outcome.settings:
+            blocks.setdefault((written.agent, written.path), []).extend(_file_lines(written))
+    lines: list[str] = []
+    for (agent, path), body in blocks.items():
+        lines.append(f"{agent} — {display_path(path)}:")
+        lines.extend(body)
+    lines.extend(
+        f"{outcome.row.tool_id}: not installed by this run; nothing written"
+        for outcome in outcomes
+        if outcome.settings_skipped
+    )
+    return lines
+
+
+def _file_lines(written: FileResult) -> list[str]:
+    return [f"  wrote {key.key}" for key in written.keys if key.kind == "wrote"]
 
 
 def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:
