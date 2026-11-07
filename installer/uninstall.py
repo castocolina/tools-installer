@@ -23,6 +23,7 @@ from installer.download import (
 )
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
+from installer.postinstall import hook_method, unregister_argvs, unregister_hosts
 from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
 
@@ -92,6 +93,10 @@ class RemovalPlan:
     # Declared config entries that exist now, expanded; never deleted by this module.
     config: tuple[Path, ...] = ()
     hint: str | None = None
+    # D-04: the undo argvs for the hosts the receipt's hook records, first word the proven
+    # executable; and those hosts (sorted, filtered through the target map).
+    unregister: tuple[tuple[str, ...], ...] = ()
+    hook_hosts: tuple[str, ...] = ()
 
 
 # The argv prefix that uninstalls a package of each manager kind (L1, D-06). The package
@@ -253,9 +258,7 @@ def _recipe_argv(
     leaf's absolute path, so no PATH copy ever runs."""
     if receipt is None or receipt.method.kind != "script" or not plan.by_tool.get(tool.id):
         return ()
-    scripts = [method for method in tool.methods if method.kind == "script"]
-    keyed = [m for m in scripts if receipts.method_key(m) == receipt.method.key]
-    method = keyed[0] if keyed else (scripts[0] if len(scripts) == 1 else None)
+    method = hook_method(tool, receipt)
     remove = method.params.get("remove") if method is not None else None
     if not isinstance(remove, list) or not remove:
         return ()
@@ -265,15 +268,49 @@ def _recipe_argv(
         if expanded is None:
             return ()
         words.append(expanded)
-    leaves = [plan.artifacts[p] for p in plan.by_tool[tool.id] if plan.artifacts[p].type == "leaf"]
     head, *rest = words
-    if "/" in head:
-        matches = [leaf for leaf in leaves if str(leaf.path) == head]
-    else:
-        matches = [leaf for leaf in leaves if leaf.path.name == head]
-    if len(matches) != 1:
+    leaf = _proven_named(plan, tool.id, head, ("leaf",))
+    if leaf is None:
         return ()
-    return (str(matches[0].path), *rest)
+    return (str(leaf.path), *rest)
+
+
+def _proven_named(
+    plan: RemovalPlan, tool_id: str, name: str, types: tuple[str, ...]
+) -> receipts.ReceiptArtifact | None:
+    """The one receipt-proven artifact of `tool_id` with this name (a bare name or an absolute
+    path) and one of these types. A name two artifacts share proves neither: None."""
+    matches = [
+        artifact
+        for path in plan.by_tool.get(tool_id, ())
+        if (artifact := plan.artifacts[path]).type in types
+        and name in (artifact.path.name, str(artifact.path))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _hook_undo(
+    tool: Tool, receipt: receipts.Receipt | None, base: RemovalPlan
+) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]:
+    """D-04: the undo for the hosts `receipt.hooks[tool.postinstall]` records, run by the
+    receipt-proven executable (the one proven artifact named `tool.cmd`), else nothing.
+    Hosts come from the receipt alone, never from the hosts present now."""
+    name = tool.postinstall
+    if receipt is None or name is None or not receipt.hooks.get(name):
+        # shortcut: a receipt written before hooks were recorded holds hooks={} (review R1-39),
+        # so its removal unregisters nothing; 23-07's RECONFIGURE records those hosts first.
+        return (), ()
+    executable = _proven_named(base, tool.id, tool.cmd, ("link", "leaf", "file"))
+    if executable is None:
+        # shortcut: no proven executable means no unregister, also when a vendor self-upgrade
+        # moved the binary (codegraph upgrade into ~/.codegraph/versions, R1-40); upgrade when
+        # the receipt learns that moved path.
+        return (), ()
+    recorded = tuple(receipt.hooks[name])
+    return (
+        unregister_argvs(name, str(executable.path), recorded),
+        tuple(sorted(unregister_hosts(name, recorded))),
+    )
 
 
 def removal_plan(
@@ -298,7 +335,16 @@ def removal_plan(
         level = "recipe"
     elif base.removable:
         level = "artifacts"
-    return replace(base, level=level, argv=manager or recipe, config=config, hint=hint)
+    unregister, hook_hosts = _hook_undo(tool, receipt, base)
+    return replace(
+        base,
+        level=level,
+        argv=manager or recipe,
+        config=config,
+        hint=hint,
+        unregister=unregister,
+        hook_hosts=hook_hosts,
+    )
 
 
 def manager_name(method: Method, param: str, fallback: str) -> str:

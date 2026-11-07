@@ -517,6 +517,8 @@ class ToolRemoval:
     removed: bool
     detail: str = ""
     refused: tuple[str, ...] = ()
+    # The hosts the unregister ran for (D-04); set only when the removal succeeded.
+    unregistered: tuple[str, ...] = ()
 
 
 def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
@@ -590,6 +592,11 @@ def removal_order(tools: Sequence[Tool]) -> list[Tool]:
     return list(reversed(resolution.closure))
 
 
+def _command_error_line(exc: CommandError) -> str:
+    """The line a failed command shows: its first non-empty output line, else its message's."""
+    return next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
+
+
 def remove_tool(
     tool: Tool,
     *,
@@ -597,15 +604,17 @@ def remove_tool(
     argv: tuple[str, ...],
     bin_dir: Path,
     runner: Runner,
+    unregister: tuple[tuple[str, ...], ...] = (),
 ) -> ToolRemoval:
-    """Remove one tool: its command, then its proven paths, then its receipt (D-07).
+    """Remove one tool: its hook undo, its command, then its proven paths, then its receipt
+    (D-04, D-07).
 
-    `paths` and `argv` are what the user saw before the confirm. The fresh plan is
-    proven again here, so the CLI and the TUI share the same post-confirm check: a
+    `paths`, `argv` and `unregister` are what the user saw before the confirm. The fresh plan
+    is proven again here, so the CLI and the TUI share the same post-confirm check: a
     previewed path that moved, a command that changed, or a command whose paths shrank
     refuses the whole tool before anything runs. A manager package that a readable fresh
     listing no longer shows runs nothing and retires its receipt (`already removed`). A failed
-    command deletes nothing and keeps the receipt, so a later plan still sees the tool."""
+    undo or command deletes nothing and keeps the receipt, so a later plan still sees the tool."""
     try:
         fresh = removal_plan(tool, bin_dir, verify=True)
         named = {*fresh.removable, *fresh.yourself}
@@ -613,9 +622,15 @@ def remove_tool(
         # previewed path must still be removable, not merely named (review R2-02).
         changed = [p for p in paths if p not in named or (bool(argv) and p not in fresh.removable)]
         changed += [p for p in fresh.removable if p not in paths]
-        if changed or argv != fresh.argv or not (paths or argv):
+        if changed or argv != fresh.argv or unregister != fresh.unregister or not (paths or argv):
             refused = tuple(f"changed since the preview; not removed: {p}" for p in changed)
             return ToolRemoval(tool.id, False, "changed since the preview; not removed", refused)
+        # The undo runs while the proven executable still exists, before any path goes (SPEC R1).
+        for undo in fresh.unregister:
+            try:
+                runner(list(undo))
+            except CommandError as exc:
+                return ToolRemoval(tool.id, False, f"unregister: {_command_error_line(exc)}")
         manager = next(
             (kind for kind, prefix in MANAGER_UNINSTALL_ARGV.items() if argv[:-1] == prefix), None
         )
@@ -625,7 +640,7 @@ def remove_tool(
             listed = manager_listing(manager)
             if listed is not None and listed_name(manager, argv[-1]) not in listed:
                 receipts.delete(tool.id)
-                return ToolRemoval(tool.id, True, ALREADY_REMOVED)
+                return ToolRemoval(tool.id, True, ALREADY_REMOVED, unregistered=fresh.hook_hosts)
         if argv:
             command = argv
             if argv[0] == "pnpm":
@@ -637,8 +652,7 @@ def remove_tool(
             try:
                 runner(list(command))
             except CommandError as exc:
-                line = next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
-                return ToolRemoval(tool.id, False, line)
+                return ToolRemoval(tool.id, False, _command_error_line(exc))
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
             # The vendor command may have removed part of what the receipt recorded; only
             # what is still there is re-proven, so a path it already removed is not a refusal.
@@ -652,7 +666,7 @@ def remove_tool(
         if refused:
             return ToolRemoval(tool.id, False, refused[0], refused)
         receipts.delete(tool.id)
-        return ToolRemoval(tool.id, True)
+        return ToolRemoval(tool.id, True, unregistered=fresh.hook_hosts)
     except OSError as exc:
         return ToolRemoval(tool.id, False, first_line(exc))
 
