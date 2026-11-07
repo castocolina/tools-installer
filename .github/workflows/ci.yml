@@ -14,7 +14,7 @@ jobs:
   validate-and-test:
     name: validate & test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -31,6 +31,7 @@ jobs:
       - name: Validate
         run: make validate
       - name: Test
-        # Below the job's 15: a stalled run fails this step and keeps its log.
-        timeout-minutes: 12
+        # Below the job's 25: a stalled run fails this step and keeps its log.
+        # The macOS runner needed ~12 min for ~6000 tests and timed out at 96% three times.
+        timeout-minutes: 20
         run: make test
