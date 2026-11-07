@@ -354,3 +354,20 @@ Signed off in RUN-LEDGER `23 | Cycle 1 replan sign-offs` (fbcbead): (1) 23-01 at
 3. **R1-38 (if the 23-16 run shows codegraph failing for an absent recorded host):** relax D-04 to unregister `recorded ∩ present` (never an unrecorded host), or prune a removed host from every `receipt.hooks` when the host tool is removed.
 4. **R1-26 alternative:** the ledger decision (route `agent_policy._apply_opencode` through the settings writer) is folded as written. The `agent_environment_policy` chain that reaches it has no production caller, so deleting that dead chain (architecture rule 5) would also give one writer per file with less code; say so if that is preferred.
 5. **R1-48 reverses REUSE 11-2** (the desktop row keeps `owned`, now the sentinel check). REUSE is binding, so the reversal is recorded here for sign-off.
+
+
+## Cycle 2 Review (opencode-referee-two)
+
+Reviewer: opencode `router-env/my-referee-two` (referee-one unavailable: "Combo has no executable targets"), full scope, plans at ca2a422. Raw output: `.review-diagnostics/20261107T035834Z-plan-review-cycle2/opencode-referee-two/lane.out` (gitignored).
+
+**R1 disposition:** every cycle 1 HIGH (R1-01..R1-07) RESOLVED with evidence; MEDIUM spot-checks R1-10, R1-26, R1-30, R1-33, R1-36, R1-38, R1-46, R1-48, R1-56 RESOLVED in the plan text. Same-wave `files_modified` sets disjoint (checked mechanically); registry.toml edits in waves 4 and 6 are sequenced.
+
+| ID | Plan | Severity | Verdict | Resolution |
+|---|---|---|---|---|
+| R2-01 | 23-14 | HIGH | CONFIRMED (orchestrator: `rg -n 'tweak:codex-skip' tests/test_setup.py` → 1053, 1174, 1191, 1204, 2678) | Task 1 retargets the five test_setup.py lookups to `tweak:docker`, retargets/deletes the named test_policy_tweaks.py pins, sweeps the remaining alias-id pins with rg, and adds tests/test_setup.py to the Task 1 verify run — all in the same green commit |
+
+Not checked by the reviewer: line-by-line 23-05/23-12/23-13 beyond file lists, verbatim UI-SPEC string diff, a simulated JSON/JSONC/TOML splice, shell-check of bundle bodies, the whole e2e script.
+
+CYCLE_SUMMARY: current_high=1 current_actionable=1 (resolved in the plan text by the orchestrator: current_high=0 after the fix)
+
+CONVERGED: yes (cycle 2: the only new HIGH was a mechanical test retarget, fixed in 23-14; no open HIGH remains)
