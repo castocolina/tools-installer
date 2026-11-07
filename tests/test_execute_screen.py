@@ -61,6 +61,7 @@ from installer.session import (
     SensitiveInstall,
     ran_anything,
 )
+from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
@@ -5068,3 +5069,295 @@ async def test_update_row_transitions_from_review_to_running_to_finished(tmp_pat
 
     assert "✓ rg  updated" in _log_text(screen)
     assert _outcomes_by_id(screen)["rg"].result == "done"
+
+
+# --- Run options in the install review (plan 23-12, Task 1) ----------------
+
+_RUN_OPTION_HEADING = "run options — off unless you turn them on with space"
+_OPTION_LOCKED = "A run option is set before start; it cannot change now."
+_OPTION_PLAN_ROW_ONLY = "space toggles run options only; plan rows change with r."
+
+
+def _codex_inputs(
+    *, install: SensitiveInstall | None = None, unattended: bool = False
+) -> tuple[Tool, ExecuteInputs]:
+    codex = _tool("codex")
+    inputs = _inputs(
+        tools=[codex],
+        install=install,
+        unattended=unattended,
+        states=[plan_state(codex, health=Health.MISSING)],
+    )
+    return codex, inputs
+
+
+async def test_an_auto_approve_option_toggles_and_reaches_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex, inputs = _codex_inputs()
+    handed: list[frozenset[str]] = []
+    real_execute_plan = installer.execute_screen.execute_plan
+
+    def recording_execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
+        handed.append(ctx.options)
+        return real_execute_plan(rows, ctx)
+
+    monkeypatch.setattr(installer.execute_screen, "execute_plan", recording_execute_plan)
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompts = _plan_prompts(screen)
+        assert prompts == [
+            "○ codex  will install — not installed",
+            _RUN_OPTION_HEADING,
+            "[ ] auto-approve agents — codex: no permission prompts",
+        ]
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("run-opt-auto-approve")
+        await pilot.press("space")
+        await pilot.pause()
+        assert _plan_prompts(screen)[2] == "[x] auto-approve agents — codex: no permission prompts"
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+    assert handed == [frozenset({"auto-approve"})]
+
+
+async def test_space_on_a_plan_row_warns_and_changes_nothing() -> None:
+    codex, inputs = _codex_inputs()
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("space")
+        await pilot.pause()
+        assert screen.status.text == _OPTION_PLAN_ROW_ONLY
+        assert _plan_prompts(screen)[2] == "[ ] auto-approve agents — codex: no permission prompts"
+
+
+async def test_space_after_enter_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    started, release = threading.Event(), threading.Event()
+    handed: list[frozenset[str]] = []
+    real_execute_plan = installer.execute_screen.execute_plan
+
+    def recording_execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
+        handed.append(ctx.options)
+        return real_execute_plan(rows, ctx)
+
+    def install(
+        tool: Tool, platform: Platform, runner: Runner, resolve_tag: TagResolver, **kwargs: Any
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, kwargs
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    monkeypatch.setattr(installer.execute_screen, "execute_plan", recording_execute_plan)
+    codex, inputs = _codex_inputs(install=install)
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("run-opt-auto-approve")
+        await pilot.press("space")
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.press("space")
+        await pilot.pause()
+        assert screen.status.text == _OPTION_LOCKED
+        release.set()
+        await _settle_execute(screen, pilot)
+        await pilot.press("space")
+        await pilot.pause()
+        assert screen.status.text == _OPTION_LOCKED
+    assert handed == [frozenset({"auto-approve"})]
+
+
+async def test_a_skip_only_plan_shows_no_run_options() -> None:
+    codex = _tool("codex")
+    inputs = _inputs(tools=[codex], states=[plan_state(codex, health=Health.OK)])
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _plan_prompts(screen) == ["✓ codex  skipped — already current (r: reinstall)"]
+        assert _keys_text(screen) == "enter continue · r reinstall · up/down move · esc cancel"
+
+
+async def test_the_review_shows_an_unparsable_file_note() -> None:
+    config = Path.home() / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("not = [valid\n")
+    codex, inputs = _codex_inputs()
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _plan_prompts(screen)[2] == (
+            "[ ] auto-approve agents — codex: no permission prompts\n"
+            "    codex: config.toml is not valid TOML; nothing will be written"
+        )
+
+
+# --- Keyed prompts, unattended lines and the 80x20 fit (plan 23-12, Task 2) ---
+
+_UNATTENDED_OFF = "Run options left off (--yes never turns them on); change them in Policies."
+_LOGIN_SHELL_TEXT = (
+    "Show a reviewed command to change the login shell to zsh for oh-my-zsh, "
+    "which you run in your own terminal after the installer exits?"
+)
+
+
+@pytest.mark.parametrize("tool_id", SHELL_INIT_TOOLS)
+async def test_each_shell_init_prompt_shows_its_effect(
+    tool_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    bundle = shell_init_bundle(tool_id)
+    assert bundle is not None
+    screen_cls = _sensitive_action_screen()
+    app = _host(_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(screen_cls(tool_id, "source_shell_init"))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, screen_cls)
+        text = _sensitive_labels(screen)
+        assert bundle.description in text
+        assert "Yes, turn it on" in text
+        assert "No, leave it off" in text
+        assert screen.query_one(ListView).region.bottom <= 20
+
+
+async def test_the_login_shell_prompt_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    screen_cls = _sensitive_action_screen()
+    captured: list[str | None] = []
+    app = _host(_inputs())
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(screen_cls("oh-my-zsh", "set_login_shell"), captured.append)
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, screen_cls)
+        assert _sensitive_labels(screen) == "\n".join(
+            (_LOGIN_SHELL_TEXT, "Yes, show the reviewed command", "No, skip this")
+        )
+        await pilot.press("escape")
+        await pilot.pause()
+    assert captured == [None]
+
+
+async def test_unattended_runs_leave_every_option_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    codex, starship = _tool("codex"), _tool("starship")
+    handed: list[frozenset[str]] = []
+    real_execute_plan = installer.execute_screen.execute_plan
+
+    def recording_execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
+        handed.append(ctx.options)
+        return real_execute_plan(rows, ctx)
+
+    monkeypatch.setattr(installer.execute_screen, "execute_plan", recording_execute_plan)
+    inputs = _inputs(
+        tools=[codex, starship],
+        states=[
+            plan_state(codex, health=Health.MISSING),
+            plan_state(starship, health=Health.MISSING),
+        ],
+        unattended=True,
+    )
+    app = _host(inputs, [codex, starship])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex", "starship"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _settle_execute(screen, pilot)
+        prompts = _plan_prompts(screen)
+        assert "[ ] auto-approve agents — codex: no permission prompts" in prompts
+        assert not any("[x]" in prompt for prompt in prompts)
+        log = _log_text(screen)
+        assert _UNATTENDED_OFF in log
+        assert "Shell init left off (--yes): starship. Turn it on in Policies." in log
+    assert handed == [frozenset()]
+
+
+async def test_option_rows_fit_80x20(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    names = ("claude", "codex", "opencode", "cursor-agent", "vscode", "zsh")
+    tools = [_tool(name) for name in names]
+    inputs = _inputs(
+        tools=tools,
+        states=[plan_state(tool, health=Health.MISSING) for tool in tools],
+    )
+    app = _host(inputs, tools)
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([tool.id for tool in tools], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompts = _plan_prompts(screen)
+        for prompt in prompts:
+            for line in prompt.split("\n"):
+                assert cell_len(line) <= 78
+        auto_approve = next(prompt for prompt in prompts if "auto-approve agents" in prompt)
+        assert "\n    " in auto_approve
+        assert _keys_text(screen) == "enter start · space option · up/down move · esc cancel"
+        assert cell_len(_keys_text(screen)) <= 78
+        options = screen.query_one("#plan-rows", OptionList)
+        await pilot.press("end")
+        await pilot.pause()
+        assert options.get_option_at_index(options.highlighted or 0).id == (
+            "run-opt-vscode-ext-updates-off"
+        )
+
+
+async def test_markup_in_review_values_renders_literally(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    markup_id = "[red]x[/]"
+    codex, markup_tool = _tool("codex"), _tool(markup_id)
+    inputs = _inputs(
+        tools=[codex, markup_tool],
+        states=[
+            plan_state(codex, health=Health.MISSING),
+            plan_state(markup_tool, health=Health.MISSING),
+        ],
+    )
+
+    def fake_problems(
+        rows: Sequence[PlanRow], *, home: Path, platform_os: str
+    ) -> dict[str, tuple[str, str]]:
+        del rows, home, platform_os
+        return {"codex": ("[red]x[/].toml", "TOML")}
+
+    monkeypatch.setattr(installer.execute_screen, "review_problems", fake_problems)
+    screen_cls = _sensitive_action_screen()
+    app = _host(inputs, [codex, markup_tool])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex", markup_id], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompts = _plan_prompts(screen)
+        assert any(prompt.startswith(f"○ {markup_id}") for prompt in prompts)
+        note = "codex: [red]x[/].toml is not valid TOML; nothing will be written"
+        assert any(note in prompt for prompt in prompts)
+        app.push_screen(screen_cls(markup_id, "source_shell_init"))
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, screen_cls)
+        assert markup_id in _sensitive_labels(modal)

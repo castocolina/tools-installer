@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.cells import cell_len
@@ -33,14 +34,19 @@ from installer.engine import install_tool
 from installer.enums import Severity
 from installer.model import Tool
 from installer.platform import Platform
+from installer.post_install import sensitive_prompt
 from installer.render import (
+    RUN_OPTIONS_LEFT_OFF,
     display_order,
+    fold_reason,
     id_width,
     outcome_row_text,
     plan_head,
     plan_row_text,
     render_run_report,
+    run_option_lines,
     running_row_text,
+    shell_init_left_off_line,
     summary_head,
 )
 from installer.run import StreamingRunner
@@ -58,7 +64,10 @@ from installer.session import (
     exit_code,
     ran_anything,
     retained,
+    review_problems,
+    run_options,
 )
+from installer.tweaks import SHELL_INIT_TOOLS
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.update import UpdateService
 from installer.version_status import VersionRefreshService
@@ -85,6 +94,13 @@ _STATE_CHECK_ERROR_BUDGET = 78 - cell_len(_STATE_CHECK_FAILED.format(error=""))
 _CANCEL_AVAILABLE = "Press c to stop after the current tool; nothing further will start."
 _CANCEL_ARMED = "The current tool will finish and nothing further will start."
 _CANCEL_IDLE = "No install is running."
+# Run-option rows in the review (UI-SPEC section 1): the ids, the copy and the notes' column.
+_OPTION_PREFIX = "run-opt-"
+_OPTION_HEADING_ID = "run-opt-heading"
+_OPTION_HEADING = "run options — off unless you turn them on with space"
+_OPTION_LOCKED = "A run option is set before start; it cannot change now."
+_OPTION_PLAN_ROW_ONLY = "space toggles run options only; plan rows change with r."
+_OPTION_COLUMN = 4
 SILENCE_SECONDS = 2.0
 _WAITING_OUTPUT = "-- still running; waiting for output --"
 _UPDATE_STARTED = "-- updating --"
@@ -136,10 +152,11 @@ class ChecksumMismatchScreen(ModalScreen[str | None]):
 
 
 class SensitiveActionScreen(ModalScreen[str | None]):
-    """Yes/no prompt for a sensitive post-install action.
+    """Yes/no prompt for a sensitive post-install action, keyed by the action (D-11).
 
-    Letter-prefixed ListItem ids (`opt-yes`) because a raw value can be an
-    invalid Textual identifier — the same convention ChecksumMismatchScreen
+    The prompt and choices come from `sensitive_prompt`, so each action asks its
+    own question. Letter-prefixed ListItem ids (`opt-yes`) because a raw value
+    can be an invalid Textual identifier — the same convention ChecksumMismatchScreen
     uses. Dismisses with the string values the shared worker-to-modal helper
     is typed for; the screen's ask method converts them to bool.
     """
@@ -153,18 +170,18 @@ class SensitiveActionScreen(ModalScreen[str | None]):
     SensitiveActionScreen > ListView { width: 72; height: 6; border: round $accent; }
     """
 
-    def __init__(self, tool_id: str) -> None:
+    def __init__(self, tool_id: str, action: str = "set_login_shell") -> None:
         super().__init__()
         self.tool_id = tool_id
+        self.action = action
 
     def compose(self) -> ComposeResult:
-        yield Label(
-            f"Show a reviewed command to change the login shell to zsh for {self.tool_id}, "
-            "which you run in your own terminal after the installer exits?"
-        )
+        prompt = sensitive_prompt(self.tool_id, self.action)
+        # Tool ids and effects are data: markup=False keeps a `[red]` in them literal (A32).
+        yield Label(prompt.prompt, markup=False)
         yield ListView(
-            ListItem(Label("Yes, show the reviewed command"), id="opt-yes"),
-            ListItem(Label("No, skip this"), id="opt-no"),
+            ListItem(Label(prompt.yes), id="opt-yes"),
+            ListItem(Label(prompt.no), id="opt-no"),
         )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -352,6 +369,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "start", "start", show=True, priority=True),
         Binding("r", "toggle_reinstall", "reinstall", show=False),
+        Binding("space", "toggle_option", "option", show=False),
         Binding("escape", "close", "close", show=True),
         Binding("c", "cancel_run", "cancel", show=True),
     ]
@@ -379,6 +397,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._inputs = inputs
         self._rows: list[PlanRow] = []
         self._reinstall: set[str] = set()
+        # The run options the user switched on, and the set frozen at enter (D-09, T-23-34).
+        self._options: set[str] = set()
+        self._run_options: frozenset[str] = frozenset()
         self._start_requested = False
         self._cancelled_wait = False
         self._wait_token = 0
@@ -424,6 +445,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                 options.replace_option_prompt(
                     outcome.row.tool_id, outcome_row_text(outcome, idw, width)
                 )
+            for name, prompt in self._option_prompts(width):
+                options.replace_option_prompt(_OPTION_PREFIX + name, prompt)
             return
         if self.started:
             return
@@ -472,6 +495,14 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                     id=row.tool_id,
                 )
             )
+        shown = self._shown_options()
+        self._options.intersection_update(shown)
+        if shown:
+            options.add_option(
+                Option(Text(_OPTION_HEADING, style="bold"), id=_OPTION_HEADING_ID, disabled=True)
+            )
+            for name, prompt in self._option_prompts(width):
+                options.add_option(Option(prompt, id=_OPTION_PREFIX + name))
         highlighted_index = (
             options.get_option_index(highlighted_id) if highlighted_id is not None else None
         )
@@ -479,9 +510,37 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         head.update(plan_head(self._rows))
         keys.update(self._idle_keys())
 
+    def _shown_options(self) -> tuple[str, ...]:
+        return run_options(self._rows, self._platform().os)
+
+    def _option_prompts(self, width: int) -> list[tuple[str, Text]]:
+        """(option name, row text) for each shown run option; the target files are read once."""
+        platform_os = self._platform().os
+        problems = review_problems(self._rows, home=Path.home(), platform_os=platform_os)
+        prompts: list[tuple[str, Text]] = []
+        for name in self._shown_options():
+            first, notes = run_option_lines(
+                name, self._rows, platform_os=platform_os, problems=problems
+            )
+            on = name in self._options
+            text = Text("[x]" if on else "[ ]", style="green" if on else "")
+            text.append(" ")
+            fold_reason(text, first, _OPTION_COLUMN, width)
+            for note in notes:
+                line = fold_reason(Text(" " * _OPTION_COLUMN), note, _OPTION_COLUMN, width)
+                line.stylize("dim")
+                text.append("\n")
+                text.append_text(line)
+            if self.finished:
+                text.stylize("dim")
+            prompts.append((name, text))
+        return prompts
+
     def _idle_keys(self) -> str:
         runnable = any(row.disposition in RUNNABLE for row in self._rows)
         parts = ["enter start" if runnable else "enter continue"]
+        if self._shown_options():
+            parts.append("space option")
         if any(row.can_reinstall for row in self._rows):
             parts.append("r reinstall")
         parts.extend(("up/down move", "esc cancel"))
@@ -509,6 +568,21 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._reinstall ^= {tool_id}
         self.status.clear()
         self._replan()
+
+    def action_toggle_option(self) -> None:
+        if self.started or self.finished or self._start_requested:
+            self.status.set(_OPTION_LOCKED, "warn")
+            return
+        options = self.query_one("#plan-rows", OptionList)
+        if options.highlighted is None:
+            return
+        option_id = options.get_option_at_index(options.highlighted).id or ""
+        if not option_id.startswith(_OPTION_PREFIX) or option_id == _OPTION_HEADING_ID:
+            self.status.set(_OPTION_PLAN_ROW_ONLY, "warn")
+            return
+        self._options ^= {option_id.removeprefix(_OPTION_PREFIX)}
+        self.status.clear()
+        self._paint_review()
 
     def action_start(self) -> None:
         if self.finished:
@@ -576,6 +650,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
 
     def _begin_run(self) -> None:
         self.started = True
+        # Frozen here, at enter: a later space is refused, so the run gets exactly these answers.
+        self._run_options = frozenset(self._options & set(self._shown_options()))
+        if self._inputs.unattended and self._shown_options():
+            self.query_one("#execute-log", RichLog).write(RUN_OPTIONS_LEFT_OFF)
         self.add_class("-running")
         self.post_message(InstallRunStarted())
         self.query_one("#plan-rows", OptionList).can_focus = False
@@ -652,6 +730,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                     should_continue=self._should_continue,
                     on_row_started=announce_row,
                     on_outcome=record,
+                    options=self._run_options,
                 ),
             )
             collected = list(outcomes)
@@ -781,10 +860,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.post_message(InstallLogLine(tool_id, sentence))
         return "skip"
 
-    def _ask_sensitive_action(self, tool_id: str, _action: str) -> bool:
+    def _ask_sensitive_action(self, tool_id: str, action: str) -> bool:
         self.post_message(PromptOpen(tool_id, True))
         try:
-            answer = ask_from_worker(self.app, SensitiveActionScreen(tool_id))
+            answer = ask_from_worker(self.app, SensitiveActionScreen(tool_id, action))
         finally:
             self.post_message(PromptOpen(tool_id, False))
         if answer == "yes":
@@ -853,6 +932,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             options.replace_option_prompt(
                 outcome.row.tool_id, outcome_row_text(outcome, idw, width)
             )
+        for name, prompt in self._option_prompts(width):
+            options.replace_option_prompt(_OPTION_PREFIX + name, prompt)
         failed = (
             exit_code(message.outcomes) != 0
             or message.run_error is not None
@@ -874,8 +955,16 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.query_one("#execute-keys", Static).update(_KEYS_FINISHED)
         log = self.query_one("#execute-log", RichLog)
         log.write(
-            self._render_captured(lambda console: render_run_report(message.outcomes, console))
+            self._render_captured(
+                lambda console: render_run_report(
+                    message.outcomes, console, options=self._run_options
+                )
+            )
         )
+        if self._inputs.unattended:
+            left_off = shell_init_left_off_line(message.outcomes, SHELL_INIT_TOOLS)
+            if left_off is not None:
+                log.write(left_off)
         if message.path_text:
             log.write("PATH wiring")
             log.write(message.path_text)
