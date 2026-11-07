@@ -67,7 +67,7 @@ from installer.policy import (
     omz_plugins_policy,
     tweak_policy,
 )
-from installer.postinstall import BREW_BIN_DIRS
+from installer.postinstall import BREW_BIN_DIRS, which_with_brew
 from installer.prompt import CallbackPrompter
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
@@ -634,33 +634,6 @@ def _cache_redirect_policies(
     )
 
 
-def _which_with_brew(name: str) -> str | None:
-    """Resolve an executable like `shutil.which`, falling back to well-known
-    Homebrew prefixes checked by disk presence.
-
-    CR-04: on an immutable host -- Bazzite, the only host class this phase
-    targets -- registry.toml's zsh entry has no rpm-ostree method and
-    installs via the brew method (`formula = "zsh"`). `engine.py` only calls
-    `prepend_path` for a method whose params include `bin_dir`, and the brew
-    method declares none, so `/home/linuxbrew/.linuxbrew/bin` is never added
-    to THIS process's own PATH. Immediately after the install this phase
-    exists to react to, a bare `shutil.which("zsh")` still returned `None` in
-    that same process, and the synchronizer took its revert branch instead of
-    configuring anything -- silently, on the exact host this phase was built
-    for. Reuses the fix pattern this project already has for the identical
-    chicken-and-egg problem (`installer/postinstall.py::_resolve_binary`,
-    `BREW_BIN_DIRS`).
-    """
-    found = shutil.which(name)
-    if found:
-        return found
-    for brew_dir in BREW_BIN_DIRS:
-        candidate = brew_dir / name
-        if candidate.exists():
-            return str(candidate)
-    return None
-
-
 def _sync_terminals(platform: Platform) -> str | None:
     """The single Phase 15.6 terminal-shell synchronizer every lifecycle route
     reuses (D-01): Policies' OMZ-plugin apply, the direct `u` update,
@@ -672,7 +645,7 @@ def _sync_terminals(platform: Platform) -> str | None:
     the two CLI-only lifecycle routes in `main`/`_run_uninstall` call this
     directly since neither builds a `UnifiedApp`.
 
-    CR-04: `lookup` is `_which_with_brew`, not a bare `shutil.which`, so a
+    CR-04: `lookup` is `which_with_brew`, not a bare `shutil.which`, so a
     zsh that a brew install just placed on disk in this same process is
     still found. IN-01/CR-04: a revert is also surfaced now -- previously
     only `result.warnings` was ever read, so a full revert (zsh no longer
@@ -682,7 +655,7 @@ def _sync_terminals(platform: Platform) -> str | None:
         home=Path.home(),
         environ=os.environ,
         platform=platform,
-        lookup=_which_with_brew,
+        lookup=which_with_brew,
     )
     messages = list(result.warnings)
     if result.reverted:
@@ -728,7 +701,7 @@ def _build_services(
             home=Path.home(),
             environ=os.environ,
             platform=live,
-            lookup=_which_with_brew,
+            lookup=which_with_brew,
             write=False,
         ),
     )

@@ -7,6 +7,7 @@ from rich.cells import cell_len
 from rich.console import Console
 
 import installer.executors as executors
+from installer.agent_settings import CHANGED_WHILE_WRITING, FileResult, KeyResult
 from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
@@ -14,6 +15,7 @@ from installer.executors import ExecutorError
 from installer.model import ConfigStep
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
+    RUN_OPTIONS_LEFT_OFF,
     outcome_detail_text,
     outcome_mark,
     outcome_row_text,
@@ -31,10 +33,13 @@ from installer.render import (
     render_remove_yourself,
     render_run_report,
     render_run_summary,
+    render_settings_lines,
     render_shell_section,
     render_uninstall,
     render_verification,
+    run_option_lines,
     running_row_text,
+    shell_init_left_off_line,
     summary_head,
 )
 from installer.run import CommandError
@@ -1453,3 +1458,226 @@ def test_the_review_row_folds_a_long_manual_reason() -> None:
     lines = plan_row_text(row, 12, 78, hint=False).plain.splitlines()
     assert len(lines) > 1
     assert all(cell_len(line) <= 78 for line in lines)
+
+
+def test_run_option_lines_match_the_ui_spec() -> None:
+    rows = [
+        PlanRow("claude", Disposition.INSTALL, ""),
+        PlanRow("codex", Disposition.INSTALL, ""),
+        PlanRow("pi", Disposition.INSTALL, ""),
+    ]
+    assert run_option_lines("no-attribution", rows, platform_os="fedora") == (
+        "attribution off — claude: no agent credit in commits/PRs",
+        ("no documented key: codex, pi (nothing written for them)",),
+    )
+    assert run_option_lines("auto-approve", rows, platform_os="fedora") == (
+        "auto-approve agents — claude, codex: no permission prompts",
+        ("pi: nothing written; its approvals come only from extensions",),
+    )
+    with_cursor = [*rows, PlanRow("cursor-agent", Disposition.INSTALL, "")]
+    assert run_option_lines("no-attribution", with_cursor, platform_os="fedora")[1] == (
+        "no documented key: codex, pi (nothing written for them)",
+        "cursor-agent: its CLI ignores the commit opt-out (as of 2026-10-04)",
+    )
+    vscode = [PlanRow("vscode", Disposition.UPDATE, "")]
+    assert run_option_lines("vscode-lean", vscode, platform_os="fedora") == (
+        "VS Code lean mode — telemetry, experiments, minimap, auto-detect off",
+        ("zsh terminal; update.mode not written on Linux (this installer updates it)",),
+    )
+    assert run_option_lines("vscode-lean", vscode, platform_os="macos")[1] == (
+        "zsh terminal; update.mode set to none",
+    )
+    assert run_option_lines("vscode-ai-off", vscode, platform_os="fedora") == (
+        "VS Code built-in AI off — chat.disableAIFeatures",
+        (),
+    )
+    assert run_option_lines("vscode-ext-updates-off", vscode, platform_os="fedora") == (
+        "VS Code extension auto-update off — security fixes only on demand",
+        (),
+    )
+    zsh = [PlanRow("zsh", Disposition.INSTALL, "")]
+    assert run_option_lines("desktop-shell", zsh, platform_os="fedora") == (
+        "SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)",
+        (),
+    )
+
+
+def test_an_unparsable_target_file_adds_a_review_note() -> None:
+    rows = [PlanRow("codex", Disposition.INSTALL, "")]
+    problems = {"codex": ("config.toml", "TOML")}
+    notes = run_option_lines("auto-approve", rows, platform_os="fedora", problems=problems)[1]
+    assert notes == ("codex: config.toml is not valid TOML; nothing will be written",)
+
+
+def _settings_text(outcomes: list[RowOutcome], options: frozenset[str]) -> list[str]:
+    console, buf = _console()
+    render_settings_lines(outcomes, options, console)
+    return buf.getvalue().splitlines()
+
+
+def test_settings_report_lines_cover_every_outcome() -> None:
+    home = Path.home()
+    claude = home / ".claude" / "settings.json"
+    cursor = home / ".cursor" / "cli-config.json"
+    codex = home / ".codex" / "config.toml"
+    opencode = home / ".config" / "opencode" / "opencode.jsonc"
+    vscode = home / ".config" / "Code" / "User" / "settings.json"
+    long_value = "x" * 200
+    outcomes = [
+        RowOutcome(
+            PlanRow("claude", Disposition.INSTALL, ""),
+            "done",
+            settings=(
+                FileResult(
+                    "claude",
+                    "auto-approve",
+                    claude,
+                    "json",
+                    keys=(KeyResult("permissions.defaultMode", "wrote", '"bypassPermissions"'),),
+                ),
+                FileResult(
+                    "claude",
+                    "no-attribution",
+                    claude,
+                    "json",
+                    keys=(KeyResult("attribution.commit", "set_by_you", long_value),),
+                ),
+            ),
+        ),
+        RowOutcome(
+            PlanRow("cursor-agent", Disposition.INSTALL, ""),
+            "done",
+            settings=(
+                FileResult(
+                    "cursor-agent",
+                    "no-attribution",
+                    cursor,
+                    "json",
+                    keys=(
+                        KeyResult(
+                            "attribution.attributeCommitsToAgent", "replaced_default", "true"
+                        ),
+                        KeyResult("attribution.attributePRsToAgent", "replaced_default", "true"),
+                    ),
+                ),
+            ),
+        ),
+        RowOutcome(
+            PlanRow("vscode", Disposition.INSTALL, ""),
+            "done",
+            settings=(
+                FileResult(
+                    "vscode",
+                    "vscode-lean",
+                    vscode,
+                    "jsonc",
+                    keys=(
+                        KeyResult(
+                            "workbench.settings.enableNaturalLanguageSearch", "already", "false"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        RowOutcome(
+            PlanRow("codex", Disposition.INSTALL, ""),
+            "done",
+            settings=(
+                FileResult(
+                    "codex", "auto-approve", codex, "toml", refused="not valid TOML (line 2)"
+                ),
+            ),
+        ),
+        RowOutcome(
+            PlanRow("opencode", Disposition.INSTALL, ""),
+            "done",
+            settings=(
+                FileResult(
+                    "opencode", "auto-approve", opencode, "jsonc", refused=CHANGED_WHILE_WRITING
+                ),
+            ),
+        ),
+    ]
+    lines = _settings_text(outcomes, frozenset({"auto-approve", "no-attribution", "vscode-lean"}))
+    assert lines.count("claude — ~/.claude/settings.json:") == 1
+    assert "  wrote permissions.defaultMode" in lines
+    set_by_you = [line for line in lines if line.startswith("  set by you: attribution.commit = ")]
+    assert len(set_by_you) == 1
+    assert set_by_you[0].endswith(" (left as is)")
+    assert "…" in set_by_you[0]
+    assert cell_len(set_by_you[0]) <= 78
+    assert "  already set: workbench.settings.enableNaturalLanguageSearch" in lines
+    first = lines.index("  replaced CLI default: attribution.attributeCommitsToAgent = true")
+    assert lines[first + 1] == "  replaced CLI default: attribution.attributePRsToAgent = true"
+    assert lines[first + 2] == "  revert restores the replaced defaults"
+    assert lines.count("  revert restores the replaced defaults") == 1
+    assert "  not valid TOML (line 2); nothing written" in lines
+    assert "  changed while being written; nothing written. Retry in Policies." in lines
+
+
+def test_settings_report_lines_fit_78_cells() -> None:
+    zsh = "/home/linuxbrew/.linuxbrew/bin/zsh"
+    outcomes = [
+        RowOutcome(
+            PlanRow("opencode", Disposition.INSTALL, ""),
+            "done",
+            settings=(
+                FileResult(
+                    "opencode",
+                    "auto-approve",
+                    Path.home() / ".config" / "opencode" / "opencode.jsonc",
+                    "jsonc",
+                    keys=(
+                        KeyResult(
+                            "workbench.settings.enableNaturalLanguageSearch", "wrote", "false"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        RowOutcome(PlanRow("codex", Disposition.INSTALL, ""), "done"),
+        RowOutcome(PlanRow("pi", Disposition.INSTALL, ""), "done"),
+        RowOutcome(
+            PlanRow("zsh", Disposition.INSTALL, ""),
+            "done",
+            desktop_shell=("~/.config/environment.d/52-tools-installer-desktop-shell.conf", zsh),
+        ),
+    ]
+    lines = _settings_text(outcomes, frozenset({"no-attribution", "desktop-shell"}))
+    assert "opencode — ~/.config/opencode/opencode.jsonc:" in lines
+    assert "  wrote workbench.settings.enableNaturalLanguageSearch" in lines
+    assert "  SHELL=/home/linuxbrew/.linuxbrew/bin/zsh; log in again to use it" in lines
+    assert all(cell_len(line) <= 78 for line in lines)
+
+
+def test_attribution_report_names_agents_without_a_key() -> None:
+    rows = [
+        RowOutcome(PlanRow(agent, Disposition.INSTALL, ""), "done")
+        for agent in ("claude", "codex", "opencode", "pi")
+    ]
+    lines = _settings_text(rows, frozenset({"no-attribution"}))
+    assert "codex, opencode, pi: no documented attribution key; nothing written" in lines
+    cursor = [*rows, RowOutcome(PlanRow("cursor-agent", Disposition.INSTALL, ""), "done")]
+    cursor_lines = _settings_text(cursor, frozenset({"no-attribution"}))
+    assert "cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)" in (
+        cursor_lines
+    )
+    assert "pi: nothing written; pi has no approval setting in its core" in _settings_text(
+        rows, frozenset({"auto-approve"})
+    )
+    assert _settings_text(cursor, frozenset()) == []
+
+
+def test_shell_init_left_off_line_lists_done_tools() -> None:
+    outcomes = [
+        RowOutcome(PlanRow("starship", Disposition.INSTALL, ""), "done"),
+        RowOutcome(PlanRow("zoxide", Disposition.INSTALL, ""), "failed"),
+        RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done"),
+    ]
+    assert shell_init_left_off_line(outcomes, ("starship", "zoxide")) == (
+        "Shell init left off (--yes): starship. Turn it on in Policies."
+    )
+    assert shell_init_left_off_line(outcomes[1:2], ("zoxide",)) is None
+    assert RUN_OPTIONS_LEFT_OFF == (
+        "Run options left off (--yes never turns them on); change them in Policies."
+    )

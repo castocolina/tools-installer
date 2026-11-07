@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.text import Text
 
+from installer.agent_settings import CHANGED_WHILE_WRITING, FileResult, KeyResult
 from installer.apps import APP_KINDS
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -23,11 +24,15 @@ from installer.guidance import (
     node_globals_guidance,
 )
 from installer.links import TROUBLESHOOTING_URL
+from installer.locations import display_path
 from installer.pnpm_globals import NodeGlobalsReport
 from installer.postinstall import host_labels
 from installer.sanitize import sanitize_log_line
 from installer.session import (
+    NO_ATTRIBUTION_KEY_IDS,
+    OPTION_COVERS,
     RESULT_WORDS,
+    RUNNABLE,
     WORDS,
     Disposition,
     PlanRow,
@@ -301,7 +306,12 @@ def render_done_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
             console.print(line, markup=False, highlight=False, soft_wrap=True)
 
 
-def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
+def render_run_report(
+    outcomes: Sequence[RowOutcome],
+    console: Console,
+    *,
+    options: frozenset[str] = frozenset(),
+) -> None:
     """Print the summary followed by every outcome report in one fixed order."""
     render_run_summary(outcomes, console)
     installs = [outcome.install for outcome in outcomes if outcome.install is not None]
@@ -311,9 +321,165 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_postinstall_warnings(installs, console)
     render_resync_warnings(outcomes, console)
     render_hook_lines(outcomes, console)
+    render_settings_lines(outcomes, options, console)
     render_done_notes(outcomes, console)
     render_verification(installs, console)
     render_shell_section(outcomes, console)
+
+
+def render_settings_lines(
+    outcomes: Sequence[RowOutcome], options: frozenset[str], console: Console
+) -> None:
+    """Print the settings section (UI-SPEC section 4); silent when empty."""
+    lines = _settings_lines(outcomes, options)
+    if not lines:
+        return
+    console.print("Agent and editor settings", style="bold", markup=False, highlight=False)
+    for line in lines:
+        console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
+
+
+def _settings_lines(outcomes: Sequence[RowOutcome], options: frozenset[str]) -> list[str]:
+    """One block per settings file in first-seen order, then the lines that have no file."""
+    blocks: dict[tuple[str, Path], list[tuple[bool, str]]] = {}
+    for outcome in outcomes:
+        for written in outcome.settings:
+            blocks.setdefault((written.agent, written.path), []).extend(_file_lines(written))
+    lines: list[str] = []
+    for (agent, path), body in blocks.items():
+        lines.append(f"{agent} — {display_path(path)}:")
+        lines.extend(_with_revert_note(body))
+    ran = {outcome.row.tool_id for outcome in outcomes if outcome.row.disposition in RUNNABLE}
+    if "no-attribution" in options:
+        if "cursor-agent" in ran:
+            lines.append(
+                "cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)"
+            )
+        keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in ran]
+        if keyless:
+            lines.append(f"{', '.join(keyless)}: no documented attribution key; nothing written")
+    if "auto-approve" in options and "pi" in ran:
+        lines.append("pi: nothing written; pi has no approval setting in its core")
+    lines.extend(
+        f"{outcome.row.tool_id}: not installed by this run; nothing written"
+        for outcome in outcomes
+        if outcome.settings_skipped
+    )
+    for outcome in outcomes:
+        if outcome.desktop_shell is not None:
+            path, zsh = outcome.desktop_shell
+            lines += [f"environment.d — {path}:", f"  SHELL={zsh}; log in again to use it"]
+        if outcome.desktop_shell_error is not None:
+            path, error = outcome.desktop_shell_error
+            lines += [f"environment.d — {path}:", f"  not written: {error}"]
+    return lines
+
+
+def _file_lines(written: FileResult) -> list[tuple[bool, str]]:
+    """(is a replaced CLI default, line) for each key of one settings result, or its refusal."""
+    if written.refused is not None:
+        if written.refused == CHANGED_WHILE_WRITING:
+            return [(False, f"  {CHANGED_WHILE_WRITING}; nothing written. Retry in Policies.")]
+        return [(False, f"  {written.refused}; nothing written")]
+    lines: list[tuple[bool, str]] = []
+    for key in written.keys:
+        if key.kind == "wrote":
+            lines.append((False, f"  wrote {key.key}"))
+        elif key.kind == "set_by_you":
+            lines.append((False, _set_by_you_line(key)))
+        elif key.kind == "already":
+            lines.append((False, f"  already set: {key.key}"))
+        elif key.kind == "replaced_default":
+            lines.append((True, f"  replaced CLI default: {key.key} = {key.value}"))
+    return lines
+
+
+# A `set by you` line is cut so the whole line stays within 78 cells (UI-SPEC section 4).
+_SETTINGS_LINE_CELLS = 78
+_SET_BY_YOU_TAIL = " (left as is)"
+
+
+def _set_by_you_line(key: KeyResult) -> str:
+    head = f"  set by you: {key.key} = "
+    value = Text(sanitize_log_line(key.value))
+    room = _SETTINGS_LINE_CELLS - cell_len(head) - cell_len(_SET_BY_YOU_TAIL)
+    value.truncate(room, overflow="ellipsis")
+    return f"{head}{value.plain}{_SET_BY_YOU_TAIL}"
+
+
+def _with_revert_note(body: list[tuple[bool, str]]) -> list[str]:
+    """The file's lines, with the revert note once after its last replaced default."""
+    last = max((index for index, (replaced, _) in enumerate(body) if replaced), default=-1)
+    lines: list[str] = []
+    for index, (_, line) in enumerate(body):
+        lines.append(line)
+        if index == last:
+            lines.append("  revert restores the replaced defaults")
+    return lines
+
+
+def run_option_lines(
+    option: str,
+    rows: Sequence[PlanRow],
+    *,
+    platform_os: str,
+    problems: Mapping[str, tuple[str, str]] | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """One run option's review text: its first line (no `[ ] ` cell) and its dim notes.
+
+    The strings are UI-SPEC section 1's, read by the TUI review and the headless prompts alike.
+    """
+    ran = {row.tool_id for row in rows if row.disposition in RUNNABLE}
+    _, covered = OPTION_COVERS.get(option, ("", ()))
+    listed = [agent for agent in covered if agent in ran]
+    notes: list[str] = []
+    if option == "auto-approve":
+        first = f"auto-approve agents — {', '.join(listed)}: no permission prompts"
+        if "pi" in ran:
+            notes.append("pi: nothing written; its approvals come only from extensions")
+    elif option == "no-attribution":
+        first = f"attribution off — {', '.join(listed)}: no agent credit in commits/PRs"
+        keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in ran]
+        if keyless:
+            notes.append(f"no documented key: {', '.join(keyless)} (nothing written for them)")
+        if "cursor-agent" in ran:
+            notes.append("cursor-agent: its CLI ignores the commit opt-out (as of 2026-10-04)")
+    elif option == "vscode-lean":
+        first = "VS Code lean mode — telemetry, experiments, minimap, auto-detect off"
+        notes.append(
+            "zsh terminal; update.mode set to none"
+            if platform_os == "macos"
+            else "zsh terminal; update.mode not written on Linux (this installer updates it)"
+        )
+    elif option == "vscode-ai-off":
+        first = "VS Code built-in AI off — chat.disableAIFeatures"
+    elif option == "vscode-ext-updates-off":
+        first = "VS Code extension auto-update off — security fixes only on demand"
+    else:
+        first = "SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)"
+    for agent in listed:
+        if problems and agent in problems:
+            file, fmt = problems[agent]
+            notes.append(f"{agent}: {file} is not valid {fmt}; nothing will be written")
+    return first, tuple(notes)
+
+
+RUN_OPTIONS_LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
+
+
+def shell_init_left_off_line(outcomes: Sequence[RowOutcome], tools: Sequence[str]) -> str | None:
+    """The headless note for shell-init questions `--yes` skipped, naming the installed tools."""
+    installed = {
+        outcome.row.tool_id
+        for outcome in outcomes
+        if outcome.row.disposition
+        in {Disposition.INSTALL, Disposition.REPAIR, Disposition.REINSTALL}
+        and outcome.result == "done"
+    }
+    ids = [tool for tool in tools if tool in installed]
+    if not ids:
+        return None
+    return f"Shell init left off (--yes): {', '.join(ids)}. Turn it on in Policies."
 
 
 def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:

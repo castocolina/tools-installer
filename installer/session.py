@@ -4,6 +4,7 @@ The Phase 20 model (`Disposition`, `PlanRow`, `WORDS`, and `build_plan`) and
 its executor (`execute_plan`) live together here.
 """
 
+import os
 import stat
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -13,9 +14,25 @@ from pathlib import Path
 from typing import Literal, Protocol, get_args
 
 from installer import executors, postinstall, receipts
+from installer.agent_settings import (
+    AGENT_FORMATS,
+    FORMAT_NAMES,
+    FileResult,
+    apply_setting,
+    file_problem,
+    setting_keys,
+    settings_file,
+)
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
+from installer.env_redirect import (
+    DESKTOP_SHELL_CONF,
+    environment_d_dir,
+    shell_redirect,
+    write_linux_redirect,
+)
+from installer.locations import display_path
 from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (
     UNMANAGEABLE_OWNERS,
@@ -26,7 +43,7 @@ from installer.ownership import (
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
 from installer.postinstall import hook_method, host_labels, register_hooks
-from installer.receipts import CHANGED_SINCE_INSTALL
+from installer.receipts import CHANGED_SINCE_INSTALL, CONFIG_AGENTS
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
 from installer.selection import select_tools
@@ -187,6 +204,12 @@ class RowOutcome:
     # The end-of-run sweep's answer for a new agent host: (tool id, harness ids registered).
     resynced: tuple[tuple[str, tuple[str, ...]], ...] = ()
     resync_warnings: tuple[tuple[str, str], ...] = ()
+    # The chosen run options' writes to this row's settings file, and whether an option skipped it.
+    settings: tuple[FileResult, ...] = ()
+    settings_skipped: bool = False
+    # The desktop SHELL conf: (display path, zsh path) when written, (display path, error) when not.
+    desktop_shell: tuple[str, str] | None = None
+    desktop_shell_error: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -203,6 +226,8 @@ class RunContext:
     should_continue: Callable[[], bool] | None = None
     on_row_started: Callable[[PlanRow], None] | None = None
     on_outcome: Callable[[RowOutcome], None] | None = None
+    # The run options the user switched on; empty by default, so a run writes no setting (D-09).
+    options: frozenset[str] = frozenset()
 
 
 _REVIEW_ORDER: tuple[Disposition, ...] = (
@@ -558,6 +583,139 @@ def _resync_hooks(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcom
     return outcomes
 
 
+# The run options, in the order the review shows them (UI-SPEC section 1).
+RUN_OPTIONS: tuple[str, ...] = (
+    "auto-approve",
+    "no-attribution",
+    "vscode-lean",
+    "vscode-ai-off",
+    "vscode-ext-updates-off",
+    "desktop-shell",
+)
+
+
+def _ids_with_setting(setting: str) -> tuple[str, ...]:
+    """The agents whose settings file holds this setting; the set does not depend on the OS."""
+    return tuple(agent for agent in CONFIG_AGENTS if setting_keys(agent, setting, "linux"))
+
+
+AGENT_OPTION_IDS: tuple[str, ...] = _ids_with_setting("auto-approve")
+ATTRIBUTION_IDS: tuple[str, ...] = _ids_with_setting("no-attribution")
+# Agents with no documented attribution key; pi has no ledger agent, so it stays a literal.
+NO_ATTRIBUTION_KEY_IDS: tuple[str, ...] = ("codex", "opencode", "pi")
+# Each option's (settings group, row ids it covers).
+OPTION_COVERS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "auto-approve": ("auto-approve", AGENT_OPTION_IDS),
+    "no-attribution": ("no-attribution", ATTRIBUTION_IDS),
+    "vscode-lean": ("vscode-lean", ("vscode",)),
+    "vscode-ai-off": ("vscode-ai-off", ("vscode",)),
+    "vscode-ext-updates-off": ("vscode-ext-updates-off", ("vscode",)),
+}
+
+
+# The rows whose settings the desktop SHELL option can export (its environment.d conf).
+_DESKTOP_SHELL_IDS: frozenset[str] = frozenset({"zsh", "kitty", "wezterm"})
+
+
+def run_options(rows: Sequence[PlanRow], platform_os: str) -> tuple[str, ...]:
+    """The options a plan shows: each only when a runnable row triggers it (UI-SPEC O2)."""
+    shown: set[str] = set()
+    for row in rows:
+        if row.disposition not in RUNNABLE:
+            continue
+        if row.tool_id in AGENT_OPTION_IDS:
+            shown.add("auto-approve")
+        if row.tool_id in ATTRIBUTION_IDS:
+            shown.add("no-attribution")
+        if row.tool_id == "vscode":
+            shown.update(("vscode-lean", "vscode-ai-off", "vscode-ext-updates-off"))
+        if platform_os != "macos" and row.tool_id in _DESKTOP_SHELL_IDS:
+            shown.add("desktop-shell")
+    return tuple(option for option in RUN_OPTIONS if option in shown)
+
+
+def review_problems(
+    rows: Sequence[PlanRow], *, home: Path, platform_os: str
+) -> dict[str, tuple[str, str]]:
+    """O7: each runnable agent whose settings file does not parse, as (file name, format name)."""
+    runnable = {row.tool_id for row in rows if row.disposition in RUNNABLE}
+    problems: dict[str, tuple[str, str]] = {}
+    for agent in CONFIG_AGENTS:
+        if agent not in runnable:
+            continue
+        problem = file_problem(agent, home=home, platform_os=platform_os)
+        if problem is not None and problem.startswith("not valid "):
+            path = settings_file(agent, home=home, platform_os=platform_os)
+            problems[agent] = (path.name, FORMAT_NAMES[AGENT_FORMATS[agent]])
+    return problems
+
+
+def _apply_option(agent: str, setting: str, home: Path, platform_os: str) -> FileResult:
+    """One option's write for one agent; an unexpected OS error is that file's refusal."""
+    try:
+        return apply_setting(agent, setting, home=home, platform_os=platform_os)
+    except OSError as exc:
+        path = settings_file(agent, home=home, platform_os=platform_os)
+        return FileResult(agent, setting, path, AGENT_FORMATS[agent], refused=first_line(exc))
+
+
+def _desktop_shell(outcomes: list[RowOutcome]) -> list[RowOutcome]:
+    """SHELL for desktop apps: one environment.d conf, from the first done zsh/kitty/wezterm row.
+
+    The zsh comes from `which_with_brew`, the lookup the terminal sync also uses.
+    """
+    index = next(
+        (
+            position
+            for position, outcome in enumerate(outcomes)
+            if outcome.row.tool_id in _DESKTOP_SHELL_IDS
+            and outcome.row.disposition in RUNNABLE
+            and outcome.result == "done"
+        ),
+        None,
+    )
+    if index is None:
+        return outcomes
+    home = Path.home()
+    conf_dir = environment_d_dir(home, os.environ)
+    shown = display_path(conf_dir / DESKTOP_SHELL_CONF)
+    zsh = postinstall.which_with_brew("zsh")
+    if zsh is None:
+        outcomes[index] = replace(outcomes[index], desktop_shell_error=(shown, "zsh not found"))
+        return outcomes
+    try:
+        write_linux_redirect(shell_redirect(zsh), home, conf_dir)
+    except (ValueError, OSError) as exc:
+        outcomes[index] = replace(outcomes[index], desktop_shell_error=(shown, first_line(exc)))
+    else:
+        outcomes[index] = replace(outcomes[index], desktop_shell=(shown, zsh))
+    return outcomes
+
+
+def _apply_run_options(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcome]:
+    """D-09: each chosen option writes its settings to every runnable row that ended done.
+
+    A row that did not end done writes nothing for its option and is marked `settings_skipped`.
+    Options run in table order, so the report reads the same on every run.
+    """
+    home = Path.home()
+    for option in RUN_OPTIONS:
+        if option not in ctx.options or option not in OPTION_COVERS:
+            continue
+        setting, covered = OPTION_COVERS[option]
+        for index, outcome in enumerate(outcomes):
+            if outcome.row.disposition not in RUNNABLE or outcome.row.tool_id not in covered:
+                continue
+            if outcome.result != "done":
+                outcomes[index] = replace(outcome, settings_skipped=True)
+                continue
+            written = _apply_option(outcome.row.tool_id, setting, home, ctx.platform.os)
+            outcomes[index] = replace(outcome, settings=(*outcome.settings, written))
+    if "desktop-shell" in ctx.options and ctx.platform.os != "macos":
+        outcomes = _desktop_shell(outcomes)
+    return outcomes
+
+
 def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
     """Execute a settled plan and return one truthful outcome per row."""
     if any(row.disposition is Disposition.WAIT for row in rows):
@@ -688,7 +846,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
         outcomes.append(outcome)
         if ctx.on_outcome is not None:
             ctx.on_outcome(outcome)
-    return _resync_hooks(outcomes, ctx)
+    return _apply_run_options(_resync_hooks(outcomes, ctx), ctx)
 
 
 def _settled(state: ToolState | None) -> bool:

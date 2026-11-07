@@ -1,5 +1,7 @@
 import inspect
 import io
+import json
+import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -24,7 +26,7 @@ from installer.model import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
-from installer.render import render_done_notes
+from installer.render import render_done_notes, render_run_report
 from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
@@ -44,6 +46,8 @@ from installer.session import (
     ran_anything,
     retained,
     review_counts,
+    review_problems,
+    run_options,
     summary_counts,
 )
 from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
@@ -1742,3 +1746,128 @@ def test_every_disposition_has_words_and_a_review_place(disposition: Disposition
 def test_every_disposition_manual_is_reviewed_right_after_blocked():
     members = list(Disposition)
     assert members.index(Disposition.MANUAL) == members.index(Disposition.BLOCKED) + 1
+
+
+_AGENT_ROWS = [
+    PlanRow("claude", Disposition.INSTALL, "not installed"),
+    PlanRow("codex", Disposition.INSTALL, "not installed"),
+]
+_AGENT_CATALOG = {"claude": _tool("claude"), "codex": _tool("codex")}
+
+
+def _report(outcomes: list[RowOutcome]) -> str:
+    buf = io.StringIO()
+    render_run_report(outcomes, Console(file=buf, width=100, no_color=True))
+    return buf.getvalue()
+
+
+def test_auto_approve_is_applied_to_every_agent_row_that_ended_done() -> None:
+    recorder = RunRecorder()
+    ctx = replace(
+        _run_context(recorder, catalog=_AGENT_CATALOG), options=frozenset({"auto-approve"})
+    )
+    outcomes = execute_plan(_AGENT_ROWS, ctx)
+    claude = json.loads((Path.home() / ".claude" / "settings.json").read_text())
+    assert claude["permissions"]["defaultMode"] == "bypassPermissions"
+    assert claude["skipDangerousModePermissionPrompt"] is True
+    codex = tomllib.loads((Path.home() / ".codex" / "config.toml").read_text())
+    assert codex["approval_policy"] == "never"
+    assert codex["sandbox_mode"] == "danger-full-access"
+    assert [len(outcome.settings) for outcome in outcomes] == [1, 1]
+    text = _report(outcomes)
+    for line in (
+        "Agent and editor settings",
+        "claude — ~/.claude/settings.json:",
+        "  wrote permissions.defaultMode",
+        "  wrote skipDangerousModePermissionPrompt",
+        "codex — ~/.codex/config.toml:",
+        "  wrote approval_policy",
+        "  wrote sandbox_mode",
+    ):
+        assert line in text
+
+
+def test_a_default_run_writes_no_setting() -> None:
+    recorder = RunRecorder()
+    outcomes = execute_plan(_AGENT_ROWS, _run_context(recorder, catalog=_AGENT_CATALOG))
+    home = Path.home()
+    assert not (home / ".claude" / "settings.json").exists()
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".config" / "environment.d").exists()
+    assert all(outcome.settings == () for outcome in outcomes)
+    assert "Agent and editor settings" not in _report(outcomes)
+
+
+def test_a_failed_agent_row_writes_nothing_and_says_so() -> None:
+    recorder = RunRecorder(outcomes={"claude": InstallOutcome("claude", InstallStatus.FAILED)})
+    ctx = replace(
+        _run_context(recorder, catalog={"claude": _tool("claude")}),
+        options=frozenset({"auto-approve"}),
+    )
+    outcomes = execute_plan([PlanRow("claude", Disposition.INSTALL, "not installed")], ctx)
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].settings_skipped
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    assert "claude: not installed by this run; nothing written" in _report(outcomes)
+
+
+def test_run_options_follow_the_plan() -> None:
+    def row(tool_id: str, disposition: Disposition = Disposition.INSTALL) -> PlanRow:
+        return PlanRow(tool_id, disposition, "")
+
+    assert run_options([row("codex")], "fedora") == ("auto-approve",)
+    assert run_options([row("claude"), row("codex"), row("pi")], "fedora") == (
+        "auto-approve",
+        "no-attribution",
+    )
+    assert run_options([row("codex", Disposition.SKIP)], "fedora") == ()
+    assert run_options([row("vscode", Disposition.UPDATE)], "fedora") == (
+        "vscode-lean",
+        "vscode-ai-off",
+        "vscode-ext-updates-off",
+    )
+    assert run_options([row("zsh")], "fedora") == ("desktop-shell",)
+    assert run_options([row("zsh")], "macos") == ()
+    assert run_options([row("cursor-agent", Disposition.RECONFIGURE)], "fedora") == (
+        "auto-approve",
+        "no-attribution",
+    )
+
+
+def test_review_problems_name_an_unparsable_settings_file() -> None:
+    config = Path.home() / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("not = [valid\n")
+    home = Path.home()
+    install = [PlanRow("codex", Disposition.INSTALL, "")]
+    assert review_problems(install, home=home, platform_os="fedora") == {
+        "codex": ("config.toml", "TOML")
+    }
+    config.write_text('approval_policy = "never"\n')
+    assert review_problems(install, home=home, platform_os="fedora") == {}
+    config.unlink()
+    assert review_problems(install, home=home, platform_os="fedora") == {}
+    config.write_text("not = [valid\n")
+    skipped = [PlanRow("codex", Disposition.SKIP, "")]
+    assert review_problems(skipped, home=home, platform_os="fedora") == {}
+
+
+def test_desktop_shell_option_writes_environment_d(monkeypatch: pytest.MonkeyPatch) -> None:
+    def which_zsh(name: str) -> str | None:
+        return "/z/bin/zsh" if name == "zsh" else None
+
+    monkeypatch.setattr(postinstall, "which_with_brew", which_zsh)
+    conf = Path.home() / ".config" / "environment.d" / "52-tools-installer-desktop-shell.conf"
+    ctx = replace(
+        _run_context(RunRecorder(), catalog={"zsh": _tool("zsh")}),
+        options=frozenset({"desktop-shell"}),
+    )
+    outcomes = execute_plan([PlanRow("zsh", Disposition.INSTALL, "not installed")], ctx)
+    assert "SHELL=/z/bin/zsh" in conf.read_text().splitlines()
+    lines = _report(outcomes).splitlines()
+    assert "environment.d — ~/.config/environment.d/52-tools-installer-desktop-shell.conf:" in lines
+    assert "  SHELL=/z/bin/zsh; log in again to use it" in lines
+    conf.unlink()
+    mac = replace(ctx, platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True))
+    execute_plan([PlanRow("zsh", Disposition.INSTALL, "not installed")], mac)
+    assert not conf.exists()
