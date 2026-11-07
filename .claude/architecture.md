@@ -281,7 +281,7 @@ make something `ai`-tier, what matters is whether the human is the one
 typing into it; `ai` = tooling that operates underneath or is consumed BY an
 agent session, never launched directly by the human as their own interface —
 MCP servers, token-reduction proxies, knowledge-graph builders (codegraph,
-graphify, rtk), or agent-oriented CLI utilities (rg, fd, sd, bat, eza).
+graphify), or agent-oriented CLI utilities (rg, fd, sd, bat, eza).
 Skill packs are not catalog entries since 23.1. `Tool.audience`
 (`human`/`ai`/`both`) is a separate, independent field recording who
 *benefits* from a tool regardless of tier — it is not derived from tier and
@@ -307,7 +307,7 @@ New registry tool needs post-install setup?
 │  an MCP server, patch a per-agent config file)?
 │  -> Tool.postinstall = "<hook-name>", dispatched through
 │     installer/postinstall.py's closed POSTINSTALL_HOOKS table.
-│     Worked examples: codegraph (Phase 9), rtk/graphify (Phase 12.4).
+│     Worked examples: codegraph (Phase 9), tealdeer (Phase 23).
 │
 ├─ Setup requires a live terminal or user-selected project target that
 │  cannot be safely scripted from a Textual worker thread?
@@ -602,8 +602,9 @@ with zero observable behavior change, and is now shared by two hooks in
 `POSTINSTALL_HOOKS`:
 
 1. `codegraph-mcp-register` (Phase 9) — composes one `--target` CSV call.
-2. `rtk-register` (Phase 12.4) — one `rtk init <args>` invocation per
-   present host; `cursor-agent`'s branch only fires when `claude` is ALSO
+2. `rtk-register` (Phase 12.4, removed in Phase 23.1 with the rtk catalog
+   entry; the installer no longer installs or registers rtk) — one
+   `rtk init <args>` invocation per present host; `cursor-agent`'s branch only fires when `claude` is ALSO
    present, because live testing against the real rtk v0.49.0 binary
    confirmed `--agent cursor` still unconditionally also writes Claude
    Code's `RTK.md`/`settings.json` as a side effect — writing unrequested
