@@ -539,7 +539,11 @@ def check_launch(
             if not command:
                 raise AssertionError(f"{name} needs a command")
             check_launch(command, env=env, cwd=cwd, policy=policy, missing_ok=missing_ok)
-        elif resolved in policy.interpreters and resolved.name in _SHELL_NAMES:
+        elif resolved in policy.interpreters and (
+            name in _SHELL_NAMES or resolved != _real(sys.executable)
+        ):
+            # Every interpreter but the running Python is a shell, whatever its realpath is
+            # named (`bash5.2`, a busybox), and so is anything invoked by a shell name.
             check_shell_args(rest, env=env, cwd=cwd, policy=policy)
         return
     # 2. the linuxbrew prefix is refused on every host, whether or not the binary exists
@@ -657,6 +661,9 @@ def guarded_getaddrinfo(describe: Callable[[], str]) -> Callable[..., NoReturn]:
 
 
 # --- the os launchers: the same allowlist as subprocess.Popen (SPEC R6, D-21) ---
+
+# Names the base temp for tests/child_guard/sitecustomize.py, which guards Python children.
+CHILD_GUARD_ROOT_ENV = "TOOLS_INSTALLER_TEST_ALLOWED_ROOT"
 
 # execl*/spawnl* are pure-Python wrappers over these (through module globals), so they are covered.
 GUARDED_OS_FUNCTIONS = (

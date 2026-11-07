@@ -635,6 +635,33 @@ def test_a_function_counts_only_after_its_top_level_definition(
         shells.run("bash", script)
 
 
+def test_a_shell_under_another_name_is_still_script_checked(
+    tmp_path: Path, policy: LaunchPolicy
+) -> None:
+    """WR-04: a shell whose realpath is `bash5.2` or a busybox, or that is invoked by a shell
+    name, still has its script checked; only the running interpreter is not a shell."""
+    versioned = _fake(tmp_path / "real", "bash5.2")
+    busybox = _fake(tmp_path / "real", "busybox")
+    named_sh = tmp_path / "named" / "sh"
+    named_sh.parent.mkdir()
+    named_sh.symlink_to(busybox)
+    members = replace(policy, interpreters=frozenset({_real(versioned), _real(busybox)}))
+    for shell in (versioned, busybox, named_sh):
+        check_launch([shell, "-c", "echo hi"], env=None, cwd=None, policy=members)
+        with pytest.raises(AssertionError):
+            check_launch([shell, "-c", "uv x"], env=None, cwd=None, policy=members)
+
+
+def test_a_python_child_inherits_the_launch_guard() -> None:
+    """WR-04: a `sys.executable -c` child loads the guard through PYTHONPATH (sitecustomize)."""
+    child = "import subprocess; subprocess.run(['true'], check=False)"
+    done = subprocess.run(
+        [sys.executable, "-c", child], capture_output=True, text=True, check=False
+    )
+    assert done.returncode != 0
+    assert "host's true" in done.stderr
+
+
 def test_shell_scripts_refuse_a_shell_with_no_arguments(shells: _Shells) -> None:
     with pytest.raises(AssertionError):
         check_launch([shells.paths["bash"]], env=None, cwd=None, policy=shells.policy)

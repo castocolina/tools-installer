@@ -28,6 +28,7 @@ import pytest
 from installer import app, executors, locations, post_install, postinstall, receipts, status
 from tests.home_fingerprint import fingerprint, fingerprint_diff
 from tests.sandbox import (
+    CHILD_GUARD_ROOT_ENV,
     GUARDED_OS_FUNCTIONS,
     HOST_ZSH_STASH,
     OVERRIDES_STASH,
@@ -64,6 +65,7 @@ _REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
 # The same trick for the host reader, restored by `real_present_hosts`.
 _REAL_PRESENT_HOSTS: Callable[[], frozenset[str]] = postinstall.present_hosts
 _launch_policy: LaunchPolicy | None = None
+_CHILD_GUARD_DIR = Path(__file__).resolve().parent / "child_guard"
 
 
 def launch_policy() -> LaunchPolicy:
@@ -97,8 +99,12 @@ def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
     """Build the launch allowlist once per worker: fakes under the base temp, checkout scripts,
     the named interpreters and utilities (tests/sandbox.py `check_launch`)."""
     global _launch_policy
-    _launch_policy = build_launch_policy(
-        tmp_path_factory.getbasetemp().resolve(), path_value=os.environ.get("PATH", "")
+    root = tmp_path_factory.getbasetemp().resolve()
+    _launch_policy = build_launch_policy(root, path_value=os.environ.get("PATH", ""))
+    # A Python child loads tests/child_guard/sitecustomize.py and faces the same allowlist.
+    os.environ[CHILD_GUARD_ROOT_ENV] = str(root)
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        entry for entry in (str(_CHILD_GUARD_DIR), os.environ.get("PYTHONPATH")) if entry
     )
 
 
