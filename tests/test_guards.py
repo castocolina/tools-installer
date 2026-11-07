@@ -37,10 +37,12 @@ from installer.guards import (
     redirect_shim_script,
     remove_ban_aliases,
     remove_shims,
+    rewrite_outdated_ban_aliases,
     shell_path,
     shim_script,
     write_ban_aliases,
 )
+from installer.locations import display_path
 
 
 def test_shim_script_names_the_replacement_and_exits_nonzero():
@@ -153,9 +155,7 @@ def test_ban_alias_block_aliases_each_banned_command():
     assert "alias pnpm=" not in block
     assert "alias pip=" in block
     assert "alias pip3=" in block
-    assert "alias npx='pnpm dlx'" in block
-    npx_lines = [line for line in block.splitlines() if line.startswith("alias npx=")]
-    assert npx_lines == ["alias npx='pnpm dlx'"]
+    assert not [line for line in block.splitlines() if line.startswith("alias npx=")]
     assert "banned" in block
 
 
@@ -225,6 +225,72 @@ def test_ban_aliases_write_through_a_symlinked_rc(tmp_path: Path):
     new_text = target.read_text()
     assert BAN_BEGIN in new_text
     assert new_text.startswith("# user\nexport A=1\n")
+
+
+def _old_ban_block() -> str:
+    """The pre-phase block: the current block with the npx redirect alias before BAN_END."""
+    return ban_alias_block().replace(BAN_END, f"alias npx='pnpm dlx'\n{BAN_END}")
+
+
+def test_rewrite_outdated_ban_aliases_drops_the_npx_alias(tmp_path: Path):
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(f"user1\nuser2\n{_old_ban_block()}\nuser3\nuser4\n")
+    expected = f"user1\nuser2\n{ban_alias_block()}\nuser3\nuser4\n"
+    message = f"Rewrote the guard aliases in {display_path(rc)}: npx now runs through its redirect."
+    assert rewrite_outdated_ban_aliases([rc]) == ((message, "ok"),)
+    assert rc.read_text() == expected
+    assert rewrite_outdated_ban_aliases([rc]) == ()
+    assert rc.read_text() == expected
+
+
+@pytest.mark.parametrize("shape", ["missing", "no_block", "orphan_begin"])
+def test_rewrite_outdated_ban_aliases_never_adds_a_block(tmp_path: Path, shape: str):
+    rc = tmp_path / ".myshellrc"
+    texts = {"no_block": "user only\n", "orphan_begin": f"user only\n{BAN_BEGIN}\nalias pip='x'\n"}
+    if shape in texts:
+        rc.write_text(texts[shape])
+    assert rewrite_outdated_ban_aliases([rc]) == ()
+    assert rc.exists() == (shape in texts)
+    if shape in texts:
+        assert rc.read_text() == texts[shape]
+
+
+def test_rewrite_outdated_ban_aliases_leaves_a_current_block(tmp_path: Path):
+    rc = tmp_path / ".myshellrc"
+    text = f"user1\n{ban_alias_block()}\nuser2\n"
+    rc.write_text(text)
+    assert rewrite_outdated_ban_aliases([rc]) == ()
+    assert rc.read_text() == text
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
+def test_rewrite_outdated_ban_aliases_warns_when_it_cannot_write(tmp_path: Path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    rc = locked / ".myshellrc"
+    text = f"user1\n{_old_ban_block()}\n"
+    rc.write_text(text)
+    locked.chmod(0o555)
+    try:
+        results = rewrite_outdated_ban_aliases([rc])
+    finally:
+        locked.chmod(0o755)
+    assert len(results) == 1
+    message, level = results[0]
+    assert level == "warn"
+    assert message.startswith("Could not rewrite the guard aliases in ")
+    assert message.endswith("; fix its permissions, then relaunch.")
+    assert rc.read_text() == text
+
+
+def test_rewrite_outdated_ban_aliases_sanitizes_the_path(tmp_path: Path):
+    odd = tmp_path / "a\x1b[31mb"
+    odd.mkdir()
+    rc = odd / ".myshellrc"
+    rc.write_text(f"{_old_ban_block()}\n")
+    ((message, level),) = rewrite_outdated_ban_aliases([rc])
+    assert level == "ok"
+    assert not any(ord(ch) < 32 or ord(ch) == 127 for ch in message)
 
 
 def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):
@@ -539,6 +605,161 @@ def test_npx_redirect_shim_execs_into_pnpm_dlx_with_real_exit_code(tmp_path: Pat
     )
     assert result.returncode == 3
     assert "dlx a b" in result.stdout
+
+
+def _npx_with_fake_pnpm(tmp_path: Path, exit_code: int = 0) -> tuple[Path, Path]:
+    """An npx redirect shim over a fake pnpm that records its argv NUL-separated."""
+    record = tmp_path / "argv.bin"
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text(
+        '#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > '
+        f"{shlex.quote(str(record))}\nexit {exit_code}\n"
+    )
+    pnpm.chmod(0o755)
+    shim = tmp_path / "npx"
+    shim.write_text(redirect_shim_script("npx", str(pnpm)))
+    shim.chmod(0o755)
+    return shim, record
+
+
+def _run_npx(shim: Path, *argv: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(shim), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+
+
+def _recorded(record: Path) -> list[str]:
+    return [arg.decode() for arg in record.read_bytes().split(b"\0")[:-1]]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (("-y", "-p", "pkg", "bin", "a", "b"), ["dlx", "--package=pkg", "bin", "a", "b"]),
+        (("--package=a", "-p", "b", "cmd"), ["dlx", "--package=a", "--package=b", "cmd"]),
+        (("--package", "a", "cmd"), ["dlx", "--package=a", "cmd"]),
+        (("--yes", "pkg@1", "x"), ["dlx", "pkg@1", "x"]),
+        (("pkg@1", "x"), ["dlx", "pkg@1", "x"]),
+        (("cmd", "-p", "x", "--yes"), ["dlx", "cmd", "-p", "x", "--yes"]),
+    ],
+)
+def test_npx_shim_translates_package_options(
+    tmp_path: Path, argv: tuple[str, ...], expected: list[str]
+):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 0, result.stderr
+    assert _recorded(record) == expected
+
+
+def test_npx_shim_returns_pnpm_exit_code(tmp_path: Path):
+    shim, _ = _npx_with_fake_pnpm(tmp_path, exit_code=3)
+    assert _run_npx(shim, "cmd").returncode == 3
+
+
+def test_npx_shim_body_keeps_the_contract(tmp_path: Path):
+    target = "/fake/bin/pnpm"
+    body = redirect_shim_script("npx", target)
+    lines = body.splitlines()
+    assert lines[1] == REDIRECT_SENTINEL
+    exec_lines = [line for line in lines if line.strip().startswith("exec ")]
+    assert exec_lines == [f'exec {shlex.quote(target)} {shlex.quote("dlx")} "$@"']
+    assert lines[-1] == exec_lines[0]
+    assert exec_targets(body) == (target,)
+    shim = tmp_path / "npx"
+    shim.write_text(body)
+    syntax = subprocess.run(["sh", "-n", str(shim)], capture_output=True, text=True, check=False)
+    assert syntax.returncode == 0, syntax.stderr
+
+
+def _not_supported(token: str) -> str:
+    return (
+        f"npx: option '{token}' is not supported by this redirect (it runs pnpm dlx); "
+        "nothing was run.\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("-c", "echo hi"),
+        ("--call", "x"),
+        ("--no", "pkg"),
+        ("--no-install", "pkg"),
+        ("-w", "ws", "cmd"),
+        ("--workspace=ws", "cmd"),
+        ("--frobnicate", "pkg"),
+        ("--", "cmd"),
+        ("-", "cmd"),
+    ],
+)
+def test_npx_shim_refuses_untranslated_options(tmp_path: Path, argv: tuple[str, ...]):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 127
+    assert result.stderr == _not_supported(argv[0])
+    assert not record.exists()
+
+
+@pytest.mark.parametrize("argv", [(), ("-y",)])
+def test_npx_shim_needs_a_command(tmp_path: Path, argv: tuple[str, ...]):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 127
+    assert result.stderr == "npx: missing command. Usage: npx [-y] [-p package]... command [args]\n"
+    assert not record.exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "token"),
+    [
+        (("-p",), "-p"),
+        (("--package",), "--package"),
+        (("-p", "", "cmd"), "-p"),
+        (("--package=", "cmd"), "--package="),
+    ],
+)
+def test_npx_shim_needs_a_package_name(tmp_path: Path, argv: tuple[str, ...], token: str):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 127
+    assert result.stderr == f"npx: option '{token}' needs a package name; nothing was run.\n"
+    assert not record.exists()
+
+
+def test_npx_shim_passes_awkward_arguments_through(tmp_path: Path):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, "cmd", "a b", "$x", "q'uote")
+    assert result.returncode == 0, result.stderr
+    assert _recorded(record) == ["dlx", "cmd", "a b", "$x", "q'uote"]
+
+
+@pytest.mark.parametrize("token", ["--%s%n", "--a\\nb", "--a\nb", "--$(id)"])
+def test_npx_shim_prints_hostile_tokens_literally(tmp_path: Path, token: str):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, token, "cmd")
+    assert result.returncode == 127
+    assert result.stderr == _not_supported(token)
+    assert not record.exists()
+
+
+def test_npx_shim_messages_keep_the_ui_copy(tmp_path: Path):
+    shim, _ = _npx_with_fake_pnpm(tmp_path)
+    not_supported = (
+        "npx: option '' is not supported by this redirect (it runs pnpm dlx); nothing was run."
+    )
+    missing = "npx: missing command. Usage: npx [-y] [-p package]... command [args]"
+    needs_package = "npx: option '' needs a package name; nothing was run."
+    assert len(not_supported) == 85
+    assert len(missing) <= 78
+    assert len(needs_package) <= 78
+    assert _run_npx(shim, "-x", "cmd").stderr == not_supported.replace("''", "'-x'") + "\n"
+    assert _run_npx(shim).stderr == missing + "\n"
+    assert _run_npx(shim, "-p").stderr == needs_package.replace("''", "'-p'") + "\n"
 
 
 def test_banned_npm_hint_names_volta_not_global_add():
