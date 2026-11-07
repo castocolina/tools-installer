@@ -457,9 +457,12 @@ def test_a_cwd_executable_is_not_reachable_through_the_emitted_block(
     test_script.write_text("#!/bin/bash\necho 'executed'\n")
     test_script.chmod(0o755)
 
-    script = f". {rc}\nhello.sh\n"
+    # A file, not `-c`: `hello.sh` is deliberately on no PATH (a fake under tmp_path in the
+    # cwd), which the guard reads as a typo; the words are `.` and that fake only.
+    probe = tmp_path / "probe.sh"
+    probe.write_text(f". {rc}\nhello.sh\n")
     result = subprocess.run(
-        [bash_path, "-c", script],
+        [bash_path, str(probe)],
         cwd=str(tmp_path),
         env={"PATH": "", "HOME": str(tmp_path)},
         capture_output=True,
@@ -1807,8 +1810,12 @@ def test_consolidation_end_to_end_leaves_one_canonical_file(tmp_path: Path) -> N
             "echo $__SHELLRC_RUNS",
         ]
     )
+    # A file, not `-c`: the guard cannot resolve `$HOME` in a sourced word; the words are the
+    # builtins `.` and `echo` only.
+    probe = tmp_path / "probe.sh"
+    probe.write_text(script + "\n")
     proc = subprocess.run(
-        [bash_path, "--noprofile", "--norc", "-c", script],
+        [bash_path, "--noprofile", "--norc", str(probe)],
         env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
         capture_output=True,
         text=True,
@@ -2555,9 +2562,12 @@ def test_wrapped_and_escaped_source_forms_really_execute_and_are_refused(
     # 1. Prove the form really executes the file it names.
     marker = tmp_path / "marker.sh"
     marker.write_text("MARKER_RAN=1\n")
-    script = form.format(path=marker) + '\necho "MARKER=${MARKER_RAN-}"'
+    # A file, not `-c`: the `$cmd` form names its command through a variable, which the guard
+    # cannot read. Every word, once expanded, is the builtin `source`, `.`, `command` or `echo`.
+    probe = tmp_path / "probe.sh"
+    probe.write_text(form.format(path=marker) + '\necho "MARKER=${MARKER_RAN-}"\n')
     executed = subprocess.run(
-        [_BASH, "--noprofile", "--norc", "-c", script],
+        [_BASH, "--noprofile", "--norc", str(probe)],
         env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
         capture_output=True,
         text=True,

@@ -1,7 +1,6 @@
 """Screen-family lifecycle pilots: launch, the one show_view order, status lifecycle."""
 
 import re
-import subprocess
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -3683,16 +3682,18 @@ _REPLACED_FORKS = [
 
 
 def _guarded_files() -> list[Path]:
-    """Tracked and untracked-not-ignored files under installer/, plus setup.py."""
-    names: set[str] = set()
-    for argv in (
-        ["git", "ls-files", "installer"],
-        ["git", "ls-files", "--others", "--exclude-standard", "installer"],
-    ):
-        listing = subprocess.run(argv, cwd=_REPO_ROOT, check=True, capture_output=True, text=True)
-        names.update(listing.stdout.splitlines())
-    paths = [_REPO_ROOT / name for name in sorted(names)] + [_REPO_ROOT / "setup.py"]
-    return [path for path in paths if path.is_file()]
+    """Every regular file under installer/ outside __pycache__ (any suffix), plus setup.py.
+
+    A walk, not a version-control listing: the suite never launches the host's tools, and
+    installer/ ignores only __pycache__, so this is the set tracked plus untracked-not-ignored
+    gave.
+    """
+    walked = sorted(
+        path
+        for path in (_REPO_ROOT / "installer").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    return [*walked, _REPO_ROOT / "setup.py"]
 
 
 @pytest.mark.parametrize("name", _REPLACED_FORKS)

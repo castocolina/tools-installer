@@ -1483,15 +1483,14 @@ def test_a_consolidated_bashrc_runs_the_canonical_file_once_per_startup(tmp_path
         rc_paths=[bashrc],
     )
 
+    # A file, not `-c`: the guard cannot resolve `$HOME` in a `source` word; the words here are
+    # the builtins `source` and `printf` only.
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        'source "$HOME/.bashrc"; printf \'%s\\n\' "$__SHELLRC_RUNS" "$PATH" "$__COPIED_FORWARD"\n'
+    )
     completed = subprocess.run(
-        [
-            bash_path,
-            "--noprofile",
-            "--norc",
-            "-c",
-            'source "$HOME/.bashrc"; '
-            'printf \'%s\\n\' "$__SHELLRC_RUNS" "$PATH" "$__COPIED_FORWARD"',
-        ],
+        [bash_path, "--noprofile", "--norc", str(probe)],
         env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
         capture_output=True,
         text=True,

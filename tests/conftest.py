@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,11 +29,17 @@ from tests.home_fingerprint import fingerprint, fingerprint_diff
 from tests.sandbox import (
     HOST_ZSH_STASH,
     OVERRIDES_STASH,
+    LaunchPolicy,
+    build_launch_policy,
     capture_home_overrides,
+    check_launch,
     env_names_to_clear,
+    fail_on_refusals,
     host_zsh_stash,
     prepare_interpreter_dir,
+    record_refusal,
     sandboxed_path,
+    take_refusals,
 )
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
@@ -51,80 +57,62 @@ _interpreter_dir: Path | None = None
 _REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
 # The same trick for the host reader, restored by `real_present_hosts`.
 _REAL_PRESENT_HOSTS: Callable[[], frozenset[str]] = postinstall.present_hosts
-# The node-family names answered by Volta, fnm, pnpm and bun, plus brew.
-# Tests that need one plant a fake under tmp_path.
-HOST_TOOLCHAIN: frozenset[str] = frozenset(
-    {"node", "npm", "npx", "pnpm", "corepack", "volta", "bun", "yarn", "brew"}
-)
-_toolchain_allowed_root: Path | None = None
+_launch_policy: LaunchPolicy | None = None
 
 
-def _allowed_root() -> Path:
-    if _toolchain_allowed_root is None:
+def launch_policy() -> LaunchPolicy:
+    """The policy this worker's guard enforces, built once at session start."""
+    if _launch_policy is None:
         raise RuntimeError("toolchain_allowed_root did not run")
-    return _toolchain_allowed_root
-
-
-def assert_not_host_toolchain(
-    argv: object,
-    *,
-    env: Mapping[str, str] | None,
-    cwd: object,
-    allowed_root: Path,
-) -> None:
-    """Refuse host toolchain executables; the net is under sandboxed_puppeteer_cache.
-
-    A shell string and a script's own child processes are not inspected; the
-    PATH strip covers bare names there. Widen when a test needs a script that
-    must not reach the host toolchain.
-    """
-    if not isinstance(argv, (list, tuple)) or not argv or not isinstance(argv[0], str):
-        return
-    first = argv[0]
-    name = Path(first).name
-    if name not in HOST_TOOLCHAIN:
-        return
-    if os.sep in first:
-        base = Path(cwd if isinstance(cwd, (str, Path)) else os.getcwd())
-        candidate = base / first
-    else:
-        found = shutil.which(first, path=(env if env is not None else os.environ).get("PATH", ""))
-        if found is None:
-            return
-        candidate = Path(found)
-    resolved = candidate.resolve()
-    if not resolved.exists() or resolved.is_relative_to(allowed_root):
-        return
-    message = (
-        f"the suite tried to run the host's {name} at {resolved}; "
-        "plant a fake under tmp_path instead"
-    )
-    raise AssertionError(message)
+    return _launch_policy
 
 
 class GuardedPopen(subprocess.Popen[Any]):
     """Subscriptable Popen replacement, as installer/run.py annotates Popen[str]."""
 
     def __init__(self, args: Any, *pargs: Any, **kwargs: Any) -> None:
-        assert_not_host_toolchain(
-            args,
-            env=kwargs.get("env"),
-            cwd=kwargs.get("cwd"),
-            allowed_root=_allowed_root(),
-        )
+        try:
+            check_launch(
+                args,
+                env=kwargs.get("env"),
+                cwd=kwargs.get("cwd"),
+                policy=launch_policy(),
+                shell=bool(kwargs.get("shell", False)),
+                executable=kwargs.get("executable", pargs[1] if len(pargs) > 1 else None),
+            )
+        except AssertionError as refusal:
+            record_refusal(str(refusal))  # the test fails at teardown even if this is caught
+            raise
         super().__init__(args, *pargs, **kwargs)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
-    global _toolchain_allowed_root
-    _toolchain_allowed_root = tmp_path_factory.getbasetemp().resolve()
+    """Build the launch allowlist once per worker: fakes under the base temp, checkout scripts,
+    the named interpreters and utilities (tests/sandbox.py `check_launch`)."""
+    global _launch_policy
+    _launch_policy = build_launch_policy(
+        tmp_path_factory.getbasetemp().resolve(), path_value=os.environ.get("PATH", "")
+    )
 
 
 @pytest.fixture(autouse=True)
 def no_host_toolchain_exec(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every subprocess.run resolves Popen here; the guard refuses before launch."""
+    """Every subprocess.run resolves Popen here; the allowlist refuses before launch."""
     monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def refusals_fail_the_test() -> Iterator[None]:
+    """A refused launch fails its test even when the code under test catches the exception.
+
+    Every refusal is recorded before it is raised; leftovers from before the test are dropped
+    here and anything recorded during it fails the test at teardown. A test that expects a
+    refusal consumes it through `tests.sandbox.refused`.
+    """
+    take_refusals()
+    yield
+    fail_on_refusals()
 
 
 def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
