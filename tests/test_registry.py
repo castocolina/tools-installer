@@ -15,6 +15,7 @@ from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, 
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.skill_lifecycle import inspect_project_pack
+from installer.tweaks import SHELL_INIT_TOOLS
 from installer.uninstall import removal_plan
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
@@ -1286,10 +1287,11 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     """D-07: a second declarer arriving unreviewed is how a guarded,
     single-purpose action quietly becomes a general mechanism. This test is
     the only automated thing standing between those two states. Phase 23
-    reviewed the two new declarers (CONF-11 theme, CONF-12 lean tips).
+    reviewed the two new declarers (CONF-11 theme, CONF-12 lean tips) and the
+    six shell-init tools (D-11: the keyed, default-no source_shell_init).
     """
-    declarers = [tool.id for tool in load_tools(REGISTRY) if tool.post_install]
-    assert declarers == ["oh-my-zsh", "vscode"]
+    declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
+    assert declarers == {"oh-my-zsh", "vscode", *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
     assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
     assert oh_my_zsh.requires == ("zsh", "git")
@@ -2900,3 +2902,9 @@ def test_omz_and_vscode_declare_their_actions() -> None:
     tools = _tools_by_id()
     assert tools["oh-my-zsh"].post_install == ("set_login_shell", "set_omz_theme")
     assert tools["vscode"].post_install == ("show_lean_tips",)
+
+
+def test_the_six_tools_declare_shell_init() -> None:
+    tools = {tool.id: tool for tool in load_tools(REGISTRY)}
+    for tool_id in SHELL_INIT_TOOLS:
+        assert tools[tool_id].post_install.count("source_shell_init") == 1, tool_id

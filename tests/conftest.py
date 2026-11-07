@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import pytest
 
-from installer import app, executors, locations, postinstall, receipts, version_status
+from installer import app, executors, locations, post_install, postinstall, receipts, version_status
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
@@ -245,6 +245,12 @@ def _rerooted(path: Path, real_home: Path, project: Path, scratch: Path) -> Path
 # setup.py resolves its home paths at IMPORT, before any fixture runs, so HOME alone
 # cannot reach them. Re-root every such attribute, generically, so a constant added
 # later is covered too; `real_home_untouched` stays the net underneath (review R1-07).
+@pytest.fixture(autouse=True)
+def no_shell_init_sourcing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test that builds the app injects its split-mode reader; reset it per test (R1-05)."""
+    monkeypatch.setattr(post_install, "_shell_init_sourced_from", lambda: ())
+
+
 @pytest.fixture(autouse=True)
 def sandboxed_setup_paths(sandboxed_home: None, monkeypatch: pytest.MonkeyPatch) -> None:
     setup_module = sys.modules.get("setup")

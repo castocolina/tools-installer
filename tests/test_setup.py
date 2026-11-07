@@ -16,7 +16,7 @@ from rich.console import Console
 from textual.pilot import Pilot
 
 import setup
-from installer import pnpm_globals, postinstall, systemd_daemon
+from installer import pnpm_globals, post_install, postinstall, systemd_daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
@@ -29,7 +29,7 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
-from installer.policy import Policy
+from installer.policy import Policy, settings_policies
 from installer.resolve import UnavailableReason
 from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
@@ -779,7 +779,14 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     daemon_at = ids.index("daemon:prune-tmpdir")
     assert ids[daemon_at - 1] == "omz-plugins"
     assert all(policy_id.startswith("tweak:") for policy_id in ids[1 : daemon_at - 1])
-    assert all(policy_id.startswith("cache-redirect:") for policy_id in ids[daemon_at + 1 :])
+    # Phase 23 appends the settings rows after the cache redirects (23-14);
+    # macOS has no desktop row.
+    settings = [
+        p.id for p in settings_policies(home=tmp_path, platform_os="macos", installed_tools=None)
+    ]
+    redirects = ids[daemon_at + 1 : len(ids) - len(settings)]
+    assert all(policy_id.startswith("cache-redirect:") for policy_id in redirects)
+    assert ids[len(ids) - len(settings) :] == settings
     assert ids[daemon_at + 1 :]
     assert len(ids) > 3
 
@@ -4228,3 +4235,66 @@ def test_headless_main_strips_only_the_scratch_rc(monkeypatch: pytest.MonkeyPatc
 
     assert setup.main(["--all", "--yes"]) == 0
     assert "tools-installer tweak:claude-skip" not in scratch_rc.read_text()
+
+
+def _linux() -> Platform:
+    return Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+
+
+def test_the_app_composes_the_settings_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "detect", _linux)
+    seen = _wired(monkeypatch, [])
+    policies = seen["policies"]
+    assert isinstance(policies, PolicyInputs)
+    settings = [
+        p.id for p in settings_policies(home=tmp_path, platform_os="fedora", installed_tools=None)
+    ]
+    ids = [p.id for p in policies.policies]
+    assert ids[-(len(settings) + 1) :] == [*settings, "desktop-shell"]
+
+    captured: list[dict[str, object]] = []
+
+    def fake_perform(_decision: object, **kwargs: object) -> SweepResult:
+        captured.append(kwargs)
+        return SweepResult()
+
+    monkeypatch.setattr(setup, "perform_uninstall", fake_perform)
+    uninstall = seen["uninstall"]
+    assert isinstance(uninstall, UninstallInputs)
+    uninstall.remove(cast("UninstallDecision", object()))
+    extra = cast("tuple[Policy, ...]", captured[0]["extra_policies"])
+    assert "desktop-shell" in [p.id for p in extra]
+
+
+def test_the_composition_root_wires_split_mode_sourcing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    assert setup.main(["--link-mode", "split"]) == 0
+    split = cast("Callable[[], tuple[Path, ...]]", vars(post_install)["_shell_init_sourced_from"])
+    assert tmp_path / ".bashrc" in split()
+    assert setup.main(["--link-mode", "centralized"]) == 0
+    assert vars(post_install)["_shell_init_sourced_from"]() == ()
+
+
+def test_the_headless_route_injects_split_mode_sourcing(monkeypatch: pytest.MonkeyPatch) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    readings: list[tuple[Path, ...]] = []
+    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
+
+    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
+        reader = cast(
+            "Callable[[], tuple[Path, ...]]", vars(post_install)["_shell_init_sourced_from"]
+        )
+        readings.append(reader())
+        return fake_run_wizard(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+    assert setup.main(["--all", "--yes", "--link-mode", "split"]) == 0
+    assert Path.home() / ".bashrc" in readings[0]
