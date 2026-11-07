@@ -14,7 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from installer.atomic import OLD_SUFFIX, atomic_write_bytes, atomic_write_text, staged_sibling
+from installer.atomic import (
+    OLD_SUFFIX,
+    FileSnapshot,
+    atomic_write_bytes,
+    atomic_write_text,
+    read_snapshot,
+    snapshot_matches,
+    staged_sibling,
+)
 from installer.model import Tool
 from installer.platform import Platform
 from installer.rcclean import PathWriterLine
@@ -810,21 +818,6 @@ class ShellrcRefusal(RuntimeError):
     """
 
 
-@dataclass(frozen=True)
-class _Snapshot:
-    """One identity-bound read of ~/.shellrc.
-
-    `data` and `(device, inode)` come from the same `O_RDONLY|O_NOFOLLOW`
-    descriptor, so they describe the SAME file even if the path is replaced
-    mid-call. `mode` is the `S_IMODE` the backup's own permissions copy.
-    """
-
-    data: bytes
-    device: int
-    inode: int
-    mode: int
-
-
 def _path_hazard(path: Path) -> str | None:
     """A refusal when a write aimed at path could land on a different file, or block.
 
@@ -902,39 +895,9 @@ def consolidation_precondition(shellrc_path: Path, myshellrc_path: Path) -> str 
     return None
 
 
-def _snapshot(path: Path) -> _Snapshot:
-    """Read path through one `O_RDONLY|O_NOFOLLOW` descriptor, binding bytes to identity."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        st = os.fstat(fd)
-        data = b""
-        while chunk := os.read(fd, 65536):
-            data += chunk
-    finally:
-        os.close(fd)
-    return _Snapshot(data=data, device=st.st_dev, inode=st.st_ino, mode=stat.S_IMODE(st.st_mode))
-
-
-def _snapshot_matches(path: Path, snapshot: _Snapshot) -> bool:
-    """Whether path still has the snapshot's identity AND bytes.
-
-    Any `OSError` from the re-open (removed, or became a symlink) returns False:
-    an unanswerable comparison is a refusal, never permission.
-    """
-    try:
-        current = _snapshot(path)
-    except OSError:
-        return False
-    return (
-        current.device == snapshot.device
-        and current.inode == snapshot.inode
-        and (current.data == snapshot.data)
-    )
-
-
 def backup_precondition(
     shellrc_path: Path,
-    snapshot: _Snapshot,
+    snapshot: FileSnapshot,
     *,
     flow: Literal["consolidation", "guard"] = "consolidation",
 ) -> str | None:
@@ -986,7 +949,7 @@ def backup_precondition(
     return None
 
 
-def _create_backup(path: Path, snapshot: _Snapshot) -> bool:
+def _create_backup(path: Path, snapshot: FileSnapshot) -> bool:
     """Write snapshot bytes to path's .old sibling, create-exclusive.
 
     Returns False when the sibling already exists. The caller has already
@@ -1058,7 +1021,7 @@ def consolidate_shellrc(
         return ShellrcConsolidation(status="refused", reason=hazard)
 
     try:
-        snapshot = _snapshot(shellrc_path)
+        snapshot = read_snapshot(shellrc_path)
     except OSError as exc:
         return ShellrcConsolidation(
             status="refused", reason=f"{shellrc_path} could not be read: {exc}"
@@ -1122,7 +1085,7 @@ def consolidate_shellrc(
     backup = staged_sibling(shellrc_path, OLD_SUFFIX)
     created_backup = _create_backup(shellrc_path, snapshot)
 
-    if not _snapshot_matches(shellrc_path, snapshot):
+    if not snapshot_matches(shellrc_path, snapshot):
         if pre_myshellrc_bytes is None:
             myshellrc_path.unlink(missing_ok=True)
         else:
@@ -1167,7 +1130,7 @@ def guard_path_writers(rc_path: Path, lines: Sequence[PathWriterLine]) -> PathGu
         return PathGuardOutcome(status="refused", reason=hazard)
 
     try:
-        snapshot = _snapshot(rc_path)
+        snapshot = read_snapshot(rc_path)
     except OSError as exc:
         return PathGuardOutcome(status="refused", reason=f"{rc_path} could not be read: {exc}")
 
@@ -1211,7 +1174,7 @@ def guard_path_writers(rc_path: Path, lines: Sequence[PathWriterLine]) -> PathGu
         rewritten.append(line + "\r" if carriage else line)
 
     created = _create_backup(rc_path, snapshot)
-    if not _snapshot_matches(rc_path, snapshot):
+    if not snapshot_matches(rc_path, snapshot):
         if created:
             staged_sibling(rc_path, OLD_SUFFIX).unlink(missing_ok=True)
         return PathGuardOutcome(
