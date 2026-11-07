@@ -1,3 +1,4 @@
+import json
 import os
 import pwd
 import shutil
@@ -12,35 +13,208 @@ from typing import NamedTuple, cast
 import pytest
 
 import setup
-from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain, host_free_path
+from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain
 from tests.sandbox import (
     CHECKOUT,
     FORBIDDEN_PROGRAM_NAMES,
+    INTERPRETER_DIR_STASH,
     LINUXBREW_PREFIX,
+    OVERRIDES_STASH,
     SHELL_BUILTINS,
     UTILITY_NAMES,
     LaunchPolicy,
     build_launch_policy,
+    capture_home_overrides,
     check_launch,
+    env_names_to_clear,
+    host_free_path,
+    host_zsh,
+    link_interpreters,
+    prepare_interpreter_dir,
 )
 
 
 def test_host_toolchain_dirs_are_off_path() -> None:
     real_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    linuxbrew = Path(os.path.realpath(LINUXBREW_PREFIX))
     for entry in os.environ["PATH"].split(os.pathsep):
         if not entry:
             continue
         resolved = Path(os.path.realpath(entry))
         assert not resolved.is_relative_to(real_home)
         assert not resolved.is_relative_to(Path("/run/user"))
+        assert not resolved.is_relative_to(linuxbrew)
     assert "VOLTA_HOME" not in os.environ
+    assert env_names_to_clear(os.environ) == ()
 
 
 def test_the_path_strip_survives_a_looping_entry(tmp_path: Path) -> None:
     loop = tmp_path / "loopbin"
     loop.symlink_to(loop)
-    kept = host_free_path(f"{loop}{os.pathsep}/usr/bin").split(os.pathsep)
+    kept = host_free_path(f"{loop}{os.pathsep}/usr/bin", real_home=tmp_path / "home").split(
+        os.pathsep
+    )
     assert "/usr/bin" in kept
+
+
+def test_host_free_path_strips_linuxbrew_home_and_run_user(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    home = root / "home"
+    brew = root / "brew"
+    keep = home / "link"
+    (brew / "bin").mkdir(parents=True)
+    keep.mkdir(parents=True)
+    alias = root / "alias"
+    alias.symlink_to(brew / "bin")
+    path_value = os.pathsep.join(
+        [
+            str(brew),
+            str(brew / "bin"),
+            str(alias),
+            "/usr/bin",
+            str(home / "bin"),
+            str(keep),
+            "/run/user/1000/fnm",
+            "/usr/local/bin",
+        ]
+    )
+    kept = host_free_path(path_value, real_home=home, linuxbrew=brew, keep=keep)
+    assert kept.split(os.pathsep) == ["/usr/bin", str(keep), "/usr/local/bin"]
+
+
+def test_env_names_to_clear_matches_prefixes_exactly() -> None:
+    environ: dict[str, str] = dict.fromkeys(
+        (
+            "npm_config_foo",
+            "NPM_CONFIG_BAR",
+            "UV_CACHE_DIR",
+            "OPENCODE_CONFIG_DIR",
+            "HOMEBREW_PREFIX",
+            "GH_TOKEN",
+            "CODEX_HOME",
+            "MY_UV_X",
+            "KEEP_ME",
+        ),
+        "x",
+    )
+    assert env_names_to_clear(environ) == (
+        "CODEX_HOME",
+        "GH_TOKEN",
+        "HOMEBREW_PREFIX",
+        "NPM_CONFIG_BAR",
+        "OPENCODE_CONFIG_DIR",
+        "UV_CACHE_DIR",
+        "npm_config_foo",
+    )
+
+
+def test_home_overrides_survive_the_configure_clearing() -> None:
+    stashed: dict[str, str | None] = {
+        "UV_TOOL_DIR": "/stash/uv",
+        "PNPM_HOME": None,
+        "VOLTA_HOME": "/stash/volta",
+    }
+    live = {"UV_TOOL_DIR": "/live/uv", "PNPM_HOME": "/live/pnpm"}
+    assert capture_home_overrides({**live, OVERRIDES_STASH: json.dumps(stashed)}) == stashed
+    assert capture_home_overrides(live) == {
+        "UV_TOOL_DIR": "/live/uv",
+        "PNPM_HOME": "/live/pnpm",
+        "VOLTA_HOME": None,
+    }
+
+
+def test_link_interpreters_links_only_what_the_strip_removed(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    original = root / "original"
+    kept = root / "kept"
+    _fake(original, "zsh")
+    _fake(original, "sh")
+    _fake(original, "python3")
+    _fake(kept, "sh")
+    original_path = os.pathsep.join([str(kept), str(original)])
+    link = root / "link"
+    link.mkdir()
+
+    assert link_interpreters(link, stripped_path=str(kept), original_path=original_path) is True
+    assert sorted(entry.name for entry in link.iterdir()) == ["zsh"]
+    assert os.readlink(link / "zsh") == os.path.realpath(original / "zsh")
+
+    nothing_missing = root / "nothing-missing"
+    nothing_missing.mkdir()
+    assert (
+        link_interpreters(nothing_missing, stripped_path=original_path, original_path=original_path)
+        is False
+    )
+    assert list(nothing_missing.iterdir()) == []
+
+
+def test_zsh_resolves_when_the_host_has_one(tmp_path_factory: pytest.TempPathFactory) -> None:
+    recorded = host_zsh()
+    if recorded is None:
+        pytest.skip("this host has no zsh at all")
+    found = shutil.which("zsh")
+    assert found is not None
+    assert Path(os.path.realpath(found)) == recorded
+    policy = build_launch_policy(
+        tmp_path_factory.getbasetemp().resolve(), path_value=os.environ["PATH"]
+    )
+    assert recorded in policy.interpreters
+    check_launch(["zsh", "-f", "-c", "true"], env=None, cwd=None, policy=policy)
+
+
+def test_the_interpreter_dir_is_prepended_once() -> None:
+    link = os.environ.get(INTERPRETER_DIR_STASH)
+    entries = os.environ["PATH"].split(os.pathsep)
+    if link is not None:
+        assert entries.count(link) == 1
+        assert entries[0] == link
+    without_link = os.pathsep.join(entry for entry in entries if entry != link)
+    if host_zsh() is not None and shutil.which("zsh", path=without_link) is None:
+        assert link is not None
+        found = shutil.which("zsh")
+        assert found is not None
+        assert Path(found).parent == Path(link)
+
+
+def test_a_worker_keeps_the_inherited_interpreter_dir(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    fake_home = root / "home"
+    link = fake_home / "tmp" / "link"
+    link.mkdir(parents=True)
+    kept = host_free_path(
+        os.pathsep.join([str(link), "/usr/bin"]), real_home=fake_home, keep=link
+    ).split(os.pathsep)
+    assert kept[0] == str(link)
+    assert "/usr/bin" in kept
+
+    def no_new_dir() -> Path:
+        raise AssertionError("a worker must reuse the controller's link dir")
+
+    environ = {INTERPRETER_DIR_STASH: str(link)}
+    assert prepare_interpreter_dir(environ, real_home=fake_home, make_dir=no_new_dir) == (
+        link,
+        None,
+    )
+
+
+def test_prepare_interpreter_dir_makes_no_dir_when_no_shell_is_missing(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    bin_dir = root / "bin"
+    for name in ("sh", "bash", "zsh"):
+        _fake(bin_dir, name)
+    link = root / "link"
+
+    def make_dir() -> Path:
+        link.mkdir()
+        return link
+
+    environ = {"PATH": str(bin_dir)}
+    assert prepare_interpreter_dir(environ, real_home=root / "home", make_dir=make_dir) == (
+        None,
+        None,
+    )
+    assert not link.exists()
+    assert INTERPRETER_DIR_STASH not in environ
 
 
 def test_a_node_family_binary_outside_tmp_is_never_run(

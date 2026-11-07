@@ -10,10 +10,13 @@ Clearing it by default keeps every test that does not set it explicitly on
 ~/.zshrc.
 """
 
+import functools
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -23,14 +26,24 @@ import pytest
 
 from installer import app, executors, locations, post_install, postinstall, receipts, version_status
 from tests.home_fingerprint import fingerprint, fingerprint_diff
+from tests.sandbox import (
+    HOST_ZSH_STASH,
+    OVERRIDES_STASH,
+    capture_home_overrides,
+    env_names_to_clear,
+    host_zsh_stash,
+    prepare_interpreter_dir,
+    sandboxed_path,
+)
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
 _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a patched Path.home()
 # Toolchain overrides, captured at import for the same reason (the fingerprint watches them).
-_HOME_OVERRIDES: dict[str, str | None] = {
-    name: os.environ.get(name) for name in ("UV_TOOL_DIR", "PNPM_HOME", "VOLTA_HOME")
-}
+# A worker reads the stash its controller wrote, since the controller has cleared the live values.
+_HOME_OVERRIDES: dict[str, str | None] = capture_home_overrides(os.environ)
+# The interpreter link dir this run prepends to PATH, or None when no shell needed a link.
+_interpreter_dir: Path | None = None
 
 # Same trick for the puppeteer launch probe: captured before the autouse stub
 # below replaces it, so the tests that ARE the probe can put it back through
@@ -155,44 +168,53 @@ def real_home_untouched() -> "object":
     )
 
 
-# Public name on purpose: pytest collects it by reference, so a private
-# (underscore-prefixed) name reads as dead code to pyright.
-def host_free_path(path_value: str) -> str:
-    """Return PATH without real-home or /run/user entries using loop-safe realpath."""
-    real_home = Path(os.path.realpath(_REAL_HOME))
-    kept = [
-        entry
-        for entry in path_value.split(os.pathsep)
-        if entry
-        and not Path(os.path.realpath(entry)).is_relative_to(real_home)
-        and not Path(os.path.realpath(entry)).is_relative_to(Path("/run/user"))
-    ]
-    return os.pathsep.join(kept)
+def pytest_configure(config: pytest.Config) -> None:
+    """Sandbox the test PATH and environment before collection (23.1 D-16, D-17).
+
+    Runs in the controller and again in each xdist worker. The stashes make the first
+    process's answers (the zsh before the strip, the link dir, the toolchain overrides) the
+    ones every worker keeps, because the controller has already cleared the live values.
+    """
+    global _interpreter_dir
+    original = os.environ.get("PATH", "")
+    if HOST_ZSH_STASH not in os.environ:
+        os.environ[HOST_ZSH_STASH] = host_zsh_stash(original)
+    if OVERRIDES_STASH not in os.environ:
+        os.environ[OVERRIDES_STASH] = json.dumps(capture_home_overrides(os.environ))
+    link, made = prepare_interpreter_dir(
+        os.environ,
+        real_home=_REAL_HOME,
+        make_dir=lambda: Path(tempfile.mkdtemp(prefix="tools-installer-interpreters-")),
+    )
+    if made is not None:
+        config.add_cleanup(functools.partial(shutil.rmtree, made, ignore_errors=True))
+    _interpreter_dir = link
+    os.environ["PATH"] = sandboxed_path(original, real_home=_REAL_HOME, interpreter_dir=link)
+    for name in env_names_to_clear(os.environ):
+        del os.environ[name]
 
 
 @pytest.fixture(autouse=True)
 def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear inherited shell and location overrides so tests never follow the
-    developer's real HOME.
+    """Clear inherited agent, toolchain and shell-location variables, and re-strip PATH.
 
-    `$ZDOTDIR` and `$ZSH` point at the developer's shell. `PNPM_HOME`,
-    `VOLTA_HOME`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are absolute overrides
-    inherited from the developer's shell that point into the real HOME. The
-    developer's toolchain directories (`~/.volta/bin`, the Volta tools image,
-    `~/.bun/bin`, fnm multishells under `/run/user`, `~/.local/share/pnpm` and
-    `~/.local/bin`) are also removed from PATH by resolved path, since `/home`
-    may symlink to `/var/home`. With `VOLTA_HOME` cleared, a Volta shim can
-    reinvoke itself through PATH and fork without end (P3-01, 24d91d6). Linuxbrew
-    stays because this host's `zsh` and `python3` live there. Tests that exercise
-    these variables set them after this fixture.
+    The names (`env_names_to_clear`) cover the developer's shell files (`$ZDOTDIR`, `$ZSH`),
+    absolute toolchain overrides into the real HOME (`PNPM_HOME`, `VOLTA_HOME`, the XDG
+    variables), agent config and tokens, and the `UV_`, `HOMEBREW_` and `npm_config_` families.
+    The PATH loses the real home, `/run/user` and linuxbrew bins, judged by resolved path
+    (`/home` may symlink to `/var/home`); `sh`, `bash` and `zsh` stay runnable by name through
+    the interpreter link dir. With `VOLTA_HOME` cleared, a Volta shim can reinvoke itself
+    through PATH and fork without end (P3-01, 24d91d6). Tests that exercise these variables
+    set them after this fixture.
     """
-    monkeypatch.delenv("ZDOTDIR", raising=False)
-    monkeypatch.delenv("ZSH", raising=False)  # omz_root falls back to $ZSH
-    monkeypatch.delenv("PNPM_HOME", raising=False)
-    monkeypatch.delenv("VOLTA_HOME", raising=False)
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    monkeypatch.setenv("PATH", host_free_path(os.environ.get("PATH", "")))
+    for name in env_names_to_clear(os.environ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(
+        "PATH",
+        sandboxed_path(
+            os.environ.get("PATH", ""), real_home=_REAL_HOME, interpreter_dir=_interpreter_dir
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
