@@ -16,7 +16,7 @@ from typing import Any, Literal, cast
 
 import pytest
 
-from installer import download, executors, receipts, uninstall, version_status
+from installer import agent_settings, download, executors, receipts, uninstall, version_status
 from installer.app import run_wizard
 from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
@@ -4763,7 +4763,12 @@ def test_kitty_drift_is_misconfigured(tmp_path: Path) -> None:
     assert kitty.health is Health.MISCONFIGURED
     assert kitty.reasons[0] == "Kitty does not start zsh"
     assert kitty.unconfigured == (
-        ConfigStep(text="point Kitty at zsh", kind="terminal_sync", harness=None),
+        ConfigStep(
+            text="point Kitty at zsh",
+            kind="terminal_sync",
+            harness=None,
+            report="Kitty now starts zsh",
+        ),
     )
     for other in ("wezterm", "zsh", "jqx"):
         assert states[other].health is Health.OK
@@ -4774,7 +4779,9 @@ def test_wezterm_drift_lands_on_its_own_row(tmp_path: Path) -> None:
     states = _settled_states(_drift_service(tmp_path, _drifted("wezterm")), _terminals())
     assert states["wezterm"].health is Health.MISCONFIGURED
     assert states["wezterm"].reasons[0] == "WezTerm does not start zsh"
-    assert states["wezterm"].unconfigured == (ConfigStep("point WezTerm at zsh", "terminal_sync"),)
+    assert states["wezterm"].unconfigured == (
+        ConfigStep("point WezTerm at zsh", "terminal_sync", report="WezTerm now starts zsh"),
+    )
     assert states["kitty"].health is Health.OK
 
 
@@ -4783,7 +4790,9 @@ def test_konsole_drift_lands_on_zsh(tmp_path: Path) -> None:
     zsh = states["zsh"]
     assert zsh.health is Health.MISCONFIGURED
     assert zsh.reasons[0] == "Konsole does not start zsh"
-    assert zsh.unconfigured == (ConfigStep("point Konsole at zsh", "terminal_sync"),)
+    assert zsh.unconfigured == (
+        ConfigStep("point Konsole at zsh", "terminal_sync", report="Konsole now starts zsh"),
+    )
     for other in ("kitty", "wezterm", "jqx"):
         assert states[other].health is Health.OK
         assert not any("zsh" in reason for reason in states[other].reasons)
@@ -4874,6 +4883,187 @@ def test_unknown_terminal_warning_lands_on_every_terminal_row(tmp_path: Path) ->
 def test_no_terminal_drift_seam_adds_nothing(tmp_path: Path) -> None:
     states = _settled_states(_drift_service(tmp_path, None), _terminals())
     assert all(state.health is Health.OK for state in states.values())
+
+
+# -- 23-07 Task 1: a present host the hook receipt does not record reads ≈ (D-02, CONF-01) --
+
+
+def _hook_tool(tool_id: str = "codegraph") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd="codegraph",
+        methods=(Method(kind="github_release", params={}),),
+        tier="ai",
+        postinstall="codegraph-mcp-register",
+    )
+
+
+def _hook_receipt(hooks: Mapping[str, tuple[str, ...]], tool_id: str = "codegraph") -> None:
+    receipts.write(
+        Receipt(
+            tool=tool_id,
+            at="2026-11-07T00:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks=hooks,
+        )
+    )
+
+
+def _hook_service(tmp_path: Path, commands: frozenset[str]) -> VersionRefreshService:
+    return VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=tmp_path / "managed",
+        which=lambda cmd: f"/usr/bin/{cmd}" if cmd in commands else None,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+        skill_home=tmp_path / "home",
+        present=lambda _tool: True,
+    )
+
+
+def test_an_unrecorded_present_host_reads_misconfigured(tmp_path: Path) -> None:
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    service = _hook_service(tmp_path, frozenset({"claude", "codex"}))
+    codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert codegraph.health is Health.MISCONFIGURED
+    assert codegraph.reasons[0] == "codegraph is not registered for codex"
+    assert codegraph.unconfigured == (ConfigStep("register codegraph for codex", "hook_register"),)
+
+    service = _hook_service(tmp_path, frozenset({"claude", "codex", "cursor-agent"}))
+    codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert codegraph.reasons[0] == "codegraph is not registered for codex, cursor-agent"
+    assert codegraph.unconfigured == (
+        ConfigStep("register codegraph for codex, cursor-agent", "hook_register"),
+    )
+
+
+def test_hook_drift_ignores_absent_unsupported_and_receiptless_tools(tmp_path: Path) -> None:
+    _hook_receipt({"codegraph-mcp-register": ()})
+    only_pi = _settled_states(_hook_service(tmp_path, frozenset({"pi"})), [_hook_tool()])
+    assert only_pi["codegraph"].unconfigured == ()
+    assert only_pi["codegraph"].health is not Health.MISCONFIGURED
+
+    receiptless = _hook_tool("codegraph-bare")
+    present_all = frozenset({"claude", "codex", "opencode", "cursor-agent", "pi"})
+    bare = _settled_states(_hook_service(tmp_path, present_all), [receiptless])
+    assert bare["codegraph-bare"].unconfigured == ()
+    assert bare["codegraph-bare"].health is not Health.MISCONFIGURED
+
+    _hook_receipt({"codegraph-mcp-register": ("claude", "codex", "opencode", "cursor")})
+    recorded = _settled_states(_hook_service(tmp_path, present_all), [_hook_tool()])
+    assert recorded["codegraph"].unconfigured == ()
+    assert recorded["codegraph"].health is not Health.MISCONFIGURED
+
+
+def test_the_pass_calls_present_harnesses_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[Path] = []
+    real = version_status.present_harnesses
+
+    def counted(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
+        calls.append(home)
+        return real(home, which)
+
+    monkeypatch.setattr(version_status, "present_harnesses", counted)
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    service = _hook_service(tmp_path, frozenset({"claude", "codex"}))
+    service.refresh([_hook_tool(), _claude_pack()])
+    assert len(calls) == 1
+
+
+# -- 23-07 Task 2: a missing ~/.zshenv block reads ≈ on the zsh row; O7 settings (O6, O7) --
+
+
+def test_a_missing_zshenv_block_reads_misconfigured_on_the_zsh_row(tmp_path: Path) -> None:
+    def drift(_platform: Platform) -> TerminalShellResult:
+        return TerminalShellResult(drifted=("zshenv",), zsh="/z/bin/zsh")
+
+    states = _settled_states(_drift_service(tmp_path, drift), _terminals())
+    zsh = states["zsh"]
+    assert zsh.health is Health.MISCONFIGURED
+    assert zsh.reasons[0] == "~/.zshenv does not export SHELL as zsh"
+    assert zsh.unconfigured == (
+        ConfigStep("export SHELL=/z/bin/zsh in ~/.zshenv", "zshenv_shell", report="/z/bin/zsh"),
+    )
+    for other in ("kitty", "wezterm", "jqx"):
+        assert states[other].health is Health.OK
+        assert states[other].unconfigured == ()
+
+
+def test_terminal_steps_carry_their_done_note(tmp_path: Path) -> None:
+    kitty_conf = Path.home() / ".config" / "kitty" / "kitty.conf"
+
+    def drift(_platform: Platform) -> TerminalShellResult:
+        return TerminalShellResult(drifted=("kitty",), paths=(("kitty", kitty_conf),))
+
+    states = _settled_states(_drift_service(tmp_path, drift), _terminals())
+    assert states["kitty"].unconfigured == (
+        ConfigStep(
+            "point Kitty at zsh",
+            "terminal_sync",
+            report="Kitty now starts zsh\n  ~/.config/kitty/kitty.conf",
+        ),
+    )
+
+
+def test_a_zshenv_warning_lands_on_the_zsh_row_only(tmp_path: Path) -> None:
+    warning = "zshenv: not valid UTF-8"
+    states = _settled_states(_drift_service(tmp_path, _warned(warning)), _terminals())
+    note = f"terminal shell not checked: {warning}"
+    assert note in states["zsh"].reasons
+    assert states["zsh"].unconfigured == ()
+    for other in ("kitty", "wezterm", "jqx"):
+        assert note not in states[other].reasons
+
+
+def _agent_tool(tool_id: str = "claude") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={}),),
+        tier="ai",
+    )
+
+
+def test_an_unparsable_managed_settings_file_reads_blocked(tmp_path: Path) -> None:
+    home = Path.home()
+    agent_settings.apply_setting("claude", "auto-approve", home=home, platform_os="fedora")
+    settings = home / ".claude" / "settings.json"
+    settings.write_text('{"a": 1,,}', encoding="utf-8")
+    claude = _settled_states(_hook_service(tmp_path, frozenset()), [_agent_tool()])["claude"]
+    assert claude.health is Health.MISCONFIGURED
+    assert claude.reasons[0] == (
+        "~/.claude/settings.json is not valid JSON (line 1, column 9); "
+        "nothing is written until it parses"
+    )
+    assert claude.unconfigured == ()
+    assert settings.read_text(encoding="utf-8") == '{"a": 1,,}'
+
+
+def test_an_unparsable_unmanaged_settings_file_reads_nothing(tmp_path: Path) -> None:
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text('{"a": 1,,}', encoding="utf-8")
+    claude = _settled_states(_hook_service(tmp_path, frozenset()), [_agent_tool()])["claude"]
+    assert claude.health is not Health.MISCONFIGURED
+    assert claude.unconfigured == ()
+    assert not any("not valid" in reason or "not checked" in reason for reason in claude.reasons)
 
 
 # -- 19-16 Task 2: incomplete pnpm co-install groups (D-19, review H10/M11, checker I6) --

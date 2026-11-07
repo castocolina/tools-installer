@@ -11,6 +11,7 @@ from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
 from installer.executors import ExecutorError
+from installer.model import ConfigStep
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
     outcome_detail_text,
@@ -23,12 +24,14 @@ from installer.render import (
     render_guard,
     render_guard_status,
     render_handoff,
+    render_hook_lines,
     render_node_globals,
     render_post_install_handoff,
     render_postinstall_warnings,
     render_remove_yourself,
     render_run_report,
     render_run_summary,
+    render_shell_section,
     render_uninstall,
     render_verification,
     running_row_text,
@@ -1178,6 +1181,121 @@ def test_render_done_notes_prints_every_successful_update_extra() -> None:
         "pnpm updated — replayed claude, opencode; left leftover; hook warned; "
         "pnpm globals replay failed: boom"
     )
+
+
+def test_a_hook_reconfigure_prints_its_done_note() -> None:
+    outcome = RowOutcome(
+        PlanRow("codegraph", Disposition.RECONFIGURE, "not registered for codex"),
+        "done",
+        detail="registered for codex",
+    )
+    console, buf = _console()
+
+    render_done_notes([outcome], console)
+
+    assert buf.getvalue().splitlines() == ["codegraph reconfigured — registered for codex"]
+
+
+_ZSH = "/home/linuxbrew/.linuxbrew/bin/zsh"
+_KONSOLE_PROFILE = "~/.local/share/konsole/tools-installer-zsh.profile"
+
+
+def _zsh_reconfigured_outcome() -> RowOutcome:
+    steps = (
+        ConfigStep(
+            "point Konsole at zsh",
+            "terminal_sync",
+            report=f"Konsole now starts zsh\n  {_KONSOLE_PROFILE}",
+        ),
+        ConfigStep(f"export SHELL={_ZSH} in ~/.zshenv", "zshenv_shell", report=_ZSH),
+    )
+    return RowOutcome(
+        PlanRow("zsh", Disposition.RECONFIGURE, "does not start zsh", steps=steps),
+        "done",
+        detail=f"Konsole now starts zsh\n  {_KONSOLE_PROFILE}\n~/.zshenv exports SHELL",
+    )
+
+
+def test_the_shell_section_prints_after_a_zshenv_reconfigure() -> None:
+    console, buf = _console()
+    render_run_report([_zsh_reconfigured_outcome()], console)
+    assert buf.getvalue().splitlines()[-3:] == [
+        "Shell",
+        "~/.zshenv now exports SHELL; new terminals start with it.",
+        f"  SHELL={_ZSH}",
+    ]
+
+    kitty = RowOutcome(
+        PlanRow(
+            "kitty",
+            Disposition.RECONFIGURE,
+            "does not start zsh",
+            steps=(ConfigStep("point Kitty at zsh", "terminal_sync"),),
+        ),
+        "done",
+        detail="Kitty now starts zsh",
+    )
+    console, buf = _console()
+    render_run_report([kitty], console)
+    assert "Shell" not in buf.getvalue().splitlines()
+
+
+def test_reconfigure_report_lines_fit_78_cells() -> None:
+    outcome = _zsh_reconfigured_outcome()
+    console, buf = _console()
+    render_done_notes([outcome], console)
+    render_shell_section([outcome], console)
+    lines = buf.getvalue().splitlines()
+    assert len(lines) == 6
+    assert max(cell_len(line) for line in lines) <= 78
+
+
+def test_the_agent_host_hooks_section() -> None:
+    codegraph = RowOutcome(
+        PlanRow("codegraph", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("codegraph", InstallStatus.INSTALLED, hooks=("claude", "cursor")),
+    )
+    codex = RowOutcome(
+        PlanRow("codex", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("codex", InstallStatus.INSTALLED),
+        resynced=(("codegraph", ("codex",)),),
+        resync_warnings=(("codegraph", "codegraph MCP registration failed: exit 1"),),
+    )
+    console, buf = _console()
+
+    render_run_report([codegraph, codex], console)
+
+    lines = buf.getvalue().splitlines()
+    start = lines.index("Agent-host hooks")
+    assert lines[start + 1 : start + 3] == [
+        "codegraph: registered for claude, cursor-agent",
+        "codegraph: registered for codex (new host)",
+    ]
+    assert "⚠ codegraph postinstall warning: codegraph MCP registration failed: exit 1" in lines
+    assert max(cell_len(line) for line in lines[start + 1 : start + 3]) <= 78
+
+    quiet = RowOutcome(
+        PlanRow("rg", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("rg", InstallStatus.INSTALLED),
+    )
+    console, buf = _console()
+    render_run_report([quiet], console)
+    assert "Agent-host hooks" not in buf.getvalue()
+
+    four = RowOutcome(
+        PlanRow("opencode", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("opencode", InstallStatus.INSTALLED),
+        resynced=(("codegraph", ("claude", "codex", "opencode", "cursor")),),
+    )
+    console, buf = _console()
+    render_hook_lines([four], console)
+    wide = "codegraph: registered for claude, codex, cursor-agent, opencode (new host)"
+    assert buf.getvalue().splitlines() == ["Agent-host hooks", wide]
+    assert cell_len(wide) <= 78
 
 
 def test_render_done_notes_is_silent_without_extras() -> None:

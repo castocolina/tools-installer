@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol, get_args
 
-from installer import executors
+from installer import executors, postinstall, receipts
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
@@ -25,6 +25,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.postinstall import hook_method, host_labels, register_hooks
 from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
@@ -183,6 +184,9 @@ class RowOutcome:
     install: InstallOutcome | None = None
     update: UpdateOutcome | None = None
     detail: str = ""
+    # The end-of-run sweep's answer for a new agent host: (tool id, harness ids registered).
+    resynced: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    resync_warnings: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -238,7 +242,12 @@ def retained(outcomes: Sequence[RowOutcome]) -> set[str]:
 
 
 def _step_runs_command(step: ConfigStep) -> bool:
-    return bool(step.argv) or step.kind in {"terminal_sync", "pnpm_group_install"}
+    return bool(step.argv) or step.kind in {
+        "terminal_sync",
+        "pnpm_group_install",
+        "hook_register",
+        "zshenv_shell",
+    }
 
 
 def ran_anything(outcomes: Sequence[RowOutcome]) -> bool:
@@ -361,11 +370,39 @@ class _StepResult:
     handoff: tuple[str, ...] = ()
 
 
-# The eight kinds the model declares. The dispatcher below branches on every
+# The kinds the model declares. The dispatcher below branches on every
 # member and `test_each_config_step_kind_dispatches` asserts this set equals
 # `get_args(ConfigStepKind)`, so a ninth kind added to the model fails there
 # instead of reaching a command path no one reviewed.
 _STEP_KINDS: frozenset[str] = frozenset(get_args(ConfigStepKind))
+
+
+# The done note of a zshenv_shell step (UI-SPEC section 4); its path is in the Shell section.
+_ZSHENV_DONE = "~/.zshenv exports SHELL"
+
+
+def _first_line_of(text: str) -> str:
+    """The first line of a warning or refusal, for a one-line row detail."""
+    return text.splitlines()[0]
+
+
+def _register_hook_step(tool: Tool, ctx: RunContext) -> _StepResult:
+    """Register the present hosts the hook's receipt does not record, then record them (D-02).
+
+    `register_hooks` already subtracts the recorded hosts and writes what it registered;
+    a run with nothing left to register is a failure with a reason, never an empty `done`.
+    """
+    receipt = receipts.read(tool.id)
+    method = hook_method(tool, receipt) if receipt is not None else None
+    if receipt is None or method is None:
+        return _StepResult(failed="no install receipt to record the hook in")
+    registered, warning = register_hooks(tool, method, ctx.runner)
+    if registered:
+        note = f"registered for {host_labels(registered)}"
+        return _StepResult(warning=f"{note}; {_first_line_of(warning)}" if warning else note)
+    if warning:
+        return _StepResult(failed=_first_line_of(warning))
+    return _StepResult(failed="no unregistered host is present any more")
 
 
 def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
@@ -375,13 +412,18 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         # plausible-looking argv one: its producer is unreviewed, so refusing
         # is the only answer that cannot run something nobody agreed to.
         return _StepResult(failed="step kind has no branch")
-    if step.kind == "terminal_sync":
+    if step.kind == "hook_register":
+        return _register_hook_step(tool, ctx)
+    if step.kind in {"terminal_sync", "zshenv_shell"}:
         if ctx.terminal_sync is None:
             return _StepResult(failed="no terminal synchronizer bound")
         try:
-            return _StepResult(warning=ctx.terminal_sync())
+            warning = ctx.terminal_sync()
         except Exception as exc:
             return _StepResult(failed=first_line(exc))
+        # The synchronizer's own warning wins; a clean run reports the step's done note.
+        done = _ZSHENV_DONE if step.kind == "zshenv_shell" else step.report
+        return _StepResult(warning=warning or done)
     if step.kind == "pnpm_group_install":
         method = next((m for m in tool.methods if m.kind == "node"), None)
         if method is None:
@@ -435,14 +477,15 @@ def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:
     lines is `manual` — the user still has reviewed steps to run themselves.
     """
     handoff: list[str] = []
-    detail = ""
+    warnings: list[str] = []
     for step in row.steps:
         result = _run_step(step, tool, ctx)
         if result.failed is not None:
             return RowOutcome(row, "failed", detail=f"{step.text}: {result.failed}")
-        if result.warning is not None:
-            detail = result.warning
+        if result.warning:
+            warnings.append(result.warning)
         handoff.extend(result.handoff)
+    detail = "\n".join(warnings)
     if handoff:
         lines = tuple(handoff)
         install = InstallOutcome(
@@ -461,6 +504,58 @@ _INSTALL_RESULT: dict[InstallStatus, Result] = {
     InstallStatus.MANUAL_REQUIRED: "manual",
     InstallStatus.NO_METHOD: "blocked",
 }
+
+
+# The rows whose install can add an agent host, and the catalog ids of those hosts.
+_HOST_INSTALL_DISPOSITIONS: frozenset[Disposition] = frozenset(
+    {Disposition.INSTALL, Disposition.REPAIR, Disposition.REINSTALL}
+)
+_HOST_CATALOG_IDS: frozenset[str] = frozenset(postinstall.HOST_CATALOG_IDS.values())
+
+
+def _resync_hooks(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcome]:
+    """D-03: when a run installed an agent host, register each installed hook tool for it.
+
+    One sweep after every row, reading the present hosts once. Only a receipt that records
+    hooks takes part: a receipt written before hooks were recorded is left to RECONFIGURE,
+    whose unrecorded hosts already read `≈`. `register_hooks` never re-runs a recorded host.
+    shortcut: the sweep's command output is attributed to the last host row in the TUI log,
+    upgrade when the log gains a run-level attribution.
+    """
+    installed = [
+        index
+        for index, outcome in enumerate(outcomes)
+        if outcome.row.disposition in _HOST_INSTALL_DISPOSITIONS
+        and outcome.result == "done"
+        and outcome.row.tool_id in _HOST_CATALOG_IDS
+    ]
+    if not installed:
+        return outcomes
+    present = postinstall.present_hosts()
+    resynced: list[tuple[str, tuple[str, ...]]] = []
+    warnings: list[tuple[str, str]] = []
+    for tool in ctx.catalog.values():
+        name = tool.postinstall or ""
+        pair = postinstall.POSTINSTALL_HOOKS.get(name)
+        if pair is None or pair.targets is None:
+            continue
+        receipt = receipts.read(tool.id)
+        method = hook_method(tool, receipt) if receipt is not None else None
+        if receipt is None or method is None or not receipt.hooks.get(name):
+            continue
+        try:
+            registered, warning = register_hooks(tool, method, ctx.runner, hosts=present)
+        except Exception as exc:  # the sweep is never a failed row; its failure is a warning
+            registered, warning = (), first_line(exc)
+        if registered:
+            resynced.append((tool.id, registered))
+        if warning:
+            warnings.append((tool.id, _first_line_of(warning)))
+    last = installed[-1]
+    outcomes[last] = replace(
+        outcomes[last], resynced=tuple(resynced), resync_warnings=tuple(warnings)
+    )
+    return outcomes
 
 
 def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
@@ -593,7 +688,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
         outcomes.append(outcome)
         if ctx.on_outcome is not None:
             ctx.on_outcome(outcome)
-    return outcomes
+    return _resync_hooks(outcomes, ctx)
 
 
 def _settled(state: ToolState | None) -> bool:

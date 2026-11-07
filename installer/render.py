@@ -24,6 +24,7 @@ from installer.guidance import (
 )
 from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.postinstall import host_labels
 from installer.sanitize import sanitize_log_line
 from installer.session import (
     RESULT_WORDS,
@@ -261,14 +262,23 @@ def render_plan(
         )
 
 
+def _print_reconfigure_notes(outcome: RowOutcome, console: Console) -> None:
+    """One done note per detail line; an indented line is a path under the note above it."""
+    done = WORDS[outcome.row.disposition].done
+    for line in outcome.detail.splitlines():
+        text = line if line.startswith("  ") else f"{outcome.row.tool_id} {done} — {line}"
+        console.print(sanitize_log_line(text), markup=False, highlight=False, soft_wrap=True)
+
+
 def render_done_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print what a successful update or reconfiguration reported beside its row."""
     for outcome in outcomes:
         if outcome.result != "done":
             continue
         if outcome.row.disposition is Disposition.RECONFIGURE:
-            notes = [outcome.detail] if outcome.detail else []
-        elif outcome.row.disposition is Disposition.UPDATE:
+            _print_reconfigure_notes(outcome, console)
+            continue
+        if outcome.row.disposition is Disposition.UPDATE:
             update = outcome.update
             if update is None:
                 continue
@@ -299,8 +309,57 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_handoff(installs, console)
     render_post_install_handoff(installs, console)
     render_postinstall_warnings(installs, console)
+    render_resync_warnings(outcomes, console)
+    render_hook_lines(outcomes, console)
     render_done_notes(outcomes, console)
     render_verification(installs, console)
+    render_shell_section(outcomes, console)
+
+
+def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print each end-of-run sweep warning in the postinstall warning form (UI-SPEC 4, A22)."""
+    for outcome in outcomes:
+        for tool_id, warning in outcome.resync_warnings:
+            line = sanitize_log_line(f"⚠ {tool_id} postinstall warning: {warning}")
+            console.print(Text(line, style="yellow"), soft_wrap=True)
+
+
+def render_hook_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print the Agent-host hooks section: each install's registrations and the sweep's hosts."""
+    lines: list[str] = []
+    for outcome in outcomes:
+        if outcome.install is not None and outcome.install.hooks:
+            labels = host_labels(outcome.install.hooks)
+            lines.append(f"{outcome.row.tool_id}: registered for {labels}")
+        for tool_id, hosts in outcome.resynced:
+            lines.append(f"{tool_id}: registered for {host_labels(hosts)} (new host)")
+    if not lines:
+        return
+    console.print("Agent-host hooks", style="bold", markup=False, highlight=False)
+    for line in lines:
+        console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
+
+
+def render_shell_section(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print the Shell section for each done reconfigure that wrote SHELL into ~/.zshenv."""
+    exported = [
+        step.report
+        for outcome in outcomes
+        if outcome.result == "done" and outcome.row.disposition is Disposition.RECONFIGURE
+        for step in outcome.row.steps
+        if step.kind == "zshenv_shell"
+    ]
+    if not exported:
+        return
+    console.print("Shell", style="bold", markup=False, highlight=False)
+    console.print(
+        "~/.zshenv now exports SHELL; new terminals start with it.",
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )
+    for zsh in exported:
+        console.print(f"  SHELL={zsh}", markup=False, highlight=False, soft_wrap=True)
 
 
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:
