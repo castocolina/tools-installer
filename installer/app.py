@@ -1070,8 +1070,9 @@ def run_uninstall(
             runner=runner,
             unregister=plan.unregister,
         )
+        # Receipt-derived paths reach these lines: plain text, control characters stripped.
         for line in outcome.refused:
-            console.print(line)
+            console.print(sanitize_log_line(line), markup=False, soft_wrap=True)
         if outcome.removed:
             removed.extend(plan.removable)
             after.append(
@@ -1096,7 +1097,11 @@ def run_uninstall(
                     handled.add(member)
                     console.print(removed_with_group_line(member, group), markup=False)
         else:
-            console.print(f"{tool.id}: remove failed — {outcome.detail}")
+            console.print(
+                sanitize_log_line(f"{tool.id}: remove failed — {outcome.detail}"),
+                markup=False,
+                soft_wrap=True,
+            )
             failed.append(tool.id)
     # O5: the whole-environment run reverts every key the installer wrote, even for an agent
     # whose tool is not being removed; each key still goes only while it holds our value.

@@ -2986,6 +2986,47 @@ def test_a_retired_file_changed_before_confirm_is_refused(
     assert receipts.receipt_exists("rtk")
 
 
+def test_a_refused_receipt_path_prints_as_plain_sanitized_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-12 (IN-05): a receipt-derived path in the refusal lines carries no escape or markup."""
+    from installer.app import run_uninstall
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    odd = bin_dir / "rt\x1b[31mk[bold]"
+    odd.write_text("rtk raw binary")
+    tool = _retired_tool("rtk", [(odd, "file")])
+
+    def swap_then_confirm(_message: str) -> bool:
+        stat = odd.stat()
+        odd.write_text("RTK RAW BINARY")
+        os.utime(odd, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        return True
+
+    console, buf = _uninstall_console()
+    _removed, failed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=swap_then_confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+    )
+    assert failed == ("rtk",)
+    out = buf.getvalue()
+    assert "\x1b" not in out
+    assert "changed since the preview; not removed" in out
+    assert "rt[31mk[bold]" in out
+    assert odd.read_text() == "RTK RAW BINARY"
+
+
 def _write_bare_receipt(tool_id: str, kind: str, *, package: str | None = None) -> Tool:
     """A retired receipt that records no artifact (a manager package, or nothing at all)."""
     receipts.write(
