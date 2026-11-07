@@ -9,6 +9,8 @@ Messages carry program names, paths and script text only, never environment valu
 """
 
 import os
+import re
+import shlex
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
@@ -181,6 +183,223 @@ def _skip_prefix_options(rest: Sequence[str]) -> Sequence[str]:
     return rest[index:]
 
 
+# --- shell scripts: every command word is checked (D-18) ---
+
+# Only builtins that neither run nor rebind a command: a builtin's arguments are never checked.
+# Never `time`, `noglob`, `nocorrect` (the parser skips them and checks the next word), nor
+# `eval`, `exec`, `trap`, `emulate`, `autoload`, `hash`, `alias` (each runs or rebinds a command).
+SHELL_BUILTINS: frozenset[str] = frozenset(
+    {
+        "echo",
+        "printf",
+        "test",
+        "[",
+        "true",
+        "false",
+        "cd",
+        "export",
+        "unset",
+        "set",
+        "exit",
+        "return",
+        ".",
+        "source",
+        "command",
+        "type",
+        "local",
+        "shift",
+        ":",
+        "unalias",
+        "read",
+        "wait",
+        "typeset",
+        "declare",
+        "readonly",
+        "print",
+        "whence",
+        "setopt",
+        "unsetopt",
+        "builtin",
+    }
+)
+# Words that run or rebind a command the parser never sees, and compound keywords it skips.
+_REFUSED_WORDS = frozenset(
+    {"eval", "trap", "emulate", "autoload", "hash", "case", "select", "function", "coproc", "[["}
+)
+_SKIPPED_KEYWORDS = frozenset(
+    {"{", "}", "(", ")", "!", "if", "then", "elif", "else", "fi", "while", "until", "do", "done"}
+)
+_PRECOMMAND_WORDS = frozenset({"noglob", "nocorrect"})
+_DECLARERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+_OPERATOR_CHARS = frozenset(";&|()<>\n")
+_OPERATORS = ("&&", "||", ";;", ">>", "<<", ">&", "<&", "&>", ">|")
+_SEPARATORS = frozenset({";", "&", "|", "&&", "||", ";;", "\n"})
+_REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<&", ">&", "&>", ">|"})
+_UNPARSEABLE_TEXT = ("$(", "`", "<(", ">(")
+_PATH_ASSIGNMENT = re.compile(r"^(PATH|path)\+?=")
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_FUNCTION_NAMES = re.compile(
+    r"^\s*(?:([A-Za-z_][\w.-]*)\s*\(\s*\)|function\s+([A-Za-z_][\w.-]*))", re.MULTILINE
+)
+_PATH_REASON = "assigns PATH; pass the PATH through env= instead"
+
+
+def _tokens(script: str) -> list[str]:
+    """Words and single operators; ValueError on an unclosed quote."""
+    lexer = shlex.shlex(script, posix=True, punctuation_chars=";&|()<>\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    # With `#` as a comment char a comment would swallow the newline and hide the next command.
+    lexer.commenters = ""
+    tokens: list[str] = []
+    for token in lexer:
+        if not set(token) <= _OPERATOR_CHARS:
+            tokens.append(token)
+            continue
+        # the lexer glues adjacent operator characters (`;(`, `);`, `()`): split them
+        position = 0
+        while position < len(token):
+            operator = next((op for op in _OPERATORS if token.startswith(op, position)), None)
+            operator = operator or token[position]
+            tokens.append(operator)
+            position += len(operator)
+    return tokens
+
+
+def _is_operator(token: str) -> bool:
+    return bool(token) and set(token) <= _OPERATOR_CHARS
+
+
+def _without_redirections(words: Sequence[str]) -> list[str]:
+    """Drop redirection operators with their targets and the fd words before them."""
+    kept: list[str] = []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        following = words[index + 1 : index + 2]
+        if word in _REDIRECTIONS:
+            index += 2
+        elif word.isdigit() and following and following[0] in _REDIRECTIONS:
+            index += 1
+        else:
+            kept.append(word)
+            index += 1
+    return kept
+
+
+class _ScriptChecker:
+    def __init__(
+        self, script: str, env: Mapping[str, str] | None, cwd: object, policy: LaunchPolicy
+    ) -> None:
+        self.script = script
+        self.env = env
+        self.cwd = cwd
+        self.policy = policy
+        self.functions: set[str] = set()
+
+    def refuse(self, reason: str) -> AssertionError:
+        return AssertionError(
+            f"the suite tried to run a shell script the guard cannot check ({reason}); "
+            f"move it into a file under tmp_path and run it as bash <file>: {self.script!r:.200}"
+        )
+
+    def launch(self, argv: list[str], *, missing_ok: bool) -> None:
+        check_launch(argv, env=self.env, cwd=self.cwd, policy=self.policy, missing_ok=missing_ok)
+
+    def run(self) -> None:
+        if not self.script.strip():
+            raise self.refuse("the script is empty")
+        if any(text in self.script for text in _UNPARSEABLE_TEXT):
+            raise self.refuse("it uses command or process substitution")
+        try:
+            tokens = _tokens(self.script)
+        except ValueError as error:
+            raise self.refuse(f"it does not parse: {error}") from error
+        for index in range(1, len(tokens) - 1):
+            if tokens[index : index + 2] == ["(", ")"] and not _is_operator(tokens[index - 1]):
+                self.functions.add(tokens[index - 1])
+        command: list[str] = []
+        for token in [*tokens, "\n"]:
+            if token not in _SEPARATORS:
+                command.append(token)
+            elif command:
+                self.command(command)
+                command = []
+
+    def command(self, words: list[str]) -> None:
+        index = 0
+        while index < len(words):
+            word = words[index]
+            following = words[index + 1 : index + 2]
+            if word in _REDIRECTIONS:
+                index += 2
+            elif word.isdigit() and following and following[0] in _REDIRECTIONS:
+                # `2>&1`: an fd; the lexer cannot tell `2>x` from `2 >x`, so the word is also
+                # checked as a program that may not be a host one
+                self.launch([word], missing_ok=True)
+                index += 1
+            elif _PATH_ASSIGNMENT.match(word):
+                raise self.refuse(_PATH_REASON)
+            elif _ASSIGNMENT.match(word):
+                index += 1
+            elif words[index + 1 : index + 3] == ["(", ")"] and not _is_operator(word):
+                index += 3  # `name ( )`: a function header, recorded up front
+            elif word in _SKIPPED_KEYWORDS:
+                index += 1
+            elif word == "time":
+                index += 2 if words[index + 1 : index + 2] == ["-p"] else 1
+            elif word in _PRECOMMAND_WORDS:
+                self.launch([word], missing_ok=True)
+                index += 1
+            else:
+                self.word(word, words[index + 1 :])
+                return
+
+    def word(self, word: str, rest: list[str]) -> None:
+        if word in _REFUSED_WORDS:
+            raise self.refuse(f"{word} can run a command the guard cannot see")
+        if word == "for":
+            return
+        if _PATH_ASSIGNMENT.match(word):
+            raise self.refuse(_PATH_REASON)
+        if word in ("command", "builtin", "exec"):
+            if word == "command" and rest[:1] in (["-v"], ["-V"]):
+                return
+            self.command(rest)
+        elif word == "alias":
+            if any("=" in argument for argument in rest):
+                raise self.refuse("an alias definition rebinds a command")
+        elif word in _DECLARERS:
+            if any(_PATH_ASSIGNMENT.match(argument) for argument in rest):
+                raise self.refuse(_PATH_REASON)
+        elif word in (".", "source"):
+            self.source(_without_redirections(rest))
+        elif word not in self.functions and word not in SHELL_BUILTINS:
+            self.launch([word, *_without_redirections(rest)], missing_ok=False)
+
+    def source(self, arguments: list[str]) -> None:
+        if not arguments:
+            raise self.refuse("source has no file")
+        base = Path(self.cwd if isinstance(self.cwd, (str, Path)) else os.getcwd())
+        target = _real(base / arguments[0])
+        if not _file_allowed(target, self.policy):
+            raise self.refuse(f"it sources {target}, outside tmp_path and the checkout scripts")
+        if _under_checkout_roots(target, self.policy):
+            try:
+                text = target.read_text()
+            except (OSError, UnicodeDecodeError):
+                return
+            for match in _FUNCTION_NAMES.finditer(text):
+                self.functions.add(match.group(1) or match.group(2))
+
+
+def check_script(
+    script: str, *, env: Mapping[str, str] | None, cwd: object, policy: LaunchPolicy
+) -> None:
+    """Check every command word of an `sh -c` script, strictly and function-aware."""
+    _ScriptChecker(script, env, cwd, policy).run()
+
+
 def check_shell_args(
     rest: Sequence[str],
     *,
@@ -216,7 +435,8 @@ def check_shell_args(
             "move the script into a file under tmp_path and run it as bash <file>"
         )
     if command:
-        raise AssertionError(f"the guard cannot check shell scripts yet: {remaining[0]!r:.200}")
+        check_script(remaining[0], env=env, cwd=cwd, policy=policy)
+        return
     base = Path(cwd if isinstance(cwd, (str, Path)) else os.getcwd())
     script = _real(base / remaining[0])
     if not _file_allowed(script, policy):

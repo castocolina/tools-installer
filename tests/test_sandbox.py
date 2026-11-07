@@ -4,10 +4,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 import pytest
 
@@ -17,6 +17,7 @@ from tests.sandbox import (
     CHECKOUT,
     FORBIDDEN_PROGRAM_NAMES,
     LINUXBREW_PREFIX,
+    SHELL_BUILTINS,
     UTILITY_NAMES,
     LaunchPolicy,
     build_launch_policy,
@@ -291,3 +292,257 @@ def test_the_allowlist_names_no_toolchain(policy: LaunchPolicy) -> None:
     own = _real(Path(sys.executable))
     for member in (policy.interpreters | policy.utilities) - {own}:
         assert member.name not in FORBIDDEN_PROGRAM_NAMES, member
+
+
+# --- shell scripts: every command word is checked (D-18) ---
+
+
+class _Shells(NamedTuple):
+    """The policy plus fake sh, bash and zsh under tmp_path, so no host shell is needed."""
+
+    policy: LaunchPolicy
+    paths: dict[str, Path]
+    file: Path
+    bindir: Path
+
+    def run(self, shell: str, script: str, *, env: Mapping[str, str] | None = None) -> None:
+        text = script.replace("{FILE}", str(self.file))
+        check_launch([self.paths[shell], "-c", text], env=env, cwd=None, policy=self.policy)
+
+
+@pytest.fixture
+def shells(tmp_path: Path, policy: LaunchPolicy) -> _Shells:
+    bindir = tmp_path / "shells"
+    paths = {name: _fake(bindir, name) for name in ("sh", "bash", "zsh")}
+    members = frozenset(_real(path) for path in paths.values())
+    file = tmp_path / "sourced.sh"
+    file.write_text("echo hi\n")
+    return _Shells(replace(policy, interpreters=members), paths, file, bindir)
+
+
+@pytest.mark.parametrize(
+    ("shell", "script"),
+    [
+        ("sh", "uv --version"),
+        ("bash", "true && gh --version"),
+        ("bash", "echo a; uv x"),
+        ("bash", "echo a | uv x"),
+        ("bash", "false || uv x"),
+        ("bash", "echo a\nuv x"),
+        ("bash", "exec uv"),
+        ("bash", "command uv"),
+        ("bash", "X=1 uv"),
+        ("bash", ">/dev/null uv"),
+    ],
+)
+def test_shell_scripts_check_every_command_word(shells: _Shells, shell: str, script: str) -> None:
+    with pytest.raises(AssertionError):
+        shells.run(shell, script)
+
+
+def test_shell_scripts_allow_builtins_functions_and_fakes(shells: _Shells) -> None:
+    tool = _fake(shells.bindir, "tool")
+    shells.run("bash", "echo hi; printf x")
+    shells.run("bash", "X=1 echo hi")
+    shells.run("bash", "f() { echo hi; }; f")
+    shells.run("bash", "command -v uv")
+    shells.run("bash", "if true; then echo y; fi")
+    shells.run("bash", 'source "{FILE}" && alias x')
+    shells.run("sh", f'. "{CHECKOUT / "install.sh"}"; detect_os')
+    shells.run("zsh", "echo $SHELL")
+    shells.run("bash", f"{tool} --x")
+    shells.run("bash", "tool --x", env={"PATH": str(shells.bindir)})
+    check_launch(
+        [shells.paths["zsh"], "-f", "-c", "echo $SHELL"],
+        env=None,
+        cwd=None,
+        policy=shells.policy,
+    )
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "$(uv)",
+        "`uv`",
+        "cat <(uv)",
+        "eval uv",
+        "case x in x) uv;; esac",
+        "echo 'unclosed",
+        "",
+        "   ",
+        "source /etc/profile",
+    ],
+)
+def test_shell_scripts_refuse_what_the_guard_cannot_parse(shells: _Shells, script: str) -> None:
+    with pytest.raises(AssertionError):
+        shells.run("bash", script)
+
+
+def test_shell_scripts_refuse_a_shell_with_no_arguments(shells: _Shells) -> None:
+    with pytest.raises(AssertionError):
+        check_launch([shells.paths["bash"]], env=None, cwd=None, policy=shells.policy)
+
+
+def test_shell_no_exec_and_script_files(shells: _Shells, outside: Path) -> None:
+    mentions_uv = shells.file.parent / "mentions-uv.sh"
+    mentions_uv.write_text("uv --version\n")
+    sh, bash = shells.paths["sh"], shells.paths["bash"]
+    check_launch([sh, "-n", mentions_uv], env=None, cwd=None, policy=shells.policy)
+    check_launch([bash, "-n", "-c", "uv"], env=None, cwd=None, policy=shells.policy)
+    check_launch([bash, shells.file], env=None, cwd=None, policy=shells.policy)
+    elsewhere = outside / "run.sh"
+    elsewhere.write_text("echo hi\n")
+    with pytest.raises(AssertionError):
+        check_launch([bash, elsewhere], env=None, cwd=None, policy=shells.policy)
+
+
+@pytest.mark.parametrize(
+    "script",
+    ["echo a;(uv x)", "(echo a);uv x", "true&&uv x", "echo a|uv x"],
+)
+def test_glued_operators_are_split_before_checking_refused(shells: _Shells, script: str) -> None:
+    with pytest.raises(AssertionError):
+        shells.run("bash", script)
+
+
+@pytest.mark.parametrize(
+    "script",
+    ["f(){ echo hi;};f", "f () { echo hi; }; f", "(echo a);(echo b)", "echo a>/dev/null;echo b"],
+)
+def test_glued_operators_are_split_before_checking_allowed(shells: _Shells, script: str) -> None:
+    shells.run("bash", script)
+
+
+def test_stdbuf_wraps_a_checked_shell_script(shells: _Shells, outside: Path) -> None:
+    stdbuf = _fake(outside, "stdbuf")
+    wrapped = replace(shells.policy, utilities=frozenset({_real(stdbuf)}))
+    sh = shells.paths["sh"]
+    check_launch([stdbuf, "-oL", sh, "-c", "printf x"], env=None, cwd=None, policy=wrapped)
+    with pytest.raises(AssertionError):
+        check_launch([stdbuf, "-oL", sh, "-c", "uv x"], env=None, cwd=None, policy=wrapped)
+
+
+@pytest.mark.parametrize(
+    ("shell", "script"),
+    [
+        ("bash", "time . {FILE}"),
+        ("bash", "time -p . {FILE}"),
+        ("sh", "time . {FILE}"),
+        ("zsh", "noglob . {FILE}"),
+        ("zsh", "nocorrect . {FILE}"),
+        ("bash", "2>&1 . {FILE}"),
+        ("bash", "2>/dev/null . {FILE}"),
+        ("bash", "<&0 . {FILE}"),
+        ("bash", "2>&1 source {FILE}"),
+    ],
+)
+def test_precommand_words_and_fd_redirections_are_skipped_allowed(
+    shells: _Shells, shell: str, script: str
+) -> None:
+    shells.run(shell, script)
+
+
+@pytest.mark.parametrize(
+    ("shell", "script"),
+    [
+        ("bash", "time uv x"),
+        ("bash", "time -p uv x"),
+        ("bash", "time -o out true"),
+        ("bash", "! time uv x"),
+        ("zsh", "noglob uv x"),
+        ("bash", "2>&1 uv x"),
+        ("bash", "2>/dev/null uv x"),
+    ],
+)
+def test_precommand_words_and_fd_redirections_are_skipped_refused(
+    shells: _Shells, shell: str, script: str
+) -> None:
+    with pytest.raises(AssertionError):
+        shells.run(shell, script)
+
+
+@pytest.mark.parametrize(("shell", "word"), [("bash", "2"), ("zsh", "noglob")])
+def test_precommand_words_and_fd_redirections_are_skipped_host_program_refused(
+    shells: _Shells, outside: Path, shell: str, word: str
+) -> None:
+    _fake(outside, word)
+    script = "2>&1 . {FILE}" if word == "2" else "noglob . {FILE}"
+    with pytest.raises(AssertionError, match=f"host's {word}"):
+        shells.run(shell, script, env={"PATH": str(outside)})
+
+
+@pytest.mark.parametrize(
+    ("shell", "script"),
+    [
+        ("bash", "trap 'uv x' EXIT"),
+        ("bash", "trap 'echo hi' EXIT"),
+        ("zsh", "emulate zsh -c 'uv x'"),
+        ("zsh", "autoload -U compinit"),
+        ("bash", "hash -p /bin/sh x"),
+        ("bash", "alias echo=uv; echo x"),
+        ("bash", "alias x='echo hi'"),
+    ],
+)
+def test_string_running_builtins_are_refused(shells: _Shells, shell: str, script: str) -> None:
+    with pytest.raises(AssertionError):
+        shells.run(shell, script)
+
+
+@pytest.mark.parametrize("script", ["alias", "alias x", "alias -p"])
+def test_string_running_builtins_are_refused_but_alias_lookups_pass(
+    shells: _Shells, script: str
+) -> None:
+    shells.run("bash", script)
+
+
+def test_shell_builtins_never_hold_a_command_runner() -> None:
+    runners = {
+        "time",
+        "noglob",
+        "nocorrect",
+        "eval",
+        "exec",
+        "trap",
+        "emulate",
+        "autoload",
+        "hash",
+        "alias",
+    }
+    assert SHELL_BUILTINS.isdisjoint(runners)
+
+
+@pytest.mark.parametrize(
+    ("shell", "script"),
+    [
+        ("bash", "PATH=/x:$PATH uv x"),
+        ("bash", "export PATH=/x:$PATH; uv x"),
+        ("bash", "PATH=/x sh {FILE}"),
+        ("bash", "PATH+=:/x; uv x"),
+        ("bash", "declare -x PATH=/x; uv x"),
+        ("bash", "if true; then PATH=/x; fi; uv x"),
+        ("zsh", "path=(/x $path); uv x"),
+    ],
+)
+def test_path_assignments_are_refused(shells: _Shells, shell: str, script: str) -> None:
+    _fake(shells.bindir, "uv")
+    with pytest.raises(AssertionError, match="assigns PATH"):
+        shells.run(shell, script, env={"PATH": str(shells.bindir)})
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "uv x",
+        "echo $PATH",
+        "printf '%s' \"$PATH\"",
+        "X=$PATH:/y uv x",
+        "MANPATH=/x uv x",
+        "export MYPATH=/x; uv x",
+    ],
+)
+def test_path_assignments_are_refused_but_reads_and_lookalikes_pass(
+    shells: _Shells, script: str
+) -> None:
+    _fake(shells.bindir, "uv")
+    shells.run("bash", script, env={"PATH": str(shells.bindir)})
