@@ -1,7 +1,7 @@
 """Offline tool-state services for screen tests.
 
 Every service built here is a real `VersionRefreshService` with offline fakes.
-`skill_home` is required, and the managed bin dir lives under it, so no
+`home` is required, and the managed bin dir lives under it, so no
 test-built service reads the developer's home (checker W5).
 """
 
@@ -68,7 +68,7 @@ def _no_version(argv: list[str]) -> str | None:
 def offline_service(
     cache_path: Path,
     *,
-    skill_home: Path,
+    home: Path,
     resolve_tag: Callable[[str], str],
     probe_output: Callable[[list[str]], str | None],
     now: Callable[[], datetime] | None = None,
@@ -82,7 +82,7 @@ def offline_service(
 ) -> VersionRefreshService:
     """A service with no first pass. By default every command resolves into
     the scratch managed bin dir, so every tool reads present and installer-owned."""
-    managed = skill_home / ".local" / "bin"
+    managed = home / ".local" / "bin"
     return VersionRefreshService(
         platform=platform or _MACOS,
         cache_path=cache_path,
@@ -97,7 +97,7 @@ def offline_service(
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
         native_probe=native_probe,
-        skill_home=skill_home,
+        home=home,
         present=present,
     )
 
@@ -127,7 +127,7 @@ def seeded_service(
 
     service = offline_service(
         cache_path,
-        skill_home=home,
+        home=home,
         resolve_tag=resolve_tag,
         probe_output=probe_output,
         platform=platform,
@@ -266,7 +266,7 @@ class HeldRefreshService(FrozenStateService):
             pnpm_packages=lambda: (),
             query=lambda *_a, **_k: "",
             native_probe=_probe_nothing,
-            skill_home=home,
+            home=home,
             present=lambda _tool: False,
         )
         self.pending = tuple(pending)
@@ -304,7 +304,7 @@ def frozen_service(home: Path, *, platform: Platform | None = None) -> FrozenSta
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
         native_probe=_probe_nothing,
-        skill_home=home,
+        home=home,
         present=lambda _tool: False,
     )
 

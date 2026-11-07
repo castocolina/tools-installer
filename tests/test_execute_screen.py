@@ -2902,7 +2902,7 @@ async def test_brew_appearing_mid_session_unblocks_colima(
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: None,
         platform=launch,

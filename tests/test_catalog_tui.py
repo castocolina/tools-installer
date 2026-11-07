@@ -1173,7 +1173,7 @@ def test_owner_column_and_detail_paint_the_os_package_case_end_to_end(tmp_path: 
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda repo: "v1.0.0",
         probe_output=lambda argv: None,
         platform=Platform(os="fedora", arch="amd64", immutable=True, has_brew=False),
@@ -1332,7 +1332,7 @@ async def test_ver_cell_is_empty_for_unparseable_probe_output(
     tool = _gh_tool("dasel")
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda repo: "v2.8.0",
         probe_output=lambda argv: "Usage: dasel <command>",
     )
@@ -1507,7 +1507,7 @@ async def test_checking_mark_reaches_the_rendered_table_while_a_pass_is_blocked(
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=resolve_tag,
         probe_output=lambda argv: "1.0.0",
     )
@@ -1558,7 +1558,7 @@ async def test_refresh_cursor_survives_both_repaints_of_one_cycle(tmp_path: Path
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda repo: "v1.0.0",
         probe_output=probe_output,
     )
@@ -1748,7 +1748,7 @@ async def test_owner_cell_semantic_value_reaches_the_mounted_table(tmp_path: Pat
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
         artifacts_for=lambda _t: [],
@@ -1859,7 +1859,7 @@ async def test_budget_deferred_row_renders_stale_marker(tmp_path: Path) -> None:
     )
     service = offline_service(
         path,
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda repo: "1.0.0",
         probe_output=lambda argv: "1.0.0",
         now=lambda: now,
@@ -2878,7 +2878,7 @@ def test_a_single_tool_refresh_after_invalidate_strands_every_other_record(
     alpha, beta = _tool("alpha"), _tool("beta")
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: "1.0",
     )
@@ -3411,7 +3411,7 @@ async def test_health_cell_is_checking_before_the_first_pass(tmp_path: Path) -> 
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=home,
+        home=home,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: None,
         which=which,
@@ -3471,7 +3471,7 @@ def test_state_doubles_never_use_the_real_home(tmp_path: Path) -> None:
     )
     offline = offline_service(
         tmp_path / "offline.json",
-        skill_home=offline_home,
+        home=offline_home,
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: None,
     )
@@ -3486,7 +3486,7 @@ def test_state_doubles_never_use_the_real_home(tmp_path: Path) -> None:
         return None
 
     without_home: dict[str, Any] = {"resolve_tag": str, "probe_output": no_version}
-    with pytest.raises(TypeError, match="skill_home"):
+    with pytest.raises(TypeError, match="'home'"):
         offline_service(tmp_path / "missing.json", **without_home)
 
 
@@ -3725,7 +3725,7 @@ async def test_refresh_error_shows_the_retry_copy(
     tools, installed = _catalog()
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path / "home",
+        home=tmp_path / "home",
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: None,
     )
@@ -3839,7 +3839,7 @@ async def test_cache_save_warning_reaches_the_status_line(
     monkeypatch.setattr(version_status, "save_version_cache", save)
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path / "home",
+        home=tmp_path / "home",
         resolve_tag=lambda repo: "v1",
         probe_output=lambda argv: None,
         present=lambda tool: installed[tool.id],
@@ -3880,7 +3880,7 @@ async def test_quick_tier_switching_runs_one_full_pass(tmp_path: Path) -> None:
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path / "home",
+        home=tmp_path / "home",
         resolve_tag=resolve_tag,
         probe_output=lambda argv: "1.0.0",
     )

@@ -2617,7 +2617,7 @@ def test_failed_invalidate_save_still_requeries_the_managers(
 
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: "1.0",
         which=lambda cmd: None if cmd == "brew" else str(tmp_path / cmd),
@@ -2658,7 +2658,7 @@ def test_a_failed_query_after_a_failed_invalidate_save_clears_the_flag_and_backs
     now = datetime(2026, 9, 7, tzinfo=UTC)
     service = offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "v1",
         probe_output=lambda _argv: "1.0",
         now=lambda: now,
@@ -2837,7 +2837,7 @@ def _alpha_service(tmp_path: Path) -> VersionRefreshService:
         probe_output=lambda _argv: "1.0.0",
         now=lambda: _STATE_NOW,
         managed_bin_dir=managed,
-        skill_home=tmp_path,
+        home=tmp_path,
         which=lambda cmd: str(managed / cmd) if cmd == "alpha" else None,
         artifacts_for=lambda tool: [managed / tool.cmd],
         query=lambda *_args, **_kwargs: "",
@@ -4449,7 +4449,7 @@ def _hook_service(
         pnpm_packages=lambda: (),
         resolve_pnpm=lambda: None,
         query=lambda *_args, **_kwargs: "",
-        skill_home=tmp_path / "home",
+        home=tmp_path / "home",
         present=lambda _tool: True,
     )
 
@@ -5005,7 +5005,7 @@ def _pending_service(
 ) -> VersionRefreshService:
     return offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "1.0.0",
         probe_output=probe,
     )
@@ -5131,7 +5131,7 @@ def _off_path_service(
 
     return offline_service(
         tmp_path / "versions.json",
-        skill_home=tmp_path,
+        home=tmp_path,
         resolve_tag=lambda _repo: "1.0.0",
         probe_output=lambda _argv: "1.0.0",
         which=(lambda cmd: f"/bin/{cmd}") if resolves else (lambda _cmd: None),

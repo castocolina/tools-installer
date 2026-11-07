@@ -223,7 +223,7 @@ def sandboxed_home(
 ) -> None:
     """Point HOME at a per-test scratch dir under pytest's base temp (P19-12, G28).
 
-    The state doubles sandbox `skill_home` and the managed bin dir, but declared
+    The state doubles sandbox `home` and the managed bin dir, but declared
     locations (`~/.sdkman/...`, `~/.local/opt`, `~/Applications`) are expanded
     through HOME deep in production code. `Path.home()` and `expanduser` both
     read HOME on Linux and macOS, so one assignment covers both. A test that

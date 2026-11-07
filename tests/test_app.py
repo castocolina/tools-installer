@@ -493,7 +493,7 @@ def test_headless_all_runs_one_refresh_pass_before_planning(
     tools = [_tool("rg", "search")]
     refresh = offline_service(
         Path.home() / "versions.json",
-        skill_home=Path.home(),
+        home=Path.home(),
         resolve_tag=lambda _repo: (_ for _ in ()).throw(OSError("offline")),
         probe_output=lambda _argv: None,
         present=lambda _tool: False,

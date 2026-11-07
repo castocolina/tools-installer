@@ -965,7 +965,7 @@ class VersionRefreshService:
         read_inventory_fn: Callable[..., ManagerInventory] | None = None,
         read_outdated_fn: Callable[..., OutdatedReport] | None = None,
         native_probe: ProbeRunner | None = None,
-        skill_home: Path | None = None,
+        home: Path | None = None,
         present: Callable[[Tool], bool] | None = None,
         path_value: Callable[[], str] | None = None,
         terminal_drift: Callable[[Platform], TerminalShellResult] | None = None,
@@ -1001,7 +1001,7 @@ class VersionRefreshService:
         # forbids ("tests must be deterministic and offline"). Production
         # (setup.py) supplies the real runner explicitly.
         self._native_probe = native_probe
-        self._skill_home = skill_home if skill_home is not None else Path.home()
+        self._home = home if home is not None else Path.home()
         # D-16: a dry run only; production passes `sync_terminal_shells(write=False)`.
         self._terminal_drift = terminal_drift
         self._lock = threading.Lock()
@@ -1187,7 +1187,7 @@ class VersionRefreshService:
         """The harness hosts, read once per pass (23-REUSE 07-2). A failure is a note, never
         a failed pass: it returns no hosts and the reason."""
         try:
-            return present_harnesses(self._skill_home, self._looked_through), None
+            return present_harnesses(self._home, self._looked_through), None
         except Exception as exc:  # a read-only secondary fact must never fail the pass
             return frozenset(), str(exc)
 
