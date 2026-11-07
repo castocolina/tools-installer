@@ -52,9 +52,10 @@
   4. With a ban and a tweak active, changing the shell link mode (centralized → split) removes their blocks from the old mode's rc and writes them where the new mode sources.
   5. CI is green on ubuntu and macOS, merges to main require the PR check (branch protection, user action), and plans 16-17..19 carry secure and validate re-audit records.
 
-**Plans**: 20/20 plans executed
+**Plans**: 21/21 plans executed
 
 Plans:
+- [x] 17-21-PLAN.md
 - [x] 17-14-PLAN.md
 - [x] 17-15-PLAN.md
 - [x] 17-16-PLAN.md
@@ -99,37 +100,37 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans:** 28 plans
+**Plans:** 28/28 plans executed
 
 Plans (numbered in creation order; W = execution wave):
-- [ ] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
-- [ ] 18-02-PLAN.md — Version parser fixes: `-1`, `version=`, quoted output (W1)
-- [ ] 18-03-PLAN.md — macOS java/git stubs never count as installed (W1)
-- [ ] 18-04-PLAN.md — `cli_name` honored only through `apps.cli_spec` (W1)
-- [ ] 18-05-PLAN.md — Launchers run `uv run --isolated --no-dev` (Makefile, install.sh, e2e harness); an activated venv is dropped from PATH at the entry point (W1)
-- [ ] 18-06-PLAN.md — Remove drawio-cli and the managed-download probe; audit C/D data fixes (W2)
-- [ ] 18-07-PLAN.md — One release read gives tag + digests; digest-verified install; unverified reason on the outcome and screen (W2)
-- [ ] 18-08-PLAN.md — Audit E/F data fixes and the 35-row ledger (W3)
-- [ ] 18-16-PLAN.md — One staged plain-argv fetch (shell pipeline deleted); pinned tarball sha256; updates verify digests (W3)
-- [ ] 18-10-PLAN.md — Release digests stored in the version cache (W3)
-- [ ] 18-09-PLAN.md — Shared smoke run before swap/link (loader errors in stderr on any exit); staged-member containment (W4)
-- [ ] 18-20-PLAN.md — `smoke_argv` registry key, its authoring docs, accurate kitty/wezterm registry comments (W4)
-- [ ] 18-19-PLAN.md — Manager-kind smoke after install, falling through on failure; leftover packages reported with their removal command (W5)
-- [ ] 18-12-PLAN.md — verify-registry check core: assets, members, digests, read-only (W5)
-- [ ] 18-11-PLAN.md — macOS app zips: pinned sha256, staged swap, smoke (W6)
-- [ ] 18-17-PLAN.md — verify-registry verdicts: newer stable, not checkable, outage vs flaky host; `Unverified at install`; gh-login token (W6)
-- [ ] 18-13-PLAN.md — verify-registry `--write`/`--candidate`: dated passes and verified pin bumps (W7)
-- [ ] 18-14-PLAN.md — `--issue` upsert, `make verify-registry`, weekly workflow outside the PR gate (W8)
-- [ ] 18-15-PLAN.md — Template pins, live bump + clean rerun, measured SC3 residual set (W9)
-- [ ] 18-18-PLAN.md — Container e2e proof on the final registry; ruff's owner under the launch form (W10)
-- [ ] 18-21-PLAN.md — Gap: restore architecture.md Phase 15.8 doctrine; rule-doc truncation guard (W11)
-- [ ] 18-22-PLAN.md — Gap: install ownership proof (opt tree + app bundle), app finalize, per-method OSError (W12)
-- [ ] 18-23-PLAN.md — Gap: smoke reasons and failure report; undecodable output (W13)
-- [ ] 18-24-PLAN.md — Gap: `strip`/member semantics shared by loader, checker and install (W14)
-- [ ] 18-25-PLAN.md — Gap: check_registry robustness: shared-URL identity, release-read memo, transports (W15)
-- [ ] 18-26-PLAN.md — Gap: verify-registry main: snapshot-bound write, exit codes, usage before network, writer tests (W16)
-- [ ] 18-27-PLAN.md — Gap: lean pass (M4/M5 and cheap LOWs) + Deferred to Phase 25 (W17)
-- [ ] 18-28-PLAN.md — Gap: open security threats T-18-56 (app bundle symlink escape) and T-18-69 (corrupt xz/gz archive listing) (W18)
+- [x] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
+- [x] 18-02-PLAN.md — Version parser fixes: `-1`, `version=`, quoted output (W1)
+- [x] 18-03-PLAN.md — macOS java/git stubs never count as installed (W1)
+- [x] 18-04-PLAN.md — `cli_name` honored only through `apps.cli_spec` (W1)
+- [x] 18-05-PLAN.md — Launchers run `uv run --isolated --no-dev` (Makefile, install.sh, e2e harness); an activated venv is dropped from PATH at the entry point (W1)
+- [x] 18-06-PLAN.md — Remove drawio-cli and the managed-download probe; audit C/D data fixes (W2)
+- [x] 18-07-PLAN.md — One release read gives tag + digests; digest-verified install; unverified reason on the outcome and screen (W2)
+- [x] 18-08-PLAN.md — Audit E/F data fixes and the 35-row ledger (W3)
+- [x] 18-16-PLAN.md — One staged plain-argv fetch (shell pipeline deleted); pinned tarball sha256; updates verify digests (W3)
+- [x] 18-10-PLAN.md — Release digests stored in the version cache (W3)
+- [x] 18-09-PLAN.md — Shared smoke run before swap/link (loader errors in stderr on any exit); staged-member containment (W4)
+- [x] 18-20-PLAN.md — `smoke_argv` registry key, its authoring docs, accurate kitty/wezterm registry comments (W4)
+- [x] 18-19-PLAN.md — Manager-kind smoke after install, falling through on failure; leftover packages reported with their removal command (W5)
+- [x] 18-12-PLAN.md — verify-registry check core: assets, members, digests, read-only (W5)
+- [x] 18-11-PLAN.md — macOS app zips: pinned sha256, staged swap, smoke (W6)
+- [x] 18-17-PLAN.md — verify-registry verdicts: newer stable, not checkable, outage vs flaky host; `Unverified at install`; gh-login token (W6)
+- [x] 18-13-PLAN.md — verify-registry `--write`/`--candidate`: dated passes and verified pin bumps (W7)
+- [x] 18-14-PLAN.md — `--issue` upsert, `make verify-registry`, weekly workflow outside the PR gate (W8)
+- [x] 18-15-PLAN.md — Template pins, live bump + clean rerun, measured SC3 residual set (W9)
+- [x] 18-18-PLAN.md — Container e2e proof on the final registry; ruff's owner under the launch form (W10)
+- [x] 18-21-PLAN.md — Gap: restore architecture.md Phase 15.8 doctrine; rule-doc truncation guard (W11)
+- [x] 18-22-PLAN.md — Gap: install ownership proof (opt tree + app bundle), app finalize, per-method OSError (W12)
+- [x] 18-23-PLAN.md — Gap: smoke reasons and failure report; undecodable output (W13)
+- [x] 18-24-PLAN.md — Gap: `strip`/member semantics shared by loader, checker and install (W14)
+- [x] 18-25-PLAN.md — Gap: check_registry robustness: shared-URL identity, release-read memo, transports (W15)
+- [x] 18-26-PLAN.md — Gap: verify-registry main: snapshot-bound write, exit codes, usage before network, writer tests (W16)
+- [x] 18-27-PLAN.md — Gap: lean pass (M4/M5 and cheap LOWs) + Deferred to Phase 25 (W17)
+- [x] 18-28-PLAN.md — Gap: open security threats T-18-56 (app bundle symlink escape) and T-18-69 (corrupt xz/gz archive listing) (W18)
 
 ### Phase 19: One tool state with health plus receipts
 
@@ -144,55 +145,55 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 46 plans
+**Plans:** 46/46 plans executed
 
 Plans (W = execution wave):
-- [ ] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
-- [ ] 19-02-PLAN.md — one `artifact_paths` formula shared by install, receipts and uninstall; implicit `~/.local/bin` presence (W1)
-- [ ] 19-03-PLAN.md — `Health`, `Evidence` and `tool_health` proven by one parametrized table (W1)
-- [ ] 19-04-PLAN.md — batched native-package index and shim look-through owner evidence (W1)
-- [ ] 19-05-PLAN.md — Volta, `uv tool dir` and host_setup owners plus their update refusals (W1)
-- [ ] 19-06-PLAN.md — dry-run terminal drift and pnpm co-install group evidence (W1)
-- [ ] 19-07-PLAN.md — Claude plugin duplicates/disabled copies, per-harness partials, `ConfigStep` and the tool id rule (W1)
-- [ ] 19-08-PLAN.md — one `ToolState` snapshot published in one swap, read through `state_of`; single-flight pass; live `has_brew`; sandboxed skill home (W2)
-- [ ] 19-09-PLAN.md — one receipt writer called from install and update (W2)
-- [ ] 19-10-PLAN.md — receipt-proven removal with re-hash before deletion, one shared remover (W2)
-- [ ] 19-11-PLAN.md — project-scope skill packs: registry scope/pin and global leftovers in all nine harness homes, hook configs included (W2)
-- [ ] 19-12-PLAN.md — owner evidence wired into the refresh pass; owner/version reasons in state (W3)
-- [ ] 19-13-PLAN.md — one Health cell per row from state; `u` and tier switching run one full pass (W3)
-- [ ] 19-21-PLAN.md — project-pack repo walk, per-repo install steps and pinned opengsd handoff text (W3)
-- [ ] 19-14-PLAN.md — receipts as state evidence and digest adoption of pre-phase installs (W4)
-- [ ] 19-20-PLAN.md — per-tier installed copies deleted; install close and view switches rely on the pass (W4)
-- [ ] 19-15-PLAN.md — Ver/Owner cells, focused-row health detail, legend text and `u` from state (W5)
-- [ ] 19-16-PLAN.md — terminal, pnpm, skill and project-pack misconfiguration facts and steps (W5)
-- [ ] 19-17-PLAN.md — 80x20 layout: legend and health detail visible on every tier and chrome screen; every mark on every tier (W6)
-- [ ] 19-18-PLAN.md — execute screen, composition root and update service read state; transitional readers deleted (W7)
-- [ ] 19-19-PLAN.md — container e2e receipt assertions and Phase 19 architecture record (W8)
-- [ ] 19-22-PLAN.md — gap: dir receipts carry their identity, per-type reader, fail-closed artifact paths, digest-keyed re-hash memo (W9)
-- [ ] 19-23-PLAN.md — gap: symlinked `.planning` rejected, unreadable install dirs not checked, surplus canonical entries, dead projection deleted (W9)
-- [ ] 19-24-PLAN.md — gap: installer shim on PATH is never presence; app smoke recorded only with a CLI (W9)
-- [ ] 19-25-PLAN.md — gap: suite-wide scratch HOME; quoted container e2e paths; receipt check fails the pass (W9)
-- [ ] 19-26-PLAN.md — gap: removal carries each artifact's type to its delete and re-checks it (W10)
-- [ ] 19-27-PLAN.md — gap: one skill-presence rule, sequence-safe skill worker, terminal warnings as notes, explicit health precedence (W10)
-- [ ] 19-28-PLAN.md — gap: one non-blocking capped reader for plugin, hook and receipt files (W10)
-- [ ] 19-29-PLAN.md — gap: guarded receipt existence check; the pass retires all-gone receipts (W11)
-- [ ] 19-30-PLAN.md — gap: one health read per tool and one state snapshot per catalog rebuild (W11)
-- [ ] 19-31-PLAN.md — gap: drift refusal at the update gate, installer receipts kept by manager updates, reviewed pnpm hint (W12)
-- [ ] 19-32-PLAN.md — gap round 2: a dir receipt is proven by one key file; dir drift is unproven, never broken or update-refused (W13)
-- [ ] 19-33-PLAN.md — gap round 2: quarantine-then-verify dir removal; the final file check re-hashes (W14)
-- [ ] 19-34-PLAN.md — gap round 2: real pnpm behind the redirect shim is presence; inherited location overrides cleared in tests (W13)
-- [ ] 19-35-PLAN.md — gap round 2: FIFO-safe shim, terminal and skill-lock reads; one unreadable runtime never hides another's empty install (W13)
-- [ ] 19-36-PLAN.md — gap round 2: execute screen refuses a broken tool up front; dead `_health_of` deleted; spaced e2e workspace (W13)
-- [ ] 19-37-PLAN.md — gap round 2: skill cache failures publish and warn; per-pack scans; ambiguous Claude duplicates are never partial (W14)
-- [ ] 19-38-PLAN.md — gap round 3: a dir key file proves only the directory it resolves inside, in the pass and in the quarantine re-check (W15)
-- [ ] 19-39-PLAN.md — gap round 3: the test sandbox strips host toolchain dirs from PATH, refuses host node-family and brew processes, stubs brew in the e2e harness (W15)
-- [ ] 19-40-PLAN.md — gap round 3: a skill-save failure warning stays until the next version save persists the answers (W15)
-- [ ] 19-41-PLAN.md — gap round 3: the shim look-through matches the managed dir by resolved path (W15)
-- [ ] 19-42-PLAN.md — gap round 3: a deeply nested skill lock is unknown, never a dead worker (W15)
-- [ ] 19-43-PLAN.md — gap round 3: a key file is hashed once per session; one `broken_drift` rule for health and the update gate (W16)
-- [ ] 19-44-PLAN.md — gap round 3: an interrupted dir removal puts the tree back; a leftover quarantine is listed, never deleted; one dir hash fewer (W16)
-- [ ] 19-45-PLAN.md — gap round 3: reader and record cleanups, reason-less broken `u` parity, cap-derived terminal message (W17)
-- [ ] 19-46-PLAN.md — gap round 4: the e2e tester shell gets the selected brew, a looping PATH entry never aborts the look-through or the sandbox, a receiptless dir is re-hashed at deletion time (W18)
+- [x] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
+- [x] 19-02-PLAN.md — one `artifact_paths` formula shared by install, receipts and uninstall; implicit `~/.local/bin` presence (W1)
+- [x] 19-03-PLAN.md — `Health`, `Evidence` and `tool_health` proven by one parametrized table (W1)
+- [x] 19-04-PLAN.md — batched native-package index and shim look-through owner evidence (W1)
+- [x] 19-05-PLAN.md — Volta, `uv tool dir` and host_setup owners plus their update refusals (W1)
+- [x] 19-06-PLAN.md — dry-run terminal drift and pnpm co-install group evidence (W1)
+- [x] 19-07-PLAN.md — Claude plugin duplicates/disabled copies, per-harness partials, `ConfigStep` and the tool id rule (W1)
+- [x] 19-08-PLAN.md — one `ToolState` snapshot published in one swap, read through `state_of`; single-flight pass; live `has_brew`; sandboxed skill home (W2)
+- [x] 19-09-PLAN.md — one receipt writer called from install and update (W2)
+- [x] 19-10-PLAN.md — receipt-proven removal with re-hash before deletion, one shared remover (W2)
+- [x] 19-11-PLAN.md — project-scope skill packs: registry scope/pin and global leftovers in all nine harness homes, hook configs included (W2)
+- [x] 19-12-PLAN.md — owner evidence wired into the refresh pass; owner/version reasons in state (W3)
+- [x] 19-13-PLAN.md — one Health cell per row from state; `u` and tier switching run one full pass (W3)
+- [x] 19-21-PLAN.md — project-pack repo walk, per-repo install steps and pinned opengsd handoff text (W3)
+- [x] 19-14-PLAN.md — receipts as state evidence and digest adoption of pre-phase installs (W4)
+- [x] 19-20-PLAN.md — per-tier installed copies deleted; install close and view switches rely on the pass (W4)
+- [x] 19-15-PLAN.md — Ver/Owner cells, focused-row health detail, legend text and `u` from state (W5)
+- [x] 19-16-PLAN.md — terminal, pnpm, skill and project-pack misconfiguration facts and steps (W5)
+- [x] 19-17-PLAN.md — 80x20 layout: legend and health detail visible on every tier and chrome screen; every mark on every tier (W6)
+- [x] 19-18-PLAN.md — execute screen, composition root and update service read state; transitional readers deleted (W7)
+- [x] 19-19-PLAN.md — container e2e receipt assertions and Phase 19 architecture record (W8)
+- [x] 19-22-PLAN.md — gap: dir receipts carry their identity, per-type reader, fail-closed artifact paths, digest-keyed re-hash memo (W9)
+- [x] 19-23-PLAN.md — gap: symlinked `.planning` rejected, unreadable install dirs not checked, surplus canonical entries, dead projection deleted (W9)
+- [x] 19-24-PLAN.md — gap: installer shim on PATH is never presence; app smoke recorded only with a CLI (W9)
+- [x] 19-25-PLAN.md — gap: suite-wide scratch HOME; quoted container e2e paths; receipt check fails the pass (W9)
+- [x] 19-26-PLAN.md — gap: removal carries each artifact's type to its delete and re-checks it (W10)
+- [x] 19-27-PLAN.md — gap: one skill-presence rule, sequence-safe skill worker, terminal warnings as notes, explicit health precedence (W10)
+- [x] 19-28-PLAN.md — gap: one non-blocking capped reader for plugin, hook and receipt files (W10)
+- [x] 19-29-PLAN.md — gap: guarded receipt existence check; the pass retires all-gone receipts (W11)
+- [x] 19-30-PLAN.md — gap: one health read per tool and one state snapshot per catalog rebuild (W11)
+- [x] 19-31-PLAN.md — gap: drift refusal at the update gate, installer receipts kept by manager updates, reviewed pnpm hint (W12)
+- [x] 19-32-PLAN.md — gap round 2: a dir receipt is proven by one key file; dir drift is unproven, never broken or update-refused (W13)
+- [x] 19-33-PLAN.md — gap round 2: quarantine-then-verify dir removal; the final file check re-hashes (W14)
+- [x] 19-34-PLAN.md — gap round 2: real pnpm behind the redirect shim is presence; inherited location overrides cleared in tests (W13)
+- [x] 19-35-PLAN.md — gap round 2: FIFO-safe shim, terminal and skill-lock reads; one unreadable runtime never hides another's empty install (W13)
+- [x] 19-36-PLAN.md — gap round 2: execute screen refuses a broken tool up front; dead `_health_of` deleted; spaced e2e workspace (W13)
+- [x] 19-37-PLAN.md — gap round 2: skill cache failures publish and warn; per-pack scans; ambiguous Claude duplicates are never partial (W14)
+- [x] 19-38-PLAN.md — gap round 3: a dir key file proves only the directory it resolves inside, in the pass and in the quarantine re-check (W15)
+- [x] 19-39-PLAN.md — gap round 3: the test sandbox strips host toolchain dirs from PATH, refuses host node-family and brew processes, stubs brew in the e2e harness (W15)
+- [x] 19-40-PLAN.md — gap round 3: a skill-save failure warning stays until the next version save persists the answers (W15)
+- [x] 19-41-PLAN.md — gap round 3: the shim look-through matches the managed dir by resolved path (W15)
+- [x] 19-42-PLAN.md — gap round 3: a deeply nested skill lock is unknown, never a dead worker (W15)
+- [x] 19-43-PLAN.md — gap round 3: a key file is hashed once per session; one `broken_drift` rule for health and the update gate (W16)
+- [x] 19-44-PLAN.md — gap round 3: an interrupted dir removal puts the tree back; a leftover quarantine is listed, never deleted; one dir hash fewer (W16)
+- [x] 19-45-PLAN.md — gap round 3: reader and record cleanups, reason-less broken `u` parity, cap-derived terminal message (W17)
+- [x] 19-46-PLAN.md — gap round 4: the e2e tester shell gets the selected brew, a looping PATH entry never aborts the look-through or the sandbox, a receiptless dir is re-hashed at deletion time (W18)
 
 **UI hint**: yes
 
@@ -209,44 +210,44 @@ Plans (W = execution wave):
   4. Headless `--all --yes` uses the same plan and engine: on a host with an outdated tool it updates it and exits 0, and a failed row exits 1.
   5. No screen promises an off-policy migration ("moving it there") that does not exist.
 
-**Plans:** 31 plans (19 + 12 gap closure)
+**Plans:** 31/31 plans executed (19 + 12 gap closure)
 
 Plans (W = execution wave):
-- [ ] 20-01-PLAN.md — `Resolution.closure`/`blocked`/`requested_by`: the resolver exposes present tools, blocked reasons and first requesters as data (W1)
-- [ ] 20-02-PLAN.md — one `update_refusal` predicate shared by engine and plan; no "moving it there" promise under `installer/` (W1)
-- [ ] 20-03-PLAN.md — `setup._build_services` composes the refresh and update services for the TUI and headless routes (W1)
-- [ ] 20-04-PLAN.md — `Disposition`, `PlanRow`, `WORDS`/`RESULT_WORDS`, pure `build_plan`: missing, current, dragged, blocked, pending rows; reinstall only from the `r` set (W2)
-- [ ] 20-05-PLAN.md — health x owner x direct/dragged matrix: repair, blocked-needs-sudo, reconfigure or blocked, update or managed-by; G cases A–I on three tiers (W3)
-- [ ] 20-06-PLAN.md — `render_plan`: grouped under the requester, mark column, folded reasons, steps, sanitized; `HEALTH_MARKS` moved out of the catalog screen (W3)
-- [ ] 20-07-PLAN.md — `RowOutcome`, `RunContext`, `execute_plan` for install/repair/reinstall/update/skip/blocked; `exit_code`, `retained`, `ran_anything`, `summary_counts` (W4)
-- [ ] 20-08-PLAN.md — RECONFIGURE runs typed `ConfigStep`s by kind: cwd shim, pnpm group via the node executor, terminal sync, skill handoff -> manual (W5)
-- [ ] 20-09-PLAN.md — `render_run_summary`: the `Summary — …` head and outcome rows from the one vocabulary (W5)
-- [ ] 20-17-PLAN.md — `ExecuteInputs` contract: `version_refresh` required, `installed` deleted, `terminal_sync` wired; test input helpers with a published-state default (W5)
-- [ ] 20-10-PLAN.md — the TUI on the plan: `OptionList` review, worker on `execute_plan`, retained selection, `ran_anything` sync gate, exit code from outcomes; tests ported (W6)
-- [ ] 20-11-PLAN.md — headless `--all`/`--categories` on the same plan and engine; `Run this plan?`; exit code from outcomes (W7)
-- [ ] 20-19-PLAN.md — the container e2e parser reads `Summary —` and the outcome rows (W7)
-- [ ] 20-12-PLAN.md — wait for state: Enter joins the one refresh flight, `esc` cancels with the selection kept, a stale publication never starts a run (W7)
-- [ ] 20-13-PLAN.md — `r` toggles reinstall on eligible rows only; `UNPROVEN_NOTE` points at it; 80x20 layout pins and Resize re-fold (W8)
-- [ ] 20-14-PLAN.md — delete `Summary`/`run_installs`/`summarize`/`fold_run`, the audit/summary/notice renderers and `reapply_post_install` (W8)
-- [ ] 20-15-PLAN.md — delete `audit.py` and the two-step prompter helpers; the headless prompter asks one question (W9)
-- [ ] 20-18-PLAN.md — end-to-end pins through the real app: `a` on an all-current tier, order parity, mixed-run retained selection, D-05 (W9)
-- [ ] 20-16-PLAN.md — architecture doctrine: Phase 20 section pinned; Tier/Phase 3/13/14 paragraphs describe `build_plan`/`execute_plan` (W10)
+- [x] 20-01-PLAN.md — `Resolution.closure`/`blocked`/`requested_by`: the resolver exposes present tools, blocked reasons and first requesters as data (W1)
+- [x] 20-02-PLAN.md — one `update_refusal` predicate shared by engine and plan; no "moving it there" promise under `installer/` (W1)
+- [x] 20-03-PLAN.md — `setup._build_services` composes the refresh and update services for the TUI and headless routes (W1)
+- [x] 20-04-PLAN.md — `Disposition`, `PlanRow`, `WORDS`/`RESULT_WORDS`, pure `build_plan`: missing, current, dragged, blocked, pending rows; reinstall only from the `r` set (W2)
+- [x] 20-05-PLAN.md — health x owner x direct/dragged matrix: repair, blocked-needs-sudo, reconfigure or blocked, update or managed-by; G cases A–I on three tiers (W3)
+- [x] 20-06-PLAN.md — `render_plan`: grouped under the requester, mark column, folded reasons, steps, sanitized; `HEALTH_MARKS` moved out of the catalog screen (W3)
+- [x] 20-07-PLAN.md — `RowOutcome`, `RunContext`, `execute_plan` for install/repair/reinstall/update/skip/blocked; `exit_code`, `retained`, `ran_anything`, `summary_counts` (W4)
+- [x] 20-08-PLAN.md — RECONFIGURE runs typed `ConfigStep`s by kind: cwd shim, pnpm group via the node executor, terminal sync, skill handoff -> manual (W5)
+- [x] 20-09-PLAN.md — `render_run_summary`: the `Summary — …` head and outcome rows from the one vocabulary (W5)
+- [x] 20-17-PLAN.md — `ExecuteInputs` contract: `version_refresh` required, `installed` deleted, `terminal_sync` wired; test input helpers with a published-state default (W5)
+- [x] 20-10-PLAN.md — the TUI on the plan: `OptionList` review, worker on `execute_plan`, retained selection, `ran_anything` sync gate, exit code from outcomes; tests ported (W6)
+- [x] 20-11-PLAN.md — headless `--all`/`--categories` on the same plan and engine; `Run this plan?`; exit code from outcomes (W7)
+- [x] 20-19-PLAN.md — the container e2e parser reads `Summary —` and the outcome rows (W7)
+- [x] 20-12-PLAN.md — wait for state: Enter joins the one refresh flight, `esc` cancels with the selection kept, a stale publication never starts a run (W7)
+- [x] 20-13-PLAN.md — `r` toggles reinstall on eligible rows only; `UNPROVEN_NOTE` points at it; 80x20 layout pins and Resize re-fold (W8)
+- [x] 20-14-PLAN.md — delete `Summary`/`run_installs`/`summarize`/`fold_run`, the audit/summary/notice renderers and `reapply_post_install` (W8)
+- [x] 20-15-PLAN.md — delete `audit.py` and the two-step prompter helpers; the headless prompter asks one question (W9)
+- [x] 20-18-PLAN.md — end-to-end pins through the real app: `a` on an all-current tier, order parity, mixed-run retained selection, D-05 (W9)
+- [x] 20-16-PLAN.md — architecture doctrine: Phase 20 section pinned; Tier/Phase 3/13/14 paragraphs describe `build_plan`/`execute_plan` (W10)
 
 Gap closure from 20-REVIEW-CONSOLIDATED.md (GW = gap execution wave):
-- [ ] 20-20-PLAN.md — J1, J5: skill packs settle before planning on both routes; the review wait always settles (GW1)
-- [ ] 20-21-PLAN.md — J2: one e2e install-step gate fails a run that did nothing; builtin-only summary parser (GW1)
-- [ ] 20-22-PLAN.md — J4: dependency blocking reads the dependency's own disposition; pruned drag-ins; pending deps wait (GW1)
-- [ ] 20-23-PLAN.md — J8 / L-20-10: the pre-confirmation refresh writes nothing headless; TUI consent boundary documented; drift note (GW2)
-- [ ] 20-24-PLAN.md — J7, J9: one presence predicate and run-level errors on the outcome exit rule; handoff-only rows ran nothing (GW2)
-- [ ] 20-25-PLAN.md — J3, J6: one end-of-run report with update notes; failed rows keep their reason (GW4)
-- [ ] 20-26-PLAN.md — J11 (L-20-11): `r` on an installed oh-my-zsh shows the reviewed chsh handoff; fresh install pinned on both routes (GW3)
-- [ ] 20-27-PLAN.md — J10: dim unchanged finished marks, one statement per fact, cursor on row 1, running keys pinned (GW5)
-- [ ] 20-28-PLAN.md — J12: dead install wrapper, resolver outputs, `run_wizard(platform)`, unused styles (GW6)
-- [ ] 20-29-PLAN.md — J12: one runnable set, `_row` maker, dead selection helpers, fold-width floor (GW7)
+- [x] 20-20-PLAN.md — J1, J5: skill packs settle before planning on both routes; the review wait always settles (GW1)
+- [x] 20-21-PLAN.md — J2: one e2e install-step gate fails a run that did nothing; builtin-only summary parser (GW1)
+- [x] 20-22-PLAN.md — J4: dependency blocking reads the dependency's own disposition; pruned drag-ins; pending deps wait (GW1)
+- [x] 20-23-PLAN.md — J8 / L-20-10: the pre-confirmation refresh writes nothing headless; TUI consent boundary documented; drift note (GW2)
+- [x] 20-24-PLAN.md — J7, J9: one presence predicate and run-level errors on the outcome exit rule; handoff-only rows ran nothing (GW2)
+- [x] 20-25-PLAN.md — J3, J6: one end-of-run report with update notes; failed rows keep their reason (GW4)
+- [x] 20-26-PLAN.md — J11 (L-20-11): `r` on an installed oh-my-zsh shows the reviewed chsh handoff; fresh install pinned on both routes (GW3)
+- [x] 20-27-PLAN.md — J10: dim unchanged finished marks, one statement per fact, cursor on row 1, running keys pinned (GW5)
+- [x] 20-28-PLAN.md — J12: dead install wrapper, resolver outputs, `run_wizard(platform)`, unused styles (GW6)
+- [x] 20-29-PLAN.md — J12: one runnable set, `_row` maker, dead selection helpers, fold-width floor (GW7)
 
 Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
-- [ ] 20-30-PLAN.md — K1, K4: the e2e gate fails a step that printed a PATH error; a held adoption commits through the one adoption check and reports a refusal (GW1)
-- [ ] 20-31-PLAN.md — K2, K3, K5, K6: every runnable row waits for its prerequisites; a present tool stays resolved; reconfiguration warnings reach the report; crash detail via `_first_line` (GW1)
+- [x] 20-30-PLAN.md — K1, K4: the e2e gate fails a step that printed a PATH error; a held adoption commits through the one adoption check and reports a refusal (GW1)
+- [x] 20-31-PLAN.md — K2, K3, K5, K6: every runnable row waits for its prerequisites; a present tool stays resolved; reconfiguration warnings reach the report; crash detail via `_first_line` (GW1)
 
 **UI hint**: yes
 
@@ -467,10 +468,10 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 17. Stop the bleeding | 20/20 | In Progress | - |
-| 18. Registry truth and drift guard | 0/TBD | Not started | - |
-| 19. One tool state with health plus receipts | 0/TBD | Not started | - |
-| 20. Install plan with dispositions | 0/TBD | Not started | - |
+| 17. Stop the bleeding | 21/21 | In Progress | - |
+| 18. Registry truth and drift guard | 28/28 | In Progress | - |
+| 19. One tool state with health plus receipts | 46/46 | In Progress | - |
+| 20. Install plan with dispositions | 31/31 | In Progress | - |
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |

@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 22
-current_phase_name: Method lifecycle contract
-status: executing
-stopped_at: Phase 21 UI-SPEC approved
-last_updated: "2026-11-03T22:28:57.989Z"
-last_activity: 2026-11-03
-last_activity_desc: Phase 21 execution started
-state_head: 898ba09a74557cc1370362f64669037836c15d1d
+current_phase: 23
+current_phase_name: Configuration as a lifecycle step
+status: Verifying — human_needed (UAT fixes in progress)
+stopped_at: "Phase 23 close-out: UAT fixes, final e2e, re-verify phase 20"
+last_updated: "2026-11-07T10:12:15.460Z"
+last_activity: 2026-11-07
+last_activity_desc: Phase 23 verified (human_needed), SECURED, container UAT 5/6, fixes running
+state_head: 18ab7f2f999dc0f6a7ed4e753df4b0cccc4f1a22
 progress:
   total_phases: 11
   completed_phases: 1
-  total_plans: 160
-  completed_plans: 126
-  percent: 0
+  total_plans: 176
+  completed_plans: 176
+  percent: 9
 ---
 
 # Project State
@@ -25,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 21 — One screen family
+**Current focus:** Phase 23 — Configuration as a lifecycle step
 
 ## Current Position
 
-Phase: 22 (Method lifecycle contract) — READY TO EXECUTE
-Plan: 1 of 21
-Status: Ready to execute
-Last activity: 2026-11-03 — Phase 21 execution started
+Phase: 23 (Configuration as a lifecycle step) — EXECUTING
+Plan: 16 of 16
+Status: Verifying — human_needed (UAT fixes in progress)
+Last activity: 2026-11-07 — Phase 23 verified (human_needed), SECURED, container UAT 5/6, fixes running
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 9%
 
 ## Performance Metrics
 
