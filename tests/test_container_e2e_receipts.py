@@ -1025,3 +1025,105 @@ def test_every_array_expansion_survives_bash_3_2_under_set_u() -> None:
     bare = re.findall(r'"\$\{(\w+)\[@\]\}"', text)
     guarded = re.findall(r'\$\{(\w+)\[@\]\+"\$\{\1\[@\]\}"\}', text)
     assert sorted(bare) == sorted(guarded)
+
+
+def test_hook_probe_after_reports_a_file_still_naming_codegraph(tmp_path: Path) -> None:
+    """A recorded file that still names codegraph after the uninstall fails the probe."""
+    scratch = tmp_path / "home"
+    phase = scratch / "phase"
+    phase.mkdir(parents=True)
+    _write_listing(phase / "hook-hosts.txt", ["claude", "codex"])
+    _write_listing(
+        phase / "hook-files.txt", [".claude.json", ".codex/config.toml", ".claude/CLAUDE.md"]
+    )
+    (scratch / ".claude.json").write_text('{"mcpServers": {"codegraph": {}}}', encoding="utf-8")
+    (scratch / ".codex").mkdir()
+    (scratch / ".codex" / "config.toml").write_text("model = 'gpt'\n", encoding="utf-8")
+    script = _phase_harness("hook_probe_after") + "\nhook_probe_after\n"
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == ["TRACER_HOOK_LEFT path=.claude.json"]
+    (scratch / ".claude.json").write_text("{}\n", encoding="utf-8")
+    clean = _run(script, scratch)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_HOOKS_UNREGISTERED_OK count=3"]
+    _write_listing(phase / "hook-hosts.txt", [])
+    skipped = _run(script, scratch)
+    assert skipped.stdout.splitlines() == ["TRACER_HOOKS_UNREGISTER_SKIPPED"]
+
+
+def test_hook_probe_before_requires_config_for_recorded_hosts(tmp_path: Path) -> None:
+    """Recorded hosts need a config file on disk; no receipt or no host skips the probe."""
+    scratch = tmp_path / "home"
+    phase = scratch / "phase"
+    phase.mkdir(parents=True)
+
+    def probe(*reader_lines: str) -> subprocess.CompletedProcess[str]:
+        stub = _assign("STUB_OUTPUT", "\n".join(reader_lines))
+        override = 'exec_tester() { printf "%s\\n" "$STUB_OUTPUT"; }'
+        return _run(
+            "\n".join([_phase_harness("hook_probe_before"), stub, override, "hook_probe_before"]),
+            scratch,
+        )
+
+    none = probe("N")
+    assert none.returncode == 0, none.stderr
+    assert none.stdout.splitlines() == ["TRACER_HOOKS_SKIPPED reason=no-receipt"]
+    orphan = probe("H claude")
+    assert orphan.returncode != 0
+    assert orphan.stdout.splitlines() == ["TRACER_HOOK_FILES_MISSING hosts=claude"]
+    found = probe("H claude", "F .claude.json")
+    assert found.returncode == 0, found.stderr
+    assert found.stdout.splitlines() == ["TRACER_HOOKS_RECORDED hosts=claude files=1"]
+    assert (phase / "hook-hosts.txt").read_text(encoding="utf-8") == "claude\n"
+    assert (phase / "hook-files.txt").read_text(encoding="utf-8") == ".claude.json\n"
+    no_host = probe("F .claude.json")
+    assert no_host.returncode == 0
+    assert no_host.stdout.splitlines() == ["TRACER_HOOKS_SKIPPED reason=no-hosts"]
+
+
+def test_the_hook_probes_are_wired_around_the_uninstall_step() -> None:
+    pass2 = _function("cmd_pass2")
+    uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("receipt_paths") < pass2.index("hook_probe_before") < uninstall
+    assert pass2.index("assert_no_leftovers") < pass2.index("hook_probe_after") < reinstall
+
+
+def test_hook_probe_before_reads_the_real_codegraph_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader and the grep run for real: a recorded host and its config file are found."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    receipts.write(
+        Receipt(
+            tool="codegraph",
+            at="2026-10-16T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"codegraph-mcp-register": ("claude",)},
+        )
+    )
+    (scratch / ".claude.json").write_text('{"mcpServers": {"codegraph": {}}}', encoding="utf-8")
+    (scratch / "phase").mkdir()
+    script = "\n".join(
+        [
+            f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+            _phase_harness("hook_probe_before"),
+            _assign("TESTER_WORKSPACE", str(tmp_path)),
+            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+            _uv_stub(),
+            "hook_probe_before",
+        ]
+    )
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["TRACER_HOOKS_RECORDED hosts=claude files=1"]

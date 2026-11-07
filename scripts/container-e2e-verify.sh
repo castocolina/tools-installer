@@ -50,9 +50,9 @@ Usage: container-e2e-verify.sh <command> [options]
                           already-installed state, a full --uninstall --yes
                           sweep, then a third --all --yes reinstall. Prints
                           TRACER_RERUN_OK / TRACER_UNINSTALL_OK /
-                          TRACER_REINSTALL_OK per step into
-                          pass2-transcript.log (appended, in order). Tears the
-                          container down (rm -f) once all three succeed.
+                          TRACER_REINSTALL_OK, TRACER_HOOKS_*, TRACER_SETTINGS_*
+                          per step into pass2-transcript.log (appended, in order).
+                          Tears the container down (rm -f) once all three succeed.
   all                     bootstrap --replace, pass1, pass2, then remove the
                           container whatever the outcome (what `make e2e` runs).
   -h, --help              Show this help
@@ -710,6 +710,72 @@ assert_removed_receipts_gone() {
   return 1
 }
 
+# Before --uninstall --yes: the hosts codegraph's receipt records under its MCP hook (read by the
+# installer's own reader) and the HOME-relative config files that mention codegraph. Writes
+# hook-hosts.txt and hook-files.txt; a recorded host with no config file at all fails.
+hook_probe_before() {
+  local out line no_receipt=0 hosts files workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ~ && for p in .claude.json .claude .codex .config/opencode .cursor; do [ -e \"\$p\" ] && grep -rlI codegraph -- \"\$p\" || true; done | sed 's/^/F /'
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+from installer import receipts
+receipt = receipts.read(\"codegraph\")
+if receipt is None:
+    print(\"N\")
+for host in (receipt.hooks.get(\"codegraph-mcp-register\", ()) if receipt else ()):
+    print(\"H \" + host)
+'
+")" || { printf 'TRACER_HOOKS_PROBE_FAILED\n'; return 1; }
+  : >"$PHASE_DIR/hook-hosts.txt"
+  : >"$PHASE_DIR/hook-files.txt"
+  while IFS= read -r line; do
+    case "$line" in
+      "H "*) printf '%s\n' "${line#H }" >>"$PHASE_DIR/hook-hosts.txt" ;;
+      "F "*) printf '%s\n' "${line#F }" >>"$PHASE_DIR/hook-files.txt" ;;
+      N) no_receipt=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$no_receipt" -eq 1 ]]; then
+    printf 'TRACER_HOOKS_SKIPPED reason=no-receipt\n'
+    return 0
+  fi
+  hosts="$(paste -sd, - <"$PHASE_DIR/hook-hosts.txt")"
+  if [[ -z "$hosts" ]]; then
+    printf 'TRACER_HOOKS_SKIPPED reason=no-hosts\n'
+    return 0
+  fi
+  files="$(wc -l <"$PHASE_DIR/hook-files.txt" | tr -d ' ')"
+  if [[ "$files" -eq 0 ]]; then
+    printf 'TRACER_HOOK_FILES_MISSING hosts=%s\n' "$hosts"
+    return 1
+  fi
+  printf 'TRACER_HOOKS_RECORDED hosts=%s files=%s\n' "$hosts" "$files"
+}
+
+# After --uninstall --yes: no file hook_probe_before recorded may still name codegraph. A
+# missing file is clean. Prints TRACER_HOOK_LEFT path=... per survivor, else _UNREGISTERED_OK.
+hook_probe_after() {
+  local out line left=0 paths count
+  if [[ ! -s "$PHASE_DIR/hook-hosts.txt" ]]; then
+    printf 'TRACER_HOOKS_UNREGISTER_SKIPPED\n'
+    return 0
+  fi
+  paths="$(while IFS= read -r p; do printf '%q ' "$p"; done <"$PHASE_DIR/hook-files.txt")"
+  out="$(exec_tester "cd ~ && for p in ${paths}; do if [ -e \"\$p\" ] && grep -q codegraph -- \"\$p\"; then printf 'LEFT %s\\n' \"\$p\"; fi; done")" \
+    || { printf 'TRACER_HOOKS_UNREGISTER_PROBE_FAILED\n'; return 1; }
+  count="$(wc -l <"$PHASE_DIR/hook-files.txt" | tr -d ' ')"
+  while IFS= read -r line; do
+    case "$line" in
+      "LEFT "*) printf 'TRACER_HOOK_LEFT path=%s\n' "${line#LEFT }"; left=1 ;;
+    esac
+  done <<<"$out"
+  [[ "$left" -eq 0 ]] || return 1
+  printf 'TRACER_HOOKS_UNREGISTERED_OK count=%s\n' "$count"
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -763,6 +829,9 @@ cmd_pass2() {
   if ! receipt_paths >> "$log"; then
     return 1
   fi
+  if ! hook_probe_before >> "$log"; then
+    return 1
+  fi
 
   # Step 2: the full uninstall sweep. --uninstall prints no Summary — line,
   # so only the exit code (and the transcript itself) is evidence here.
@@ -779,6 +848,9 @@ cmd_pass2() {
     return 1
   fi
   if ! assert_no_leftovers >> "$log"; then
+    return 1
+  fi
+  if ! hook_probe_after >> "$log"; then
     return 1
   fi
 
