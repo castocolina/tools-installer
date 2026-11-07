@@ -787,6 +787,8 @@ def remove_tool(
                 runner(list(undo))
             except CommandError as exc:
                 return ToolRemoval(tool.id, False, f"unregister: {_command_error_line(exc)}")
+        if fresh.unregister and tool.postinstall:
+            receipts.forget_hooks(tool.id, tool.postinstall)
         manager = next(
             (kind for kind, prefix in MANAGER_UNINSTALL_ARGV.items() if argv[:-1] == prefix), None
         )

@@ -162,6 +162,15 @@ def record_hooks(tool_id: str, name: str, hosts: tuple[str, ...]) -> bool:
     return True
 
 
+def forget_hooks(tool_id: str, name: str) -> None:
+    """Record that `name` is registered for no host any more (after a successful unregister),
+    so a removal that fails later leaves an honest `≈` (CR-10). No receipt: nothing to do."""
+    with _WRITE_LOCK:
+        receipt = read(tool_id)
+        if receipt is not None and name in receipt.hooks:
+            _write_unlocked(replace(receipt, hooks={**receipt.hooks, name: ()}))
+
+
 def read(tool_id: str) -> Receipt | None:
     """Read back the receipt written for `tool_id`; None when it cannot be trusted.
 

@@ -5923,6 +5923,39 @@ def test_a_failed_unregister_stops_the_removal(
     assert receipts.receipt_exists("codegraph")
 
 
+def test_a_refusal_after_a_successful_unregister_forgets_the_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-10: the hosts are unregistered, so a kept tool must not still record them."""
+    from installer import app as app_module
+    from installer import receipts
+    from installer.app import remove_tool
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("claude", "codex"))
+    plan = removal_plan(tool, bin_dir, verify=True)
+
+    def refuse(*_args: object) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+        return (), ("changed since the preview; not removed: x",)
+
+    monkeypatch.setattr(app_module, "remove_proven", refuse)
+    outcome = remove_tool(
+        tool,
+        paths=plan.removable,
+        argv=plan.argv,
+        bin_dir=bin_dir,
+        runner=lambda _cmd: None,
+        unregister=plan.unregister,
+    )
+    assert outcome.removed is False
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks == {"codegraph-mcp-register": ()}
+
+
 def test_an_unregister_that_changed_since_the_preview_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
