@@ -1642,3 +1642,25 @@ async def test_an_unparsable_file_without_a_ledger_refuses_on_apply(
             "codex auto-approve not changed: ~/.codex/config.toml is not valid TOML (line "
         )
         assert _policies(app).status.text.endswith("; fix it, then press space.")
+
+
+async def test_settings_values_render_literally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"permissions": {"defaultMode": "[red]x[/]\x1b[31m"}}))
+    app = _settings_app(tmp_path, _claude_row(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        # json.dumps escapes the escape byte, and Policies draws every value as Text.
+        shown = '"[red]x[/]\\u001b[31m"'
+        assert f"permissions.defaultMode is set by you ({shown}); left as is." in (
+            _policies(app).status.text
+        )
+        assert f"Set by you: permissions.defaultMode = {shown} (left as is)." in (
+            _policies(app).detail_text
+        )

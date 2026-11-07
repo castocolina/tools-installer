@@ -38,10 +38,12 @@ from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.shellrc import ShellrcRefusal, ensure_source
 from installer.terminal_shell import terminal_sync_warning
 from installer.tweaks import (
+    SHELL_INIT_TOOLS,
     TweakBundle,
     install_tweak_executables,
     remove_tweak,
     remove_tweak_executables,
+    shell_init_bundle,
     tweak_present,
     write_tweak,
 )
@@ -516,6 +518,9 @@ def tweak_policy(
         missing_requires=_missing(),
         missing_requires_now=_missing,
         link_mode_aware=True,
+        detail_lines=(
+            (lambda: shell_init_detail(bundle.id)) if bundle.id in SHELL_INIT_TOOLS else None
+        ),
     )
 
 
@@ -812,6 +817,74 @@ def settings_policies(
             "editor settings",
             "Writes extensions.autoUpdate = false and extensions.autoCheckUpdates = false.",
             "Extension security fixes then arrive only when you update extensions yourself.",
+        ),
+    )
+
+
+def shell_init_detail(tool_id: str) -> tuple[str, ...]:
+    """A shell-init row's detail (UI-SPEC section 3); the effect is the bundle's own description."""
+    bundle = shell_init_bundle(tool_id)
+    if bundle is None:
+        return ()
+    effect = bundle.description[:1].upper() + bundle.description[1:] + "."
+    lines = [
+        f"Adds {tool_id}'s shell init to ~/.myshellrc, guarded by command -v {tool_id}.",
+        effect,
+        f"Turned off automatically when {tool_id} is removed.",
+    ]
+    if tool_id == "starship":
+        lines.append(
+            'Sets ZSH_THEME="" in ~/.zshrc so Oh-My-Zsh draws no prompt; turning it off leaves '
+            "the theme line as it is."
+        )
+    return tuple(lines)
+
+
+def desktop_shell_policy(*, zsh_path: str | None, conf_dir: Path, home: Path) -> Policy:
+    """The desktop-session SHELL row: one environment.d conf that names the real zsh."""
+    zsh = zsh_path or "zsh"  # never SHELL=None: the Requires cell already reads missing: zsh
+    redirect = env_redirect.shell_redirect(zsh_path) if zsh_path is not None else None
+
+    def _is_active() -> bool:
+        return redirect is not None and env_redirect.linux_applied(redirect, home, conf_dir)
+
+    def _apply() -> PolicyResult:
+        if redirect is None:  # the screen refuses first: the row requires zsh
+            raise OSError("zsh is not installed")
+        env_redirect.write_linux_redirect(redirect, home, conf_dir)
+        return PolicyResult(
+            layers=(PolicyLayer("environment.d", f"wrote {env_redirect.DESKTOP_SHELL_CONF}"),),
+            reload_hint="Log out and back in for desktop apps to see it.",
+            warning=None,
+        )
+
+    def _remove() -> PolicyResult:
+        env_redirect.remove_owned_conf(conf_dir, env_redirect.DESKTOP_SHELL_CONF)
+        return PolicyResult(
+            layers=(PolicyLayer("environment.d", f"removed {env_redirect.DESKTOP_SHELL_CONF}"),),
+            reload_hint=None,
+            warning=None,
+        )
+
+    missing = () if zsh_path is not None else ("zsh",)
+    return Policy(
+        id="desktop-shell",
+        label="SHELL for desktop apps",
+        description=f"SHELL={zsh} in ~/.config/environment.d",
+        active=_is_active(),
+        apply=_apply,
+        remove=_remove,
+        requires=("zsh",),
+        missing_requires=missing,
+        missing_requires_now=lambda: missing,
+        is_active=_is_active,
+        # The sentinel alone: a file pointing at a removed or moved zsh is still ours.
+        owned=lambda: env_redirect.conf_owned(conf_dir, env_redirect.DESKTOP_SHELL_CONF),
+        effect_kind="desktop session",
+        detail_lines=lambda: (
+            f"Writes SHELL={zsh} to ~/.config/environment.d/{env_redirect.DESKTOP_SHELL_CONF} "
+            "for apps started from the desktop menu.",
+            "Takes effect at your next login; terminals already get SHELL from ~/.zshenv.",
         ),
     )
 

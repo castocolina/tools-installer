@@ -2235,40 +2235,6 @@ class PoliciesScreen(AppScreen):
                 "Use wait_time --seconds to preview the parsed delay without sleeping.",
                 "Requires uv at runtime so the Python helper runs through the managed toolchain.",
             ),
-            "tweak:claude-skip": (
-                "Aliases claude to claude --dangerously-skip-permissions.",
-                "Useful only in trusted, disposable workspaces where confirmation prompts are"
-                " intentional noise.",
-                "Disable it when you need normal Claude Code permission prompts back.",
-            ),
-            "tweak:codex-skip": (
-                "Aliases codex to codex --dangerously-bypass-approvals-and-sandbox.",
-                "Useful only in trusted, disposable workspaces where confirmation and sandbox"
-                " prompts are intentional noise.",
-                "Disable it when you need normal Codex confirmation/sandboxing prompts back.",
-            ),
-            "tweak:opencode-auto": (
-                "Aliases opencode to opencode --auto.",
-                "Narrower than claude-skip's/codex-skip's full bypass: explicit deny rules in"
-                " your own opencode config still apply.",
-                "Disable it when you want normal per-permission prompting back.",
-            ),
-            "tweak:cursor-agent-model": (
-                "Injects --model gpt-5.6-sol-high into a bare cursor-agent/cursor call, and"
-                " never overrides an already-passed --model (either --model X or --model=X).",
-                "This tweak only requests, per Cursor's own headless-mode changelog fix, this"
-                " model's full context — this installer does not independently verify the"
-                " context window reached in a given response.",
-                "Requires a Cursor plan that actually includes this model; an unsupported plan"
-                " may error or silently downgrade.",
-                "Enabling this tweak automatically removes (via unalias) a cursor-agent/cursor"
-                " alias that is active before this block loads — not any alias anywhere in your"
-                " config — so the tweak's own function takes effect over whatever was defined"
-                " earlier. A same-named alias or function defined later in your own sourced"
-                " files still wins, since shell source order — not unalias — controls the final"
-                " definition.",
-                "Disable it to keep using whatever model was last selected.",
-            ),
             "tweak:apt-upgrade": (
                 "Adds apt-upgrade for upgrading only packages that already have updates.",
                 "Keeps the command narrower than a broad apt upgrade flow.",
@@ -2333,7 +2299,7 @@ class PoliciesScreen(AppScreen):
             lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
         if policy.detail_lines is None:
             lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
-        if policy.id.startswith("tweak:"):
+        if policy.id.startswith("tweak:") and policy.detail_lines is None:
             lines.append(
                 "This alias/function needs ~/.myshellrc to be sourced; in split PATH mode,"
                 " enabling this Policy also wires that sourcing into your rc files"

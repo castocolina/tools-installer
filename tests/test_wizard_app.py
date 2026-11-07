@@ -2039,14 +2039,6 @@ async def test_policy_detail_panel_explains_tweak_rules() -> None:
             apply=_ok_result,
             remove=_ok_result,
         ),
-        Policy(
-            id="tweak:claude-skip",
-            label="claude skip-permissions",
-            description="alias claude skip permissions",
-            active=False,
-            apply=_ok_result,
-            remove=_ok_result,
-        ),
     ]
     app = _app(policies=_policy_inputs(policies), initial_view="policies")
     async with app.run_test(size=(100, 30)) as pilot:
@@ -2057,26 +2049,6 @@ async def test_policy_detail_panel_explains_tweak_rules() -> None:
         await pilot.press("down")
         assert "1d10m15s" in screen.detail_text
         assert "--seconds" in screen.detail_text
-        await pilot.press("down")
-        assert "dangerously-skip-permissions" in screen.detail_text
-
-
-async def test_policy_detail_panel_explains_codex_skip() -> None:
-    policy = Policy(
-        id="tweak:codex-skip",
-        label="codex skip-permissions",
-        description="alias codex codex --dangerously-bypass-approvals-and-sandbox",
-        active=False,
-        apply=_ok_result,
-        remove=_ok_result,
-    )
-    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
-    async with app.run_test(size=(100, 30)) as pilot:
-        del pilot
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        assert "dangerously-bypass-approvals-and-sandbox" in screen.detail_text
-        assert "trusted" in screen.detail_text.lower()
 
 
 async def test_policy_detail_panel_explains_myshellrc_sourcing_for_every_tweak() -> None:
@@ -2107,49 +2079,6 @@ async def test_policy_detail_panel_explains_myshellrc_sourcing_for_every_tweak()
         await pilot.press("down")
         assert "~/.myshellrc" in screen.detail_text
         assert "split" in screen.detail_text.lower()
-
-
-async def test_policy_detail_panel_explains_opencode_auto_is_narrower_than_a_full_bypass() -> None:
-    policy = Policy(
-        id="tweak:opencode-auto",
-        label="opencode auto-approve",
-        description="alias opencode opencode --auto — not a full bypass, deny rules still apply",
-        active=False,
-        apply=_ok_result,
-        remove=_ok_result,
-    )
-    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
-    async with app.run_test(size=(100, 30)) as pilot:
-        del pilot
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        detail = screen.detail_text
-        assert "Space toggles this reversible shell policy." not in detail
-        assert "deny" in detail.lower()
-
-
-async def test_policy_detail_panel_explains_cursor_agent_model_wrapper() -> None:
-    policy = Policy(
-        id="tweak:cursor-agent-model",
-        label="cursor-agent default model",
-        description="injects --model gpt-5.6-sol-high when --model is absent",
-        active=False,
-        apply=_ok_result,
-        remove=_ok_result,
-    )
-    app = _app(policies=_policy_inputs([policy]), initial_view="policies")
-    async with app.run_test(size=(100, 30)) as pilot:
-        del pilot
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        detail = screen.detail_text
-        assert "gpt-5.6-sol-high" in detail
-        assert "requests" in detail
-        assert "guarantees" not in detail
-        assert "verifies" not in detail
-        assert "plan" in detail.lower()
-        assert "alias" in detail.lower()
-        assert "before" in detail.lower()
 
 
 async def test_policy_missing_required_tool_blocks_enable() -> None:

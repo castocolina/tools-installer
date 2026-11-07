@@ -7,8 +7,17 @@ import pytest
 
 from installer import agent_settings
 from installer.agent_settings import CHANGED_WHILE_WRITING, FileResult
+from installer.env_redirect import DESKTOP_SHELL_CONF
 from installer.locations import display_path
-from installer.policy import Policy, settings_policy
+from installer.policy import (
+    Policy,
+    PolicyLayer,
+    desktop_shell_policy,
+    settings_policies,
+    settings_policy,
+    tweak_policy,
+)
+from installer.tweaks import shell_init_bundle
 
 
 def _claude_row(home: Path, *, claude_installed: bool = True) -> Policy:
@@ -125,3 +134,134 @@ def test_a_settings_row_requires_its_agent(tmp_path: Path, monkeypatch: pytest.M
     assert absent.requires == ("claude",)
     assert absent.missing_requirements() == ("claude",)
     assert _claude_row(tmp_path).missing_requirements() == ()
+
+
+SHELL_INIT_IDS = ("starship", "direnv", "zoxide", "fzf", "fnm", "volta")
+
+
+def _shell_init_row(home: Path, tool: str) -> Policy:
+    bundle = shell_init_bundle(tool)
+    assert bundle is not None
+    return tweak_policy(
+        bundle,
+        rc_path=home / ".myshellrc",
+        bin_dir=home / ".local" / "bin",
+        installed_tools={tool: True},
+    )
+
+
+def test_policies_list_the_new_rows_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    shell = tuple(_shell_init_row(tmp_path, tool) for tool in SHELL_INIT_IDS)
+    settings = settings_policies(home=tmp_path, platform_os="fedora", installed_tools={})
+    desktop = desktop_shell_policy(
+        zsh_path=None, conf_dir=tmp_path / "environment.d", home=tmp_path
+    )
+    rows = (*shell, *settings, desktop)
+    assert [row.id for row in shell] == [f"tweak:{tool}" for tool in SHELL_INIT_IDS]
+    assert [row.id for row in settings] == [
+        "agent:claude:auto-approve",
+        "agent:claude:no-attribution",
+        "agent:codex:auto-approve",
+        "agent:opencode:auto-approve",
+        "agent:cursor-agent:auto-approve",
+        "agent:cursor-agent:no-attribution",
+        "vscode:lean",
+        "vscode:ai-off",
+        "vscode:ext-updates-off",
+    ]
+    assert desktop.label == "SHELL for desktop apps"
+    assert all(len(row.label) <= 28 for row in rows)
+
+
+def test_shell_init_rows_show_their_detail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zoxide = _shell_init_row(tmp_path, "zoxide")
+    assert zoxide.detail_lines is not None
+    assert zoxide.detail_lines() == (
+        "Adds zoxide's shell init to ~/.myshellrc, guarded by command -v zoxide.",
+        "Adds z, a cd that learns the directories you use.",
+        "Turned off automatically when zoxide is removed.",
+    )
+    assert zoxide.effect_kind is None  # the Effect cell prefix is the row's own description
+    assert zoxide.description == "adds z, a cd that learns the directories you use"
+    starship = _shell_init_row(tmp_path, "starship")
+    assert starship.detail_lines is not None
+    lines = starship.detail_lines()
+    assert len(lines) == 4
+    assert lines[-1] == (
+        'Sets ZSH_THEME="" in ~/.zshrc so Oh-My-Zsh draws no prompt; turning it off leaves '
+        "the theme line as it is."
+    )
+
+
+def test_the_desktop_shell_row_writes_environment_d(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zsh = tmp_path / "bin" / "zsh"
+    zsh.parent.mkdir()
+    zsh.write_text("")
+    conf = tmp_path / ".config" / "environment.d" / DESKTOP_SHELL_CONF
+    row = desktop_shell_policy(zsh_path=str(zsh), conf_dir=conf.parent, home=tmp_path)
+    assert row.is_active is not None and row.is_active() is False
+    result = row.apply()
+    assert f"SHELL={zsh}" in conf.read_text()
+    assert result.layers == (PolicyLayer("environment.d", f"wrote {DESKTOP_SHELL_CONF}"),)
+    assert result.reload_hint == "Log out and back in for desktop apps to see it."
+    assert row.is_active is not None and row.is_active() is True
+    row.remove()
+    assert not conf.exists()
+
+
+def test_a_desktop_shell_file_outlives_zsh_and_is_still_swept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zsh = tmp_path / "bin" / "zsh"
+    zsh.parent.mkdir()
+    zsh.write_text("")
+    conf = tmp_path / ".config" / "environment.d" / DESKTOP_SHELL_CONF
+    desktop_shell_policy(zsh_path=str(zsh), conf_dir=conf.parent, home=tmp_path).apply()
+    gone = desktop_shell_policy(zsh_path=None, conf_dir=conf.parent, home=tmp_path)
+    assert gone.description == "SHELL=zsh in ~/.config/environment.d"
+    assert gone.active is False
+    assert gone.owned is not None and gone.owned() is True
+    moved = desktop_shell_policy(
+        zsh_path=str(tmp_path / "other" / "zsh"), conf_dir=conf.parent, home=tmp_path
+    )
+    assert moved.owned is not None and moved.owned() is True
+    gone.remove()
+    assert not conf.exists()
+
+
+def test_vscode_and_cursor_details_follow_the_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def rows(platform_os: str) -> dict[str, Policy]:
+        found = settings_policies(home=tmp_path, platform_os=platform_os, installed_tools={})
+        return {row.id: row for row in found}
+
+    def details(platform_os: str, policy_id: str) -> tuple[str, ...]:
+        detail = rows(platform_os)[policy_id].detail_lines
+        assert detail is not None
+        return detail()
+
+    assert "update.mode is not written on Linux: this installer updates VS Code." in details(
+        "fedora", "vscode:lean"
+    )
+    assert "update.mode is set to none: this installer updates VS Code." in details(
+        "macos", "vscode:lean"
+    )
+    assert (
+        "The Cursor CLI ignores the commit opt-out as of 2026-10-04; the PR opt-out works."
+        in details("fedora", "agent:cursor-agent:no-attribution")
+    )
+    assert (
+        "codex, opencode and pi have no documented attribution key; nothing is written for them."
+        in details("fedora", "agent:claude:no-attribution")
+    )
