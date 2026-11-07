@@ -649,15 +649,26 @@ def guarded_socket_init(
     return init
 
 
-def guarded_getaddrinfo(describe: Callable[[], str]) -> Callable[..., NoReturn]:
-    """A `socket.getaddrinfo` replacement: no DNS query leaves the host."""
+# Every resolver entry point: each is its own C function, and getfqdn calls gethostbyaddr.
+NAME_LOOKUPS = (
+    "getaddrinfo",
+    "gethostbyname",
+    "gethostbyname_ex",
+    "gethostbyaddr",
+    "getnameinfo",
+    "getfqdn",
+)
 
-    def getaddrinfo(host: object, *_args: Any, **_kwargs: Any) -> NoReturn:
+
+def guarded_name_lookup(describe: Callable[[], str]) -> Callable[..., NoReturn]:
+    """A replacement for each of NAME_LOOKUPS: no DNS query leaves the host."""
+
+    def lookup(host: object = "", *_args: Any, **_kwargs: Any) -> NoReturn:
         message = f"the test {describe()} tried to resolve {host!r}; fake the network call instead"
         record_refusal(message)
         raise AssertionError(message)
 
-    return getaddrinfo
+    return lookup
 
 
 # --- the os launchers: the same allowlist as subprocess.Popen (SPEC R6, D-21) ---

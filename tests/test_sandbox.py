@@ -1022,6 +1022,29 @@ def test_internet_sockets_are_refused_naming_the_test(
     assert nodeid_of(request) in recorded[0]
 
 
+_NAME_LOOKUPS: dict[str, Callable[[], object]] = {
+    "gethostbyname": lambda: socket.gethostbyname("example.com"),
+    "gethostbyname_ex": lambda: socket.gethostbyname_ex("example.com"),
+    "gethostbyaddr": lambda: socket.gethostbyaddr("192.0.2.1"),
+    "getnameinfo": lambda: socket.getnameinfo(("192.0.2.1", 80), 0),
+    "getfqdn": lambda: socket.getfqdn("example.com"),
+    "getfqdn-localhost": lambda: socket.getfqdn("localhost"),
+}
+
+
+@pytest.mark.parametrize("lookup", sorted(_NAME_LOOKUPS))
+def test_every_name_lookup_is_refused_naming_the_test(
+    lookup: str, request: pytest.FixtureRequest
+) -> None:
+    """WR-05: every resolver entry point is blocked like getaddrinfo, localhost included."""
+    with pytest.raises(AssertionError) as error:
+        _NAME_LOOKUPS[lookup]()
+    assert nodeid_of(request) in str(error.value)
+    recorded = take_refusals()
+    assert recorded
+    assert all(nodeid_of(request) in message for message in recorded)
+
+
 def _fetch_or_none(url: str) -> bytes | None:
     """Production-shaped: a broad catch around a network call."""
     try:

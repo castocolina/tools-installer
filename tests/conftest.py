@@ -31,6 +31,7 @@ from tests.sandbox import (
     CHILD_GUARD_ROOT_ENV,
     GUARDED_OS_FUNCTIONS,
     HOST_ZSH_STASH,
+    NAME_LOOKUPS,
     OVERRIDES_STASH,
     LaunchPolicy,
     build_launch_policy,
@@ -38,7 +39,7 @@ from tests.sandbox import (
     check_launch,
     env_names_to_clear,
     fail_on_refusals,
-    guarded_getaddrinfo,
+    guarded_name_lookup,
     guarded_os_call,
     guarded_socket_init,
     host_zsh_stash,
@@ -116,7 +117,7 @@ def no_host_toolchain_exec(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def no_internet_sockets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No test opens an internet socket or resolves a name (SPEC R8, D-22).
+    """No test opens an internet socket or resolves a name by any resolver (SPEC R8, D-22).
 
     Patching the class applies to every thread (Textual workers included). `socketpair`,
     `AF_UNIX` and asyncio's self-pipe keep working: only AF_INET and AF_INET6 are refused.
@@ -128,7 +129,8 @@ def no_internet_sockets(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     monkeypatch.setattr(
         socket.socket, "__init__", guarded_socket_init(socket.socket.__init__, describe)
     )
-    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo(describe))
+    for name in NAME_LOOKUPS:
+        monkeypatch.setattr(socket, name, guarded_name_lookup(describe))
 
 
 @pytest.fixture(autouse=True)
