@@ -13,6 +13,7 @@ import copy
 import json
 import os
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -119,10 +120,17 @@ def _clean(text: str, fmt: SettingsFormat) -> str:
 
 def parse_settings(text: str, fmt: SettingsFormat) -> dict[str, object]:
     """The document as a dict; whitespace-only text is an empty object."""
-    if fmt == "toml":
-        raise NotImplementedError(fmt)  # TOML is added by the last task of this plan
     if not text.strip():
         return {}
+    if fmt == "toml":
+        try:
+            toml_doc: object = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as exc:
+            located = re.search(r"\(at line (\d+), column (\d+)\)", str(exc))
+            if located is None:  # "(at end of document)": the last line, no column
+                raise SettingsParseError(fmt, len(text.splitlines()), None) from exc
+            raise SettingsParseError(fmt, int(located[1]), int(located[2])) from exc
+        return cast(dict[str, object], toml_doc)
     try:
         doc: object = json.loads(_clean(text, fmt))
     except json.JSONDecodeError as exc:
@@ -248,12 +256,14 @@ def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object)
     """Insert one absent key by splice. A two-part key whose parent is absent creates the parent
     as one member. The fragment is the text a later revert removes."""
     doc = parse_settings(text, fmt)
+    if lookup(doc, key_path) is not ABSENT:
+        raise SettingsEditRefused(f"{'.'.join(key_path)} is already set")
+    if fmt == "toml":
+        return _insert_toml(text, doc, key_path, value)
     if not text.strip():
         raise SettingsEditRefused("empty file: there is no object to insert into")
     if len(key_path) not in (1, 2):
         raise SettingsEditRefused("settings keys nest at most one level")
-    if lookup(doc, key_path) is not ABSENT:
-        raise SettingsEditRefused(f"{'.'.join(key_path)} is already set")
     parent = key_path[:-1]
     created_parent = len(key_path) == 2 and lookup(doc, parent) is ABSENT
     if parent and not created_parent and not isinstance(lookup(doc, parent), dict):
@@ -278,6 +288,48 @@ def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object)
     new_text = text[: obj + 1] + fragment + text[obj + 1 :]
     expected = _edited(doc, key_path, value)
     return Inserted(_guarded(new_text, fmt, expected), fragment, created_parent)
+
+
+def _toml_key(key_path: KeyPath) -> str:
+    if len(key_path) != 1 or not re.fullmatch(r"[A-Za-z0-9_-]+", key_path[0]):
+        raise SettingsEditRefused("TOML keys are top-level bare keys")
+    return key_path[0]
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return _dump(value)
+    raise SettingsEditRefused(
+        f"TOML values here are strings or booleans, not {type(value).__name__}"
+    )
+
+
+def _insert_toml(text: str, doc: dict[str, object], key_path: KeyPath, value: object) -> Inserted:
+    """A top-level key goes on its own line before the first table header, or at the end."""
+    key = _toml_key(key_path)
+    lines = text.splitlines(keepends=True)
+    table = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines))
+    fragment = f"{key} = {_toml_value(value)}\n"
+    if table == len(lines) and text and not text.endswith("\n"):
+        fragment = "\n" + fragment
+    new_text = "".join(lines[:table]) + fragment + "".join(lines[table:])
+    expected = _edited(doc, key_path, value)
+    return Inserted(_guarded(new_text, "toml", expected), fragment, created_parent=False)
+
+
+def _toml_remove(text: str, key: str, fragment: str | None) -> str:
+    """The recorded fragment when it occurs once, else the key's own top-level line."""
+    if fragment is not None and text.count(fragment) == 1:
+        return text.replace(fragment, "", 1)
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("["):
+            break
+        if re.match(rf"\s*{re.escape(key)}\s*=", line):
+            return "".join(lines[:index] + lines[index + 1 :])
+    raise SettingsEditRefused(f"{key} has no top-level line to remove")
 
 
 def _cut_member(text: str, clean: str, members: list[_Member], member: _Member) -> str:
@@ -319,6 +371,9 @@ def remove_key(
     doc = parse_settings(text, fmt)
     if lookup(doc, key_path) is ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is not set")
+    if fmt == "toml":
+        new_text = _toml_remove(text, _toml_key(key_path), fragment)
+        return _guarded(new_text, fmt, _edited(doc, key_path, ABSENT))
     clean = _clean(text, fmt)
     members, member = _member_at(clean, key_path)
     located = text[member.key_start : member.value_end]
@@ -331,6 +386,8 @@ def remove_key(
 
 def replace_value(text: str, fmt: SettingsFormat, key_path: KeyPath, new: object) -> str:
     """Swap one set value in place; every other byte of the file stays as it was."""
+    if fmt == "toml":
+        raise SettingsEditRefused("TOML values are not swapped in place")
     doc = parse_settings(text, fmt)
     if lookup(doc, key_path) is ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is not set")

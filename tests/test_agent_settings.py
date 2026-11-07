@@ -1,11 +1,14 @@
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from installer.agent_settings import (
+    SettingsChanged,
     SettingsEditRefused,
     SettingsParseError,
+    delete_if_unchanged,
     insert_key,
     new_file_text,
     parse_settings,
@@ -216,3 +219,106 @@ def test_an_invalid_jsonc_file_names_line_and_column() -> None:
         insert_key('{\n  "a": 1,\n  "b: 2\n}\n', "jsonc", ("c",), 3)
 
     assert refused.value.fragment.startswith("not valid JSONC (line 3, column")
+
+
+CODEX_CONFIG = (
+    'model = "gpt"\n'
+    'model_reasoning_effort = "high"\n'
+    "# written by codex\n"
+    "[features]\n"
+    "x = true\n"
+    '[projects."/home/x/repo"]\n'
+    'trust_level = "trusted"\n'
+)
+
+
+def test_codex_toml_round_trip_inserts_before_the_first_table() -> None:
+    first = insert_key(CODEX_CONFIG, "toml", ("approval_policy",), "never")
+    second = insert_key(first.text, "toml", ("sandbox_mode",), "danger-full-access")
+
+    assert second.text.index('sandbox_mode = "danger-full-access"') < second.text.index(
+        "[features]"
+    )
+    doc = tomllib.loads(second.text)
+    assert doc["approval_policy"] == "never"
+    assert doc["sandbox_mode"] == "danger-full-access"
+    assert doc["features"] == {"x": True}
+
+    reverted = remove_key(second.text, "toml", ("sandbox_mode",), fragment=second.fragment)
+    reverted = remove_key(reverted, "toml", ("approval_policy",), fragment=first.fragment)
+    assert reverted == CODEX_CONFIG
+
+    with pytest.raises(SettingsEditRefused):
+        insert_key(CODEX_CONFIG, "toml", ("features", "x"), 1)
+    with pytest.raises(SettingsEditRefused):
+        insert_key(CODEX_CONFIG, "toml", ("a b",), "x")
+    with pytest.raises(SettingsEditRefused):
+        insert_key(CODEX_CONFIG, "toml", ("count",), 3)
+    with pytest.raises(SettingsEditRefused):
+        replace_value(CODEX_CONFIG, "toml", ("model",), "o3")
+
+
+def test_a_toml_file_without_a_final_newline_round_trips() -> None:
+    original = 'model = "gpt"'
+
+    inserted = insert_key(original, "toml", ("approval_policy",), "never")
+
+    assert (
+        remove_key(inserted.text, "toml", ("approval_policy",), fragment=inserted.fragment)
+        == original
+    )
+
+
+def test_a_toml_splice_into_an_array_is_refused() -> None:
+    with pytest.raises(SettingsEditRefused):
+        insert_key("arr = [\n  [1, 2],\n  [3],\n]\n", "toml", ("k",), "v")
+
+
+def test_an_invalid_toml_file_names_the_line() -> None:
+    with pytest.raises(SettingsParseError) as at_column:
+        insert_key("a = \n", "toml", ("b",), 1)
+    assert at_column.value.fragment == "not valid TOML (line 1, column 5)"
+
+    with pytest.raises(SettingsParseError) as at_end:
+        insert_key('a = """\nxyz\n', "toml", ("b",), 1)
+    assert at_end.value.fragment == "not valid TOML (line 2)"
+
+
+def test_a_file_changed_between_read_and_write_is_not_written(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('model = "gpt"\n', encoding="utf-8")
+    before = read_settings(config)
+    assert before is not None
+    config.write_text('model = "other"\n', encoding="utf-8")
+
+    with pytest.raises(SettingsChanged, match="changed while being written"):
+        write_if_unchanged(config, before, 'model = "gpt"\napproval_policy = "never"\n')
+    assert config.read_text(encoding="utf-8") == 'model = "other"\n'
+
+    with pytest.raises(SettingsChanged):
+        delete_if_unchanged(config, before)
+    assert config.read_text(encoding="utf-8") == 'model = "other"\n'
+
+    created_later = tmp_path / "new.toml"
+    assert read_settings(created_later) is None
+    created_later.write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(SettingsChanged):
+        write_if_unchanged(created_later, None, "y = 2\n")
+    assert created_later.read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_a_symlinked_settings_file_is_edited_through_its_target(tmp_path: Path) -> None:
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    target = dotfiles / "settings.json"
+    target.write_text('{\n  "model": "opus"\n}\n', encoding="utf-8")
+    link = tmp_path / "settings.json"
+    link.symlink_to(target)
+    before = read_settings(link)
+    assert before is not None
+
+    inserted = insert_key(before.data.decode("utf-8"), "json", ("flag",), True)
+    write_if_unchanged(link, before, inserted.text)
+
+    assert link.is_symlink()
+    assert json.loads(target.read_text(encoding="utf-8")) == {"model": "opus", "flag": True}
