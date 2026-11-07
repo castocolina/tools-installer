@@ -50,9 +50,9 @@ Usage: container-e2e-verify.sh <command> [options]
                           already-installed state, a full --uninstall --yes
                           sweep, then a third --all --yes reinstall. Prints
                           TRACER_RERUN_OK / TRACER_UNINSTALL_OK /
-                          TRACER_REINSTALL_OK per step into
-                          pass2-transcript.log (appended, in order). Tears the
-                          container down (rm -f) once all three succeed.
+                          TRACER_REINSTALL_OK, TRACER_HOOKS_*, TRACER_SETTINGS_*
+                          per step into pass2-transcript.log (appended, in order).
+                          Tears the container down (rm -f) once all three succeed.
   all                     bootstrap --replace, pass1, pass2, then remove the
                           container whatever the outcome (what `make e2e` runs).
   -h, --help              Show this help
@@ -710,6 +710,174 @@ assert_removed_receipts_gone() {
   return 1
 }
 
+# Before --uninstall --yes: the hosts codegraph's receipt records under its MCP hook (read by the
+# installer's own reader) and the HOME-relative config files that mention codegraph. Writes
+# hook-hosts.txt and hook-files.txt; a recorded host with no config file at all fails.
+hook_probe_before() {
+  local out line no_receipt=0 hosts files workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ~ && for p in .claude.json .claude .codex .config/opencode .cursor; do [ -e \"\$p\" ] && grep -rlI codegraph -- \"\$p\" || true; done | sed 's/^/F /'
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+from installer import receipts
+receipt = receipts.read(\"codegraph\")
+if receipt is None:
+    print(\"N\")
+for host in (receipt.hooks.get(\"codegraph-mcp-register\", ()) if receipt else ()):
+    print(\"H \" + host)
+'
+")" || { printf 'TRACER_HOOKS_PROBE_FAILED\n'; return 1; }
+  : >"$PHASE_DIR/hook-hosts.txt"
+  : >"$PHASE_DIR/hook-files.txt"
+  while IFS= read -r line; do
+    case "$line" in
+      "H "*) printf '%s\n' "${line#H }" >>"$PHASE_DIR/hook-hosts.txt" ;;
+      "F "*) printf '%s\n' "${line#F }" >>"$PHASE_DIR/hook-files.txt" ;;
+      N) no_receipt=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$no_receipt" -eq 1 ]]; then
+    printf 'TRACER_HOOKS_SKIPPED reason=no-receipt\n'
+    return 0
+  fi
+  hosts="$(paste -sd, - <"$PHASE_DIR/hook-hosts.txt")"
+  if [[ -z "$hosts" ]]; then
+    printf 'TRACER_HOOKS_SKIPPED reason=no-hosts\n'
+    return 0
+  fi
+  files="$(wc -l <"$PHASE_DIR/hook-files.txt" | tr -d ' ')"
+  if [[ "$files" -eq 0 ]]; then
+    printf 'TRACER_HOOK_FILES_MISSING hosts=%s\n' "$hosts"
+    return 1
+  fi
+  printf 'TRACER_HOOKS_RECORDED hosts=%s files=%s\n' "$hosts" "$files"
+}
+
+# After --uninstall --yes: no file hook_probe_before recorded may still name codegraph. A
+# missing file is clean. Prints TRACER_HOOK_LEFT path=... per survivor, else _UNREGISTERED_OK.
+hook_probe_after() {
+  local out line left=0 paths count
+  if [[ ! -s "$PHASE_DIR/hook-hosts.txt" ]]; then
+    printf 'TRACER_HOOKS_UNREGISTER_SKIPPED\n'
+    return 0
+  fi
+  paths="$(while IFS= read -r p; do printf '%q ' "$p"; done <"$PHASE_DIR/hook-files.txt")"
+  out="$(exec_tester "cd ~ && for p in ${paths}; do if [ -e \"\$p\" ] && grep -q codegraph -- \"\$p\"; then printf 'LEFT %s\\n' \"\$p\"; fi; done")" \
+    || { printf 'TRACER_HOOKS_UNREGISTER_PROBE_FAILED\n'; return 1; }
+  count="$(wc -l <"$PHASE_DIR/hook-files.txt" | tr -d ' ')"
+  while IFS= read -r line; do
+    case "$line" in
+      "LEFT "*) printf 'TRACER_HOOK_LEFT path=%s\n' "${line#LEFT }"; left=1 ;;
+    esac
+  done <<<"$out"
+  [[ "$left" -eq 0 ]] || return 1
+  printf 'TRACER_HOOKS_UNREGISTERED_OK count=%s\n' "$count"
+}
+
+# Before --uninstall --yes: snapshot each auto-approve key's current value (null when absent) for
+# claude and codex into the workspace, then write the keys through the installer's apply_setting.
+# Prints TRACER_SETTINGS_WRITE_OK wrote=N, or TRACER_SETTINGS_WRITE_FAILED per refusal.
+settings_probe_write() {
+  local out line wrote=0 failed=0 agent detail workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+import json
+from pathlib import Path
+from installer import agent_settings as s
+home = Path.home()
+def now(doc, key):
+    value = s.lookup(doc, key.path)
+    return None if value is s.ABSENT else value
+snap = {}
+for agent in (\"claude\", \"codex\"):
+    path = s.settings_file(agent, home=home, platform_os=\"linux\")
+    text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
+    doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
+    snap[agent] = {\".\".join(k.path): now(doc, k) for k in s.setting_keys(agent, \"auto-approve\", \"linux\")}
+Path(\".e2e-settings-before.json\").write_text(json.dumps(snap), encoding=\"utf-8\")
+for agent in (\"claude\", \"codex\"):
+    result = s.apply_setting(agent, \"auto-approve\", home=home, platform_os=\"linux\")
+    if result.refused:
+        print(\"E\", agent, result.refused)
+    for key in result.keys:
+        if key.kind in (\"wrote\", \"replaced_default\"):
+            print(\"W\", agent, key.key)
+'
+")" || { printf 'TRACER_SETTINGS_WRITE_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "W "*) wrote=$((wrote + 1)) ;;
+      "E "*)
+        agent="${line#E }"
+        detail="${agent#* }"
+        agent="${agent%% *}"
+        printf 'TRACER_SETTINGS_WRITE_FAILED agent=%s detail=%s\n' "$agent" "$detail"
+        failed=1
+        ;;
+    esac
+  done <<<"$out"
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_SETTINGS_WRITE_OK wrote=%s\n' "$wrote"
+}
+
+# After --uninstall --yes: every key settings_probe_write snapshotted must hold its pre-write
+# value again, and no config ledger may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N, or the
+# per-key TRACER_SETTINGS_REVERT_DIFF and per-agent TRACER_SETTINGS_LEDGER_LEFT lines.
+settings_probe_revert() {
+  local out line failed=0 keys="" workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+import json
+from pathlib import Path
+from installer import agent_settings as s
+from installer import receipts
+home = Path.home()
+snap = json.loads(Path(\".e2e-settings-before.json\").read_text(encoding=\"utf-8\"))
+problems = []
+count = 0
+for agent in (\"claude\", \"codex\"):
+    path = s.settings_file(agent, home=home, platform_os=\"linux\")
+    text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
+    doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
+    for key in s.setting_keys(agent, \"auto-approve\", \"linux\"):
+        name = \".\".join(key.path)
+        value = s.lookup(doc, key.path)
+        value = None if value is s.ABSENT else value
+        count += 1
+        if not s.same_value(value, snap[agent][name]):
+            problems.append(\"D \" + agent + \" \" + name)
+    if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
+        problems.append(\"L \" + agent)
+for problem in problems:
+    print(problem)
+if not problems:
+    print(\"K\", count)
+'
+")" || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "D "*)
+        agent="${line#D }"
+        printf 'TRACER_SETTINGS_REVERT_DIFF agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
+        failed=1
+        ;;
+      "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
+      "K "*) keys="${line#K }" ;;
+    esac
+  done <<<"$out"
+  [[ "$failed" -eq 0 ]] || return 1
+  [[ -n "$keys" ]] || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
+  printf 'TRACER_SETTINGS_REVERT_OK keys=%s\n' "$keys"
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -763,6 +931,12 @@ cmd_pass2() {
   if ! receipt_paths >> "$log"; then
     return 1
   fi
+  if ! hook_probe_before >> "$log"; then
+    return 1
+  fi
+  if ! settings_probe_write >> "$log"; then
+    return 1
+  fi
 
   # Step 2: the full uninstall sweep. --uninstall prints no Summary — line,
   # so only the exit code (and the transcript itself) is evidence here.
@@ -779,6 +953,12 @@ cmd_pass2() {
     return 1
   fi
   if ! assert_no_leftovers >> "$log"; then
+    return 1
+  fi
+  if ! hook_probe_after >> "$log"; then
+    return 1
+  fi
+  if ! settings_probe_revert >> "$log"; then
     return 1
   fi
 

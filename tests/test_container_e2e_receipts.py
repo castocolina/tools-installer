@@ -1025,3 +1025,202 @@ def test_every_array_expansion_survives_bash_3_2_under_set_u() -> None:
     bare = re.findall(r'"\$\{(\w+)\[@\]\}"', text)
     guarded = re.findall(r'\$\{(\w+)\[@\]\+"\$\{\1\[@\]\}"\}', text)
     assert sorted(bare) == sorted(guarded)
+
+
+def test_hook_probe_after_reports_a_file_still_naming_codegraph(tmp_path: Path) -> None:
+    """A recorded file that still names codegraph after the uninstall fails the probe."""
+    scratch = tmp_path / "home"
+    phase = scratch / "phase"
+    phase.mkdir(parents=True)
+    _write_listing(phase / "hook-hosts.txt", ["claude", "codex"])
+    _write_listing(
+        phase / "hook-files.txt", [".claude.json", ".codex/config.toml", ".claude/CLAUDE.md"]
+    )
+    (scratch / ".claude.json").write_text('{"mcpServers": {"codegraph": {}}}', encoding="utf-8")
+    (scratch / ".codex").mkdir()
+    (scratch / ".codex" / "config.toml").write_text("model = 'gpt'\n", encoding="utf-8")
+    script = _phase_harness("hook_probe_after") + "\nhook_probe_after\n"
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == ["TRACER_HOOK_LEFT path=.claude.json"]
+    (scratch / ".claude.json").write_text("{}\n", encoding="utf-8")
+    clean = _run(script, scratch)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_HOOKS_UNREGISTERED_OK count=3"]
+    _write_listing(phase / "hook-hosts.txt", [])
+    skipped = _run(script, scratch)
+    assert skipped.stdout.splitlines() == ["TRACER_HOOKS_UNREGISTER_SKIPPED"]
+
+
+def test_hook_probe_before_requires_config_for_recorded_hosts(tmp_path: Path) -> None:
+    """Recorded hosts need a config file on disk; no receipt or no host skips the probe."""
+    scratch = tmp_path / "home"
+    phase = scratch / "phase"
+    phase.mkdir(parents=True)
+
+    def probe(*reader_lines: str) -> subprocess.CompletedProcess[str]:
+        stub = _assign("STUB_OUTPUT", "\n".join(reader_lines))
+        override = 'exec_tester() { printf "%s\\n" "$STUB_OUTPUT"; }'
+        return _run(
+            "\n".join([_phase_harness("hook_probe_before"), stub, override, "hook_probe_before"]),
+            scratch,
+        )
+
+    none = probe("N")
+    assert none.returncode == 0, none.stderr
+    assert none.stdout.splitlines() == ["TRACER_HOOKS_SKIPPED reason=no-receipt"]
+    orphan = probe("H claude")
+    assert orphan.returncode != 0
+    assert orphan.stdout.splitlines() == ["TRACER_HOOK_FILES_MISSING hosts=claude"]
+    found = probe("H claude", "F .claude.json")
+    assert found.returncode == 0, found.stderr
+    assert found.stdout.splitlines() == ["TRACER_HOOKS_RECORDED hosts=claude files=1"]
+    assert (phase / "hook-hosts.txt").read_text(encoding="utf-8") == "claude\n"
+    assert (phase / "hook-files.txt").read_text(encoding="utf-8") == ".claude.json\n"
+    no_host = probe("F .claude.json")
+    assert no_host.returncode == 0
+    assert no_host.stdout.splitlines() == ["TRACER_HOOKS_SKIPPED reason=no-hosts"]
+
+
+def test_the_hook_probes_are_wired_around_the_uninstall_step() -> None:
+    pass2 = _function("cmd_pass2")
+    uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("receipt_paths") < pass2.index("hook_probe_before") < uninstall
+    assert pass2.index("assert_no_leftovers") < pass2.index("hook_probe_after") < reinstall
+
+
+def test_hook_probe_before_reads_the_real_codegraph_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader and the grep run for real: a recorded host and its config file are found."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    receipts.write(
+        Receipt(
+            tool="codegraph",
+            at="2026-10-16T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"codegraph-mcp-register": ("claude",)},
+        )
+    )
+    (scratch / ".claude.json").write_text('{"mcpServers": {"codegraph": {}}}', encoding="utf-8")
+    (scratch / "phase").mkdir()
+    script = "\n".join(
+        [
+            f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+            _phase_harness("hook_probe_before"),
+            _assign("TESTER_WORKSPACE", str(tmp_path)),
+            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+            _uv_stub(),
+            "hook_probe_before",
+        ]
+    )
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["TRACER_HOOKS_RECORDED hosts=claude files=1"]
+
+
+def test_settings_probe_write_fails_on_a_refusal(tmp_path: Path) -> None:
+    """One refusal fails the write probe; every written key passes it."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+
+    def probe(*lines: str) -> subprocess.CompletedProcess[str]:
+        stub = _assign("STUB_OUTPUT", "\n".join(lines))
+        override = 'exec_tester() { printf "%s\\n" "$STUB_OUTPUT"; }'
+        script = "\n".join(
+            [_harness("settings_probe_write"), stub, override, "settings_probe_write"]
+        )
+        return _run(script, scratch)
+
+    refused = probe("W claude permissions.defaultMode", "E codex not valid TOML (line 2)")
+    assert refused.returncode != 0
+    assert refused.stdout.splitlines() == [
+        "TRACER_SETTINGS_WRITE_FAILED agent=codex detail=not valid TOML (line 2)"
+    ]
+    wrote = probe(
+        "W claude permissions.defaultMode",
+        "W claude skipDangerousModePermissionPrompt",
+        "W codex approval_policy",
+    )
+    assert wrote.returncode == 0, wrote.stderr
+    assert wrote.stdout.splitlines() == ["TRACER_SETTINGS_WRITE_OK wrote=3"]
+
+
+def test_settings_probe_revert_flags_a_key_or_ledger_left(tmp_path: Path) -> None:
+    """A key that differs from its snapshot, or a ledger left behind, fails the revert probe."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+
+    def probe(*lines: str) -> subprocess.CompletedProcess[str]:
+        stub = _assign("STUB_OUTPUT", "\n".join(lines))
+        override = 'exec_tester() { printf "%s\\n" "$STUB_OUTPUT"; }'
+        script = "\n".join(
+            [_harness("settings_probe_revert"), stub, override, "settings_probe_revert"]
+        )
+        return _run(script, scratch)
+
+    diff = probe("D claude skipDangerousModePermissionPrompt")
+    assert diff.returncode != 0
+    assert diff.stdout.splitlines() == [
+        "TRACER_SETTINGS_REVERT_DIFF agent=claude key=skipDangerousModePermissionPrompt"
+    ]
+    left = probe("L codex")
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == ["TRACER_SETTINGS_LEDGER_LEFT agent=codex"]
+    clean = probe("K 4")
+    assert clean.returncode == 0, clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_SETTINGS_REVERT_OK keys=4"]
+
+
+def test_the_settings_probes_are_wired_around_the_uninstall_step() -> None:
+    pass2 = _function("cmd_pass2")
+    uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("hook_probe_before") < pass2.index("settings_probe_write") < uninstall
+    assert pass2.index("hook_probe_after") < pass2.index("settings_probe_revert") < reinstall
+    assert "TESTER_WORKSPACE" in _function("settings_probe_write")
+
+
+def test_the_settings_probes_drive_the_installer_and_check_the_revert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe sees an unreverted write, passes once the installer's own revert runs."""
+    from installer import agent_settings
+
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    script = "\n".join(
+        [
+            f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+            _harness("settings_probe_write", "settings_probe_revert"),
+            _assign("TESTER_WORKSPACE", str(workspace)),
+            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+            _uv_stub(),
+        ]
+    )
+    written = _run(script + "\nsettings_probe_write\n", scratch)
+    assert written.returncode == 0, written.stdout + written.stderr
+    assert written.stdout.splitlines() == ["TRACER_SETTINGS_WRITE_OK wrote=4"]
+    unreverted = _run(script + "\nsettings_probe_revert\n", scratch)
+    assert unreverted.returncode != 0
+    assert (
+        "TRACER_SETTINGS_REVERT_DIFF agent=claude key=permissions.defaultMode" in unreverted.stdout
+    )
+    for agent in ("claude", "codex"):
+        agent_settings.revert_setting(agent, "auto-approve", home=scratch, platform_os="linux")
+    reverted = _run(script + "\nsettings_probe_revert\n", scratch)
+    assert reverted.returncode == 0, reverted.stdout + reverted.stderr
+    assert reverted.stdout.splitlines() == ["TRACER_SETTINGS_REVERT_OK keys=4"]
