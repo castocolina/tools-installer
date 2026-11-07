@@ -81,7 +81,7 @@ class FakePrompter:
         self.confirmed = 0
         self.questions: list[str] = []
 
-    def confirm(self, message: str) -> bool:
+    def confirm(self, message: str, *, default: bool = True) -> bool:
         self.confirmed += 1
         self.questions.append(message)
         if message == _BATCH_QUESTION:
@@ -188,6 +188,148 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
     assert isinstance(accepted_outcomes, list)
 
 
+_AUTO_APPROVE_QUESTION = "auto-approve agents — claude, codex: no permission prompts?"
+_ATTRIBUTION_QUESTION = "attribution off — claude: no agent credit in commits/PRs?"
+_PI_NOTE = "pi: nothing written; its approvals come only from extensions"
+_NO_KEY_NOTE = "no documented key: codex, pi (nothing written for them)"
+_LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
+_ZOXIDE_QUESTION = (
+    "Turn on zoxide shell init? It adds one guarded block to ~/.myshellrc that adds z, "
+    "a cd that learns the directories you use. It stays off unless you choose yes; "
+    "Policies can change it later."
+)
+_LOGIN_SHELL_QUESTION = (
+    "Show a reviewed command to change the login shell to zsh for oh-my-zsh, "
+    "which you run in your own terminal after the installer exits?"
+)
+
+
+class _ScriptedPrompter:
+    """Answers from a script (an unscripted question is no) and records each question.
+
+    Each record is (message, default, console text printed before the question).
+    """
+
+    def __init__(self, answers: Mapping[str, bool], console_buf: io.StringIO) -> None:
+        self._answers = answers
+        self._buf = console_buf
+        self.asked: list[tuple[str, bool, str]] = []
+
+    def confirm(self, message: str, *, default: bool = True) -> bool:
+        self.asked.append((message, default, self._buf.getvalue()))
+        return self._answers.get(message, False)
+
+
+def _asking_install(asks: Sequence[tuple[str, str]]) -> SensitiveInstall:
+    """An install that asks the sensitive questions the real post-install step would ask."""
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        for tool_id, action in asks:
+            if tool_id == tool.id and confirm_sensitive_action is not None:
+                confirm_sensitive_action(tool_id, action)
+        return InstallOutcome(tool.id, "installed", method_kind="brew")
+
+    return install
+
+
+def test_headless_option_questions_default_to_no():
+    """D-09 / T-23-47: each run-option question defaults to no; only a yes turns one on."""
+    tools = [_tool("claude", "agent"), _tool("codex", "agent"), _tool("pi", "agent")]
+    _, install = _recording_install()
+    console, buf = _console()
+    prompter = _ScriptedPrompter({_BATCH_QUESTION: True, _AUTO_APPROVE_QUESTION: True}, buf)
+
+    outcomes = run_wizard(
+        tools,
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert [(message, default) for message, default, _ in prompter.asked] == [
+        (_BATCH_QUESTION, True),
+        (_AUTO_APPROVE_QUESTION, False),
+        (_ATTRIBUTION_QUESTION, False),
+    ]
+    printed = {message: text for message, _, text in prompter.asked}
+    assert _PI_NOTE in printed[_AUTO_APPROVE_QUESTION]
+    assert _NO_KEY_NOTE in printed[_ATTRIBUTION_QUESTION]
+    assert outcomes is not None
+    home = Path.home()
+    assert "bypassPermissions" in (home / ".claude" / "settings.json").read_text()
+    assert "approval_policy" in (home / ".codex" / "config.toml").read_text()
+    assert '"attribution"' not in (home / ".claude" / "settings.json").read_text()
+
+
+def test_headless_yes_asks_nothing_and_says_so():
+    """A7 / T-23-48: --yes asks no run-option question, turns no option on, and says so."""
+    tools = [_tool("claude", "agent"), _tool("pi", "agent"), _tool("starship", "shell")]
+    _, install = _recording_install()
+    console, buf = _console()
+    prompter = _ScriptedPrompter({}, buf)
+
+    outcomes = run_wizard(
+        tools,
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=install,
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
+    )
+
+    output = buf.getvalue()
+    assert outcomes is not None
+    assert prompter.asked == []
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    assert output.index(_LEFT_OFF) < output.index("Summary —")
+    assert "Shell init left off (--yes): starship. Turn it on in Policies." in output
+
+
+def test_the_headless_shell_init_question_is_keyed_and_default_no():
+    """D-11 / R1-54: shell init asks its own sentence with default no; the login shell keeps yes."""
+    tools = [_tool("zoxide", "shell"), _tool("oh-my-zsh", "shell")]
+    console, buf = _console()
+    prompter = _ScriptedPrompter({_BATCH_QUESTION: True}, buf)
+
+    run_wizard(
+        tools,
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=False),
+        runner=_runner,
+        resolve_tag=_resolve_tag,
+        install=_asking_install(
+            [("zoxide", "source_shell_init"), ("oh-my-zsh", "set_login_shell")]
+        ),
+        refresh=presence_service(tools),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert len(prompter.asked) == 3
+    assert {(message, default) for message, default, _ in prompter.asked} == {
+        (_BATCH_QUESTION, True),
+        (_ZOXIDE_QUESTION, False),
+        (_LOGIN_SHELL_QUESTION, True),
+    }
+
+
 def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
     tools = [_tool("rg", "search"), _tool("fd", "search")]
     installed, install = _recording_install()
@@ -216,7 +358,7 @@ def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
 
 def test_all_current_without_yes_prints_the_plan_and_summary_without_asking():
     class MustNotConfirm(FakePrompter):
-        def confirm(self, message: str) -> bool:
+        def confirm(self, message: str, *, default: bool = True) -> bool:
             raise AssertionError("confirm must not be called")
 
     tools = [_tool("rg", "search"), _tool("fd", "search")]
