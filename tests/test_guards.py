@@ -37,10 +37,12 @@ from installer.guards import (
     redirect_shim_script,
     remove_ban_aliases,
     remove_shims,
+    rewrite_outdated_ban_aliases,
     shell_path,
     shim_script,
     write_ban_aliases,
 )
+from installer.locations import display_path
 
 
 def test_shim_script_names_the_replacement_and_exits_nonzero():
@@ -153,9 +155,7 @@ def test_ban_alias_block_aliases_each_banned_command():
     assert "alias pnpm=" not in block
     assert "alias pip=" in block
     assert "alias pip3=" in block
-    assert "alias npx='pnpm dlx'" in block
-    npx_lines = [line for line in block.splitlines() if line.startswith("alias npx=")]
-    assert npx_lines == ["alias npx='pnpm dlx'"]
+    assert not [line for line in block.splitlines() if line.startswith("alias npx=")]
     assert "banned" in block
 
 
@@ -225,6 +225,72 @@ def test_ban_aliases_write_through_a_symlinked_rc(tmp_path: Path):
     new_text = target.read_text()
     assert BAN_BEGIN in new_text
     assert new_text.startswith("# user\nexport A=1\n")
+
+
+def _old_ban_block() -> str:
+    """The pre-phase block: the current block with the npx redirect alias before BAN_END."""
+    return ban_alias_block().replace(BAN_END, f"alias npx='pnpm dlx'\n{BAN_END}")
+
+
+def test_rewrite_outdated_ban_aliases_drops_the_npx_alias(tmp_path: Path):
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(f"user1\nuser2\n{_old_ban_block()}\nuser3\nuser4\n")
+    expected = f"user1\nuser2\n{ban_alias_block()}\nuser3\nuser4\n"
+    message = f"Rewrote the guard aliases in {display_path(rc)}: npx now runs through its redirect."
+    assert rewrite_outdated_ban_aliases([rc]) == ((message, "ok"),)
+    assert rc.read_text() == expected
+    assert rewrite_outdated_ban_aliases([rc]) == ()
+    assert rc.read_text() == expected
+
+
+@pytest.mark.parametrize("shape", ["missing", "no_block", "orphan_begin"])
+def test_rewrite_outdated_ban_aliases_never_adds_a_block(tmp_path: Path, shape: str):
+    rc = tmp_path / ".myshellrc"
+    texts = {"no_block": "user only\n", "orphan_begin": f"user only\n{BAN_BEGIN}\nalias pip='x'\n"}
+    if shape in texts:
+        rc.write_text(texts[shape])
+    assert rewrite_outdated_ban_aliases([rc]) == ()
+    assert rc.exists() == (shape in texts)
+    if shape in texts:
+        assert rc.read_text() == texts[shape]
+
+
+def test_rewrite_outdated_ban_aliases_leaves_a_current_block(tmp_path: Path):
+    rc = tmp_path / ".myshellrc"
+    text = f"user1\n{ban_alias_block()}\nuser2\n"
+    rc.write_text(text)
+    assert rewrite_outdated_ban_aliases([rc]) == ()
+    assert rc.read_text() == text
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
+def test_rewrite_outdated_ban_aliases_warns_when_it_cannot_write(tmp_path: Path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    rc = locked / ".myshellrc"
+    text = f"user1\n{_old_ban_block()}\n"
+    rc.write_text(text)
+    locked.chmod(0o555)
+    try:
+        results = rewrite_outdated_ban_aliases([rc])
+    finally:
+        locked.chmod(0o755)
+    assert len(results) == 1
+    message, level = results[0]
+    assert level == "warn"
+    assert message.startswith("Could not rewrite the guard aliases in ")
+    assert message.endswith("; fix its permissions, then relaunch.")
+    assert rc.read_text() == text
+
+
+def test_rewrite_outdated_ban_aliases_sanitizes_the_path(tmp_path: Path):
+    odd = tmp_path / "a\x1b[31mb"
+    odd.mkdir()
+    rc = odd / ".myshellrc"
+    rc.write_text(f"{_old_ban_block()}\n")
+    ((message, level),) = rewrite_outdated_ban_aliases([rc])
+    assert level == "ok"
+    assert not any(ord(ch) < 32 or ord(ch) == 127 for ch in message)
 
 
 def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):

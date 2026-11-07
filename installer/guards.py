@@ -7,8 +7,8 @@ Two removable, idempotent layers steer callers to the managed toolchain:
    They catch ANY caller that resolves via PATH: you, an agent, a script, a
    non-interactive shell.
 2. Interactive-shell aliases — a faster path for interactive use, written as a
-   marker-delimited block (reusing shellrc's block machinery). A redirect alias
-   performs the redirect; a ban alias prints a message and fails.
+   marker-delimited block (reusing shellrc's block machinery). A ban alias prints
+   a message and fails; npm, pnpm and npx have no alias and rely on the PATH shim.
 
 Neither layer is hermetic: `python -m pip install` bypasses the pip shim, and a
 real npm/pip earlier on PATH wins. guard_path_warning flags the PATH-order case.
@@ -29,12 +29,13 @@ https://docs.astral.sh/uv/pip/compatibility/ and
 import os
 import shlex
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import installer.locations
 from installer.atomic import atomic_write_text, read_capped
+from installer.sanitize import sanitize_log_line
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
@@ -627,28 +628,17 @@ def guard_label(name: str) -> str:
 def ban_alias_block() -> str:
     """Marker-delimited alias block (no trailing newline, like shellrc blocks).
 
-    An interactive redirect alias must perform the redirect, not warn about it —
-    a redirect is meant to be transparent. The alias names the target by PATH
-    name while the installed shim bakes the real_binary-resolved absolute path,
-    so in an interactive shell the alias resolves the target through the user's
-    own PATH. That is intended — an alias must keep working after the target
-    moves — and it stays harmless after plan 04-03 wraps pnpm, because dlx is
-    not one of GLOBAL_SUBCOMMANDS and therefore never reaches the volta branch.
-
-    Names in GLOBAL_REDIRECTED are skipped: a one-line alias cannot reproduce
-    the argv branch, so an npm alias would claim the command is blocked while
-    the PATH shim was redirecting its global form, and any pnpm alias risks
-    breaking a sanctioned tool in interactive shells. For these two, the PATH
-    shim is the only layer.
+    Names in GLOBAL_REDIRECTED and REDIRECTED are skipped: a one-line alias cannot
+    reproduce their argv branch or the npx translator. An npm alias would claim the
+    command is blocked while the PATH shim was redirecting its global form, a pnpm
+    alias risks breaking a sanctioned tool in interactive shells, and an npx alias
+    would hand raw flags to `pnpm dlx`. For these, the PATH shim is the only layer.
+    An interactive npx therefore resolves to that shim, or to a real npx earlier on
+    PATH, which parses its own flags.
     """
     lines = [BAN_BEGIN]
     for name, hint in BANNED.items():
-        if name in GLOBAL_REDIRECTED:
-            continue
-        if name in REDIRECTED:
-            spec = REDIRECTED[name]
-            tokens = " ".join((spec.target, *spec.args))
-            lines.append(f"alias {name}='{tokens}'")
+        if name in GLOBAL_REDIRECTED or name in REDIRECTED:
             continue
         lines.append(
             f"""alias {name}='echo "tools-installer: {name} is banned — use {hint}." >&2; false'"""
@@ -673,6 +663,53 @@ def remove_ban_aliases(rc_path: Path) -> None:
     stripped = strip_block(original, BAN_BEGIN, BAN_END)
     if stripped != original:
         atomic_write_text(rc_path, stripped)
+
+
+_RC_MAX_BYTES = 1 << 20  # the cap installer.tweaks reads an rc file with
+
+
+def rewrite_outdated_ban_aliases(rc_paths: Sequence[Path]) -> tuple[tuple[str, str], ...]:
+    """Rewrite each rc file's guard alias block to match ban_alias_block(); report each change.
+
+    Only the marker-owned block is rewritten, through write_ban_aliases, which leaves every
+    other line as it was. A file without a well-formed BAN_BEGIN..BAN_END pair is skipped, so
+    a block is never added, and a missing, unreadable or non-UTF-8 file is skipped silently.
+    A write failure is reported as a warning. It never raises, so a launch cannot fail on it.
+    """
+    expected = ban_alias_block().split("\n")
+    results: list[tuple[str, str]] = []
+    for rc_path in rc_paths:
+        try:
+            data = read_capped(rc_path, _RC_MAX_BYTES, follow_symlinks=True)
+            if data is None:
+                continue
+            lines = data.decode("utf-8").split("\n")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if BAN_BEGIN not in lines:
+            continue
+        # The same pairing apply_block uses: the last begin marker, then the first end after it.
+        start = max(index for index, line in enumerate(lines) if line == BAN_BEGIN)
+        stops = [index for index in range(start, len(lines)) if lines[index] == BAN_END]
+        if not stops or lines[start : stops[0] + 1] == expected:
+            continue
+        shown = sanitize_log_line(installer.locations.display_path(rc_path))
+        try:
+            write_ban_aliases(rc_path)
+        except OSError as exc:
+            first = sanitize_log_line(((exc.strerror or str(exc)).splitlines() or [""])[0])
+            results.append(
+                (
+                    f"Could not rewrite the guard aliases in {shown}: {first}; "
+                    "fix its permissions, then relaunch.",
+                    "warn",
+                )
+            )
+            continue
+        results.append(
+            (f"Rewrote the guard aliases in {shown}: npx now runs through its redirect.", "ok")
+        )
+    return tuple(results)
 
 
 def guard_path_warning(
