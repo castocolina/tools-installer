@@ -1245,6 +1245,23 @@ def test_the_shell_section_prints_after_a_zshenv_reconfigure() -> None:
     assert "Shell" not in buf.getvalue().splitlines()
 
 
+def test_the_shell_section_strips_control_characters() -> None:
+    """O-2: the zsh path and the ZDOTDIR-derived .zshenv path are sanitized like hook lines."""
+    step = ConfigStep(
+        "export SHELL", "zshenv_shell", report="/opt/z\x1b]0;t\x07sh\n~/zd\x1b[2J/.zshenv"
+    )
+    outcome = RowOutcome(
+        PlanRow("zsh", Disposition.RECONFIGURE, "does not start zsh", steps=(step,)), "done"
+    )
+    console, buf = _console()
+    render_shell_section([outcome], console)
+    assert buf.getvalue().splitlines() == [
+        "Shell",
+        "~/zd[2J/.zshenv now exports SHELL; new terminals start with it.",
+        "  SHELL=/opt/z]0;tsh",
+    ]
+
+
 def test_reconfigure_report_lines_fit_78_cells() -> None:
     outcome = _zsh_reconfigured_outcome()
     console, buf = _console()

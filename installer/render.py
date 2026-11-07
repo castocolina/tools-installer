@@ -532,7 +532,7 @@ def render_shell_section(outcomes: Sequence[RowOutcome], console: Console) -> No
             f"{shown or '~/.zshenv'} now exports SHELL; new terminals start with it.",
             f"  SHELL={zsh}",
         ):
-            console.print(line, markup=False, highlight=False, soft_wrap=True)
+            console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
 
 
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:
