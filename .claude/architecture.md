@@ -111,8 +111,9 @@ relies on the resolver's deps-first order and deliberately does not sort, so
 `requires` plus `resolve_dependencies` remains the sole ordering mechanism.
 
 `installer/shellrc.py`'s `apply_block`/`strip_block` applies only to files this
-installer owns — `~/.myshellrc`, and the rc files it wires a `source` line into
-— and every `TweakBundle` uses it. Oh-My-Zsh's `plugins=(...)` array is the
+installer owns — `~/.myshellrc`, the rc files it wires a `source` line into, and
+`$ZDOTDIR/.zshenv` (the managed `SHELL` block, Phase 23) — and every `TweakBundle`
+uses it. Oh-My-Zsh's `plugins=(...)` array is the
 single exception, edited in place by `installer/omz.py`, because `.zshrc` and
 that line belong to the user's own oh-my-zsh install, so no tools-installer
 marker is ever written there. Only the single-line form is supported; the

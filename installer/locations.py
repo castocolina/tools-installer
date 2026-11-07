@@ -1,8 +1,13 @@
 """Userspace install-location policy: binaries land under ~/.local/bin, no sudo."""
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
+
+from installer.atomic import read_capped
+
+_ZDOTDIR_ASSIGNMENT = re.compile(r"^\s*(export\s+)?ZDOTDIR=", re.MULTILINE)
 
 
 def zshrc_path(home: Path, environ: Mapping[str, str]) -> Path:
@@ -19,6 +24,23 @@ def zshrc_path(home: Path, environ: Mapping[str, str]) -> Path:
     if zdotdir and Path(zdotdir).is_dir():
         return Path(zdotdir) / ".zshrc"
     return home / ".zshrc"
+
+
+def zshenv_path(home: Path, environ: Mapping[str, str]) -> Path:
+    """The .zshenv zsh actually reads.
+
+    zsh reads ~/.zshenv before it applies a ZDOTDIR assigned inside that file, so
+    such an assignment keeps the file in home; otherwise it follows zshrc_path.
+    An unreadable ~/.zshenv counts as absent, and the sync reports its own warning.
+    """
+    home_zshenv = home / ".zshenv"
+    try:
+        data = read_capped(home_zshenv, 1 << 20, follow_symlinks=True)
+    except OSError:
+        data = None
+    if data is not None and _ZDOTDIR_ASSIGNMENT.search(data.decode("utf-8", "replace")):
+        return home_zshenv
+    return zshrc_path(home, environ).with_name(".zshenv")
 
 
 def _zshrc() -> Path:

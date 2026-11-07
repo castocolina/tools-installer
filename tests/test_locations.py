@@ -283,6 +283,25 @@ def test_zshrc_path_ignores_a_zdotdir_that_is_not_a_directory(tmp_path: Path) ->
     assert zshrc_path(tmp_path, {"ZDOTDIR": str(tmp_path / "gone")}) == tmp_path / ".zshrc"
 
 
+def test_zshenv_path_follows_zdotdir(tmp_path: Path) -> None:
+    from installer.locations import zshenv_path
+
+    zdotdir = tmp_path / "zdot"
+    zdotdir.mkdir()
+    assert zshenv_path(tmp_path, {}) == tmp_path / ".zshenv"
+    assert zshenv_path(tmp_path, {"ZDOTDIR": str(tmp_path / "gone")}) == tmp_path / ".zshenv"
+    assert zshenv_path(tmp_path, {"ZDOTDIR": str(zdotdir)}) == zdotdir / ".zshenv"
+
+    # A ZDOTDIR assigned inside ~/.zshenv is read before the new ZDOTDIR applies (review R1-20).
+    home_zshenv = tmp_path / ".zshenv"
+    home_zshenv.write_text('export ZDOTDIR="$HOME/.config/zsh"\n')
+    assert zshenv_path(tmp_path, {"ZDOTDIR": str(zdotdir)}) == home_zshenv
+
+    # A commented assignment does not count.
+    home_zshenv.write_text("# ZDOTDIR=/elsewhere\n")
+    assert zshenv_path(tmp_path, {"ZDOTDIR": str(zdotdir)}) == zdotdir / ".zshenv"
+
+
 def test_rc_paths_and_ban_sweep_follow_zdotdir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

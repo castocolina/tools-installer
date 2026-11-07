@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from installer.atomic import atomic_write_text, read_capped
-from installer.locations import zshrc_path
+from installer.locations import zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
+from installer.shellrc import apply_block, strip_block
 
 Lookup = Callable[[str], str | None]
 
@@ -61,7 +62,9 @@ class TerminalShellResult:
 
     `drifted` names the terminals whose owned region differed from what
     synchronization writes (a write run then fixes it); the refresh pass reads
-    it from a dry run for `≈` (D-16).
+    it from a dry run for `≈` (D-16). `zsh` is the resolved zsh path and `paths`
+    maps each synchronized target (`zshenv`, `kitty`, `wezterm`, `konsole`) to
+    the file it wrote or checked.
     """
 
     configured: tuple[str, ...] = ()
@@ -69,6 +72,8 @@ class TerminalShellResult:
     reverted: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     drifted: tuple[str, ...] = ()
+    zsh: str | None = None
+    paths: tuple[tuple[str, Path], ...] = ()
 
 
 def _marker(terminal: str, edge: str, *, comment: str = "#") -> str:
@@ -155,7 +160,15 @@ def _lua_string(value: str) -> str:
 
 def _wezterm_content(existing: str, zsh_path: str) -> str | None:
     """Add the owned Lua region before a recognised `return config` boundary."""
-    body = f'config.default_prog = {{ {_lua_string(zsh_path)}, "-l" }}'
+    # `or {}` keeps a user's own environment table set above the region.
+    shell = _lua_string(zsh_path)
+    body = "\n".join(
+        (
+            f'config.default_prog = {{ {shell}, "-l" }}',
+            "config.set_environment_variables = config.set_environment_variables or {}",
+            f"config.set_environment_variables.SHELL = {shell}",
+        )
+    )
     updated = _replace_owned_region(existing, "wezterm", body, comment="--")
     if "tools-installer terminal-shell wezterm" in existing:
         return (
@@ -288,6 +301,42 @@ def _write_if_changed(path: Path, content: str, *, write: bool = True) -> bool:
     return True
 
 
+# The owned SHELL export in the .zshenv zsh reads (CONF-05, D-15): every zsh, in a
+# terminal or not, starts with the real zsh as $SHELL.
+ZSHENV_BEGIN = "# >>> tools-installer shell >>>"
+ZSHENV_END = "# <<< tools-installer shell <<<"
+
+
+def zshenv_block(zsh_path: str) -> str:
+    return f"{ZSHENV_BEGIN}\nexport SHELL={shlex.quote(zsh_path)}\n{ZSHENV_END}"
+
+
+def _edit_zshenv(
+    home: Path, environ: Mapping[str, str], block: str | None, *, write: bool
+) -> tuple[bool, str | None]:
+    """Apply `block` to the owned region of the .zshenv zsh reads, or strip it when None.
+
+    Returns (changed, warning). An OSError (non-UTF-8, FIFO, oversize, permission)
+    becomes one `zshenv:` warning, so the terminal configs still synchronize and
+    this file is left as it was (review R1-21).
+    """
+    path = zshenv_path(home, environ)
+    try:
+        existing = _read_text(path)
+        if block is None:
+            updated = strip_block(existing, ZSHENV_BEGIN, ZSHENV_END)
+        else:
+            updated = apply_block(existing, block, ZSHENV_BEGIN, ZSHENV_END)
+        return _write_if_changed(path, updated, write=write), None
+    except OSError as exc:
+        first_line = (str(exc).splitlines() or [type(exc).__name__])[0]
+        return False, f"zshenv: {first_line}"
+
+
+def _konsole_profile_path(home: Path, environ: Mapping[str, str]) -> Path:
+    return _xdg_data_home(home, environ) / "konsole" / "tools-installer-zsh.profile"
+
+
 def _sync_konsole(
     *, home: Path, environ: Mapping[str, str], zsh_path: str, lookup: Lookup, write: bool = True
 ) -> tuple[bool, str | None, bool]:
@@ -301,7 +350,7 @@ def _sync_konsole(
         return False, None, False
 
     data_home = _xdg_data_home(home, environ)
-    profile = data_home / "konsole" / "tools-installer-zsh.profile"
+    profile = _konsole_profile_path(home, environ)
     state = data_home / "tools-installer" / "terminal-shell-konsole-default"
     konsolerc = _xdg_config_home(home, environ) / "konsolerc"
     profile_content = _read_text(profile)
@@ -396,6 +445,9 @@ def _revert_konsole(*, home: Path, environ: Mapping[str, str]) -> bool:
 def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> TerminalShellResult:
     """Remove only complete terminal regions created by this synchronizer."""
     reverted: list[str] = []
+    zshenv_changed, zshenv_warning = _edit_zshenv(home, environ, None, write=True)
+    if zshenv_changed:
+        reverted.append("zshenv")
     kitty = _kitty_config_path(home, environ)
     if _remove_if_owned(kitty, "kitty"):
         reverted.append("kitty")
@@ -404,7 +456,11 @@ def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> Termin
         reverted.append("wezterm")
     if _revert_konsole(home=home, environ=environ):
         reverted.append("konsole")
-    return TerminalShellResult(reverted=tuple(reverted), skipped=("zsh unavailable",))
+    return TerminalShellResult(
+        reverted=tuple(reverted),
+        skipped=("zsh unavailable",),
+        warnings=() if zshenv_warning is None else (zshenv_warning,),
+    )
 
 
 def sync_terminal_shells(
@@ -415,11 +471,12 @@ def sync_terminal_shells(
     lookup: Lookup,
     write: bool = True,
 ) -> TerminalShellResult:
-    """Synchronize zsh into detected Linux terminal emulators.
+    """Synchronize zsh into detected Linux terminal emulators and the .zshenv zsh reads.
 
-    The caller injects every environment-dependent value so tests never consult or
-    mutate the developer's actual home directory. `write=False` is a dry run
-    (D-16, L-19-05): it reports `drifted` and writes, creates, renames and
+    The owned SHELL block in .zshenv (CONF-05) is kept first, then kitty, WezTerm and
+    Konsole. The caller injects every environment-dependent value so tests never
+    consult or mutate the developer's actual home directory. `write=False` is a dry
+    run (D-16, L-19-05): it reports `drifted` and writes, creates, renames and
     deletes nothing -- no revert, no .zshrc repair, no terminal config.
     """
     if platform.os == "macos":
@@ -430,6 +487,24 @@ def sync_terminal_shells(
         if not write:
             return TerminalShellResult(skipped=("zsh unavailable",))
         return _revert_terminal_shells(home=home, environ=environ)
+
+    configured: list[str] = []
+    skipped: list[str] = []
+    warnings: list[str] = []
+    drifted: list[str] = []
+    paths: list[tuple[str, Path]] = []
+    zshenv = zshenv_path(home, environ)
+    zshenv_changed, zshenv_warning = _edit_zshenv(
+        home, environ, zshenv_block(zsh_path), write=write
+    )
+    if zshenv_warning is not None:
+        warnings.append(zshenv_warning)
+    else:
+        paths.append(("zshenv", zshenv))
+        if write:
+            configured.append("zshenv")
+        if zshenv_changed:
+            drifted.append("zshenv")
 
     root = omz_root(home, environ)
     if write and root is not None:
@@ -443,20 +518,20 @@ def sync_terminal_shells(
         # repair never edits a file zsh does not source.
         ensure_zshrc_template(zshrc_path(home, environ), root)
 
-    configured: list[str] = []
-    skipped: list[str] = []
-    warnings: list[str] = []
-    drifted: list[str] = []
     if _safe_executable(lookup("kitty")) is None:
         skipped.append("kitty unavailable")
     else:
         config_path = _kitty_config_path(home, environ)
+        # kitty's `env` line takes the rest of the line as the value, so the path is not quoted.
         updated = _replace_owned_region(
-            _read_text(config_path), "kitty", f"shell {shlex.join((zsh_path, '-l'))}"
+            _read_text(config_path),
+            "kitty",
+            f"shell {shlex.join((zsh_path, '-l'))}\nenv SHELL={zsh_path}",
         )
         if _write_if_changed(config_path, updated, write=write):
             drifted.append("kitty")
         configured.append("kitty")
+        paths.append(("kitty", config_path))
 
     if _safe_executable(lookup("wezterm")) is None:
         # CR-03: kitty (above) and Konsole (_sync_konsole) both gate on a
@@ -478,12 +553,14 @@ def sync_terminal_shells(
             if _write_if_changed(wezterm_path, wezterm_content, write=write):
                 drifted.append("wezterm")
             configured.append("wezterm")
+            paths.append(("wezterm", wezterm_path))
 
     konsole_configured, konsole_warning, konsole_drifted = _sync_konsole(
         home=home, environ=environ, zsh_path=zsh_path, lookup=lookup, write=write
     )
     if konsole_configured:
         configured.append("konsole")
+        paths.append(("konsole", _konsole_profile_path(home, environ)))
     if konsole_drifted:
         drifted.append("konsole")
     if konsole_warning is not None:
@@ -493,4 +570,6 @@ def sync_terminal_shells(
         skipped=tuple(skipped),
         warnings=tuple(warnings),
         drifted=tuple(drifted),
+        zsh=zsh_path,
+        paths=tuple(paths),
     )
