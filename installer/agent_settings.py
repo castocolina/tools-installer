@@ -29,12 +29,12 @@ FORMAT_NAMES: Final = {"json": "JSON", "jsonc": "JSONC", "toml": "TOML"}
 CHANGED_WHILE_WRITING: Final = "changed while being written"
 _WHITESPACE: Final = " \t\r\n"
 # A string is kept so that "//" inside a URL is data; a comment and a comma that
-# closes an object or array (a trailing comma) are blanked, newlines kept.
+# closes an object or array (a trailing comma) are blanked, newlines kept. A block
+# comment cannot match past its own `*/`, so two comments never merge into one.
 _JSONC_TOKEN: Final = re.compile(
     r'("(?:\\.|[^"\\])*")'
-    r"|(//[^\n]*|/\*.*?\*/)"
-    r"|(,)(?=(?:\s|//[^\n]*|/\*.*?\*/)*[}\]])",
-    re.DOTALL,
+    r"|(//[^\n]*|/\*(?:[^*]|\*(?!/))*\*/)"
+    r"|(,)(?=(?:\s|//[^\n]*|/\*(?:[^*]|\*(?!/))*\*/)*[}\]])",
 )
 
 

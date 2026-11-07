@@ -941,3 +941,15 @@ def test_opencode_and_a_created_claude_parent_revert_after_a_user_key_follows() 
 
     assert json.loads(opencode.read_text(encoding="utf-8")) == {"theme": "dark"}
     assert json.loads(claude.read_text(encoding="utf-8")) == {"x": 1, "model": "opus"}
+
+
+def test_jsonc_block_comments_never_reach_across_each_other() -> None:
+    assert parse_settings('{"a": 1, /* c */ "b": 2 /* d */}', "jsonc") == {"a": 1, "b": 2}
+    commented_tail = '{\n  "a": 1, /* why */\n  "b": 2\n  /* "c": 3 */\n}\n'
+    assert parse_settings(commented_tail, "jsonc") == {"a": 1, "b": 2}
+    markers_in_strings = '{"u": "/* not */", "v": "a, */ }", /* real */ "w": [1, /* x */ 2,]}'
+    assert parse_settings(markers_in_strings, "jsonc") == {
+        "u": "/* not */",
+        "v": "a, */ }",
+        "w": [1, 2],
+    }
