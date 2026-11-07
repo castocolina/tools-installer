@@ -815,24 +815,64 @@ def file_problem(agent: str, *, home: Path, platform_os: str) -> str | None:
     return _read_document(agent, path, _format(agent), home=home, platform_os=platform_os)[1]
 
 
-def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingState:
-    """on: a recorded key still holds ours. drift: recorded keys were all changed by someone else.
-    yours: every key holds ours and nothing is recorded. off: anything else."""
-    fmt = _format(agent)
+@dataclass(frozen=True)
+class SettingFacts:
+    """Who put each of one setting's keys where it now is; `path` is the file they live in."""
+
+    path: Path
+    written: tuple[str, ...]  # recorded keys still holding our value
+    set_by_you: tuple[tuple[str, str], ...]  # (key, JSON value): another value, no record
+    already: tuple[str, ...]  # keys holding our value, no record
+    drifted: tuple[str, ...]  # recorded keys that no longer hold our value
+
+
+def setting_facts(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingFacts:
+    """The one classification of a setting's keys; the only place SettingsUnreadable is raised."""
     path = settings_file(agent, home=home, platform_os=platform_os)
     ledger = read_ledger(agent) or ConfigLedger(agent)
-    in_file = tuple(entry for entry in ledger.entries if entry.file == str(path))
-    doc, problem = _read_document(agent, path, fmt, home=home, platform_os=platform_os)
+    in_file = tuple(
+        entry for entry in ledger.entries if entry.file == str(path) and entry.setting == setting
+    )
+    doc, problem = _read_document(agent, path, _format(agent), home=home, platform_os=platform_os)
     if doc is None:
         if in_file:
             raise SettingsUnreadable(path, problem or "unreadable")
-        return "off"
-    entries = tuple(entry for entry in in_file if entry.setting == setting)
-    if entries:
-        holding = any(same_value(lookup(doc, entry.key_path), entry.value) for entry in entries)
-        return "on" if holding else "drift"
-    table = setting_keys(agent, setting, platform_os)
-    if table and all(same_value(lookup(doc, key.path), key.value) for key in table):
+        return SettingFacts(path, (), (), (), ())
+    holding = tuple(
+        ".".join(entry.key_path)
+        for entry in in_file
+        if same_value(lookup(doc, entry.key_path), entry.value)
+    )
+    drifted = tuple(
+        ".".join(entry.key_path)
+        for entry in in_file
+        if not same_value(lookup(doc, entry.key_path), entry.value)
+    )
+    recorded = {entry.key_path for entry in in_file}
+    set_by_you: list[tuple[str, str]] = []
+    already: list[str] = []
+    for key in setting_keys(agent, setting, platform_os):
+        current = lookup(doc, key.path)
+        if key.path in recorded or current is ABSENT:
+            continue
+        if same_value(current, key.value):
+            already.append(".".join(key.path))
+        elif not (key.cli_default is not ABSENT and same_value(current, key.cli_default)):
+            # A CLI default is replaced on apply, so it is not the user's own value.
+            set_by_you.append((".".join(key.path), _dump(current)))
+    return SettingFacts(path, holding, tuple(set_by_you), tuple(already), drifted)
+
+
+def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingState:
+    """on: a recorded key still holds ours. drift: recorded keys were all changed by someone else.
+    yours: every key holds ours and nothing is recorded. off: anything else."""
+    facts = setting_facts(agent, setting, home=home, platform_os=platform_os)
+    if facts.written:
+        return "on"
+    if facts.drifted:
+        return "drift"
+    keys = setting_keys(agent, setting, platform_os)
+    if keys and len(facts.already) == len(keys):
         return "yours"
     return "off"
 

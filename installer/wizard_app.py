@@ -1977,6 +1977,8 @@ class PoliciesScreen(AppScreen):
         }
         # Policies whose last read said owned-but-not-active.
         self._drift: set[str] = set()
+        # Settings rows whose keys all hold our values with no record: nothing to write.
+        self._yours: set[str] = set()
         # Bumped by every render and mutation completion that supersedes a
         # job-state read in flight; JobStatesRead carries the one it began with.
         self._job_state_generation = 0
@@ -2006,7 +2008,9 @@ class PoliciesScreen(AppScreen):
         table.add_column("Requires", key="requires")
         table.add_column("Effect", key="effect")
         for policy in self._policies:
-            effect_kind = "scheduled job" if policy.log_path is not None else "shell config"
+            effect_kind = policy.effect_kind or (
+                "scheduled job" if policy.log_path is not None else "shell config"
+            )
             table.add_row(
                 Text(""),
                 Text(policy.label, style="bold yellow"),
@@ -2082,11 +2086,25 @@ class PoliciesScreen(AppScreen):
         is_active keeps the state its last toggle left. A failed read drops the
         remembered answer: the row is never painted from a previous read.
         """
+        if policy.state is not None:
+            state, error = run_live(policy.state)
+            self._record_settings_state(policy.id, state)
+            return error
         if policy.is_active is None or policy.state_cache is not None:
             return None
         read, error = _read_active_owned(policy)
         self._record_state(policy.id, read)
         return error
+
+    def _record_settings_state(self, policy_id: str, state: str | None) -> None:
+        """A settings row's read: on, yours, off or drift. None (unreadable) drops it."""
+        self._yours.discard(policy_id)
+        if state is None:
+            self._record_state(policy_id, None)
+            return
+        self._record_state(policy_id, (state == "on", state == "drift"))
+        if state == "yours":
+            self._yours.add(policy_id)
 
     def _record_state(self, policy_id: str, read: tuple[bool, bool] | None) -> None:
         """Keep one policy's (active, owned) answer; None drops it (blank cell)."""
@@ -2169,6 +2187,8 @@ class PoliciesScreen(AppScreen):
         active = self.active_state.get(policy_id)
         if active is None:
             return Text("")
+        if policy_id in self._yours:
+            return Text("● [yours]", style="green")
         if policy_id in self._drift:
             return Text("! [drift]", style="yellow")
         label = "● [on]" if active else "○ [off]"
@@ -2215,40 +2235,6 @@ class PoliciesScreen(AppScreen):
                 "Use wait_time --seconds to preview the parsed delay without sleeping.",
                 "Requires uv at runtime so the Python helper runs through the managed toolchain.",
             ),
-            "tweak:claude-skip": (
-                "Aliases claude to claude --dangerously-skip-permissions.",
-                "Useful only in trusted, disposable workspaces where confirmation prompts are"
-                " intentional noise.",
-                "Disable it when you need normal Claude Code permission prompts back.",
-            ),
-            "tweak:codex-skip": (
-                "Aliases codex to codex --dangerously-bypass-approvals-and-sandbox.",
-                "Useful only in trusted, disposable workspaces where confirmation and sandbox"
-                " prompts are intentional noise.",
-                "Disable it when you need normal Codex confirmation/sandboxing prompts back.",
-            ),
-            "tweak:opencode-auto": (
-                "Aliases opencode to opencode --auto.",
-                "Narrower than claude-skip's/codex-skip's full bypass: explicit deny rules in"
-                " your own opencode config still apply.",
-                "Disable it when you want normal per-permission prompting back.",
-            ),
-            "tweak:cursor-agent-model": (
-                "Injects --model gpt-5.6-sol-high into a bare cursor-agent/cursor call, and"
-                " never overrides an already-passed --model (either --model X or --model=X).",
-                "This tweak only requests, per Cursor's own headless-mode changelog fix, this"
-                " model's full context — this installer does not independently verify the"
-                " context window reached in a given response.",
-                "Requires a Cursor plan that actually includes this model; an unsupported plan"
-                " may error or silently downgrade.",
-                "Enabling this tweak automatically removes (via unalias) a cursor-agent/cursor"
-                " alias that is active before this block loads — not any alias anywhere in your"
-                " config — so the tweak's own function takes effect over whatever was defined"
-                " earlier. A same-named alias or function defined later in your own sourced"
-                " files still wins, since shell source order — not unalias — controls the final"
-                " definition.",
-                "Disable it to keep using whatever model was last selected.",
-            ),
             "tweak:apt-upgrade": (
                 "Adds apt-upgrade for upgrading only packages that already have updates.",
                 "Keeps the command narrower than a broad apt upgrade flow.",
@@ -2292,8 +2278,12 @@ class PoliciesScreen(AppScreen):
                 env_redirect.BUN_CACHE_REDIRECT.coverage_caveat,
             ),
         }
-        lines = [_DRIFT_DETAIL] if policy.id in self._drift else []
-        lines.append(f"{policy.label} — {policy.description}")
+        if policy.detail_lines is not None:
+            # A settings row's own lines replace the generic drift and label lines.
+            lines = list(policy.detail_lines())
+        else:
+            lines = [_DRIFT_DETAIL] if policy.id in self._drift else []
+            lines.append(f"{policy.label} — {policy.description}")
         if missing_requires and policy.hard_requires:
             lines.append(
                 "Missing required tool(s): "
@@ -2307,8 +2297,9 @@ class PoliciesScreen(AppScreen):
             )
         elif policy.requires and missing_requires is not None:
             lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
-        lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
-        if policy.id.startswith("tweak:"):
+        if policy.detail_lines is None:
+            lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
+        if policy.id.startswith("tweak:") and policy.detail_lines is None:
             lines.append(
                 "This alias/function needs ~/.myshellrc to be sourced; in split PATH mode,"
                 " enabling this Policy also wires that sourcing into your rc files"
@@ -2564,6 +2555,10 @@ class PoliciesScreen(AppScreen):
                     " Check permissions, then open Policies and press space."
                 ),
             )
+            self.app.request_refresh()
+            return
+        if not result.changed:  # a refused or no-op settings write: the row keeps its state
+            self.app.show_result(self, result.warning or "", "warn")
             self.app.request_refresh()
             return
         new_active = not active
