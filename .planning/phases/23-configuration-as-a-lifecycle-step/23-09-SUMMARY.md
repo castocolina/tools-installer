@@ -2,126 +2,165 @@
 phase: 23-configuration-as-a-lifecycle-step
 plan: "09"
 subsystem: installer
-tags: [shell-init, post-install, tweaks, tdd, blocked]
-status: blocked
-requirements-completed: []
+tags: [shell-init, post-install, tweaks, shellrc, omz, tdd]
+status: complete
+requirements-completed: [CONF-04, CONF-11, CONF-12]
 
-# Actuals (#2632): no plan code reached the branch; the Task 1 work is saved as a patch (see Saved work)
+# Actuals (#2632): chars/4 over the realized code diff (git diff 3dd533e..836e796, 32289 chars)
 actuals:
-  tokens: 0
-  tasks: 0
-  commits: 0
+  tokens: 8072
+  tasks: 3
+  commits: 3
 
-# Measured commit ledger (#3968): rev-list count from the plan base, taken before this SUMMARY commit
-commits: 0
+# Measured commit ledger (#3968): rev-list count from the plan base, taken before this SUMMARY commit.
+# The count includes the earlier blocked-plan SUMMARY commit 3dd533e.
+commits: 4
 plan_head_before: 58fe43485d5a573da08956a70eac6b75a66d4c57
-plan_head_after: 58fe43485d5a573da08956a70eac6b75a66d4c57
+plan_head_after: 836e796
 ---
 
-# Phase 23 Plan 09: Shell-init bundles and install handoffs — Summary (BLOCKED at Task 1)
+# Phase 23 Plan 09: Shell-init bundles and install handoffs — Summary
 
-**Stopped at Task 1 before any commit. The plan's volta shell-init body writes a PATH prepend, which the repo's PATH-accumulation invariant forbids. No code from this plan is on the branch. The Task 1 work is saved as a patch outside the repo.**
+**Starship, direnv, zoxide, fzf, fnm and volta each offer a default-off shell-init block at install; starship's yes also makes it the only prompt; Oh-My-Zsh names its theme; VS Code prints its lean tips; the chsh-absent text names the sync that actually runs.**
 
-## Status by task
+## Performance
 
-| Task | Status |
-| ---- | ------ |
-| 1 | RED run and GREEN implementation done. `make test` fails on one invariant test. Not committed. Code restored to base. |
-| 2 | Not started. It depends on the Task 1 bundles. |
-| 3 | Not started. |
+- **Tasks:** 3 of 3, each test-first with one green commit.
+- **Commits:** `49a8913`, `8902667`, `836e796`. The earlier blocked-plan SUMMARY commit `3dd533e` is kept in history.
+- **Test counts:** base `5680` (5676 passed, 4 skipped) → after Task 1 `5686` → after Task 2 `5711` → after Task 3 `5719` (5715 passed, 4 skipped). The plan delta is +6, +25 and +8.
 
-## Blocker (plan contract vs. repo invariant)
+## Accomplishments
 
-- **Plan:** Task 1 adds six shell-init bundles. Ledger Q4 (locked) and D-11 give volta a body that exports `VOLTA_HOME` and then prepends its bin dir with `case ":$PATH:" in *":$VOLTA_HOME/bin:"*) ;; *) export PATH="$VOLTA_HOME/bin:$PATH" ;; esac`.
-- **Source:** `tests/test_shellrc.py::test_no_accumulating_path_build_under_installer_or_setup` scans `installer/*.py` and `setup.py` for any assignment to `PATH` whose value references `$PATH`. Its only exemption is the `rcclean.py` docstring. The exact failure:
-  ```
-  AssertionError: Found 1 accumulating PATH assignment(s) outside exemptions:
-  installer/tweaks.py:0 in module: __TOOLS_INSTALLER_BIN_DIR__docker-ps() ...
-  ...ME:-$HOME/.volta}"\n  case ":$PATH:" in *":$VOLTA_HOME/bin:"*) ;; *) export PATH="$VOLTA_HOME/bin:$PATH" ;; esac\nfi
-  ```
-  The one hit is the volta body. Every other bundle body passes.
-- **Why no small faithful fix exists:**
-  - Any PATH prepend in a body string matches the needle. The `case` guard does not change the shape the scanner matches.
-  - Hiding the line from the scan, or adding an exemption, silences a check. The rules forbid that, and a module-level exemption would be blanket.
-  - Building the line through `shellrc.path_export_guard` at write time needs a render-time directory, so the body would stop honouring `VOLTA_HOME`. That is a design change.
-- **Option for the orchestrator (recommended):** drop the `export PATH=` line from the volta body and keep the `VOLTA_HOME` export. The standard layout already puts `~/.volta/bin` on PATH. The volta registry method declares `bin_dir = "~/.volta/bin"`, and `collect_bin_dirs` wires it into the managed PATH block when the directory exists. A first install writes the PATH block above shell init (R1-06, Task 2). Only a custom `VOLTA_HOME` would then go unhandled. That changes ledger Q4, which is locked, so this needs an orchestrator decision.
+- `installer/tweaks.py`: `SHELL_INIT_TOOLS`, six shell-init bundles (`id` = tool id, `requires=(tool,)`, `platforms=()`, description = the UI-SPEC effect), `shell_init_bundle(tool_id)`. The bundles sit in `BUNDLES` after `apt-upgrade`.
+- `installer/post_install.py`:
+  - `SensitivePrompt` (with `default`), `SENSITIVE_PROMPTS` and `sensitive_prompt`. `sensitive_prompt` raises `KeyError` for an action with no entry.
+  - The split-mode reader `_shell_init_sourced_from` and its setter `use_shell_init_sourcing`.
+  - Actions `source_shell_init` (through `tweak_policy(...).apply()`, and `apply_theme` for starship), `set_omz_theme` and `show_lean_tips`.
+  - The third chsh-absent line now names the terminal sync.
+- `installer/model.py`: `POST_INSTALL_ACTIONS` and `SENSITIVE_POST_INSTALL_ACTIONS` gained the new names.
+- `installer/shellrc.py`: `_apply_path_block`, used by `write_myshellrc` and `write_managed_path`. A PATH block written into a file with none yet lands above the first tweak or source block. An existing PATH block is still replaced in place. `apply_block` is unchanged.
+- `installer/registry.toml`: oh-my-zsh declares `["set_login_shell", "set_omz_theme"]`; vscode declares `["show_lean_tips"]`. The six `source_shell_init` declarations are not here. They belong to 23-14, as the plan says.
 
-## Task 1 evidence
+## Task Commits
 
-RED, run before the implementation, using the plan's command. It failed at collection on the missing API, so no test ran:
+1. **Task 1: offer starship and friends' shell init at install, default off** — `49a8913` (feat; tests and code in one commit).
+2. **Task 2: six guarded shell-init bundles** — `8902667` (feat; tests and code in one commit).
+3. **Task 3: theme and lean-mode handoff lines; chsh-absent text names the sync** — `836e796` (feat; tests and code in one commit).
+
+## Test-first evidence
+
+### Task 1
+
+RED, the plan's command, at collection on the missing API. No test ran:
 ```
 ImportError: cannot import name 'SENSITIVE_PROMPTS' from 'installer.post_install'
 !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
 exit=2
 ```
 
-RED, the model test, run alone:
+RED, the model test on its own:
 ```
 FAILED tests/test_model.py::test_post_install_action_names_include_the_new_actions
 E       AssertionError: assert ('configure_p..._login_shell') == ('configure_p...ow_lean_tips')
 exit=1
 ```
 
-GREEN, targeted (six new post-install tests, the renamed model test, and the disjoint-table test): `8 passed`, exit 0.
+GREEN, targeted (the six new tests, the renamed model test and the disjoint-table test): `8 passed`, exit 0.
 
-`make validate` on the Task 1 tree: exit 0, after two ruff fixes (a long docstring and a lambda assigned to a name).
+GREEN, full gate on the committed tree: `make validate` exit 0. `make test` exit 0, `5682 passed, 4 skipped`, coverage 96.20%.
 
-`make test` on the Task 1 tree: exit 2, `1 failed, 5681 passed, 4 skipped`. The only failure is the PATH invariant above.
+### Task 2
 
-## Base gate (the tree the SUMMARY commit lands on)
+RED, 25 selected tests, `3 failed, 22 passed`. The failures are the three placement tests:
+```
+FAILED tests/test_post_install.py::test_a_first_install_puts_the_path_block_above_shell_init
+FAILED tests/test_shellrc.py::test_a_new_path_block_lands_above_the_first_tweak_block
+FAILED tests/test_shellrc.py::test_a_new_path_block_lands_above_the_source_block
+E       assert 7 < 0   (path block index 7; zoxide tweak index 0)
+```
 
-- `make validate`: exit 0 (log in the scratchpad).
-- `make test`: exit 0, `5676 passed, 4 skipped`, coverage 96.20%.
+The other 22 passed on the Task 1 code. They are regression guards, not RED: the six `follows_yes_and_no` cases, six `guarded_and_parses` cases, six `parses_in_zsh` cases, `sit_after_apt_upgrade`, `only_starship_touches_the_theme`, `test_an_existing_path_block_is_replaced_in_place` and `test_a_file_without_path_or_tweak_block_appends_the_path_block`.
 
-## Test counts
+GREEN, the same 25 selected tests: `25 passed`, exit 0. None were skipped; zsh is on the host, so `parses_in_zsh` ran.
 
-- Collected at start: 5680 (per-file sum of `pytest --collect-only`). Matches the base run above.
-- Task 1 tree (in the patch): 5686 collected, which is +6. The six new Task 1 tests are `test_starship_yes_turns_shell_init_on_and_empties_the_theme`, `test_a_split_mode_yes_wires_the_rc_files_to_source_myshellrc`, `test_the_default_reader_wires_no_rc_file`, `test_shell_init_is_never_turned_on_without_a_yes`, `test_the_shell_init_prompt_is_keyed_by_action` and `test_every_sensitive_action_has_a_prompt`. The plan delta for Task 1 is met.
-- Committed tree: 5680, unchanged.
+GREEN, full gate: `make validate` exit 0 (after one E501 fix). `make test` exit 0, `5707 passed, 4 skipped`.
 
-## Existing tests changed (in the patch, not committed)
+### Task 3
 
-Each change is forced by a plan decision:
+RED, 8 selected tests, `7 failed, 1 passed`. The failures are the behavioural ones, because `set_omz_theme`, `show_lean_tips` and the registry declarations did not exist yet:
+```
+FAILED tests/test_post_install.py::test_omz_install_adds_robbyrussell_and_names_the_theme_commands
+FAILED tests/test_post_install.py::test_omz_install_keeps_a_user_theme
+FAILED tests/test_post_install.py::test_a_user_theme_name_is_sanitized_in_the_handoff
+FAILED tests/test_post_install.py::test_omz_install_with_starship_on_writes_an_empty_theme
+FAILED tests/test_post_install.py::test_vscode_install_returns_the_lean_tips
+FAILED tests/test_post_install.py::test_the_chsh_absent_text_names_the_sync_that_runs
+FAILED tests/test_registry.py::test_omz_and_vscode_declare_their_actions
+E       AssertionError: assert ('set_login_shell',) == ('set_login_s...et_omz_theme')
+```
 
-- `tests/test_model.py`: `test_post_install_actions_are_the_live_ones` is renamed to `test_post_install_action_names_include_the_new_actions`. Its literal now holds the five plan names, and it also asserts the sensitive tuple and a registry row that declares `source_shell_init`. Reason: the names exist from this plan on (decisions, POST_INSTALL_ACTIONS).
-- `tests/test_post_install.py`: `test_post_install_tables_are_disjoint_and_match_their_schema_sets` replaces `len(actions) == 1` and `actions <= sensitive` with `sensitive <= actions`. Reason: the plan adds a second dispatched action, and Task 3 adds non-sensitive ones.
+`test_omz_install_without_oh_my_zsh_hands_off_nothing` passed on the Task 2 code. It is a regression guard.
+
+GREEN, targeted: `8 passed`, exit 0.
+
+GREEN, full gate: `make validate` exit 0. `make test` exit 0, `5715 passed, 4 skipped`.
+
+## Deviations from Plan
+
+### 1. [Coordinator decision — Q4 amended] volta body exports only `VOLTA_HOME`
+
+- **Found during:** Task 1 `make test`.
+- **Issue:** The plan's volta body prepends `~/.volta/bin` to PATH with `export PATH="$VOLTA_HOME/bin:$PATH"`. That line trips `tests/test_shellrc.py::test_no_accumulating_path_build_under_installer_or_setup`, the PATH-accumulation invariant. Its only exemption is the `rcclean.py` docstring, and the rules forbid exempting or silencing it. An earlier executor stopped here and recorded the blocker (`3dd533e`). A patch of the work was saved outside the repo.
+- **Decision (binding, from the coordinator):** the volta body exports only `VOLTA_HOME`. `~/.volta/bin` reaches PATH through the managed PATH block via the registry `bin_dir` (`bin_dir = "~/.volta/bin"`, wired by `collect_bin_dirs` once the directory exists). A custom `VOLTA_HOME` outside `~/.volta` is not supported. This is recorded as a `shortcut:` comment above `_VOLTA_BODY` in `installer/tweaks.py`.
+- **Copy kept:** the volta bundle's description is still the UI-SPEC section 2 text, `exports VOLTA_HOME and puts Volta's bin directory on PATH`. It stays verbatim because the copy is locked. Its PATH half is delivered by the managed PATH block, not by the body. **Open copy point for the orchestrator:** the UI-SPEC wording may need a one-line amendment, or the description may stay as is.
+
+### 2. [Plan-forced test changes] existing assertions updated
+
+Each change is listed with its reason. No test was deleted and no assertion was weakened.
+
+- `tests/test_model.py`: `test_post_install_actions_are_the_live_ones` is renamed to `test_post_install_action_names_include_the_new_actions`. Its literal now holds the five plan names, and it also checks the sensitive tuple and that a registry row declaring `source_shell_init` loads. Reason: the names exist from this plan on.
+- `tests/test_post_install.py`: `test_post_install_tables_are_disjoint_and_match_their_schema_sets` replaces `len(actions) == 1` and `actions <= sensitive` with `sensitive <= actions`. Reason: the plan adds a second dispatched action (`source_shell_init`), and Task 3 adds non-sensitive ones.
 - `tests/test_tweaks.py`: `test_bundles_have_stable_ids_and_order` gains the six shell-init ids in `SHELL_INIT_TOOLS` order. Reason: the plan puts them into `BUNDLES` after `apt-upgrade`.
+- `tests/test_registry.py`: `test_only_oh_my_zsh_declares_a_post_install_action` is renamed to `test_only_reviewed_tools_declare_a_post_install_action`. Its expected set is now `["oh-my-zsh", "vscode"]`, and oh-my-zsh's expected actions now include `set_omz_theme`. Reason: the D-07 guard is about reviewed declarers, and this plan adds two reviewed declarations (CONF-11 and CONF-12). The guard still fails on any unreviewed declarer.
 
-No test was deleted. No assertion was weakened.
+### 3. [Judgement] handoff copy outside the plan's examples
 
-## Saved work
+- A theme line that cannot be read (for example, a value with a space) reads `Theme: your own theme (left as is).`. The plan gave no copy for this case.
+- An installer-owned `robbyrussell` that a later run replaces with `robbyrussell` again reads with the "added because ~/.zshrc had no ZSH_THEME" line. This is an edge case, and the copy is slightly wrong there.
 
-- Patch of the Task 1 code and tests, against base `58fe434`: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/23-09-task1-wip.patch` (418 lines). It covers `installer/tweaks.py`, `installer/post_install.py`, `installer/model.py`, `tests/test_post_install.py`, `tests/test_model.py` and `tests/test_tweaks.py`.
-- The six base files were restored with `git checkout --` after the patch was saved. The worktree is clean.
+## Verification
+
+- Acceptance greps: `def sensitive_prompt(` is 1 in `post_install.py`. `"source_shell_init"` is 2 in `model.py`. It is 0 in `registry.toml`. `SHELL_INIT_EFFECTS` is 0. `tweak_policy(` is 1 in `post_install.py`. `write_tweak(` is 0 in `post_install.py`. The new chsh sentence is 1. The stale sentence is 0 across `installer/`.
+- `apply_block` is unchanged. The `installer/shellrc.py` hunks are at lines 234 and later.
+- Suppression gate: `git diff 58fe434 HEAD` adds zero `type: ignore`, `pyright: ignore`, `noqa` or `nosec` lines.
+- Collected test count: base 5680, final 5719.
 
 ## Process notes
 
-- Worktree branch check passed: branch `worktree-agent-a49d102674b326af5`, HEAD `58fe434`.
-- `codegraph init -i` ran in the worktree (gitignored). The main checkout's index had been reported as a different worktree.
-- `make install` created the worktree `.venv` (gitignored).
-- The harness refused compound git commands. Each was split into plain commands.
-- The test-session guard did not trip on either `make test` run.
-- Ledger 0c and the cwd sentinel were written before the first commit, as the protocol requires.
-- AGENTS.md asks for a `Co-Authored-By` trailer on commits. The orchestrator prompt says no attribution trailers. I followed the orchestrator. The SUMMARY commit has no trailer.
-- Nothing was run on the real host. No `make setup`, `make fix` or `make uninstall`. No real rc or settings file was touched. No sudo.
+- Worktree branch check passed: branch `worktree-agent-a49d102674b326af5`, base `58fe434`. The cwd-drift sentinel and the plan-head ledger were written before the first commit.
+- `codegraph init -i` ran in the worktree (gitignored). `make install` created the worktree `.venv` (gitignored).
+- The harness refused some compound git commands, and some commands that named git inside a variable. Each was split into plain commands run from the worktree.
+- Lint fixes applied during the gate, with no suppressions: a long docstring and a lambda assigned to a name (Task 1), an import sort and a long docstring (Task 2).
+- The test-session guard did not trip on any `make test` run.
+- AGENTS.md asks for a `Co-Authored-By` trailer. The orchestrator asked for no attribution trailers, and I followed that. No commit here has a trailer.
+- Nothing ran on the real host. No `make setup`, `make fix` or `make uninstall`. No real rc, settings or shell file was touched. No sudo.
+
+## Not done in this plan (by design)
+
+- The six `post_install = ["source_shell_init"]` registry declarations, and the split-mode reader wiring through `use_shell_init_sourcing`, belong to 23-14.
+- The keyed TUI modal (23-12) and the headless prompt (23-13) still carry the login-shell text literals and read `SENSITIVE_PROMPTS` only after those plans land.
 
 ## Known Stubs
 
-None in the committed tree.
+None.
 
 ## Threat Flags
 
-None in the committed tree.
+None beyond the plan's register. T-23-23 (shell-init body injection) is covered by the code-constant bodies and `test_each_shell_init_body_is_guarded_and_parses`. T-23-24 (no consent, no enable) is covered by `test_shell_init_is_never_turned_on_without_a_yes` and `test_each_shell_init_tool_follows_yes_and_no`. T-23-58 (a PATH block below the guards) is covered by `test_a_first_install_puts_the_path_block_above_shell_init`. T-23-25 (ANSI in a theme name) is covered by `test_a_user_theme_name_is_sanitized_in_the_handoff`.
 
-## Next steps for the orchestrator
+## Self-Check: PASSED
 
-1. Decide the volta body. The recommended option is to drop the PATH export and record that under ledger Q4.
-2. Re-dispatch this plan from Task 1 with that decision. The patch above can be applied as a starting point, after the volta body is changed.
-3. Tasks 2 and 3 follow Task 1 unchanged.
-
-## Self-Check: BLOCKED
-
-- [x] Task 1 was not committed, because `make test` was red on the Task 1 tree.
-- [x] Base gate green: `make validate` exit 0, `make test` exit 0 (5676 passed, 4 skipped).
-- [x] No changes to `STATE.md` or `ROADMAP.md`.
-- [x] No trailers in the commit message.
+- [x] Commits `49a8913`, `8902667` and `836e796` exist on `worktree-agent-a49d102674b326af5` after base `58fe434`.
+- [x] `make validate` exit 0 and `make test` exit 0 on each task's committed tree.
+- [x] No change to `STATE.md` or `ROADMAP.md`.
+- [x] No trailers in any commit message.
