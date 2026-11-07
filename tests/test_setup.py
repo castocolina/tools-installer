@@ -16,7 +16,7 @@ from rich.console import Console
 from textual.pilot import Pilot
 
 import setup
-from installer import pnpm_globals, postinstall, systemd_daemon
+from installer import pnpm_globals, post_install, postinstall, systemd_daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
@@ -29,7 +29,7 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
-from installer.policy import Policy
+from installer.policy import Policy, settings_policies
 from installer.resolve import UnavailableReason
 from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
@@ -779,7 +779,14 @@ def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
     daemon_at = ids.index("daemon:prune-tmpdir")
     assert ids[daemon_at - 1] == "omz-plugins"
     assert all(policy_id.startswith("tweak:") for policy_id in ids[1 : daemon_at - 1])
-    assert all(policy_id.startswith("cache-redirect:") for policy_id in ids[daemon_at + 1 :])
+    # Phase 23 appends the settings rows after the cache redirects (23-14);
+    # macOS has no desktop row.
+    settings = [
+        p.id for p in settings_policies(home=tmp_path, platform_os="macos", installed_tools=None)
+    ]
+    redirects = ids[daemon_at + 1 : len(ids) - len(settings)]
+    assert all(policy_id.startswith("cache-redirect:") for policy_id in redirects)
+    assert ids[len(ids) - len(settings) :] == settings
     assert ids[daemon_at + 1 :]
     assert len(ids) > 3
 
@@ -1050,7 +1057,7 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
     assert setup.main(["--guard", "--link-mode", "split"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
@@ -1171,7 +1178,7 @@ def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(
     assert setup.main(["--guard"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert not (tmp_path / ".bashrc").exists()
 
@@ -1188,7 +1195,7 @@ def test_the_normal_interactive_flow_wires_split_mode_myshellrc_sourcing_before_
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
 
@@ -1201,7 +1208,7 @@ def test_the_normal_interactive_flow_does_not_wire_split_sourcing_under_centrali
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert not (tmp_path / ".bashrc").exists()
 
@@ -2663,7 +2670,7 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
     assert ".zshrc" in alias_detail
     assert ".bashrc" in alias_detail
     assert ".myshellrc" not in alias_detail
-    tweak = next(policy for policy in policies.policies if policy.id == "tweak:codex-skip")
+    tweak = next(policy for policy in policies.policies if policy.id == "tweak:docker")
     tweak.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
@@ -4139,3 +4146,155 @@ def test_session_exit_code_is_one_iff_an_outcome_failed_or_a_run_error_exists(
     app.run_errors = run_errors
     app.run_in_flight = in_flight
     assert setup._session_exit_code(cast(Any, app)) == expected  # pyright: ignore[reportPrivateUsage]
+
+
+def _legacy_alias_block(alias_id: str, body: str) -> str:
+    marker = f"tools-installer tweak:{alias_id}"
+    return f"# >>> {marker} >>>\n{body}\n# <<< {marker} <<<\n"
+
+
+_CLAUDE_LEGACY = "alias claude='claude --dangerously-skip-permissions'"
+_CODEX_LEGACY = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
+
+
+def test_launch_strips_and_shows_the_notice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(_legacy_alias_block("claude-skip", _CLAUDE_LEGACY))
+
+    seen = _wired(monkeypatch, [])
+
+    warning = seen["startup_warning"]
+    assert isinstance(warning, str)
+    assert "Removed the claude-skip alias; turn on claude auto-approve in Policies." in warning
+    assert "tools-installer tweak:claude-skip" not in rc.read_text()
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_headless_launch_strips_and_prints_the_notice_before_the_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    rc = Path.home() / ".myshellrc"
+    rc.write_text(_legacy_alias_block("claude-skip", _CLAUDE_LEGACY))
+    printed_before_plan: list[str] = []
+    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
+
+    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
+        printed_before_plan.append(buffer.getvalue())
+        return fake_run_wizard(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    notice = "Removed the claude-skip alias; turn on claude auto-approve in Policies."
+    assert notice in printed_before_plan[0]
+    assert "tools-installer tweak:claude-skip" not in rc.read_text()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+
+
+def test_the_cli_uninstall_strips_legacy_alias_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(_legacy_alias_block("codex-skip", _CODEX_LEGACY))
+
+    def fake_run_uninstall(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ()
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+
+    def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
+        return TerminalShellResult()
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert "Removed the codex-skip alias block(s) from ~/.myshellrc." in buffer.getvalue()
+    assert "tools-installer tweak:codex-skip" not in rc.read_text()
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_headless_main_strips_only_the_scratch_rc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R1-07: without _sandbox, setup._MYSHELLRC is the scratch HOME's rc, never the real one."""
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    scratch_rc = Path.home() / ".myshellrc"
+    scratch_rc.write_text(_legacy_alias_block("claude-skip", _CLAUDE_LEGACY))
+    assert vars(setup)["_MYSHELLRC"] == scratch_rc
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert "tools-installer tweak:claude-skip" not in scratch_rc.read_text()
+
+
+def _linux() -> Platform:
+    return Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+
+
+def test_the_app_composes_the_settings_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup, "detect", _linux)
+    seen = _wired(monkeypatch, [])
+    policies = seen["policies"]
+    assert isinstance(policies, PolicyInputs)
+    settings = [
+        p.id for p in settings_policies(home=tmp_path, platform_os="fedora", installed_tools=None)
+    ]
+    ids = [p.id for p in policies.policies]
+    assert ids[-(len(settings) + 1) :] == [*settings, "desktop-shell"]
+
+    captured: list[dict[str, object]] = []
+
+    def fake_perform(_decision: object, **kwargs: object) -> SweepResult:
+        captured.append(kwargs)
+        return SweepResult()
+
+    monkeypatch.setattr(setup, "perform_uninstall", fake_perform)
+    uninstall = seen["uninstall"]
+    assert isinstance(uninstall, UninstallInputs)
+    uninstall.remove(cast("UninstallDecision", object()))
+    extra = cast("tuple[Policy, ...]", captured[0]["extra_policies"])
+    assert "desktop-shell" in [p.id for p in extra]
+
+
+def test_the_composition_root_wires_split_mode_sourcing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    assert setup.main(["--link-mode", "split"]) == 0
+    split = cast("Callable[[], tuple[Path, ...]]", vars(post_install)["_shell_init_sourced_from"])
+    assert tmp_path / ".bashrc" in split()
+    assert setup.main(["--link-mode", "centralized"]) == 0
+    assert vars(post_install)["_shell_init_sourced_from"]() == ()
+
+
+def test_the_headless_route_injects_split_mode_sourcing(monkeypatch: pytest.MonkeyPatch) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    readings: list[tuple[Path, ...]] = []
+    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
+
+    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
+        reader = cast(
+            "Callable[[], tuple[Path, ...]]", vars(post_install)["_shell_init_sourced_from"]
+        )
+        readings.append(reader())
+        return fake_run_wizard(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+    assert setup.main(["--all", "--yes", "--link-mode", "split"]) == 0
+    assert Path.home() / ".bashrc" in readings[0]

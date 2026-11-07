@@ -24,7 +24,7 @@ from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 
-from installer import daemon, diskusage, env_redirect, pnpm_globals, systemd_daemon
+from installer import daemon, diskusage, env_redirect, pnpm_globals, post_install, systemd_daemon
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -62,9 +62,11 @@ from installer.policy import (
     ban_policy,
     cache_redirect_policy,
     daemon_policy,
+    desktop_shell_policy,
     ensure_daemon_default,
     linux_daemon_policy,
     omz_plugins_policy,
+    settings_policies,
     tweak_policy,
 )
 from installer.postinstall import BREW_BIN_DIRS, which_with_brew
@@ -83,7 +85,7 @@ from installer.settings import (
 from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
-from installer.tweaks import BUNDLES, applicable_bundles
+from installer.tweaks import BUNDLES, applicable_bundles, strip_legacy_aliases
 from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
@@ -759,6 +761,24 @@ def _build_services(
     return version_refresh, updates, policy, _install
 
 
+def _split_sourced_from(link_mode: str) -> tuple[Path, ...]:
+    """The rc files that source ~/.myshellrc under `link_mode`: split mode only."""
+    if link_mode != "split":
+        return ()
+    return tuple(rc_paths_for_mode(link_mode, _SHELL))
+
+
+def _desktop_shell_policies(platform: Platform) -> tuple[Policy, ...]:
+    """The desktop SHELL row, Linux only: macOS has no environment.d desktop session."""
+    if platform.os == "macos":
+        return ()
+    return (
+        desktop_shell_policy(
+            zsh_path=which_with_brew("zsh"), conf_dir=_ENVIRONMENT_D_DIR, home=Path.home()
+        ),
+    )
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -844,7 +864,7 @@ def _build_app(
             bundles=BUNDLES,
             zshrc_path=_ZSHRC,
             daemon_policy=daemon,
-            extra_policies=redirects,
+            extra_policies=(*redirects, *desktop),
             catalog=tools,
         )
 
@@ -852,12 +872,12 @@ def _build_app(
         return ban_rc_paths(_current_link_mode(), _SHELL)
 
     def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
-        mode = _current_link_mode()
-        if mode != "split":
-            return ()
-        return tuple(rc_paths_for_mode(mode, _SHELL))
+        return _split_sourced_from(_current_link_mode())
 
+    # An install-time shell-init yes is sourced the same way a tweak is (D-11).
+    post_install.use_shell_init_sourcing(_tweak_ensure_sourced_from)
     redirects = _cache_redirect_policies(platform, ensure_sourced_from=_tweak_ensure_sourced_from)
+    desktop = _desktop_shell_policies(platform)
 
     def _sync_omz_terminals() -> str | None:
         """Apply the shared terminal writer after a committed OMZ plugin edit,
@@ -889,11 +909,16 @@ def _build_app(
             bin_dir=_DEFAULT_BIN_DIR,
             zshrc_path=_ZSHRC,
             daemon_policy=daemon,
-            extra_policies=redirects,
+            extra_policies=(*redirects, *desktop),
         ),
         terminal_sync=_sync_omz_terminals,
     )
 
+    # A legacy alias block is stripped at every launch and its notice rides the startup
+    # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
+    legacy_strip = strip_legacy_aliases(_MYSHELLRC)
+    startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
+    startup_lines += [text for text, _severity in legacy_strip.launch_lines()]
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -921,6 +946,12 @@ def _build_app(
             ),
             *((daemon,) if daemon is not None else ()),
             *redirects,
+            *settings_policies(
+                home=Path.home(),
+                platform_os=platform.os,
+                installed_tools=version_refresh.installed_or(installed),
+            ),
+            *desktop,
         ],
         link_mode=_current_link_mode if settings is not None else None,
         set_link_mode=settings.set_link_mode if settings is not None else None,
@@ -1071,7 +1102,7 @@ def _build_app(
         prompt_link_mode=prompt_link_mode,
         # D-11: a damaged settings.json surfaces as the startup warning on the
         # first screen the route opens, carried through the store's flag.
-        startup_warning=settings.warning if settings is not None else None,
+        startup_warning="\n".join(startup_lines) or None,
         # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
         # `updates` above are wired with -- every interactive close
         # re-synchronizes terminal configuration exactly like Policies' own
@@ -1291,6 +1322,12 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # CLI teardown path gates fd/rg-aware daemon construction on the SAME
     # real-installed-status map the interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
+    legacy = strip_legacy_aliases(_MYSHELLRC)
+    notice = legacy.uninstall_line()
+    if notice is not None:
+        console.print(notice, markup=False, soft_wrap=True)
+    for text in legacy.failure_lines():
+        console.print(text, markup=False, soft_wrap=True)
     _removed, failed = run_uninstall(
         tools,
         console,
@@ -1304,7 +1341,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         bundles=BUNDLES,
         zshrc_path=_ZSHRC,
         daemon_policy=_build_daemon_policy(platform, installed),
-        extra_policies=_cache_redirect_policies(platform),
+        extra_policies=(*_cache_redirect_policies(platform), *_desktop_shell_policies(platform)),
     )
     # D-01/15.6-06 Task 2: absent zsh reverts only owned terminal
     # configuration (sync_terminal_shells' own no-zsh branch), so a teardown
@@ -1413,6 +1450,9 @@ def main(argv: list[str]) -> int:
             settings=store,
             prompt_link_mode=needs_choice,
         )
+    for text, _severity in strip_legacy_aliases(_MYSHELLRC).launch_lines():
+        console.print(text, markup=False, soft_wrap=True)
+    post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
     refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(
         tools,

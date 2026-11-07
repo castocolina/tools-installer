@@ -259,7 +259,7 @@ def _mode_policies(home: Path, mode: dict[str, str]) -> tuple[Policy, Policy]:
         path_value=str(shim_dir),
         which=lambda _name: None,
     )
-    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    bundle = next(b for b in BUNDLES if b.id == "docker")
     tweak = tweak_policy(
         bundle,
         rc_path=myshellrc,
@@ -291,11 +291,11 @@ def test_move_link_mode_moves_ban_and_tweak_to_split(tmp_path: Path) -> None:
     assert "tools-installer ban" in zshrc.read_text()
     assert "tools-installer ban" in bashrc.read_text()
     # tweak block stays in ~/.myshellrc, now sourced from each rc
-    assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
+    assert "tools-installer tweak:docker" in myshellrc.read_text()
     for rc in (zshrc, bashrc):
         assert f'. "{myshellrc}"' in rc.read_text()
     assert mode["v"] == "split"
-    assert [entry.policy_id for entry in report] == ["ban", "tweak:claude-skip"]
+    assert [entry.policy_id for entry in report] == ["ban", "tweak:docker"]
     assert all(entry.status == "moved" for entry in report)
 
 
@@ -312,7 +312,7 @@ def test_link_mode_move_keeps_foreign_rc_bytes_identical(tmp_path: Path) -> None
 
     move_link_mode([ban, tweak], "split", _setter(mode), old_mode="centralized")
 
-    begin, rest = tweak_block(next(b for b in BUNDLES if b.id == "claude-skip")).split("\n", 1)
+    begin, rest = tweak_block(next(b for b in BUNDLES if b.id == "docker")).split("\n", 1)
     tweak_begin, tweak_end = begin, rest.rsplit("\n", 1)[1]
     checked = tmp_path / "check"
     checked.mkdir()
@@ -339,7 +339,7 @@ def test_move_link_mode_restores_the_old_block_when_apply_fails(tmp_path: Path) 
         if mode["v"] == "split":
             raise OSError("no space left on device")
         return tweak_policy(
-            next(b for b in BUNDLES if b.id == "claude-skip"),
+            next(b for b in BUNDLES if b.id == "docker"),
             rc_path=myshellrc,
         ).apply()
 
@@ -357,12 +357,12 @@ def test_move_link_mode_restores_the_old_block_when_apply_fails(tmp_path: Path) 
 
     assert mode["v"] == "split"
     statuses = {entry.policy_id: entry.status for entry in report}
-    assert statuses == {"ban": "moved", "tweak:claude-skip": "failed"}
+    assert statuses == {"ban": "moved", "tweak:docker": "failed"}
     failed = next(entry for entry in report if entry.status == "failed")
     assert "no space left on device" in failed.detail
     assert "restored" in failed.detail
     # the tweak's old block is back in the old file, the ban's is gone (it moved)
-    assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
+    assert "tools-installer tweak:docker" in myshellrc.read_text()
     assert "tools-installer ban" not in myshellrc.read_text()
     # the ban still moved
     assert "tools-installer ban" not in myshellrc.read_text()
@@ -397,7 +397,7 @@ def test_move_link_mode_restores_everything_when_saving_the_mode_fails(
         which=lambda _name: None,
     )
     tweak = tweak_policy(
-        next(b for b in BUNDLES if b.id == "claude-skip"),
+        next(b for b in BUNDLES if b.id == "docker"),
         rc_path=myshellrc,
         ensure_sourced_from=lambda: (zshrc, bashrc) if store.link_mode == "split" else (),
     )
@@ -446,7 +446,7 @@ def test_move_link_mode_rolls_back_when_re_saving_the_new_mode_fails(
     bashrc = tmp_path / ".bashrc"
     shim_dir = tmp_path / ".local" / "bin"
     shim_dir.mkdir(parents=True, exist_ok=True)
-    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    bundle = next(b for b in BUNDLES if b.id == "docker")
 
     def apply_rc_paths() -> list[Path]:
         return [myshellrc] if store.link_mode == "centralized" else [zshrc, bashrc]
@@ -506,7 +506,7 @@ def test_move_link_mode_rolls_back_when_re_saving_the_new_mode_fails(
     # both blocks are back in ~/.myshellrc; the already-moved ban was taken
     # back out of the split rcs
     assert "tools-installer ban" in myshellrc.read_text()
-    assert "tools-installer tweak:claude-skip" in myshellrc.read_text()
+    assert "tools-installer tweak:docker" in myshellrc.read_text()
     assert "tools-installer ban" not in zshrc.read_text()
     assert "tools-installer ban" not in bashrc.read_text()
 
@@ -576,7 +576,7 @@ def test_move_link_mode_names_the_ids_it_could_not_restore(
     bashrc = tmp_path / ".bashrc"
     shim_dir = tmp_path / ".local" / "bin"
     shim_dir.mkdir(parents=True, exist_ok=True)
-    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    bundle = next(b for b in BUNDLES if b.id == "docker")
 
     def apply_rc_paths() -> list[Path]:
         return [myshellrc] if store.link_mode == "centralized" else [zshrc, bashrc]
@@ -619,9 +619,7 @@ def test_move_link_mode_names_the_ids_it_could_not_restore(
         real_save(path, settings)  # type: ignore[arg-type]
 
     monkeypatch.setattr("installer.settings.save_settings", flaky_save)
-    with pytest.raises(
-        OSError, match=r"settings\.json unwritable; not restored: tweak:claude-skip"
-    ):
+    with pytest.raises(OSError, match=r"settings\.json unwritable; not restored: tweak:docker"):
         move_link_mode([ban, moved_tweak], "split", store.set_link_mode, old_mode="centralized")
 
     # the live mode stayed split (the failed save never assigned), so the

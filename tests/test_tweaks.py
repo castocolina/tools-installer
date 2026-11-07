@@ -1,4 +1,3 @@
-import itertools
 import os
 import shlex
 import shutil
@@ -8,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from installer import tweaks as tweaks_module
 from installer.helper_assets import wait_time
 from installer.platform import Platform
 from installer.tweaks import (
@@ -20,6 +20,7 @@ from installer.tweaks import (
     remove_tweak,
     remove_tweak_executables,
     shell_init_bundle,
+    strip_legacy_aliases,
     tweak_block,
     tweak_executables_present,
     tweak_present,
@@ -35,8 +36,6 @@ def test_bundles_have_stable_ids_and_order() -> None:
     assert [b.id for b in BUNDLES] == [
         "docker",
         "countdown",
-        "claude-skip",
-        "codex-skip",
         "apt-upgrade",
         "starship",
         "direnv",
@@ -44,37 +43,14 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "fzf",
         "fnm",
         "volta",
-        "opencode-auto",
-        "cursor-agent-model",
     ]
 
 
-def test_codex_skip_body_matches_the_verified_flag() -> None:
-    codex = _bundle("codex-skip")
-    assert codex.body == "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
-    assert codex.requires == ()
-    assert codex.executables == ()
-    assert codex.platforms == ()
-
-
-def test_opencode_auto_body_matches_the_verified_flag() -> None:
-    opencode = _bundle("opencode-auto")
-    assert opencode.body == "alias opencode='opencode --auto'"
-    assert opencode.requires == ()
-    assert opencode.executables == ()
-    assert opencode.platforms == ()
-
-
-def test_opencode_auto_description_states_it_is_narrower_than_a_full_bypass() -> None:
-    description = _bundle("opencode-auto").description
-    assert "full" in description or "deny" in description
-
-
 def test_block_is_marker_delimited_around_body() -> None:
-    bundle = _bundle("claude-skip")
+    bundle = _bundle("docker")
     block = tweak_block(bundle)
-    assert block.startswith("# >>> tools-installer tweak:claude-skip >>>\n")
-    assert block.endswith("\n# <<< tools-installer tweak:claude-skip <<<")
+    assert block.startswith("# >>> tools-installer tweak:docker >>>\n")
+    assert block.endswith("\n# <<< tools-installer tweak:docker <<<")
     assert bundle.body in block
 
 
@@ -215,8 +191,8 @@ def test_tweak_executables_present_detects_an_owned_helper(
     install_tweak_executables(countdown, bin_dir)
     assert tweak_executables_present(countdown, bin_dir) is True
     assert tweak_executables_present(countdown, tmp_path / "empty-bin") is False
-    assert tweak_executables_present(_bundle("claude-skip"), bin_dir) is False
-    assert tweak_executables_present(_bundle("claude-skip"), tmp_path / "empty-bin") is False
+    assert tweak_executables_present(_bundle("docker"), bin_dir) is False
+    assert tweak_executables_present(_bundle("docker"), tmp_path / "empty-bin") is False
 
 
 def test_tweak_executables_present_ignores_a_foreign_file(
@@ -275,191 +251,6 @@ def test_blocks_parse_in_bash_and_zsh_when_present(tmp_path: Path) -> None:
             assert result.returncode == 0, f"{shell} {bundle.id}: {result.stderr!r}"
 
 
-_SCRIPT_COUNTER = itertools.count()
-
-
-def _run_cursor_agent(
-    tmp_path: Path,
-    invoke: str,
-    args: list[str],
-    *,
-    shell: str = "bash",
-    preamble: str = "",
-    postamble: str = "",
-) -> str | None:
-    """Source the cursor-agent-model tweak block, invoke it, and return stdout.
-
-    A stub `cursor-agent` executable (never the real, installed CLI — ONESHOT-
-    RULES Rule 5) is put on a test-controlled PATH prepended to the real PATH,
-    so `command cursor-agent "$@"` resolves to the stub and echoes its argv.
-    Returns None when `shell` is not installed on this machine (graceful skip).
-    An explicit timeout turns a self-recursion regression into a diagnosable
-    AssertionError instead of hanging the whole test suite. `postamble` is raw
-    shell text appended after the single shlex-joined invocation, for
-    assertions that must run in the same shell session afterward (e.g.
-    proving a loop variable did not leak).
-    """
-    binary = shutil.which(shell)
-    if binary is None:
-        return None
-    stub_dir = tmp_path / "stub"
-    stub_dir.mkdir(exist_ok=True)
-    stub = stub_dir / "cursor-agent"
-    if not stub.exists():
-        stub.write_text('#!/bin/sh\necho "ARGV: $*"\n')
-        stub.chmod(0o755)
-    script = tmp_path / f"cursor-agent-{next(_SCRIPT_COUNTER)}.{shell}"
-    script.write_text(
-        preamble
-        + tweak_block(_bundle("cursor-agent-model"))
-        + "\n"
-        + shlex.join([invoke, *args])
-        + ("\n" + postamble if postamble else "")
-    )
-    env = os.environ | {"PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
-    try:
-        result = subprocess.run(
-            [binary, str(script)], env=env, capture_output=True, text=True, timeout=10
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise AssertionError(
-            "cursor-agent invocation timed out — likely self-recursion inside "
-            "cursor-agent() (a missing `command` guard)"
-        ) from exc
-    assert result.returncode == 0, result.stderr
-    return result.stdout.strip()
-
-
-def test_cursor_agent_model_injects_default_when_no_model_flag(tmp_path: Path) -> None:
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"])
-    assert output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
-
-
-def test_cursor_agent_model_respects_explicit_space_form_model_flag(tmp_path: Path) -> None:
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["--model", "other-model", "chat"])
-    assert output is not None
-    assert "ARGV: --model other-model chat" in output
-
-
-def test_cursor_agent_model_respects_explicit_equals_form_model_flag(tmp_path: Path) -> None:
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["--model=other-model", "chat"])
-    assert output is not None
-    assert "ARGV: --model=other-model chat" in output
-
-
-def test_cursor_delegates_to_cursor_agent_function_and_inherits_injection(
-    tmp_path: Path,
-) -> None:
-    output = _run_cursor_agent(tmp_path, "cursor", ["chat", "hello"])
-    assert output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
-
-
-def test_cursor_agent_does_not_mistake_a_quoted_substring_for_the_flag(tmp_path: Path) -> None:
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "explain --model flag"])
-    assert output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat explain --model flag" in output
-
-
-def test_cursor_agent_model_body_declares_the_correct_command_guard_invariant() -> None:
-    body = _bundle("cursor-agent-model").body
-    unalias_index = body.index("unalias cursor-agent cursor")
-    agent_fn_index = body.index("function cursor-agent")
-    cursor_fn_index = body.index("function cursor ")
-    assert unalias_index < agent_fn_index
-    assert unalias_index < cursor_fn_index
-
-    agent_block = body[agent_fn_index:cursor_fn_index]
-    for line in agent_block.splitlines():
-        if "cursor-agent" in line and "function" not in line:
-            assert "command cursor-agent" in line, line
-
-    cursor_block = body[cursor_fn_index:]
-    assert "command cursor-agent" not in cursor_block
-    assert 'cursor-agent "$@"' in cursor_block
-    assert cursor_block.count("cursor-agent") == 1
-
-
-def test_cursor_agent_wrapper_removes_a_pre_existing_conflicting_alias(tmp_path: Path) -> None:
-    preamble = (
-        "shopt -s expand_aliases\n"
-        "alias cursor-agent='echo PRE_EXISTING_ALIAS'\n"
-        "alias cursor='echo PRE_EXISTING_ALIAS_CURSOR'\n"
-    )
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"], preamble=preamble)
-    assert output is not None
-    assert "PRE_EXISTING_ALIAS" not in output
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
-
-
-def test_cursor_agent_wrapper_removes_a_pre_existing_conflicting_alias_under_zsh(
-    tmp_path: Path,
-) -> None:
-    if shutil.which("zsh") is None:
-        pytest.skip("zsh not available")
-    preamble = (
-        "alias cursor-agent='echo PRE_EXISTING_ALIAS'\n"
-        "alias cursor='echo PRE_EXISTING_ALIAS_CURSOR'\n"
-    )
-    output = _run_cursor_agent(
-        tmp_path, "cursor-agent", ["chat", "hello"], shell="zsh", preamble=preamble
-    )
-    assert output is not None
-    assert "PRE_EXISTING_ALIAS" not in output
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
-
-
-def test_cursor_agent_unalias_guard_does_not_abort_sourcing_under_set_e(tmp_path: Path) -> None:
-    """WR-01 (dual-lane review, internal + codex-sol-high): `unalias` exits
-    nonzero when neither name is currently an alias -- the common case --
-    and `2>/dev/null` alone silences only the message, not the exit status.
-    Under `set -e` that would abort the rest of the sourcing shell with zero
-    diagnostic output. `|| true` must make the guard status-neutral."""
-    preamble = "set -e\n"
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"], preamble=preamble)
-    assert output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in output
-
-
-def test_cursor_agent_loop_variable_does_not_leak_into_the_calling_shell(tmp_path: Path) -> None:
-    """WR-02 (dual-lane review, internal + codex-sol-high): the argv-scan
-    loop variable must be `local`, or it clobbers a pre-existing same-named
-    variable in the calling interactive shell after the function returns."""
-    output = _run_cursor_agent(
-        tmp_path,
-        "cursor-agent",
-        ["chat", "hello"],
-        preamble='a="my own variable"\n',
-        postamble='echo "SENTINEL=$a"',
-    )
-    assert output is not None
-    assert "SENTINEL=my own variable" in output
-
-
-def test_cursor_agent_stops_scanning_at_double_dash_boundary(tmp_path: Path) -> None:
-    """codex-sol-high (dual-lane review): cursor-agent's own commander.js
-    parser treats everything after a literal `--` as positional prompt
-    text, never as flags. The wrapper's scan must stop at `--` too, or it
-    would mistake a literal `--model` appearing after `--` for the real
-    flag and wrongly skip injecting the default."""
-    output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "--", "explain", "--model"])
-    assert output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat -- explain --model" in output
-
-
-def test_cursor_agent_model_behavior_under_zsh_when_available(tmp_path: Path) -> None:
-    if shutil.which("zsh") is None:
-        pytest.skip("zsh not available")
-    default_output = _run_cursor_agent(tmp_path, "cursor-agent", ["chat", "hello"], shell="zsh")
-    assert default_output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in default_output
-
-    delegate_output = _run_cursor_agent(tmp_path, "cursor", ["chat", "hello"], shell="zsh")
-    assert delegate_output is not None
-    assert "ARGV: --model gpt-5.6-sol-high chat hello" in delegate_output
-
-
 def test_write_then_present_then_remove_roundtrip(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
     bundle = _bundle("countdown")
@@ -486,10 +277,10 @@ def test_bundle_marker_present_reads_the_begin_marker(tmp_path: Path) -> None:
 
 def test_re_enable_does_not_duplicate(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
-    bundle = _bundle("claude-skip")
+    bundle = _bundle("docker")
     write_tweak(bundle, rc)
     write_tweak(bundle, rc)
-    assert rc.read_text().count("# >>> tools-installer tweak:claude-skip >>>") == 1
+    assert rc.read_text().count("# >>> tools-installer tweak:docker >>>") == 1
 
 
 def test_toggling_one_bundle_leaves_another_and_user_content_intact(tmp_path: Path) -> None:
@@ -524,7 +315,7 @@ def test_apt_upgrade_offered_on_linux_absent_on_macos() -> None:
     macos_ids = [b.id for b in applicable_bundles(_platform("macos"))]
     assert "apt-upgrade" in linux_ids
     assert "apt-upgrade" not in macos_ids
-    assert {"docker", "countdown", "claude-skip"} <= set(macos_ids)
+    assert {"docker", "countdown"} <= set(macos_ids)
 
 
 def test_shell_init_bundles_sit_after_apt_upgrade_in_tool_order() -> None:
@@ -555,3 +346,70 @@ def test_each_shell_init_body_parses_in_zsh(tool: str) -> None:
         ["zsh", "-n", "-c", bundle.body], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
+def _legacy_block(alias_id: str, body: str) -> str:
+    marker = f"tools-installer tweak:{alias_id}"
+    return f"# >>> {marker} >>>\n{body}\n# <<< {marker} <<<\n"
+
+
+_CLAUDE_ALIAS = "alias claude='claude --dangerously-skip-permissions'"
+_CODEX_ALIAS = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
+
+
+def test_an_enabled_claude_skip_alias_is_stripped_and_nothing_written() -> None:
+    rc = Path.home() / ".myshellrc"
+    rc.write_text("export KEEP=1\n" + _legacy_block("claude-skip", _CLAUDE_ALIAS))
+    report = strip_legacy_aliases(rc)
+    assert report.stripped == ("claude-skip",)
+    assert rc.read_text() == "export KEEP=1\n"
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    assert not (Path.home() / ".local" / "state" / "tools-installer" / "config").exists()
+    assert report.launch_lines() == (
+        ("Removed the claude-skip alias; turn on claude auto-approve in Policies.", "ok"),
+    )
+    again = strip_legacy_aliases(rc)
+    assert again.stripped == ()
+    assert again.launch_lines() == ()
+
+
+def test_the_cursor_model_alias_is_removed_and_nothing_written() -> None:
+    rc = Path.home() / ".myshellrc"
+    rc.write_text(_legacy_block("cursor-agent-model", "function cursor-agent {\n}"))
+    report = strip_legacy_aliases(rc)
+    assert report.stripped == ("cursor-agent-model",)
+    assert not (Path.home() / ".cursor" / "cli-config.json").exists()
+    assert report.launch_lines() == (
+        ("cursor-agent-model alias removed: pick the model with /model in cursor-agent.", "warn"),
+    )
+
+
+def test_a_block_that_cannot_be_edited_is_kept_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rc = Path.home() / ".myshellrc"
+    text = _legacy_block("claude-skip", _CLAUDE_ALIAS)
+    rc.write_text(text)
+
+    def refuse(path: Path, content: str, **_: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(tweaks_module, "atomic_write_text", refuse)
+    report = strip_legacy_aliases(rc)
+    assert report.stripped == ()
+    assert report.failed == (("claude-skip", "denied"),)
+    assert rc.read_text() == text
+    assert report.launch_lines() == (
+        ("Could not remove the claude-skip alias from ~/.myshellrc: denied.", "warn"),
+    )
+
+
+def test_uninstall_line_names_every_stripped_alias() -> None:
+    rc = Path.home() / ".myshellrc"
+    blocks = _legacy_block("claude-skip", _CLAUDE_ALIAS) + _legacy_block("codex-skip", _CODEX_ALIAS)
+    rc.write_text(blocks)
+    report = strip_legacy_aliases(rc)
+    assert report.uninstall_line() == (
+        "Removed the claude-skip, codex-skip alias block(s) from ~/.myshellrc."
+    )
+    assert strip_legacy_aliases(rc).uninstall_line() is None
