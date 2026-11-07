@@ -8987,10 +8987,12 @@ async def test_uninstall_values_render_literally(monkeypatch: pytest.MonkeyPatch
 
     odd = "[red]x[/]"
 
-    def ledger(agent: str, *, home: Path) -> tuple[tuple[Path, tuple[str, ...]], ...]:
-        return ((Path(f"/cfg/{odd}.json"), (odd,)),) if agent == "claude" else ()
+    def ledger(
+        agent: str, *, home: Path
+    ) -> tuple[tuple[Path, tuple[str, ...], tuple[str, ...]], ...]:
+        return ((Path(f"/cfg/{odd}.json"), (odd,), ()),) if agent == "claude" else ()
 
-    monkeypatch.setattr(app_module, "ledger_summary", ledger)
+    monkeypatch.setattr(app_module, "ledger_preview", ledger)
     claude = _tool("claude")
     app = _app(
         cases=[(claude, plan_state(claude, removable=RemovalPlan((Path("/opt/claude"),), ())))],

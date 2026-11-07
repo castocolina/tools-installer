@@ -1075,3 +1075,24 @@ def test_a_created_file_the_user_commented_is_kept_on_revert() -> None:
 
     assert vscode.read_text(encoding="utf-8") == "// mine\n{}\n"
     assert read_ledger("vscode") is None
+
+
+def test_the_removal_preview_lists_only_keys_still_holding_our_value() -> None:
+    """F-3: a key the user changed since is named as kept, never promised as removed."""
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+    apply_setting("claude", "no-attribution", home=home, platform_os="linux")
+    doc = json.loads(settings.read_text(encoding="utf-8"))
+    doc["attribution"]["pr"] = "mine"
+    settings.write_text(json.dumps(doc), encoding="utf-8")
+
+    assert settings_change_lines(("claude",)) == (
+        "claude: removes attribution.commit from ~/.claude/settings.json",
+        "claude: keeps attribution.pr, changed since this installer wrote it",
+    )
+    results = revert_agent("claude", home=home, platform_os="linux")
+    assert [(key.key, key.kind) for result in results for key in result.keys] == [
+        ("attribution.pr", "kept_changed"),
+        ("attribution.commit", "removed"),
+    ]

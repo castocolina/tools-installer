@@ -6340,6 +6340,38 @@ def test_the_cli_uninstall_reverts_every_written_key(
     assert not (tmp_path / ".codex" / "config.toml").exists()
 
 
+def test_the_cli_uninstall_lists_only_keys_still_holding_our_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-3: a key the user changed since is not listed as reverted."""
+    from installer.agent_settings import apply_setting
+    from installer.app import run_uninstall
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".myshellrc").write_text("")
+    apply_setting("codex", "auto-approve", home=tmp_path, platform_os="linux")
+    config = tmp_path / ".codex" / "config.toml"
+    config.write_text(
+        config.read_text().replace('"danger-full-access"', '"workspace-write"'), encoding="utf-8"
+    )
+    console, buf = _console()
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=lambda _message: False,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        platform_os="linux",
+    )
+    assert "  ~/.codex/config.toml: approval_policy\n" in buf.getvalue()
+
+
 def test_no_config_agent_declares_config_paths() -> None:
     """R1-58, R1-59: the guard the per-tool revert's shortcut relies on. When a settings agent
     starts declaring config_paths, the removal must revert before it deletes."""

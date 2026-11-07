@@ -130,6 +130,12 @@ def same_value(a: object, b: object) -> bool:
     return a == b
 
 
+def key_held(current: object, ours: object) -> bool | None:
+    """Whether a recorded key still holds our value: None when it is gone, False when the
+    user changed it. The one check the revert and the removal preview share (UAT F-3)."""
+    return None if current is ABSENT else same_value(current, ours)
+
+
 def _blank(match: re.Match[str]) -> str:
     if match.group(1) is not None:
         return match.group(1)
@@ -747,9 +753,10 @@ def _revert_pass(
         key = table[entry.key_path]
         name = ".".join(entry.key_path)
         current = lookup(parse_settings(text, fmt), entry.key_path)
-        if current is ABSENT:
+        held = key_held(current, key.value)
+        if held is None:
             continue
-        if not same_value(current, key.value):
+        if not held:
             results.append(KeyResult(name, "kept_changed", _dump(current)))
         elif entry.replaced_default:
             text = replace_value(text, fmt, entry.key_path, key.cli_default)
@@ -1004,3 +1011,30 @@ def ledger_summary(agent: str, *, home: Path) -> tuple[tuple[Path, tuple[str, ..
         if Path(entry.file).is_relative_to(home):
             keys_by_file.setdefault(entry.file, []).append(".".join(entry.key_path))
     return tuple((Path(file), tuple(keys)) for file, keys in keys_by_file.items())
+
+
+def ledger_preview(
+    agent: str, *, home: Path
+) -> tuple[tuple[Path, tuple[str, ...], tuple[str, ...]], ...]:
+    """Per ledgered file under home: (path, keys a revert removes, keys the user changed since).
+    A key that is gone is in neither. A missing or unreadable file lists every key as removed;
+    the revert itself then reports why it cannot (removal previews)."""
+    fmt = _format(agent)
+    preview: list[tuple[Path, tuple[str, ...], tuple[str, ...]]] = []
+    for path, names in ledger_summary(agent, home=home):
+        entries = [
+            e for e in (read_ledger(agent) or ConfigLedger(agent)).entries if e.file == str(path)
+        ]
+        try:
+            snap = read_settings(path)
+            doc = None if snap is None else parse_settings(_text_of(snap, fmt), fmt)
+        except (SettingsParseError, OSError):
+            doc = None
+        if doc is None:
+            preview.append((path, names, ()))
+            continue
+        held = [key_held(lookup(doc, e.key_path), e.value) for e in entries]
+        removes = tuple(n for n, h in zip(names, held, strict=True) if h)
+        kept = tuple(n for n, h in zip(names, held, strict=True) if h is False)
+        preview.append((path, removes, kept))
+    return tuple(preview)

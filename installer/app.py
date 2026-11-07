@@ -13,7 +13,7 @@ from pathlib import Path
 from rich.console import Console
 
 from installer import receipts, shellrc
-from installer.agent_settings import ledger_summary, revert_agent
+from installer.agent_settings import ledger_preview, revert_agent
 from installer.atomic import atomic_write_text
 from installer.cli import Options
 from installer.deps import resolve_dependencies
@@ -643,15 +643,25 @@ HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
 
 
 def settings_change_lines(agent_ids: Iterable[str]) -> tuple[str, ...]:
-    """The settings keys the ledgers record, one line per ledgered file (UI-SPEC section 6). A
-    recorded file that is gone is named as such: the revert reports it and touches nothing."""
-    return tuple(
-        f"{agent}: removes {', '.join(keys)} from {display_path(path)}"
-        if os.path.lexists(path)
-        else f"{agent}: cannot remove {', '.join(keys)}: {display_path(path)} is missing"
-        for agent in agent_ids
-        for path, keys in ledger_summary(agent, home=Path.home())
-    )
+    """The settings keys a revert removes, one line per ledgered file (UI-SPEC section 6), and
+    the keys it keeps because the user changed them since (F-3). A recorded file that is gone
+    is named as such: the revert reports it and touches nothing."""
+    lines: list[str] = []
+    for agent in agent_ids:
+        for path, removes, kept in ledger_preview(agent, home=Path.home()):
+            if not os.path.lexists(path):
+                lines.append(
+                    f"{agent}: cannot remove {', '.join(removes)}: {display_path(path)} is missing"
+                )
+                continue
+            if removes:
+                lines.append(f"{agent}: removes {', '.join(removes)} from {display_path(path)}")
+            if kept:
+                them = "it" if len(kept) == 1 else "them"
+                lines.append(
+                    f"{agent}: keeps {', '.join(kept)}, changed since this installer wrote {them}"
+                )
+    return tuple(lines)
 
 
 def removal_change_lines(
@@ -889,10 +899,11 @@ def run_uninstall(
         extra_policies=extra_policies,
     )
     tweaks = tuple(policy.id for policy in policies)
+    # Only the keys still holding our value: a key the user changed since is kept (F-3).
     settings_files = [
-        (agent, path, keys)
+        (agent, path, removes)
         for agent in receipts.CONFIG_AGENTS
-        for path, keys in ledger_summary(agent, home=Path.home())
+        for path, removes, _kept in ledger_preview(agent, home=Path.home())
     ]
     # A machine whose only tools-installer footprint is an enabled tweak or a settings key must
     # not be told there is nothing to uninstall.
@@ -964,13 +975,15 @@ def run_uninstall(
         active_tweaks=tweaks,
     ):
         console.print(line, markup=False, soft_wrap=True)
-    if settings_files:
+    if any(keys for _agent, _path, keys in settings_files):
         console.print(
             "Agent and editor settings this installer wrote (reverted):",
             markup=False,
             soft_wrap=True,
         )
         for _agent, path, keys in settings_files:
+            if not keys:
+                continue
             console.print(
                 f"  {display_path(path)}: {', '.join(keys)}", markup=False, soft_wrap=True
             )
