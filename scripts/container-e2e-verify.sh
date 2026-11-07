@@ -50,7 +50,7 @@ Usage: container-e2e-verify.sh <command> [options]
                           already-installed state, a full --uninstall --yes
                           sweep, then a third --all --yes reinstall. Prints
                           TRACER_RERUN_OK / TRACER_UNINSTALL_OK /
-                          TRACER_REINSTALL_OK, TRACER_HOOKS_*, TRACER_SETTINGS_*
+                          TRACER_REINSTALL_OK, TRACER_GSD_ABSENT_OK, TRACER_HOOKS_*, TRACER_SETTINGS_*
                           per step into pass2-transcript.log (appended, in order).
                           Tears the container down (rm -f) once all three succeed.
   all                     bootstrap --replace, pass1, pass2, then remove the
@@ -336,6 +336,23 @@ uv run --isolated --no-dev python -c 'import sys; from installer import receipts
   return 1
 }
 
+# D-26: no global GSD tree in the tester's home after a pass. $1 names the pass.
+# `-L` also catches a dangling link; a `.gsd-source` file is a hit too.
+assert_gsd_absent() {
+  local pass="$1" rel hit=0
+  for rel in .claude/gsd-core .claude/.gsd-source; do
+    if exec_tester "test -e \$HOME/${rel} || test -L \$HOME/${rel}"; then
+      printf 'TRACER_GSD_PRESENT path=%s\n' "\$HOME/${rel}"
+      hit=1
+    fi
+  done
+  if [[ "$hit" -eq 0 ]]; then
+    printf 'TRACER_GSD_ABSENT_OK pass=%s\n' "$pass"
+    return 0
+  fi
+  return 1
+}
+
 run_setup_as_tester() {
   local args="$1"
   # COLUMNS is forced wide so Rich's non-tty Console (default width 80) does
@@ -521,6 +538,7 @@ cmd_pass1() {
     fi
     rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     assert_receipt_present "$categories" || return 1
+    assert_gsd_absent install || return 1
     return 0
   fi
   printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
@@ -963,6 +981,9 @@ cmd_pass2() {
   if ! settings_probe_revert >> "$log"; then
     return 1
   fi
+  if ! assert_gsd_absent uninstall >> "$log"; then
+    return 1
+  fi
 
   # Step 3: reinstall — catches state the uninstall sweep left stray.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
@@ -985,6 +1006,9 @@ cmd_pass2() {
   rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   printf 'TRACER_REINSTALL_OK installed=%s updated=%s skipped=%s failed=%s dependency_failed=%s blocked=%s manual=%s\n' \
     "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL" >> "$log"
+  if ! assert_gsd_absent reinstall >> "$log"; then
+    return 1
+  fi
 
   ct rm -f "$CONTAINER_NAME" >/dev/null
   printf 'TRACER_CONTAINER_TEARDOWN_OK\n' >> "$log"
