@@ -285,9 +285,9 @@ def test_a_toml_file_without_a_final_newline_round_trips() -> None:
     )
 
 
-def test_a_toml_splice_into_an_array_is_refused() -> None:
-    with pytest.raises(SettingsEditRefused):
-        insert_key("arr = [\n  [1, 2],\n  [3],\n]\n", "toml", ("k",), "v")
+def test_a_toml_splice_never_lands_inside_an_array() -> None:
+    inserted = insert_key("arr = [\n  [1, 2],\n  [3],\n]\n", "toml", ("k",), "v")
+    assert inserted.text == 'arr = [\n  [1, 2],\n  [3],\n]\nk = "v"\n'
 
 
 def test_an_invalid_toml_file_names_the_line() -> None:
@@ -1026,3 +1026,28 @@ def test_an_untrusted_ledger_is_kept_aside_and_blocks_every_write() -> None:
     assert settings.read_bytes() == written
     assert apply_setting("claude", "auto-approve", home=home, platform_os="linux").refused
     assert settings.read_bytes() == written
+
+
+def test_an_empty_file_a_bom_and_a_nested_toml_array_are_edited_not_refused() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_bytes(b"")  # e.g. after `touch`
+    assert apply_setting("claude", "auto-approve", home=home, platform_os="linux").refused is None
+    assert json.loads(settings.read_text(encoding="utf-8"))["skipDangerousModePermissionPrompt"]
+
+    vscode = home / ".config" / "Code" / "User" / "settings.json"
+    vscode.parent.mkdir(parents=True, exist_ok=True)
+    original = '﻿{\n  "editor.fontSize": 14\n}\n'.encode()
+    vscode.write_bytes(original)
+    assert apply_setting("vscode", "vscode-ai-off", home=home, platform_os="linux").refused is None
+    assert vscode.read_bytes().startswith("﻿".encode())
+    assert revert_setting("vscode", "vscode-ai-off", home=home, platform_os="linux").refused is None
+    assert vscode.read_bytes() == original
+
+    nested = 'args = [\n  ["a"],\n]\n\n[features]\nx = true\n'
+    inserted = insert_key(nested, "toml", ("approval_policy",), "never")
+    assert tomllib.loads(inserted.text) == {
+        "args": [["a"]],
+        "approval_policy": "never",
+        "features": {"x": True},
+    }

@@ -335,16 +335,23 @@ def _toml_value(value: object) -> str:
 
 
 def _insert_toml(text: str, doc: dict[str, object], key_path: KeyPath, value: object) -> Inserted:
-    """A top-level key goes on its own line before the first table header, or at the end."""
+    """A top-level key goes on its own line before the first table header, or at the end. A
+    line starting with `[` may also sit inside an array or a multi-line string, so each
+    candidate is tried in order and the first one the guard accepts is the header."""
     key = _toml_key(key_path)
     lines = text.splitlines(keepends=True)
-    table = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines))
-    fragment = f"{key} = {_toml_value(value)}\n"
-    if table == len(lines) and text and not text.endswith("\n"):
-        fragment = "\n" + fragment
-    new_text = "".join(lines[:table]) + fragment + "".join(lines[table:])
+    candidates = [i for i, line in enumerate(lines) if line.lstrip().startswith("[")]
     expected = _edited(doc, key_path, value)
-    return Inserted(_guarded(new_text, "toml", expected), fragment, created_parent=False)
+    for table in (*candidates, len(lines)):
+        fragment = f"{key} = {_toml_value(value)}\n"
+        if table == len(lines) and text and not text.endswith("\n"):
+            fragment = "\n" + fragment
+        new_text = "".join(lines[:table]) + fragment + "".join(lines[table:])
+        try:
+            return Inserted(_guarded(new_text, "toml", expected), fragment, created_parent=False)
+        except SettingsEditRefused:
+            continue
+    raise SettingsEditRefused("no place for a top-level key")
 
 
 def _toml_remove(text: str, key: str, fragment: str | None) -> str:
@@ -598,14 +605,24 @@ class FileResult:
     refused: str | None = None
 
 
+_BOM: Final = "\ufeff"
+
+
 def _text_of(snap: FileSnapshot | None, fmt: SettingsFormat) -> str:
-    """The file's text; a missing file is its new content, and non-UTF-8 bytes read as line 1."""
+    """The file's text without a leading BOM (`_with_bom` puts it back); a missing or
+    whitespace-only file is its new content, and non-UTF-8 bytes read as line 1."""
     if snap is None:
         return new_file_text(fmt)
     try:
-        return snap.data.decode("utf-8")
+        text = snap.data.decode("utf-8").removeprefix(_BOM)
     except UnicodeDecodeError as exc:
         raise SettingsParseError(fmt, 1, None) from exc
+    return text if text.strip() else new_file_text(fmt)
+
+
+def _with_bom(snap: FileSnapshot | None, text: str) -> str:
+    """The text to write: a BOM the file started with stays."""
+    return _BOM + text if snap is not None and snap.data.startswith(_BOM.encode()) else text
 
 
 @dataclass(frozen=True)
@@ -692,7 +709,7 @@ def _apply_once(
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     try:
-        write_if_unchanged(path, snap, step.text)
+        write_if_unchanged(path, snap, _with_bom(snap, step.text))
     except SettingsChanged:
         write_ledger(ledger)
         raise
@@ -800,7 +817,7 @@ def _revert_once(
                 delete_if_unchanged(path, snap)
                 deleted = True
             else:
-                write_if_unchanged(path, snap, text)
+                write_if_unchanged(path, snap, _with_bom(snap, text))
     except SettingsChanged:
         raise
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
