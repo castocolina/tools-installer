@@ -369,27 +369,32 @@ def _cut_member(text: str, clean: str, members: list[_Member], member: _Member) 
 def remove_key(
     text: str, fmt: SettingsFormat, key_path: KeyPath, *, fragment: str | None = None
 ) -> str:
-    """Remove one set key. The recorded fragment is cut when it occurs once and holds the member;
-    otherwise the located member is cut, so a vendor re-serialization still reverts."""
+    """Remove one set key. The recorded fragment is cut when it occurs once, holds the member
+    and the result re-parses; otherwise the located member is cut, so a later edit around the
+    member or a vendor re-serialization still reverts."""
     doc = parse_settings(text, fmt)
     if lookup(doc, key_path) is ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is not set")
+    expected = _edited(doc, key_path, ABSENT)
     if fmt == "toml":
-        new_text = _toml_remove(text, _toml_key(key_path), fragment)
-        return _guarded(new_text, fmt, _edited(doc, key_path, ABSENT))
+        return _guarded(_toml_remove(text, _toml_key(key_path), fragment), fmt, expected)
     clean = _clean(text, fmt)
     members, member = _member_at(clean, key_path)
     located = text[member.key_start : member.value_end]
-    # A comma-less fragment cut from the last of several members would strand the comma
-    # before it, so that member takes the cut path, which removes the preceding comma.
-    stranded = (
-        len(members) > 1 and member is members[-1] and not (fragment or "").rstrip().endswith(",")
-    )
-    if not stranded and fragment is not None and text.count(fragment) == 1 and located in fragment:
-        new_text = text.replace(fragment, "", 1)
-    else:
-        new_text = _cut_member(text, clean, members, member)
-    return _guarded(new_text, fmt, _edited(doc, key_path, ABSENT))
+    if fragment is not None and text.count(fragment) == 1 and located in fragment:
+        cut = text.replace(fragment, "", 1)
+        # JSONC accepts a trailing comma, so the re-parse alone cannot see one the cut left.
+        if _trailing_commas(cut, fmt) <= _trailing_commas(text, fmt):
+            try:
+                return _guarded(cut, fmt, expected)
+            except SettingsEditRefused:
+                pass  # e.g. a member appended after ours: its comma now belongs to the cut
+    return _guarded(_cut_member(text, clean, members, member), fmt, expected)
+
+
+def _trailing_commas(text: str, fmt: SettingsFormat) -> int:
+    """Commas the JSONC reader blanks: trailing ones, plus any inside comments."""
+    return sum(1 for raw, kept in zip(text, _clean(text, fmt), strict=True) if raw == "," != kept)
 
 
 def replace_value(text: str, fmt: SettingsFormat, key_path: KeyPath, new: object) -> str:

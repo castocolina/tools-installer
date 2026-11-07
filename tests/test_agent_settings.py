@@ -898,3 +898,46 @@ def test_opencode_json_has_a_single_writer() -> None:
     ):
         assert f"def {name}(" not in policy_source
         assert f"class {name}" not in policy_source
+
+
+def test_vscode_lean_reverts_after_vscode_appends_a_user_key() -> None:
+    home = Path.home()
+    path = home / ".config" / "Code" / "User" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+    apply_setting("vscode", "vscode-lean", home=home, platform_os="linux")
+    text = path.read_text(encoding="utf-8")
+    close = text.rstrip().rfind("}")
+    path.write_text(text[:close] + ',\n  "workbench.colorTheme": "x"\n' + text[close:], "utf-8")
+
+    reverted = revert_setting("vscode", "vscode-lean", home=home, platform_os="linux")
+
+    assert reverted.refused is None
+    assert {key.kind for key in reverted.keys} == {"removed"}
+    assert path.read_text(encoding="utf-8") == '{\n  "workbench.colorTheme": "x"\n}\n'
+    assert read_ledger("vscode") is None
+
+
+def test_opencode_and_a_created_claude_parent_revert_after_a_user_key_follows() -> None:
+    home = Path.home()
+    opencode = home / ".config" / "opencode" / "opencode.json"
+    opencode.parent.mkdir(parents=True, exist_ok=True)
+    opencode.write_text("{}\n", encoding="utf-8")
+    apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    opencode.write_text(
+        opencode.read_text(encoding="utf-8").replace('"allow"', '"allow", "theme": "dark"'),
+        "utf-8",
+    )
+    claude = _claude_settings_file()
+    claude.write_text('{"model": "opus"}\n', encoding="utf-8")
+    apply_setting("claude", "no-attribution", home=home, platform_os="linux")
+    claude.write_text(
+        claude.read_text(encoding="utf-8").replace('"commit": ""}', '"commit": ""}, "x": 1'),
+        "utf-8",
+    )
+
+    for agent, setting in (("opencode", "auto-approve"), ("claude", "no-attribution")):
+        assert revert_setting(agent, setting, home=home, platform_os="linux").refused is None
+
+    assert json.loads(opencode.read_text(encoding="utf-8")) == {"theme": "dark"}
+    assert json.loads(claude.read_text(encoding="utf-8")) == {"x": 1, "model": "opus"}
