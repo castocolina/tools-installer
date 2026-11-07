@@ -463,6 +463,46 @@ def test_setting_state_reads_each_state() -> None:
     assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "yours"
 
 
+def test_setting_facts_split_written_yours_already_and_drift() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    keys = ("permissions.defaultMode", "skipDangerousModePermissionPrompt")
+
+    def facts() -> agent_settings.SettingFacts:
+        return agent_settings.setting_facts(
+            "claude", "auto-approve", home=home, platform_os="linux"
+        )
+
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    recorded = facts()
+    assert (recorded.written, recorded.set_by_you, recorded.already, recorded.drifted) == (
+        keys,
+        (),
+        (),
+        (),
+    )
+
+    settings.write_text('{"permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8")
+    drifted = facts()
+    assert (drifted.written, drifted.drifted) == ((), keys)
+
+    write_ledger(ConfigLedger("claude"))
+    yours = facts()
+    assert yours.set_by_you == (("permissions.defaultMode", '"acceptEdits"'),)
+    assert yours.written == yours.already == yours.drifted == ()
+
+    settings.write_text(
+        json.dumps(
+            {
+                "permissions": {"defaultMode": "bypassPermissions"},
+                "skipDangerousModePermissionPrompt": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert facts().already == keys
+
+
 def test_apply_on_drift_rewrites_absent_keys_and_forgets_changed_ones() -> None:
     home = Path.home()
     settings = _claude_settings_file()

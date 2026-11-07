@@ -1455,3 +1455,190 @@ async def test_claude_auto_approve_toggles_from_policies(
             "permissions.defaultMode"
         )
         assert not settings.exists()
+
+
+CLAUDE_ROW_ID = "agent:claude:auto-approve"
+
+
+def _claude_row(home: Path) -> Policy:
+    return settings_policy(
+        "claude",
+        "auto-approve",
+        policy_id=CLAUDE_ROW_ID,
+        label="claude auto-approve",
+        description="bypassPermissions in ~/.claude/settings.json",
+        effect_kind="agent settings",
+        fixed=(),
+        home=home,
+        platform_os="fedora",
+        installed_tools={"claude": True},
+    )
+
+
+def _settings_app(home: Path, *rows: Policy) -> UnifiedApp:
+    return UnifiedApp(
+        [_tool()],
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(home / ".local" / "bin"), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(policies=list(rows)),
+        initial_view="policies",
+    )
+
+
+def _policies(app: UnifiedApp) -> PoliciesScreen:
+    screen = app.screen
+    assert isinstance(screen, PoliciesScreen)
+    return screen
+
+
+async def test_a_preset_accept_edits_shows_set_by_you(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"permissions": {"defaultMode": "acceptEdits"}}))
+    app = _settings_app(tmp_path, _claude_row(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        assert json.loads(settings.read_text()) == {
+            "permissions": {"defaultMode": "acceptEdits"},
+            "skipDangerousModePermissionPrompt": True,
+        }
+        assert _policies(app).active_state[CLAUDE_ROW_ID] is True
+        assert _policies(app).status.severity == "warn"
+        assert (
+            'permissions.defaultMode is set by you ("acceptEdits"); left as is.'
+            in _policies(app).status.text
+        )
+        assert (
+            'Set by you: permissions.defaultMode = "acceptEdits" (left as is).'
+            in _policies(app).detail_text
+        )
+
+
+async def test_keys_already_set_read_yours_and_space_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    text = json.dumps(
+        {
+            "permissions": {"defaultMode": "bypassPermissions"},
+            "skipDangerousModePermissionPrompt": True,
+        }
+    )
+    settings.write_text(text)
+    app = _settings_app(tmp_path, _claude_row(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert _cell(app, CLAUDE_ROW_ID, "state") == "● [yours]"
+        await pilot.press("space")
+        await pilot.pause()
+        assert settings.read_text() == text
+        assert _policies(app).status.text == (
+            "claude auto-approve: you set these keys yourself; "
+            "edit ~/.claude/settings.json to change them."
+        )
+
+
+async def test_a_drifted_row_rewrites_absent_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".claude" / "settings.json"
+    _claude_row(tmp_path).apply()
+    settings.write_text(json.dumps({"permissions": {"defaultMode": "plan"}}))
+    app = _settings_app(tmp_path, _claude_row(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert _cell(app, CLAUDE_ROW_ID, "state") == "! [drift]"
+        assert _policies(app).detail_text.splitlines()[0] == (
+            "Drift: this installer wrote permissions.defaultMode, "
+            "skipDangerousModePermissionPrompt, but ~/.claude/settings.json no longer holds "
+            "those values. space writes the absent keys again; values you set stay."
+        )
+        await pilot.press("space")
+        await pilot.pause()
+        assert json.loads(settings.read_text()) == {
+            "permissions": {"defaultMode": "plan"},
+            "skipDangerousModePermissionPrompt": True,
+        }
+        assert _cell(app, CLAUDE_ROW_ID, "state") == "● [on]"
+
+
+async def test_an_unparsable_file_with_a_ledger_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex = tmp_path / ".codex" / "config.toml"
+    row = settings_policy(
+        "codex",
+        "auto-approve",
+        policy_id="agent:codex:auto-approve",
+        label="codex auto-approve",
+        description="approval_policy never, full-access sandbox",
+        effect_kind="agent settings",
+        fixed=(),
+        home=tmp_path,
+        platform_os="fedora",
+        installed_tools={"codex": True},
+    )
+    row.apply()
+    broken = "approval_policy = \n[[[\n"
+    codex.write_text(broken)
+    app = _settings_app(tmp_path, row)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert _cell(app, "agent:codex:auto-approve", "state") == ""
+        await pilot.press("space")
+        await pilot.pause()
+        assert codex.read_text() == broken
+        assert _policies(app).status.text.startswith(
+            "Could not read the policy state: ~/.codex/config.toml is not valid TOML (line "
+        )
+        assert _policies(app).status.text.endswith("; nothing is written until it parses.")
+
+
+async def test_an_unparsable_file_without_a_ledger_refuses_on_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex = tmp_path / ".codex" / "config.toml"
+    codex.parent.mkdir()
+    broken = "approval_policy = \n[[[\n"
+    codex.write_text(broken)
+    row = settings_policy(
+        "codex",
+        "auto-approve",
+        policy_id="agent:codex:auto-approve",
+        label="codex auto-approve",
+        description="approval_policy never, full-access sandbox",
+        effect_kind="agent settings",
+        fixed=(),
+        home=tmp_path,
+        platform_os="fedora",
+        installed_tools={"codex": True},
+    )
+    app = _settings_app(tmp_path, row)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert _cell(app, "agent:codex:auto-approve", "state") == "○ [off]"
+        await pilot.press("space")
+        await pilot.pause()
+        assert codex.read_text() == broken
+        assert _policies(app).status.text.startswith(
+            "codex auto-approve not changed: ~/.codex/config.toml is not valid TOML (line "
+        )
+        assert _policies(app).status.text.endswith("; fix it, then press space.")

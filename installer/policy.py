@@ -587,9 +587,9 @@ def settings_policy(
     platform_os: str,
     installed_tools: Mapping[str, bool] | Callable[[str], bool] | None,
 ) -> Policy:
-    """One agent or editor setting as a Policy: keys are written only where absent and reverted "
-    "exactly."""
+    """One agent or editor setting as a Policy: its absent keys are written and reverted exactly."""
     is_installed = _installed_predicate(installed_tools)
+    path = agent_settings.settings_file(agent, home=home, platform_os=platform_os)
 
     def _state() -> str:
         return agent_settings.setting_state(agent, setting, home=home, platform_os=platform_os)
@@ -601,9 +601,47 @@ def settings_policy(
         return () if is_installed(agent) else (agent,)
 
     def _apply() -> PolicyResult:
+        try:
+            yours = _state() == "yours"
+        except OSError:  # unreadable: apply_setting's own parse refusal says why
+            yours = False
+        if yours:  # every key already holds ours and nothing is recorded: writing would be a no-op
+            return PolicyResult(
+                layers=(),
+                reload_hint=None,
+                warning=(
+                    f"{label}: you set these keys yourself; "
+                    f"edit {_display_path(path)} to change them."
+                ),
+                changed=False,
+            )
         return _settings_result(
             label, agent_settings.apply_setting(agent, setting, home=home, platform_os=platform_os)
         )
+
+    def _detail_lines() -> tuple[str, ...]:
+        try:
+            facts = agent_settings.setting_facts(agent, setting, home=home, platform_os=platform_os)
+        except OSError:
+            return (*fixed, _SETTINGS_LAST_LINE)
+        lines: list[str] = []
+        if facts.drifted:
+            lines.append(
+                f"Drift: this installer wrote {', '.join(facts.drifted)}, but "
+                f"{_display_path(facts.path)} no longer holds those values. space writes the "
+                "absent keys again; values you set stay."
+            )
+        lines.extend(fixed)
+        lines.append(_SETTINGS_LAST_LINE)
+        lines.extend(
+            f"Set by you: {key} = {_short(value)} (left as is)." for key, value in facts.set_by_you
+        )
+        if facts.already:
+            lines.append(
+                f"Already this way: {', '.join(facts.already)} "
+                "(not written, so space never removes them)."
+            )
+        return tuple(lines)
 
     def _remove() -> PolicyResult:
         return _settings_result(
@@ -627,7 +665,7 @@ def settings_policy(
         is_active=_active,
         effect_kind=effect_kind,
         state=_state,
-        detail_lines=lambda: (*fixed, _SETTINGS_LAST_LINE),
+        detail_lines=_detail_lines,
     )
 
 

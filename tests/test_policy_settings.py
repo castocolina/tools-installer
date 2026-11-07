@@ -62,19 +62,23 @@ def test_settings_policy_results_map_every_outcome(
     )
     row.remove()
 
+    # Both keys recorded; the user then sets the skip key to false. Nothing is absent, and the
+    # state is on, so this is not the yours refusal: apply reports nothing to write.
+    path.unlink()
+    row.apply()
     path.write_text(
         json.dumps(
             {
                 "permissions": {"defaultMode": "bypassPermissions"},
-                "skipDangerousModePermissionPrompt": True,
+                "skipDangerousModePermissionPrompt": False,
             }
         )
     )
     nothing = row.apply()
     assert nothing.changed is False
     assert nothing.warning == (
-        "claude auto-approve: nothing to write; "
-        "permissions.defaultMode, skipDangerousModePermissionPrompt already hold these values."
+        "claude auto-approve: nothing to write; permissions.defaultMode already hold these values. "
+        "skipDangerousModePermissionPrompt is set by you (false); left as is."
     )
 
     path.unlink()

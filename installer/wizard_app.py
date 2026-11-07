@@ -1920,11 +1920,6 @@ def _read_active_owned(policy: Policy) -> tuple[tuple[bool, bool] | None, str | 
     `owned` is read only when the policy binds it; either read failing fails
     the pair, so a row is never half-painted from one answer.
     """
-    if policy.state is not None:
-        state, error = run_live(policy.state)
-        if state is None:
-            return None, error
-        return (state == "on", state == "drift"), None
     if policy.is_active is None:
         return None, None
     active, error = run_live(policy.is_active)
@@ -1982,6 +1977,8 @@ class PoliciesScreen(AppScreen):
         }
         # Policies whose last read said owned-but-not-active.
         self._drift: set[str] = set()
+        # Settings rows whose keys all hold our values with no record: nothing to write.
+        self._yours: set[str] = set()
         # Bumped by every render and mutation completion that supersedes a
         # job-state read in flight; JobStatesRead carries the one it began with.
         self._job_state_generation = 0
@@ -2089,11 +2086,25 @@ class PoliciesScreen(AppScreen):
         is_active keeps the state its last toggle left. A failed read drops the
         remembered answer: the row is never painted from a previous read.
         """
+        if policy.state is not None:
+            state, error = run_live(policy.state)
+            self._record_settings_state(policy.id, state)
+            return error
         if policy.is_active is None or policy.state_cache is not None:
             return None
         read, error = _read_active_owned(policy)
         self._record_state(policy.id, read)
         return error
+
+    def _record_settings_state(self, policy_id: str, state: str | None) -> None:
+        """A settings row's read: on, yours, off or drift. None (unreadable) drops it."""
+        self._yours.discard(policy_id)
+        if state is None:
+            self._record_state(policy_id, None)
+            return
+        self._record_state(policy_id, (state == "on", state == "drift"))
+        if state == "yours":
+            self._yours.add(policy_id)
 
     def _record_state(self, policy_id: str, read: tuple[bool, bool] | None) -> None:
         """Keep one policy's (active, owned) answer; None drops it (blank cell)."""
@@ -2176,6 +2187,8 @@ class PoliciesScreen(AppScreen):
         active = self.active_state.get(policy_id)
         if active is None:
             return Text("")
+        if policy_id in self._yours:
+            return Text("● [yours]", style="green")
         if policy_id in self._drift:
             return Text("! [drift]", style="yellow")
         label = "● [on]" if active else "○ [off]"
