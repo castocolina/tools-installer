@@ -1600,3 +1600,36 @@ def test_record_hooks_merges_sorted_and_skips_a_missing_receipt() -> None:
     assert written.hooks == {"h": ("claude", "codex", "opencode")}
     assert receipts.record_hooks("nothing", "h", ("codex",)) is False
     assert not receipts.receipt_path("nothing").exists()
+
+
+def test_the_ledger_round_trips_and_fails_closed() -> None:
+    entry = receipts.ConfigWrite(
+        "auto-approve", "/h/.claude/settings.json", ("model",), "opus", '\n  "model": "opus",'
+    )
+    ledger = receipts.ConfigLedger("claude", ("/h/.claude/settings.json",), (entry,))
+    assert receipts.config_ledger_dir() == receipts.default_receipts_dir().parent / "config"
+    receipts.write_ledger(ledger)
+    assert receipts.read_ledger("claude") == ledger
+
+    path = receipts.config_ledger_dir() / "claude.json"
+    good = path.read_text(encoding="utf-8")
+    for broken in ("{", good.replace('"v": 1', '"v": 2'), good.replace('"claude"', '"codex"')):
+        path.write_text(broken, encoding="utf-8")
+        assert receipts.read_ledger("claude") is None
+
+    target = path.parent / "elsewhere.json"
+    target.write_text(good, encoding="utf-8")
+    path.unlink()
+    path.symlink_to(target)
+    assert receipts.read_ledger("claude") is None
+    with pytest.raises(OSError):
+        receipts.write_ledger(ledger)
+
+    path.unlink()
+    with pytest.raises(ValueError):
+        receipts.read_ledger("pi")
+    with pytest.raises(ValueError):
+        receipts.write_ledger(receipts.ConfigLedger("pi", entries=(entry,)))
+    receipts.write_ledger(ledger)
+    receipts.write_ledger(receipts.ConfigLedger("claude"))
+    assert not path.exists()

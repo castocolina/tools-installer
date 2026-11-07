@@ -10,6 +10,13 @@ from installer.atomic import read_capped
 _ZDOTDIR_ASSIGNMENT = re.compile(r"^\s*(export\s+)?ZDOTDIR=", re.MULTILINE)
 
 
+def display_path(path: Path) -> str:
+    """Collapse a HOME-relative path to ~/… so feedback reads as a shell path
+    rather than a long absolute (or pytest temp) dump; leave others verbatim."""
+    home = Path.home()
+    return f"~/{path.relative_to(home)}" if path.is_relative_to(home) else str(path)
+
+
 def zshrc_path(home: Path, environ: Mapping[str, str]) -> Path:
     """The .zshrc zsh actually reads: $ZDOTDIR/.zshrc when ZDOTDIR names an
     existing directory, else ~/.zshrc.

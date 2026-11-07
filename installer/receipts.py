@@ -105,7 +105,7 @@ def receipt_path(tool_id: str) -> Path:
 
 
 def method_key(method: Method) -> str:
-    """Stable informational key for a method; never matched on (a pin bump changes it)."""
+    """Matched only to pick the method a receipt was written for; a pin bump changes it."""
     payload = json.dumps(
         {"kind": method.kind, "params": method.params}, sort_keys=True, default=str
     )
@@ -114,11 +114,6 @@ def method_key(method: Method) -> str:
 
 def _write_unlocked(receipt: Receipt) -> None:
     """Encode and atomically write one receipt. The caller must hold _WRITE_LOCK."""
-    path = receipt_path(receipt.tool)
-    if path.is_symlink():
-        raise OSError(
-            f"tool '{receipt.tool}': receipt path is a symlink; refusing to write through it"
-        )
     artifacts: list[dict[str, object]] = []
     for artifact in receipt.artifacts:
         if not Path(artifact.path).is_absolute():
@@ -144,9 +139,7 @@ def _write_unlocked(receipt: Receipt) -> None:
         "smoke": receipt.smoke,
         "hooks": {name: list(ids) for name, ids in receipt.hooks.items()},
     }
-    path = receipt_path(receipt.tool)
-    ensure_dir(path.parent)
-    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+    _write_json(receipt_path(receipt.tool), payload, f"tool '{receipt.tool}': receipt path")
 
 
 def write(receipt: Receipt) -> None:
@@ -180,18 +173,9 @@ def read(tool_id: str) -> Receipt | None:
     mismatch, any wrong-typed field or any artifact violating its type's
     required fields returns None. A bad tool id still raises ValueError:
     that is a programming error, not an untrusted-input case."""
-    path = receipt_path(tool_id)
-    try:
-        raw_bytes = read_capped(path, _MAX_RECEIPT_BYTES, follow_symlinks=False)
-        if raw_bytes is None:
-            return None
-        raw = raw_bytes.decode("utf-8")
-        raw_data = json.loads(raw)
-    except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+    data = _read_json_object(receipt_path(tool_id))
+    if data is None:
         return None
-    if not isinstance(raw_data, dict):
-        return None
-    data = cast(dict[str, object], raw_data)
     version = data.get("v")
     if not isinstance(version, int) or isinstance(version, bool) or version != 1:
         return None
@@ -236,6 +220,139 @@ def read(tool_id: str) -> Receipt | None:
         smoke=smoke,
         hooks=hooks,
     )
+
+
+def _read_json_object(path: Path) -> dict[str, object] | None:
+    """A capped, no-follow read of one JSON object; anything else is None (fail-closed)."""
+    try:
+        raw_bytes = read_capped(path, _MAX_RECEIPT_BYTES, follow_symlinks=False)
+        if raw_bytes is None:
+            return None
+        raw_data = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+        return None
+    return cast(dict[str, object], raw_data) if isinstance(raw_data, dict) else None
+
+
+def _write_json(path: Path, payload: dict[str, object], label: str) -> None:
+    """Atomically write one JSON object; refuses a symlink at path. The caller holds _WRITE_LOCK."""
+    if path.is_symlink():
+        raise OSError(f"{label} is a symlink; refusing to write through it")
+    ensure_dir(path.parent)
+    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+
+
+# Per-agent config-write ledger (D-08): every key the installer wrote into an agent's
+# settings, kept apart from install receipts, so a revert removes exactly those keys.
+CONFIG_AGENTS = ("claude", "codex", "opencode", "cursor-agent", "vscode")
+
+
+@dataclass(frozen=True)
+class ConfigWrite:
+    setting: str
+    file: str
+    key_path: tuple[str, ...]
+    value: object
+    fragment: str
+    created_parent: bool = False
+    replaced_default: bool = False
+
+
+@dataclass(frozen=True)
+class ConfigLedger:
+    agent: str
+    created_files: tuple[str, ...] = ()
+    entries: tuple[ConfigWrite, ...] = ()
+
+
+def config_ledger_dir() -> Path:
+    """The config-write ledgers, beside the receipts directory."""
+    return default_receipts_dir().parent / "config"
+
+
+def _config_ledger_path(agent: str) -> Path:
+    if agent not in CONFIG_AGENTS:
+        raise ValueError(f"unknown config agent: {agent!r}")
+    return config_ledger_dir() / f"{agent}.json"
+
+
+def _config_write_from(raw: object) -> ConfigWrite | None:
+    if not isinstance(raw, dict):
+        return None
+    data = cast(dict[str, object], raw)
+    key_path = data.get("key_path")
+    setting, file, fragment = data.get("setting"), data.get("file"), data.get("fragment")
+    created, replaced = data.get("created_parent"), data.get("replaced_default")
+    if (
+        "value" not in data
+        or not isinstance(key_path, list)
+        or not all(isinstance(part, str) for part in cast(list[object], key_path))
+        or not isinstance(setting, str)
+        or not isinstance(file, str)
+        or not isinstance(fragment, str)
+        or not isinstance(created, bool)
+        or not isinstance(replaced, bool)
+    ):
+        return None
+    return ConfigWrite(
+        setting,
+        file,
+        tuple(cast(list[str], key_path)),
+        data["value"],
+        fragment,
+        created,
+        replaced,
+    )
+
+
+def read_ledger(agent: str) -> ConfigLedger | None:
+    """The agent's ledger; None when it is missing or cannot be trusted (fail-closed)."""
+    data = _read_json_object(_config_ledger_path(agent))
+    if data is None or type(data.get("v")) is not int or data.get("v") != 1:
+        return None
+    if data.get("agent") != agent:
+        return None
+    raw_files = data.get("created_files")
+    raw_entries = data.get("entries")
+    if not isinstance(raw_files, list) or not isinstance(raw_entries, list):
+        return None
+    files = cast(list[object], raw_files)
+    if not all(isinstance(name, str) for name in files):
+        return None
+    entries: list[ConfigWrite] = []
+    for raw in cast(list[object], raw_entries):
+        entry = _config_write_from(raw)
+        if entry is None:
+            return None
+        entries.append(entry)
+    return ConfigLedger(agent, tuple(cast(list[str], files)), tuple(entries))
+
+
+def write_ledger(ledger: ConfigLedger) -> None:
+    """Atomically write one agent's ledger; a ledger with nothing in it deletes the file."""
+    path = _config_ledger_path(ledger.agent)
+    with _WRITE_LOCK:
+        if not ledger.entries and not ledger.created_files:
+            path.unlink(missing_ok=True)
+            return
+        payload: dict[str, object] = {
+            "v": 1,
+            "agent": ledger.agent,
+            "created_files": list(ledger.created_files),
+            "entries": [
+                {
+                    "setting": entry.setting,
+                    "file": entry.file,
+                    "key_path": list(entry.key_path),
+                    "value": entry.value,
+                    "fragment": entry.fragment,
+                    "created_parent": entry.created_parent,
+                    "replaced_default": entry.replaced_default,
+                }
+                for entry in ledger.entries
+            ],
+        }
+        _write_json(path, payload, f"config ledger for {ledger.agent!r}")
 
 
 def _build_receipt(

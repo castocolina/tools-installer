@@ -6,7 +6,15 @@ from installer.agent_env import adapters
 def test_adapters_define_supported_agents_with_injected_home_paths(tmp_path: Path) -> None:
     configured = adapters(tmp_path)
 
-    assert set(configured) == {"claude", "codex", "opencode", "pi", "antigravity"}
+    assert set(configured) == {
+        "claude",
+        "codex",
+        "opencode",
+        "pi",
+        "antigravity",
+        "cursor-agent",
+        "vscode",
+    }
     assert configured["claude"].config_path == tmp_path / ".claude" / "settings.json"
     assert configured["codex"].config_path == tmp_path / ".codex" / "config.toml"
     assert configured["opencode"].config_path == tmp_path / ".config" / "opencode" / "opencode.json"
@@ -16,6 +24,21 @@ def test_adapters_define_supported_agents_with_injected_home_paths(tmp_path: Pat
         == tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
     )
     assert all(adapter.config_path.is_relative_to(tmp_path) for adapter in configured.values())
+
+
+def test_adapters_add_cursor_agent_and_vscode(tmp_path: Path) -> None:
+    linux = adapters(tmp_path)
+
+    assert linux["cursor-agent"].config_path == tmp_path / ".cursor" / "cli-config.json"
+    assert linux["vscode"].config_path == tmp_path / ".config" / "Code" / "User" / "settings.json"
+    assert (
+        adapters(tmp_path, platform_os="fedora")["vscode"].config_path
+        == linux["vscode"].config_path
+    )
+    assert adapters(tmp_path, platform_os="macos")["vscode"].config_path == (
+        tmp_path / "Library" / "Application Support" / "Code" / "User" / "settings.json"
+    )
+    assert linux["claude"].config_path == tmp_path / ".claude" / "settings.json"
 
 
 def test_pi_is_an_audit_only_adapter(tmp_path: Path) -> None:

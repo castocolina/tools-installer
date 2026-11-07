@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import env_redirect, locations, systemd_daemon
+from installer import env_redirect, locations, policy, systemd_daemon
 from installer.locations import (
     applications_dir,
     bin_dir,
@@ -281,6 +281,15 @@ def test_zshrc_path_ignores_a_zdotdir_that_is_not_a_directory(tmp_path: Path) ->
     # A stale or typo'd ZDOTDIR must not point writes at a path that does not
     # exist; fall back to the file zsh would read without it.
     assert zshrc_path(tmp_path, {"ZDOTDIR": str(tmp_path / "gone")}) == tmp_path / ".zshrc"
+
+
+def test_display_path_lives_in_locations() -> None:
+    assert locations.display_path(Path.home() / ".claude" / "settings.json") == (
+        "~/.claude/settings.json"
+    )
+    assert locations.display_path(Path("/etc/x")) == "/etc/x"
+    # policy re-binds the moved function under its old private name.
+    assert vars(policy)["_display_path"] is locations.display_path
 
 
 def test_zshenv_path_follows_zdotdir(tmp_path: Path) -> None:

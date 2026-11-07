@@ -8,6 +8,7 @@ from installer.agent_settings import (
     SettingsChanged,
     SettingsEditRefused,
     SettingsParseError,
+    apply_setting,
     delete_if_unchanged,
     insert_key,
     new_file_text,
@@ -15,10 +16,12 @@ from installer.agent_settings import (
     read_settings,
     remove_key,
     replace_value,
+    revert_setting,
     same_value,
     strip_jsonc,
     write_if_unchanged,
 )
+from installer.receipts import read_ledger
 
 VSCODE_SETTINGS = (
     '// VS Code user settings\n{\n  /* editor */\n  "editor.fontSize": 14, // size\n}\n'
@@ -322,3 +325,103 @@ def test_a_symlinked_settings_file_is_edited_through_its_target(tmp_path: Path) 
 
     assert link.is_symlink()
     assert json.loads(target.read_text(encoding="utf-8")) == {"model": "opus", "flag": True}
+
+
+def _claude_settings_file() -> Path:
+    path = Path.home() / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_claude_auto_approve_writes_records_and_reverts_byte_identical() -> None:
+    settings = _claude_settings_file()
+    original = (
+        json.dumps({"model": "opus", "permissions": {"allow": ["Bash(ls)"]}}, indent=2) + "\n"
+    )
+    settings.write_text(original, encoding="utf-8")
+    home = Path.home()
+
+    applied = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert applied.refused is None
+    assert [(key.key, key.kind) for key in applied.keys] == [
+        ("permissions.defaultMode", "wrote"),
+        ("skipDangerousModePermissionPrompt", "wrote"),
+    ]
+    written = json.loads(settings.read_text(encoding="utf-8"))
+    assert written["model"] == "opus"
+    assert written["permissions"] == {"allow": ["Bash(ls)"], "defaultMode": "bypassPermissions"}
+    assert written["skipDangerousModePermissionPrompt"] is True
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    assert [entry.key_path for entry in ledger.entries] == [
+        ("permissions", "defaultMode"),
+        ("skipDangerousModePermissionPrompt",),
+    ]
+
+    reverted = revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert [key.kind for key in reverted.keys] == ["removed", "removed"]
+    assert settings.read_text(encoding="utf-8") == original
+    assert read_ledger("claude") is None
+
+
+def test_a_user_accept_edits_stays_and_reads_set_by_you() -> None:
+    settings = _claude_settings_file()
+    settings.write_text('{"permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8")
+    home = Path.home()
+
+    applied = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind, key.value) for key in applied.keys] == [
+        ("permissions.defaultMode", "set_by_you", '"acceptEdits"'),
+        ("skipDangerousModePermissionPrompt", "wrote", "true"),
+    ]
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    assert [entry.key_path for entry in ledger.entries] == [("skipDangerousModePermissionPrompt",)]
+
+    reverted = revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert [key.kind for key in reverted.keys] == ["removed"]
+    assert json.loads(settings.read_text(encoding="utf-8")) == {
+        "permissions": {"defaultMode": "acceptEdits"}
+    }
+
+
+def test_a_missing_settings_file_is_created_and_deleted_on_revert() -> None:
+    home = Path.home()
+    settings = home / ".claude" / "settings.json"
+    assert not settings.exists()
+
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert json.loads(settings.read_text(encoding="utf-8")) == {
+        "permissions": {"defaultMode": "bypassPermissions"},
+        "skipDangerousModePermissionPrompt": True,
+    }
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    assert ledger.created_files == (str(settings),)
+
+    revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert not settings.exists()
+    assert read_ledger("claude") is None
+
+
+def test_an_invalid_settings_file_is_refused_and_byte_identical() -> None:
+    settings = _claude_settings_file()
+    original = '{"a": 1,,}'
+    settings.write_text(original, encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError) as caught:
+        json.loads(original)
+
+    applied = apply_setting("claude", "auto-approve", home=Path.home(), platform_os="linux")
+
+    assert applied.refused == (
+        f"not valid JSON (line {caught.value.lineno}, column {caught.value.colno})"
+    )
+    assert applied.keys == ()
+    assert settings.read_text(encoding="utf-8") == original
+    assert read_ledger("claude") is None

@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
 
+from installer.agent_env import adapters
 from installer.atomic import FileSnapshot, atomic_write_text, read_snapshot, snapshot_matches
+from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_ledger
 
 SettingsFormat = Literal["json", "jsonc", "toml"]
 KeyPath = tuple[str, ...]
@@ -423,3 +425,297 @@ def delete_if_unchanged(path: Path, before: FileSnapshot) -> None:
     if not snapshot_matches(target, before):
         raise SettingsChanged()
     target.unlink()
+
+
+KeyKind = Literal["wrote", "set_by_you", "already", "replaced_default", "removed", "kept_changed"]
+AGENT_FORMATS: Final[dict[str, SettingsFormat]] = {
+    "claude": "json",
+    "codex": "toml",
+    "opencode": "jsonc",
+    "cursor-agent": "json",
+    "vscode": "jsonc",
+}
+
+
+@dataclass(frozen=True)
+class SettingKey:
+    """One key the installer may write: its path, our value, and the CLI default it may replace."""
+
+    path: KeyPath
+    value: object
+    cli_default: object = ABSENT
+
+
+# The CONF-12 lean list. Each entry is a flat key: the dotted name is the one path part.
+_VSCODE_LEAN: Final[tuple[tuple[str, object], ...]] = (
+    ("telemetry.telemetryLevel", "off"),
+    ("workbench.enableExperiments", False),
+    ("workbench.settings.enableNaturalLanguageSearch", False),
+    ("extensions.ignoreRecommendations", True),
+    ("window.restoreWindows", "one"),
+    ("workbench.startupEditor", "none"),
+    ("editor.minimap.enabled", False),
+    (
+        "files.watcherExclude",
+        {
+            "**/node_modules/**": True,
+            "**/.venv/**": True,
+            "**/.git/objects/**": True,
+            "**/dist/**": True,
+            "**/build/**": True,
+            "**/.cache/**": True,
+        },
+    ),
+    ("search.followSymlinks", False),
+    ("npm.autoDetect", "off"),
+    ("task.autoDetect", "off"),
+    ("typescript.disableAutomaticTypeAcquisition", True),
+    ("git.autoRepositoryDetection", "openEditors"),
+)
+
+_KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
+    ("claude", "auto-approve"): (
+        SettingKey(("permissions", "defaultMode"), "bypassPermissions"),
+        SettingKey(("skipDangerousModePermissionPrompt",), True),
+    ),
+    ("claude", "no-attribution"): (
+        SettingKey(("attribution", "commit"), ""),
+        SettingKey(("attribution", "pr"), ""),
+    ),
+    ("codex", "auto-approve"): (
+        SettingKey(("approval_policy",), "never"),
+        SettingKey(("sandbox_mode",), "danger-full-access"),
+    ),
+    ("opencode", "auto-approve"): (SettingKey(("permission",), "allow"),),
+    ("cursor-agent", "auto-approve"): (SettingKey(("approvalMode",), "unrestricted"),),
+    ("cursor-agent", "no-attribution"): (
+        SettingKey(("attribution", "attributeCommitsToAgent"), False, cli_default=True),
+        SettingKey(("attribution", "attributePRsToAgent"), False, cli_default=True),
+    ),
+    ("vscode", "vscode-ai-off"): (SettingKey(("chat.disableAIFeatures",), True),),
+    ("vscode", "vscode-ext-updates-off"): (
+        SettingKey(("extensions.autoUpdate",), False),
+        SettingKey(("extensions.autoCheckUpdates",), False),
+    ),
+}
+
+
+def _vscode_lean(platform_os: str) -> tuple[SettingKey, ...]:
+    """The lean list plus this OS's terminal profile; update.mode is written on macOS only."""
+    macos = platform_os == "macos"
+    profile = "osx" if macos else "linux"
+    keys = [SettingKey((name,), value) for name, value in _VSCODE_LEAN]
+    keys.append(SettingKey((f"terminal.integrated.defaultProfile.{profile}",), "zsh"))
+    if macos:
+        keys.append(SettingKey(("update.mode",), "none"))
+    return tuple(keys)
+
+
+def setting_keys(agent: str, setting: str, platform_os: str) -> tuple[SettingKey, ...]:
+    """The keys one (agent, setting) pair writes on this OS; empty for an unknown pair."""
+    if (agent, setting) == ("vscode", "vscode-lean"):
+        return _vscode_lean(platform_os)
+    return _KEYS.get((agent, setting), ())
+
+
+def _format(agent: str) -> SettingsFormat:
+    if agent not in AGENT_FORMATS:
+        raise ValueError(f"unknown settings agent: {agent!r}")
+    return AGENT_FORMATS[agent]
+
+
+def settings_file(agent: str, *, home: Path, platform_os: str) -> Path:
+    """The file an agent's settings live in: its adapter path."""
+    _format(agent)
+    return adapters(home, platform_os=platform_os)[agent].config_path
+
+
+@dataclass(frozen=True)
+class KeyResult:
+    """`key` is the dotted path; `value` is the JSON of the value it names (the user's or ours)."""
+
+    key: str
+    kind: KeyKind
+    value: str
+
+
+@dataclass(frozen=True)
+class FileResult:
+    agent: str
+    setting: str
+    path: Path
+    fmt: SettingsFormat
+    keys: tuple[KeyResult, ...] = ()
+    refused: str | None = None
+
+
+def _text_of(snap: FileSnapshot | None, fmt: SettingsFormat) -> str:
+    """The file's text; a missing file is its new content, and non-UTF-8 bytes read as line 1."""
+    if snap is None:
+        return new_file_text(fmt)
+    try:
+        return snap.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SettingsParseError(fmt, 1, None) from exc
+
+
+@dataclass(frozen=True)
+class _Pass:
+    """One computed edit: the new text, the per-key results, and the ledger changes it implies."""
+
+    text: str
+    keys: tuple[KeyResult, ...]
+    writes: tuple[ConfigWrite, ...]
+    dropped: tuple[KeyPath, ...]
+
+
+def _apply_pass(
+    text: str, fmt: SettingsFormat, setting: str, file: str, keys: tuple[SettingKey, ...]
+) -> _Pass:
+    results: list[KeyResult] = []
+    writes: list[ConfigWrite] = []
+    dropped: list[KeyPath] = []
+    for key in keys:
+        doc = parse_settings(text, fmt)
+        name = ".".join(key.path)
+        parent = lookup(doc, key.path[:-1])
+        current = lookup(doc, key.path)
+        if parent is not ABSENT and not isinstance(parent, dict):
+            results.append(KeyResult(name, "set_by_you", _dump(parent)))
+            dropped.append(key.path)
+        elif current is ABSENT:
+            inserted = insert_key(text, fmt, key.path, key.value)
+            text = inserted.text
+            writes.append(
+                ConfigWrite(
+                    setting, file, key.path, key.value, inserted.fragment, inserted.created_parent
+                )
+            )
+            results.append(KeyResult(name, "wrote", _dump(key.value)))
+        elif same_value(current, key.value):
+            results.append(KeyResult(name, "already", _dump(key.value)))
+        elif key.cli_default is not ABSENT and same_value(current, key.cli_default):
+            text = replace_value(text, fmt, key.path, key.value)
+            writes.append(
+                ConfigWrite(setting, file, key.path, key.value, "", replaced_default=True)
+            )
+            results.append(KeyResult(name, "replaced_default", _dump(key.value)))
+        else:
+            results.append(KeyResult(name, "set_by_you", _dump(current)))
+            dropped.append(key.path)
+    return _Pass(text, tuple(results), tuple(writes), tuple(dropped))
+
+
+def _kept_entries(
+    entries: tuple[ConfigWrite, ...], setting: str, file: str, step: _Pass
+) -> tuple[ConfigWrite, ...]:
+    """The ledger after a pass: entries for keys the pass wrote or dropped are replaced."""
+    touched = {write.key_path for write in step.writes} | set(step.dropped)
+    kept = tuple(
+        entry
+        for entry in entries
+        if not (entry.setting == setting and entry.file == file and entry.key_path in touched)
+    )
+    return kept + step.writes
+
+
+def apply_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+    """Write each absent key of one setting and record it; a key set differently is left."""
+    fmt = _format(agent)
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    file = str(path)
+    ledger = read_ledger(agent) or ConfigLedger(agent)
+    try:
+        snap = read_settings(path)
+        text = _text_of(snap, fmt)
+        step = _apply_pass(text, fmt, setting, file, setting_keys(agent, setting, platform_os))
+    except (SettingsParseError, SettingsEditRefused, OSError) as exc:
+        return FileResult(agent, setting, path, fmt, refused=str(exc))
+    entries = _kept_entries(ledger.entries, setting, file, step)
+    if step.text == text:
+        write_ledger(ConfigLedger(agent, ledger.created_files, entries))
+        return FileResult(agent, setting, path, fmt, keys=step.keys)
+    created = ledger.created_files
+    if snap is None and file not in created:
+        created = (*created, file)
+    write_ledger(ConfigLedger(agent, created, entries))  # reserved before the file write
+    try:
+        write_if_unchanged(path, snap, step.text)
+    except OSError as exc:
+        write_ledger(ledger)  # the write did not happen: the previous ledger stands
+        return FileResult(agent, setting, path, fmt, refused=str(exc))
+    return FileResult(agent, setting, path, fmt, keys=step.keys)
+
+
+def _revert_pass(
+    text: str,
+    fmt: SettingsFormat,
+    entries: tuple[ConfigWrite, ...],
+    table: dict[KeyPath, SettingKey],
+) -> tuple[str, tuple[KeyResult, ...]]:
+    """Revert the entries newest first. A key whose value is no longer ours is kept and reported."""
+    results: list[KeyResult] = []
+    for entry in reversed(entries):
+        key = table[entry.key_path]
+        name = ".".join(entry.key_path)
+        current = lookup(parse_settings(text, fmt), entry.key_path)
+        if current is ABSENT:
+            continue
+        if not same_value(current, key.value):
+            results.append(KeyResult(name, "kept_changed", _dump(current)))
+        elif entry.replaced_default:
+            text = replace_value(text, fmt, entry.key_path, key.cli_default)
+            results.append(KeyResult(name, "removed", _dump(key.cli_default)))
+        else:
+            # A parent object we created that holds only our key goes with it; the guard
+            # would refuse to leave an empty object behind as a child-only removal.
+            parent = entry.key_path[:-1]
+            if (
+                entry.created_parent
+                and parent
+                and same_value(
+                    lookup(parse_settings(text, fmt), parent), {entry.key_path[-1]: key.value}
+                )
+            ):
+                text = remove_key(text, fmt, parent, fragment=entry.fragment)
+            else:
+                text = remove_key(text, fmt, entry.key_path, fragment=entry.fragment)
+            results.append(KeyResult(name, "removed", _dump(key.value)))
+    return text, tuple(results)
+
+
+def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+    """Undo the ledger's keys for this setting that still hold our value; anything else is left."""
+    fmt = _format(agent)
+    table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    file = str(path)
+    ledger = read_ledger(agent) or ConfigLedger(agent)
+    mine = tuple(
+        entry
+        for entry in ledger.entries
+        if entry.setting == setting
+        and entry.file == file
+        and entry.key_path in table
+        and same_value(entry.value, table[entry.key_path].value)
+    )
+    if not mine:
+        return FileResult(agent, setting, path, fmt)
+    deleted = False
+    try:
+        snap = read_settings(path)
+        original = _text_of(snap, fmt)
+        text, results = _revert_pass(original, fmt, mine, table)
+        if text != original:
+            if snap is not None and file in ledger.created_files and not parse_settings(text, fmt):
+                delete_if_unchanged(path, snap)
+                deleted = True
+            else:
+                write_if_unchanged(path, snap, text)
+    except (SettingsParseError, SettingsEditRefused, OSError) as exc:
+        return FileResult(agent, setting, path, fmt, refused=str(exc))
+    gone = deleted or (snap is None and file in ledger.created_files)
+    created = tuple(name for name in ledger.created_files if not (gone and name == file))
+    remaining = tuple(entry for entry in ledger.entries if entry not in mine)
+    write_ledger(ConfigLedger(agent, created, remaining))
+    return FileResult(agent, setting, path, fmt, keys=results)
