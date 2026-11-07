@@ -14,6 +14,7 @@ import functools
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -35,7 +36,10 @@ from tests.sandbox import (
     check_launch,
     env_names_to_clear,
     fail_on_refusals,
+    guarded_getaddrinfo,
+    guarded_socket_init,
     host_zsh_stash,
+    nodeid_of,
     prepare_interpreter_dir,
     record_refusal,
     sandboxed_path,
@@ -100,6 +104,23 @@ def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
 def no_host_toolchain_exec(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every subprocess.run resolves Popen here; the allowlist refuses before launch."""
     monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def no_internet_sockets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test opens an internet socket or resolves a name (SPEC R8, D-22).
+
+    Patching the class applies to every thread (Textual workers included). `socketpair`,
+    `AF_UNIX` and asyncio's self-pipe keep working: only AF_INET and AF_INET6 are refused.
+    """
+
+    def describe() -> str:
+        return nodeid_of(request)
+
+    monkeypatch.setattr(
+        socket.socket, "__init__", guarded_socket_init(socket.socket.__init__, describe)
+    )
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo(describe))
 
 
 @pytest.fixture(autouse=True)

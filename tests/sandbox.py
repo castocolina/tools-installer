@@ -14,11 +14,12 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import sys
 from collections.abc import Callable, Generator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -547,6 +548,54 @@ def refused(match: str) -> Generator[None]:
     if not any(re.search(match, message) for message in block):
         pytest.fail(f"no launch refusal matching {match!r} was recorded", pytrace=False)
     _REFUSALS[start:] = [message for message in block if re.search(match, message) is None]
+
+
+# --- the socket guard: no internet socket and no name lookup in a test (SPEC R8, D-22) ---
+
+INTERNET_FAMILIES = frozenset({socket.AF_INET, socket.AF_INET6})
+
+
+def nodeid_of(request: pytest.FixtureRequest) -> str:
+    """The running test's node id; pytest leaves `FixtureRequest.node` untyped."""
+    return str(cast(Any, request).node.nodeid)
+
+
+def guarded_socket_init(
+    original: Callable[..., None], describe: Callable[[], str]
+) -> Callable[..., None]:
+    """A `socket.socket.__init__` replacement that refuses internet families.
+
+    `*args` rather than named parameters: the socket signature has a `type` parameter and callers
+    pass any of the four by keyword. The default family (no fileno) is AF_INET; a fileno with no
+    family is a descriptor that already exists (socketpair, fromfd), so it passes.
+    """
+
+    def init(self: socket.socket, *args: Any, **kwargs: Any) -> None:
+        family = kwargs.get("family", args[0] if args else -1)
+        fileno = kwargs.get("fileno", args[3] if len(args) > 3 else None)
+        if family == -1 and fileno is None:
+            family = socket.AF_INET
+        if family in INTERNET_FAMILIES:
+            message = (
+                f"the test {describe()} tried to open an internet socket "
+                f"({getattr(family, 'name', family)}); fake the network call instead"
+            )
+            record_refusal(message)
+            raise AssertionError(message)
+        original(self, *args, **kwargs)
+
+    return init
+
+
+def guarded_getaddrinfo(describe: Callable[[], str]) -> Callable[..., NoReturn]:
+    """A `socket.getaddrinfo` replacement: no DNS query leaves the host."""
+
+    def getaddrinfo(host: object, *_args: Any, **_kwargs: Any) -> NoReturn:
+        message = f"the test {describe()} tried to resolve {host!r}; fake the network call instead"
+        record_refusal(message)
+        raise AssertionError(message)
+
+    return getaddrinfo
 
 
 # --- the test PATH and environment (23.1 D-16, D-17): applied before collection ---

@@ -1,17 +1,22 @@
+import asyncio
 import json
 import os
 import pwd
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+import threading
+import urllib.request
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple, cast
 
 import pytest
+from textual.app import App
 
 import setup
 from tests.conftest import GuardedPopen, launch_policy
@@ -32,6 +37,7 @@ from tests.sandbox import (
     host_free_path,
     host_zsh,
     link_interpreters,
+    nodeid_of,
     prepare_interpreter_dir,
     record_refusal,
     refused,
@@ -842,3 +848,89 @@ def test_refused_consumes_only_what_its_block_raised(host_fakes: Path) -> None:
     with pytest.raises(pytest.fail.Exception), refused("host's uv"):
         pass
     assert take_refusals() == ()
+
+
+# --- the socket guard: no internet socket and no name lookup in any test (SPEC R8) ---
+
+
+def _connect_loopback() -> object:
+    return socket.create_connection(("127.0.0.1", 9), timeout=1)
+
+
+def _open_url() -> object:
+    return urllib.request.urlopen("https://example.com", timeout=1)
+
+
+def _default_socket() -> object:
+    return socket.socket()
+
+
+def _ipv6_socket() -> object:
+    return socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+
+
+_SOCKET_ATTEMPTS = [_connect_loopback, _open_url, _default_socket, _ipv6_socket]
+
+
+@pytest.mark.parametrize("attempt", _SOCKET_ATTEMPTS, ids=lambda attempt: attempt.__name__)
+def test_internet_sockets_are_refused_naming_the_test(
+    attempt: Callable[[], object], request: pytest.FixtureRequest
+) -> None:
+    with pytest.raises(AssertionError) as error:
+        attempt()
+    assert nodeid_of(request) in str(error.value)
+    recorded = take_refusals()
+    assert len(recorded) == 1
+    assert nodeid_of(request) in recorded[0]
+
+
+def _fetch_or_none(url: str) -> bytes | None:
+    """Production-shaped: a broad catch around a network call."""
+    try:
+        return urllib.request.urlopen(url, timeout=1).read()
+    except Exception:
+        return None
+
+
+def test_a_swallowed_socket_refusal_still_fails_the_test() -> None:
+    assert _fetch_or_none("https://example.com") is None
+    with pytest.raises(pytest.fail.Exception) as failure:
+        fail_on_refusals()
+    assert "tried to resolve" in str(failure.value)
+    assert take_refusals() == ()
+
+
+def test_unix_sockets_still_work() -> None:
+    left, right = socket.socketpair()
+    with left, right:
+        left.sendall(b"x")
+        assert right.recv(1) == b"x"
+    with socket.socket(socket.AF_UNIX):
+        pass
+
+    async def answer() -> int:
+        return 42
+
+    assert asyncio.run(answer()) == 42
+
+
+async def test_a_textual_app_still_runs_under_the_socket_guard() -> None:
+    async with App[None]().run_test() as pilot:
+        await pilot.press("x")
+
+
+def test_the_socket_block_holds_in_threads() -> None:
+    caught: list[AssertionError] = []
+
+    def attempt() -> None:
+        try:
+            _connect_loopback()
+        except AssertionError as error:
+            caught.append(error)
+
+    worker = threading.Thread(target=attempt)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert len(caught) == 1
+    assert len(take_refusals()) == 1
