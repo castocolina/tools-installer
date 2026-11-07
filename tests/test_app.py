@@ -5746,3 +5746,64 @@ def test_an_unreadable_listing_runs_the_uninstall_and_a_failure_keeps_the_receip
     )
     assert (outcome.removed, outcome.detail) == (False, keg)
     assert receipts.read("jq") is not None
+
+
+def test_a_failed_unregister_stops_the_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O4 / T-23-20: a failed undo deletes nothing, keeps the receipt, and runs no other command."""
+    from installer import receipts
+    from installer.app import remove_tool
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("claude", "codex"))
+    plan = removal_plan(tool, bin_dir, verify=True)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        raise CommandError(cmd, 1, detail="boom")
+
+    outcome = remove_tool(
+        tool,
+        paths=plan.removable,
+        argv=plan.argv,
+        bin_dir=bin_dir,
+        runner=runner,
+        unregister=plan.unregister,
+    )
+    assert (outcome.removed, outcome.detail) == (False, "unregister: boom")
+    assert calls == [list(undo) for undo in plan.unregister]
+    assert all(path.exists() or path.is_symlink() for path in plan.removable)
+    assert receipts.receipt_exists("codegraph")
+
+
+def test_an_unregister_that_changed_since_the_preview_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-23-21: the undo that runs is the one the user saw; a changed set refuses the whole tool."""
+    from installer import receipts
+    from installer.app import remove_tool
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("claude",))
+    plan = removal_plan(tool, bin_dir, verify=True)
+    calls: list[list[str]] = []
+    outcome = remove_tool(
+        tool,
+        paths=plan.removable,
+        argv=plan.argv,
+        bin_dir=bin_dir,
+        runner=calls.append,
+        unregister=(),
+    )
+    assert (outcome.removed, outcome.detail) == (False, "changed since the preview; not removed")
+    assert calls == []
+    assert all(path.exists() or path.is_symlink() for path in plan.removable)
+    assert receipts.receipt_exists("codegraph")

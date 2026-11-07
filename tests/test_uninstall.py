@@ -2497,3 +2497,35 @@ def test_a_pre_phase_23_receipt_unregisters_nothing(
     assert not (bin_dir / "codegraph").is_symlink()
     assert not receipts.receipt_exists("codegraph")
     assert removed
+
+
+@pytest.mark.parametrize(
+    ("recorded", "hosts"),
+    [
+        pytest.param(("claude", "all", "../x", "pi"), ("claude",), id="filtered"),
+        pytest.param(("all",), (), id="nothing-left"),
+    ],
+)
+def test_a_tampered_receipt_host_list_is_filtered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded: tuple[str, ...],
+    hosts: tuple[str, ...],
+) -> None:
+    """T-23-19: a hand-edited host list reaches an argv only through the closed target map."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, recorded)
+    plan = removal_plan(tool, bin_dir, verify=True)
+    undo = (
+        str(bin_dir / "codegraph"),
+        "uninstall",
+        "--target",
+        ",".join(hosts),
+        "--location",
+        "global",
+        "--yes",
+        "--keep-cli",
+    )
+    assert plan.unregister == ((undo,) if hosts else ())
+    assert plan.hook_hosts == hosts
