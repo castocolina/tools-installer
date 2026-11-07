@@ -17,10 +17,6 @@ from installer.manager_versions import OutdatedReport
 from installer.model import (
     ConfigStep,
     Method,
-    SkillLifecycle,
-    SkillOperation,
-    SkillStatusProbe,
-    SkillTarget,
     Tool,
 )
 from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner, removal_hint
@@ -32,7 +28,6 @@ from installer.uninstall import RemovalPlan
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     Health,
-    SkillHostStatus,
     ToolState,
     VersionRefreshService,
     VersionStatus,
@@ -45,33 +40,6 @@ from installer.versions import TagResolver
 _MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 # Public alias for test modules that build plans on the same platform.
 MACOS = _MACOS
-
-
-def skill_pack_tool(tool_id: str) -> Tool:
-    """A skill pack with one Claude plugin status probe."""
-    manual = SkillOperation(
-        mode="manual-required", instructions=("Review and run the official flow.",)
-    )
-    return Tool(
-        id=tool_id,
-        name=tool_id,
-        category="agents",
-        cmd=tool_id,
-        methods=(Method(kind="skill_pack", params={}),),
-        tier="ai",
-        skill_lifecycle=SkillLifecycle(
-            source="https://github.com/example/skills",
-            owner="example",
-            supported_harnesses=("claude",),
-            revision_policy="upstream-latest",
-            targets=(SkillTarget("harness", "<claude-plugin-dir>/demo"),),
-            install=manual,
-            status=manual,
-            update=manual,
-            removal=manual,
-            status_probes=(SkillStatusProbe("claude", "plugin-cli", tool_id),),
-        ),
-    )
 
 
 def empty_inventory(**_kwargs: object) -> ManagerInventory:
@@ -108,7 +76,6 @@ def offline_service(
     which: Callable[[str], str | None] | None = None,
     native_probe: Callable[[list[str]], str] | None = None,
     artifacts_for: Callable[[Tool], list[Path]] | None = None,
-    skill_probe: Callable[[list[str]], str] | None = None,
     read_inventory_fn: Callable[..., ManagerInventory] = empty_inventory,
     read_outdated_fn: Callable[..., OutdatedReport] = empty_outdated,
     present: Callable[[Tool], bool] | None = None,
@@ -130,7 +97,6 @@ def offline_service(
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
         native_probe=native_probe,
-        skill_probe=skill_probe,
         skill_home=skill_home,
         present=present,
     )
@@ -149,12 +115,10 @@ def seeded_service(
     artifacts_for: Callable[[Tool], list[Path]] = lambda _tool: [],
     read_inventory_fn: Callable[..., ManagerInventory] = empty_inventory,
     read_outdated_fn: Callable[..., OutdatedReport] = empty_outdated,
-    skill_probe: Callable[[list[str]], str] | None = None,
 ) -> VersionRefreshService:
     """A service after one completed `refresh(tools)`: the ids in `present`
-    read present, and skill packs are probed when `skill_probe` is given. By
-    default only brew is on PATH (under `home`), so brew-method tools can
-    install and no tool binary is found."""
+    read present. By default only brew is on PATH (under `home`), so
+    brew-method tools can install and no tool binary is found."""
     ids = frozenset(present)
     brew = str(home / "homebrew" / "bin" / "brew")
 
@@ -171,11 +135,8 @@ def seeded_service(
         artifacts_for=artifacts_for,
         read_inventory_fn=read_inventory_fn,
         read_outdated_fn=read_outdated_fn,
-        skill_probe=skill_probe,
         present=lambda tool: tool.id in ids,
     )
-    if skill_probe is not None:
-        service.refresh_skills(tools)
     service.refresh(tools)
     return service
 
@@ -279,14 +240,6 @@ class FrozenStateService(VersionRefreshService):
         self.publish([*self._states.values(), *self.queued])
         self.queued = ()
 
-    def refresh_skills(self, tools: Sequence[Tool]) -> dict[str, SkillHostStatus]:
-        del tools
-        return {
-            tool_id: state.skill_hosts
-            for tool_id, state in self._states.items()
-            if state.skill_hosts is not None
-        }
-
 
 class HeldRefreshService(FrozenStateService):
     """A frozen service whose refresh waits until the test releases it."""
@@ -313,7 +266,6 @@ class HeldRefreshService(FrozenStateService):
             pnpm_packages=lambda: (),
             query=lambda *_a, **_k: "",
             native_probe=_probe_nothing,
-            skill_probe=_probe_nothing,
             skill_home=home,
             present=lambda _tool: False,
         )
@@ -352,7 +304,6 @@ def frozen_service(home: Path, *, platform: Platform | None = None) -> FrozenSta
         pnpm_packages=lambda: (),
         query=lambda *_a, **_k: "",
         native_probe=_probe_nothing,
-        skill_probe=_probe_nothing,
         skill_home=home,
         present=lambda _tool: False,
     )
@@ -391,7 +342,6 @@ def pass_state(
     present: bool = True,
     ownership: ManagerOwnership | None = None,
     version: VersionStatus | None = None,
-    skill_hosts: SkillHostStatus | None = None,
     broken: tuple[str, ...] = (),
     misconfigured: tuple[str, ...] = (),
     unconfigured: tuple[ConfigStep, ...] = (),
@@ -418,7 +368,6 @@ def pass_state(
         version=version,
         removable=replace(plan, hint=hint),
         receipt=receipt,
-        skill_hosts=skill_hosts,
         broken=broken,
         misconfigured=misconfigured,
         unconfigured=unconfigured,

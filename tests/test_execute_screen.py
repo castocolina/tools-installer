@@ -2952,7 +2952,6 @@ async def test_broken_tool_with_no_reason_is_still_refused(tmp_path: Path) -> No
         reasons=(),
         ownership=state.ownership,
         version=state.version,
-        skill_hosts=state.skill_hosts,
         receipt=state.receipt,
         removable=state.removable,
         unconfigured=state.unconfigured,

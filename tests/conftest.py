@@ -24,7 +24,7 @@ from typing import Any, cast
 
 import pytest
 
-from installer import app, executors, locations, post_install, postinstall, receipts, version_status
+from installer import app, executors, locations, post_install, postinstall, receipts
 from tests.home_fingerprint import fingerprint, fingerprint_diff
 from tests.sandbox import (
     HOST_ZSH_STASH,
@@ -313,28 +313,6 @@ def sandboxed_bin_dir(
         return original(declared)
 
     monkeypatch.setattr(locations, "bin_dir", _sandboxed)
-
-
-@pytest.fixture(autouse=True)
-def sandboxed_skill_home(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Answer `version_status.default_skill_home()` with a per-test scratch dir.
-
-    A service built without `skill_home` would otherwise read the developer's
-    real host GSD leftovers and plugin lists (checker W5). The dir is not
-    created. As in `sandboxed_bin_dir`, a test that redirected HOME keeps
-    reading that HOME; a test passing `skill_home` is unaffected.
-    """
-    original: Callable[[], Path] = version_status.default_skill_home
-    scratch = tmp_path_factory.getbasetemp() / "skill-home" / uuid.uuid4().hex
-
-    def _sandboxed() -> Path:
-        if Path.home() == _REAL_HOME:
-            return scratch
-        return original()
-
-    monkeypatch.setattr(version_status, "default_skill_home", _sandboxed)
 
 
 @pytest.fixture(scope="session")

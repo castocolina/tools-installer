@@ -21,8 +21,8 @@ per-manager window would add state without removing a single child process
 in the common case; and ownership resolution needs the whole inventory at
 once, so a partially-refreshed snapshot has no consumer.
 
-Skill-pack per-host answers live under the same envelope's `skills` key.
-A save that omits `skills` preserves that key, the same way `managers=None` does.
+A key an older version wrote and this one does not is ignored on load and
+dropped by the next save.
 """
 
 from __future__ import annotations
@@ -171,35 +171,6 @@ def _existing_managers(path: Path) -> dict[str, object]:
     return _as_object(mapping.get("managers", {})) or {}
 
 
-_SKILL_STATUSES = frozenset({"present", "absent", "unknown"})
-
-
-def _existing_skills(path: Path) -> dict[str, object]:
-    mapping = _envelope(path)
-    if mapping is None:
-        return {}
-    return _as_object(mapping.get("skills", {})) or {}
-
-
-def load_skill_statuses(path: Path) -> dict[str, dict[str, str]]:
-    """Per-host skill answers. A non-dict or out-of-vocabulary tool entry is {}."""
-    out: dict[str, dict[str, str]] = {}
-    for tool_id, raw in _existing_skills(path).items():
-        hosts = _as_object(raw)
-        if hosts is None:
-            out[tool_id] = {}
-            continue
-        decoded: dict[str, str] = {}
-        valid = True
-        for harness, status in hosts.items():
-            if not isinstance(status, str) or status not in _SKILL_STATUSES:
-                valid = False
-                break
-            decoded[harness] = status
-        out[tool_id] = decoded if valid else {}
-    return out
-
-
 def load_version_cache(path: Path) -> dict[str, VersionCacheEntry]:
     """Read the cache. Missing, unreadable, or malformed input yields {} / skips."""
     try:
@@ -222,15 +193,9 @@ def save_version_cache(
     cache: Mapping[str, VersionCacheEntry],
     *,
     managers: Mapping[str, object] | None = None,
-    skills: Mapping[str, Mapping[str, str]] | None = None,
 ) -> None:
-    """Write the versioned envelope. managers=None and skills=None preserve keys."""
+    """Write the versioned envelope. managers=None preserves the stored key."""
     managers_out = dict(managers) if managers is not None else _existing_managers(path)
-    skills_out: dict[str, object] = (
-        {tool_id: dict(hosts) for tool_id, hosts in skills.items()}
-        if skills is not None
-        else _existing_skills(path)
-    )
     payload = {
         "version": 1,
         "tools": {
@@ -243,7 +208,6 @@ def save_version_cache(
             for tool_id, entry in cache.items()
         },
         "managers": managers_out,
-        "skills": skills_out,
     }
     ensure_dir(path.parent)
     atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
