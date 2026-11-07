@@ -21,7 +21,7 @@ from installer.download import (
     expand_script_token,
     is_still_proven,
 )
-from installer.locations import opt_dir
+from installer.locations import applications_dir, opt_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.postinstall import hook_method, unregister_argvs, unregister_hosts
@@ -139,6 +139,11 @@ def _placement_shape(
         if artifact.type in ("link", "file"):
             return path.parent == bin_dir
         return artifact.type == "dir" and path == opt_dir(path.name) and path.name in link_names
+    if kind == "app":
+        # The bundle sits directly under ~/Applications; its optional cli link in the bin dir.
+        if artifact.type == "dir":
+            return path.parent == applications_dir()
+        return artifact.type == "link" and path.parent == bin_dir
     return False
 
 
@@ -208,6 +213,18 @@ def _quarantined(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
+def _retired_leftovers(tool: Tool, proven: set[Path]) -> list[Path]:
+    """A retired receipt's recorded paths that are not proven and still exist (D-06 extension).
+
+    The catalog formula that normally names them is empty for a tool with no methods, so they
+    are listed here for the user and never deleted. A manager kind's recorded paths belong to
+    that manager, so none are listed."""
+    receipt = receipts.read(tool.id)
+    if receipt is None or receipt.method.kind in MANAGER_UNINSTALL_ARGV:
+        return []
+    return [a.path for a in receipt.artifacts if a.path not in proven and _exists(a.path)]
+
+
 def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
     """Prove removability by receipt, else by the archive layout; name the rest.
 
@@ -233,9 +250,12 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     seen: set[Path] = set()
     by_tool: dict[str, tuple[Path, ...]] = {}
     artifacts: dict[Path, receipts.ReceiptArtifact] = {}
+    leftovers: list[Path] = []
     for tool in tools:
         if receipts.receipt_exists(tool.id):
             proven = _receipt_proof(tool, default_bin_dir, verify=verify)
+            if tool.retired:
+                leftovers.extend(_retired_leftovers(tool, {a.path for a in proven}))
             if proven:
                 by_tool[tool.id] = tuple(a.path for a in proven)
             for artifact in proven:
@@ -264,9 +284,15 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
                     removable.append(artifact.path)
                     artifacts[artifact.path] = artifact
     yourself = tuple(
-        p
-        for p in (*plan_uninstall(tools, default_bin_dir), *_quarantined(tools, default_bin_dir))
-        if p not in seen
+        dict.fromkeys(
+            p
+            for p in (
+                *plan_uninstall(tools, default_bin_dir),
+                *_quarantined(tools, default_bin_dir),
+                *leftovers,
+            )
+            if p not in seen
+        )
     )
     return RemovalPlan(tuple(removable), yourself, by_tool, artifacts)
 

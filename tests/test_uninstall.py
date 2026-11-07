@@ -2616,3 +2616,230 @@ def test_a_catalog_tool_proof_is_unchanged(tmp_path: Path, monkeypatch: pytest.M
 
     yq, yq_bin = plant_raw_yq(tmp_path)
     assert plan_removal([yq], yq_bin).removable == (yq_bin / "yq",)
+
+
+def _plant_opt_tool(home: Path, name: str) -> tuple[Path, Path, Path]:
+    """`<bin>/name` linked into `opt_dir(name)/name`; returns (bin dir, link, opt dir)."""
+    bin_dir = home / ".local" / "bin"
+    opt = home / ".local" / "opt" / name
+    opt.mkdir(parents=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (opt / name).write_text(f"{name} binary")
+    (bin_dir / name).symlink_to(opt / name)
+    return bin_dir, bin_dir / name, opt
+
+
+def test_a_drifted_retired_file_is_kept_and_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prohibition: a recorded file changed since the receipt proves nothing and is kept."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    tool = _retired_tool("rtk", [(rtk, "file")])
+    rtk.write_text("rtk raw binary, edited by the user")
+
+    plan = removal_plan(tool, bin_dir)
+    assert plan.removable == ()
+    assert plan.yourself == (rtk,)
+
+    console, buf = _uninstall_console()
+    removed, failed = _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert (removed, failed) == ([], ())
+    assert rtk.read_text() == "rtk raw binary, edited by the user"
+    assert receipts.receipt_exists("rtk")
+    assert f"remove it yourself: {rtk}" in buf.getvalue()
+
+
+def _outside_shape_artifact(
+    case: str, home: Path
+) -> tuple[str, Path, receipts.ReceiptArtifact | None]:
+    """(receipt kind, the planted path, its matching fingerprint) for one out-of-shape case."""
+    bin_dir = home / ".local" / "bin"
+    (home / ".local" / "opt").mkdir(parents=True, exist_ok=True)
+    if case == "ssh-file":
+        target = home / ".ssh" / "id_test"
+        target.parent.mkdir()
+        target.write_text("private key stand-in")
+        return "github_release", target, receipts.fingerprint(target, "file")
+    if case == "opt-dotdot":
+        target = home / ".local" / "opt" / ".."
+        (home / ".local" / "key.txt").write_text("key")
+        return "tarball", target, receipts.fingerprint(target, "dir", key="key.txt")
+    if case == "nested-bin-file":
+        target = bin_dir / "sub" / "x"
+        target.parent.mkdir(parents=True)
+        target.write_text("nested")
+        return "github_release", target, receipts.fingerprint(target, "file")
+    target = home / ".claude" / "skills"
+    target.mkdir(parents=True)
+    return "script", target, receipts.fingerprint(target, "tree")
+
+
+@pytest.mark.parametrize("case", ["ssh-file", "opt-dotdot", "nested-bin-file", "script-tree"])
+def test_a_retired_receipt_never_deletes_outside_its_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """T-23.1-30: a hand-edited receipt with a planted matching fingerprint cannot aim a delete."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    kind, target, artifact = _outside_shape_artifact(case, tmp_path)
+    assert artifact is not None
+    receipts.write(
+        Receipt(
+            tool="evil",
+            at="2026-10-16T00:00:00Z",
+            method=ReceiptMethod(kind=kind, key="k"),
+            package=None,
+            artifacts=(artifact,),
+            smoke=None,
+            hooks={},
+        )
+    )
+    (tool,) = receipts.scan_retired(set()).tools
+
+    plan = removal_plan(tool, bin_dir)
+    assert plan.removable == ()
+    assert plan.yourself == (target,)
+
+    console, buf = _uninstall_console()
+    removed, _failed = _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert removed == []
+    assert target.exists()
+    assert (tmp_path / ".local").is_dir()
+    assert receipts.receipt_exists("evil")
+
+
+@pytest.mark.parametrize("kind", ["tarball", "github_release"])
+def test_a_retired_tarball_link_and_opt_dir_are_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir, link, opt = _plant_opt_tool(tmp_path, "tool")
+    tool = _retired_tool("tool", [(link, "link"), (opt, "dir")], kind=kind)
+
+    assert plan_removal([tool], bin_dir).removable == (link, opt)
+
+    console, buf = _uninstall_console()
+    removed, _failed = _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert set(removed) == {link, opt}
+    assert not link.is_symlink()
+    assert not opt.exists()
+    assert not receipts.receipt_exists("tool")
+
+
+@pytest.mark.parametrize("case", ["other-name", "no-link"])
+def test_a_retired_opt_dir_needs_its_paired_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Review R1-04: an opt dir is proven only beside a recorded bin link of the same name."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir, link, tool_opt = _plant_opt_tool(tmp_path, "tool")
+    if case == "other-name":
+        other = tmp_path / ".local" / "opt" / "other"
+        other.mkdir()
+        (other / "other").write_text("someone else's tool")
+        opt, artifacts = other, [(link, "link"), (other, "dir")]
+    else:
+        opt, artifacts = tool_opt, [(tool_opt, "dir")]
+    tool = _retired_tool("tool", artifacts, kind="tarball", dir_key=opt.name)
+
+    plan = removal_plan(tool, bin_dir)
+    assert opt not in plan.removable
+    assert opt in plan.yourself
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert (opt / opt.name).is_file()
+
+
+def test_a_partial_proof_removes_the_proven_file_and_lists_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review R1-50: the proven path goes, the receipt is retired, the out-of-shape path stays."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    ssh = tmp_path / ".ssh" / "id_test"
+    ssh.parent.mkdir()
+    ssh.write_text("private key stand-in")
+    tool = _retired_tool("rtk", [(rtk, "file"), (ssh, "file")])
+
+    console, buf = _uninstall_console()
+    removed, _failed = _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert removed == [rtk]
+    assert not rtk.exists()
+    assert not receipts.receipt_exists("rtk")
+    assert ssh.read_text() == "private key stand-in"
+    assert f"remove it yourself: {ssh}" in buf.getvalue()
+
+
+def test_a_retired_app_bundle_is_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    bundle = tmp_path / "Applications" / "X.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    (bundle / receipts.APP_KEY_FILE).write_text("plist")
+    (bundle / "Contents" / "MacOS" / "x").write_text("x")
+    link = bin_dir / "x"
+    link.symlink_to(bundle / "Contents" / "MacOS" / "x")
+    tool = _retired_tool("x", [(bundle, "dir"), (link, "link")], kind="app")
+
+    console, buf = _uninstall_console()
+    removed, _failed = _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert set(removed) == {bundle, link}
+    assert not bundle.exists()
+    assert not link.is_symlink()
+    assert not receipts.receipt_exists("x")
+
+
+def test_unrecorded_files_are_never_touched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    sibling = bin_dir / "other"
+    sibling.write_text("not in the receipt")
+    tool = _retired_tool("rtk", [(rtk, "file")])
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert not rtk.exists()
+    assert sibling.read_text() == "not in the receipt"
+
+
+def test_a_retired_file_changed_before_confirm_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R3 concurrency: same size and mtime, other bytes; only the deletion re-hash sees it."""
+    from installer.app import remove_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    tool = _retired_tool("rtk", [(rtk, "file")])
+    plan = removal_plan(tool, bin_dir)
+    assert plan.removable == (rtk,)
+
+    stat = rtk.stat()
+    rtk.write_text("RTK RAW BINARY")
+    os.utime(rtk, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    outcome = remove_tool(
+        tool, paths=plan.removable, argv=(), bin_dir=bin_dir, runner=_no_removal_runner
+    )
+
+    assert not outcome.removed
+    assert "changed since the preview; not removed" in outcome.detail
+    assert rtk.read_text() == "RTK RAW BINARY"
+    assert receipts.receipt_exists("rtk")

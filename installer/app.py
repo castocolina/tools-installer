@@ -845,6 +845,9 @@ def _print_retired_preview(rows: Sequence[tuple[Tool, RemovalPlan]], console: Co
         console.print(f"{sanitize_log_line(tool.id)} (retired)", markup=False, soft_wrap=True)
         for path in plan.removable:
             console.print(f"  {sanitize_log_line(str(path))}", markup=False, soft_wrap=True)
+        if plan.yourself:
+            kept = ", ".join(sanitize_log_line(str(path)) for path in plan.yourself)
+            console.print(f"  remove it yourself: {kept}", markup=False, soft_wrap=True)
 
 
 def run_uninstall(
@@ -895,7 +898,11 @@ def run_uninstall(
     # A retired tool is previewed in its own section after the catalog tools (UI-SPEC section 2).
     catalog = [(tool, plan) for tool, plan in ordered if not tool.retired]
     retired = sorted(
-        ((tool, plan) for tool, plan in ordered if tool.retired and (plan.level != "none")),
+        (
+            (tool, plan)
+            for tool, plan in ordered
+            if tool.retired and (plan.level != "none" or plan.yourself)
+        ),
         key=lambda row: row[0].id,
     )
     paths = list(dict.fromkeys(p for _tool, plan in catalog for p in plan.removable))
