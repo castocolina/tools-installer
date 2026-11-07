@@ -1063,3 +1063,15 @@ def test_a_fifo_at_a_settings_path_is_refused_without_blocking() -> None:
     assert applied.refused is not None
     assert "not a regular file" in applied.refused
     assert file_problem("claude", home=Path.home(), platform_os="linux") == applied.refused
+
+
+def test_a_created_file_the_user_commented_is_kept_on_revert() -> None:
+    home = Path.home()
+    vscode = home / ".config" / "Code" / "User" / "settings.json"
+    apply_setting("vscode", "vscode-ai-off", home=home, platform_os="linux")
+    vscode.write_text("// mine\n" + vscode.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert revert_setting("vscode", "vscode-ai-off", home=home, platform_os="linux").refused is None
+
+    assert vscode.read_text(encoding="utf-8") == "// mine\n{}\n"
+    assert read_ledger("vscode") is None

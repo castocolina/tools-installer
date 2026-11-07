@@ -804,7 +804,6 @@ def _revert_once(
     )
     if not mine:
         return FileResult(agent, setting, path, fmt)
-    deleted = False
     try:
         snap = read_settings(path)
         if snap is None and file not in ledger.created_files:
@@ -813,18 +812,20 @@ def _revert_once(
         original = _text_of(snap, fmt)
         text, results = _revert_pass(original, fmt, mine, table)
         if text != original:
-            if snap is not None and file in ledger.created_files and not parse_settings(text, fmt):
+            # A created file goes only when nothing of the user's is left in it, comments too.
+            bare = "".join(text.split()) in ("", "{}")
+            if snap is not None and file in ledger.created_files and bare:
                 delete_if_unchanged(path, snap)
-                deleted = True
             else:
                 write_if_unchanged(path, snap, _with_bom(snap, text))
     except SettingsChanged:
         raise
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
-    gone = deleted or (snap is None and file in ledger.created_files)
-    created = tuple(name for name in ledger.created_files if not (gone and name == file))
     remaining = tuple(entry for entry in ledger.entries if entry not in mine)
+    # With no key of ours left in it, a created file is gone or holds only the user's content.
+    released = not any(entry.file == file for entry in remaining)
+    created = tuple(name for name in ledger.created_files if not (released and name == file))
     try:
         write_ledger(ConfigLedger(agent, created, remaining))
     except OSError as exc:
