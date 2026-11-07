@@ -3,6 +3,7 @@ ban_policy closures against a sandboxed HOME, asserting shims + aliases appear o
 enable and vanish on disable while the real $HOME is never touched. Saves SVG
 screenshots for agent inspection."""
 
+import json
 import os
 import plistlib
 from collections.abc import Callable
@@ -25,6 +26,7 @@ from installer.policy import (
     ban_policy,
     daemon_policy,
     omz_plugins_policy,
+    settings_policy,
     tweak_policy,
 )
 from installer.tweaks import BUNDLES, TweakBundle
@@ -1397,3 +1399,59 @@ async def test_a_failed_owned_read_shows_the_error(tmp_path: Path) -> None:
             f"{_READ_ERROR}unreadable state file.",
             Severity.ERROR,
         )
+
+
+async def test_claude_auto_approve_toggles_from_policies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".claude" / "settings.json"
+    policy = settings_policy(
+        "claude",
+        "auto-approve",
+        policy_id="agent:claude:auto-approve",
+        label="claude auto-approve",
+        description="bypassPermissions in ~/.claude/settings.json",
+        effect_kind="agent settings",
+        fixed=(),
+        home=tmp_path,
+        platform_os="fedora",
+        installed_tools={"claude": True},
+    )
+    app = UnifiedApp(
+        [_tool()],
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(tmp_path / ".local" / "bin"), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            ban_names=list,
+            has_path_block=lambda: False,
+            remove=lambda _d: SweepResult(),
+        ),
+        policies=PolicyInputs(policies=[policy]),
+        initial_view="policies",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PoliciesScreen)
+        assert app.screen.active_state["agent:claude:auto-approve"] is False
+        await pilot.press("space")
+        await pilot.pause()
+        assert json.loads(settings.read_text())["permissions"]["defaultMode"] == "bypassPermissions"
+        assert app.screen.active_state["agent:claude:auto-approve"] is True
+        assert app.screen.status.text == (
+            "claude auto-approve enabled.\n"
+            "~/.claude/settings.json: wrote permissions.defaultMode, "
+            "skipDangerousModePermissionPrompt"
+        )
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.screen.active_state["agent:claude:auto-approve"] is False
+        assert app.screen.status.text == (
+            "claude auto-approve disabled.\n"
+            "~/.claude/settings.json: removed skipDangerousModePermissionPrompt, "
+            "permissions.defaultMode"
+        )
+        assert not settings.exists()

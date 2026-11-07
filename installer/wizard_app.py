@@ -1920,6 +1920,11 @@ def _read_active_owned(policy: Policy) -> tuple[tuple[bool, bool] | None, str | 
     `owned` is read only when the policy binds it; either read failing fails
     the pair, so a row is never half-painted from one answer.
     """
+    if policy.state is not None:
+        state, error = run_live(policy.state)
+        if state is None:
+            return None, error
+        return (state == "on", state == "drift"), None
     if policy.is_active is None:
         return None, None
     active, error = run_live(policy.is_active)
@@ -2006,7 +2011,9 @@ class PoliciesScreen(AppScreen):
         table.add_column("Requires", key="requires")
         table.add_column("Effect", key="effect")
         for policy in self._policies:
-            effect_kind = "scheduled job" if policy.log_path is not None else "shell config"
+            effect_kind = policy.effect_kind or (
+                "scheduled job" if policy.log_path is not None else "shell config"
+            )
             table.add_row(
                 Text(""),
                 Text(policy.label, style="bold yellow"),
@@ -2292,8 +2299,12 @@ class PoliciesScreen(AppScreen):
                 env_redirect.BUN_CACHE_REDIRECT.coverage_caveat,
             ),
         }
-        lines = [_DRIFT_DETAIL] if policy.id in self._drift else []
-        lines.append(f"{policy.label} — {policy.description}")
+        if policy.detail_lines is not None:
+            # A settings row's own lines replace the generic drift and label lines.
+            lines = list(policy.detail_lines())
+        else:
+            lines = [_DRIFT_DETAIL] if policy.id in self._drift else []
+            lines.append(f"{policy.label} — {policy.description}")
         if missing_requires and policy.hard_requires:
             lines.append(
                 "Missing required tool(s): "
@@ -2307,7 +2318,8 @@ class PoliciesScreen(AppScreen):
             )
         elif policy.requires and missing_requires is not None:
             lines.append(f"Required tool(s): {', '.join(policy.requires)}.")
-        lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
+        if policy.detail_lines is None:
+            lines.extend(details.get(policy.id, ("Space toggles this reversible shell policy.",)))
         if policy.id.startswith("tweak:"):
             lines.append(
                 "This alias/function needs ~/.myshellrc to be sourced; in split PATH mode,"
@@ -2564,6 +2576,10 @@ class PoliciesScreen(AppScreen):
                     " Check permissions, then open Policies and press space."
                 ),
             )
+            self.app.request_refresh()
+            return
+        if not result.changed:  # a refused or no-op settings write: the row keeps its state
+            self.app.show_result(self, result.warning or "", "warn")
             self.app.request_refresh()
             return
         new_active = not active

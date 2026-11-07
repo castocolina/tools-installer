@@ -17,7 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from installer import daemon, env_redirect, systemd_daemon
+from rich.text import Text
+
+from installer import agent_settings, daemon, env_redirect, systemd_daemon
 from installer.atomic import atomic_write_bytes
 from installer.enums import DaemonState
 from installer.guards import (
@@ -106,6 +108,8 @@ class PolicyResult:
     layers: tuple[PolicyLayer, ...]
     reload_hint: str | None
     warning: str | None
+    # False: nothing changed, so the screen must not flip the row's state (settings refusals).
+    changed: bool = True
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,11 @@ class Policy:
     # redirect never depend on the mode, so re-applying them would re-bootstrap
     # services and rewrite .zshrc for nothing.
     link_mode_aware: bool = False
+    # Settings rows (23-11): the Effect column prefix, the read state (on/yours/off/drift)
+    # and the detail panel's own lines. Each is None for every other policy.
+    effect_kind: str | None = None
+    state: Callable[[], str] | None = None
+    detail_lines: Callable[[], tuple[str, ...]] | None = None
 
     def missing_requirements(self) -> tuple[str, ...]:
         """Read prerequisites at the point a policy is rendered or applied."""
@@ -507,6 +516,265 @@ def tweak_policy(
         missing_requires=_missing(),
         missing_requires_now=_missing,
         link_mode_aware=True,
+    )
+
+
+_SETTINGS_LAST_LINE = (
+    "Only keys you have not set are written; space again removes exactly what this installer wrote."
+)
+
+
+def _short(value: str) -> str:
+    """A user's value in a warning, cut to 40 cells (the house truncation form)."""
+    text = Text(value)
+    text.truncate(40, overflow="ellipsis")
+    return text.plain
+
+
+def _settings_result(label: str, result: agent_settings.FileResult) -> PolicyResult:
+    """One settings write or revert as the UI-SPEC copy: layers for what changed, warnings for "
+    "the rest."""
+    shown = _display_path(result.path)
+    if result.refused is not None:
+        if result.refused == agent_settings.CHANGED_WHILE_WRITING:
+            reason = f"{shown} changed while it was being written; press space to retry."
+        else:
+            reason = f"{shown} is {result.refused}; fix it, then press space."
+        return PolicyResult(
+            layers=(), reload_hint=None, warning=f"{label} not changed: {reason}", changed=False
+        )
+    wrote = [key.key for key in result.keys if key.kind in ("wrote", "replaced_default")]
+    removed = [key.key for key in result.keys if key.kind == "removed"]
+    layers: list[PolicyLayer] = []
+    if wrote:
+        layers.append(PolicyLayer(shown, f"wrote {', '.join(wrote)}"))
+    if removed:
+        layers.append(PolicyLayer(shown, f"removed {', '.join(removed)}"))
+    warnings: list[str] = []
+    already = [key.key for key in result.keys if key.kind == "already"]
+    if already and not wrote:
+        warnings.append(
+            f"{label}: nothing to write; {', '.join(already)} already hold these values."
+        )
+    warnings.extend(
+        f"{key.key} is set by you ({_short(key.value)}); left as is."
+        for key in result.keys
+        if key.kind == "set_by_you"
+    )
+    warnings.extend(
+        f"kept {key.key}: it changed since this installer wrote it."
+        for key in result.keys
+        if key.kind == "kept_changed"
+    )
+    return PolicyResult(
+        layers=tuple(layers),
+        reload_hint=None,
+        warning=" ".join(warnings) or None,
+        changed=bool(wrote or removed),
+    )
+
+
+def settings_policy(
+    agent: str,
+    setting: str,
+    *,
+    policy_id: str,
+    label: str,
+    description: str,
+    effect_kind: str,
+    fixed: tuple[str, ...],
+    home: Path,
+    platform_os: str,
+    installed_tools: Mapping[str, bool] | Callable[[str], bool] | None,
+) -> Policy:
+    """One agent or editor setting as a Policy: keys are written only where absent and reverted "
+    "exactly."""
+    is_installed = _installed_predicate(installed_tools)
+
+    def _state() -> str:
+        return agent_settings.setting_state(agent, setting, home=home, platform_os=platform_os)
+
+    def _active() -> bool:
+        return _state() == "on"
+
+    def _missing() -> tuple[str, ...]:
+        return () if is_installed(agent) else (agent,)
+
+    def _apply() -> PolicyResult:
+        return _settings_result(
+            label, agent_settings.apply_setting(agent, setting, home=home, platform_os=platform_os)
+        )
+
+    def _remove() -> PolicyResult:
+        return _settings_result(
+            label, agent_settings.revert_setting(agent, setting, home=home, platform_os=platform_os)
+        )
+
+    try:
+        active = _active()
+    except OSError:  # an unreadable file reads as off here; the screen re-reads it and shows why
+        active = False
+    return Policy(
+        id=policy_id,
+        label=label,
+        description=description,
+        active=active,
+        apply=_apply,
+        remove=_remove,
+        requires=(agent,),
+        missing_requires=_missing(),
+        missing_requires_now=_missing,
+        is_active=_active,
+        effect_kind=effect_kind,
+        state=_state,
+        detail_lines=lambda: (*fixed, _SETTINGS_LAST_LINE),
+    )
+
+
+def settings_policies(
+    *,
+    home: Path,
+    platform_os: str,
+    installed_tools: Mapping[str, bool] | Callable[[str], bool] | None,
+) -> tuple[Policy, ...]:
+    """The nine settings rows of Policies, in UI-SPEC section 3 order (its copy, verbatim)."""
+
+    def row(
+        policy_id: str,
+        agent: str,
+        setting: str,
+        label: str,
+        description: str,
+        effect_kind: str,
+        *fixed: str,
+    ) -> Policy:
+        return settings_policy(
+            agent,
+            setting,
+            policy_id=policy_id,
+            label=label,
+            description=description,
+            effect_kind=effect_kind,
+            fixed=fixed,
+            home=home,
+            platform_os=platform_os,
+            installed_tools=installed_tools,
+        )
+
+    def path_of(agent: str) -> str:
+        return _display_path(
+            agent_settings.settings_file(agent, home=home, platform_os=platform_os)
+        )
+
+    update_mode = (
+        "update.mode is set to none: this installer updates VS Code."
+        if platform_os == "macos"
+        else "update.mode is not written on Linux: this installer updates VS Code."
+    )
+    return (
+        row(
+            "agent:claude:auto-approve",
+            "claude",
+            "auto-approve",
+            "claude auto-approve",
+            "bypassPermissions in ~/.claude/settings.json",
+            "agent settings",
+            'Writes permissions.defaultMode = "bypassPermissions" and '
+            "skipDangerousModePermissionPrompt = true into ~/.claude/settings.json (user scope).",
+            "Claude Code then runs every tool without asking; use it only where that is safe.",
+        ),
+        row(
+            "agent:claude:no-attribution",
+            "claude",
+            "no-attribution",
+            "claude attribution off",
+            'attribution commit/pr "" in ~/.claude/settings.json',
+            "agent settings",
+            'Writes attribution.commit = "" and attribution.pr = "" into ~/.claude/settings.json, '
+            "so commits and PRs carry no Claude credit.",
+            "codex, opencode and pi have no documented attribution key; nothing is written for "
+            "them.",
+        ),
+        row(
+            "agent:codex:auto-approve",
+            "codex",
+            "auto-approve",
+            "codex auto-approve",
+            "approval_policy never, full-access sandbox",
+            "agent settings",
+            'Writes approval_policy = "never" and sandbox_mode = "danger-full-access" at the top '
+            "of ~/.codex/config.toml.",
+            "Codex then runs commands without asking and without a sandbox.",
+        ),
+        row(
+            "agent:opencode:auto-approve",
+            "opencode",
+            "auto-approve",
+            "opencode auto-approve",
+            '"permission": "allow" in opencode.json(c)',
+            "agent settings",
+            f'Writes "permission": "allow" into {path_of("opencode")} (the existing '
+            f"opencode.jsonc, else opencode.json).",
+            "Deny rules you keep in a permission object of your own still apply.",
+        ),
+        row(
+            "agent:cursor-agent:auto-approve",
+            "cursor-agent",
+            "auto-approve",
+            "cursor-agent auto-approve",
+            "approvalMode unrestricted in cli-config.json",
+            "agent settings",
+            'Writes approvalMode = "unrestricted" into ~/.cursor/cli-config.json.',
+            "The Cursor CLI rewrites this file itself; a value it already holds counts as set by "
+            "you.",
+        ),
+        row(
+            "agent:cursor-agent:no-attribution",
+            "cursor-agent",
+            "no-attribution",
+            "cursor-agent attribution off",
+            "attribution off in ~/.cursor/cli-config.json",
+            "agent settings",
+            "Writes attribution.attributeCommitsToAgent and attributePRsToAgent = false into "
+            "~/.cursor/cli-config.json.",
+            "A CLI default of true is replaced and restored on revert only if it still reads "
+            "false.",
+            "The Cursor CLI ignores the commit opt-out as of 2026-10-04; the PR opt-out works.",
+        ),
+        row(
+            "vscode:lean",
+            "vscode",
+            "vscode-lean",
+            "VS Code lean mode",
+            "telemetry, experiments, minimap, auto-detect off",
+            "editor settings",
+            f"Writes only absent keys into {path_of('vscode')}; comments and your keys stay.",
+            "Telemetry, experiments, natural-language settings search, recommendations, minimap "
+            "and npm/task auto-detect off; one window restored; no startup editor; heavy folders "
+            "excluded from watching; the integrated terminal opens zsh.",
+            update_mode,
+        ),
+        row(
+            "vscode:ai-off",
+            "vscode",
+            "vscode-ai-off",
+            "VS Code built-in AI off",
+            "chat.disableAIFeatures = true",
+            "editor settings",
+            "Writes chat.disableAIFeatures = true.",
+            "Built-in chat and inline suggestions stay off until you remove the key or press "
+            "space again.",
+        ),
+        row(
+            "vscode:ext-updates-off",
+            "vscode",
+            "vscode-ext-updates-off",
+            "VS Code ext. auto-update off",
+            "extensions.autoUpdate/autoCheckUpdates false",
+            "editor settings",
+            "Writes extensions.autoUpdate = false and extensions.autoCheckUpdates = false.",
+            "Extension security fixes then arrive only when you update extensions yourself.",
+        ),
     )
 
 
