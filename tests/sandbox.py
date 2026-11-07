@@ -636,10 +636,12 @@ def guarded_os_call(
                 argv = ["/bin/sh", "-c", os.fsdecode(args[0])]
             else:
                 argv = [os.fsdecode(args[first]), *(os.fsdecode(a) for a in args[first + 1][1:])]
+            # subprocess passes env=None to os.posix_spawn to inherit the environment
+            raw_env = args[first + 2] if has_env else None
             env = (
-                {os.fsdecode(k): os.fsdecode(v) for k, v in args[first + 2].items()}
-                if has_env
-                else None
+                None
+                if raw_env is None
+                else {os.fsdecode(k): os.fsdecode(v) for k, v in raw_env.items()}
             )
             check(argv, env)
         except AssertionError as refusal:

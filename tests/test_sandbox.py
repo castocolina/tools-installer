@@ -1050,3 +1050,19 @@ def test_the_os_wrappers_are_idempotent(tmp_path: Path) -> None:
         wrapped(str(fake), [str(fake)], dict(os.environ))
     assert len(recorder.calls) == 2
     assert subprocess.run([str(fake)], check=False).returncode == 0
+
+
+def test_posix_spawn_with_an_inherited_environment_is_checked(
+    outside: Path, tmp_path: Path
+) -> None:
+    """CPython's subprocess calls os.posix_spawn(path, argv, None) to inherit the environment
+    (seen on the ubuntu CI runner): env=None is checked like any launch, never crashes."""
+    host = _marker_fake(outside, "uv")
+    fake = _fake(tmp_path / "bin", "tool")
+    recorder = _Recorder()
+    spawn = guarded_os_call("posix_spawn", recorder, _policy_check)
+    with refused("host's uv"):
+        spawn(str(host), [str(host)], None)
+    assert recorder.calls == []
+    spawn(str(fake), [str(fake)], None)
+    assert recorder.calls == [(str(fake), [str(fake)], None)]
