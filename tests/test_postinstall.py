@@ -316,3 +316,67 @@ def test_installing_graphify_runs_no_host_registration(
     assert outcome.status == "installed"
     assert calls == [["uv", "tool", "install", "graphifyy"]]
     assert list(cwd.iterdir()) == []
+
+
+def _uninstall(targets: str) -> tuple[str, ...]:
+    return (
+        "/b/codegraph",
+        "uninstall",
+        "--target",
+        targets,
+        "--location",
+        "global",
+        "--yes",
+        "--keep-cli",
+    )
+
+
+def _receipt_for(kind: str, key: str) -> receipts.Receipt:
+    return receipts.Receipt(
+        tool="demo",
+        at="2026-11-07T00:00:00+00:00",
+        method=receipts.ReceiptMethod(kind=kind, key=key),
+        package=None,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+
+
+def test_codegraph_unregister_targets_only_recorded_hosts() -> None:
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("codex", "claude")) == (
+        _uninstall("claude,codex"),
+    )
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("cursor",)) == (_uninstall("cursor"),)
+
+
+def test_unregister_drops_unknown_and_tampered_ids() -> None:
+    kept = pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("claude", "all", "../x", "pi"))
+    assert kept == (_uninstall("claude"),)
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("all", "auto")) == ()
+    assert pi.unregister_argvs("not-a-real-hook", "/b/codegraph", ("claude",)) == ()
+
+
+@pytest.mark.parametrize("subset", _ALL_SUBSETS, ids=lambda s: ",".join(s) or "none")
+def test_unregister_never_passes_all(subset: tuple[str, ...]) -> None:
+    for argv in pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", subset):
+        assert "all" not in argv
+        assert "auto" not in argv
+
+
+def test_hook_method_matches_the_receipt_key() -> None:
+    first = Method(kind="github_release", params={"repo": "a/a"})
+    second = Method(kind="github_release", params={"repo": "b/b"})
+    brew = Method(kind="brew", params={"formula": "demo"})
+    keyed = Tool(id="demo", name="demo", category="ai", cmd="demo", methods=(first, second))
+    lone = Tool(id="demo", name="demo", category="ai", cmd="demo", methods=(first, brew))
+    assert (
+        pi.hook_method(keyed, _receipt_for("github_release", receipts.method_key(second))) is second
+    )
+    assert pi.hook_method(lone, _receipt_for("github_release", "stale")) is first
+    assert pi.hook_method(keyed, _receipt_for("github_release", "stale")) is None
+
+
+def test_host_labels_use_catalog_ids() -> None:
+    assert pi.host_labels(("cursor", "claude")) == "claude, cursor-agent"
+    assert pi.host_labels(()) == ""

@@ -13,7 +13,7 @@ records what it registered in `receipt.hooks`, so removal can undo exactly that.
 """
 
 import shutil
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,10 +113,17 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     return tuple(sorted(harnesses)), None
 
 
+def _codegraph_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    """codegraph's own uninstall for exactly these hosts; `--keep-cli` leaves the binary."""
+    csv = ",".join(_CODEGRAPH_TARGETS[harness] for harness in harnesses)
+    return ((binary, "uninstall", "--target", csv, "--location", "global", "--yes", "--keep-cli"),)
+
+
 @dataclass(frozen=True)
 class HookPair:
     """One hook. `targets` maps a harness id to the vendor's own target id; `None`
-    marks a host-independent hook. `unregister` is filled by a later plan."""
+    marks a host-independent hook. `unregister` builds the undo argvs for the hosts
+    it is given; `None` when the hook has no undo."""
 
     targets: Mapping[str, str] | None
     register: Callable[[Method, Runner, tuple[str, ...]], HookOutcome]
@@ -124,8 +131,44 @@ class HookPair:
 
 
 POSTINSTALL_HOOKS: dict[str, HookPair] = {
-    "codegraph-mcp-register": HookPair(targets=_CODEGRAPH_TARGETS, register=_codegraph_register),
+    "codegraph-mcp-register": HookPair(
+        targets=_CODEGRAPH_TARGETS,
+        register=_codegraph_register,
+        unregister=_codegraph_unregister,
+    ),
 }
+
+
+def unregister_argvs(
+    name: str, binary: str, recorded: tuple[str, ...]
+) -> tuple[tuple[str, ...], ...]:
+    """The argvs that undo hook `name` for the recorded hosts only (D-04).
+
+    `recorded` comes from a receipt a user can hand-edit, so it is filtered through
+    the code-owned target map: an id outside it (`all`, `auto`, a path) never reaches
+    an argv. Nothing left, or no undo for this hook, is `()`.
+    """
+    pair = POSTINSTALL_HOOKS.get(name)
+    if pair is None or pair.targets is None or pair.unregister is None:
+        return ()
+    wanted = tuple(harness for harness in pair.targets if harness in recorded)
+    return pair.unregister(binary, wanted) if wanted else ()
+
+
+def hook_method(tool: Tool, receipt: receipts.Receipt) -> Method | None:
+    """The method a receipt was written for: the keyed match, else the only method of
+    the receipt's kind, else None. The one rule for "which method was this receipt
+    written for"; removal uses it too, so the two cannot disagree."""
+    keyed = [method for method in tool.methods if receipts.method_key(method) == receipt.method.key]
+    if keyed:
+        return keyed[0]
+    same_kind = [method for method in tool.methods if method.kind == receipt.method.kind]
+    return same_kind[0] if len(same_kind) == 1 else None
+
+
+def host_labels(hosts: Iterable[str]) -> str:
+    """Catalog ids of harness ids, sorted and comma-joined for display (UI-SPEC U10)."""
+    return ", ".join(sorted(HOST_CATALOG_IDS.get(host, host) for host in hosts))
 
 
 def run_postinstall(
