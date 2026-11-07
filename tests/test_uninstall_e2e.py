@@ -14,6 +14,7 @@ from installer.app import HOST_SETTINGS_OS, UninstallDecision, perform_uninstall
 from installer.doctor import DoctorReport
 from installer.download import artifact_paths
 from installer.guards import guard_status, install_shims, write_ban_aliases
+from installer.locations import display_path
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory
 from installer.platform import Platform
@@ -802,9 +803,13 @@ async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
         assert isinstance(screen, UninstallScreen)
         # From the first row down: fd, the environment title, the PATH wiring row, then this row.
         await pilot.press("down", "down", "down", "down")
+        # The editor's settings path differs per OS; read it from the ledger the row reads.
+        vscode_settings = display_path(
+            ledger_summary("vscode", home=tmp_path, platform_os=HOST_SETTINGS_OS)[0][0]
+        )
         assert screen.detail_text == (
             "reverts only keys that still hold this installer's value: "
-            "~/.claude/settings.json, ~/.config/Code/User/settings.json"
+            f"~/.claude/settings.json, {vscode_settings}"
         )
         await pilot.press("c")
         assert screen.status.text == "This row has no config to delete."
