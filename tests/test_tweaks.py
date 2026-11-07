@@ -9,6 +9,7 @@ import pytest
 
 from installer import tweaks as tweaks_module
 from installer.helper_assets import wait_time
+from installer.omz import plugins_owned
 from installer.platform import Platform
 from installer.tweaks import (
     BUNDLES,
@@ -413,3 +414,27 @@ def test_uninstall_line_names_every_stripped_alias() -> None:
         "Removed the claude-skip, codex-skip alias block(s) from ~/.myshellrc."
     )
     assert strip_legacy_aliases(rc).uninstall_line() is None
+
+
+def test_an_unreadable_rc_is_reported_and_never_raises() -> None:
+    rc = Path.home() / ".myshellrc"
+    latin1 = b"# caf\xe9\n" + _legacy_block("claude-skip", _CLAUDE_ALIAS).encode()
+    rc.write_bytes(latin1)
+    report = strip_legacy_aliases(rc)
+    assert report.stripped == ()
+    assert rc.read_bytes() == latin1
+    assert tweaks_module.bundle_marker_present("claude-skip", rc)
+    assert report.launch_lines() == (
+        (
+            "Could not check ~/.myshellrc for legacy alias blocks: not valid UTF-8; "
+            "nothing was changed.",
+            "warn",
+        ),
+    )
+    rc.unlink()
+    rc.mkdir()
+    assert not tweaks_module.bundle_marker_present("claude-skip", rc)
+    assert not plugins_owned(rc)
+    [(text, severity)] = strip_legacy_aliases(rc).launch_lines()
+    assert severity == "warn"
+    assert text.startswith("Could not check ~/.myshellrc for legacy alias blocks: ")

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from installer.atomic import atomic_write_text
+from installer.atomic import atomic_write_text, read_capped
 from installer.locations import display_path
 from installer.platform import Platform
 from installer.shellrc import apply_block, strip_block
@@ -294,6 +294,7 @@ class LegacyStrip:
     rc: str
     stripped: tuple[str, ...] = ()
     failed: tuple[tuple[str, str], ...] = ()
+    unreadable: str | None = None
 
     def launch_lines(self) -> tuple[tuple[str, str], ...]:
         lines: list[tuple[str, str]] = []
@@ -309,7 +310,15 @@ class LegacyStrip:
         return tuple(lines)
 
     def failure_lines(self) -> tuple[str, ...]:
-        return tuple(
+        unreadable = (
+            ()
+            if self.unreadable is None
+            else (
+                f"Could not check {self.rc} for legacy alias blocks: {self.unreadable}; "
+                "nothing was changed.",
+            )
+        )
+        return unreadable + tuple(
             f"Could not remove the {alias_id} alias from {self.rc}: {reason}."
             for alias_id, reason in self.failed
         )
@@ -320,27 +329,45 @@ class LegacyStrip:
         return f"Removed the {', '.join(self.stripped)} alias block(s) from {self.rc}."
 
 
+_RC_MAX_BYTES = 1 << 20
+
+
 def strip_legacy_aliases(rc_path: Path) -> LegacyStrip:
-    """Strip every legacy alias block from rc_path. Idempotent; no agent file is touched."""
+    """Strip every legacy alias block from rc_path. Idempotent; no agent file is touched. It runs
+    at every launch, so a file it cannot read is reported and never raised (CR-04)."""
+    rc = display_path(rc_path)
+    try:
+        data = read_capped(rc_path, _RC_MAX_BYTES, follow_symlinks=True)
+        if data is None:
+            return LegacyStrip(rc=rc, unreadable="not a regular file of at most 1 MiB")
+        lines = data.decode("utf-8").split("\n")
+    except FileNotFoundError:
+        return LegacyStrip(rc=rc)
+    except UnicodeDecodeError:
+        return LegacyStrip(rc=rc, unreadable="not valid UTF-8")
+    except OSError as exc:
+        return LegacyStrip(rc=rc, unreadable=exc.strerror or str(exc))
     stripped: list[str] = []
     failed: list[tuple[str, str]] = []
     for alias_id in LEGACY_ALIAS_BUNDLES:
-        if not bundle_marker_present(alias_id, rc_path):
+        if _markers(alias_id)[0] not in lines:
             continue
         try:
             if strip_tweak_block(alias_id, rc_path):
                 stripped.append(alias_id)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             failed.append((alias_id, (str(exc).splitlines() or [""])[0]))
-    return LegacyStrip(rc=display_path(rc_path), stripped=tuple(stripped), failed=tuple(failed))
+    return LegacyStrip(rc=rc, stripped=tuple(stripped), failed=tuple(failed))
 
 
 def bundle_marker_present(bundle_id: str, rc_path: Path) -> bool:
     """True when rc_path exists and carries the begin marker of the bundle's block."""
-    if not rc_path.exists():
-        return False
     begin, _ = _markers(bundle_id)
-    return begin in rc_path.read_text().split("\n")
+    try:  # read at launch for every bundle row: an undecodable byte or a directory never raises
+        text = rc_path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    return begin in text.split("\n")
 
 
 def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:

@@ -4224,6 +4224,48 @@ def test_the_cli_uninstall_strips_legacy_alias_blocks(
     assert not (tmp_path / ".codex" / "config.toml").exists()
 
 
+def test_every_route_survives_a_non_utf8_myshellrc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    rc = tmp_path / ".myshellrc"
+    latin1 = b"# caf\xe9\n" + _legacy_alias_block("claude-skip", _CLAUDE_LEGACY).encode()
+    rc.write_bytes(latin1)
+    notice = "Could not check ~/.myshellrc for legacy alias blocks: not valid UTF-8"
+
+    warning = _wired(monkeypatch, [])["startup_warning"]
+    assert isinstance(warning, str)
+    assert notice in warning
+
+    def fake_run_uninstall(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ()
+
+    def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
+        return TerminalShellResult()
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert notice in buffer.getvalue()
+    assert rc.read_bytes() == latin1
+
+
+def test_headless_launch_survives_a_non_utf8_myshellrc(monkeypatch: pytest.MonkeyPatch) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    rc = Path.home() / ".myshellrc"
+    rc.write_bytes(b"# caf\xe9\n")
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert "Could not check ~/.myshellrc for legacy alias blocks" in buffer.getvalue()
+    assert rc.read_bytes() == b"# caf\xe9\n"
+
+
 def test_headless_main_strips_only_the_scratch_rc(monkeypatch: pytest.MonkeyPatch) -> None:
     """R1-07: without _sandbox, setup._MYSHELLRC is the scratch HOME's rc, never the real one."""
     buffer = io.StringIO()

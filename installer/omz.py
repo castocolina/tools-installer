@@ -308,12 +308,14 @@ def _record(
     way to ever switch it off. Last closed block wins, mirroring the same
     last-begin pairing rule apply_block/strip_block use.
     """
-    if not state_path.exists():
+    try:  # a read-only probe at launch: an undecodable byte or a directory never raises
+        text = state_path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
         return None
     record: tuple[str, ...] | None = None
     names: tuple[str, ...] = ()
     inside = False
-    for line in state_path.read_text().split("\n"):
+    for line in text.split("\n"):
         if line == begin:
             inside, names = True, ()
         elif line == end and inside:
