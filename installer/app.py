@@ -41,6 +41,7 @@ from installer.pnpm_globals import (
     pnpm_global_packages,
 )
 from installer.policy import Policy, omz_removal_detail
+from installer.post_install import sensitive_prompt
 from installer.postinstall import host_labels
 from installer.prompt import Prompter
 from installer.rcclean import (
@@ -51,6 +52,7 @@ from installer.rcclean import (
     strip_lines,
 )
 from installer.render import (
+    RUN_OPTIONS_LEFT_OFF,
     render_competing_mechanisms,
     render_disk_pressure,
     render_doctor,
@@ -63,18 +65,24 @@ from installer.render import (
     render_run_report,
     render_run_summary,
     render_uninstall,
+    run_option_lines,
+    shell_init_left_off_line,
 )
 from installer.run import CommandError, Runner, run_command
+from installer.sanitize import sanitize_log_line
 from installer.session import (
     RUNNABLE,
     Disposition,
     OnMismatch,
+    PlanRow,
     RowOutcome,
     RunContext,
     SensitiveInstall,
     build_plan,
     execute_plan,
     first_line,
+    review_problems,
+    run_options,
 )
 from installer.shellrc import (
     collect_bin_dirs,
@@ -85,7 +93,7 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
-from installer.tweaks import TweakBundle
+from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle
 from installer.uninstall import (
     MANAGER_UNINSTALL_ARGV,
     SweepResult,
@@ -161,15 +169,18 @@ def run_wizard(
     if not options.yes and has_runnable_row and not prompter.confirm("Run this plan?"):
         console.print("Cancelled; nothing was changed.")
         return None
+    chosen: frozenset[str] = (
+        frozenset() if options.yes else _ask_run_options(rows, prompter, console, refresh)
+    )
     if options.yes or has_runnable_row:
         for line in refresh.commit_writes():
             console.print(line, markup=False, highlight=False, soft_wrap=True)
+    if options.yes and run_options(rows, refresh.platform.os):
+        console.print(RUN_OPTIONS_LEFT_OFF, markup=False, highlight=False, soft_wrap=True)
 
-    def confirm_sensitive(tool_id: str, _action: str) -> bool:
-        return prompter.confirm(
-            f"Show a reviewed command to change the login shell to zsh for {tool_id}, "
-            "which you run in your own terminal after the installer exits?"
-        )
+    def confirm_sensitive(tool_id: str, action: str) -> bool:
+        prompt = sensitive_prompt(tool_id, action)
+        return prompter.confirm(prompt.prompt, default=prompt.default)
 
     context = RunContext(
         catalog={tool.id: tool for tool in tools},
@@ -181,10 +192,37 @@ def run_wizard(
         terminal_sync=terminal_sync,
         on_mismatch=None if options.yes else on_mismatch,
         confirm_sensitive=None if options.yes else confirm_sensitive,
+        options=chosen,
     )
     outcomes = execute_plan(rows, context)
-    render_run_report(outcomes, console)
+    render_run_report(outcomes, console, options=chosen)
+    if options.yes:
+        left_off = shell_init_left_off_line(outcomes, SHELL_INIT_TOOLS)
+        if left_off is not None:
+            console.print(left_off, markup=False, highlight=False, soft_wrap=True)
     return outcomes
+
+
+def _ask_run_options(
+    rows: Sequence[PlanRow],
+    prompter: Prompter,
+    console: Console,
+    refresh: VersionRefreshService,
+) -> frozenset[str]:
+    """D-09: one default-no question per run option the plan shows; the yes answers are the options.
+
+    Each question follows its continuation notes (UI-SPEC section 7); `--yes` never reaches here.
+    """
+    platform_os = refresh.platform.os
+    problems = review_problems(rows, home=Path.home(), platform_os=platform_os)
+    chosen: set[str] = set()
+    for option in run_options(rows, platform_os):
+        first, notes = run_option_lines(option, rows, platform_os=platform_os, problems=problems)
+        for note in notes:
+            console.print(sanitize_log_line(note), markup=False, highlight=False, soft_wrap=True)
+        if prompter.confirm(f"{first}?", default=False):
+            chosen.add(option)
+    return frozenset(chosen)
 
 
 def configure_path(

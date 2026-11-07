@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from installer.cli import Options, parse_args
@@ -95,3 +97,22 @@ def test_guard_defaults_false():
     options = parse_args([])
     assert options.guard is False
     assert options.unguard is False
+
+
+def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
+    """A33 / O1: Phase 23 adds no flag; the accepted flags are the ones --help lists."""
+    with pytest.raises(SystemExit):
+        parse_args(["--help"])
+    flags = set(re.findall(r"--[a-z][a-z-]*", capsys.readouterr().out))
+    assert flags == {
+        "--help",
+        "--all",
+        "--categories",
+        "--yes",
+        "--doctor",
+        "--fix",
+        "--uninstall",
+        "--guard",
+        "--unguard",
+        "--link-mode",
+    }
