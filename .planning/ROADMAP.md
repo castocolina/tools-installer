@@ -376,7 +376,32 @@ Plans:
   5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active.
   6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME).
 
-**Plans**: TBD
+**Plans:** 16 plans (7 waves)
+
+Plans:
+**Wave 1**
+- [ ] 23-01-PLAN.md — Hook register path on one host list (`present_harnesses`), hosts recorded in `receipt.hooks`, rtk hook deleted, `tools` removed from install/update
+- [ ] 23-02-PLAN.md — Guarded JSON/JSONC/TOML settings splice with byte-identical revert and compare-before-commit writes
+- [ ] 23-03-PLAN.md — Oh-My-Zsh honors `$ZSH`; one theme writer with a default only where none exists
+- [ ] 23-04-PLAN.md — Managed `~/.zshenv` SHELL block, kitty/WezTerm SHELL lines, environment.d carries the zsh path
+**Wave 2**
+- [ ] 23-05-PLAN.md — Unregister builders from recorded hosts, herdr pair shape, tealdeer cache fetch
+- [ ] 23-06-PLAN.md — Agent/editor settings API and per-agent config-write ledger
+**Wave 3**
+- [ ] 23-07-PLAN.md — Hook and `.zshenv` drift with RECONFIGURE; new-host re-sync at the end of the run
+- [ ] 23-08-PLAN.md — Removal unregisters recorded hosts first, with the shared re-proof
+**Wave 4**
+- [ ] 23-09-PLAN.md — Six shell-init bundles behind the keyed sensitive prompt; theme and lean-tip handoffs; chsh copy fix (SC4)
+- [ ] 23-10-PLAN.md — Run options as engine inputs, the settings report section and the shared review helpers
+**Wave 5**
+- [ ] 23-11-PLAN.md — Policies rows for each agent/VS Code setting, the shell-init and desktop SHELL rows
+- [ ] 23-12-PLAN.md — TUI review run options with `space` and the keyed sensitive modal
+- [ ] 23-13-PLAN.md — Headless run-option and shell-init questions default to no; `--yes` asks nothing
+**Wave 6**
+- [ ] 23-14-PLAN.md — Alias bundles leave Policies; legacy alias blocks stripped at launch/uninstall with a notice (no migration); app composition
+- [ ] 23-15-PLAN.md — Removal reverts settings and shell init; `agent/editor settings` uninstall row; ConfirmUninstall blocks
+**Wave 7**
+- [ ] 23-16-PLAN.md — Container e2e: codegraph hook register/unregister and a settings write reverted by `--uninstall --yes`
 
 ### Phase 24: Onboarding through the skill and e2e
 
