@@ -6354,3 +6354,69 @@ def test_removing_zsh_sweeps_the_desktop_shell_file(
     assert result.removed == ("zsh",)
     assert "desktop-shell" in result.swept
     assert not conf.exists()
+
+
+def test_a_refused_zsh_removal_keeps_the_desktop_shell_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused zsh removal removes nothing, so the desktop SHELL file it would sweep stays."""
+    from installer.app import perform_uninstall
+    from installer.env_redirect import DESKTOP_SHELL_CONF
+    from installer.policy import desktop_shell_policy
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    conf_dir = tmp_path / ".config" / "environment.d"
+    desktop_shell_policy(zsh_path="/z/bin/zsh", conf_dir=conf_dir, home=tmp_path).apply()
+    conf = conf_dir / DESKTOP_SHELL_CONF
+    tool = plant_receipted_tool(tmp_path, "zsh")
+    decision = _removal_decision(tool)
+    (tmp_path / ".local" / "bin" / "zsh").unlink()  # the previewed link moved: refused
+    result = perform_uninstall(
+        decision,
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+        platform_os="linux",
+    )
+    assert result.removed == ()
+    assert "desktop-shell" not in result.swept
+    assert conf.exists()
+
+
+def test_macos_zsh_removal_leaves_the_desktop_shell_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desktop SHELL row is a Linux environment.d file; a macOS removal never sweeps it."""
+    from installer.app import perform_uninstall
+    from installer.env_redirect import DESKTOP_SHELL_CONF
+    from installer.policy import desktop_shell_policy
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    conf_dir = tmp_path / ".config" / "environment.d"
+    desktop_shell_policy(zsh_path="/z/bin/zsh", conf_dir=conf_dir, home=tmp_path).apply()
+    conf = conf_dir / DESKTOP_SHELL_CONF
+    tool = plant_receipted_tool(tmp_path, "zsh")
+    result = perform_uninstall(
+        _removal_decision(tool),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+        platform_os="macos",
+    )
+    assert result.removed == ("zsh",)
+    assert "desktop-shell" not in result.swept
+    assert conf.exists()
