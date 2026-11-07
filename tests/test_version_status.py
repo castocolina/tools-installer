@@ -6924,3 +6924,13 @@ def test_a_reloaded_snapshot_keeps_the_greedy_outdated_row(tmp_path: Path) -> No
     assert state.health is Health.OUTDATED
     assert reloaded.greedy_casks() == frozenset({"visual-studio-code"})
     assert not [c for c in later.calls if c[:2] in (["brew", "info"], ["brew", "outdated"])]
+
+
+def test_the_detail_bar_names_the_hosts_to_unregister() -> None:
+    """23-15 (UI-SPEC section 6): a hook tool's detail names the hosts its undo unregisters,
+    right after the proof sentence."""
+    tool, state = _uninstall_state(owner="installer", removable=_REMOVABLE)
+    hooked = replace(state, removable=replace(state.removable, hook_hosts=("claude", "cursor")))
+    assert uninstall_detail(tool, hooked) == (
+        f"{LAYOUT_PROOF_NOTE} — unregisters it from claude, cursor-agent first"
+    )

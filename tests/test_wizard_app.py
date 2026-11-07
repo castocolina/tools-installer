@@ -8916,3 +8916,142 @@ async def test_status_data_is_literal() -> None:
         assert isinstance(screen, UninstallScreen)
         assert "could not delete config ~/.config/[red]x[/] — [31mdenied." in screen.status.text
         assert "\x1b" not in screen.status.text
+
+
+# -- 23-15: the removal review and results (UI-SPEC section 6) -----------------
+
+
+async def test_confirm_uninstall_lists_the_unregister_line_first() -> None:
+    """A24: a hook tool's undo runs before its removal, so its line comes first in block 3."""
+    codegraph = _tool("codegraph")
+    undo = (
+        "/home/u/.local/bin/codegraph",
+        "uninstall",
+        "--target",
+        "claude,codex",
+        "--location",
+        "global",
+        "--yes",
+        "--keep-cli",
+    )
+    removable = RemovalPlan(
+        (Path("/opt/codegraph"),), (), unregister=(undo,), hook_hosts=("claude", "codex")
+    )
+    app = _app(
+        cases=[(codegraph, plan_state(codegraph, removable=removable))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause()
+        review = [" ".join(line.plain.split()) for line in _confirm(app).review]
+        assert review[0] == (
+            "codegraph: runs codegraph uninstall --target claude,codex --location global "
+            "--yes --keep-cli"
+        )
+
+
+async def test_confirm_uninstall_lists_the_changes_block() -> None:
+    """A24/A26: block 3b names the settings a removal reverts and the shell init it turns off."""
+    from installer.agent_settings import apply_setting
+    from installer.app import HOST_SETTINGS_OS
+
+    apply_setting("claude", "auto-approve", home=Path.home(), platform_os=HOST_SETTINGS_OS)
+    claude, starship = _tool("claude"), _tool("starship")
+    app = _app(
+        cases=[
+            (claude, plan_state(claude, removable=RemovalPlan((Path("/opt/claude"),), ()))),
+            (starship, plan_state(starship, removable=RemovalPlan((Path("/opt/starship"),), ()))),
+        ],
+        uninstall=_uninstall_inputs(tweak_ids=("tweak:starship",), remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space", "down", "space")
+        await pilot.press("enter")
+        await pilot.pause()
+        # The review folds long lines with a hanging indent; compare the unfolded text.
+        review = [" ".join(line.plain.split()) for line in _confirm(app).review]
+        assert (
+            "claude: removes permissions.defaultMode, skipDangerousModePermissionPrompt "
+            "from ~/.claude/settings.json"
+        ) in review
+        assert "starship: turns off its shell init in ~/.myshellrc" in review
+
+
+async def test_uninstall_values_render_literally(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A32: a ledger path or key holding markup renders as the text it is, never as style."""
+    from installer import app as app_module
+
+    odd = "[red]x[/]"
+
+    def ledger(
+        agent: str, *, home: Path, platform_os: str
+    ) -> tuple[tuple[Path, tuple[str, ...]], ...]:
+        return ((Path(f"/cfg/{odd}.json"), (odd,)),) if agent == "claude" else ()
+
+    monkeypatch.setattr(app_module, "ledger_summary", ledger)
+    claude = _tool("claude")
+    app = _app(
+        cases=[(claude, plan_state(claude, removable=RemovalPlan((Path("/opt/claude"),), ())))],
+        uninstall=_uninstall_inputs(remove=_recorder([])),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause()
+        review = _confirm(app).review
+        assert f"claude: removes {odd} from /cfg/{odd}.json" in [line.plain for line in review]
+        assert all(not line.spans for line in review if odd in line.plain)
+
+
+async def test_removal_results_name_unregister_revert_and_shell_init() -> None:
+    """A25 (status half): each result names what happened, in the UI-SPEC section 6 wording."""
+    codegraph = _tool("codegraph")
+    result = SweepResult(
+        removed=("codegraph",),
+        unregistered=("claude", "codex"),
+        settings_reverted=("claude",),
+        settings_kept=("codex",),
+        shell_init_off=("starship",),
+        warnings=("could not revert ~/.codex/config.toml — not valid TOML (line 2)",),
+    )
+    app = _app(
+        cases=[(codegraph, plan_state(codegraph, removable=RemovalPlan((Path("/opt/cg"),), ())))],
+        uninstall=_uninstall_inputs(remove=_recorder([], result)),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space", "enter", "enter")
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        status = screen.status.text
+    for line in (
+        "Unregistered from agent hosts: claude, codex.",
+        "Settings reverted for claude.",
+        "Kept settings you changed since this installer wrote them: codex.",
+        "Shell init turned off for starship.",
+        "warning: could not revert ~/.codex/config.toml — not valid TOML (line 2).",
+    ):
+        assert line in status, line
+
+
+async def test_an_unregister_failure_row_reads_remove_failed() -> None:
+    """A25: a failed undo ends the row `remove failed — unregister: …` and deletes nothing."""
+    codegraph = _tool("codegraph")
+    result = SweepResult(remove_failed=(("codegraph", "unregister: boom"),))
+    app = _app(
+        cases=[(codegraph, plan_state(codegraph, removable=RemovalPlan((Path("/opt/cg"),), ())))],
+        uninstall=_uninstall_inputs(remove=_recorder([], result)),
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space", "enter", "enter")
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert screen.detail_text.startswith("remove failed — unregister: boom")

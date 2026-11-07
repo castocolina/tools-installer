@@ -95,7 +95,7 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
-from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle, shell_init_bundle, tweak_present
+from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle
 from installer.uninstall import (
     MANAGER_UNINSTALL_ARGV,
     SweepResult,
@@ -647,18 +647,26 @@ def _command_error_line(exc: CommandError) -> str:
 HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
 
 
+def settings_change_lines(agent_ids: Iterable[str], *, platform_os: str) -> tuple[str, ...]:
+    """The settings keys the ledgers record, one line per ledgered file (UI-SPEC section 6)."""
+    return tuple(
+        f"{agent}: removes {', '.join(keys)} from {display_path(path)}"
+        for agent in agent_ids
+        for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
+    )
+
+
 def removal_change_lines(
-    tools: Iterable[Tool], *, platform_os: str, myshellrc_path: Path
+    tools: Iterable[Tool], *, platform_os: str, active_tweaks: Collection[str]
 ) -> tuple[str, ...]:
-    """What removing these tools changes: the settings keys a removal reverts (one line per
-    ledgered file) and the shell-init bundle it turns off (UI-SPEC section 6, block 3b)."""
+    """What removing these tools changes: the settings keys a removal reverts and the shell-init
+    bundle it turns off (UI-SPEC section 6, block 3b). `active_tweaks` is the policy-id list the
+    sweep itself reads, so the preview and the effect cannot disagree."""
     lines: list[str] = []
     for tool in tools:
         if tool.id in receipts.CONFIG_AGENTS:
-            for path, keys in ledger_summary(tool.id, home=Path.home(), platform_os=platform_os):
-                lines.append(f"{tool.id}: removes {', '.join(keys)} from {display_path(path)}")
-        bundle = shell_init_bundle(tool.id) if tool.id in SHELL_INIT_TOOLS else None
-        if bundle is not None and tweak_present(bundle, myshellrc_path):
+            lines.extend(settings_change_lines((tool.id,), platform_os=platform_os))
+        if tool.id in SHELL_INIT_TOOLS and f"tweak:{tool.id}" in active_tweaks:
             lines.append(f"{tool.id}: turns off its shell init in ~/.myshellrc")
     return tuple(lines)
 
@@ -693,6 +701,7 @@ def _revert_settings(
 def _after_removal(
     tool: Tool,
     *,
+    bundles: tuple[TweakBundle, ...],
     bin_dir: Path,
     myshellrc_path: Path,
     extra_policies: tuple[Policy, ...],
@@ -706,7 +715,8 @@ def _after_removal(
         # settings file; when one does, revert first, then delete it and drop its ledger entries.
         reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
         parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
-    if tool.id in SHELL_INIT_TOOLS and (bundle := shell_init_bundle(tool.id)) is not None:
+    bundle = next((b for b in bundles if b.id == tool.id), None)
+    if tool.id in SHELL_INIT_TOOLS and bundle is not None:
         shell = sweep_policies(active_policies((bundle,), rc_path=myshellrc_path, bin_dir=bin_dir))
         parts.append(dataclasses.replace(shell, shell_init_off=(tool.id,) if shell.swept else ()))
     if tool.id == "zsh" and platform_os != "macos":
@@ -952,7 +962,7 @@ def run_uninstall(
     for line in removal_change_lines(
         (tool for tool, plan in ordered if plan.level != "none"),
         platform_os=platform_os,
-        myshellrc_path=myshellrc_path,
+        active_tweaks=tweaks,
     ):
         console.print(line, markup=False, soft_wrap=True)
     if settings_files:
@@ -994,6 +1004,7 @@ def run_uninstall(
             after.append(
                 _after_removal(
                     tool,
+                    bundles=bundles,
                     bin_dir=default_bin_dir,
                     myshellrc_path=myshellrc_path,
                     extra_policies=extra_policies,
@@ -1193,6 +1204,7 @@ def perform_uninstall(
             after.append(
                 _after_removal(
                     tool,
+                    bundles=bundles,
                     bin_dir=bin_dir,
                     myshellrc_path=myshellrc_path,
                     extra_policies=extra_policies,

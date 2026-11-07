@@ -38,7 +38,11 @@ from installer.app import (
     UninstallDecision,
     path_writer_lines_for,
     pnpm_removal_packages,
+    removal_change_lines,
+    removal_result_lines,
     removal_runs_line,
+    settings_change_lines,
+    unregister_runs_line,
 )
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
@@ -76,6 +80,7 @@ from installer.policy import (
     lost_policy_ids,
     move_link_mode,
 )
+from installer.postinstall import host_labels
 from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import fold_reason, guidance_text, outcome_detail_text, outcome_word
 from installer.resolve import UnavailableReason
@@ -1623,8 +1628,18 @@ class UninstallScreen(AppScreen):
         it goes through `sanitize_log_line` and is appended as plain `Text`, never markup."""
         lines: list[Text] = []
         for tool in decision.tools:
+            # A hook tool's undo runs first, so its line comes before its own command (A24).
+            for undo in decision.unregister.get(tool.id, ()):
+                lines.append(_review_line(sanitize_log_line(unregister_runs_line(tool.id, undo))))
             if argv := decision.argv.get(tool.id):
                 lines.append(_review_line(sanitize_log_line(removal_runs_line(tool.id, argv))))
+        # Block 3b, what changes (UI-SPEC section 6): the same lines the CLI previews.
+        changes = removal_change_lines(
+            decision.tools, platform_os=HOST_SETTINGS_OS, active_tweaks=self._tweak_ids
+        )
+        if decision.revert_settings:
+            changes += settings_change_lines(receipts.CONFIG_AGENTS, platform_os=HOST_SETTINGS_OS)
+        lines.extend(_review_line(sanitize_log_line(line)) for line in dict.fromkeys(changes))
         deleted = [
             _review_line(sanitize_log_line(f"  {entry} ({tool.id})"))
             for tool in decision.tools
@@ -1905,6 +1920,11 @@ class UninstallScreen(AppScreen):
         if failed:
             summary_parts.append(fix_here)
         summary_parts.extend(self._config_lines(message.decision, swept))
+        if swept.unregistered:
+            summary_parts.append(
+                f"Unregistered from agent hosts: {host_labels(swept.unregistered)}."
+            )
+        summary_parts.extend(removal_result_lines(swept))
         # Empty when no lever was chosen; a blank line would cost a status row.
         if applied := self._applied_summary(message.decision, swept):
             summary_parts.append(applied)

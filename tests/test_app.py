@@ -6193,7 +6193,7 @@ def test_the_cli_names_the_shell_init_it_turns_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from installer.app import run_uninstall
-    from installer.tweaks import shell_init_bundle, write_tweak
+    from installer.tweaks import BUNDLES, shell_init_bundle, write_tweak
     from tests.test_uninstall import plant_receipted_tool
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -6216,7 +6216,7 @@ def test_the_cli_names_the_shell_init_it_turns_off(
         myshellrc_path=myshellrc,
         rc_paths=[],
         confirm=confirm,
-        bundles=(),
+        bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         daemon_policy=None,
         extra_policies=(),
