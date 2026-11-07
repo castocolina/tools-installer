@@ -14,11 +14,12 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import sys
 from collections.abc import Callable, Generator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -547,6 +548,106 @@ def refused(match: str) -> Generator[None]:
     if not any(re.search(match, message) for message in block):
         pytest.fail(f"no launch refusal matching {match!r} was recorded", pytrace=False)
     _REFUSALS[start:] = [message for message in block if re.search(match, message) is None]
+
+
+# --- the socket guard: no internet socket and no name lookup in a test (SPEC R8, D-22) ---
+
+INTERNET_FAMILIES = frozenset({socket.AF_INET, socket.AF_INET6})
+
+
+def nodeid_of(request: pytest.FixtureRequest) -> str:
+    """The running test's node id; pytest leaves `FixtureRequest.node` untyped."""
+    return str(cast(Any, request).node.nodeid)
+
+
+def guarded_socket_init(
+    original: Callable[..., None], describe: Callable[[], str]
+) -> Callable[..., None]:
+    """A `socket.socket.__init__` replacement that refuses internet families.
+
+    `*args` rather than named parameters: the socket signature has a `type` parameter and callers
+    pass any of the four by keyword. The default family (no fileno) is AF_INET; a fileno with no
+    family is a descriptor that already exists (socketpair, fromfd), so it passes.
+    """
+
+    def init(self: socket.socket, *args: Any, **kwargs: Any) -> None:
+        family = kwargs.get("family", args[0] if args else -1)
+        fileno = kwargs.get("fileno", args[3] if len(args) > 3 else None)
+        if family == -1 and fileno is None:
+            family = socket.AF_INET
+        if family in INTERNET_FAMILIES:
+            message = (
+                f"the test {describe()} tried to open an internet socket "
+                f"({getattr(family, 'name', family)}); fake the network call instead"
+            )
+            record_refusal(message)
+            raise AssertionError(message)
+        original(self, *args, **kwargs)
+
+    return init
+
+
+def guarded_getaddrinfo(describe: Callable[[], str]) -> Callable[..., NoReturn]:
+    """A `socket.getaddrinfo` replacement: no DNS query leaves the host."""
+
+    def getaddrinfo(host: object, *_args: Any, **_kwargs: Any) -> NoReturn:
+        message = f"the test {describe()} tried to resolve {host!r}; fake the network call instead"
+        record_refusal(message)
+        raise AssertionError(message)
+
+    return getaddrinfo
+
+
+# --- the os launchers: the same allowlist as subprocess.Popen (SPEC R6, D-21) ---
+
+# execl*/spawnl* are pure-Python wrappers over these (through module globals), so they are covered.
+GUARDED_OS_FUNCTIONS = (
+    "system",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
+    "spawnvpe",
+    "posix_spawn",
+    "posix_spawnp",
+)
+
+
+def guarded_os_call(
+    name: str,
+    original: Callable[..., Any],
+    check: Callable[[list[str], Mapping[str, str] | None], None],
+) -> Callable[..., Any]:
+    """Wrap an os launcher: build its argv (command, path and arguments through `os.fsdecode`),
+    `check` it, record a refusal before re-raising, then call `original` with the untouched
+    arguments. The check is pure, so a Popen that already passed may pass again at `posix_spawn`."""
+    first = 1 if name.startswith("spawn") else 0  # spawn* takes a mode before the path
+    has_env = name.endswith("e") or name.startswith("posix_spawn")
+    needed = 1 if name == "system" else first + (3 if has_env else 2)
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        try:
+            if len(args) < needed:
+                raise AssertionError(f"the guard needs os.{name} called with positional arguments")
+            if name == "system":
+                argv = ["/bin/sh", "-c", os.fsdecode(args[0])]
+            else:
+                argv = [os.fsdecode(args[first]), *(os.fsdecode(a) for a in args[first + 1][1:])]
+            env = (
+                {os.fsdecode(k): os.fsdecode(v) for k, v in args[first + 2].items()}
+                if has_env
+                else None
+            )
+            check(argv, env)
+        except AssertionError as refusal:
+            record_refusal(str(refusal))
+            raise
+        return original(*args, **kwargs)
+
+    return call
 
 
 # --- the test PATH and environment (23.1 D-16, D-17): applied before collection ---

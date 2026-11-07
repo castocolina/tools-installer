@@ -1,17 +1,22 @@
+import asyncio
 import json
 import os
 import pwd
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+import threading
+import urllib.request
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
+from textual.app import App
 
 import setup
 from tests.conftest import GuardedPopen, launch_policy
@@ -29,9 +34,11 @@ from tests.sandbox import (
     check_launch,
     env_names_to_clear,
     fail_on_refusals,
+    guarded_os_call,
     host_free_path,
     host_zsh,
     link_interpreters,
+    nodeid_of,
     prepare_interpreter_dir,
     record_refusal,
     refused,
@@ -842,3 +849,204 @@ def test_refused_consumes_only_what_its_block_raised(host_fakes: Path) -> None:
     with pytest.raises(pytest.fail.Exception), refused("host's uv"):
         pass
     assert take_refusals() == ()
+
+
+# --- the socket guard: no internet socket and no name lookup in any test (SPEC R8) ---
+
+
+def _connect_loopback() -> object:
+    return socket.create_connection(("127.0.0.1", 9), timeout=1)
+
+
+def _open_url() -> object:
+    return urllib.request.urlopen("https://example.com", timeout=1)
+
+
+def _default_socket() -> object:
+    return socket.socket()
+
+
+def _ipv6_socket() -> object:
+    return socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+
+
+_SOCKET_ATTEMPTS = [_connect_loopback, _open_url, _default_socket, _ipv6_socket]
+
+
+@pytest.mark.parametrize("attempt", _SOCKET_ATTEMPTS, ids=lambda attempt: attempt.__name__)
+def test_internet_sockets_are_refused_naming_the_test(
+    attempt: Callable[[], object], request: pytest.FixtureRequest
+) -> None:
+    with pytest.raises(AssertionError) as error:
+        attempt()
+    assert nodeid_of(request) in str(error.value)
+    recorded = take_refusals()
+    assert len(recorded) == 1
+    assert nodeid_of(request) in recorded[0]
+
+
+def _fetch_or_none(url: str) -> bytes | None:
+    """Production-shaped: a broad catch around a network call."""
+    try:
+        return urllib.request.urlopen(url, timeout=1).read()
+    except Exception:
+        return None
+
+
+def test_a_swallowed_socket_refusal_still_fails_the_test() -> None:
+    assert _fetch_or_none("https://example.com") is None
+    with pytest.raises(pytest.fail.Exception) as failure:
+        fail_on_refusals()
+    assert "tried to resolve" in str(failure.value)
+    assert take_refusals() == ()
+
+
+def test_unix_sockets_still_work() -> None:
+    left, right = socket.socketpair()
+    with left, right:
+        left.sendall(b"x")
+        assert right.recv(1) == b"x"
+    with socket.socket(socket.AF_UNIX):
+        pass
+
+    async def answer() -> int:
+        return 42
+
+    assert asyncio.run(answer()) == 42
+
+
+async def test_a_textual_app_still_runs_under_the_socket_guard() -> None:
+    async with App[None]().run_test() as pilot:
+        await pilot.press("x")
+
+
+def test_the_socket_block_holds_in_threads() -> None:
+    caught: list[AssertionError] = []
+
+    def attempt() -> None:
+        try:
+            _connect_loopback()
+        except AssertionError as error:
+            caught.append(error)
+
+    worker = threading.Thread(target=attempt)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert len(caught) == 1
+    assert len(take_refusals()) == 1
+
+
+# --- the os launchers: os.system, os.exec*, os.spawn*, os.posix_spawn* use the allowlist ---
+
+
+def _policy_check(argv: list[str], env: Mapping[str, str] | None) -> None:
+    check_launch(argv, env=env, cwd=None, policy=launch_policy())
+
+
+class _Recorder:
+    """Stands in for an os launcher: remembers what it was called with, launches nothing."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    def __call__(self, *args: Any) -> None:
+        self.calls.append(args)
+
+
+def _launcher(name: str) -> Callable[..., Any]:
+    """An os launcher looked up at call time (the guard swaps it per test); pyright flags the
+    deprecated ones when they are named directly."""
+    return getattr(os, name)
+
+
+_OS_LAUNCHES: dict[str, Callable[[str], object]] = {
+    "system": lambda _fake: _launcher("system")("uv --version"),
+    "spawnv": lambda fake: _launcher("spawnv")(os.P_WAIT, fake, [fake]),
+    "spawnl": lambda fake: _launcher("spawnl")(os.P_WAIT, fake, fake),
+    "spawnvp": lambda _fake: _launcher("spawnvp")(os.P_WAIT, "uv", ["uv"]),
+    "posix_spawn": lambda fake: os.posix_spawn(fake, [fake], dict(os.environ)),
+    "posix_spawnp": lambda _fake: os.posix_spawnp("uv", ["uv"], dict(os.environ)),
+}
+
+
+@pytest.mark.parametrize("launch", sorted(_OS_LAUNCHES))
+def test_os_launchers_refuse_host_programs(launch: str, host_fakes: Path) -> None:
+    with refused("host's uv"):
+        _OS_LAUNCHES[launch](str(host_fakes / "uv"))
+    assert list(host_fakes.glob("*.ran")) == []
+
+
+def test_bytes_arguments_are_decoded_before_the_check(outside: Path, tmp_path: Path) -> None:
+    host = _marker_fake(outside, "uv")
+    fake = _fake(tmp_path / "bin", "tool")
+    recorder = _Recorder()
+    execv = guarded_os_call("execv", recorder, _policy_check)
+    with refused("host's uv"):
+        execv(os.fsencode(host), [os.fsencode(host)])
+    assert recorder.calls == []
+    execv(os.fsencode(fake), [os.fsencode(fake)])
+    assert recorder.calls == [(os.fsencode(fake), [os.fsencode(fake)])]
+
+    spawn = guarded_os_call("posix_spawn", recorder, _policy_check)
+    with refused("host's uv"):
+        spawn(host, [host], dict(os.environ))
+    assert len(recorder.calls) == 1
+    spawn(fake, [str(fake)], dict(os.environ))
+    assert len(recorder.calls) == 2
+
+
+def _quiet_system(command: str) -> int | None:
+    """Production-shaped: a broad catch around a launch."""
+    try:
+        return _launcher("system")(command)
+    except Exception:
+        return None
+
+
+def test_a_swallowed_os_refusal_still_fails_the_test(host_fakes: Path) -> None:
+    assert _quiet_system("uv --version") is None
+    assert list(host_fakes.glob("*.ran")) == []
+    with pytest.raises(pytest.fail.Exception) as failure:
+        fail_on_refusals()
+    assert "host's uv" in str(failure.value)
+    assert take_refusals() == ()
+
+
+@pytest.mark.parametrize("name", ["execv", "execve", "execvp", "execvpe"])
+def test_exec_family_is_checked_before_the_original_runs(
+    name: str, outside: Path, tmp_path: Path
+) -> None:
+    def operands(program: Path) -> tuple[Any, ...]:
+        base = (str(program), [str(program)])
+        return (*base, dict(os.environ)) if name.endswith("e") else base
+
+    host = _marker_fake(outside, "uv")
+    fake = _fake(tmp_path / "bin", "tool")
+    recorder = _Recorder()
+    wrapped = guarded_os_call(name, recorder, _policy_check)
+    with refused("host's uv"):
+        wrapped(*operands(host))
+    assert recorder.calls == []
+    wrapped(*operands(fake))
+    assert recorder.calls == [operands(fake)]
+    # inside a test the real launchers are the wrappers; execl* reaches execv through os's globals
+    assert os.execv.__qualname__.startswith("guarded_os_call.")
+    assert os.execl.__globals__["execv"] is os.execv
+
+
+def test_allowed_os_launches_run(tmp_path: Path) -> None:
+    fake = str(_fake(tmp_path / "bin", "tool"))
+    assert _launcher("system")("echo hi") == 0
+    pid = os.posix_spawn(fake, [fake], dict(os.environ))
+    assert os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) == 0
+
+
+def test_the_os_wrappers_are_idempotent(tmp_path: Path) -> None:
+    fake = _fake(tmp_path / "bin", "tool")
+    recorder = _Recorder()
+    wrapped = guarded_os_call("posix_spawn", recorder, _policy_check)
+    for _ in range(2):
+        wrapped(str(fake), [str(fake)], dict(os.environ))
+    assert len(recorder.calls) == 2
+    assert subprocess.run([str(fake)], check=False).returncode == 0
