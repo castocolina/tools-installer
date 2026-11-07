@@ -244,6 +244,16 @@ def test_rewrite_outdated_ban_aliases_drops_the_npx_alias(tmp_path: Path):
     assert rc.read_text() == expected
 
 
+def test_rewrite_outdated_ban_aliases_keeps_other_lines_byte_for_byte(tmp_path: Path):
+    """C-11 (IN-03): CRLF and lone CR user lines outside the block survive the rewrite."""
+    rc = tmp_path / ".myshellrc"
+    head, tail = b"user1\r\nuser2\rstill2\r\n", b"\nuser3\r\n"
+    rc.write_bytes(head + _old_ban_block().encode() + tail)
+    ((_message, level),) = rewrite_outdated_ban_aliases([rc])
+    assert level == "ok"
+    assert rc.read_bytes() == head + ban_alias_block().encode() + tail
+
+
 @pytest.mark.parametrize("shape", ["missing", "no_block", "orphan_begin"])
 def test_rewrite_outdated_ban_aliases_never_adds_a_block(tmp_path: Path, shape: str):
     rc = tmp_path / ".myshellrc"
