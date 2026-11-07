@@ -30,6 +30,7 @@ from installer.agent_settings import (
     strip_jsonc,
     write_if_unchanged,
 )
+from installer.app import settings_change_lines
 from installer.atomic import FileSnapshot
 from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_ledger
 
@@ -953,3 +954,47 @@ def test_jsonc_block_comments_never_reach_across_each_other() -> None:
         "v": "a, */ }",
         "w": [1, 2],
     }
+
+
+def test_revert_follows_the_recorded_file_not_the_one_resolved_now() -> None:
+    home = Path.home()
+    base = home / ".config" / "opencode"
+    base.mkdir(parents=True, exist_ok=True)
+    plain, jsonc = base / "opencode.json", base / "opencode.jsonc"
+    plain.write_text('{"theme": "dark"}\n', encoding="utf-8")
+    apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    jsonc.write_text("{}\n", encoding="utf-8")  # e.g. codegraph's own registration file
+
+    reverted = revert_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert reverted.refused is None
+    assert reverted.path == plain
+    assert [key.kind for key in reverted.keys] == ["removed"]
+    assert plain.read_text(encoding="utf-8") == '{"theme": "dark"}\n'
+    assert jsonc.read_text(encoding="utf-8") == "{}\n"
+    assert read_ledger("opencode") is None
+
+
+def test_a_recorded_file_that_is_gone_is_reported_and_no_other_file_is_touched() -> None:
+    home = Path.home()
+    base = home / ".config" / "opencode"
+    base.mkdir(parents=True, exist_ok=True)
+    plain, jsonc = base / "opencode.json", base / "opencode.jsonc"
+    plain.write_text('{"theme": "dark"}\n', encoding="utf-8")
+    apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    plain.rename(jsonc)  # the usual step to add comments
+    renamed = jsonc.read_bytes()
+    ledger_before = read_ledger("opencode")
+
+    assert setting_state("opencode", "auto-approve", home=home, platform_os="linux") != "yours"
+    reverted = revert_agent("opencode", home=home, platform_os="linux")
+
+    assert [(result.path, result.refused) for result in reverted] == [
+        (plain, agent_settings.RECORDED_FILE_GONE)
+    ]
+    assert jsonc.read_bytes() == renamed
+    assert read_ledger("opencode") == ledger_before
+    assert ledger_summary("opencode", home=home, platform_os="linux") == ((plain, ("permission",)),)
+    assert settings_change_lines(("opencode",), platform_os="linux") == (
+        "opencode: cannot remove permission: ~/.config/opencode/opencode.json is missing",
+    )

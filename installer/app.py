@@ -648,9 +648,12 @@ HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
 
 
 def settings_change_lines(agent_ids: Iterable[str], *, platform_os: str) -> tuple[str, ...]:
-    """The settings keys the ledgers record, one line per ledgered file (UI-SPEC section 6)."""
+    """The settings keys the ledgers record, one line per ledgered file (UI-SPEC section 6). A
+    recorded file that is gone is named as such: the revert reports it and touches nothing."""
     return tuple(
         f"{agent}: removes {', '.join(keys)} from {display_path(path)}"
+        if os.path.lexists(path)
+        else f"{agent}: cannot remove {', '.join(keys)}: {display_path(path)} is missing"
         for agent in agent_ids
         for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
     )

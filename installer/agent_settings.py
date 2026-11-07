@@ -730,6 +730,15 @@ def _revert_pass(
     return text, tuple(results)
 
 
+RECORDED_FILE_GONE: Final = "missing (moved or deleted); its keys stay recorded"
+NOT_A_SETTINGS_FILE: Final = "not a settings file of this agent; nothing is reverted there"
+
+
+def _recorded_files(ledger: ConfigLedger, setting: str) -> tuple[str, ...]:
+    """The files the ledger records this setting in, in ledger order."""
+    return tuple(dict.fromkeys(e.file for e in ledger.entries if e.setting == setting))
+
+
 def _revert_once(
     agent: str,
     setting: str,
@@ -753,6 +762,9 @@ def _revert_once(
     deleted = False
     try:
         snap = read_settings(path)
+        if snap is None and file not in ledger.created_files:
+            # Its keys may live on under another name: never look for them in another file.
+            return FileResult(agent, setting, path, fmt, refused=RECORDED_FILE_GONE)
         original = _text_of(snap, fmt)
         text, results = _revert_pass(original, fmt, mine, table)
         if text != original:
@@ -775,20 +787,52 @@ def _revert_once(
     return FileResult(agent, setting, path, fmt, keys=results)
 
 
-def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
-    """Undo the ledger's keys for this setting that still hold our value; anything else is left."""
+def _agent_files(agent: str, *, home: Path, platform_os: str) -> tuple[str, ...]:
+    """Every file this agent's settings may live in; a ledger naming another is not followed."""
+    path = adapters(home, platform_os=platform_os)[agent].config_path
+    if agent == "opencode":
+        return (str(path), str(path.with_name("opencode.jsonc")))
+    return (str(path),)
+
+
+def _revert_file(
+    agent: str, setting: str, file: str, *, home: Path, platform_os: str
+) -> FileResult:
     fmt = _format(agent)
+    if file not in _agent_files(agent, home=home, platform_os=platform_os):
+        return FileResult(agent, setting, Path(file), fmt, refused=NOT_A_SETTINGS_FILE)
     table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
-    path = settings_file(agent, home=home, platform_os=platform_os)
-    conflict = _conflict(agent, home=home, platform_os=platform_os)
-    if conflict is not None:
-        return FileResult(agent, setting, path, fmt, refused=conflict)
     for _attempt in range(2):
         try:
-            return _revert_once(agent, setting, path, fmt, table)
+            return _revert_once(agent, setting, Path(file), fmt, table)
         except SettingsChanged:
             continue
-    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
+    return FileResult(agent, setting, Path(file), fmt, refused=CHANGED_WHILE_WRITING)
+
+
+def _revert_results(
+    agent: str, setting: str, *, home: Path, platform_os: str
+) -> tuple[FileResult, ...]:
+    """One result per file the ledger recorded this setting in; each is reverted at the path
+    that was written, never at the file the agent's settings resolve to now (CR-02)."""
+    files = _recorded_files(read_ledger(agent) or ConfigLedger(agent), setting)
+    if not files:
+        path = settings_file(agent, home=home, platform_os=platform_os)
+        return (FileResult(agent, setting, path, _format(agent)),)
+    return tuple(
+        _revert_file(agent, setting, file, home=home, platform_os=platform_os) for file in files
+    )
+
+
+def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+    """Undo the ledger's keys for this setting that still hold our value; anything else is left.
+    Over several recorded files, the first refusal is reported, else every file's keys."""
+    results = _revert_results(agent, setting, home=home, platform_os=platform_os)
+    refused = next((result for result in results if result.refused is not None), None)
+    if refused is not None:
+        return refused
+    keys = tuple(key for result in results for key in result.keys)
+    return FileResult(agent, setting, results[0].path, results[0].fmt, keys=keys)
 
 
 SettingState = Literal["on", "yours", "off", "drift"]
@@ -833,8 +877,14 @@ class SettingFacts:
 
 def setting_facts(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingFacts:
     """The one classification of a setting's keys; the only place SettingsUnreadable is raised."""
-    path = settings_file(agent, home=home, platform_os=platform_os)
     ledger = read_ledger(agent) or ConfigLedger(agent)
+    recorded_files = _recorded_files(ledger, setting)
+    # The recorded file, so a written key never reads as yours after a rename (CR-02).
+    path = (
+        Path(recorded_files[0])
+        if recorded_files
+        else settings_file(agent, home=home, platform_os=platform_os)
+    )
     in_file = tuple(
         entry for entry in ledger.entries if entry.file == str(path) and entry.setting == setting
     )
@@ -887,7 +937,9 @@ def revert_agent(agent: str, *, home: Path, platform_os: str) -> tuple[FileResul
     ledger = read_ledger(agent) or ConfigLedger(agent)
     settings = tuple(dict.fromkeys(entry.setting for entry in ledger.entries))
     return tuple(
-        revert_setting(agent, setting, home=home, platform_os=platform_os) for setting in settings
+        result
+        for setting in settings
+        for result in _revert_results(agent, setting, home=home, platform_os=platform_os)
     )
 
 

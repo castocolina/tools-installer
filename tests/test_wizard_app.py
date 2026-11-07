@@ -9004,7 +9004,9 @@ async def test_uninstall_values_render_literally(monkeypatch: pytest.MonkeyPatch
         await pilot.press("enter")
         await pilot.pause()
         review = _confirm(app).review
-        assert f"claude: removes {odd} from /cfg/{odd}.json" in [line.plain for line in review]
+        # /cfg does not exist, so the line is the missing-file form (CR-02).
+        expected = f"claude: cannot remove {odd}: /cfg/{odd}.json"
+        assert any(line.plain.startswith(expected) for line in review)
         assert all(not line.spans for line in review if odd in line.plain)
 
 
