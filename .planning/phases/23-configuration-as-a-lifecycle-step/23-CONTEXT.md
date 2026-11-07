@@ -39,7 +39,7 @@ None of these has landed as of 2026-10-14.
 
 ### Hooks, hosts and re-sync (R1, R2, R3)
 - **D-01 (best, not easy):** Delete `_AGENT_HOST_IDS`/`present_agent_hosts` (`postinstall.py:26-46`).
-  - `skill_lifecycle.present_harnesses(home, which)` (`:234-242`) is computed **once per run** by the caller (`engine.install_tool`, `execute_plan`) and passed as a `frozenset[str]` into every hook.
+  - `skill_lifecycle.present_harnesses(home, which)` (`:234-242`) is computed **once per run** by the caller (`engine.install_tool`, `execute_plan`) and passed as a `frozenset[str]` into every hook. *(amended 2026-11-07, 23.1 D-01: `skill_lifecycle.py` is deleted with the skill packs; `present_harnesses` and its full host table move into `postinstall.py`, same signature)*
   - `PostinstallHook` becomes `(register, unregister)` with the signature `(method, runner, hosts)`. The `tools` map parameter goes away.
   - Hosts = the passed set ∩ the hook's own id map (`_CODEGRAPH_TARGETS` :67, `_RTK_HOST_ARGS` :149, `_GRAPHIFY_HOST_SUBCOMMANDS` :250, plus herdr's).
   - jev: Laya hook_calls_itself 0.71, own confidence 0.13, so I pivoted; TypeSafe inject_hosts 0.96.
