@@ -835,3 +835,12 @@ def test_real_pnpm_behind_the_redirect_shim_is_presence(
     assert is_installed(tool, default_bin_dir=shims, darwin=False) is True
     (brew / "pnpm").unlink()
     assert is_installed(tool, default_bin_dir=shims, darwin=False) is False
+
+
+def test_the_default_stub_probe_never_runs_a_host_program() -> None:
+    """23.1 (CI macOS): with no probe passed, macos_stub_reason must not launch the
+    host's xcode-select or java_home. The suite's autouse fake answers that the real
+    tool exists, so a git or java that resolves to the macOS shim reads as present on
+    every host and no launch reaches the allowlist guard."""
+    for cmd, shim in (("git", "/usr/bin/git"), ("java", "/usr/bin/java")):
+        assert macos_stub_reason(_tool(cmd), darwin=True, which=lambda _cmd, s=shim: s) is None

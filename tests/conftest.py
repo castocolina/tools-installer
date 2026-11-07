@@ -25,7 +25,7 @@ from typing import Any, cast
 
 import pytest
 
-from installer import app, executors, locations, post_install, postinstall, receipts
+from installer import app, executors, locations, post_install, postinstall, receipts, status
 from tests.home_fingerprint import fingerprint, fingerprint_diff
 from tests.sandbox import (
     GUARDED_OS_FUNCTIONS,
@@ -404,6 +404,18 @@ def no_manager_listing(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(app, "manager_listing", unknown)
+
+
+@pytest.fixture(autouse=True)
+def no_macos_stub_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The macOS shim check never runs the host's xcode-select or java_home: the default
+    probe answers that the real tool exists. A test that exercises the check passes its own
+    probe to `macos_stub_reason`."""
+
+    def real_tool_exists(_argv: Sequence[str]) -> bool:
+        return True
+
+    monkeypatch.setattr(status, "_default_stub_probe", real_tool_exists)
 
 
 @pytest.fixture
