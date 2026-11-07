@@ -1722,7 +1722,7 @@ desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its ow
 # UserPromptSubmit hook and ~/.claude/CLAUDE.md are still written (see above), and
 # the run report discloses them (postinstall.CLAUDE_EXTRAS).
 # Verified 2026-11-07 (Phase 23, CONF-02/CONF-03): hosts come from
-# skill_lifecycle.present_harnesses; receipt.hooks records the registered hosts. The
+# postinstall.present_harnesses (moved there in 23.1-02); receipt.hooks records the registered hosts. The
 # new-host sweep (CONF-02) lands in plan 23-07.
 postinstall = "codegraph-mcp-register"
 [[tool.method]]
