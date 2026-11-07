@@ -776,6 +776,108 @@ hook_probe_after() {
   printf 'TRACER_HOOKS_UNREGISTERED_OK count=%s\n' "$count"
 }
 
+# Before --uninstall --yes: snapshot each auto-approve key's current value (null when absent) for
+# claude and codex into the workspace, then write the keys through the installer's apply_setting.
+# Prints TRACER_SETTINGS_WRITE_OK wrote=N, or TRACER_SETTINGS_WRITE_FAILED per refusal.
+settings_probe_write() {
+  local out line wrote=0 failed=0 agent detail workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+import json
+from pathlib import Path
+from installer import agent_settings as s
+home = Path.home()
+def now(doc, key):
+    value = s.lookup(doc, key.path)
+    return None if value is s.ABSENT else value
+snap = {}
+for agent in (\"claude\", \"codex\"):
+    path = s.settings_file(agent, home=home, platform_os=\"linux\")
+    text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
+    doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
+    snap[agent] = {\".\".join(k.path): now(doc, k) for k in s.setting_keys(agent, \"auto-approve\", \"linux\")}
+Path(\".e2e-settings-before.json\").write_text(json.dumps(snap), encoding=\"utf-8\")
+for agent in (\"claude\", \"codex\"):
+    result = s.apply_setting(agent, \"auto-approve\", home=home, platform_os=\"linux\")
+    if result.refused:
+        print(\"E\", agent, result.refused)
+    for key in result.keys:
+        if key.kind in (\"wrote\", \"replaced_default\"):
+            print(\"W\", agent, key.key)
+'
+")" || { printf 'TRACER_SETTINGS_WRITE_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "W "*) wrote=$((wrote + 1)) ;;
+      "E "*)
+        agent="${line#E }"
+        detail="${agent#* }"
+        agent="${agent%% *}"
+        printf 'TRACER_SETTINGS_WRITE_FAILED agent=%s detail=%s\n' "$agent" "$detail"
+        failed=1
+        ;;
+    esac
+  done <<<"$out"
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_SETTINGS_WRITE_OK wrote=%s\n' "$wrote"
+}
+
+# After --uninstall --yes: every key settings_probe_write snapshotted must hold its pre-write
+# value again, and no config ledger may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N, or the
+# per-key TRACER_SETTINGS_REVERT_DIFF and per-agent TRACER_SETTINGS_LEDGER_LEFT lines.
+settings_probe_revert() {
+  local out line failed=0 keys="" workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c '
+import json
+from pathlib import Path
+from installer import agent_settings as s
+from installer import receipts
+home = Path.home()
+snap = json.loads(Path(\".e2e-settings-before.json\").read_text(encoding=\"utf-8\"))
+problems = []
+count = 0
+for agent in (\"claude\", \"codex\"):
+    path = s.settings_file(agent, home=home, platform_os=\"linux\")
+    text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
+    doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
+    for key in s.setting_keys(agent, \"auto-approve\", \"linux\"):
+        name = \".\".join(key.path)
+        value = s.lookup(doc, key.path)
+        value = None if value is s.ABSENT else value
+        count += 1
+        if not s.same_value(value, snap[agent][name]):
+            problems.append(\"D \" + agent + \" \" + name)
+    if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
+        problems.append(\"L \" + agent)
+for problem in problems:
+    print(problem)
+if not problems:
+    print(\"K\", count)
+'
+")" || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "D "*)
+        agent="${line#D }"
+        printf 'TRACER_SETTINGS_REVERT_DIFF agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
+        failed=1
+        ;;
+      "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
+      "K "*) keys="${line#K }" ;;
+    esac
+  done <<<"$out"
+  [[ "$failed" -eq 0 ]] || return 1
+  [[ -n "$keys" ]] || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
+  printf 'TRACER_SETTINGS_REVERT_OK keys=%s\n' "$keys"
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -832,6 +934,9 @@ cmd_pass2() {
   if ! hook_probe_before >> "$log"; then
     return 1
   fi
+  if ! settings_probe_write >> "$log"; then
+    return 1
+  fi
 
   # Step 2: the full uninstall sweep. --uninstall prints no Summary — line,
   # so only the exit code (and the transcript itself) is evidence here.
@@ -851,6 +956,9 @@ cmd_pass2() {
     return 1
   fi
   if ! hook_probe_after >> "$log"; then
+    return 1
+  fi
+  if ! settings_probe_revert >> "$log"; then
     return 1
   fi
 
