@@ -22,10 +22,15 @@ from typing import Any, cast
 import pytest
 
 from installer import app, executors, locations, post_install, postinstall, receipts, version_status
+from tests.home_fingerprint import fingerprint, fingerprint_diff
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
 _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a patched Path.home()
+# Toolchain overrides, captured at import for the same reason (the fingerprint watches them).
+_HOME_OVERRIDES: dict[str, str | None] = {
+    name: os.environ.get(name) for name in ("UV_TOOL_DIR", "PNPM_HOME", "VOLTA_HOME")
+}
 
 # Same trick for the puppeteer launch probe: captured before the autouse stub
 # below replaces it, so the tests that ARE the probe can put it back through
@@ -33,7 +38,6 @@ _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a 
 _REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
 # The same trick for the host reader, restored by `real_present_hosts`.
 _REAL_PRESENT_HOSTS: Callable[[], frozenset[str]] = postinstall.present_hosts
-_GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".zshenv", ".profile")
 # The node-family names answered by Volta, fnm, pnpm and bun, plus brew.
 # Tests that need one plant a fake under tmp_path.
 HOST_TOOLCHAIN: frozenset[str] = frozenset(
@@ -122,36 +126,6 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
     return max(1, round(usable * 0.4))
 
 
-def _real_home_fingerprint() -> dict[str, tuple[int, float] | None]:
-    """(size, mtime) for each guarded file in the real home, None when absent.
-
-    Also covers `*.tools-installer.old`, the backup sibling consolidation writes:
-    its mere APPEARANCE is a violation even though no guarded file changed.
-    """
-    fingerprint: dict[str, tuple[int, float] | None] = {}
-    for name in _GUARDED_DOTFILES:
-        path = _REAL_HOME / name
-        try:
-            stat = path.stat()
-        except OSError:
-            fingerprint[name] = None
-        else:
-            fingerprint[name] = (stat.st_size, stat.st_mtime)
-    fingerprint["<backups>"] = (len(list(_REAL_HOME.glob("*.tools-installer.old"))), 0.0)
-    # Listings only: live agent CLI files (settings.json, cli-config.json) are never fingerprinted.
-    listed = {
-        "<receipts>": _REAL_HOME / ".local" / "state" / "tools-installer" / "receipts",
-        "<environment.d>": _REAL_HOME / ".config" / "environment.d",
-        "<config-ledger>": _REAL_HOME / ".local" / "state" / "tools-installer" / "config",
-    }
-    for label, directory in listed.items():
-        if directory.is_dir():
-            fingerprint[label] = (len(list(directory.iterdir())), directory.stat().st_mtime)
-        else:
-            fingerprint[label] = None
-    return fingerprint
-
-
 @pytest.fixture(scope="session", autouse=True)
 def real_home_untouched() -> "object":
     """Fail the run if any test wrote to the developer's real shell files.
@@ -164,16 +138,20 @@ def real_home_untouched() -> "object":
     the developer's own ~/.shellrc and leave a backup behind.
 
     This is the net under that. It catches the whole class at session scope
-    rather than trusting every present and future test to remember.
+    rather than trusting every present and future test to remember. The
+    fingerprint is metadata only (tests/home_fingerprint.py) and names each
+    changed path and entry (SPEC R9, D-24, D-25).
     """
-    before = _real_home_fingerprint()
+    before = fingerprint(_REAL_HOME, _HOME_OVERRIDES)
     yield
-    after = _real_home_fingerprint()
-    changed = sorted(name for name in before if before[name] != after[name])
+    changed = fingerprint_diff(before, fingerprint(_REAL_HOME, _HOME_OVERRIDES))
     assert not changed, (
-        f"the test suite modified real files under {_REAL_HOME}: {changed}. "
-        f"A test reached a home-derived constant without redirecting it; patch it "
-        f"the way tests/test_setup.py::_sandbox does."
+        f"the test suite modified real files under {_REAL_HOME}:\n  "
+        + "\n  ".join(changed)
+        + "\nA test reached a home-derived constant without redirecting it; patch it "
+        "the way tests/test_setup.py::_sandbox does. If an entry was written by another "
+        "program running at the same time (an agent session timer, an editor), re-run; "
+        "this guard fails on any change (23.1 D-25)."
     )
 
 
