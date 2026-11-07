@@ -22,10 +22,14 @@ from installer.atomic import atomic_write_bytes
 from installer.locations import xdg_config_base
 from installer.shellrc import apply_block, strip_block
 
-# Carried by every file and block this module writes. linux_applied and
-# remove_linux_redirect share one ownership check against it, so a policy can
+# Carried by every cache-redirect file and block this module writes. linux_applied
+# and remove_linux_redirect share one ownership check (_owned), so a policy can
 # never read active for an artifact its own remover would refuse to delete.
 OWNERSHIP_SENTINEL = "# tools-installer: cache-redirect"
+# The desktop SHELL conf's own header. Its files written before it existed carry
+# OWNERSHIP_SENTINEL, so both read as owned (UAT F-4).
+DESKTOP_SHELL_SENTINEL = "# tools-installer: desktop-shell"
+_OWNED_HEADERS = (OWNERSHIP_SENTINEL, DESKTOP_SHELL_SENTINEL)
 
 # Distinct from every marker pair in installer/shellrc.py.
 RC_BEGIN = "# >>> tools-installer cache-redirect >>>"
@@ -47,6 +51,7 @@ class CacheRedirect:
     coverage_caveat: str
     conf_basename: str
     absolute: str | None = None
+    header: str = OWNERSHIP_SENTINEL
 
 
 # Path recorded by the source todo
@@ -93,6 +98,7 @@ def shell_redirect(zsh_path: str) -> CacheRedirect:
         ),
         conf_basename=DESKTOP_SHELL_CONF,
         absolute=zsh_path,
+        header=DESKTOP_SHELL_SENTINEL,
     )
 
 
@@ -132,7 +138,7 @@ def target_path(redirect: CacheRedirect, home: Path) -> Path:
 
 
 def _owned(text: str) -> bool:
-    return OWNERSHIP_SENTINEL in text
+    return any(header in text for header in _OWNED_HEADERS)
 
 
 def _assigns(text: str, redirect: CacheRedirect, target: Path) -> bool:
@@ -155,7 +161,7 @@ def render_conf(redirect: CacheRedirect, home: Path) -> str:
     """
     target = target_path(redirect, home)
     return (
-        f"{OWNERSHIP_SENTINEL}\n"
+        f"{redirect.header}\n"
         f"# {redirect.reason}\n"
         "# Takes effect at the next login, when the systemd user manager reads environment.d.\n"
         f"{redirect.variable}={target}\n"

@@ -434,3 +434,21 @@ def test_the_desktop_conf_is_owned_by_its_sentinel_alone(tmp_path: Path) -> None
     assert not env_redirect.conf_owned(conf_dir, basename)
     assert not env_redirect.remove_owned_conf(conf_dir, basename)
     assert plain.exists()
+
+
+def test_the_desktop_conf_names_itself_and_an_old_header_stays_owned(tmp_path: Path) -> None:
+    """F-4: the desktop SHELL conf carries its own header; one written with the shared
+    cache-redirect header before the fix still reads as ours."""
+    conf_dir = tmp_path / "environment.d"
+    redirect = env_redirect.shell_redirect(str(tmp_path / "bin" / "zsh"))
+    conf = env_redirect.write_linux_redirect(redirect, tmp_path, conf_dir)
+    assert conf.read_text().splitlines()[0] == "# tools-installer: desktop-shell"
+    assert "cache-redirect" not in conf.read_text()
+    assert env_redirect.linux_applied(redirect, tmp_path, conf_dir)
+
+    conf.write_text(f"# tools-installer: cache-redirect\nSHELL={tmp_path / 'bin' / 'zsh'}\n")
+    assert env_redirect.conf_owned(conf_dir, env_redirect.DESKTOP_SHELL_CONF)
+    assert env_redirect.linux_applied(redirect, tmp_path, conf_dir)
+    env_redirect.write_linux_redirect(redirect, tmp_path, conf_dir)
+    assert conf.read_text().startswith("# tools-installer: desktop-shell\n")
+    assert env_redirect.remove_linux_redirect(redirect, conf_dir)
