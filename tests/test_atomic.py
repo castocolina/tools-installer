@@ -12,9 +12,31 @@ from installer.atomic import (
     atomic_write_bytes,
     atomic_write_text,
     read_capped,
+    read_snapshot,
     recover_update_remnants,
+    snapshot_matches,
     staged_sibling,
 )
+
+
+def test_snapshot_matches_refuses_a_swapped_file(tmp_path: Path) -> None:
+    target = tmp_path / "settings.json"
+    target.write_bytes(b"{}")
+    snapshot = read_snapshot(target)
+    assert snapshot_matches(target, snapshot)
+
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(b"{}")
+    os.replace(replacement, target)
+    assert not snapshot_matches(target, snapshot)
+
+    snapshot = read_snapshot(target)
+    target.write_bytes(b'{"a": 1}')
+    assert not snapshot_matches(target, snapshot)
+
+    snapshot = read_snapshot(target)
+    target.unlink()
+    assert not snapshot_matches(target, snapshot)
 
 
 def test_atomic_write_bytes_replaces_an_existing_file(tmp_path: Path) -> None:

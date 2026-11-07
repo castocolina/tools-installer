@@ -25,6 +25,7 @@ import os
 import shutil
 import stat as stat_module
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -57,6 +58,48 @@ def atomic_write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> N
 def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None:
     """UTF-8 text entry point over atomic_write_bytes."""
     atomic_write_bytes(path, text.encode("utf-8"), mode=mode)
+
+
+@dataclass(frozen=True)
+class FileSnapshot:
+    """One identity-bound read: the bytes, and the device, inode and mode they were read under."""
+
+    data: bytes
+    device: int
+    inode: int
+    mode: int
+
+
+def read_snapshot(path: Path) -> FileSnapshot:
+    """Read path through one `O_RDONLY|O_NOFOLLOW` descriptor, binding bytes to identity."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        data = b""
+        while chunk := os.read(fd, 65536):
+            data += chunk
+    finally:
+        os.close(fd)
+    return FileSnapshot(
+        data=data, device=st.st_dev, inode=st.st_ino, mode=stat_module.S_IMODE(st.st_mode)
+    )
+
+
+def snapshot_matches(path: Path, snapshot: FileSnapshot) -> bool:
+    """Whether path still has the snapshot's identity AND bytes.
+
+    Any `OSError` from the re-open (removed, or became a symlink) returns False:
+    an unanswerable comparison is a refusal, never permission.
+    """
+    try:
+        current = read_snapshot(path)
+    except OSError:
+        return False
+    return (
+        current.device == snapshot.device
+        and current.inode == snapshot.inode
+        and current.data == snapshot.data
+    )
 
 
 NEW_SUFFIX = ".tools-installer.new"

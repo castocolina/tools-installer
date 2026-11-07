@@ -2223,7 +2223,7 @@ def test_refuses_when_the_snapshot_cannot_be_read(
     def raise_oserror(_path: Path) -> object:
         raise OSError("vanished")
 
-    monkeypatch.setattr("installer.shellrc._snapshot", raise_oserror)
+    monkeypatch.setattr("installer.shellrc.read_snapshot", raise_oserror)
 
     result = consolidate_shellrc(shellrc, myshellrc)
 
@@ -2955,7 +2955,7 @@ def test_guard_refuses_when_the_file_changes_while_it_is_being_guarded(
     def _changed(_path: Path, _snapshot: object) -> bool:
         return False
 
-    monkeypatch.setattr("installer.shellrc._snapshot_matches", _changed)
+    monkeypatch.setattr("installer.shellrc.snapshot_matches", _changed)
 
     outcome = guard_path_writers(rc, records)
 
