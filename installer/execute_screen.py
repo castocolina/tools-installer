@@ -34,7 +34,9 @@ from installer.engine import install_tool
 from installer.enums import Severity
 from installer.model import Tool
 from installer.platform import Platform
+from installer.post_install import sensitive_prompt
 from installer.render import (
+    RUN_OPTIONS_LEFT_OFF,
     display_order,
     fold_reason,
     id_width,
@@ -44,6 +46,7 @@ from installer.render import (
     render_run_report,
     run_option_lines,
     running_row_text,
+    shell_init_left_off_line,
     summary_head,
 )
 from installer.run import StreamingRunner
@@ -64,6 +67,7 @@ from installer.session import (
     review_problems,
     run_options,
 )
+from installer.tweaks import SHELL_INIT_TOOLS
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.update import UpdateService
 from installer.version_status import VersionRefreshService
@@ -148,10 +152,11 @@ class ChecksumMismatchScreen(ModalScreen[str | None]):
 
 
 class SensitiveActionScreen(ModalScreen[str | None]):
-    """Yes/no prompt for a sensitive post-install action.
+    """Yes/no prompt for a sensitive post-install action, keyed by the action (D-11).
 
-    Letter-prefixed ListItem ids (`opt-yes`) because a raw value can be an
-    invalid Textual identifier — the same convention ChecksumMismatchScreen
+    The prompt and choices come from `sensitive_prompt`, so each action asks its
+    own question. Letter-prefixed ListItem ids (`opt-yes`) because a raw value
+    can be an invalid Textual identifier — the same convention ChecksumMismatchScreen
     uses. Dismisses with the string values the shared worker-to-modal helper
     is typed for; the screen's ask method converts them to bool.
     """
@@ -165,18 +170,18 @@ class SensitiveActionScreen(ModalScreen[str | None]):
     SensitiveActionScreen > ListView { width: 72; height: 6; border: round $accent; }
     """
 
-    def __init__(self, tool_id: str) -> None:
+    def __init__(self, tool_id: str, action: str = "set_login_shell") -> None:
         super().__init__()
         self.tool_id = tool_id
+        self.action = action
 
     def compose(self) -> ComposeResult:
-        yield Label(
-            f"Show a reviewed command to change the login shell to zsh for {self.tool_id}, "
-            "which you run in your own terminal after the installer exits?"
-        )
+        prompt = sensitive_prompt(self.tool_id, self.action)
+        # Tool ids and effects are data: markup=False keeps a `[red]` in them literal (A32).
+        yield Label(prompt.prompt, markup=False)
         yield ListView(
-            ListItem(Label("Yes, show the reviewed command"), id="opt-yes"),
-            ListItem(Label("No, skip this"), id="opt-no"),
+            ListItem(Label(prompt.yes), id="opt-yes"),
+            ListItem(Label(prompt.no), id="opt-no"),
         )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -647,6 +652,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.started = True
         # Frozen here, at enter: a later space is refused, so the run gets exactly these answers.
         self._run_options = frozenset(self._options & set(self._shown_options()))
+        if self._inputs.unattended and self._shown_options():
+            self.query_one("#execute-log", RichLog).write(RUN_OPTIONS_LEFT_OFF)
         self.add_class("-running")
         self.post_message(InstallRunStarted())
         self.query_one("#plan-rows", OptionList).can_focus = False
@@ -853,10 +860,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.post_message(InstallLogLine(tool_id, sentence))
         return "skip"
 
-    def _ask_sensitive_action(self, tool_id: str, _action: str) -> bool:
+    def _ask_sensitive_action(self, tool_id: str, action: str) -> bool:
         self.post_message(PromptOpen(tool_id, True))
         try:
-            answer = ask_from_worker(self.app, SensitiveActionScreen(tool_id))
+            answer = ask_from_worker(self.app, SensitiveActionScreen(tool_id, action))
         finally:
             self.post_message(PromptOpen(tool_id, False))
         if answer == "yes":
@@ -954,6 +961,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                 )
             )
         )
+        if self._inputs.unattended:
+            left_off = shell_init_left_off_line(message.outcomes, SHELL_INIT_TOOLS)
+            if left_off is not None:
+                log.write(left_off)
         if message.path_text:
             log.write("PATH wiring")
             log.write(message.path_text)
