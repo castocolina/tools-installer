@@ -29,6 +29,19 @@ class MethodAwareRunner(Protocol):
     def method_started(self, method: str) -> None: ...
 
 
+@runtime_checkable
+class NotingRunner(Protocol):
+    """Optional runner capability: a hook writes an attributed note into the log.
+
+    A separate protocol, not a MethodAwareRunner widening, so a fake that lacks `note`
+    still satisfies Runner.
+    """
+
+    def __call__(self, cmd: list[str]) -> None: ...
+
+    def note(self, text: str) -> None: ...
+
+
 # What every child inherits (reviews C-10, C-18; Homebrew 7.0.12 source): brew's own sudo
 # calls fail under HOMEBREW_NO_SUDO, and `brew uninstall`/`cleanup` keep dependency formulae
 # no receipt proves under HOMEBREW_NO_AUTOREMOVE. SUDO_ASKPASS is dropped so no child gets
@@ -263,6 +276,9 @@ class StreamingRunner:
 
     def method_started(self, method: str) -> None:
         self._emit(self._current(), f"-- trying {method} --")
+
+    def note(self, text: str) -> None:
+        self._emit(self._current(), text)
 
     def __call__(self, cmd: list[str]) -> None:
         """Run argv, emit each line as it arrives, raise CommandError on failure.

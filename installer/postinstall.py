@@ -20,7 +20,7 @@ from pathlib import Path
 from installer import receipts
 from installer.locations import bin_dir
 from installer.model import Method, Tool
-from installer.run import CommandError, Runner
+from installer.run import CommandError, NotingRunner, Runner
 from installer.skill_lifecycle import present_harnesses
 
 # (harness ids registered, warning). A warning never fails the install.
@@ -119,6 +119,51 @@ def _codegraph_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tupl
     return ((binary, "uninstall", "--target", csv, "--location", "global", "--yes", "--keep-cli"),)
 
 
+def _failure_line(exc: CommandError) -> str:
+    """The first non-empty line the command printed, else of its message (app.py's rule)."""
+    return next((ln for ln in exc.detail.splitlines() if ln.strip()), str(exc).splitlines()[0])
+
+
+# herdr's own target ids (herdr 0.9.3: `herdr integration install <TARGET>`).
+_HERDR_TARGETS: Mapping[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "opencode": "opencode",
+    "cursor": "cursor",
+}
+
+
+def _herdr_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) -> HookOutcome:
+    """Register herdr's integration per host; one host's failure does not stop the others."""
+    binary = _resolve_binary(method, "herdr")
+    done: list[str] = []
+    failures: list[str] = []
+    for harness in harnesses:
+        try:
+            runner([binary, "integration", "install", _HERDR_TARGETS[harness]])
+        except CommandError as exc:
+            failures.append(f"{harness}: {_failure_line(exc)}")
+        else:
+            done.append(harness)
+    return tuple(done), "; ".join(failures) or None
+
+
+def _herdr_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    return tuple((binary, "integration", "uninstall", _HERDR_TARGETS[h]) for h in harnesses)
+
+
+def _tealdeer_cache(method: Method, runner: Runner, _harnesses: tuple[str, ...]) -> HookOutcome:
+    """Fill tldr's page cache after install and after `u`. A failure is a warning, never
+    a row failure: the binary the method installed is usable without the cache."""
+    if isinstance(runner, NotingRunner):
+        runner.note("fetching the tldr page cache — tldr --update")
+    try:
+        runner([_resolve_binary(method, "tldr"), "--update"])
+    except CommandError as exc:
+        return (), f"tldr --update failed: {_failure_line(exc)}; run it yourself later"
+    return (), None
+
+
 @dataclass(frozen=True)
 class HookPair:
     """One hook. `targets` maps a harness id to the vendor's own target id; `None`
@@ -136,6 +181,10 @@ POSTINSTALL_HOOKS: dict[str, HookPair] = {
         register=_codegraph_register,
         unregister=_codegraph_unregister,
     ),
+    "herdr-integration": HookPair(
+        targets=_HERDR_TARGETS, register=_herdr_register, unregister=_herdr_unregister
+    ),
+    "tealdeer-cache": HookPair(targets=None, register=_tealdeer_cache),
 }
 
 

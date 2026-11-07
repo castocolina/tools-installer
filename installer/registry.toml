@@ -1314,6 +1314,10 @@ audience = "both"
 tier = "user"
 verified = 2026-11-03
 desc = "A fast tldr client — simplified, community-driven man pages"
+# docs.tealdeer.org (fetched 2026-11-07): `tldr --update` fills the page cache under
+# ~/.cache/tealdeer on Linux. The macOS cache path is assumed (research A6); harmless when absent.
+postinstall = "tealdeer-cache"
+config_paths = ["~/.cache/tealdeer", "~/Library/Caches/tealdeer"]
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]

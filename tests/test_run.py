@@ -14,6 +14,7 @@ from installer.run import (
     TIMEOUT_CODE,
     CommandError,
     MethodAwareRunner,
+    NotingRunner,
     StreamingRunner,
     run_captured,
     run_command,
@@ -252,6 +253,15 @@ def test_run_query_missing_binary_is_127() -> None:
 
 def test_streaming_runner_is_method_aware() -> None:
     assert isinstance(StreamingRunner(lambda _tool, _line: None), MethodAwareRunner)
+
+
+def test_streaming_runner_note_emits_an_attributed_line() -> None:
+    seen: list[tuple[str, str]] = []
+    runner = StreamingRunner(lambda tool_id, line: seen.append((tool_id, line)))
+    runner.set_tool("tealdeer")
+    runner.note("x")
+    assert seen == [("tealdeer", "x")]
+    assert isinstance(runner, NotingRunner)
 
 
 def test_streaming_runner_emits_attributed_lines_without_newlines() -> None:

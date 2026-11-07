@@ -380,3 +380,66 @@ def test_hook_method_matches_the_receipt_key() -> None:
 def test_host_labels_use_catalog_ids() -> None:
     assert pi.host_labels(("cursor", "claude")) == "claude, cursor-agent"
     assert pi.host_labels(()) == ""
+
+
+_HERDR = "herdr-integration"
+_TEALDEER = "tealdeer-cache"
+_TLDR_NOTE = "fetching the tldr page cache — tldr --update"
+
+
+def test_herdr_registers_and_unregisters_per_host() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+    calls: list[list[str]] = []
+    outcome = pi.run_postinstall(
+        _HERDR, method, lambda cmd: calls.append(cmd), frozenset({"cursor", "claude", "pi"})
+    )
+    assert outcome == (("claude", "cursor"), None)
+    assert calls == [
+        ["/b/herdr", "integration", "install", "claude"],
+        ["/b/herdr", "integration", "install", "cursor"],
+    ]
+    assert pi.unregister_argvs(_HERDR, "/b/herdr", ("cursor", "claude")) == (
+        ("/b/herdr", "integration", "uninstall", "claude"),
+        ("/b/herdr", "integration", "uninstall", "cursor"),
+    )
+
+    def cursor_fails(cmd: list[str]) -> None:
+        if cmd[-1] == "cursor":
+            raise CommandError(cmd, 1, detail="boom")
+
+    failed = pi.run_postinstall(_HERDR, method, cursor_fails, frozenset({"cursor", "claude", "pi"}))
+    assert failed == (("claude",), "cursor: boom")
+
+
+def test_tealdeer_fetches_its_cache_after_install() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+    seen: list[object] = []
+
+    class _NotingRunner:
+        def __call__(self, cmd: list[str]) -> None:
+            seen.append(cmd)
+
+        def note(self, text: str) -> None:
+            seen.append(text)
+
+    assert pi.run_postinstall(_TEALDEER, method, _NotingRunner(), frozenset()) == ((), None)
+    assert seen == [_TLDR_NOTE, ["/b/tldr", "--update"]]
+
+    calls: list[list[str]] = []
+    assert pi.run_postinstall(_TEALDEER, method, lambda cmd: calls.append(cmd), frozenset()) == (
+        (),
+        None,
+    )
+    assert calls == [["/b/tldr", "--update"]]
+
+
+def test_a_failed_tldr_update_is_a_warning() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="boom\nmore")
+
+    assert pi.run_postinstall(_TEALDEER, method, failing, frozenset()) == (
+        (),
+        "tldr --update failed: boom; run it yourself later",
+    )
