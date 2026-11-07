@@ -244,7 +244,8 @@ def test_no_present_supported_host_runs_nothing(hosts: frozenset[str]) -> None:
     assert calls == []
     receipt = receipts.read("codegraph")
     assert receipt is not None
-    assert receipt.hooks == {}
+    # Known, none registered: the new-host sweep picks it up for the next host (CR-06).
+    assert receipt.hooks == {"codegraph-mcp-register": ()}
 
 
 def test_pi_is_in_no_target_map() -> None:

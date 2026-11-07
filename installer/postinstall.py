@@ -294,7 +294,9 @@ def register_hooks(
     present = present_hosts() if hosts is None else hosts
     recorded = frozenset(receipt.hooks.get(name, ()))
     registered, warning = run_postinstall(name, method, runner, present - recorded)
-    if registered:
+    # An empty entry is recorded too: "hooks known, none registered yet" is swept for the
+    # next host, unlike a receipt written before hooks were recorded (CR-06).
+    if registered or name not in receipt.hooks:
         try:
             receipts.record_hooks(tool.id, name, registered)
         except OSError as exc:

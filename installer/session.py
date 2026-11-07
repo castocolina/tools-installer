@@ -542,8 +542,9 @@ _HOST_CATALOG_IDS: frozenset[str] = frozenset(postinstall.HOST_CATALOG_IDS.value
 def _resync_hooks(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcome]:
     """D-03: when a run installed an agent host, register each installed hook tool for it.
 
-    One sweep after every row, reading the present hosts once. Only a receipt that records
-    hooks takes part: a receipt written before hooks were recorded is left to RECONFIGURE,
+    One sweep after every row, reading the present hosts once. Only a receipt with a hooks
+    entry takes part, an empty one included (the tool was installed before any host, CR-06):
+    a receipt written before hooks were recorded is left to RECONFIGURE,
     whose unrecorded hosts already read `≈`. `register_hooks` never re-runs a recorded host.
     shortcut: the sweep's command output is attributed to the last host row in the TUI log,
     upgrade when the log gains a run-level attribution.
@@ -567,7 +568,7 @@ def _resync_hooks(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcom
             continue
         receipt = receipts.read(tool.id)
         method = hook_method(tool, receipt) if receipt is not None else None
-        if receipt is None or method is None or not receipt.hooks.get(name):
+        if receipt is None or method is None or name not in receipt.hooks:
             continue
         try:
             registered, warning = register_hooks(tool, method, ctx.runner, hosts=present)

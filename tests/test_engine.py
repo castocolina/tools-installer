@@ -992,7 +992,7 @@ def test_installing_codex_with_codegraph_registers_codex_once(
     assert written.hooks == {"codegraph-mcp-register": ("codex",)}
 
 
-def test_a_failed_register_is_a_warning_and_records_nothing(
+def test_a_failed_register_is_a_warning_and_records_no_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
@@ -1007,7 +1007,7 @@ def test_a_failed_register_is_a_warning_and_records_nothing(
     assert outcome.hooks == ()
     written = receipts.read("codegraph")
     assert written is not None
-    assert written.hooks == {}
+    assert written.hooks == {"codegraph-mcp-register": ()}
 
 
 def test_no_receipt_means_no_registration(monkeypatch: pytest.MonkeyPatch) -> None:

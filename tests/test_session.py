@@ -1038,6 +1038,17 @@ def test_the_sweep_reads_hosts_after_the_rows(monkeypatch: pytest.MonkeyPatch):
     assert installs_seen == [1]
 
 
+def test_a_hook_tool_that_recorded_no_host_is_registered_for_the_new_host(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
+    _codegraph_receipt({"codegraph-mcp-register": ()})
+    argvs: list[list[str]] = []
+    outcomes = _install_codex_run(RunRecorder(), lambda command: argvs.append(list(command)))
+    assert [argv[argv.index("--target") + 1] for argv in argvs] == ["codex"]
+    assert outcomes[0].resynced == (("codegraph", ("codex",)),)
+
+
 def test_a_receipt_without_recorded_hooks_is_not_swept(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
     _codegraph_receipt({})
