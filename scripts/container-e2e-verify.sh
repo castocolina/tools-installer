@@ -712,7 +712,8 @@ assert_removed_receipts_gone() {
 
 # Before --uninstall --yes: the hosts codegraph's receipt records under its MCP hook (read by the
 # installer's own reader) and the HOME-relative config files that mention codegraph. Writes
-# hook-hosts.txt and hook-files.txt; a recorded host with no config file at all fails.
+# hook-hosts.txt and hook-files.txt; no receipt, no recorded host, or a recorded host with no
+# config file at all fails.
 hook_probe_before() {
   local out line no_receipt=0 hosts files workspace
   printf -v workspace '%q' "$TESTER_WORKSPACE"
@@ -738,14 +739,15 @@ for host in (receipt.hooks.get(\"codegraph-mcp-register\", ()) if receipt else (
       N) no_receipt=1 ;;
     esac
   done <<<"$out"
+  # This pass installs codegraph and agent hosts, so nothing registered is a regression.
   if [[ "$no_receipt" -eq 1 ]]; then
-    printf 'TRACER_HOOKS_SKIPPED reason=no-receipt\n'
-    return 0
+    printf 'TRACER_HOOKS_NOT_RECORDED reason=no-receipt\n'
+    return 1
   fi
   hosts="$(paste -sd, - <"$PHASE_DIR/hook-hosts.txt")"
   if [[ -z "$hosts" ]]; then
-    printf 'TRACER_HOOKS_SKIPPED reason=no-hosts\n'
-    return 0
+    printf 'TRACER_HOOKS_NOT_RECORDED reason=no-hosts\n'
+    return 1
   fi
   files="$(wc -l <"$PHASE_DIR/hook-files.txt" | tr -d ' ')"
   if [[ "$files" -eq 0 ]]; then
@@ -760,8 +762,8 @@ for host in (receipt.hooks.get(\"codegraph-mcp-register\", ()) if receipt else (
 hook_probe_after() {
   local out line left=0 paths count
   if [[ ! -s "$PHASE_DIR/hook-hosts.txt" ]]; then
-    printf 'TRACER_HOOKS_UNREGISTER_SKIPPED\n'
-    return 0
+    printf 'TRACER_HOOKS_NOT_RECORDED\n'
+    return 1
   fi
   paths="$(while IFS= read -r p; do printf '%q ' "$p"; done <"$PHASE_DIR/hook-files.txt")"
   out="$(exec_tester "cd ~ && for p in ${paths}; do if [ -e \"\$p\" ] && grep -q codegraph -- \"\$p\"; then printf 'LEFT %s\\n' \"\$p\"; fi; done")" \

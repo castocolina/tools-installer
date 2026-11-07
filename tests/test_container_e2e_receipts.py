@@ -1048,12 +1048,13 @@ def test_hook_probe_after_reports_a_file_still_naming_codegraph(tmp_path: Path) 
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert clean.stdout.splitlines() == ["TRACER_HOOKS_UNREGISTERED_OK count=3"]
     _write_listing(phase / "hook-hosts.txt", [])
-    skipped = _run(script, scratch)
-    assert skipped.stdout.splitlines() == ["TRACER_HOOKS_UNREGISTER_SKIPPED"]
+    nothing = _run(script, scratch)
+    assert nothing.returncode != 0  # nothing registered is a failure, never a skip (CR-13)
+    assert nothing.stdout.splitlines() == ["TRACER_HOOKS_NOT_RECORDED"]
 
 
 def test_hook_probe_before_requires_config_for_recorded_hosts(tmp_path: Path) -> None:
-    """Recorded hosts need a config file on disk; no receipt or no host skips the probe."""
+    """Recorded hosts need a config file on disk; no receipt or no host fails the probe."""
     scratch = tmp_path / "home"
     phase = scratch / "phase"
     phase.mkdir(parents=True)
@@ -1067,8 +1068,8 @@ def test_hook_probe_before_requires_config_for_recorded_hosts(tmp_path: Path) ->
         )
 
     none = probe("N")
-    assert none.returncode == 0, none.stderr
-    assert none.stdout.splitlines() == ["TRACER_HOOKS_SKIPPED reason=no-receipt"]
+    assert none.returncode != 0
+    assert none.stdout.splitlines() == ["TRACER_HOOKS_NOT_RECORDED reason=no-receipt"]
     orphan = probe("H claude")
     assert orphan.returncode != 0
     assert orphan.stdout.splitlines() == ["TRACER_HOOK_FILES_MISSING hosts=claude"]
@@ -1078,8 +1079,8 @@ def test_hook_probe_before_requires_config_for_recorded_hosts(tmp_path: Path) ->
     assert (phase / "hook-hosts.txt").read_text(encoding="utf-8") == "claude\n"
     assert (phase / "hook-files.txt").read_text(encoding="utf-8") == ".claude.json\n"
     no_host = probe("F .claude.json")
-    assert no_host.returncode == 0
-    assert no_host.stdout.splitlines() == ["TRACER_HOOKS_SKIPPED reason=no-hosts"]
+    assert no_host.returncode != 0
+    assert no_host.stdout.splitlines() == ["TRACER_HOOKS_NOT_RECORDED reason=no-hosts"]
 
 
 def test_the_hook_probes_are_wired_around_the_uninstall_step() -> None:
