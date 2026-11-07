@@ -35,9 +35,10 @@ from pathlib import Path
 
 from installer.locations import zshrc_path
 from installer.model import Tool
-from installer.omz import apply_theme
+from installer.omz import apply_theme, default_theme, ensure_zshrc_template, omz_root
 from installer.platform import Platform
 from installer.policy import tweak_policy
+from installer.sanitize import sanitize_log_line
 from installer.tweaks import shell_init_bundle
 
 ConfirmSensitiveAction = Callable[[str, str], bool]
@@ -108,7 +109,17 @@ _CHSH_ABSENT_EXPLANATION: tuple[str, ...] = (
     "to avoid breaking graphical login after an ostree rebase.",
     "The supported path is to set zsh in your terminal emulator "
     "(Konsole, kitty, or WezTerm), not as the system login shell.",
-    "A later installer step will apply that terminal-emulator configuration automatically.",
+    "This installer points Konsole, kitty and WezTerm at zsh when this run ends.",
+)
+
+_OMZ_HANDOFF: tuple[str, ...] = (
+    "Try a theme in this shell: omz theme use <name>",
+    "Keep it: omz theme set <name>",
+)
+
+_LEAN_TIPS: tuple[str, ...] = (
+    "Lean tip: skip resident type-checkers (Pylance held 358 MB here).",
+    "Run the project's pre-commit as an on-demand task, not on every save.",
 )
 
 
@@ -145,9 +156,47 @@ def _source_shell_init(
     return ("Shell init on: open a new terminal to use it.",)
 
 
+def _set_omz_theme(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del tool, platform, confirm
+    home = Path.home()
+    root = omz_root(home, os.environ)
+    if root is None:
+        return ()
+    zshrc = zshrc_path(home, os.environ)
+    myshellrc = home / ".myshellrc"
+    ensure_zshrc_template(zshrc, root)
+    result = apply_theme(zshrc, myshellrc, default_theme(myshellrc))
+    if result.outcome == "no-source":
+        return ()
+    if result.theme is None:
+        theme_line = "Theme: your own theme (left as is)."
+    elif result.theme == "":
+        theme_line = 'Theme: none (ZSH_THEME=""), so starship draws the prompt.'
+    elif result.outcome == "yours":
+        theme_line = f"Theme: {sanitize_log_line(result.theme)} (yours; left as is)."
+    else:
+        theme_line = f"Theme: {result.theme} (added because ~/.zshrc had no ZSH_THEME)."
+    return (theme_line, *_OMZ_HANDOFF)
+
+
+def _show_lean_tips(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del tool, platform, confirm
+    return _LEAN_TIPS
+
+
 POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "set_login_shell": _set_login_shell,
     "source_shell_init": _source_shell_init,
+    "set_omz_theme": _set_omz_theme,
+    "show_lean_tips": _show_lean_tips,
 }
 
 

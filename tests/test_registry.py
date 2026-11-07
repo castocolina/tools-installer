@@ -1282,15 +1282,16 @@ def test_oh_my_zsh_requires_zsh_and_sets_safe_env() -> None:
     assert method.params["detect_path"] == "~/.oh-my-zsh/oh-my-zsh.sh"
 
 
-def test_only_oh_my_zsh_declares_a_post_install_action() -> None:
+def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     """D-07: a second declarer arriving unreviewed is how a guarded,
     single-purpose action quietly becomes a general mechanism. This test is
-    the only automated thing standing between those two states.
+    the only automated thing standing between those two states. Phase 23
+    reviewed the two new declarers (CONF-11 theme, CONF-12 lean tips).
     """
     declarers = [tool.id for tool in load_tools(REGISTRY) if tool.post_install]
-    assert declarers == ["oh-my-zsh"]
+    assert declarers == ["oh-my-zsh", "vscode"]
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
-    assert oh_my_zsh.post_install == ("set_login_shell",)
+    assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
     assert oh_my_zsh.requires == ("zsh", "git")
     method = oh_my_zsh.methods[0]
     assert method.kind == "script"
@@ -2893,3 +2894,9 @@ def test_rtk_has_no_hook() -> None:
     assert "rtk-register" not in POSTINSTALL_HOOKS
     assert "rtk-register" not in POSTINSTALL_HOOK_NAMES
     assert _tools_by_id()["rtk"].postinstall is None
+
+
+def test_omz_and_vscode_declare_their_actions() -> None:
+    tools = _tools_by_id()
+    assert tools["oh-my-zsh"].post_install == ("set_login_shell", "set_omz_theme")
+    assert tools["vscode"].post_install == ("show_lean_tips",)

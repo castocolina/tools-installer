@@ -338,3 +338,89 @@ def test_a_first_install_puts_the_path_block_above_shell_init() -> None:
     assert lines.index("# >>> tools-installer path >>>") < lines.index(
         "# >>> tools-installer tweak:zoxide >>>"
     )
+
+
+_OMZ_THEMELESS = 'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git)\nsource $ZSH/oh-my-zsh.sh\n'
+_STARSHIP_BLOCK = (
+    "# >>> tools-installer tweak:starship >>>\n"
+    'eval "$(starship init zsh)"\n'
+    "# <<< tools-installer tweak:starship <<<\n"
+)
+_OMZ_HANDOFF = (
+    "Try a theme in this shell: omz theme use <name>",
+    "Keep it: omz theme set <name>",
+)
+
+
+def _action_tool(tool_id: str, action: str) -> Tool:
+    tools = {tool.id: tool for tool in load_tools(REGISTRY)}
+    return replace(tools[tool_id], post_install=(action,))
+
+
+def test_omz_install_adds_robbyrussell_and_names_the_theme_commands() -> None:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    zshrc = home / ".zshrc"
+    zshrc.write_text(_OMZ_THEMELESS)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    assert lines == (
+        "Theme: robbyrussell (added because ~/.zshrc had no ZSH_THEME).",
+        *_OMZ_HANDOFF,
+    )
+    rc_lines = zshrc.read_text().split("\n")
+    assert rc_lines[rc_lines.index('ZSH_THEME="robbyrussell"') + 1] == "source $ZSH/oh-my-zsh.sh"
+
+
+def test_omz_install_keeps_a_user_theme() -> None:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    zshrc = home / ".zshrc"
+    zshrc.write_text(_OMZ_THEMELESS.replace("plugins", 'ZSH_THEME="agnoster"\nplugins'))
+    before = zshrc.read_bytes()
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    assert lines[0] == "Theme: agnoster (yours; left as is)."
+    assert zshrc.read_bytes() == before
+
+
+def test_a_user_theme_name_is_sanitized_in_the_handoff() -> None:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    (home / ".zshrc").write_text(
+        _OMZ_THEMELESS.replace("plugins", 'ZSH_THEME="ag\x1b[31mnoster"\nplugins')
+    )
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    assert "\x1b" not in lines[0]
+    assert lines[0].startswith("Theme: ag")
+
+
+def test_omz_install_with_starship_on_writes_an_empty_theme() -> None:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    (home / ".myshellrc").write_text(_STARSHIP_BLOCK)
+    zshrc = home / ".zshrc"
+    zshrc.write_text(_OMZ_THEMELESS)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    assert lines[0] == 'Theme: none (ZSH_THEME=""), so starship draws the prompt.'
+    assert 'ZSH_THEME=""' in zshrc.read_text()
+
+
+def test_omz_install_without_oh_my_zsh_hands_off_nothing() -> None:
+    assert run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None) == ()
+
+
+def test_vscode_install_returns_the_lean_tips() -> None:
+    lines = run_post_install(_action_tool("vscode", "show_lean_tips"), _mutable(), None)
+    assert lines == (
+        "Lean tip: skip resident type-checkers (Pylance held 358 MB here).",
+        "Run the project's pre-commit as an on-demand task, not on every save.",
+    )
+    assert all(len(line) <= 76 for line in lines)
+
+
+def test_the_chsh_absent_text_names_the_sync_that_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_chsh(monkeypatch, present=False)
+    lines = run_post_install(_login_shell_tool(), _immutable(), None)
+    assert lines[2] == "This installer points Konsole, kitty and WezTerm at zsh when this run ends."
+    stale = "A later installer step will apply that terminal-emulator configuration automatically."
+    installer_dir = Path(__file__).resolve().parent.parent / "installer"
+    assert not any(stale in path.read_text() for path in installer_dir.glob("*.py"))
