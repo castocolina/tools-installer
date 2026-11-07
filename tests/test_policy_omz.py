@@ -1,3 +1,4 @@
+import shlex
 from pathlib import Path
 
 import pytest
@@ -208,3 +209,24 @@ def test_policy_keeps_committed_plugins_when_terminal_sync_raises_a_non_oserror(
     assert plugins_owned(tmp_path / ".myshellrc") is True
     assert result.warning is not None
     assert result.warning.startswith("Terminal shell synchronization failed: ")
+
+
+def test_a_custom_zsh_root_is_written_into_the_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A $ZSH install with no ~/.oh-my-zsh gets its own root written, never the default."""
+    home = tmp_path / "home"
+    custom = tmp_path / "custom" / "omz"
+    custom.mkdir(parents=True)
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ZSH", str(custom))
+    zshrc = home / ".zshrc"
+    policy = omz_plugins_policy(zshrc_path=zshrc, state_path=home / ".myshellrc", present=True)
+    policy.apply()
+    text = zshrc.read_text()
+    assert f"export ZSH={shlex.quote(str(custom))}" in text
+    assert 'export ZSH="$HOME/.oh-my-zsh"' not in text
+    assert "plugins=(" in text
+    assert "source $ZSH/oh-my-zsh.sh" in text
+    assert not (home / ".oh-my-zsh").exists()

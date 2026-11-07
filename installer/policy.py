@@ -9,6 +9,7 @@ with no screen changes.
 """
 
 import contextlib
+import os
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -30,7 +31,7 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
-from installer.omz import owned_plugins, plugins_owned, remove_plugins, write_plugins
+from installer.omz import omz_root, owned_plugins, plugins_owned, remove_plugins, write_plugins
 from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.shellrc import ShellrcRefusal, ensure_source
 from installer.terminal_shell import terminal_sync_warning
@@ -773,7 +774,7 @@ def omz_plugins_policy(
         return () if available else ("oh-my-zsh",)
 
     def _apply() -> PolicyResult:
-        added = write_plugins(zshrc_path, state_path)
+        added = write_plugins(zshrc_path, state_path, root=omz_root(Path.home(), os.environ))
         display = _display_path(zshrc_path)
         if added:
             detail = f"added {' '.join(added)} to {display}"

@@ -430,11 +430,17 @@ def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
 
 
 def write_plugins(
-    zshrc_path: Path, state_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS
+    zshrc_path: Path,
+    state_path: Path,
+    plugins: tuple[str, ...] = MANAGED_PLUGINS,
+    *,
+    root: Path | None = None,
 ) -> tuple[str, ...]:
     """Enable managed plugins in zshrc_path, recording what was added in state_path.
 
-    Returns the names actually added.
+    Returns the names actually added. `root` is the real Oh-My-Zsh directory
+    (`omz_root`'s answer) written into a template this call appends; None keeps
+    the conventional `$HOME/.oh-my-zsh` default.
 
     The record and the .zshrc edit are transactional, in the only order that
     fails safe: `enable_plugins` raises for a refused array before anything is
@@ -447,13 +453,13 @@ def write_plugins(
     contain is a no-op); an absent one is not.
     """
     if not zshrc_path.exists():
-        ensure_zshrc_template(zshrc_path)
+        ensure_zshrc_template(zshrc_path, root)
     else:
         lines = _read_rc(zshrc_path).split("\n")
         if _sourced_oh_my_zsh(lines) is not None or not any(
             _ANY_PLUGINS_OPEN.match(line) for line in lines
         ):
-            ensure_zshrc_template(zshrc_path)
+            ensure_zshrc_template(zshrc_path, root)
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
     original = _read_rc(zshrc_path)

@@ -1,3 +1,4 @@
+import shlex
 from pathlib import Path
 
 import pytest
@@ -799,3 +800,19 @@ def test_non_utf8_zshrc_is_refused_as_an_oserror_without_changing_bytes(tmp_path
 
     assert isinstance(caught.value, OSError)
     assert zshrc.read_bytes() == original
+
+
+def test_write_plugins_passes_the_root_on_repair(tmp_path: Path) -> None:
+    """A .zshrc with no source line gets its template from the real root, not the default."""
+    zshrc, state = _sandbox(tmp_path, "export FOO=1\n")
+    custom = tmp_path / "custom"
+    write_plugins(zshrc, state, root=custom)
+    text = zshrc.read_text()
+    assert f"export ZSH={shlex.quote(str(custom))}" in text
+    assert "$HOME/.oh-my-zsh" not in text
+
+
+def test_write_plugins_keeps_the_default_root_without_one(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, "export FOO=1\n")
+    write_plugins(zshrc, state)
+    assert 'export ZSH="$HOME/.oh-my-zsh"' in zshrc.read_text()
