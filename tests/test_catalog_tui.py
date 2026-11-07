@@ -2940,12 +2940,15 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
 ) -> None:
     import installer.update as update_module
     from installer.download import ExecContext, UpdateExecResult
-    from installer.postinstall import POSTINSTALL_HOOKS
+    from installer.postinstall import POSTINSTALL_HOOKS, HookPair
 
     monkeypatch.setitem(
         POSTINSTALL_HOOKS,
         "fake-warn-hook",
-        lambda method, runner, tools: "postinstall shim needs manual review",
+        HookPair(
+            targets=None,
+            register=lambda method, runner, harnesses: ((), "postinstall shim needs manual review"),
+        ),
     )
 
     def fake_update_download(_method: Method, _ctx: ExecContext) -> UpdateExecResult:

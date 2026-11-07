@@ -1,49 +1,47 @@
 """Closed, code-owned postinstall-hook dispatch table.
 
 Mirrors installer.executors's `smoke` pattern: a registry `postinstall` field
-names an action from this closed set and can never carry a literal command.
-Every hook runs through the same `Runner` seam every other executor uses
-(installer/run.py). A hook never raises -- it returns `None` on success or a
-documented no-op, or a short string describing what went wrong, and
-installer/engine.py::install_tool treats that string as a non-fatal warning
-that never marks the tool's own install as failed, because the binary the
-succeeding method just installed is on PATH and usable regardless.
+names a hook from this closed set and can never carry a literal command. Every
+hook runs through the same `Runner` seam every other executor uses
+(installer/run.py). A hook never raises: it returns a `HookOutcome`, and
+installer/engine.py::install_tool treats a warning as non-fatal, because the
+binary the succeeding method just installed is usable regardless.
+
+Hosts come from one list, `skill_lifecycle.present_harnesses` (CONF-03). A hook
+registers for the present, supported hosts its receipt does not record yet, and
+records what it registered in `receipt.hooks`, so removal can undo exactly that.
 """
 
 import shutil
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
-from installer.locations import bin_dir, ensure_dir
+from installer import receipts
+from installer.locations import bin_dir
 from installer.model import Method, Tool
 from installer.run import CommandError, Runner
-from installer.status import is_installed
+from installer.skill_lifecycle import present_harnesses
 
-# The four canonical agent-host catalog ids every postinstall hook that needs
-# host-presence detection shares -- extracted from _codegraph_mcp_register's
-# original inline loop (D-03) so _rtk_register and any future per-host hook
-# read presence from one place instead of each re-deriving it.
-_AGENT_HOST_IDS: tuple[str, ...] = ("claude", "codex", "opencode", "cursor-agent")
+# (harness ids registered, warning). A warning never fails the install.
+HookOutcome = tuple[tuple[str, ...], str | None]
+
+# Harness id -> catalog id, for display only (UI-SPEC U10). Receipts store harness ids.
+HOST_CATALOG_IDS: dict[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "opencode": "opencode",
+    "cursor": "cursor-agent",
+}
 
 
-def present_agent_hosts(tools: Mapping[str, Tool]) -> frozenset[str]:
-    """Which of the four canonical agent-host catalog ids are actually installed.
+def present_hosts() -> frozenset[str]:
+    """Harness ids present on this machine, from `present_harnesses`.
 
-    A host id absent from `tools` entirely behaves exactly like a present-but-
-    not-installed host: excluded from the result, never a KeyError.
-
-    This is PATH-probe-based (`installer.status.is_installed` -> `shutil.which`),
-    so a host installed EARLIER IN THE SAME wizard run may not yet be reflected
-    if its own bin dir was not prepended to this process's PATH before this
-    check runs (the same same-run detection-lag caveat originally documented
-    on codegraph's registry comment -- now shared by every hook that calls
-    this function).
+    A marker dir (~/.claude, ~/.cursor, ~/.config/opencode, ~/.opencode) counts
+    even when its CLI is not on PATH (research Pitfall 6).
     """
-    return frozenset(
-        host_id
-        for host_id in _AGENT_HOST_IDS
-        if (tool := tools.get(host_id)) is not None and is_installed(tool)
-    )
+    return present_harnesses(Path.home(), shutil.which)
 
 
 def _resolve_bin_override(method: Method) -> str | None:
@@ -52,134 +50,12 @@ def _resolve_bin_override(method: Method) -> str | None:
     return raw if isinstance(raw, str) and raw else None
 
 
-# Every hook receives the succeeded Method, the Runner, and a `tools` mapping
-# of catalog id -> Tool for the hosts it may need to check presence for
-# (cycle-1 review HIGH 1/HIGH 2: Method-awareness and is_installed-based
-# detection are both part of the hook's own signature, not merely available
-# in the caller's lexical scope).
-PostinstallHook = Callable[[Method, Runner, Mapping[str, Tool]], str | None]
-
-# codegraph's own --target id for Cursor is "cursor", not this project's catalog id
-# "cursor-agent" -- a real id mismatch confirmed live against codegraph v1.2.0's own
-# installer/targets/registry.js source (09-RESEARCH.md), not a naming preference.
-# Declared in this order so a deterministic, declared-order CSV comes out of the
-# host-presence filter below with zero extra sorting.
-_CODEGRAPH_TARGETS: dict[str, str] = {
-    "claude": "claude",
-    "codex": "codex",
-    "opencode": "opencode",
-    "cursor-agent": "cursor",
-}
-
-
-def _codegraph_mcp_register(
-    method: Method, runner: Runner, tools: Mapping[str, Tool]
-) -> str | None:
-    """Register codegraph's MCP server for every already-installed agent host.
-
-    D-02's host-presence-aware composition: this NEVER passes `--target auto`
-    -- 09-RESEARCH.md found codegraph's own `installer/targets/registry.js
-    ::resolveTargetFlag` silently falls back to registering `claude` when it
-    detects ZERO installed hosts, which would be a machine-visible,
-    unrequested config write on a host that was never selected. Instead, an
-    explicit `--target` CSV is composed from a live `installer.status
-    ::is_installed` host-presence check over `claude`/`codex`/`opencode`/
-    `cursor-agent`, mapping `cursor-agent` to codegraph's own `cursor` id.
-    When zero hosts are present, this returns `None` without ever invoking
-    `codegraph install` -- a documented no-op, not a call with an empty or
-    `none` target.
-
-    The binary is invoked by its resolved absolute path
-    (installer.locations.bin_dir(...) / "codegraph"), never a bare
-    `"codegraph"` relying on the current process's PATH: a fresh
-    ~/.local/bin install is not guaranteed to be on PATH yet (PATH wiring is
-    a separate, later configure_path/`make fix` step).
-
-    REQ-postinstall-idempotency-live-check is satisfied by this function's
-    own live is_installed-based host-presence check (never re-registering an
-    absent host) plus codegraph's own idempotent config-merge behavior
-    (`codegraph install` merges into each target's own config file rather
-    than duplicating an entry) -- neither side needs a new state-tracking
-    database.
-
-    REQ-postinstall-noninteractive-only: `--yes` plus always passing explicit
-    `--target`/`--location` values guarantees this call never reaches an
-    interactive prompt (codegraph's own `--yes` help text -- "Non-interactive:
-    defaults to --location=global --target=auto" -- only applies its OWN
-    defaults for a flag NOT otherwise given, and both are always given here).
-    `--no-permissions` is always passed too: codegraph's own `--yes` help text
-    documents that flag as ALSO enabling a Claude Code auto-allow permissions
-    list and a `UserPromptSubmit` hook, not merely skipping interactive
-    prompts -- a broader behavior change than REQ-codegraph-mcp-postinstall's
-    literal scope ("run its global MCP-registration step"). `--no-permissions`
-    is documented as Claude-only and a no-op for any other target, so passing
-    it unconditionally keeps this call scoped to registration only, for every
-    target, without needing to special-case Claude's presence in the CSV.
-    """
-    present_hosts = present_agent_hosts(tools)
-    present = [target for tool_id, target in _CODEGRAPH_TARGETS.items() if tool_id in present_hosts]
-    if not present:
-        return None
-    csv = ",".join(present)
-    codegraph_bin = str(bin_dir(_resolve_bin_override(method)) / "codegraph")
-    try:
-        runner(
-            [
-                codegraph_bin,
-                "install",
-                "--target",
-                csv,
-                "--location",
-                "global",
-                "--yes",
-                "--no-permissions",
-            ]
-        )
-    except CommandError as exc:
-        return f"codegraph MCP registration failed: {exc}"
-    return None
-
-
-# rtk's per-host `rtk init` argv, live-verified against v0.49.0 (2026-09-11,
-# see installer/registry.toml's rtk entry for the dated comment) in an
-# isolated scratch $HOME -- never this argv table run against the current
-# process's real $HOME. `codex` never receives --auto-patch: `--codex`
-# mode never patches settings.json, and rtk rejects the combination outright
-# (`rtk: --codex cannot be combined with --auto-patch`, confirmed live).
-_RTK_HOST_ARGS: dict[str, tuple[str, ...]] = {
-    "claude": ("-g", "--auto-patch"),
-    "opencode": ("-g", "--opencode", "--auto-patch"),
-    "codex": ("-g", "--codex"),
-    "cursor-agent": ("-g", "--agent", "cursor", "--auto-patch"),
-}
-
-# Live-verified (2026-09-11, v0.49.0): `rtk init -g --auto-patch` fails with
-# exit 1 ("Failed to write RTK.md ... No such file or directory") when
-# ~/.claude/ does not already exist -- it never creates the directory
-# itself. In practice Claude Code creates this directory on first run, so a
-# host where is_installed("claude") is true almost always already has it;
-# ensure_dir is a cheap, non-destructive guard against the rare case it does
-# not. Same finding for `--agent cursor` and ~/.cursor/ (Pitfall 3).
-_RTK_HOST_CONFIG_DIR: dict[str, str] = {
-    "claude": ".claude",
-    "cursor-agent": ".cursor",
-}
-
-
 # Well-known Homebrew prefixes, checked by disk presence rather than PATH
-# probing -- the same "bootstrap chicken-and-egg" reasoning
-# installer/shellrc.py::collect_bin_dirs already documents: right after a
-# brew install, `brew`'s own bin dir may not yet be on THIS process's PATH,
-# but the directory itself already exists on disk. `bin_dir(None)`
-# (~/.local/bin) is this project's own userspace install location for
-# github_release-installed tools -- a brew install never writes there, so
-# falling back to it when shutil.which misses would resolve to a path
-# guaranteed not to contain the binary.
+# probing: right after a brew install, `brew`'s own bin dir may not yet be on
+# THIS process's PATH, but the directory itself already exists on disk.
 #
-# Public (not `_`-prefixed): CR-04 (15.6-REVIEW.md) reuses this exact fix
-# pattern for `installer/terminal_shell.py`'s own brew-installed zsh
-# discovery, which hits the identical chicken-and-egg gap this constant
-# already exists to close for rtk.
+# Public (not `_`-prefixed): installer/terminal_shell.py's brew-installed zsh
+# discovery (CR-04) reuses this exact fix pattern.
 BREW_BIN_DIRS: tuple[Path, ...] = (
     Path("/opt/homebrew/bin"),  # Apple Silicon
     Path("/usr/local/bin"),  # Intel macOS
@@ -187,79 +63,118 @@ BREW_BIN_DIRS: tuple[Path, ...] = (
 )
 
 
-def _resolve_rtk_binary(method: Method) -> str:
-    """Resolve rtk's absolute binary path: `shutil.which` for a brew install
-    already on PATH, else a well-known brew prefix checked by disk presence,
-    else the method's declared/default bin_dir (mirrors
-    _codegraph_mcp_register's own github_release resolution -- only reached
-    for a github_release method, which brew never uses)."""
+def _resolve_binary(method: Method, cmd: str) -> str:
+    """Absolute path of a hook's binary: `shutil.which` for a brew install already on
+    PATH, else a well-known brew prefix checked by disk presence, else the method's
+    bin_dir (only reached for a non-brew method, which never reaches the brew branch)."""
     if method.kind == "brew":
-        found = shutil.which("rtk")
+        found = shutil.which(cmd)
         if found:
             return found
         for brew_dir in BREW_BIN_DIRS:
-            candidate = brew_dir / "rtk"
+            candidate = brew_dir / cmd
             if candidate.exists():
                 return str(candidate)
-    return str(bin_dir(_resolve_bin_override(method)) / "rtk")
+    return str(bin_dir(_resolve_bin_override(method)) / cmd)
 
 
-def _rtk_register(method: Method, runner: Runner, tools: Mapping[str, Tool]) -> str | None:
-    """Register rtk's hook for every already-installed agent host in
-    _RTK_HOST_ARGS's declared order. A CommandError on one host is captured
-    as a partial warning while the loop continues to the remaining hosts --
-    unlike codegraph's single CSV call, each host gets its own `rtk init`
-    invocation (they are independent commands, not one composed argv).
+# codegraph's `--target` ids, keyed by harness id. The catalog id `cursor-agent`
+# is the display name of the `cursor` harness (HOST_CATALOG_IDS).
+_CODEGRAPH_TARGETS: Mapping[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "opencode": "opencode",
+    "cursor": "cursor",
+}
 
-    `cursor-agent`'s branch is gated on `claude` ALSO being present: live
-    verification against v0.49.0 confirmed rtk's `--agent cursor` mode still
-    unconditionally also writes Claude Code's RTK.md/settings.json as a side
-    effect (Pitfall 1, unchanged from the stale v0.44.1 research) -- writing
-    Claude-Code-specific scaffolding on a machine that never selected/
-    installed Claude Code would be exactly the D-01a violation this phase
-    exists to prevent, so this is a documented, silent narrowing rather than
-    an unconditional call.
+
+def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) -> HookOutcome:
+    """Register codegraph's MCP server for `harnesses` in one explicit `--target` CSV.
+
+    Never `--target auto`: codegraph registers claude when it detects no host, an
+    unrequested write. `--no-permissions` keeps the call to MCP registration, since
+    codegraph's `--yes` also enables a Claude auto-allow list and a UserPromptSubmit hook.
     """
-    present = present_agent_hosts(tools)
-    if not present:
-        return None
-    rtk_bin = _resolve_rtk_binary(method)
-    errors: list[str] = []
-    for host_id in _RTK_HOST_ARGS:
-        if host_id not in present:
-            continue
-        if host_id == "cursor-agent" and "claude" not in present:
-            continue
-        config_dir = _RTK_HOST_CONFIG_DIR.get(host_id)
-        if config_dir:
-            ensure_dir(Path.home() / config_dir)
-        try:
-            runner([rtk_bin, "init", *_RTK_HOST_ARGS[host_id]])
-        except CommandError as exc:
-            errors.append(f"{host_id}: {exc}")
-    return "; ".join(errors) if errors else None
+    csv = ",".join(_CODEGRAPH_TARGETS[harness] for harness in harnesses)
+    argv = [
+        _resolve_binary(method, "codegraph"),
+        "install",
+        "--target",
+        csv,
+        "--location",
+        "global",
+        "--yes",
+        "--no-permissions",
+    ]
+    try:
+        runner(argv)
+    except CommandError as exc:
+        return (), f"codegraph MCP registration failed: {exc}"
+    return tuple(sorted(harnesses)), None
 
 
-POSTINSTALL_HOOKS: dict[str, PostinstallHook] = {
-    "codegraph-mcp-register": _codegraph_mcp_register,
-    "rtk-register": _rtk_register,
+@dataclass(frozen=True)
+class HookPair:
+    """One hook. `targets` maps a harness id to the vendor's own target id; `None`
+    marks a host-independent hook. `unregister` is filled by a later plan."""
+
+    targets: Mapping[str, str] | None
+    register: Callable[[Method, Runner, tuple[str, ...]], HookOutcome]
+    unregister: Callable[[str, tuple[str, ...]], tuple[tuple[str, ...], ...]] | None = None
+
+
+POSTINSTALL_HOOKS: dict[str, HookPair] = {
+    "codegraph-mcp-register": HookPair(targets=_CODEGRAPH_TARGETS, register=_codegraph_register),
 }
 
 
 def run_postinstall(
-    name: str, method: Method, runner: Runner, tools: Mapping[str, Tool]
-) -> str | None:
-    """Dispatch a postinstall hook by name; `None` for an unknown name.
+    name: str, method: Method, runner: Runner, hosts: frozenset[str]
+) -> HookOutcome:
+    """Run hook `name` for the harnesses in `hosts` that it supports, in target-map order.
 
-    `installer/model.py::load_tools` already rejects an unknown name at load
-    time, so an unknown name reaching here should not happen in practice --
-    this keeps the function correct in isolation regardless. This function
-    itself does not wrap the call in a broader try/except Exception: a hook's
-    own contract is to convert its OWN expected failure mode (e.g.
-    CommandError) to a returned string; isolation from an UNEXPECTED
-    exception is the caller's (install_tool's) responsibility.
+    An unknown name, or no supported host present, runs nothing and returns ((), None).
     """
-    hook = POSTINSTALL_HOOKS.get(name)
-    if hook is None:
-        return None
-    return hook(method, runner, tools)
+    pair = POSTINSTALL_HOOKS.get(name)
+    if pair is None:
+        return (), None
+    if pair.targets is None:
+        return pair.register(method, runner, ())
+    wanted = tuple(harness for harness in pair.targets if harness in hosts)
+    if not wanted:
+        return (), None
+    return pair.register(method, runner, wanted)
+
+
+def register_hooks(
+    tool: Tool, method: Method, runner: Runner, hosts: frozenset[str] | None = None
+) -> HookOutcome:
+    """Register the tool's hook for the present hosts its receipt does not record yet.
+
+    `hosts=None` reads `present_hosts()` at call time, after the method's PATH
+    prepend, so a host installed earlier in the same run is seen. A targeted hook
+    needs a receipt to record its hosts in (removal unregisters only what the
+    receipt records), so with no receipt nothing runs (review R1-08).
+
+    shortcut: a host the user removed by hand is registered again while its marker
+    dir remains; upgrade when present_harnesses tells a CLI from a marker dir.
+    """
+    name = tool.postinstall or ""
+    pair = POSTINSTALL_HOOKS.get(name)
+    if pair is None:
+        return (), None
+    if pair.targets is None:
+        return run_postinstall(name, method, runner, frozenset())
+    receipt = receipts.read(tool.id)
+    if receipt is None:
+        return (), "hook not registered: no install receipt to record it in"
+    present = present_hosts() if hosts is None else hosts
+    recorded = frozenset(receipt.hooks.get(name, ()))
+    registered, warning = run_postinstall(name, method, runner, present - recorded)
+    if registered:
+        try:
+            receipts.record_hooks(tool.id, name, registered)
+        except OSError as exc:
+            note = f"hook hosts not recorded: {next(iter(str(exc).splitlines()), 'OSError')}"
+            warning = f"{warning}; {note}" if warning else note
+    return registered, warning

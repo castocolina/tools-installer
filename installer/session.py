@@ -74,7 +74,6 @@ class SensitiveInstall(Protocol):
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = ...,
-        tools: Mapping[str, Tool] | None = ...,
         confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
     ) -> InstallOutcome: ...
 
@@ -298,12 +297,10 @@ def _with_force(
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         kwargs: dict[str, object] = {
             "checksum_policy": checksum_policy,
-            "tools": tools,
             "confirm_sensitive_action": confirm,
         }
         if tool.id in force_ids:
@@ -518,9 +515,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                             tool.id, InstallStatus.DEPENDENCY_FAILED, blocked_by=blockers
                         )
                     else:
-                        result = install(
-                            tool, ctx.platform, ctx.runner, ctx.resolve_tag, tools=ctx.catalog
-                        )
+                        result = install(tool, ctx.platform, ctx.runner, ctx.resolve_tag)
                         if (
                             result.status is InstallStatus.CHECKSUM_MISMATCH
                             and ctx.on_mismatch is not None
@@ -532,7 +527,6 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                                     ctx.platform,
                                     ctx.runner,
                                     ctx.resolve_tag,
-                                    tools=ctx.catalog,
                                 )
                             elif choice == "fallback":
                                 result = install(
@@ -541,7 +535,6 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                                     ctx.runner,
                                     ctx.resolve_tag,
                                     checksum_policy="continue",
-                                    tools=ctx.catalog,
                                 )
                     unresolved_statuses = (
                         _UNRESOLVED

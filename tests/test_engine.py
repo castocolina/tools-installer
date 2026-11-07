@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import installer.engine as engine
+import installer.postinstall as postinstall
 from installer import executors, receipts
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
@@ -752,33 +753,29 @@ def test_postinstall_hook_dispatches_after_a_successful_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _not_installed(monkeypatch)
-    seen: list[tuple[object, object, object, object]] = []
+    seen: list[tuple[Tool, Method, object]] = []
 
-    def fake_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
-        seen.append((name, method, runner, tools))
-        return None
+    def fake_register_hooks(
+        tool: Tool, method: Method, runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        seen.append((tool, method, runner))
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", fake_register_hooks)
     method = Method(kind="brew", params={"formula": "codegraph"})
-    tools = {"claude": _tool()}
 
     def runner(cmd: list[str]) -> None:
         return None
 
-    outcome = install_tool(
-        _tool(method, postinstall="codegraph-mcp-register"),
-        _macos_with_brew(),
-        runner=runner,
-        tools=tools,
-    )
+    tool = _tool(method, postinstall="codegraph-mcp-register")
+    outcome = install_tool(tool, _macos_with_brew(), runner=runner)
     assert outcome.status == "installed"
     assert outcome.postinstall_warning is None
     assert len(seen) == 1
-    name, called_method, called_runner, called_tools = seen[0]
-    assert name == "codegraph-mcp-register"
+    called_tool, called_method, called_runner = seen[0]
+    assert called_tool is tool
     assert called_method is method
     assert called_runner is runner
-    assert called_tools is tools
 
 
 def test_postinstall_hook_sees_the_same_tools_freshly_prepended_bin_dir(
@@ -798,11 +795,13 @@ def test_postinstall_hook_sees_the_same_tools_freshly_prepended_bin_dir(
     dest.mkdir()
     seen_path: list[str] = []
 
-    def fake_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
+    def fake_register_hooks(
+        _tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
         seen_path.append(os.environ["PATH"])
-        return None
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", fake_register_hooks)
     outcome = install_tool(
         _tool(
             Method(kind="brew", params={"formula": "ripgrep", "bin_dir": str(dest)}),
@@ -819,10 +818,12 @@ def test_postinstall_hook_sees_the_same_tools_freshly_prepended_bin_dir(
 def test_postinstall_failure_does_not_fail_the_install(monkeypatch: pytest.MonkeyPatch) -> None:
     _not_installed(monkeypatch)
 
-    def fake_run_postinstall(name: str, method: Method, runner: object, tools: object) -> str:
-        return "codegraph MCP registration failed: exit 1"
+    def fake_register_hooks(
+        _tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        return (), "codegraph MCP registration failed: exit 1"
 
-    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", fake_register_hooks)
     outcome = install_tool(
         _tool(
             Method(kind="brew", params={"formula": "codegraph"}),
@@ -840,12 +841,12 @@ def test_postinstall_hook_exception_does_not_fail_the_install_or_crash(
 ) -> None:
     _not_installed(monkeypatch)
 
-    def fake_run_postinstall(
-        name: str, method: Method, runner: object, tools: object
-    ) -> str | None:
+    def fake_register_hooks(
+        _tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
         raise RuntimeError("hook bug")
 
-    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", fake_register_hooks)
     attempted: list[str] = []
 
     def runner(cmd: list[str]) -> None:
@@ -873,11 +874,13 @@ def test_no_postinstall_field_means_no_dispatch(monkeypatch: pytest.MonkeyPatch)
     _not_installed(monkeypatch)
     calls: list[object] = []
 
-    def spy_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
-        calls.append(name)
-        return None
+    def spy_register_hooks(
+        tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        calls.append(tool.postinstall)
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", spy_register_hooks)
     outcome = install_tool(
         _tool(Method(kind="brew", params={"formula": "ripgrep"})),
         _macos_with_brew(),
@@ -895,11 +898,13 @@ def test_already_installed_never_dispatches_postinstall(monkeypatch: pytest.Monk
     monkeypatch.setattr(engine, "is_installed", fake_installed)
     calls: list[object] = []
 
-    def spy_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
-        calls.append(name)
-        return None
+    def spy_register_hooks(
+        tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        calls.append(tool.postinstall)
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", spy_register_hooks)
     outcome = install_tool(
         _tool(
             Method(kind="dnf", params={"package": "codegraph"}),
@@ -917,11 +922,13 @@ def test_failed_install_never_dispatches_postinstall(monkeypatch: pytest.MonkeyP
     _not_installed(monkeypatch)
     calls: list[object] = []
 
-    def spy_run_postinstall(name: str, method: Method, runner: object, tools: object) -> None:
-        calls.append(name)
-        return None
+    def spy_register_hooks(
+        tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        calls.append(tool.postinstall)
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", spy_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", spy_register_hooks)
 
     def failing_runner(cmd: list[str]) -> None:
         raise CommandError(cmd, 1)
@@ -937,6 +944,82 @@ def test_failed_install_never_dispatches_postinstall(monkeypatch: pytest.MonkeyP
     assert outcome.status == "failed"
     assert outcome.postinstall_warning is None
     assert calls == []
+
+
+def _install_codegraph(
+    monkeypatch: pytest.MonkeyPatch, runner: Callable[[list[str]], None]
+) -> engine.InstallOutcome:
+    _patch_not_installed(monkeypatch)
+    _fake_perform(monkeypatch)
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "colbymchenry/codegraph",
+            "asset": "codegraph-{ver}-{arch.machine}.tar.gz",
+            "member": "codegraph-x/codegraph",
+        },
+    )
+    return install_tool(
+        _tool(method, postinstall="codegraph-mcp-register", tool_id="codegraph"),
+        _platform(),
+        runner=runner,
+        resolve_tag=lambda _repo: "1.6.2",
+    )
+
+
+def test_installing_codex_with_codegraph_registers_codex_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex", "pi"}))
+    calls: list[list[str]] = []
+    outcome = _install_codegraph(monkeypatch, lambda cmd: calls.append(cmd))
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.hooks == ("codex",)
+    assert calls == [
+        [
+            str(Path.home() / ".local" / "bin" / "codegraph"),
+            "install",
+            "--target",
+            "codex",
+            "--location",
+            "global",
+            "--yes",
+            "--no-permissions",
+        ]
+    ]
+    written = receipts.read("codegraph")
+    assert written is not None
+    assert written.hooks == {"codegraph-mcp-register": ("codex",)}
+
+
+def test_a_failed_register_is_a_warning_and_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    outcome = _install_codegraph(monkeypatch, failing)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is not None
+    assert outcome.postinstall_warning.startswith("codegraph MCP registration failed:")
+    assert outcome.hooks == ()
+    written = receipts.read("codegraph")
+    assert written is not None
+    assert written.hooks == {}
+
+
+def test_no_receipt_means_no_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
+    monkeypatch.setattr(receipts, "write", _read_only_write)
+    calls: list[list[str]] = []
+    outcome = _install_codegraph(monkeypatch, lambda cmd: calls.append(cmd))
+    assert outcome.status == InstallStatus.INSTALLED
+    assert calls == []
+    assert outcome.postinstall_warning is not None
+    assert "hook not registered: no install receipt to record it in" in outcome.postinstall_warning
+    assert "install receipt not written: read-only" in outcome.postinstall_warning
 
 
 def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_install(
@@ -1862,10 +1945,13 @@ def test_install_writes_one_receipt_before_postinstall(
     _patch_not_installed(monkeypatch)
     seen: list[receipts.Receipt | None] = []
 
-    def observing_postinstall(_name: str, _method: Method, _runner: object, _tools: object) -> None:
+    def observing_register(
+        _tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
         seen.append(receipts.read("yq"))
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", observing_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", observing_register)
     outcome, placed = _install_raw_yq(tmp_path, monkeypatch, postinstall="codegraph-mcp-register")
     assert outcome.status == InstallStatus.INSTALLED
     written = receipts.read("yq")
@@ -2032,10 +2118,13 @@ def test_receipt_write_failure_keeps_installed(monkeypatch: pytest.MonkeyPatch) 
     _patch_not_installed(monkeypatch)
     hooks: list[str] = []
 
-    def fake_run_postinstall(name: str, _method: Method, _runner: object, _tools: object) -> None:
-        hooks.append(name)
+    def fake_register_hooks(
+        tool: Tool, _method: Method, _runner: object, _hosts: object = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        hooks.append(tool.postinstall or "")
+        return (), None
 
-    monkeypatch.setattr(engine, "run_postinstall", fake_run_postinstall)
+    monkeypatch.setattr(engine, "register_hooks", fake_register_hooks)
     monkeypatch.setattr(receipts, "write", _read_only_write)
     outcome = install_tool(
         _tool(

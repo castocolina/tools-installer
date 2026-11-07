@@ -99,12 +99,12 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
-from installer.postinstall import run_postinstall
+from installer.postinstall import HookOutcome, register_hooks
 from installer.run import CommandError, Runner, run_captured
 from installer.terminal_shell import terminal_sync_warning
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 
-PostinstallFn = Callable[[str, Method, Runner, Mapping[str, Tool]], str | None]
+PostinstallFn = Callable[[Tool, Method, Runner, frozenset[str] | None], HookOutcome]
 
 _FALLBACK_UNKNOWN = "no manager claimed this tool"
 # D-14 / ledger Q4: `u` never re-downloads a pinned release (SPEC R7); the review
@@ -206,8 +206,7 @@ def perform_update(
     platform: Platform,
     runner: Runner,
     resolve_tag: TagResolver,
-    tools: Mapping[str, Tool],
-    postinstall: PostinstallFn = run_postinstall,
+    postinstall: PostinstallFn = register_hooks,
     greedy_casks: frozenset[str] = frozenset(),
 ) -> UpdateOutcome:
     """Dispatch an update on resolved ownership. Never raises.
@@ -223,7 +222,6 @@ def perform_update(
             platform=platform,
             runner=runner,
             resolve_tag=resolve_tag,
-            tools=tools,
             postinstall=postinstall,
             greedy_casks=greedy_casks,
         )
@@ -333,7 +331,6 @@ def _perform(
     platform: Platform,
     runner: Runner,
     resolve_tag: TagResolver,
-    tools: Mapping[str, Tool],
     postinstall: PostinstallFn,
     greedy_casks: frozenset[str],
 ) -> UpdateOutcome:
@@ -398,7 +395,7 @@ def _perform(
             except OSError as exc:
                 note = f"install receipt not written: {exc}"
                 detail = f"{detail}; {note}" if detail else note
-    warning = _run_postinstall(target, method, runner, tools, postinstall)
+    warning = _run_postinstall(target, method, runner, postinstall)
     return UpdateOutcome(
         tool_id=target.tool.id,
         status="updated",
@@ -474,7 +471,6 @@ def _run_postinstall(
     target: UpdateTarget,
     method: Method | None,
     runner: Runner,
-    tools: Mapping[str, Tool],
     postinstall: PostinstallFn,
 ) -> str | None:
     hook = target.tool.postinstall
@@ -483,7 +479,7 @@ def _run_postinstall(
     if method is None:
         return f"postinstall hook {hook!r} skipped: no owning method"
     try:
-        return postinstall(hook, method, runner, tools)
+        return postinstall(target.tool, method, runner, None)[1]
     except Exception as extra:  # noqa: BLE001 -- isolation boundary, mirrors engine.py
         return f"postinstall hook {hook!r} crashed: {extra}"
 
@@ -628,7 +624,6 @@ class UpdateService:
             platform=self._live_platform() if self._live_platform is not None else self.platform,
             runner=self._runner,
             resolve_tag=self._resolve_tag,
-            tools=self._tools,
             greedy_casks=self._greedy_casks() if self._greedy_casks is not None else frozenset(),
         )
         detail = outcome.detail

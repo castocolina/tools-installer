@@ -3721,8 +3721,8 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
     assert "codegraph MCP registration failed: exit 1" in out
 
 
-def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_execute_plan() -> None:
-    seen: dict[str, object] = {}
+def test_run_wizard_install_takes_no_catalog() -> None:
+    seen: dict[str, bool] = {}
 
     def install(
         tool: Tool,
@@ -3731,10 +3731,9 @@ def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_execute_plan() -
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        seen["catalog"] = tools
+        seen["ran"] = True
         return InstallOutcome(tool.id, "installed", method_kind="brew")
 
     catalog_tools = _catalog()
@@ -3749,7 +3748,7 @@ def test_run_wizard_passes_the_full_catalog_as_tools_by_id_into_execute_plan() -
         refresh=presence_service(catalog_tools),
         updates=ScriptedUpdates({}),
     )
-    assert seen["catalog"] == {tool.id: tool for tool in catalog_tools}
+    assert seen == {"ran": True}
 
 
 def _login_shell_tool() -> Tool:
