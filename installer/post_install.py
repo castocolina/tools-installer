@@ -150,9 +150,7 @@ def _source_shell_init(
         bundle,
         rc_path=home / ".myshellrc",
         ensure_sourced_from=lambda: _shell_init_sourced_from(),
-    ).apply()
-    if tool.id == "starship":
-        apply_theme(zshrc_path(home, os.environ), home / ".myshellrc", "")
+    ).apply()  # starship's theme rides the policy's own apply (CR-08)
     return ("Shell init on: open a new terminal to use it.",)
 
 

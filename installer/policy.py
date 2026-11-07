@@ -33,7 +33,16 @@ from installer.guards import (
     write_ban_aliases,
 )
 from installer.locations import display_path as _display_path
-from installer.omz import omz_root, owned_plugins, plugins_owned, remove_plugins, write_plugins
+from installer.locations import zshrc_path
+from installer.omz import (
+    apply_theme,
+    default_theme,
+    omz_root,
+    owned_plugins,
+    plugins_owned,
+    remove_plugins,
+    write_plugins,
+)
 from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.shellrc import ShellrcRefusal, ensure_source
 from installer.terminal_shell import terminal_sync_warning
@@ -411,6 +420,19 @@ def _required_bin_dir(bundle: TweakBundle, bin_dir: Path | None) -> Path | None:
     return bin_dir
 
 
+def _starship_theme(bundle: TweakBundle, rc_path: Path, name: str) -> tuple[PolicyLayer, ...]:
+    """Starship owns the prompt: on, it empties the installer's theme; off, it restores the
+    installer's default. A theme the user set is never touched (one path for every entry
+    point: the install-time yes, the Policies row and the removal sweep, CR-08)."""
+    if bundle.id != "starship":
+        return ()
+    zshrc = zshrc_path(Path.home(), os.environ)
+    result = apply_theme(zshrc, rc_path, name)
+    if result.outcome not in ("added", "replaced"):
+        return ()
+    return (PolicyLayer("Theme", f'ZSH_THEME="{name}" in {_display_path(zshrc)}'),)
+
+
 def tweak_policy(
     bundle: TweakBundle,
     *,
@@ -456,6 +478,7 @@ def tweak_policy(
         )
         write_tweak(bundle, rc_path, bin_dir=target_bin_dir)
         layers = [PolicyLayer(bundle.label, f"written to {_display_path(rc_path)}")]
+        layers.extend(_starship_theme(bundle, rc_path, ""))
         if target_bin_dir is not None and bundle.executables:
             names = ", ".join(path.name for path in written) or "0 managed helpers"
             layers.append(
@@ -485,6 +508,8 @@ def tweak_policy(
             remove_tweak_executables(bundle, target_bin_dir) if target_bin_dir is not None else ()
         )
         layers = [PolicyLayer(bundle.label, f"cleared from {_display_path(rc_path)}")]
+        # The block is gone, so the default is the installer's own theme again, never bare.
+        layers.extend(_starship_theme(bundle, rc_path, default_theme(rc_path)))
         if target_bin_dir is not None and bundle.executables:
             layers.append(
                 PolicyLayer(

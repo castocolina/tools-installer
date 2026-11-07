@@ -424,3 +424,26 @@ def test_the_chsh_absent_text_names_the_sync_that_runs(monkeypatch: pytest.Monke
     stale = "A later installer step will apply that terminal-emulator configuration automatically."
     installer_dir = Path(__file__).resolve().parent.parent / "installer"
     assert not any(stale in path.read_text() for path in installer_dir.glob("*.py"))
+
+
+def test_starship_in_policies_sets_and_restores_the_theme_like_the_install_yes() -> None:
+    from installer.omz import owned_theme
+    from installer.policy import tweak_policy
+
+    home = Path.home()
+    zshrc, myshellrc = home / ".zshrc", home / ".myshellrc"
+    (home / ".oh-my-zsh").mkdir()
+    zshrc.write_text(_OMZ_ZSHRC)
+    run_post_install(
+        _action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None
+    )  # the installer's own robbyrussell
+    bundle = shell_init_bundle("starship")
+    assert bundle is not None
+    policy = tweak_policy(bundle, rc_path=myshellrc)
+
+    policy.apply()
+    assert 'ZSH_THEME=""\nsource' in zshrc.read_text()
+
+    policy.remove()  # the Policies off and the starship removal sweep share this closure
+    assert 'ZSH_THEME="robbyrussell"\nsource' in zshrc.read_text()
+    assert owned_theme(myshellrc) == "robbyrussell"
