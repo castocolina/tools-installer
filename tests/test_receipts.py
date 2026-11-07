@@ -1663,3 +1663,69 @@ def test_registry_tools_are_not_retired() -> None:
     registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
     assert all(tool.retired is False for tool in model.load_tools(registry))
     assert Tool("x", "x", "dev", "x", ()).retired is False
+
+
+# --- 23.1-11 Task 2: unsafe names, corrupt receipts and an unreadable folder never crash ---
+
+
+def test_unsafe_receipt_names_are_skipped() -> None:
+    folder = receipts.receipts_dir()
+    folder.mkdir(parents=True)
+    for name in ("Bad Name.json", ".hidden.json", "UPPER.json", "notes.txt"):
+        (folder / name).write_bytes(b"not json")
+    assert receipts.scan_retired(set()) == receipts.RetiredScan()
+
+
+def test_a_corrupt_receipt_is_reported_and_kept() -> None:
+    folder = receipts.receipts_dir()
+    folder.mkdir(parents=True)
+    path = folder / "old.json"
+    path.write_bytes(b"not json")
+    scan = receipts.scan_retired(set())
+    assert scan.tools == ()
+    [warning] = scan.warnings
+    assert warning.startswith("Ignored the corrupt receipt ")
+    assert warning.endswith(": it is kept; remove it yourself if it is stale.")
+    assert path.read_bytes() == b"not json"
+
+
+def test_no_or_empty_receipts_dir_gives_nothing() -> None:
+    assert receipts.scan_retired(set()) == receipts.RetiredScan()
+    receipts.receipts_dir().mkdir(parents=True)
+    assert receipts.scan_retired(set()) == receipts.RetiredScan()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 folder")
+def test_an_unreadable_receipts_dir_is_one_warning() -> None:
+    folder = receipts.receipts_dir()
+    folder.mkdir(parents=True)
+    folder.chmod(0)
+    try:
+        scan = receipts.scan_retired(set())
+    finally:
+        folder.chmod(0o700)
+    assert scan.tools == ()
+    [warning] = scan.warnings
+    assert warning.startswith("Could not read the receipts folder ")
+
+
+def test_retired_tools_sort_by_id() -> None:
+    write(_receipt_for("zeta"))
+    write(_receipt_for("alpha"))
+    assert tuple(tool.id for tool in receipts.scan_retired(set()).tools) == ("alpha", "zeta")
+
+
+def test_a_receipt_with_no_artifacts_is_still_retired() -> None:
+    write(_receipt_for("rtk"))
+    [tool] = receipts.scan_retired(set()).tools
+    assert tool.id == "rtk"
+
+
+def test_a_vanished_receipt_is_skipped_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    write(_receipt_for("gone"))
+
+    def vanish(tool_id: str) -> None:
+        receipts.receipt_path(tool_id).unlink()
+
+    monkeypatch.setattr(receipts, "read", vanish)
+    assert receipts.scan_retired(set()) == receipts.RetiredScan()
