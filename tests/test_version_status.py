@@ -4997,11 +4997,30 @@ def test_a_missing_zshenv_block_reads_misconfigured_on_the_zsh_row(tmp_path: Pat
     assert zsh.health is Health.MISCONFIGURED
     assert zsh.reasons[0] == "~/.zshenv does not export SHELL as zsh"
     assert zsh.unconfigured == (
-        ConfigStep("export SHELL=/z/bin/zsh in ~/.zshenv", "zshenv_shell", report="/z/bin/zsh"),
+        ConfigStep(
+            "export SHELL=/z/bin/zsh in ~/.zshenv", "zshenv_shell", report="/z/bin/zsh\n~/.zshenv"
+        ),
     )
     for other in ("kitty", "wezterm", "jqx"):
         assert states[other].health is Health.OK
         assert states[other].unconfigured == ()
+
+
+def test_a_zdotdir_zshenv_is_named_in_the_zsh_step(tmp_path: Path) -> None:
+    target = tmp_path / "zd" / ".zshenv"
+
+    def drift(_platform: Platform) -> TerminalShellResult:
+        return TerminalShellResult(
+            drifted=("zshenv",), zsh="/z/bin/zsh", paths=(("zshenv", target),)
+        )
+
+    zsh = _settled_states(_drift_service(tmp_path, drift), _terminals())["zsh"]
+    assert zsh.reasons[0] == f"{target} does not export SHELL as zsh"
+    assert zsh.unconfigured == (
+        ConfigStep(
+            f"export SHELL=/z/bin/zsh in {target}", "zshenv_shell", report=f"/z/bin/zsh\n{target}"
+        ),
+    )
 
 
 def test_terminal_steps_carry_their_done_note(tmp_path: Path) -> None:

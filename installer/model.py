@@ -395,8 +395,8 @@ class ConfigStep:
     harness: str | None = None
     argv: tuple[str, ...] = ()
     cwd: Path | None = None
-    # The text a successful terminal_sync or zshenv_shell step reports (its done note);
-    # empty for every other kind.
+    # The text a successful terminal_sync step reports (its done note); a zshenv_shell
+    # step's is "<zsh path>\n<the .zshenv it writes>". Empty for every other kind.
     report: str = ""
 
 

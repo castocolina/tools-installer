@@ -26,7 +26,7 @@ from installer.model import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
-from installer.render import render_done_notes, render_run_report
+from installer.render import render_done_notes, render_run_report, render_shell_section
 from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
@@ -943,6 +943,37 @@ def test_a_zsh_reconfigure_reports_konsole_and_zshenv() -> None:
         "zsh reconfigured — Konsole now starts zsh",
         f"  {profile}",
         "zsh reconfigured — ~/.zshenv exports SHELL",
+    ]
+
+
+def test_a_zshenv_step_whose_write_failed_fails_and_claims_nothing() -> None:
+    zshenv = ConfigStep(
+        "export SHELL=/z/bin/zsh in /zd/.zshenv", "zshenv_shell", report="/z/bin/zsh\n/zd/.zshenv"
+    )
+
+    def denied() -> str:
+        return "Terminal shell synchronization warning: zshenv: Permission denied; kitty: x"
+
+    failed = execute_plan(
+        [_reconfigure_row("zsh", zshenv)],
+        _run_context(RunRecorder(), catalog={"zsh": _tool("zsh")}, terminal_sync=denied),
+    )
+    done = execute_plan(
+        [_reconfigure_row("zsh", zshenv)],
+        _run_context(RunRecorder(), catalog={"zsh": _tool("zsh")}, terminal_sync=lambda: None),
+    )
+
+    assert failed[0].result == "failed"
+    assert "zshenv: Permission denied" in failed[0].detail
+    buf = io.StringIO()
+    render_shell_section(failed, Console(file=buf, width=100, no_color=True))
+    assert buf.getvalue() == ""
+    assert done[0].detail == "/zd/.zshenv exports SHELL"
+    render_shell_section(done, Console(file=buf, width=100, no_color=True))
+    assert buf.getvalue().splitlines() == [
+        "Shell",
+        "/zd/.zshenv now exports SHELL; new terminals start with it.",
+        "  SHELL=/z/bin/zsh",
     ]
 
 

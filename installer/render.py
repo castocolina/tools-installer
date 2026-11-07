@@ -507,9 +507,10 @@ def render_hook_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
 
 
 def render_shell_section(outcomes: Sequence[RowOutcome], console: Console) -> None:
-    """Print the Shell section for each done reconfigure that wrote SHELL into ~/.zshenv."""
+    """Print the Shell section for each done reconfigure that wrote SHELL into the .zshenv zsh
+    reads; a failed write fails its row, so it never reaches here (CR-05)."""
     exported = [
-        step.report
+        step.report.partition("\n")
         for outcome in outcomes
         if outcome.result == "done" and outcome.row.disposition is Disposition.RECONFIGURE
         for step in outcome.row.steps
@@ -518,14 +519,12 @@ def render_shell_section(outcomes: Sequence[RowOutcome], console: Console) -> No
     if not exported:
         return
     console.print("Shell", style="bold", markup=False, highlight=False)
-    console.print(
-        "~/.zshenv now exports SHELL; new terminals start with it.",
-        markup=False,
-        highlight=False,
-        soft_wrap=True,
-    )
-    for zsh in exported:
-        console.print(f"  SHELL={zsh}", markup=False, highlight=False, soft_wrap=True)
+    for zsh, _, shown in exported:
+        for line in (
+            f"{shown or '~/.zshenv'} now exports SHELL; new terminals start with it.",
+            f"  SHELL={zsh}",
+        ):
+            console.print(line, markup=False, highlight=False, soft_wrap=True)
 
 
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:

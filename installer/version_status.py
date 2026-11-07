@@ -1644,13 +1644,19 @@ class VersionRefreshService:
                 # shortcut: no zsh on this host leaves nothing to export, so a stale block
                 # reads nothing; upgrade when the sync names a zsh path it can write.
                 if result.zsh is not None:
+                    # The file zsh reads ($ZDOTDIR/.zshenv when set), named the same everywhere.
+                    shown = (
+                        installer.locations.display_path(paths["zshenv"])
+                        if "zshenv" in paths
+                        else "~/.zshenv"
+                    )
                     export = _ConfigFacts(
-                        ("~/.zshenv does not export SHELL as zsh",),
+                        (f"{shown} does not export SHELL as zsh",),
                         (
                             ConfigStep(
-                                f"export SHELL={result.zsh} in ~/.zshenv",
+                                f"export SHELL={result.zsh} in {shown}",
                                 "zshenv_shell",
-                                report=result.zsh,
+                                report=f"{result.zsh}\n{shown}",
                             ),
                         ),
                     )
