@@ -91,10 +91,10 @@
 - [ ] **CONF-05**: Every zsh session exports `SHELL` as the real zsh path through a managed `~/.zshenv` line, so herdr, tmux, editors and agents opened from kitty, WezTerm, Konsole or any other terminal start zsh, not the passwd login shell (bash). kitty, WezTerm and Konsole configs keep pointing at zsh, and drift shows as misconfigured. Exporting `SHELL` through `environment.d`, for apps started from the desktop menu, is optional and asked [999.4, O4; host evidence 2026-10-13: all terminal shells are zsh with `SHELL=/bin/bash`]
 - [ ] **CONF-06**: tealdeer fetches its cache after install and update [D]
 - [ ] **CONF-07**: Oh-My-Zsh plugin writes honor `$ZSH` [B 15.6 CR-01]
-- [ ] **CONF-08**: Agent auto-approval is configured in each agent's own settings at install (asked, default off) instead of shell aliases: Claude `permissions.defaultMode: "bypassPermissions"` + `skipDangerousModePermissionPrompt: true` (user scope; project/local scope is ignored since 2.1.257), Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"`, opencode `"permission": "allow"`, cursor-agent `approvalMode: "unrestricted"`; pi has no approval prompts in its core (they come only from extensions such as `pi-permission-system`), so the installer writes nothing for pi and its state notes when a permission extension is installed; each key is reverted when the choice is turned off or the tool is removed [user request 2026-10-13]
-- [ ] **CONF-09**: Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex, opencode and pi are listed as having no documented key [user request 2026-10-13]
+- [ ] **CONF-08** (asking and the Policies row superseded by TUNE-01, 2026-11-07): Agent auto-approval is configured in each agent's own settings at install (asked, default off) instead of shell aliases: Claude `permissions.defaultMode: "bypassPermissions"` + `skipDangerousModePermissionPrompt: true` (user scope; project/local scope is ignored since 2.1.257), Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"`, opencode `"permission": "allow"`, cursor-agent `approvalMode: "unrestricted"`; pi has no approval prompts in its core (they come only from extensions such as `pi-permission-system`), so the installer writes nothing for pi and its state notes when a permission extension is installed; each key is reverted when the choice is turned off or the tool is removed [user request 2026-10-13]
+- [ ] **CONF-09** (asking and the Policies row superseded by TUNE-01, 2026-11-07): Agent commit/PR attribution can be turned off at install (asked): Claude `attribution.commit = false` and `attribution.pr = false`, cursor-agent `attribution.attributeCommitsToAgent = false` and `attributePRsToAgent = false` (the Cursor CLI ignores the commit opt-out as of 2026-10-04, so the UI states it), and Codex, opencode and pi are listed as having no documented key [user request 2026-10-13]
 - [ ] **CONF-10**: The alias tweak bundles `claude-skip`, `codex-skip`, `opencode-auto` and the cursor-agent model wrapper leave Policies; a host that had one enabled gets the alias block removed with a one-line notice pointing to the matching Policies setting row; nothing is written to agent settings automatically (amended 2026-11-06, user decision: auto-approval is the settings.json key the user turns on) [user request 2026-10-13]
-- [ ] **CONF-11**: The Oh-My-Zsh writer that sets `plugins=(…)` also writes a default `ZSH_THEME="robbyrussell"` before `source $ZSH/oh-my-zsh.sh`, but only when the file has no `ZSH_THEME` line. A theme the user set by hand or with `omz theme set` is never overwritten. Choosing starship (CONF-04) instead writes `ZSH_THEME=""`, so only one prompt is active. The install summary names `omz theme use <name>` (try it in the current session) and `omz theme set <name>` (keep it) [host evidence 2026-10-13: `ZSH_THEME` unset, prompt `%m%# `]
+- [ ] **CONF-11** (applied at install with no knob per TUNE-02, 2026-11-07): The Oh-My-Zsh writer that sets `plugins=(…)` also writes a default `ZSH_THEME="robbyrussell"` before `source $ZSH/oh-my-zsh.sh`, but only when the file has no `ZSH_THEME` line. A theme the user set by hand or with `omz theme set` is never overwritten. Choosing starship (CONF-04) instead writes `ZSH_THEME=""`, so only one prompt is active. The install summary names `omz theme use <name>` (try it in the current session) and `omz theme set <name>` (keep it) [host evidence 2026-10-13: `ZSH_THEME` unset, prompt `%m%# `]
 - [ ] **CONF-12**: Installing VS Code offers a "lean mode" (asked) that writes only keys absent from `~/.config/Code/User/settings.json` (JSONC, comments preserved) and reverts exactly those keys on removal or opt-out: `telemetry.telemetryLevel: "off"`, `update.mode: "none"` (Linux: the package manager updates it; macOS: only together with LIFE-10, because the cask self-updates and `brew upgrade` skips it), `workbench.enableExperiments: false`, `workbench.settings.enableNaturalLanguageSearch: false`, `extensions.ignoreRecommendations: true`, `window.restoreWindows: "one"`, `workbench.startupEditor: "none"`, `editor.minimap.enabled: false`, `files.watcherExclude` for `node_modules`, `.venv`, `.git/objects`, `dist`, `build` and `.cache`, `search.followSymlinks: false`, `npm.autoDetect: "off"`, `task.autoDetect: "off"`, `typescript.disableAutomaticTypeAcquisition: true`, `git.autoRepositoryDetection: "openEditors"`, and `terminal.integrated.defaultProfile.linux` set to zsh. Turning off built-in AI (`chat.disableAIFeatures: true`) and extension auto-update (`extensions.autoUpdate: false`, `extensions.autoCheckUpdates: false`; security fixes then arrive only on demand) are separate questions. The install summary recommends no resident type-checker extension (Pylance uses the pyright engine, measured 358 MB resident on this repo) and running the project's pre-commit as an on-demand task. Every key was verified to exist in VS Code 1.138 [user request 2026-10-13; host evidence: 1.37 GB PSS across 5 windows, 928 MB of it in renderers; integrated terminals run bash]
 
 ### Onboarding and end-to-end
@@ -109,6 +109,37 @@
 - [ ] **ONB-03**: The tool-onboarding skill covers the new lifecycle params and is scored with skill-judge [999.5]
 - [ ] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
 - [ ] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
+
+### Host safety
+
+- [ ] **HOST-01**: The catalog no longer offers rtk, matt-pocock-skills, opengsd, ponytail, superpowers, softaworks-agent-toolkit, openspec or spec-kit: their registry entries, skill-pack and project-pack reconfigure steps (including every `pnpm dlx @opengsd/gsd-core` run), status probes and tests are deleted; a host that still has a receipt for one of them can remove it (or is told to remove it itself) and is never offered a reinstall [user request 2026-11-07]
+- [ ] **HOST-02**: The `npx` guard shim translates `-p X` / `--package X` to `--package=X`, drops `-y` / `--yes`, and exits non-zero on any other npx-only flag, so a flag mismatch can never run a package's default bin [audit 2026-11-07: `npx -y -p @opengsd/gsd-core gsd-mcp-server` ran GSD's global installer 10 times]
+- [ ] **HOST-03**: Unit tests cannot execute a real toolchain: the subprocess guard is an allowlist that also inspects `sh -c` / `bash -c` scripts; linuxbrew and real-home bins are off the test PATH; agent and toolchain variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_CONFIG*`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `npm_config_*`, `UV_*`, `HOMEBREW_*`, `GH_TOKEN`, `GITHUB_TOKEN`) are cleared; network sockets are blocked [user request 2026-11-07]
+- [ ] **HOST-04**: The real-HOME fingerprint also watches `~/.claude/{gsd-core,.gsd-source,gsd-file-manifest.json,agents,commands,hooks}`, `~/.gsd`, `~/.agents`, `~/.codex`, `~/.cursor`, `~/.config/opencode`, `~/.local/{bin,opt}`, uv tools, the pnpm global dir, Volta tools, `~/.config/systemd/user` and `~/.oh-my-zsh` (listing and mtime only) and fails the run on any change [user request 2026-11-07]
+- [ ] **HOST-05**: Every check that installs or removes real packages runs only in the container e2e, which also asserts that no global GSD tree (`~/.claude/gsd-core`, `.gsd-source`) appears [user request 2026-11-07]
+
+### Install-time tuning
+
+- [ ] **TUNE-01**: Installing claude, codex, opencode, cursor-agent or copilot applies the agent tuning at once, with no question: commit/PR co-authoring off wherever a documented key exists, and the auto-approve/bypass keys of CONF-08 (plus copilot's documented equivalent); each key is written only when absent and reverted on removal. This replaces the Phase 23 run options and their Policies rows [user decision 2026-11-07: "Always, no question"]
+- [ ] **TUNE-02**: Installing zsh / Oh-My-Zsh applies the plugins and the default theme at install, with no question and no Policies knob; starship keeps `ZSH_THEME=""` symmetric [user request 2026-11-07]
+- [ ] **TUNE-03**: Policies keeps only settings that are not part of an initial install; every current Policies row is reviewed and install tuning moves to its tool's postinstall, with the outcome of each row recorded [user request 2026-11-07]
+- [ ] **TUNE-04**: The tool-onboarding skill states the rule: a new requirement is install-time tuning in the tool's postinstall unless it lies outside any install, and it never becomes a Policies knob by default [user request 2026-11-07]
+- [ ] **TUNE-05**: While a step runs without output, the run log shows a live indicator (spinner and elapsed time) and writes a timestamped "still running (Ns)" line at least every 10 s instead of a static `waiting for output` [UAT feedback 2026-11-07]
+
+### Schedules
+
+- [ ] **SCHED-01**: A Schedules view lists the built-in schedules with name, script, target, state, interval and next run; a schedule is on by default when its target is installed and shown as unavailable when it is not [user request 2026-11-07]
+- [ ] **SCHED-02**: The built-ins are cache cleanup (the known growing caches) and updates for claude, opencode, Pi coding agent, cursor-agent and copilot when installed; the default is every 6 h starting at 00:00, and the user can change the interval and start time [user request 2026-11-07]
+- [ ] **SCHED-03**: Schedules run as user-level timers (systemd user units on Linux, a launchd agent on macOS) with zero sudo, are written atomically and recorded in a receipt, and are removed when turned off or when the installer uninstalls [user request 2026-11-07]
+- [ ] **SCHED-04**: The cursor-agent update job checks `~/.local/bin/cursor-agent`: when it is a symlink again (a fresh update), it is replaced by a shim that passes through when a model is given and otherwise injects the configured default frontier model (requested: gpt-6.1-sol, xhigh, long context; the exact model id is verified against cursor-agent's model list at plan time) before exec'ing the symlink's target in cursor's install dir; `~/.local/bin/agent` is untouched and the shim is removed with cursor-agent [user request 2026-11-07]
+- [ ] **SCHED-05**: Each schedule run appends a timestamped log line, and the view shows the last run and its result [user request 2026-11-07]
+
+### Catalog audit
+
+- [ ] **AUDIT-01**: A catalog-audit skill loops over every registry entry and compares the pinned/verified version, the installed version and the latest online release, reads the changelog between them, and checks that install, update, removal and tuning steps still match upstream docs [user request 2026-11-07]
+- [ ] **AUDIT-02**: The skill audits the install and customization scripts (postinstall, shims, tweaks) for drift and unsafe patterns, writes one report per entry plus a summary of proposed registry and script changes, keeps per-entry state so the loop can resume, and changes nothing without approval [user request 2026-11-07]
+- [ ] **AUDIT-03**: Its first run covers opencode v2 and Pi coding agent's MCP support, and the resulting registry and postinstall updates land (e.g. Pi joins the agent-host list for MCP-registering hooks) [user report 2026-11-07]
+- [ ] **AUDIT-04**: The skill is scored with skill-judge [user request 2026-11-07]
 
 ### Lean
 
@@ -222,6 +253,25 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | ONB-08 | Phase 24.1 | Pending |
 | ONB-09 | Phase 24.1 | Pending |
 | ONB-10 | Phase 24.1 | Pending |
+| HOST-01 | Phase 23.1 | Pending |
+| HOST-02 | Phase 23.1 | Pending |
+| HOST-03 | Phase 23.1 | Pending |
+| HOST-04 | Phase 23.1 | Pending |
+| HOST-05 | Phase 23.1 | Pending |
+| TUNE-01 | Phase 23.2 | Pending |
+| TUNE-02 | Phase 23.2 | Pending |
+| TUNE-03 | Phase 23.2 | Pending |
+| TUNE-04 | Phase 23.2 | Pending |
+| TUNE-05 | Phase 23.2 | Pending |
+| SCHED-01 | Phase 24.2 | Pending |
+| SCHED-02 | Phase 24.2 | Pending |
+| SCHED-03 | Phase 24.2 | Pending |
+| SCHED-04 | Phase 24.2 | Pending |
+| SCHED-05 | Phase 24.2 | Pending |
+| AUDIT-01 | Phase 24.3 | Pending |
+| AUDIT-02 | Phase 24.3 | Pending |
+| AUDIT-03 | Phase 24.3 | Pending |
+| AUDIT-04 | Phase 24.3 | Pending |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |

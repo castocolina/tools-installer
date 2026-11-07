@@ -6,16 +6,16 @@ current_phase: 23
 current_phase_name: Configuration as a lifecycle step
 status: Verifying — human_needed (UAT fixes in progress)
 stopped_at: "Phase 23 close-out: UAT fixes, final e2e"
-last_updated: "2026-11-07T10:16:07.014Z"
+last_updated: "2026-11-07T10:56:21.727Z"
 last_activity: 2026-11-07
 last_activity_desc: Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
-state_head: 1647b8abd676d9e0a6cdd95b8c1bb55f5099d5fb
+state_head: c6d9eb13cffb443160a6cfe59da23c3596172886
 progress:
-  total_phases: 11
+  total_phases: 15
   completed_phases: 1
   total_plans: 176
   completed_plans: 176
-  percent: 9
+  percent: 7
 ---
 
 # Project State
@@ -34,7 +34,7 @@ Plan: 16 of 16
 Status: Verifying — human_needed (UAT fixes in progress)
 Last activity: 2026-11-07 — Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
 
-Progress: [█░░░░░░░░░] 9%
+Progress: [█░░░░░░░░░] 7%
 
 ## Performance Metrics
 
@@ -84,6 +84,10 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - Phase 26 added: Commit and push quality hooks (user request 2026-10-15; runs last in the v0.50.0 autonomous run)
+- Phase 23.1 inserted after Phase 23: Host safety: drop 8 skill-pack entries, sandboxed tests, container-only e2e (global GSD root cause)
+- Phase 23.2 inserted after Phase 23: Install-time tuning instead of Policies knobs; live progress indicator
+- Phase 24.2 inserted after Phase 24: Schedules view: cache cleanup, agent-CLI updates, cursor-agent shim
+- Phase 24.3 inserted after Phase 24: Catalog audit skill; opencode v2 and Pi MCP
 
 ## Deferred Items
 

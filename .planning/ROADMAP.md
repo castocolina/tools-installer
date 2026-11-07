@@ -32,8 +32,12 @@
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
 - [ ] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness
 - [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
+- [ ] **Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e** (INSERTED) - Drop the 8 skill-pack entries; tests and shims can never install on the host; e2e only in containers
+- [ ] **Phase 23.2: Install-time tuning instead of Policies knobs** (INSERTED) - Agent tuning and zsh plugins/theme applied at install with no question; Policies trimmed; live progress indicator
 - [ ] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT
 - [ ] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite
+- [ ] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim
+- [ ] **Phase 24.3: Catalog audit skill** (INSERTED) - Catalog-audit skill looping over every entry; opencode v2 and Pi MCP refresh
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
 - [ ] **Phase 26: Commit and push quality hooks** - Fast checks on commit, the full test suite on push, installed by `make install`
 
@@ -404,6 +408,36 @@ Plans:
 **Wave 7**
 - [x] 23-16-PLAN.md — Container e2e: codegraph hook register/unregister and a settings write reverted by `--uninstall --yes`
 
+### Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e (INSERTED)
+
+**Goal**: The installer and its tests can no longer install anything on the developer's machine by accident, and the skill-pack entries the user dropped are gone from the catalog.
+**Depends on**: Phase 23
+**Requirements**: HOST-01, HOST-02, HOST-03, HOST-04, HOST-05
+**Note**: Root cause found 2026-11-07: the repo's gitignored `.opencode/opencode.json` (written by GSD 1.17 `--opencode --local`) declared MCP `gsd` = `npx -y -p @opengsd/gsd-core gsd-mcp-server`; the installer's npx shim execs `pnpm dlx`, which ignores `-p`/`-y`, so every `opencode run` here ran GSD's global installer (10 times since 2026-10-28). The entry was disabled on the host the same day.
+**Success Criteria** (what must be TRUE):
+
+  1. rtk, matt-pocock-skills, opengsd, ponytail, superpowers, softaworks-agent-toolkit, openspec and spec-kit are absent from every catalog view and from `registry.toml`, no code path runs `pnpm dlx @opengsd/gsd-core`, and a leftover receipt for one of them can still be removed.
+  2. `npx -y -p pkg bin args` through the guard shim runs `pnpm dlx --package=pkg bin args`, and an unknown npx-only flag exits non-zero without running anything (tests in `tests/test_guards.py`).
+  3. A test that tries to run a real toolchain (directly, via `sh -c`, or via a linuxbrew binary) or open a network socket fails, and the widened real-HOME fingerprint fails the run when any watched path changes.
+  4. The container e2e is the only place real packages are installed or removed, and it asserts that `~/.claude/gsd-core` and `~/.claude/.gsd-source` stay absent.
+
+**Plans**: TBD (run /gsd-plan-phase 23.1)
+
+### Phase 23.2: Install-time tuning instead of Policies knobs (INSERTED)
+
+**Goal**: Installing a tool finishes its setup in one go: agent co-authoring off, auto-approve/bypass, and the zsh plugins and theme are applied at install with no question, and Policies keeps only what is not part of an install.
+**Depends on**: Phase 23.1
+**Requirements**: TUNE-01, TUNE-02, TUNE-03, TUNE-04, TUNE-05
+**Success Criteria** (what must be TRUE):
+
+  1. Installing claude, codex, opencode, cursor-agent or copilot writes the co-authoring-off and auto-approve/bypass keys with no question, and removing the tool reverts exactly those keys (scratch HOME and container).
+  2. Installing zsh / Oh-My-Zsh sets the plugins and default theme with no question; no Policies row exists for them.
+  3. Every former Policies row has a recorded outcome (kept as a policy, or moved to a postinstall), and the run options added in Phase 23 are gone.
+  4. The tool-onboarding skill states the install-tuning rule, and its skill-judge score is recorded.
+  5. A step that prints nothing for 10 s shows a spinner with elapsed time and a timestamped "still running" line in the log.
+
+**Plans**: TBD (run /gsd-plan-phase 23.2)
+
 ### Phase 24: Onboarding through the skill and e2e
 
 **Goal**: herdr and Alacritty prove the new contract end to end through the onboarding skill, and a three-distro container run plus a real-host UAT show the full lifecycle leaves only documented config behind.
@@ -433,10 +467,37 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 24.2: Schedules view (INSERTED)
+
+**Goal**: A Schedules view runs the recurring upkeep the user does by hand today: cache cleanup and agent-CLI updates every 6 h, plus the cursor-agent model shim after each cursor update.
+**Depends on**: Phase 24.1
+**Requirements**: SCHED-01, SCHED-02, SCHED-03, SCHED-04, SCHED-05
+**Success Criteria** (what must be TRUE):
+
+  1. The Schedules view lists cache cleanup and the claude, opencode, Pi, cursor-agent and copilot update schedules with name, script, target, state, interval and next run; installed targets default on, missing ones show as unavailable.
+  2. Turning a schedule on writes a user-level timer (systemd user unit or launchd agent) with the default 6 h interval from 00:00 or the user's choice, records it in a receipt, and turning it off or uninstalling removes it; no sudo anywhere.
+  3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model, with a model runs that model, and `agent` is unchanged.
+  4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
+
+**Plans**: TBD (run /gsd-plan-phase 24.2)
+
+### Phase 24.3: Catalog audit skill (INSERTED)
+
+**Goal**: A catalog-audit skill keeps every registry entry honest by looping over the catalog against upstream versions, changelogs and install docs, starting with opencode v2 and Pi's new MCP support.
+**Depends on**: Phase 24.1
+**Requirements**: AUDIT-01, AUDIT-02, AUDIT-03, AUDIT-04
+**Success Criteria** (what must be TRUE):
+
+  1. Running the skill produces one report per registry entry (pinned, installed and latest versions, changelog notes, install/update/removal/tuning checks, script findings) and a summary of proposed changes, and it can resume mid-loop.
+  2. The opencode v2 and Pi MCP findings are applied to the registry and postinstall steps, with `make verify-registry` green.
+  3. The skill's skill-judge score is recorded.
+
+**Plans**: TBD (run /gsd-plan-phase 24.3)
+
 ### Phase 25: Lean
 
 **Goal**: About 2,000 production lines are gone with behavior unchanged, and app composition is under the type checker and the coverage gate.
-**Depends on**: Phase 18, Phase 24.1 (runs last, so deletions do not fight the rewrites)
+**Depends on**: Phase 18, Phase 24.3 (runs last, so deletions do not fight the rewrites)
 **Requirements**: LEAN-01, LEAN-02, LEAN-03, LEAN-04
 **Success Criteria** (what must be TRUE):
 
@@ -475,8 +536,12 @@ Plans:
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
+| 23.1 Host safety | 0/TBD | Not started | - |
+| 23.2 Install-time tuning | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
+| 24.2 Schedules view | 0/TBD | Not started | - |
+| 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
