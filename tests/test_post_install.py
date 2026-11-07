@@ -447,3 +447,12 @@ def test_starship_in_policies_sets_and_restores_the_theme_like_the_install_yes()
     policy.remove()  # the Policies off and the starship removal sweep share this closure
     assert 'ZSH_THEME="robbyrussell"\nsource' in zshrc.read_text()
     assert owned_theme(myshellrc) == "robbyrussell"
+
+
+def test_reapplying_the_installers_own_theme_is_not_reported_as_yours() -> None:
+    zshrc = Path.home() / ".zshrc"
+    (Path.home() / ".oh-my-zsh").mkdir()
+    zshrc.write_text(_OMZ_ZSHRC)
+    run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    assert "yours" not in lines[0]

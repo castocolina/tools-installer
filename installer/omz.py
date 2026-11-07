@@ -641,7 +641,9 @@ def apply_theme(zshrc_path: Path, state_path: Path, name: str) -> ThemeResult:
     updated = set_theme(original, name, replace=previous)
     if updated == original:
         parts = None if index is None else _theme_parts(lines[index])
-        return ThemeResult("yours", None if parts is None else parts[1].group("value"))
+        value = None if parts is None else parts[1].group("value")
+        # The installer's own recorded theme, already in force, is ours, not the user's (PT-07).
+        return ThemeResult("added" if previous == name == value else "yours", value)
     _record_theme(state_path, name)
     try:
         _atomic_write(zshrc_path, updated)
