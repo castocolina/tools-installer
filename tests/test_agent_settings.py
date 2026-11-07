@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -1051,3 +1052,14 @@ def test_an_empty_file_a_bom_and_a_nested_toml_array_are_edited_not_refused() ->
         "approval_policy": "never",
         "features": {"x": True},
     }
+
+
+def test_a_fifo_at_a_settings_path_is_refused_without_blocking() -> None:
+    settings = _claude_settings_file()
+    os.mkfifo(settings)  # an open without O_NONBLOCK would wait for a writer forever
+
+    applied = apply_setting("claude", "auto-approve", home=Path.home(), platform_os="linux")
+
+    assert applied.refused is not None
+    assert "not a regular file" in applied.refused
+    assert file_problem("claude", home=Path.home(), platform_os="linux") == applied.refused

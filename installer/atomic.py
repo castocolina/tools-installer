@@ -70,11 +70,18 @@ class FileSnapshot:
     mode: int
 
 
+_SNAPSHOT_MAX_BYTES = 16 << 20
+
+
 def read_snapshot(path: Path) -> FileSnapshot:
-    """Read path through one `O_RDONLY|O_NOFOLLOW` descriptor, binding bytes to identity."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    """Read path through one `O_RDONLY|O_NOFOLLOW` descriptor, binding bytes to identity. The
+    open is non-blocking and a FIFO, a device or an oversize file is refused as an OSError,
+    so a settings read on the UI thread never stalls (CR-12)."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         st = os.fstat(fd)
+        if not stat_module.S_ISREG(st.st_mode) or st.st_size > _SNAPSHOT_MAX_BYTES:
+            raise OSError("not a regular file of at most 16 MiB")
         data = b""
         while chunk := os.read(fd, 65536):
             data += chunk
