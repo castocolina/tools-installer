@@ -81,7 +81,7 @@ class FakePrompter:
         self.confirmed = 0
         self.questions: list[str] = []
 
-    def confirm(self, message: str) -> bool:
+    def confirm(self, message: str, *, default: bool = True) -> bool:
         self.confirmed += 1
         self.questions.append(message)
         if message == _BATCH_QUESTION:
@@ -216,7 +216,7 @@ def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
 
 def test_all_current_without_yes_prints_the_plan_and_summary_without_asking():
     class MustNotConfirm(FakePrompter):
-        def confirm(self, message: str) -> bool:
+        def confirm(self, message: str, *, default: bool = True) -> bool:
             raise AssertionError("confirm must not be called")
 
     tools = [_tool("rg", "search"), _tool("fd", "search")]

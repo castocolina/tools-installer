@@ -2545,6 +2545,26 @@ def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
     assert doctors == []
 
 
+def test_ask_confirm_passes_the_default_to_questionary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D-09 / UI-SPEC section 7: the run-option questions reach questionary with their default."""
+    asked: list[tuple[str, object]] = []
+
+    class _Answer:
+        def ask(self) -> bool:
+            return True
+
+    def fake_confirm(message: str, **kwargs: object) -> _Answer:
+        asked.append((message, kwargs["default"]))
+        return _Answer()
+
+    monkeypatch.setattr(setup, "_questionary_tty_io", lambda: contextlib.nullcontext(None))
+    monkeypatch.setattr(setup.questionary, "confirm", fake_confirm)
+
+    assert setup.ask_confirm("q", False) is True
+    assert setup.ask_confirm("q") is True
+    assert asked == [("q", False), ("q", True)]
+
+
 def test_interactive_run_with_nothing_stored_opens_the_app_without_a_questionary_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -4338,7 +4338,7 @@ def test_a_declined_headless_plan_retires_nothing_and_saves_no_cache(
     output = io.StringIO()
 
     class DecliningPrompter:
-        def confirm(self, message: str) -> bool:
+        def confirm(self, message: str, *, default: bool = True) -> bool:
             assert message == "Run this plan?"
             return False
 
@@ -4367,7 +4367,7 @@ def test_a_declined_headless_plan_adopts_nothing(
     missing = _rg_archive()
 
     class DecliningPrompter:
-        def confirm(self, message: str) -> bool:
+        def confirm(self, message: str, *, default: bool = True) -> bool:
             assert message == "Run this plan?"
             return False
 
@@ -4405,7 +4405,7 @@ def test_a_consented_headless_plan_commits_the_adoption_before_it_runs(
     missing = _rg_archive()
 
     class AcceptingPrompter:
-        def confirm(self, message: str) -> bool:
+        def confirm(self, message: str, *, default: bool = True) -> bool:
             del message
             return True
 
@@ -4447,7 +4447,7 @@ def test_a_held_adoption_whose_file_changed_before_consent_is_printed_not_writte
     service, placed = _adoption_service(tmp_path, bin_dir, {"yq_linux_amd64": _YQ_SHA})
 
     class EditingPrompter:
-        def confirm(self, message: str) -> bool:
+        def confirm(self, message: str, *, default: bool = True) -> bool:
             assert message == "Run this plan?"
             placed.write_bytes(_YQ_BYTES + b"changed")
             return True

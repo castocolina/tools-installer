@@ -214,7 +214,7 @@ def _questionary_tty_io() -> Iterator[tuple[Input, Output] | None]:
     Textual) gets prompt_toolkit's VT100 input driver to *read* correctly,
     but questionary needs its own file, independent of fd 0, regardless:
     _run_uninstall opens _build_app(..., initial_view="uninstall").run() and
-    then calls _ask_confirm in the same run, and each library owns fd 0
+    then calls ask_confirm in the same run, and each library owns fd 0
     exclusively while it's driving input. See _darwin_select_based_asyncio()
     for a second, unrelated macOS-only fix this pairs with.
 
@@ -279,10 +279,10 @@ def _darwin_select_based_asyncio() -> Iterator[None]:
         selectors.DefaultSelector = original
 
 
-def _ask_confirm(message: str) -> bool:
+def ask_confirm(message: str, default: bool = True) -> bool:
     with _questionary_tty_io() as io_pair, _darwin_select_based_asyncio():
         kwargs = {"input": io_pair[0], "output": io_pair[1]} if io_pair else {}
-        answer = questionary.confirm(message, default=True, style=_STYLE, **kwargs).ask()
+        answer = questionary.confirm(message, default=default, style=_STYLE, **kwargs).ask()
     if answer is None:  # questionary returns None on Ctrl+C / Ctrl+D at the prompt
         raise KeyboardInterrupt
     return bool(answer)
@@ -1177,7 +1177,7 @@ def _run_interactive_wizard(
     # separate destructive action with a confirm, and rebuilding it as a
     # third in-app confirm surface is out of scope.
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
-    confirm = (lambda _message: True) if options.yes else _ask_confirm
+    confirm = (lambda _message: True) if options.yes else ask_confirm
     clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
     code = _session_exit_code(app)
     if code:
@@ -1285,7 +1285,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
             )
             app.run()
         return _session_exit_code(app)
-    confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    confirm = (lambda _message: True) if assume_yes else ask_confirm
     tools = load_tools(_REGISTRY)
     # Mirrors _build_app's own installed computation, so the non-interactive
     # CLI teardown path gates fd/rg-aware daemon construction on the SAME
@@ -1318,7 +1318,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
 def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:
     # The caller picks rc_paths: install targets the link-mode location, removal
     # sweeps every possible location (so it never depends on a link-mode guess).
-    confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    confirm = (lambda _message: True) if assume_yes else ask_confirm
     acted = run_guard(
         remove=remove,
         shim_dir=_DEFAULT_BIN_DIR,
@@ -1351,7 +1351,7 @@ def _verify_and_clean(
         ),
     )
     managed = set(collect_bin_dirs(tools, platform, _DEFAULT_BIN_DIR))
-    confirm = (lambda _message: True) if assume_yes else _ask_confirm
+    confirm = (lambda _message: True) if assume_yes else ask_confirm
     clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
 
 
@@ -1398,7 +1398,7 @@ def main(argv: list[str]) -> int:
         return 2
     tools = load_tools(_REGISTRY)
     platform = detect()
-    prompter = CallbackPrompter(ask_confirm=_ask_confirm)
+    prompter = CallbackPrompter(ask_confirm=ask_confirm)
     # --all/--categories is the headless install route (it never opens the
     # wizard); the plain-TTY route shows the warning in the TUI instead.
     store, needs_choice = _settings_store(
