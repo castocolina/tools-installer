@@ -1,3 +1,4 @@
+import json
 import os
 import pwd
 import shutil
@@ -12,35 +13,110 @@ from typing import NamedTuple, cast
 import pytest
 
 import setup
-from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain, host_free_path
+from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain
 from tests.sandbox import (
     CHECKOUT,
     FORBIDDEN_PROGRAM_NAMES,
     LINUXBREW_PREFIX,
+    OVERRIDES_STASH,
     SHELL_BUILTINS,
     UTILITY_NAMES,
     LaunchPolicy,
     build_launch_policy,
+    capture_home_overrides,
     check_launch,
+    env_names_to_clear,
+    host_free_path,
 )
 
 
 def test_host_toolchain_dirs_are_off_path() -> None:
     real_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    linuxbrew = Path(os.path.realpath(LINUXBREW_PREFIX))
     for entry in os.environ["PATH"].split(os.pathsep):
         if not entry:
             continue
         resolved = Path(os.path.realpath(entry))
         assert not resolved.is_relative_to(real_home)
         assert not resolved.is_relative_to(Path("/run/user"))
+        assert not resolved.is_relative_to(linuxbrew)
     assert "VOLTA_HOME" not in os.environ
+    assert env_names_to_clear(os.environ) == ()
 
 
 def test_the_path_strip_survives_a_looping_entry(tmp_path: Path) -> None:
     loop = tmp_path / "loopbin"
     loop.symlink_to(loop)
-    kept = host_free_path(f"{loop}{os.pathsep}/usr/bin").split(os.pathsep)
+    kept = host_free_path(f"{loop}{os.pathsep}/usr/bin", real_home=tmp_path / "home").split(
+        os.pathsep
+    )
     assert "/usr/bin" in kept
+
+
+def test_host_free_path_strips_linuxbrew_home_and_run_user(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    home = root / "home"
+    brew = root / "brew"
+    keep = home / "link"
+    (brew / "bin").mkdir(parents=True)
+    keep.mkdir(parents=True)
+    alias = root / "alias"
+    alias.symlink_to(brew / "bin")
+    path_value = os.pathsep.join(
+        [
+            str(brew),
+            str(brew / "bin"),
+            str(alias),
+            "/usr/bin",
+            str(home / "bin"),
+            str(keep),
+            "/run/user/1000/fnm",
+            "/usr/local/bin",
+        ]
+    )
+    kept = host_free_path(path_value, real_home=home, linuxbrew=brew, keep=keep)
+    assert kept.split(os.pathsep) == ["/usr/bin", str(keep), "/usr/local/bin"]
+
+
+def test_env_names_to_clear_matches_prefixes_exactly() -> None:
+    environ: dict[str, str] = dict.fromkeys(
+        (
+            "npm_config_foo",
+            "NPM_CONFIG_BAR",
+            "UV_CACHE_DIR",
+            "OPENCODE_CONFIG_DIR",
+            "HOMEBREW_PREFIX",
+            "GH_TOKEN",
+            "CODEX_HOME",
+            "MY_UV_X",
+            "KEEP_ME",
+        ),
+        "x",
+    )
+    assert env_names_to_clear(environ) == (
+        "CODEX_HOME",
+        "GH_TOKEN",
+        "HOMEBREW_PREFIX",
+        "NPM_CONFIG_BAR",
+        "OPENCODE_CONFIG_DIR",
+        "UV_CACHE_DIR",
+        "npm_config_foo",
+    )
+
+
+def test_home_overrides_survive_the_configure_clearing() -> None:
+    stashed: dict[str, str | None] = {
+        "UV_TOOL_DIR": "/stash/uv",
+        "PNPM_HOME": None,
+        "VOLTA_HOME": "/stash/volta",
+    }
+    live = {"UV_TOOL_DIR": "/live/uv", "PNPM_HOME": "/live/pnpm"}
+    assert capture_home_overrides({**live, OVERRIDES_STASH: json.dumps(stashed)}) == stashed
+    assert capture_home_overrides(live) == {
+        "UV_TOOL_DIR": "/live/uv",
+        "PNPM_HOME": "/live/pnpm",
+        "VOLTA_HOME": None,
+    }
 
 
 def test_a_node_family_binary_outside_tmp_is_never_run(

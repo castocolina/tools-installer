@@ -8,12 +8,13 @@ beyond `os.path.realpath`, `shutil.which` and `Path.exists`.
 Messages carry program names, paths and script text only, never environment values.
 """
 
+import json
 import os
 import re
 import shlex
 import shutil
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -496,3 +497,144 @@ def check_launch(
         return
     # 5. anything else is a host program
     raise _host_refusal(name, resolved)
+
+
+# --- the test PATH and environment (23.1 D-16, D-17): applied before collection ---
+
+RUN_USER = Path("/run/user")
+# Stash names start with TOOLS_INSTALLER_TEST_, which no cleared prefix matches; values are paths.
+OVERRIDES_STASH = "TOOLS_INSTALLER_TEST_HOME_OVERRIDES"
+INTERPRETER_DIR_STASH = "TOOLS_INSTALLER_TEST_INTERPRETER_DIR"
+HOST_ZSH_STASH = "TOOLS_INSTALLER_TEST_HOST_ZSH"
+HOME_OVERRIDE_NAMES = ("UV_TOOL_DIR", "PNPM_HOME", "VOLTA_HOME")
+CLEARED_ENV_NAMES: frozenset[str] = frozenset(
+    {
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "ZDOTDIR",
+        "ZSH",
+        "PNPM_HOME",
+        "VOLTA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    }
+)
+# Start-of-name, case-sensitive; `npm_config_` is matched case-insensitively in env_names_to_clear.
+CLEARED_ENV_PREFIXES = ("OPENCODE_CONFIG", "UV_", "HOMEBREW_")
+INTERPRETER_NAMES = ("sh", "bash", "zsh")
+
+
+def host_free_path(
+    path_value: str,
+    *,
+    real_home: Path,
+    linuxbrew: Path = LINUXBREW_PREFIX,
+    keep: Path | None = None,
+) -> str:
+    """PATH without the real home, /run/user and the linuxbrew prefix, judged by resolved path.
+
+    `keep` survives even under the real home (an interpreter link dir may sit in TMPDIR there).
+    Entries keep their order; a symlink loop is handled by realpath.
+    """
+    roots = (
+        Path(os.path.realpath(real_home)),
+        RUN_USER,
+        Path(os.path.realpath(linuxbrew)),
+        linuxbrew,
+    )
+    kept_dir = Path(os.path.realpath(keep)) if keep is not None else None
+    kept: list[str] = []
+    for entry in path_value.split(os.pathsep):
+        if not entry:
+            continue
+        resolved = Path(os.path.realpath(entry))
+        if resolved == kept_dir or not any(resolved.is_relative_to(root) for root in roots):
+            kept.append(entry)
+    return os.pathsep.join(kept)
+
+
+def sandboxed_path(path_value: str, *, real_home: Path, interpreter_dir: Path | None) -> str:
+    """The test PATH: host-free, with the interpreter link dir first and exactly once."""
+    kept = host_free_path(path_value, real_home=real_home, keep=interpreter_dir)
+    if interpreter_dir is None:
+        return kept
+    rest = [entry for entry in kept.split(os.pathsep) if entry and entry != str(interpreter_dir)]
+    return os.pathsep.join([str(interpreter_dir), *rest])
+
+
+def env_names_to_clear(environ: Mapping[str, str]) -> tuple[str, ...]:
+    """The names a test must not inherit, sorted. Only names are returned, never values."""
+    return tuple(
+        sorted(
+            name
+            for name in environ
+            if name in CLEARED_ENV_NAMES
+            or name.startswith(CLEARED_ENV_PREFIXES)
+            or name.lower().startswith("npm_config_")
+        )
+    )
+
+
+def capture_home_overrides(environ: Mapping[str, str]) -> dict[str, str | None]:
+    """The fingerprint's toolchain overrides: the parent's stash when set, else the live values."""
+    stashed = environ.get(OVERRIDES_STASH)
+    if stashed is not None:
+        loaded: dict[str, str | None] = json.loads(stashed)
+        return loaded
+    return {name: environ.get(name) for name in HOME_OVERRIDE_NAMES}
+
+
+def link_interpreters(link_dir: Path, *, stripped_path: str, original_path: str) -> bool:
+    """Link each shell the stripped PATH no longer finds to where the original PATH found it.
+
+    Returns whether a link was made. `python3` is never linked: tests use `sys.executable`.
+    """
+    made = False
+    for name in INTERPRETER_NAMES:
+        if shutil.which(name, path=stripped_path) is not None:
+            continue
+        found = shutil.which(name, path=original_path)
+        if found is not None:
+            (link_dir / name).symlink_to(os.path.realpath(found))
+            made = True
+    return made
+
+
+def host_zsh_stash(path_value: str) -> str:
+    """The host's zsh by realpath, read before any strip; "" when the host has none."""
+    found = shutil.which("zsh", path=path_value)
+    return os.path.realpath(found) if found is not None else ""
+
+
+def host_zsh() -> Path | None:
+    """The host's own zsh as recorded before the strip; the live lookup when no stash is set."""
+    if HOST_ZSH_STASH in os.environ:
+        recorded = os.environ[HOST_ZSH_STASH]
+        return Path(recorded) if recorded else None
+    found = shutil.which("zsh")
+    return Path(os.path.realpath(found)) if found is not None else None
+
+
+def prepare_interpreter_dir(
+    environ: MutableMapping[str, str], *, real_home: Path, make_dir: Callable[[], Path]
+) -> tuple[Path | None, Path | None]:
+    """Return (the link dir this run uses, the dir this process made and must remove).
+
+    A worker reuses the controller's dir from the stash. The first process makes one only when
+    a shell needs linking, and writes it to the stash for its workers.
+    """
+    stashed = environ.get(INTERPRETER_DIR_STASH)
+    if stashed and Path(stashed).is_dir():
+        return Path(stashed), None
+    original = environ.get("PATH", "")
+    link = make_dir()
+    stripped = host_free_path(original, real_home=real_home)
+    if not link_interpreters(link, stripped_path=stripped, original_path=original):
+        link.rmdir()
+        return None, None
+    environ[INTERPRETER_DIR_STASH] = str(link)
+    return link, link
