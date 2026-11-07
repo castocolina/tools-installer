@@ -33,7 +33,7 @@
 - [ ] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness
 - [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
 - [ ] **Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e** (INSERTED) - Drop the 8 skill-pack entries; tests and shims can never install on the host; e2e only in containers
-- [ ] **Phase 23.2: Install-time tuning instead of Policies knobs** (INSERTED) - Agent tuning and zsh plugins/theme applied at install with no question; Policies trimmed; live progress indicator
+- [ ] **Phase 23.2: Install-time tuning instead of Policies knobs** (INSERTED) - Agent tuning and zsh plugins/theme applied at install with no question; Policies trimmed; live progress indicator; Copilot CLI in the catalog; present dependencies run from their known path
 - [ ] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT
 - [ ] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite
 - [ ] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim
@@ -376,10 +376,10 @@ Plans:
 
   1. Installing codex with codegraph present runs codegraph's register for codex once and adds codex to `receipt.hooks`; removing codegraph unregisters exactly the recorded hosts; the codegraph, graphify and herdr hooks all read one agent-host list (rtk dropped 2026-11-02: the installer does not install or register rtk).
   2. A zsh started from any terminal has `SHELL` set to the real zsh (managed `~/.zshenv`), a kitty/WezTerm/Konsole config without the owned region shows `≈`, and RECONFIGURE writes it (scratch HOME).
-  3. Installing starship with "yes" turns its shell-init bundle ON, declining leaves no health state, and removing the tool removes the bundle (same for direnv, zoxide, fzf, fnm and volta).
+  3. Installing starship with "yes" turns its shell-init bundle ON, declining leaves no health state, and removing the tool removes the bundle (same for direnv, zoxide, fzf, fnm and volta). *(superseded 2026-11-07, 23.2 R5: the block is written at install with no question)*
   4. tealdeer fetches its cache after install and update, Oh-My-Zsh plugin writes honor `$ZSH`, and selecting a current zsh no longer promises a step that never runs.
-  5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active.
-  6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME).
+  5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active. *(superseded 2026-11-07, 23.2 R1/R7: the keys are written at install with no question; removal is the revert path; the run options and agent Policies rows are removed)*
+  6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME). *(superseded 2026-11-07, 23.2 R6: written at install with no question; removal reverts)*
 
 **Plans:** 16/16 plans executed (7 waves)
 
@@ -427,7 +427,7 @@ Plans:
 
 **Goal**: Installing a tool finishes its setup in one go: agent co-authoring off, auto-approve/bypass, and the zsh plugins and theme are applied at install with no question, and Policies keeps only what is not part of an install.
 **Depends on**: Phase 23.1
-**Requirements**: TUNE-01, TUNE-02, TUNE-03, TUNE-04, TUNE-05
+**Requirements**: TUNE-01, TUNE-02, TUNE-03, TUNE-04, TUNE-05, TUNE-06, TUNE-07 *(TUNE-06 and TUNE-07 added 2026-11-07 by the 23.2 spec: user request "include copilot in the catalog"; real-TTY UAT F-1)*
 **Success Criteria** (what must be TRUE):
 
   1. Installing claude, codex, opencode, cursor-agent or copilot writes the co-authoring-off and auto-approve/bypass keys with no question, and removing the tool reverts exactly those keys (scratch HOME and container).
@@ -435,6 +435,8 @@ Plans:
   3. Every former Policies row has a recorded outcome (kept as a policy, or moved to a postinstall), and the run options added in Phase 23 are gone.
   4. The tool-onboarding skill states the install-tuning rule, and its skill-judge score is recorded.
   5. A step that prints nothing for 10 s shows a spinner with elapsed time and a timestamped "still running" line in the log.
+  6. The catalog installs, tunes and removes GitHub Copilot CLI (`copilot`) on macOS and Linux (container e2e), and a hand-installed copy reads present with its owner.
+  7. With pnpm installed by an earlier run and absent from the session PATH, installing mmdc in the same terminal succeeds; a truly absent pnpm keeps today's message.
 
 **Plans**: TBD (run /gsd-plan-phase 23.2)
 
@@ -755,3 +757,13 @@ Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
 **Absorbed by:** Phases 23 and 24 (v0.50.0)
+
+### Phase 999.12: Register codegraph and graphify hooks for the copilot host (BACKLOG)
+
+**Goal:** When copilot (added in 23.2) is present, the codegraph and graphify postinstall hooks register for it like the other agent hosts, are recorded in `receipt.hooks`, and unregister on removal.
+**Requirements:** TBD
+**Evidence (live, 2026-11-07, 23.2 analyzer):** codegraph 1.6.2's target id is `copilot-cli` (writes `~/.copilot/mcp-config.json`; `copilot` is rejected); graphify accepts `install --platform copilot`.
+**Why deferred (23.2 D-22):** 23.2 TUNE-06 asks only for `recommends`; adding the host to `_CODEGRAPH_TARGETS` makes codegraph read `≈` on every machine with `~/.copilot`, a behaviour change for existing installs that needs its own spec. Phase 24.3's catalog audit may pick it up.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)

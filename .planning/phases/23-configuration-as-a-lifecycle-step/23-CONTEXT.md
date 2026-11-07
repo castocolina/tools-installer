@@ -74,7 +74,7 @@ None of these has landed as of 2026-10-14.
   - It is not stored inside install receipts. Agents the user installed have no receipt, and creating one would wrongly make them removable (19 D-10).
   - Tool removal, opt-out and Policies revert all read the ledger.
   - jev: Laya config_ledger 0.58 (needs fallback); TypeSafe 0.95.
-- **D-09 (best, not easy):** The questions are asked **at run level, in the review**.
+- **D-09 (best, not easy):** ~~The questions are asked **at run level, in the review**.~~ *(superseded 2026-11-07, 23.2 R1/R7: no question; the agent and VS Code keys are written at install, the run options and their Policies rows are deleted)*
   - When the plan contains at least one agent (claude, codex, opencode, cursor-agent), the review (20) shows "Auto-approve agents?" and "Turn off commit/PR attribution?", both default off.
   - The answers are inputs to `execute_plan` and apply to every agent row in the run.
   - Headless `--yes` leaves both off.
@@ -89,7 +89,7 @@ None of these has landed as of 2026-10-14.
 ### Shell init, OMZ theme and `$ZSH` (R4, R7, R11)
 - **D-11:** One `TweakBundle` per shell-init tool (starship, direnv, zoxide, fzf, fnm, volta), with `requires=(cmd,)`, a body guarded by `command -v X >/dev/null &&`, and **a bundle id equal to the tool id**.
   - It is dispatched through a new `source_shell_init` entry in `POST_INSTALL_HOOKS` (`post_install.py:66-69`; the action is declared at `model.py:49` but never dispatched today).
-  - `source_shell_init` is added to `SENSITIVE_POST_INSTALL_ACTIONS` (`model.py:55`), so it is asked through the existing confirm. `confirm is None` (headless) means it never runs (`post_install.py:62`).
+  - ~~`source_shell_init` is added to `SENSITIVE_POST_INSTALL_ACTIONS` (`model.py:55`), so it is asked through the existing confirm. `confirm is None` (headless) means it never runs (`post_install.py:62`).~~ *(superseded 2026-11-07, 23.2 R5: not sensitive; written at install on every route, removed with the tool)*
   - `SensitiveActionScreen`'s prompt is hardcoded to the login-shell text (`execute_screen.py:161-165`), so it becomes keyed by action name. This was added 2026-10-14 by 24.1 D-06, because 24.1's EDITOR and kickstart questions need their own text.
   - Removing the tool disables **only that bundle**: `active_policies((bundle,), …)` + `sweep_policies` (`uninstall.py:401-446`). It never uses the whole-installer `sweep_tweaks`.
 - **D-12:** CONF-07 fix: `write_plugins` (`omz.py:432`) calls `ensure_zshrc_template(zshrc_path)` **without** `root`, so it falls back to the default.

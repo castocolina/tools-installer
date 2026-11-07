@@ -62,6 +62,7 @@ Scouted 2026-10-13:
      - Installing starship with "yes" turns its bundle ON. Declining leaves it OFF and the row `✓`.
      - Removing starship disables the bundle.
      - The same holds for each of the six tools.
+   - *Amended 2026-11-07 (23.2 R5):* the bundle is written at install with no question on every route and removed with the tool; `source_shell_init` is no longer sensitive and the six Policies rows go.
 
 5. **zsh everywhere (CONF-05, O4)**: A managed line in `~/.zshenv` exports `SHELL` as the real zsh path. kitty (`env SHELL=`), WezTerm (`set_environment_variables`) and Konsole keep pointing at zsh inside their owned regions.
    - Current: `SHELL=/bin/bash` inside zsh.
@@ -73,6 +74,7 @@ Scouted 2026-10-13:
      - In a scratch HOME, `zsh -c 'echo $SHELL'` prints the zsh path.
      - A kitty config without the region shows `≈`, and RECONFIGURE writes it.
      - An uninstalled terminal gives no `≈`.
+   - *Amended 2026-11-07 (23.2 R7):* the `environment.d` export stays a Policies row; the review run option that also offered it is removed.
 
 6. **tealdeer cache (CONF-06)**: A `tealdeer-cache` hook runs `tldr --update` after install and update. The cache dir is in `config_paths`.
    - Acceptance: With a fake runner, install and `u` each run `tldr --update` once. A failure ends the row with a warning, not a failure.
@@ -97,6 +99,7 @@ Scouted 2026-10-13:
      - A pre-existing `defaultMode: "acceptEdits"` stays and shows "set by you".
      - Opting out restores byte-identical files for keys the user never had.
      - Invalid JSON or TOML is not written, and the row shows `≈` with the reason.
+   - *Amended 2026-11-07 (23.2 R1-R3):* no question and no Policies row: the keys are written at install on every route (headless included), a present untuned agent shows `≈` "apply install tuning", and removal is the only revert path.
 
 9. **Attribution off (CONF-09)**: The same single question format (asked, default off) controls commit and PR attribution.
    - Target:
@@ -105,6 +108,7 @@ Scouted 2026-10-13:
      - **Codex, opencode and pi:** listed as having no documented key, and nothing is written for them.
      - The same conflict and revert rules as requirement 8 apply.
    - Acceptance: The keys are written and reverted as in requirement 8. The three agents without a key show the "no documented key" note.
+   - *Amended 2026-11-07 (23.2 R1):* written at install with no question, like requirement 8.
 
 10. **Aliases leave Policies (CONF-10)**: `claude-skip`, `codex-skip`, `opencode-auto` and the cursor-agent model wrapper are removed from `tweaks.BUNDLES`.
     - Current: Four alias bundles.
@@ -133,6 +137,7 @@ Scouted 2026-10-13:
     - Acceptance (scratch HOME):
       - A JSONC file with comments and one user key: lean mode adds only the absent keys, and both the comments and the user key survive.
       - Opt-out returns the file byte-identical.
+   - *Amended 2026-11-07 (23.2 R6):* lean mode, built-in AI off and extension auto-update off are written at install with no question; removal reverts them (AI off and auto-update off need the user's confirmation).
       - The integrated terminal default profile is zsh.
 
 ## Boundaries
