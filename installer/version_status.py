@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import installer.locations
-from installer import receipts
+from installer import agent_settings, receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
@@ -688,6 +688,28 @@ def _merge_facts(*maps: Mapping[str, _ConfigFacts]) -> dict[str, _ConfigFacts]:
         for tool_id, fact in facts.items():
             merged[tool_id] = merged.get(tool_id, _NO_FACTS).plus(fact)
     return merged
+
+
+def _settings_facts(platform: Platform) -> dict[str, _ConfigFacts]:
+    """O7 (UI-SPEC section 5): an agent settings file the ledger records keys in, which does not
+    parse, blocks its row with the reason and no step. A file no key was ever written to reads
+    nothing: it is not the installer's business until the user opts in.
+    """
+    facts: dict[str, _ConfigFacts] = {}
+    for agent in receipts.CONFIG_AGENTS:
+        ledger = receipts.read_ledger(agent)
+        if ledger is None:
+            continue
+        try:
+            for setting in dict.fromkeys(entry.setting for entry in ledger.entries):
+                agent_settings.setting_state(
+                    agent, setting, home=Path.home(), platform_os=platform.os
+                )
+        except agent_settings.SettingsUnreadable as exc:
+            facts[agent] = _ConfigFacts((str(exc),))  # one reason per file: stop this agent
+        except Exception as exc:  # a read-only secondary fact must never fail the pass
+            facts[agent] = _ConfigFacts(unchecked=(f"settings not checked: {exc}",))
+    return facts
 
 
 def _hook_fact(
@@ -1612,19 +1634,44 @@ class VersionRefreshService:
             note = (f"terminal shell not checked: {exc}",)
             return {row: _ConfigFacts(unchecked=note) for row, _label in _TERMINAL_ROWS.values()}
         facts: dict[str, _ConfigFacts] = {}
+        paths = dict(result.paths)
         for name in result.drifted:
+            if name == "zshenv":
+                # shortcut: no zsh on this host leaves nothing to export, so a stale block
+                # reads nothing; upgrade when the sync names a zsh path it can write.
+                if result.zsh is not None:
+                    export = _ConfigFacts(
+                        ("~/.zshenv does not export SHELL as zsh",),
+                        (
+                            ConfigStep(
+                                f"export SHELL={result.zsh} in ~/.zshenv",
+                                "zshenv_shell",
+                                report=result.zsh,
+                            ),
+                        ),
+                    )
+                    facts["zsh"] = facts.get("zsh", _NO_FACTS).plus(export)
+                continue
             if name not in _TERMINAL_ROWS:
                 continue
             row, label = _TERMINAL_ROWS[name]
+            report = f"{label} now starts zsh"
+            if name in paths:
+                report += f"\n  {installer.locations.display_path(paths[name])}"
             fact = _ConfigFacts(
                 (f"{label} does not start zsh",),
-                (ConfigStep(f"point {label} at zsh", "terminal_sync"),),
+                (ConfigStep(f"point {label} at zsh", "terminal_sync", report=report),),
             )
             facts[row] = facts.get(row, _NO_FACTS).plus(fact)
         rows = tuple(dict.fromkeys(row for row, _label in _TERMINAL_ROWS.values()))
         for warning in result.warnings:
             prefix = warning.split(":", 1)[0]
-            targets = (_TERMINAL_ROWS[prefix][0],) if prefix in _TERMINAL_ROWS else rows
+            if prefix == "zshenv":
+                targets: tuple[str, ...] = ("zsh",)  # the zsh row carries ~/.zshenv
+            elif prefix in _TERMINAL_ROWS:
+                targets = (_TERMINAL_ROWS[prefix][0],)
+            else:
+                targets = rows
             note = _ConfigFacts(unchecked=(f"terminal shell not checked: {warning}",))
             for row in targets:
                 facts[row] = facts.get(row, _NO_FACTS).plus(note)
@@ -1828,6 +1875,7 @@ class VersionRefreshService:
         hosts, presence_error = self._present_hosts()
         config = _merge_facts(
             self._terminal_facts(platform),
+            _settings_facts(platform),
             _pnpm_group_facts(tools, inventory.pnpm_globals),
             _pnpm_missing_facts(tools, inventory.pnpm_globals, which),
         )

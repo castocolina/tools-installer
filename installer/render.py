@@ -310,6 +310,29 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_postinstall_warnings(installs, console)
     render_done_notes(outcomes, console)
     render_verification(installs, console)
+    render_shell_section(outcomes, console)
+
+
+def render_shell_section(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print the Shell section for each done reconfigure that wrote SHELL into ~/.zshenv."""
+    exported = [
+        step.report
+        for outcome in outcomes
+        if outcome.result == "done" and outcome.row.disposition is Disposition.RECONFIGURE
+        for step in outcome.row.steps
+        if step.kind == "zshenv_shell"
+    ]
+    if not exported:
+        return
+    console.print("Shell", style="bold", markup=False, highlight=False)
+    console.print(
+        "~/.zshenv now exports SHELL; new terminals start with it.",
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )
+    for zsh in exported:
+        console.print(f"  SHELL={zsh}", markup=False, highlight=False, soft_wrap=True)
 
 
 def render_failure_details(outcomes: list[InstallOutcome], console: Console) -> None:

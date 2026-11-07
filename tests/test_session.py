@@ -1,10 +1,12 @@
 import inspect
+import io
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast, get_args
 
 import pytest
+from rich.console import Console
 
 import installer.engine as engine
 import installer.session as session_module
@@ -22,6 +24,7 @@ from installer.model import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.render import render_done_notes
 from installer.run import CommandError, Runner
 from installer.session import (
     RESULT_WORDS,
@@ -917,6 +920,28 @@ def test_a_register_step_with_nothing_left_fails_with_a_reason(
     )
 
 
+def test_a_zsh_reconfigure_reports_konsole_and_zshenv() -> None:
+    profile = "~/.local/share/konsole/tools-installer-zsh.profile"
+    konsole = ConfigStep(
+        "point Konsole at zsh",
+        "terminal_sync",
+        report=f"Konsole now starts zsh\n  {profile}",
+    )
+    zshenv = ConfigStep("export SHELL=/z/bin/zsh in ~/.zshenv", "zshenv_shell", report="/z/bin/zsh")
+    outcomes = execute_plan(
+        [_reconfigure_row("zsh", konsole, zshenv)],
+        _run_context(RunRecorder(), catalog={"zsh": _tool("zsh")}, terminal_sync=lambda: None),
+    )
+    assert outcomes[0].result == "done"
+    buf = io.StringIO()
+    render_done_notes(outcomes, Console(file=buf, width=100, no_color=True))
+    assert buf.getvalue().splitlines() == [
+        "zsh reconfigured — Konsole now starts zsh",
+        f"  {profile}",
+        "zsh reconfigured — ~/.zshenv exports SHELL",
+    ]
+
+
 @pytest.mark.parametrize(
     "status, expected, detail",
     [
@@ -1225,7 +1250,10 @@ _ALL_KIND_STEPS: dict[ConfigStepKind, ConfigStep] = {
 }
 
 # The details a dispatched step reports as a done note; every other kind reports none.
-_DISPATCH_DETAIL: dict[ConfigStepKind, str] = {"hook_register": "registered for codex"}
+_DISPATCH_DETAIL: dict[ConfigStepKind, str] = {
+    "hook_register": "registered for codex",
+    "zshenv_shell": "~/.zshenv exports SHELL",
+}
 
 
 def _execute_nothing(_method: Method, _runner: Runner) -> None:

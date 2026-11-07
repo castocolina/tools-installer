@@ -374,6 +374,10 @@ class _StepResult:
 _STEP_KINDS: frozenset[str] = frozenset(get_args(ConfigStepKind))
 
 
+# The done note of a zshenv_shell step (UI-SPEC section 4); its path is in the Shell section.
+_ZSHENV_DONE = "~/.zshenv exports SHELL"
+
+
 def _first_line_of(text: str) -> str:
     """The first line of a warning or refusal, for a one-line row detail."""
     return text.splitlines()[0]
@@ -411,9 +415,12 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         if ctx.terminal_sync is None:
             return _StepResult(failed="no terminal synchronizer bound")
         try:
-            return _StepResult(warning=ctx.terminal_sync())
+            warning = ctx.terminal_sync()
         except Exception as exc:
             return _StepResult(failed=first_line(exc))
+        # The synchronizer's own warning wins; a clean run reports the step's done note.
+        done = _ZSHENV_DONE if step.kind == "zshenv_shell" else step.report
+        return _StepResult(warning=warning or done)
     if step.kind == "pnpm_group_install":
         method = next((m for m in tool.methods if m.kind == "node"), None)
         if method is None:

@@ -11,6 +11,7 @@ from installer.checksums import ChecksumMismatch
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
 from installer.executors import ExecutorError
+from installer.model import ConfigStep
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
     outcome_detail_text,
@@ -29,6 +30,7 @@ from installer.render import (
     render_remove_yourself,
     render_run_report,
     render_run_summary,
+    render_shell_section,
     render_uninstall,
     render_verification,
     running_row_text,
@@ -1191,6 +1193,60 @@ def test_a_hook_reconfigure_prints_its_done_note() -> None:
     render_done_notes([outcome], console)
 
     assert buf.getvalue().splitlines() == ["codegraph reconfigured — registered for codex"]
+
+
+_ZSH = "/home/linuxbrew/.linuxbrew/bin/zsh"
+_KONSOLE_PROFILE = "~/.local/share/konsole/tools-installer-zsh.profile"
+
+
+def _zsh_reconfigured_outcome() -> RowOutcome:
+    steps = (
+        ConfigStep(
+            "point Konsole at zsh",
+            "terminal_sync",
+            report=f"Konsole now starts zsh\n  {_KONSOLE_PROFILE}",
+        ),
+        ConfigStep(f"export SHELL={_ZSH} in ~/.zshenv", "zshenv_shell", report=_ZSH),
+    )
+    return RowOutcome(
+        PlanRow("zsh", Disposition.RECONFIGURE, "does not start zsh", steps=steps),
+        "done",
+        detail=f"Konsole now starts zsh\n  {_KONSOLE_PROFILE}\n~/.zshenv exports SHELL",
+    )
+
+
+def test_the_shell_section_prints_after_a_zshenv_reconfigure() -> None:
+    console, buf = _console()
+    render_run_report([_zsh_reconfigured_outcome()], console)
+    assert buf.getvalue().splitlines()[-3:] == [
+        "Shell",
+        "~/.zshenv now exports SHELL; new terminals start with it.",
+        f"  SHELL={_ZSH}",
+    ]
+
+    kitty = RowOutcome(
+        PlanRow(
+            "kitty",
+            Disposition.RECONFIGURE,
+            "does not start zsh",
+            steps=(ConfigStep("point Kitty at zsh", "terminal_sync"),),
+        ),
+        "done",
+        detail="Kitty now starts zsh",
+    )
+    console, buf = _console()
+    render_run_report([kitty], console)
+    assert "Shell" not in buf.getvalue().splitlines()
+
+
+def test_reconfigure_report_lines_fit_78_cells() -> None:
+    outcome = _zsh_reconfigured_outcome()
+    console, buf = _console()
+    render_done_notes([outcome], console)
+    render_shell_section([outcome], console)
+    lines = buf.getvalue().splitlines()
+    assert len(lines) == 6
+    assert max(cell_len(line) for line in lines) <= 78
 
 
 def test_render_done_notes_is_silent_without_extras() -> None:
