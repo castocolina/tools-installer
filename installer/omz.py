@@ -41,10 +41,13 @@ import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import re
 import shlex
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from installer.atomic import atomic_write_text
 from installer.shellrc import apply_block, strip_block
+from installer.tweaks import bundle_marker_present
 
 # `import os` is the monkeypatch surface tests/test_omz.py uses (`omz.os.replace`).
 # It is the same stdlib module installer.atomic imports, so those patches still
@@ -101,12 +104,28 @@ _ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
 # unreachable for this match.
 _OH_MY_ZSH_SOURCE = re.compile(r"^[^#\n]*(?:^|[;&|]\s*|\s)(?:source|\.)\s+[^\n#]*oh-my-zsh\.sh")
 
+# A theme assignment as zsh reads it: plain, exported or typeset, indented or not. A
+# commented line starts with `#`, so it never matches. The value is read separately,
+# and a value it cannot read (unclosed quote, a space) is never replaced.
+_THEME_HEAD = re.compile(
+    r"^(?P<head>[ \t]*(?:export[ \t]+|typeset[ \t]+(?:-g[ \t]+)?)?ZSH_THEME=)(?P<rest>.*)$"
+)
+_THEME_VALUE = re.compile(
+    r"""(?P<quote>["']?)(?P<value>[^"'\s#]*)(?P=quote)(?P<tail>[ \t]*(?:#.*)?\r?)$"""
+)
+
 # The ownership record. It lives in ~/.myshellrc — a file this installer
 # created — because .zshrc must never carry a tools-installer marker. The body
 # is comments only, so the block is inert wherever the rc file is sourced.
 _OWNED_BEGIN = "# >>> tools-installer omz-plugins >>>"
 _OWNED_END = "# <<< tools-installer omz-plugins <<<"
 _ADDED_PREFIX = "# added:"
+
+# The theme claim, a second comment-only block in the same ~/.myshellrc and read by
+# the same closed-block reader. Its body is `# ZSH_THEME="<name>"`.
+THEME_BEGIN = "# >>> tools-installer omz-theme >>>"
+THEME_END = "# <<< tools-installer omz-theme <<<"
+_THEME_RECORD_PREFIX = "# ZSH_THEME="
 
 _NO_ARRAY = "No single-line plugins=(...) array to edit; only the single-line form is supported"
 _SHADOWED = (
@@ -261,20 +280,21 @@ def _atomic_write(path: Path, updated: str) -> None:
     atomic_write_text(path, updated)
 
 
-def _owned_block(added: tuple[str, ...]) -> str:
-    return "\n".join(
-        (
-            _OWNED_BEGIN,
-            "# Oh-My-Zsh plugin names this installer added to .zshrc's plugins=(...)",
-            "# array. Disabling removes exactly these and nothing else. Comments only:",
-            "# nothing here is executed.",
-            f"{_ADDED_PREFIX} {' '.join(added)}".rstrip(),
-            _OWNED_END,
-        )
+def _owned_body(added: tuple[str, ...]) -> tuple[str, ...]:
+    return (
+        "# Oh-My-Zsh plugin names this installer added to .zshrc's plugins=(...)",
+        "# array. Disabling removes exactly these and nothing else. Comments only:",
+        "# nothing here is executed.",
+        f"{_ADDED_PREFIX} {' '.join(added)}".rstrip(),
     )
 
 
-def _record(state_path: Path) -> tuple[str, ...] | None:
+def _record(
+    state_path: Path,
+    begin: str = _OWNED_BEGIN,
+    end: str = _OWNED_END,
+    prefix: str = _ADDED_PREFIX,
+) -> tuple[str, ...] | None:
     """The recorded names, or None when this installer holds no record at all.
 
     None and () are different answers: () means "we enabled the policy and the
@@ -294,12 +314,12 @@ def _record(state_path: Path) -> tuple[str, ...] | None:
     names: tuple[str, ...] = ()
     inside = False
     for line in state_path.read_text().split("\n"):
-        if line == _OWNED_BEGIN:
+        if line == begin:
             inside, names = True, ()
-        elif line == _OWNED_END and inside:
+        elif line == end and inside:
             inside, record = False, names
-        elif inside and line.startswith(_ADDED_PREFIX):
-            names = tuple(line[len(_ADDED_PREFIX) :].split())
+        elif inside and line.startswith(prefix):
+            names = tuple(line[len(prefix) :].split())
     return record
 
 
@@ -319,18 +339,19 @@ def plugins_owned(state_path: Path) -> bool:
     return _record(state_path) is not None
 
 
-def _record_owned(state_path: Path, added: tuple[str, ...]) -> None:
+def _record_owned(
+    state_path: Path, body: tuple[str, ...], begin: str = _OWNED_BEGIN, end: str = _OWNED_END
+) -> None:
     existing = state_path.read_text() if state_path.exists() else ""
-    _atomic_write(
-        state_path, apply_block(existing, _owned_block(added), begin=_OWNED_BEGIN, end=_OWNED_END)
-    )
+    block = "\n".join((begin, *body, end))
+    _atomic_write(state_path, apply_block(existing, block, begin=begin, end=end))
 
 
-def _clear_owned(state_path: Path) -> None:
+def _clear_owned(state_path: Path, begin: str = _OWNED_BEGIN, end: str = _OWNED_END) -> None:
     if not state_path.exists():
         return
     original = state_path.read_text()
-    stripped = strip_block(original, _OWNED_BEGIN, _OWNED_END)
+    stripped = strip_block(original, begin, end)
     if stripped != original:
         _atomic_write(state_path, stripped)
 
@@ -430,11 +451,17 @@ def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
 
 
 def write_plugins(
-    zshrc_path: Path, state_path: Path, plugins: tuple[str, ...] = MANAGED_PLUGINS
+    zshrc_path: Path,
+    state_path: Path,
+    plugins: tuple[str, ...] = MANAGED_PLUGINS,
+    *,
+    root: Path | None = None,
 ) -> tuple[str, ...]:
     """Enable managed plugins in zshrc_path, recording what was added in state_path.
 
-    Returns the names actually added.
+    Returns the names actually added. `root` is the real Oh-My-Zsh directory
+    (`omz_root`'s answer) written into a template this call appends; None keeps
+    the conventional `$HOME/.oh-my-zsh` default.
 
     The record and the .zshrc edit are transactional, in the only order that
     fails safe: `enable_plugins` raises for a refused array before anything is
@@ -447,13 +474,13 @@ def write_plugins(
     contain is a no-op); an absent one is not.
     """
     if not zshrc_path.exists():
-        ensure_zshrc_template(zshrc_path)
+        ensure_zshrc_template(zshrc_path, root)
     else:
         lines = _read_rc(zshrc_path).split("\n")
         if _sourced_oh_my_zsh(lines) is not None or not any(
             _ANY_PLUGINS_OPEN.match(line) for line in lines
         ):
-            ensure_zshrc_template(zshrc_path)
+            ensure_zshrc_template(zshrc_path, root)
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
     original = _read_rc(zshrc_path)
@@ -463,7 +490,7 @@ def write_plugins(
     previous = _record(state_path)
     owned = list(previous or ())
     owned.extend(name for name in added if name not in owned)
-    _record_owned(state_path, tuple(owned))
+    _record_owned(state_path, _owned_body(tuple(owned)))
     try:
         if updated != original:
             _atomic_write(zshrc_path, updated)
@@ -473,8 +500,10 @@ def write_plugins(
         if previous is None:
             _clear_owned(state_path)
         else:
-            _record_owned(state_path, previous)
+            _record_owned(state_path, _owned_body(previous))
         raise
+    # The default prompt follows the plugins: enabling them also writes the theme.
+    apply_theme(zshrc_path, state_path, default_theme(state_path))
     return added
 
 
@@ -525,6 +554,102 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
         _atomic_write(zshrc_path, rewritten)
     _clear_owned(state_path)
     return removed
+
+
+def owned_theme(state_path: Path) -> str | None:
+    """The theme this installer recorded writing, or None when it claims none."""
+    record = _record(state_path, THEME_BEGIN, THEME_END, _THEME_RECORD_PREFIX)
+    return _bare(record[0]) if record else None
+
+
+def _record_theme(state_path: Path, name: str) -> None:
+    _record_owned(state_path, (f'{_THEME_RECORD_PREFIX}"{name}"',), THEME_BEGIN, THEME_END)
+
+
+def default_theme(state_path: Path) -> str:
+    """The theme to write: empty once starship owns the prompt, so only one prompt runs."""
+    return "" if bundle_marker_present("starship", state_path) else "robbyrussell"
+
+
+def _last_theme_line(lines: list[str]) -> int | None:
+    """Index of the last theme assignment, the one zsh honors; None when there is none."""
+    found: int | None = None
+    for i, line in enumerate(lines):
+        if _THEME_HEAD.match(line):
+            found = i
+    return found
+
+
+def _theme_parts(line: str) -> tuple[str, re.Match[str]] | None:
+    """(head, value match) of a theme assignment whose value reads; None otherwise."""
+    head = _THEME_HEAD.match(line)
+    if head is None:
+        return None
+    value = _THEME_VALUE.match(head.group("rest"))
+    return None if value is None else (head.group("head"), value)
+
+
+def set_theme(content: str, name: str, *, replace: str | None = None) -> str:
+    """Insert `ZSH_THEME="name"` before the source line, or rewrite a value `replace` names.
+
+    An existing theme line is kept unless its value equals `replace`, in which case
+    only that value is rewritten and its indent, `export`/`typeset` and comment stay.
+    With no theme line the theme goes right before the Oh-My-Zsh source command, and
+    content without that command is returned unchanged.
+    """
+    lines = content.split("\n")
+    index = _last_theme_line(lines)
+    if index is not None:
+        parts = _theme_parts(lines[index])
+        if replace is None or parts is None or parts[1].group("value") != replace:
+            return content
+        head, value = parts
+        lines[index] = f'{head}"{name}"{value.group("tail")}'
+        return "\n".join(lines)
+    source = _sourced_oh_my_zsh(lines)
+    if source is None:
+        return content
+    lines.insert(source, _crlf_line(f'ZSH_THEME="{name}"', like=lines[source]))
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class ThemeResult:
+    """What apply_theme did, and the theme now in force (None without a source line)."""
+
+    outcome: Literal["added", "replaced", "yours", "no-source"]
+    theme: str | None
+
+
+def apply_theme(zshrc_path: Path, state_path: Path, name: str) -> ThemeResult:
+    """Write the theme into .zshrc only where it may go, reserving the claim first.
+
+    The record is reserved before the edit and restored when the edit is refused, the
+    write_plugins order. Recording after the edit would strand the claim on a failed
+    record write, and starship could then never replace this installer's default.
+    """
+    if not zshrc_path.exists():
+        return ThemeResult("no-source", None)
+    original = _read_rc(zshrc_path)
+    lines = original.split("\n")
+    if _sourced_oh_my_zsh(lines) is None:
+        return ThemeResult("no-source", None)
+    index = _last_theme_line(lines)
+    previous = owned_theme(state_path)
+    updated = set_theme(original, name, replace=previous)
+    if updated == original:
+        parts = None if index is None else _theme_parts(lines[index])
+        return ThemeResult("yours", None if parts is None else parts[1].group("value"))
+    _record_theme(state_path, name)
+    try:
+        _atomic_write(zshrc_path, updated)
+    except OSError:
+        if previous is None:
+            _clear_owned(state_path, THEME_BEGIN, THEME_END)
+        else:
+            _record_theme(state_path, previous)
+        raise
+    return ThemeResult("replaced" if index is not None else "added", name)
 
 
 def omz_root(home: Path, environ: Mapping[str, str]) -> Path | None:

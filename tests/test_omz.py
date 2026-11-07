@@ -1,3 +1,4 @@
+import shlex
 from pathlib import Path
 
 import pytest
@@ -775,7 +776,8 @@ def test_write_plugins_repairs_source_before_plugins_and_is_byte_stable(
     assert write_plugins(zshrc, state) == ("docker",)
     first = zshrc.read_text()
     assert first == (
-        'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git docker)\nsource $ZSH/oh-my-zsh.sh\n'
+        'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git docker)\n'
+        'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\n'
     )
     assert owned_plugins(state) == ("docker",)
     assert write_plugins(zshrc, state) == ()
@@ -799,3 +801,123 @@ def test_non_utf8_zshrc_is_refused_as_an_oserror_without_changing_bytes(tmp_path
 
     assert isinstance(caught.value, OSError)
     assert zshrc.read_bytes() == original
+
+
+def test_write_plugins_passes_the_root_on_repair(tmp_path: Path) -> None:
+    """A .zshrc with no source line gets its template from the real root, not the default."""
+    zshrc, state = _sandbox(tmp_path, "export FOO=1\n")
+    custom = tmp_path / "custom"
+    write_plugins(zshrc, state, root=custom)
+    text = zshrc.read_text()
+    assert f"export ZSH={shlex.quote(str(custom))}" in text
+    assert "$HOME/.oh-my-zsh" not in text
+
+
+def test_write_plugins_keeps_the_default_root_without_one(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, "export FOO=1\n")
+    write_plugins(zshrc, state)
+    assert 'export ZSH="$HOME/.oh-my-zsh"' in zshrc.read_text()
+
+
+_SOURCE_ONLY = "plugins=(git)\nsource $ZSH/oh-my-zsh.sh\n"
+
+
+def test_a_zshrc_without_a_theme_gets_robbyrussell_before_the_source_line() -> None:
+    content = 'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git)\nsource $ZSH/oh-my-zsh.sh\nalias x=y\n'
+    assert omz.set_theme(content, "robbyrussell") == (
+        'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git)\n'
+        'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\nalias x=y\n'
+    )
+
+
+def test_an_existing_theme_is_never_overwritten(tmp_path: Path) -> None:
+    agnoster = 'ZSH_THEME="agnoster"\nsource $ZSH/oh-my-zsh.sh\n'
+    assert omz.set_theme(agnoster, "robbyrussell") == agnoster
+    assert omz.set_theme(agnoster, "", replace="robbyrussell") == agnoster
+    zshrc, state = _sandbox(tmp_path, agnoster)
+    assert omz.apply_theme(zshrc, state, "robbyrussell") == omz.ThemeResult("yours", "agnoster")
+    assert zshrc.read_text() == agnoster
+    commented = '# ZSH_THEME="agnoster"\nsource $ZSH/oh-my-zsh.sh\n'
+    assert 'ZSH_THEME="robbyrussell"\nsource' in omz.set_theme(commented, "robbyrussell")
+
+
+def test_no_source_line_writes_nothing(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, "plugins=(git)\nalias x=y\n")
+    assert omz.apply_theme(zshrc, state, "robbyrussell") == omz.ThemeResult("no-source", None)
+    assert zshrc.read_text() == "plugins=(git)\nalias x=y\n"
+    assert not state.exists()
+
+
+def test_starship_replaces_only_the_installer_default(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, _SOURCE_ONLY)
+    assert omz.apply_theme(zshrc, state, "robbyrussell") == omz.ThemeResult("added", "robbyrussell")
+    assert omz.owned_theme(state) == "robbyrussell"
+    assert omz.apply_theme(zshrc, state, "") == omz.ThemeResult("replaced", "")
+    assert 'ZSH_THEME=""\nsource' in zshrc.read_text()
+    assert omz.owned_theme(state) == ""
+    user = tmp_path / "user"
+    user.mkdir()
+    zshrc, state = _sandbox(user, 'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\n')
+    assert omz.apply_theme(zshrc, state, "") == omz.ThemeResult("yours", "robbyrussell")
+    assert zshrc.read_text() == 'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\n'
+
+
+def test_the_default_is_empty_when_the_starship_block_is_present(tmp_path: Path) -> None:
+    state = tmp_path / ".myshellrc"
+    assert omz.default_theme(state) == "robbyrussell"
+    state.write_text(
+        '# >>> tools-installer tweak:starship >>>\neval "$(starship init zsh)"\n'
+        "# <<< tools-installer tweak:starship <<<\n"
+    )
+    assert omz.default_theme(state) == ""
+
+
+def test_write_plugins_adds_the_default_theme(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(
+        tmp_path, 'export ZSH="$HOME/.oh-my-zsh"\nplugins=(z)\nsource $ZSH/oh-my-zsh.sh\n'
+    )
+    write_plugins(zshrc, state)
+    assert 'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh' in zshrc.read_text()
+    remove_plugins(zshrc, state)
+    assert 'ZSH_THEME="robbyrussell"\n' in zshrc.read_text()
+    user = tmp_path / "user"
+    user.mkdir()
+    zshrc, state = _sandbox(user, 'plugins=(z)\nZSH_THEME="agnoster"\nsource $ZSH/oh-my-zsh.sh\n')
+    write_plugins(zshrc, state)
+    assert zshrc.read_text().count("ZSH_THEME") == 1
+    assert 'ZSH_THEME="agnoster"\nsource' in zshrc.read_text()
+
+
+def test_an_exported_or_indented_theme_counts_as_a_theme() -> None:
+    exported = 'export ZSH_THEME="agnoster"\nsource $ZSH/oh-my-zsh.sh\n'
+    assert omz.set_theme(exported, "robbyrussell") == exported
+    indented = 'if [ -n "$X" ]; then\n  ZSH_THEME="agnoster"\nfi\nsource $ZSH/oh-my-zsh.sh\n'
+    assert omz.set_theme(indented, "robbyrussell") == indented
+    commented = '# export ZSH_THEME="x"\nsource $ZSH/oh-my-zsh.sh\n'
+    assert 'ZSH_THEME="robbyrussell"\nsource' in omz.set_theme(commented, "robbyrussell")
+    recorded = 'export ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\n'
+    assert omz.set_theme(recorded, "", replace="robbyrussell") == (
+        'export ZSH_THEME=""\nsource $ZSH/oh-my-zsh.sh\n'
+    )
+
+
+def test_a_failed_zshrc_write_leaves_the_record_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    zshrc, state = _sandbox(tmp_path, _SOURCE_ONLY)
+    _fail_writes_to(monkeypatch, zshrc)
+    with pytest.raises(OSError, match="disk full"):
+        omz.apply_theme(zshrc, state, "robbyrussell")
+    assert zshrc.read_text() == _SOURCE_ONLY
+    assert omz.owned_theme(state) is None
+
+
+def test_a_failed_zshrc_write_keeps_the_previous_theme_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    zshrc, state = _sandbox(tmp_path, _SOURCE_ONLY)
+    assert omz.apply_theme(zshrc, state, "robbyrussell") == omz.ThemeResult("added", "robbyrussell")
+    _fail_writes_to(monkeypatch, zshrc)
+    with pytest.raises(OSError, match="disk full"):
+        omz.apply_theme(zshrc, state, "")
+    assert omz.owned_theme(state) == "robbyrussell"

@@ -14,6 +14,7 @@ from installer.tweaks import (
     BUNDLES,
     TweakBundle,
     applicable_bundles,
+    bundle_marker_present,
     install_tweak_executables,
     remove_tweak,
     remove_tweak_executables,
@@ -461,6 +462,18 @@ def test_write_then_present_then_remove_roundtrip(tmp_path: Path) -> None:
     remove_tweak(bundle, rc)
     assert tweak_present(bundle, rc) is False
     assert "wait_time()" not in rc.read_text()
+
+
+def test_bundle_marker_present_reads_the_begin_marker(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    bundle = _bundle("countdown")
+    assert bundle_marker_present(bundle.id, rc) is False
+    rc.write_text("# >>> tools-installer tweak:countdown >>>x\n")
+    assert bundle_marker_present(bundle.id, rc) is False
+    assert tweak_present(bundle, rc) is False
+    rc.write_text("# >>> tools-installer tweak:countdown >>>\n")
+    assert bundle_marker_present(bundle.id, rc) is True
+    assert tweak_present(bundle, rc) is True
 
 
 def test_re_enable_does_not_duplicate(tmp_path: Path) -> None:
