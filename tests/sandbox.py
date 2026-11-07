@@ -412,6 +412,10 @@ def check_script(
     _ScriptChecker(script, env, cwd, policy).run()
 
 
+# Long options that change no file the shell reads before its script.
+_KNOWN_LONG_SHELL_OPTIONS = frozenset({"--norc", "--noprofile", "--posix", "--noediting"})
+
+
 def check_shell_args(
     rest: Sequence[str],
     *,
@@ -429,9 +433,17 @@ def check_shell_args(
             index += 1
             break
         if word.startswith("--"):
+            # `--rcfile`/`--init-file` and any option the guard does not know may run a file
+            if word not in _KNOWN_LONG_SHELL_OPTIONS:
+                raise AssertionError(f"the guard does not allow the shell option {word}")
             index += 1
         elif word.startswith("-") and len(word) > 1:
             cluster = word[1:]
+            if "s" in cluster:
+                raise AssertionError(
+                    "the suite tried to run a shell script from stdin (-s); "
+                    "move it into a file under tmp_path and run it as bash <file>"
+                )
             no_exec = no_exec or "n" in cluster
             command = command or "c" in cluster
             # a cluster ending in `o` takes the option name as the next word

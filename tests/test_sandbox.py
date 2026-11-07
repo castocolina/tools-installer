@@ -601,6 +601,35 @@ def test_shell_scripts_refuse_a_shell_with_no_arguments(shells: _Shells) -> None
         check_launch([shells.paths["bash"]], env=None, cwd=None, policy=shells.policy)
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["-s", "{FILE}"],
+        ["-es", "{FILE}"],
+        ["-s"],
+        ["--rcfile", "{FILE}", "-c", "uv x"],
+        ["--init-file", "{FILE}", "-c", "echo hi"],
+        ["--rcfile={FILE}", "-c", "echo hi"],
+        ["--debugger", "-c", "echo hi"],
+    ],
+)
+def test_shell_options_that_read_an_unchecked_script_are_refused(
+    shells: _Shells, options: list[str]
+) -> None:
+    """WR-02: `-s` reads the script from stdin and an rc or init file runs before `-c`."""
+    argv = [shells.paths["bash"], *(o.replace("{FILE}", str(shells.file)) for o in options)]
+    with pytest.raises(AssertionError):
+        check_launch(argv, env=None, cwd=None, policy=shells.policy)
+
+
+def test_known_long_shell_options_still_reach_the_script_check(shells: _Shells) -> None:
+    bash = shells.paths["bash"]
+    argv = [bash, "--noprofile", "--norc", "-c", "echo hi"]
+    check_launch(argv, env=None, cwd=None, policy=shells.policy)
+    with pytest.raises(AssertionError):
+        check_launch([*argv[:-1], "uv x"], env=None, cwd=None, policy=shells.policy)
+
+
 def test_shell_no_exec_and_script_files(shells: _Shells, outside: Path) -> None:
     mentions_uv = shells.file.parent / "mentions-uv.sh"
     mentions_uv.write_text("uv --version\n")
