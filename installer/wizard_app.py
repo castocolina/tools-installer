@@ -31,12 +31,18 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from installer import daemon, env_redirect
+from installer import daemon, env_redirect, receipts
+from installer.agent_settings import ledger_summary
 from installer.app import (
+    HOST_SETTINGS_OS,
     UninstallDecision,
     path_writer_lines_for,
     pnpm_removal_packages,
+    removal_change_lines,
+    removal_result_lines,
     removal_runs_line,
+    settings_change_lines,
+    unregister_runs_line,
 )
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated, health_cell
 from installer.diskusage import DiskPressure
@@ -57,6 +63,7 @@ from installer.guidance import (
     doctor_guidance,
     guard_guidance,
 )
+from installer.locations import display_path
 from installer.model import Tool
 from installer.pnpm_globals import (
     PNPM_SMOKE_FAILED,
@@ -73,6 +80,7 @@ from installer.policy import (
     lost_policy_ids,
     move_link_mode,
 )
+from installer.postinstall import host_labels
 from installer.rcclean import PathWriterLine, group_writer_lines
 from installer.render import fold_reason, guidance_text, outcome_detail_text, outcome_word
 from installer.resolve import UnavailableReason
@@ -1009,6 +1017,7 @@ class _UninstallEntry:
     is_ban: bool
     is_path_block: bool
     is_tweaks: bool = False
+    is_settings: bool = False
     tool: Tool | None = None
     group: UninstallState | None = None
     # The command the row's preview showed (L1/L3); the decision hands it back to the remover.
@@ -1033,7 +1042,10 @@ _NOTHING_TO_UNINSTALL = "Nothing to uninstall."
 _BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
-_ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY)
+_SETTINGS_KEY = "#settings"
+_ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY, _SETTINGS_KEY)
+# (ban names, PATH block present, active tweak ids, ledgered settings files)
+_EnvState = tuple[list[str], bool, tuple[str, ...], tuple[Path, ...]]
 _REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 _REMOVAL_QUIT_CUT = "Quit before the removal finished; some files may remain."
 
@@ -1155,8 +1167,8 @@ class UninstallScreen(AppScreen):
         # stashed on `self._startup_error`; the first `enter_view` surfaces it
         # as a one-time warn and re-reads, so the screen self-heals.
         env, env_error = run_live(self._env_state)
-        empty_env: tuple[list[str], bool, tuple[str, ...]] = ([], False, ())
-        self._ban_names, self._has_path_block, self._tweak_ids = (
+        empty_env: _EnvState = ([], False, (), ())
+        self._ban_names, self._has_path_block, self._tweak_ids, self._settings_files = (
             env if env is not None else empty_env
         )
         self._startup_error: str | None = env_error
@@ -1184,6 +1196,8 @@ class UninstallScreen(AppScreen):
             entries.append(self._block_entry())
         if self._tweak_ids:
             entries.append(self._tweak_entry())
+        if self._settings_files:
+            entries.append(self._settings_entry())
         return entries
 
     def _state_of(self, tool: Tool) -> ToolState | None:
@@ -1380,6 +1394,30 @@ class UninstallScreen(AppScreen):
             is_tweaks=True,
         )
 
+    def _settings_entry(self) -> _UninstallEntry:
+        """The agent and editor settings row (UI-SPEC section 6, O5): one revert for every key
+        the ledgers record, which never touches a key the user changed since."""
+        files = ", ".join(display_path(path) for path in self._settings_files)
+        return _UninstallEntry(
+            key=_SETTINGS_KEY,
+            cells=[
+                mark(False),
+                Text("agent/editor settings", style="bold yellow"),
+                Text(""),
+                Text("env", style="yellow"),
+                Text("shell config", style="dim"),
+                Text(
+                    f"keys this installer wrote in {len(self._settings_files)} file(s)", style="dim"
+                ),
+            ],
+            selectable=True,
+            detail=f"reverts only keys that still hold this installer's value: {files}",
+            paths=(),
+            is_ban=False,
+            is_path_block=False,
+            is_settings=True,
+        )
+
     # -- browser adapter ---------------------------------------------------
     def _adapter(self) -> BrowserAdapter[_UninstallEntry]:
         return BrowserAdapter(
@@ -1414,7 +1452,7 @@ class UninstallScreen(AppScreen):
         env = [
             entry
             for entry in self._entries
-            if entry.is_ban or entry.is_path_block or entry.is_tweaks
+            if entry.is_ban or entry.is_path_block or entry.is_tweaks or entry.is_settings
         ]
         if env:
             sections.append(("environment", "shell config the installer manages", env))
@@ -1433,22 +1471,28 @@ class UninstallScreen(AppScreen):
         if any(uninstall_group(self._state_of(tool)) is not None for tool in self._tools):
             self._placeholders = False
 
-    def _env_state(self) -> tuple[list[str], bool, tuple[str, ...]]:
-        """The three environment predicates another view can change while
-        this one is suspended, as one tuple.
+    def _env_state(self) -> _EnvState:
+        """The environment predicates another view can change while this one is
+        suspended, as one tuple.
 
         Every one of them touches the FILESYSTEM and can therefore raise
         (CR-01, 15.4-REVIEW.md): `has_path_block` -> `shellrc.has_managed_block`
         -> `Path.read_text()`; `tweak_ids` -> `active_tweak_ids` -> the rc files
         and the managed bin dir; `ban_names` -> `guard_state`, which probes that
-        same bin dir. That is why this tuple is its own seam: every caller
-        evaluates it through `run_live`, so a failure degrades to the last known
+        same bin dir; the settings files -> the ledgers. That is why this tuple is its own seam:
+        every caller evaluates it through `run_live`, so a failure degrades to the last known
         values plus a warn rather than escaping the nav path.
         """
+        settings_files = tuple(
+            path
+            for agent in receipts.CONFIG_AGENTS
+            for path, _keys in ledger_summary(agent, home=Path.home(), platform_os=HOST_SETTINGS_OS)
+        )
         return (
             self._ban_names_of(),
             self._has_path_block_of(),
             self._tweak_ids_of(),
+            settings_files,
         )
 
     def _reread_env(self) -> str | None:
@@ -1458,7 +1502,7 @@ class UninstallScreen(AppScreen):
         `state_refreshed` call it."""
         env, error = run_live(self._env_state)
         if env is not None:
-            self._ban_names, self._has_path_block, self._tweak_ids = env
+            self._ban_names, self._has_path_block, self._tweak_ids, self._settings_files = env
         return error
 
     def enter_view(self) -> None:
@@ -1534,6 +1578,10 @@ class UninstallScreen(AppScreen):
         return _TWEAK_KEY in self._browser.selected
 
     @property
+    def remove_settings(self) -> bool:
+        return _SETTINGS_KEY in self._browser.selected
+
+    @property
     def detail_text(self) -> str:
         return self._browser.detail_text
 
@@ -1580,8 +1628,18 @@ class UninstallScreen(AppScreen):
         it goes through `sanitize_log_line` and is appended as plain `Text`, never markup."""
         lines: list[Text] = []
         for tool in decision.tools:
+            # A hook tool's undo runs first, so its line comes before its own command (A24).
+            for undo in decision.unregister.get(tool.id, ()):
+                lines.append(_review_line(sanitize_log_line(unregister_runs_line(tool.id, undo))))
             if argv := decision.argv.get(tool.id):
                 lines.append(_review_line(sanitize_log_line(removal_runs_line(tool.id, argv))))
+        # Block 3b, what changes (UI-SPEC section 6): the same lines the CLI previews.
+        changes = removal_change_lines(
+            decision.tools, platform_os=HOST_SETTINGS_OS, active_tweaks=self._tweak_ids
+        )
+        if decision.revert_settings:
+            changes += settings_change_lines(receipts.CONFIG_AGENTS, platform_os=HOST_SETTINGS_OS)
+        lines.extend(_review_line(sanitize_log_line(line)) for line in dict.fromkeys(changes))
         deleted = [
             _review_line(sanitize_log_line(f"  {entry} ({tool.id})"))
             for tool in decision.tools
@@ -1657,6 +1715,8 @@ class UninstallScreen(AppScreen):
             parts.append("the PATH wiring")
         if _TWEAK_KEY in ids:
             parts.append("the shell tweaks")
+        if _SETTINGS_KEY in ids:
+            parts.append("the agent/editor settings")
         return ", ".join(parts)
 
     def _decision(
@@ -1681,6 +1741,7 @@ class UninstallScreen(AppScreen):
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
+            revert_settings=self.remove_settings,
             config=deleted,
         )
         return decision, kept, frozenset(tool.id for tool in flagged)
@@ -1859,6 +1920,11 @@ class UninstallScreen(AppScreen):
         if failed:
             summary_parts.append(fix_here)
         summary_parts.extend(self._config_lines(message.decision, swept))
+        if swept.unregistered:
+            summary_parts.append(
+                f"Unregistered from agent hosts: {host_labels(swept.unregistered)}."
+            )
+        summary_parts.extend(removal_result_lines(swept))
         # Empty when no lever was chosen; a blank line would cost a status row.
         if applied := self._applied_summary(message.decision, swept):
             summary_parts.append(applied)

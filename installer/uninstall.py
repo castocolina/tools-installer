@@ -566,6 +566,11 @@ class SweepResult:
     with_group: tuple[str, ...] = ()
     # The hosts the hook undo ran for, over every removed tool (D-04), sorted.
     unregistered: tuple[str, ...] = ()
+    # Agents whose ledgered settings keys were reverted, and those kept as the user changed them.
+    settings_reverted: tuple[str, ...] = ()
+    settings_kept: tuple[str, ...] = ()
+    # Tools whose shell-init bundle went off with their removal (D-11).
+    shell_init_off: tuple[str, ...] = ()
 
 
 def policy_owned(policy: Policy) -> bool:

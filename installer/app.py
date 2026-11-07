@@ -5,6 +5,7 @@ import dataclasses
 import os
 import shlex
 import shutil
+import sys
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 from rich.console import Console
 
 from installer import receipts, shellrc
+from installer.agent_settings import ledger_summary, revert_agent
 from installer.atomic import atomic_write_text
 from installer.cli import Options
 from installer.deps import resolve_dependencies
@@ -30,7 +32,7 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
-from installer.locations import path_scan_rc_paths
+from installer.locations import display_path, path_scan_rc_paths
 from installer.model import Tool
 from installer.ownership import listed_name, manager_listing
 from installer.platform import Platform
@@ -641,6 +643,113 @@ def _command_error_line(exc: CommandError) -> str:
     return next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
 
 
+# Settings are written and reverted under the host's OS; only "macos" is compared, never "linux".
+HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
+
+
+def settings_change_lines(agent_ids: Iterable[str], *, platform_os: str) -> tuple[str, ...]:
+    """The settings keys the ledgers record, one line per ledgered file (UI-SPEC section 6)."""
+    return tuple(
+        f"{agent}: removes {', '.join(keys)} from {display_path(path)}"
+        for agent in agent_ids
+        for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
+    )
+
+
+def removal_change_lines(
+    tools: Iterable[Tool], *, platform_os: str, active_tweaks: Collection[str]
+) -> tuple[str, ...]:
+    """What removing these tools changes: the settings keys a removal reverts and the shell-init
+    bundle it turns off (UI-SPEC section 6, block 3b). `active_tweaks` is the policy-id list the
+    sweep itself reads, so the preview and the effect cannot disagree."""
+    lines: list[str] = []
+    for tool in tools:
+        if tool.id in receipts.CONFIG_AGENTS:
+            lines.extend(settings_change_lines((tool.id,), platform_os=platform_os))
+        if tool.id in SHELL_INIT_TOOLS and f"tweak:{tool.id}" in active_tweaks:
+            lines.append(f"{tool.id}: turns off its shell init in ~/.myshellrc")
+    return tuple(lines)
+
+
+def _revert_settings(
+    agent_ids: Iterable[str], *, platform_os: str
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Revert each agent's ledgered keys that still hold our value (SPEC R8, D-08).
+
+    Returns (agents with a key reverted, agents with a key the user changed since, warnings for
+    a file that could not be reverted). The one revert loop for every removal route (23-REUSE 15-1).
+    """
+    reverted: list[str] = []
+    kept: list[str] = []
+    warnings: list[str] = []
+    for agent in agent_ids:
+        for result in revert_agent(agent, home=Path.home(), platform_os=platform_os):
+            if result.refused is not None:
+                warnings.append(f"could not revert {display_path(result.path)} — {result.refused}")
+                continue
+            if any(key.kind == "removed" for key in result.keys):
+                reverted.append(agent)
+            if any(key.kind == "kept_changed" for key in result.keys):
+                kept.append(agent)
+    return (
+        tuple(dict.fromkeys(reverted)),
+        tuple(dict.fromkeys(kept)),
+        tuple(dict.fromkeys(warnings)),
+    )
+
+
+def _after_removal(
+    tool: Tool,
+    *,
+    bundles: tuple[TweakBundle, ...],
+    bin_dir: Path,
+    myshellrc_path: Path,
+    extra_policies: tuple[Policy, ...],
+    platform_os: str,
+) -> SweepResult:
+    """What a successful removal takes with it: its settings keys, its shell-init bundle, and the
+    desktop SHELL row when zsh goes (T-23-62). Nothing else of the tweak sweep is touched."""
+    parts: list[SweepResult] = []
+    if tool.id in receipts.CONFIG_AGENTS:
+        # shortcut: no CONFIG_AGENTS tool declares config_paths, so a removal never deletes a
+        # settings file; when one does, revert first, then delete it and drop its ledger entries.
+        reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
+        parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
+    bundle = next((b for b in bundles if b.id == tool.id), None)
+    if tool.id in SHELL_INIT_TOOLS and bundle is not None:
+        shell = sweep_policies(active_policies((bundle,), rc_path=myshellrc_path, bin_dir=bin_dir))
+        parts.append(dataclasses.replace(shell, shell_init_off=(tool.id,) if shell.swept else ()))
+    if tool.id == "zsh" and platform_os != "macos":
+        owned = [p for p in extra_policies if p.id == "desktop-shell" and policy_owned(p)]
+        parts.append(sweep_policies(owned))
+    return _merge(parts)
+
+
+def _merge(results: Sequence[SweepResult]) -> SweepResult:
+    """One teardown's sweeps read as one result: every id and warning, in the order given."""
+    return SweepResult(
+        swept=tuple(x for r in results for x in r.swept),
+        failed=tuple(x for r in results for x in r.failed),
+        warnings=tuple(x for r in results for x in r.warnings),
+        settings_reverted=tuple(x for r in results for x in r.settings_reverted),
+        settings_kept=tuple(x for r in results for x in r.settings_kept),
+        shell_init_off=tuple(x for r in results for x in r.shell_init_off),
+    )
+
+
+def removal_result_lines(result: SweepResult) -> tuple[str, ...]:
+    """The settings lines a removal result reports (UI-SPEC section 6), for the CLI and the view."""
+    lines: list[str] = []
+    if result.settings_reverted:
+        lines.append(f"Settings reverted for {', '.join(result.settings_reverted)}.")
+    if result.settings_kept:
+        kept = ", ".join(result.settings_kept)
+        lines.append(f"Kept settings you changed since this installer wrote them: {kept}.")
+    if result.shell_init_off:
+        lines.append(f"Shell init turned off for {', '.join(result.shell_init_off)}.")
+    return tuple(lines)
+
+
 def remove_tool(
     tool: Tool,
     *,
@@ -728,6 +837,7 @@ def run_uninstall(
     daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
     runner: Runner,
+    platform_os: str = HOST_SETTINGS_OS,
 ) -> tuple[list[Path], tuple[str, ...]]:
     """Preview each tool's removal, confirm, then remove the tools in dependency order,
     the PATH block, any pip/npm-ban artifacts (shims + alias blocks), and still-enabled
@@ -779,9 +889,14 @@ def run_uninstall(
         extra_policies=extra_policies,
     )
     tweaks = tuple(policy.id for policy in policies)
-    # A machine whose only tools-installer footprint is an enabled tweak must
+    settings_files = [
+        (agent, path, keys)
+        for agent in receipts.CONFIG_AGENTS
+        for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
+    ]
+    # A machine whose only tools-installer footprint is an enabled tweak or a settings key must
     # not be told there is nothing to uninstall.
-    if not paths and not commands and not shimmed and not tweaks:
+    if not paths and not commands and not shimmed and not tweaks and not settings_files:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
         # Even here the user learns what matched by name and was left alone.
         render_remove_yourself(yourself, console)
@@ -844,6 +959,22 @@ def run_uninstall(
         )
         for entry in kept_config:
             console.print(f"  {entry}", markup=False, soft_wrap=True)
+    for line in removal_change_lines(
+        (tool for tool, plan in ordered if plan.level != "none"),
+        platform_os=platform_os,
+        active_tweaks=tweaks,
+    ):
+        console.print(line, markup=False, soft_wrap=True)
+    if settings_files:
+        console.print(
+            "Agent and editor settings this installer wrote (reverted):",
+            markup=False,
+            soft_wrap=True,
+        )
+        for _agent, path, keys in settings_files:
+            console.print(
+                f"  {display_path(path)}: {', '.join(keys)}", markup=False, soft_wrap=True
+            )
     if not confirm("Remove these artifacts?"):
         return [], ()
     # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. Each tool
@@ -853,6 +984,7 @@ def run_uninstall(
     removed: list[Path] = []
     failed: list[str] = []
     handled: set[str] = set()
+    after: list[SweepResult] = []
     for tool, plan in ordered:
         if plan.level == "none" or tool.id in handled:
             continue
@@ -869,6 +1001,16 @@ def run_uninstall(
             console.print(line)
         if outcome.removed:
             removed.extend(plan.removable)
+            after.append(
+                _after_removal(
+                    tool,
+                    bundles=bundles,
+                    bin_dir=default_bin_dir,
+                    myshellrc_path=myshellrc_path,
+                    extra_policies=extra_policies,
+                    platform_os=platform_os,
+                )
+            )
             if outcome.unregistered:
                 console.print(
                     f"Unregistered from agent hosts: {host_labels(outcome.unregistered)}.",
@@ -883,6 +1025,11 @@ def run_uninstall(
         else:
             console.print(f"{tool.id}: remove failed — {outcome.detail}")
             failed.append(tool.id)
+    # O5: the whole-environment run reverts every key the installer wrote, even for an agent
+    # whose tool is not being removed; each key still goes only while it holds our value.
+    reverted, kept, warnings = _revert_settings(receipts.CONFIG_AGENTS, platform_os=platform_os)
+    after.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
+    done = _merge(after)
     remove_managed_block(myshellrc_path)
     remove_shims(default_bin_dir)
     remove_ban_aliases(myshellrc_path)
@@ -890,7 +1037,8 @@ def run_uninstall(
         remove_ban_aliases(rc_path)
     # Report the sweep's own result, not the preview: only this knows what came
     # off, and a per-policy failure no longer aborts the rest of the teardown.
-    swept = sweep_policies(policies)
+    # A policy a tool's own removal already turned off is not swept (and reported) twice.
+    swept = sweep_policies([policy for policy in policies if policy.id not in done.swept])
     if swept.swept:
         # Byte-identical to today ("Shell tweaks disabled: ...") when no
         # daemon: id is among what the sweep actually swept.
@@ -904,7 +1052,9 @@ def run_uninstall(
         console.print(
             f"Could not disable: {', '.join(swept.failed)}. Check permissions and re-run."
         )
-    for warning in swept.warnings:
+    for line in removal_result_lines(done):
+        console.print(line, markup=False)
+    for warning in (*done.warnings, *swept.warnings):
         console.print(f"Warning: {warning}.")
     # Composition-root-only, and only AFTER the sweep: daemon_policy.remove()
     # itself still calls daemon.record_decided as part of that same sweep
@@ -946,6 +1096,8 @@ class UninstallDecision:
     unregister: Mapping[str, tuple[tuple[str, ...], ...]] = field(
         default_factory=dict[str, tuple[tuple[str, ...], ...]]
     )
+    # The environment row: revert every key the ledgers record, for every settings agent (O5).
+    revert_settings: bool = False
 
 
 def _config_step(
@@ -993,6 +1145,7 @@ def perform_uninstall(
     extra_policies: tuple[Policy, ...],
     runner: Runner,
     catalog: Sequence[Tool],
+    platform_os: str = HOST_SETTINGS_OS,
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. `catalog` is the whole registry (review R1-15): a config path is shared with
@@ -1031,6 +1184,7 @@ def perform_uninstall(
     remove_failed: list[tuple[str, str]] = []
     with_group: list[str] = []
     unregistered: list[str] = []
+    after: list[SweepResult] = []
     for tool in removal_order(decision.tools):
         if tool.id in removed:  # retired with its pnpm group earlier in this run
             continue
@@ -1047,6 +1201,16 @@ def perform_uninstall(
         unregistered.extend(outcome.unregistered)
         if outcome.removed:
             removed.append(tool.id)
+            after.append(
+                _after_removal(
+                    tool,
+                    bundles=bundles,
+                    bin_dir=bin_dir,
+                    myshellrc_path=myshellrc_path,
+                    extra_policies=extra_policies,
+                    platform_os=platform_os,
+                )
+            )
         else:
             remove_failed.append((tool.id, outcome.detail))
         if outcome.removed and not outcome.detail:
@@ -1062,6 +1226,10 @@ def perform_uninstall(
         for tool in decision.tools
         if decision.config.get(tool.id) and tool.id not in removed
     )
+    if decision.revert_settings:
+        reverted, kept, warnings = _revert_settings(receipts.CONFIG_AGENTS, platform_os=platform_os)
+        after.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
+    done = _merge(after)
     if decision.remove_ban:
         remove_shims(bin_dir)
         remove_ban_aliases(myshellrc_path)
@@ -1069,6 +1237,7 @@ def perform_uninstall(
             remove_ban_aliases(rc_path)
     if decision.remove_path_block:
         remove_managed_block(myshellrc_path)
+    swept = SweepResult()
     if decision.remove_tweaks:
         swept = sweep_tweaks(
             bundles,
@@ -1086,16 +1255,6 @@ def perform_uninstall(
             and daemon_policy.clear_decided is not None
         ):
             daemon_policy.clear_decided()
-        return dataclasses.replace(
-            swept,
-            warnings=swept.warnings + refused + config_warnings,
-            removed=tuple(removed),
-            remove_failed=tuple(remove_failed),
-            config_deleted=config_deleted,
-            config_not_deleted=config_not_deleted,
-            with_group=tuple(with_group),
-            unregistered=tuple(sorted(set(unregistered))),
-        )
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
     # there was no tweaks row to select at all because the daemon was already
@@ -1105,14 +1264,16 @@ def perform_uninstall(
     # already-off daemon leaves no active state for a skipped selection to
     # preserve, so a full visible uninstall must still leave the machine
     # genuinely fresh (post-implementation review finding, second lane).
-    if (
+    elif (
         daemon_policy is not None
         and daemon_policy.clear_decided is not None
         and not policy_owned(daemon_policy)
     ):
         daemon_policy.clear_decided()
-    return SweepResult(
-        warnings=refused + config_warnings,
+    merged = _merge([done, swept])
+    return dataclasses.replace(
+        merged,
+        warnings=merged.warnings + refused + config_warnings,
         removed=tuple(removed),
         remove_failed=tuple(remove_failed),
         config_deleted=config_deleted,

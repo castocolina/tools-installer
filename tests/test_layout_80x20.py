@@ -605,3 +605,71 @@ async def test_policies_fit_80x20_with_the_new_rows(
         assert rows_of(screen, status), "the toggle result is not on screen"
         assert "wrote permissions.defaultMode" in status.text
         _assert_chrome(screen)
+
+
+async def test_uninstall_review_fits_80x20(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A21/A24/A25 backstop at 80x20 under NO_COLOR: the 92-cell undo line folds with the
+    hanging indent and nothing is cut, block 3b fits the modal, and the removal status wraps."""
+    from installer.agent_settings import apply_setting
+    from installer.app import HOST_SETTINGS_OS
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os=HOST_SETTINGS_OS)
+    codegraph = Tool(
+        id="codegraph",
+        name="codegraph",
+        category="dev",
+        cmd="codegraph",
+        methods=(Method(kind="brew", params={"formula": "codegraph"}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+    undo = (
+        str(tmp_path / ".local" / "bin" / "codegraph"),
+        "uninstall",
+        "--target",
+        "claude,codex",
+        "--location",
+        "global",
+        "--yes",
+        "--keep-cli",
+    )
+    removable = RemovalPlan(
+        (tmp_path / "opt" / "codegraph",), (), unregister=(undo,), hook_hosts=("claude", "codex")
+    )
+    service = frozen_service(tmp_path)
+    service.publish([plan_state(codegraph, removable=removable)])
+    result = SweepResult(removed=("codegraph",), settings_kept=("claude", "codex"))
+    app = UnifiedApp(
+        [codegraph],
+        {"search": "find things"},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: ({}, None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            ban_names=list, has_path_block=lambda: False, remove=lambda _decision: result
+        ),
+        policies=PolicyInputs(policies=[], link_mode=lambda: "symlink"),
+        version_refresh=service,
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ConfirmUninstall)
+        assert modal.review[0].plain.startswith("codegraph: runs codegraph uninstall")
+        assert "\n  " in modal.review[0].plain  # folded with the 2-cell hanging indent
+        assert " ".join(modal.review[0].plain.split()).endswith("--yes --keep-cli")
+        assert modal.query_one("#confirm-box").region.width == 60
+        await pilot.press("enter")  # confirm: the removal runs against the stub
+        await settle(app, pilot)
+        assert isinstance(screen, UninstallScreen)
+        status = screen.status.text
+        assert "Kept settings you changed since this installer wrote them: claude, codex." in status
+        assert screen.query_one(DataTable[Any]).region.height > 0

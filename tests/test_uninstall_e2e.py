@@ -2,12 +2,14 @@
 core against a sandboxed HOME, asserting real artifacts are deleted while the
 real $HOME is never touched. Saves an SVG screenshot for agent inspection."""
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from installer.agent_settings import apply_setting, ledger_summary
 from installer.app import UninstallDecision, perform_uninstall
 from installer.doctor import DoctorReport
 from installer.download import artifact_paths
@@ -18,11 +20,12 @@ from installer.platform import Platform
 from installer.policy import omz_plugins_policy, tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
 from installer.tweaks import BUNDLES
-from installer.uninstall import SweepResult, active_tweak_ids, plan_removal
+from installer.uninstall import SweepResult, active_tweak_ids, plan_removal, removal_plan
 from installer.version_status import VersionRefreshService
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs, UninstallScreen
 from tests.screen_family import settle
 from tests.state_doubles import frozen_service, pass_state, removable_state
+from tests.test_uninstall import plant_receipted_tool
 
 
 def _no_removal_runner(cmd: list[str]) -> None:
@@ -674,3 +677,154 @@ def test_removing_codegraph_unregisters_exactly_the_recorded_hosts(
     for path in plan.removable:
         assert not path.is_symlink() and not path.exists()
     assert not receipts.receipt_exists("codegraph")
+
+
+def _claude_settings(home: Path) -> Path:
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    return settings
+
+
+def _remove_claude(home: Path, *, moved: bool = False) -> SweepResult:
+    """Remove a receipt-proven claude through perform_uninstall, as the Uninstall view does.
+    `moved` removes the previewed link first, so the fresh plan no longer matches the preview."""
+    bin_dir = home / ".local" / "bin"
+    tool = plant_receipted_tool(home, "claude")
+    plan = removal_plan(tool, bin_dir)
+    if moved:
+        (bin_dir / "claude").unlink()
+    return perform_uninstall(
+        UninstallDecision(
+            tools=(tool,),
+            paths={tool.id: plan.removable},
+            argv={tool.id: plan.argv},
+            remove_ban=False,
+            remove_path_block=False,
+        ),
+        bin_dir=bin_dir,
+        myshellrc_path=home / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+        platform_os="linux",
+    )
+
+
+def test_removing_claude_reverts_its_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tracer (23-15): removing an agent takes back exactly the keys the installer wrote."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = _claude_settings(tmp_path)
+    settings.write_bytes(b'{\n  "theme": "dark"\n}\n')
+    before = settings.read_bytes()
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    result = _remove_claude(tmp_path)
+    assert result.removed == ("claude",)
+    assert settings.read_bytes() == before
+    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
+    assert result.settings_reverted == ("claude",)
+
+
+def test_a_key_changed_since_is_kept_and_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key the user changed since the installer wrote it keeps the user's value and is named."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = _claude_settings(tmp_path)
+    settings.write_text('{"theme": "dark"}\n')
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    changed = {
+        "theme": "dark",
+        "permissions": {"defaultMode": "acceptEdits"},
+        "skipDangerousModePermissionPrompt": True,
+    }
+    settings.write_text(json.dumps(changed))
+    result = _remove_claude(tmp_path)
+    assert result.settings_kept == ("claude",)
+    assert json.loads(settings.read_text()) == {
+        "theme": "dark",
+        "permissions": {"defaultMode": "acceptEdits"},
+    }
+
+
+def test_an_unparsable_settings_file_is_a_removal_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unparsable settings file never blocks the removal; it is left byte-identical and named."""
+    from installer import receipts
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = _claude_settings(tmp_path)
+    settings.write_text('{"theme": "dark"}\n')
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    settings.write_text('{"theme": ')
+    before = settings.read_bytes()
+    result = _remove_claude(tmp_path)
+    assert result.removed == ("claude",)
+    assert not receipts.receipt_exists("claude")
+    assert settings.read_bytes() == before
+    assert any(
+        warning.startswith("could not revert ~/.claude/settings.json — not valid JSON (line ")
+        for warning in result.warnings
+    )
+
+
+def test_a_failed_removal_reverts_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A removal that is refused leaves the settings and the ledger exactly as they were."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = _claude_settings(tmp_path)
+    settings.write_text('{"theme": "dark"}\n')
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    before = settings.read_bytes()
+    result = _remove_claude(tmp_path, moved=True)
+    assert result.removed == ()
+    assert result.remove_failed
+    assert result.settings_reverted == ()
+    assert settings.read_bytes() == before
+    assert ledger_summary("claude", home=tmp_path, platform_os="linux") != ()
+
+
+async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O5: the environment row shows the ledgered files, refuses `c`, and reverts every key."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    apply_setting("vscode", "vscode-ai-off", home=tmp_path, platform_os="linux")
+    app, _opt, _bin_dir, _myshellrc = _build_real_app(Path.home())
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        # From the first row down: fd, the environment title, the PATH wiring row, then this row.
+        await pilot.press("down", "down", "down", "down")
+        assert screen.detail_text == (
+            "reverts only keys that still hold this installer's value: "
+            "~/.claude/settings.json, ~/.config/Code/User/settings.json"
+        )
+        await pilot.press("c")
+        assert screen.status.text == "This row has no config to delete."
+        await pilot.press("a")  # select all: the tool, the PATH block and the settings row
+        await pilot.press("enter")  # accept -> confirmation modal
+        await pilot.press("enter")  # confirm: apply live
+        await settle(app, pilot)
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
+    assert ledger_summary("vscode", home=tmp_path, platform_os="linux") == ()
+
+
+async def test_the_settings_row_is_absent_without_a_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, _opt, _bin_dir, _myshellrc = _build_real_app(Path.home())
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("down", "down", "down", "down", "down")  # clamps at the last row
+        assert "reverts only keys" not in screen.detail_text

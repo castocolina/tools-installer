@@ -6096,3 +6096,327 @@ def test_perform_uninstall_passes_the_previewed_unregister(
     assert result.remove_failed == (("codegraph", "changed since the preview; not removed"),)
     assert calls == []
     assert receipts.receipt_exists("codegraph")
+
+
+def test_the_cli_previews_and_reports_the_revert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.agent_settings import apply_setting
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    (tmp_path / ".myshellrc").write_text("")
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}\n")
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    tool = plant_receipted_tool(tmp_path, "claude")
+    console, buf = _console()
+    shown_before_confirm: list[str] = []
+
+    def confirm(_message: str) -> bool:
+        shown_before_confirm.append(buf.getvalue())
+        return True
+
+    _removed, failed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        platform_os="linux",
+    )
+    assert failed == ()
+    assert (
+        "claude: removes permissions.defaultMode, skipDangerousModePermissionPrompt "
+        "from ~/.claude/settings.json" in shown_before_confirm[0]
+    )
+    assert "Settings reverted for claude." in buf.getvalue()
+
+
+def _removal_decision(tool: Tool) -> UninstallDecision:
+    from installer.uninstall import removal_plan
+
+    plan = removal_plan(tool, Path.home() / ".local" / "bin")
+    return UninstallDecision(
+        tools=(tool,),
+        paths={tool.id: plan.removable},
+        argv={tool.id: plan.argv},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+
+
+def test_removing_starship_turns_off_only_its_shell_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A26: a shell-init tool's removal turns off its own bundle, never the docker block."""
+    from installer.app import perform_uninstall
+    from installer.tweaks import BUNDLES, shell_init_bundle, tweak_present, write_tweak
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    myshellrc = tmp_path / ".myshellrc"
+    docker = next(bundle for bundle in BUNDLES if bundle.id == "docker")
+    starship = shell_init_bundle("starship")
+    assert starship is not None
+    write_tweak(docker, myshellrc)
+    write_tweak(starship, myshellrc)
+    tool = plant_receipted_tool(tmp_path, "starship")
+    result = perform_uninstall(
+        _removal_decision(tool),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+    )
+    assert result.removed == ("starship",)
+    assert result.shell_init_off == ("starship",)
+    assert tweak_present(starship, myshellrc) is False
+    assert tweak_present(docker, myshellrc) is True
+
+
+def test_the_cli_names_the_shell_init_it_turns_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES, shell_init_bundle, write_tweak
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    myshellrc = tmp_path / ".myshellrc"
+    starship = shell_init_bundle("starship")
+    assert starship is not None
+    write_tweak(starship, myshellrc)
+    tool = plant_receipted_tool(tmp_path, "starship")
+    console, buf = _console()
+    shown_before_confirm: list[str] = []
+
+    def confirm(_message: str) -> bool:
+        shown_before_confirm.append(buf.getvalue())
+        return True
+
+    run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        confirm=confirm,
+        bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        platform_os="linux",
+    )
+    assert "starship: turns off its shell init in ~/.myshellrc" in shown_before_confirm[0]
+    assert "Shell init turned off for starship." in buf.getvalue()
+
+
+def test_the_settings_pseudo_row_reverts_every_written_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O5: the environment row reverts every key the ledgers record, for any agent."""
+    from installer.agent_settings import apply_setting, ledger_summary
+    from installer.app import perform_uninstall
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    claude = tmp_path / ".claude" / "settings.json"
+    claude.parent.mkdir(parents=True)
+    claude.write_text("{}\n")
+    before = claude.read_bytes()
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    apply_setting("vscode", "vscode-ai-off", home=tmp_path, platform_os="linux")
+    assert len(ledger_summary("vscode", home=tmp_path, platform_os="linux")) == 1
+    decision = UninstallDecision(
+        tools=(),
+        paths={},
+        remove_ban=False,
+        remove_path_block=False,
+        revert_settings=True,
+    )
+    result = perform_uninstall(
+        decision,
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        catalog=(),
+        platform_os="linux",
+    )
+    assert result.settings_reverted == ("claude", "vscode")
+    assert claude.read_bytes() == before
+    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
+    assert ledger_summary("vscode", home=tmp_path, platform_os="linux") == ()
+
+
+def test_the_cli_uninstall_reverts_every_written_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O5: the CLI lists every ledgered file before the confirm and reverts it, even for an
+    agent that is not itself being removed."""
+    from installer.agent_settings import apply_setting
+    from installer.app import run_uninstall
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".myshellrc").write_text("")
+    apply_setting("codex", "auto-approve", home=tmp_path, platform_os="linux")
+    console, buf = _console()
+    shown_before_confirm: list[str] = []
+
+    def confirm(_message: str) -> bool:
+        shown_before_confirm.append(buf.getvalue())
+        return True
+
+    run_uninstall(
+        [],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        platform_os="linux",
+    )
+    assert "Agent and editor settings this installer wrote (reverted):" in shown_before_confirm[0]
+    assert "  ~/.codex/config.toml: approval_policy, sandbox_mode" in shown_before_confirm[0]
+    assert "Settings reverted for codex." in buf.getvalue()
+    # The installer created this file, so it goes once its only key is reverted.
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_no_config_agent_declares_config_paths() -> None:
+    """R1-58, R1-59: the guard the per-tool revert's shortcut relies on. When a settings agent
+    starts declaring config_paths, the removal must revert before it deletes."""
+    from installer import receipts
+    from installer.model import load_tools
+
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    declared = [
+        tool.id
+        for tool in load_tools(registry)
+        if tool.id in receipts.CONFIG_AGENTS and tool.config_paths
+    ]
+    assert declared == []
+
+
+def test_removing_zsh_sweeps_the_desktop_shell_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-48: zsh's removal takes the owned desktop SHELL file with it, so no login is left
+    with SHELL pointing at a removed zsh."""
+    from installer.app import perform_uninstall
+    from installer.env_redirect import DESKTOP_SHELL_CONF
+    from installer.policy import desktop_shell_policy
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    conf_dir = tmp_path / ".config" / "environment.d"
+    desktop_shell_policy(zsh_path="/z/bin/zsh", conf_dir=conf_dir, home=tmp_path).apply()
+    conf = conf_dir / DESKTOP_SHELL_CONF
+    assert conf.exists()
+    tool = plant_receipted_tool(tmp_path, "zsh")
+    result = perform_uninstall(
+        _removal_decision(tool),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+        platform_os="linux",
+    )
+    assert result.removed == ("zsh",)
+    assert "desktop-shell" in result.swept
+    assert not conf.exists()
+
+
+def test_a_refused_zsh_removal_keeps_the_desktop_shell_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused zsh removal removes nothing, so the desktop SHELL file it would sweep stays."""
+    from installer.app import perform_uninstall
+    from installer.env_redirect import DESKTOP_SHELL_CONF
+    from installer.policy import desktop_shell_policy
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    conf_dir = tmp_path / ".config" / "environment.d"
+    desktop_shell_policy(zsh_path="/z/bin/zsh", conf_dir=conf_dir, home=tmp_path).apply()
+    conf = conf_dir / DESKTOP_SHELL_CONF
+    tool = plant_receipted_tool(tmp_path, "zsh")
+    decision = _removal_decision(tool)
+    (tmp_path / ".local" / "bin" / "zsh").unlink()  # the previewed link moved: refused
+    result = perform_uninstall(
+        decision,
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+        platform_os="linux",
+    )
+    assert result.removed == ()
+    assert "desktop-shell" not in result.swept
+    assert conf.exists()
+
+
+def test_macos_zsh_removal_leaves_the_desktop_shell_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desktop SHELL row is a Linux environment.d file; a macOS removal never sweeps it."""
+    from installer.app import perform_uninstall
+    from installer.env_redirect import DESKTOP_SHELL_CONF
+    from installer.policy import desktop_shell_policy
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    conf_dir = tmp_path / ".config" / "environment.d"
+    desktop_shell_policy(zsh_path="/z/bin/zsh", conf_dir=conf_dir, home=tmp_path).apply()
+    conf = conf_dir / DESKTOP_SHELL_CONF
+    tool = plant_receipted_tool(tmp_path, "zsh")
+    result = perform_uninstall(
+        _removal_decision(tool),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+        platform_os="macos",
+    )
+    assert result.removed == ("zsh",)
+    assert "desktop-shell" not in result.swept
+    assert conf.exists()

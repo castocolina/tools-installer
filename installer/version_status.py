@@ -2137,6 +2137,9 @@ def uninstall_detail(
             text = f"{hint} — found at {state.ownership.active_path}"
         else:
             text = hint
+    if group is UninstallState.REMOVABLE and state.removable.hook_hosts:
+        # The undo runs before any path goes, so the hosts are named right after the proof.
+        text += f" — unregisters it from {host_labels(state.removable.hook_hosts)} first"
     if config:
         text += f" · {config}"
     text += _yourself_suffix(state)
