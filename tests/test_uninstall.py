@@ -2653,6 +2653,51 @@ def test_a_drifted_retired_file_is_kept_and_listed(
     assert f"remove it yourself: {rtk}" in buf.getvalue()
 
 
+def test_a_retired_receipt_that_removes_nothing_triggers_no_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-03 (PT-02): a drifted retired receipt alone asks nothing and keeps the PATH block."""
+    from installer.app import run_uninstall
+    from installer.shellrc import has_managed_block, write_myshellrc
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    tool = _retired_tool("rtk", [(rtk, "file")])
+    rtk.write_text("rtk raw binary, edited by the user")
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)
+    asked: list[str] = []
+
+    def confirm(message: str) -> bool:
+        asked.append(message)
+        return True
+
+    console, buf = _uninstall_console()
+    result = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        confirm=confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+    )
+    assert result == ([], ())
+    assert asked == []
+    assert has_managed_block(myshellrc)
+    out = buf.getvalue()
+    assert "Nothing to uninstall" in out
+    assert "rtk (retired)" in out
+    assert f"remove it yourself: {rtk}" in out
+
+
 def _outside_shape_artifact(
     case: str, home: Path
 ) -> tuple[str, Path, receipts.ReceiptArtifact | None]:

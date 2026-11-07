@@ -957,18 +957,20 @@ def run_uninstall(
         for path, removes, _kept in ledger_preview(agent, home=Path.home())
     ]
     # A machine whose only tools-installer footprint is an enabled tweak or a settings key must
-    # not be told there is nothing to uninstall.
+    # not be told there is nothing to uninstall. A retired row counts only when it can act: one
+    # that only lists files to remove yourself must not start the whole teardown (review C-03).
     if (
         not paths
         and not commands
         and not shimmed
         and not tweaks
         and not settings_files
-        and not retired
+        and not any(plan.level != "none" for _tool, plan in retired)
     ):
         render_uninstall([], console)  # prints the "nothing to uninstall" line
         # Even here the user learns what matched by name and was left alone.
         render_remove_yourself(yourself, console)
+        _print_retired_preview(retired, console)
         # A daemon with no footprint left never appears in `tweaks`
         # (active_policies includes it only when policy_owned() is True) and
         # needs no confirm --
