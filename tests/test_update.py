@@ -591,6 +591,38 @@ def test_update_re_record_keeps_hooks_and_registers_only_new_hosts(
     assert written.hooks == {"codegraph-mcp-register": ("claude", "codex")}
 
 
+def test_tealdeer_update_runs_tldr_update_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bin_dir = tmp_path / "bin"
+    method = Method(
+        kind="github_release",
+        params={
+            "repo": "tealdeer-rs/tealdeer",
+            "asset": "tldr",
+            "member": "tldr",
+            "bin_dir": str(bin_dir),
+        },
+    )
+    tool = _tool("tealdeer", method, cmd="tldr", postinstall="tealdeer-cache")
+
+    def fake_update(_method: Method, _ctx: object) -> DownloadUpdateExecResult:
+        return DownloadUpdateExecResult(verified=True)
+
+    monkeypatch.setattr(update.download, "update_download", fake_update)
+    calls: list[list[str]] = []
+    outcome = _perform(_target(tool, "installer", method=method), lambda cmd: calls.append(cmd))
+    assert outcome.status == "updated"
+    assert calls == [[str(bin_dir / "tldr"), "--update"]]
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="boom\nmore")
+
+    failed = _perform(_target(tool, "installer", method=method), failing)
+    assert failed.status == "updated"
+    assert failed.postinstall_warning == "tldr --update failed: boom; run it yourself later"
+
+
 def test_update_service_takes_no_catalog() -> None:
     import inspect
 

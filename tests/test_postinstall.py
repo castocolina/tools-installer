@@ -316,3 +316,130 @@ def test_installing_graphify_runs_no_host_registration(
     assert outcome.status == "installed"
     assert calls == [["uv", "tool", "install", "graphifyy"]]
     assert list(cwd.iterdir()) == []
+
+
+def _uninstall(targets: str) -> tuple[str, ...]:
+    return (
+        "/b/codegraph",
+        "uninstall",
+        "--target",
+        targets,
+        "--location",
+        "global",
+        "--yes",
+        "--keep-cli",
+    )
+
+
+def _receipt_for(kind: str, key: str) -> receipts.Receipt:
+    return receipts.Receipt(
+        tool="demo",
+        at="2026-11-07T00:00:00+00:00",
+        method=receipts.ReceiptMethod(kind=kind, key=key),
+        package=None,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+
+
+def test_codegraph_unregister_targets_only_recorded_hosts() -> None:
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("codex", "claude")) == (
+        _uninstall("claude,codex"),
+    )
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("cursor",)) == (_uninstall("cursor"),)
+
+
+def test_unregister_drops_unknown_and_tampered_ids() -> None:
+    kept = pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("claude", "all", "../x", "pi"))
+    assert kept == (_uninstall("claude"),)
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("all", "auto")) == ()
+    assert pi.unregister_argvs("not-a-real-hook", "/b/codegraph", ("claude",)) == ()
+
+
+@pytest.mark.parametrize("subset", _ALL_SUBSETS, ids=lambda s: ",".join(s) or "none")
+def test_unregister_never_passes_all(subset: tuple[str, ...]) -> None:
+    for argv in pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", subset):
+        assert "all" not in argv
+        assert "auto" not in argv
+
+
+def test_hook_method_matches_the_receipt_key() -> None:
+    first = Method(kind="github_release", params={"repo": "a/a"})
+    second = Method(kind="github_release", params={"repo": "b/b"})
+    brew = Method(kind="brew", params={"formula": "demo"})
+    keyed = Tool(id="demo", name="demo", category="ai", cmd="demo", methods=(first, second))
+    lone = Tool(id="demo", name="demo", category="ai", cmd="demo", methods=(first, brew))
+    assert (
+        pi.hook_method(keyed, _receipt_for("github_release", receipts.method_key(second))) is second
+    )
+    assert pi.hook_method(lone, _receipt_for("github_release", "stale")) is first
+    assert pi.hook_method(keyed, _receipt_for("github_release", "stale")) is None
+
+
+def test_host_labels_use_catalog_ids() -> None:
+    assert pi.host_labels(("cursor", "claude")) == "claude, cursor-agent"
+    assert pi.host_labels(()) == ""
+
+
+_HERDR = "herdr-integration"
+_TEALDEER = "tealdeer-cache"
+_TLDR_NOTE = "fetching the tldr page cache — tldr --update"
+
+
+def test_herdr_registers_and_unregisters_per_host() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+    calls: list[list[str]] = []
+    outcome = pi.run_postinstall(
+        _HERDR, method, lambda cmd: calls.append(cmd), frozenset({"cursor", "claude", "pi"})
+    )
+    assert outcome == (("claude", "cursor"), None)
+    assert calls == [
+        ["/b/herdr", "integration", "install", "claude"],
+        ["/b/herdr", "integration", "install", "cursor"],
+    ]
+    assert pi.unregister_argvs(_HERDR, "/b/herdr", ("cursor", "claude")) == (
+        ("/b/herdr", "integration", "uninstall", "claude"),
+        ("/b/herdr", "integration", "uninstall", "cursor"),
+    )
+
+    def cursor_fails(cmd: list[str]) -> None:
+        if cmd[-1] == "cursor":
+            raise CommandError(cmd, 1, detail="boom")
+
+    failed = pi.run_postinstall(_HERDR, method, cursor_fails, frozenset({"cursor", "claude", "pi"}))
+    assert failed == (("claude",), "cursor: boom")
+
+
+def test_tealdeer_fetches_its_cache_after_install() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+    seen: list[object] = []
+
+    class _NotingRunner:
+        def __call__(self, cmd: list[str]) -> None:
+            seen.append(cmd)
+
+        def note(self, text: str) -> None:
+            seen.append(text)
+
+    assert pi.run_postinstall(_TEALDEER, method, _NotingRunner(), frozenset()) == ((), None)
+    assert seen == [_TLDR_NOTE, ["/b/tldr", "--update"]]
+
+    calls: list[list[str]] = []
+    assert pi.run_postinstall(_TEALDEER, method, lambda cmd: calls.append(cmd), frozenset()) == (
+        (),
+        None,
+    )
+    assert calls == [["/b/tldr", "--update"]]
+
+
+def test_a_failed_tldr_update_is_a_warning() -> None:
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="boom\nmore")
+
+    assert pi.run_postinstall(_TEALDEER, method, failing, frozenset()) == (
+        (),
+        "tldr --update failed: boom; run it yourself later",
+    )

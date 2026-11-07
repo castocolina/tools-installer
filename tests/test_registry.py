@@ -2078,15 +2078,31 @@ def test_codegraph_entry_records_the_postinstall_research_findings() -> None:
         assert needle in window, f"missing {needle!r} in codegraph's postinstall window"
 
 
-def test_only_codegraph_and_rtk_declare_a_postinstall_hook() -> None:
+def test_only_codegraph_and_tealdeer_declare_a_postinstall_hook() -> None:
     # graphify's host-registration hook was removed in Phase 17 (SAFE-02):
     # every graphify host-registration form writes into the working directory,
-    # so the installer runs none of them.
+    # so the installer runs none of them. rtk's hook was removed 2026-11-02.
     tools = load_tools(REGISTRY)
     for tool in tools:
-        if tool.id in ("codegraph", "rtk"):
+        if tool.id in ("codegraph", "tealdeer"):
             continue
         assert tool.postinstall is None, f"{tool.id}: unexpected postinstall hook declared"
+
+
+def test_herdr_is_not_wired_in_the_registry() -> None:
+    # Phase 24 wires herdr's integration pair to a tool; until then the name is only in the table.
+    from installer.model import POSTINSTALL_HOOK_NAMES
+
+    assert "herdr-integration" in POSTINSTALL_HOOK_NAMES
+    assert all(tool.postinstall != "herdr-integration" for tool in load_tools(REGISTRY))
+
+
+def test_tealdeer_declares_its_cache_in_config_paths() -> None:
+    # docs.tealdeer.org: `tldr --update` fills the page cache under ~/.cache/tealdeer on Linux.
+    # The macOS path is assumed (research A6): harmless when it does not exist.
+    tealdeer = _tools_by_id()["tealdeer"]
+    assert tealdeer.config_paths == ("~/.cache/tealdeer", "~/Library/Caches/tealdeer")
+    assert tealdeer.postinstall == "tealdeer-cache"
 
 
 def test_native_package_manager_rows_declare_their_owner_probes() -> None:

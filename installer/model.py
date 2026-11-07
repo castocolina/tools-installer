@@ -19,7 +19,9 @@ SMOKE_CHECK_NAMES: frozenset[str] = frozenset({"puppeteer-browser"})
 # installer/executors.py::SMOKE_CHECKS rather than imported: this module
 # stays a pure data/validation layer with no dependency on the heavier
 # installer.postinstall module.
-POSTINSTALL_HOOK_NAMES: frozenset[str] = frozenset({"codegraph-mcp-register"})
+POSTINSTALL_HOOK_NAMES: frozenset[str] = frozenset(
+    {"codegraph-mcp-register", "herdr-integration", "tealdeer-cache"}
+)
 
 METHOD_KINDS = (
     "script",
