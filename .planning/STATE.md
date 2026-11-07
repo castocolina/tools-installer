@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: "23.1"
-current_phase_name: "Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e"
+current_phase: "23.2"
+current_phase_name: Install-time tuning instead of Policies knobs
 status: Verifying — human_needed (UAT fixes in progress)
 stopped_at: Phase 23.1 UI-SPEC approved
-last_updated: "2026-11-07T17:50:30.582Z"
+last_updated: "2026-11-07T23:43:38.126Z"
 last_activity: 2026-11-07
 last_activity_desc: Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
-state_head: ee8d586903a1b04afe2f5547641a187878f6dba3
+state_head: c07b4f03e275d71741003092213a72ae28baef5d
 progress:
   total_phases: 15
   completed_phases: 1
-  total_plans: 194
-  completed_plans: 176
+  total_plans: 202
+  completed_plans: 194
   percent: 7
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 23.1 (Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e) — READY TO EXECUTE
+Phase: 23.2 (Install-time tuning instead of Policies knobs) — READY TO EXECUTE
 Plan: 16 of 16
 Status: Verifying — human_needed (UAT fixes in progress)
 Last activity: 2026-11-07 — Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
