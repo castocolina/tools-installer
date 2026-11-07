@@ -7,7 +7,7 @@ hook runs through the same `Runner` seam every other executor uses
 installer/engine.py::install_tool treats a warning as non-fatal, because the
 binary the succeeding method just installed is usable regardless.
 
-Hosts come from one list, `skill_lifecycle.present_harnesses` (CONF-03). A hook
+Hosts come from one list, `present_harnesses` in this module (CONF-03). A hook
 registers for the present, supported hosts its receipt does not record yet, and
 records what it registered in `receipt.hooks`, so removal can undo exactly that.
 """
