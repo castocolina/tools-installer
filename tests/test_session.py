@@ -363,7 +363,6 @@ def test_a_headless_update_row_on_a_pinned_app_reads_blocked(
         platform=_platform(),
         runner=lambda _cmd: None,
         resolve_tag=lambda _repo: "1.0.0",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,

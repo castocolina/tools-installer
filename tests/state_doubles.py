@@ -188,7 +188,6 @@ class ScriptedUpdates(UpdateService):
             platform=_MACOS,
             runner=lambda _command: None,
             resolve_tag=lambda _repo: "v1",
-            tools={},
             managed_packages=lambda: (),
             replay_globals=lambda packages: tuple(packages),
             reresolve_ownership=unknown_ownership,

@@ -755,7 +755,6 @@ def _build_services(
         live_platform=lambda: version_refresh.platform,
         runner=run_captured,
         resolve_tag=resolve_github_tag,
-        tools={tool.id: tool for tool in tools},
         managed_packages=pnpm_globals.pnpm_global_packages,
         replay_globals=_reinstall_globals,
         # The pass's own evidence, freshly gathered (live platform, a fresh

@@ -76,7 +76,7 @@ pays per tool.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol, cast
 
@@ -531,7 +531,6 @@ class UpdateService:
         platform: Platform,
         runner: Runner = run_captured,
         resolve_tag: TagResolver = resolve_github_tag,
-        tools: Mapping[str, Tool],
         managed_packages: ManagedPackagesFn,
         replay_globals: ReplayGlobalsFn,
         reresolve_ownership: ReresolveFn,
@@ -547,7 +546,6 @@ class UpdateService:
         self._greedy_casks = greedy_casks
         self._runner = runner
         self._resolve_tag = resolve_tag
-        self._tools = tools
         self._managed_packages = managed_packages
         self._replay_globals = replay_globals
         self._reresolve_ownership = reresolve_ownership

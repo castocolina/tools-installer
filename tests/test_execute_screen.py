@@ -1491,7 +1491,6 @@ class _RecordingUpdateService(UpdateService):
             platform=_PLATFORM,
             runner=lambda _cmd: None,
             resolve_tag=lambda _repo: "v1",
-            tools={},
             managed_packages=lambda: (),
             replay_globals=lambda packages: tuple(packages),
             reresolve_ownership=_brew_ownership,

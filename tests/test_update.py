@@ -591,6 +591,12 @@ def test_update_re_record_keeps_hooks_and_registers_only_new_hosts(
     assert written.hooks == {"codegraph-mcp-register": ("claude", "codex")}
 
 
+def test_update_service_takes_no_catalog() -> None:
+    import inspect
+
+    assert "tools" not in inspect.signature(UpdateService).parameters
+
+
 def test_no_postinstall_never_calls_hook() -> None:
     brew = Method(kind="brew", params={"formula": "ripgrep"})
     tool = _tool("rg", brew, cmd="rg")
@@ -833,7 +839,6 @@ def _service(
         platform=_platform(),
         runner=runner or (lambda _cmd: None),
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=managed,
         replay_globals=replay or _replay,
         reresolve_ownership=reresolve,
@@ -1683,7 +1688,6 @@ def test_update_service_reads_the_live_platform(monkeypatch: pytest.MonkeyPatch)
         platform=_platform(has_brew=False),
         live_platform=lambda: current[0],
         runner=lambda _cmd: None,
-        tools={},
         managed_packages=lambda: (),
         replay_globals=tuple,
         reresolve_ownership=reresolve,
