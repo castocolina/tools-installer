@@ -610,6 +610,92 @@ def test_npx_shim_body_keeps_the_contract(tmp_path: Path):
     assert syntax.returncode == 0, syntax.stderr
 
 
+def _not_supported(token: str) -> str:
+    return (
+        f"npx: option '{token}' is not supported by this redirect (it runs pnpm dlx); "
+        "nothing was run.\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("-c", "echo hi"),
+        ("--call", "x"),
+        ("--no", "pkg"),
+        ("--no-install", "pkg"),
+        ("-w", "ws", "cmd"),
+        ("--workspace=ws", "cmd"),
+        ("--frobnicate", "pkg"),
+        ("--", "cmd"),
+        ("-", "cmd"),
+    ],
+)
+def test_npx_shim_refuses_untranslated_options(tmp_path: Path, argv: tuple[str, ...]):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 127
+    assert result.stderr == _not_supported(argv[0])
+    assert not record.exists()
+
+
+@pytest.mark.parametrize("argv", [(), ("-y",)])
+def test_npx_shim_needs_a_command(tmp_path: Path, argv: tuple[str, ...]):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 127
+    assert result.stderr == "npx: missing command. Usage: npx [-y] [-p package]... command [args]\n"
+    assert not record.exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "token"),
+    [
+        (("-p",), "-p"),
+        (("--package",), "--package"),
+        (("-p", "", "cmd"), "-p"),
+        (("--package=", "cmd"), "--package="),
+    ],
+)
+def test_npx_shim_needs_a_package_name(tmp_path: Path, argv: tuple[str, ...], token: str):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 127
+    assert result.stderr == f"npx: option '{token}' needs a package name; nothing was run.\n"
+    assert not record.exists()
+
+
+def test_npx_shim_passes_awkward_arguments_through(tmp_path: Path):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, "cmd", "a b", "$x", "q'uote")
+    assert result.returncode == 0, result.stderr
+    assert _recorded(record) == ["dlx", "cmd", "a b", "$x", "q'uote"]
+
+
+@pytest.mark.parametrize("token", ["--%s%n", "--a\\nb", "--a\nb", "--$(id)"])
+def test_npx_shim_prints_hostile_tokens_literally(tmp_path: Path, token: str):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, token, "cmd")
+    assert result.returncode == 127
+    assert result.stderr == _not_supported(token)
+    assert not record.exists()
+
+
+def test_npx_shim_messages_keep_the_ui_copy(tmp_path: Path):
+    shim, _ = _npx_with_fake_pnpm(tmp_path)
+    not_supported = (
+        "npx: option '' is not supported by this redirect (it runs pnpm dlx); nothing was run."
+    )
+    missing = "npx: missing command. Usage: npx [-y] [-p package]... command [args]"
+    needs_package = "npx: option '' needs a package name; nothing was run."
+    assert len(not_supported) == 85
+    assert len(missing) <= 78
+    assert len(needs_package) <= 78
+    assert _run_npx(shim, "-x", "cmd").stderr == not_supported.replace("''", "'-x'") + "\n"
+    assert _run_npx(shim).stderr == missing + "\n"
+    assert _run_npx(shim, "-p").stderr == needs_package.replace("''", "'-p'") + "\n"
+
+
 def test_banned_npm_hint_names_volta_not_global_add():
     hint = BANNED["npm"]
     assert "volta install" in hint

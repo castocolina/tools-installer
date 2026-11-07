@@ -146,6 +146,8 @@ def shim_script(name: str) -> str:
 _NPX_NOT_SUPPORTED = (
     "npx: option '%s' is not supported by this redirect (it runs pnpm dlx); nothing was run."
 )
+_NPX_NEEDS_PACKAGE = "npx: option '%s' needs a package name; nothing was run."
+_NPX_NO_COMMAND = "npx: missing command. Usage: npx [-y] [-p package]... command [args]"
 # npx's option translator for `pnpm dlx` (D-11, D-12). Options before the first
 # positional are translated or refused, never forwarded: pnpm reads an option
 # npx does not know differently, and that mismatch can run a package's default bin.
@@ -161,12 +163,20 @@ while [ "$argc" -gt 0 ]; do
   case "$arg" in
     -y|--yes) ;;
     -p|--package)
+      if [ "$argc" -eq 0 ] || [ -z "$1" ]; then
+        printf "{_NPX_NEEDS_PACKAGE}\n" "$arg" >&2
+        exit {EXIT_CODE}
+      fi
       set -- "$@" "--package=$1"
       shift
       argc=$((argc - 1))
       pkgs=$((pkgs + 1))
       ;;
     --package=*)
+      if [ -z "${{arg#--package=}}" ]; then
+        printf "{_NPX_NEEDS_PACKAGE}\n" "$arg" >&2
+        exit {EXIT_CODE}
+      fi
       set -- "$@" "$arg"
       pkgs=$((pkgs + 1))
       ;;
@@ -176,6 +186,10 @@ while [ "$argc" -gt 0 ]; do
       ;;
   esac
 done
+if [ "$#" -eq "$pkgs" ]; then
+  printf "{_NPX_NO_COMMAND}\n" >&2
+  exit {EXIT_CODE}
+fi
 argc=$(($# - pkgs))
 while [ "$argc" -gt 0 ]; do
   arg="$1"
