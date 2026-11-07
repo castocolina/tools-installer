@@ -68,12 +68,6 @@ def _platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
 
 
-# argv shapes Phase 19 actually builds (skill_lifecycle enable/uninstall/project install steps).
-_ENABLE = ("claude", "plugin", "enable", "-s", "user", "gsd-core")
-_UNINSTALL = ("claude", "plugin", "uninstall", "-s", "project", "gsd-core@gsd")
-_GSD_INSTALL = ("pnpm", "dlx", "@opengsd/gsd-core@1.16.0", "--claude", "--local")
-
-
 def _run_context(
     recorder: RunRecorder,
     *,
@@ -433,12 +427,11 @@ def test_a_failed_prerequisite_stops_a_present_dependents_update_or_reconfigure(
     )
     updates = ScriptedUpdates({"mid": UpdateOutcome("mid", "updated", "brew")})
     recorder = RunRecorder({"dep": InstallOutcome("dep", "failed")})
+    synced: list[str] = []
     middle_row = (
         PlanRow("mid", disposition, "update", ownership=ownership)
         if disposition is Disposition.UPDATE
-        else _reconfigure_row(
-            "mid", ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE)
-        )
+        else _reconfigure_row("mid", ConfigStep("sync terminals", "terminal_sync"))
     )
     outcomes = execute_plan(
         [
@@ -446,10 +439,13 @@ def test_a_failed_prerequisite_stops_a_present_dependents_update_or_reconfigure(
             middle_row,
             PlanRow("leaf", Disposition.INSTALL, "missing"),
         ],
-        _run_context(
-            recorder,
-            catalog={"dep": dependency, "mid": middle, "leaf": leaf},
-            updates=updates,
+        replace(
+            _run_context(
+                recorder,
+                catalog={"dep": dependency, "mid": middle, "leaf": leaf},
+                updates=updates,
+            ),
+            terminal_sync=lambda: synced.append("sync"),
         ),
     )
 
@@ -457,7 +453,7 @@ def test_a_failed_prerequisite_stops_a_present_dependents_update_or_reconfigure(
     assert outcomes[1].install is not None
     assert outcomes[1].install.blocked_by == ("dep",)
     assert updates.targets == []
-    assert recorder.argv == []
+    assert synced == []
     assert recorder.installs == [("dep", False), ("leaf", False)]
 
 
@@ -711,132 +707,75 @@ def _reconfigure_row(tool_id: str, *steps: ConfigStep) -> PlanRow:
     )
 
 
-def test_reconfigure_runs_argv_steps_in_order_and_is_done():
+def test_reconfigure_runs_steps_in_order_and_is_done():
     """One event list pins the callback-before-the-first-step order (the TUI's set_tool seam)."""
     events: list[object] = []
 
-    def runner(command: list[str]) -> None:
-        events.append(list(command))
+    def sync() -> None:
+        events.append("sync")
 
     recorder = RunRecorder()
     steps = (
-        ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE),
-        ConfigStep("remove gsd-core from project scope", "plugin_uninstall", "claude", _UNINSTALL),
+        ConfigStep("sync terminals", "terminal_sync"),
+        ConfigStep("sync again", "terminal_sync"),
     )
     outcomes = execute_plan(
         [_reconfigure_row("gsd", *steps)],
-        _run_context(
-            recorder,
-            catalog={"gsd": _tool("gsd")},
-            runner=runner,
-            on_row_started=lambda row: events.append(row.tool_id),
+        replace(
+            _run_context(
+                recorder,
+                catalog={"gsd": _tool("gsd")},
+                on_row_started=lambda row: events.append(row.tool_id),
+            ),
+            terminal_sync=sync,
         ),
     )
-    assert events == ["gsd", list(_ENABLE), list(_UNINSTALL)]
+    assert events == ["gsd", "sync", "sync"]
     assert outcomes[0].result == "done"
     assert outcomes[0].detail == ""
     assert summary_counts(outcomes) == "1 reconfigured"
 
 
-def test_reconfigure_wraps_a_step_with_cwd_in_the_portable_directory_shim(tmp_path: Path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    recorder = RunRecorder()
-    step = ConfigStep(
-        "install gsd-core for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL, repo
-    )
-    outcomes = execute_plan(
-        [_reconfigure_row("gsd", step)],
-        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
-    )
-    assert recorder.argv == [
-        ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "sh", str(repo), *_GSD_INSTALL]
-    ]
-    assert outcomes[0].result == "done"
-
-
-@pytest.mark.parametrize(
-    "kind, refusal",
-    [
-        ("relative", "cwd is not absolute"),
-        ("missing", "cwd does not exist"),
-        ("symlink", "cwd is not a directory"),
-    ],
-)
-def test_reconfigure_refuses_a_cwd_that_is_relative_missing_or_a_symlink(
-    tmp_path: Path, kind: str, refusal: str
-):
-    real = tmp_path / "real"
-    real.mkdir()
-    if kind == "relative":
-        cwd: Path = Path("repo")
-    elif kind == "missing":
-        cwd = tmp_path / "gone"
-    else:
-        cwd = tmp_path / "link"
-        cwd.symlink_to(real)
-    recorder = RunRecorder()
-    step = ConfigStep(
-        "install gsd-core for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL, cwd
-    )
-    outcomes = execute_plan(
-        [_reconfigure_row("gsd", step)],
-        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
-    )
-    assert outcomes[0].result == "failed"
-    assert outcomes[0].detail == f"{step.text}: {refusal}"
-    assert recorder.argv == []
-
-
 def test_reconfigure_stops_at_the_first_failing_step():
-    seen: list[list[str]] = []
+    synced: list[str] = []
 
-    def runner(command: list[str]) -> None:
-        seen.append(command)
-        raise CommandError(command, 1)
+    def failing_sync() -> None:
+        synced.append("sync")
+        raise RuntimeError("sync refused")
 
     recorder = RunRecorder()
     steps = (
-        ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE),
-        ConfigStep("remove gsd-core from project scope", "plugin_uninstall", "claude", _UNINSTALL),
+        ConfigStep("sync terminals", "terminal_sync"),
+        ConfigStep("sync again", "terminal_sync"),
     )
     outcomes = execute_plan(
         [_reconfigure_row("gsd", *steps)],
-        _run_context(recorder, catalog={"gsd": _tool("gsd")}, runner=runner),
+        replace(_run_context(recorder, catalog={"gsd": _tool("gsd")}), terminal_sync=failing_sync),
     )
     assert outcomes[0].result == "failed"
-    assert outcomes[0].detail == f"{steps[0].text}: command failed (1): {' '.join(_ENABLE)}"
-    assert seen == [list(_ENABLE)]
+    assert outcomes[0].detail.startswith(f"{steps[0].text}: ")
+    assert "sync refused" in outcomes[0].detail
+    assert synced == ["sync"]
 
 
 def test_reconfigure_failure_does_not_block_a_dependent():
-    def runner(command: list[str]) -> None:
-        raise CommandError(command, 1)
+    def failing_sync() -> None:
+        raise RuntimeError("sync refused")
 
     recorder = RunRecorder()
-    step = ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE)
+    step = ConfigStep("sync terminals", "terminal_sync")
     outcomes = execute_plan(
         [_reconfigure_row("a", step), PlanRow("b", Disposition.INSTALL, "not installed")],
-        _run_context(
-            recorder,
-            catalog={"a": _tool("a"), "b": _tool("b", requires=("a",))},
-            runner=runner,
+        replace(
+            _run_context(
+                recorder,
+                catalog={"a": _tool("a"), "b": _tool("b", requires=("a",))},
+            ),
+            terminal_sync=failing_sync,
         ),
     )
     assert [outcome.result for outcome in outcomes] == ["failed", "done"]
     assert recorder.installs == [("b", False)]
-
-
-def test_reconfigure_step_without_a_command_fails():
-    recorder = RunRecorder()
-    step = ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude")
-    outcomes = execute_plan(
-        [_reconfigure_row("gsd", step)],
-        _run_context(recorder, catalog={"gsd": _tool("gsd")}),
-    )
-    assert outcomes[0].result == "failed"
-    assert outcomes[0].detail.endswith("step has no command")
-    assert recorder.argv == []
 
 
 def _codegraph_tool() -> Tool:
@@ -1332,10 +1271,10 @@ def test_sensitive_install_protocol_parameters_are_unchanged() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 20-08 Task 2: the three argv-less step kinds, plus the promise that no kind is
+# 20-08 Task 2: the argv-less step kinds, plus the promise that no kind is
 # silently unhandled. pnpm_group_install runs the executor install and update
 # already use (19 L-19-28), terminal_sync calls the bound synchronizer, and an
-# argv-less skill_install fails closed: there is no command to run (19 L-19-07).
+# unknown kind fails closed rather than running its argv (19 L-19-07).
 # ---------------------------------------------------------------------------
 
 
@@ -1361,25 +1300,8 @@ def _node_tool(*methods: Method) -> Tool:
 
 
 _ALL_KIND_STEPS: dict[ConfigStepKind, ConfigStep] = {
-    "skill_install": ConfigStep(
-        "install superpowers with the pack CLI",
-        "skill_install",
-        "claude",
-        ("claude", "install", "x"),
-    ),
-    "plugin_enable": ConfigStep("enable superpowers", "plugin_enable", "claude", _ENABLE),
-    "plugin_uninstall": ConfigStep("remove superpowers", "plugin_uninstall", "claude", _UNINSTALL),
-    "marketplace_remove": ConfigStep(
-        "drop the marketplace", "marketplace_remove", "claude", ("claude", "marketplace", "rm")
-    ),
     "terminal_sync": ConfigStep("point iTerm2 at zsh", "terminal_sync"),
     "pnpm_group_install": ConfigStep("install @obra/superpowers with pnpm", "pnpm_group_install"),
-    "project_pack_global_uninstall": ConfigStep(
-        "remove the global gsd", "project_pack_global_uninstall", "claude", _UNINSTALL
-    ),
-    "project_pack_install": ConfigStep(
-        "install gsd for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL
-    ),
     "hook_register": ConfigStep("register codegraph for codex", "hook_register"),
     "zshenv_shell": ConfigStep("export SHELL=/bin/zsh in ~/.zshenv", "zshenv_shell"),
 }
@@ -1509,9 +1431,7 @@ def test_pnpm_group_install_reports_the_executors_own_refusal(
 def test_a_raising_terminal_sync_step_fails_its_row_and_the_batch_continues() -> None:
     recorder = RunRecorder()
     first = _reconfigure_row("a", ConfigStep("point iTerm2 at zsh", "terminal_sync"))
-    second = _reconfigure_row(
-        "b", ConfigStep("run follow-up", "skill_install", "codex", ("touch", "done"))
-    )
+    second = PlanRow("b", Disposition.INSTALL, "not installed")
 
     def fail_sync() -> str | None:
         raise PermissionError(13, "Permission denied")
@@ -1528,7 +1448,7 @@ def test_a_raising_terminal_sync_step_fails_its_row_and_the_batch_continues() ->
     assert outcomes[0].detail.startswith("point iTerm2 at zsh: ")
     assert "Permission denied" in outcomes[0].detail
     assert outcomes[1].result == "done"
-    assert recorder.argv == [["touch", "done"]]
+    assert recorder.installs == [("b", False)]
 
 
 @pytest.mark.parametrize(
@@ -1565,21 +1485,6 @@ def test_terminal_sync_step_calls_the_bound_synchronizer(
     assert missing.detail == f"{step.text}: no terminal synchronizer bound"
 
 
-def test_an_argv_less_skill_install_fails_closed_without_running_anything() -> None:
-    """With the pack runner gone, a skill_install step without argv has no command to run."""
-    recorder = RunRecorder()
-    step = ConfigStep("install superpowers for Codex", "skill_install", "codex")
-
-    outcome = execute_plan(
-        [_reconfigure_row("superpowers", step)],
-        _run_context(recorder, catalog={"superpowers": _node_tool()}),
-    )[0]
-
-    assert outcome.result == "failed"
-    assert outcome.detail == f"{step.text}: step has no command"
-    assert recorder.argv == []
-
-
 def test_an_unknown_step_kind_fails_closed_instead_of_running_argv() -> None:
     """The guard behind `_STEP_KINDS`: a kind with no branch never executes.
 
@@ -1603,22 +1508,30 @@ def test_an_unknown_step_kind_fails_closed_instead_of_running_argv() -> None:
 
 
 def test_reconfigure_stops_at_a_builtin_step_and_never_reaches_the_next() -> None:
-    """The D-18 order holds when the row starts with a kind that runs no argv.
+    """The D-18 order holds when the first step fails and a later step is a real action.
 
-    A built-in step can be the first failure in a row whose later steps do run
-    commands; stopping there is what keeps a failed enable from being followed
-    by the removal that would delete the only working copy.
+    Stopping at the first failure is what keeps a failed enable from being followed
+    by the removal that would delete the only working copy; here the later step is a
+    second synchronizer call, so the count shows whether it ran.
     """
-    sync = ConfigStep("point iTerm2 at zsh", "terminal_sync")
-    enable = ConfigStep("enable gsd-core in user scope", "plugin_enable", "claude", _ENABLE)
-    recorder = RunRecorder()
-    unbound = replace(_run_context(recorder, catalog={"gsd": _tool("gsd")}), terminal_sync=None)
+    synced: list[str] = []
 
-    outcome = execute_plan([_reconfigure_row("gsd", sync, enable)], unbound)[0]
+    def failing_sync() -> None:
+        synced.append("sync")
+        raise RuntimeError("sync refused")
+
+    sync = ConfigStep("point iTerm2 at zsh", "terminal_sync")
+    later = ConfigStep("sync again", "terminal_sync")
+    recorder = RunRecorder()
+
+    outcome = execute_plan(
+        [_reconfigure_row("gsd", sync, later)],
+        replace(_run_context(recorder, catalog={"gsd": _tool("gsd")}), terminal_sync=failing_sync),
+    )[0]
 
     assert outcome.result == "failed"
-    assert outcome.detail == f"{sync.text}: no terminal synchronizer bound"
-    assert recorder.argv == []
+    assert outcome.detail.startswith(f"{sync.text}: ")
+    assert synced == ["sync"]
 
 
 def _removal(tool_id: str, result: Result, detail: str = "") -> RowOutcome:

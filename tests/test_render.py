@@ -804,7 +804,7 @@ def test_render_plan_reconfigure_row_lists_its_steps_at_the_word_column() -> Non
         "configuration missing",
         health=Health.MISCONFIGURED,
         steps=(
-            ConfigStep("install ponytail for Codex", "plugin_enable"),
+            ConfigStep("install ponytail for Codex", "hook_register"),
             ConfigStep("sync terminals", "terminal_sync"),
         ),
     )

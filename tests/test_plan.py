@@ -96,7 +96,7 @@ def _state_of(states: Mapping[str, ToolState | None]) -> Callable[[str], ToolSta
 def test_misconfigured_direct_row_with_steps_is_will_reconfigure_listing_them():
     tool = _tool("pony")
     steps = (
-        ConfigStep("install ponytail for Codex", "skill_install", "codex"),
+        ConfigStep("install ponytail for Codex", "hook_register", "codex"),
         ConfigStep("sync terminals", "terminal_sync"),
     )
     state = plan_state(
@@ -140,7 +140,7 @@ def test_misconfigured_dragged_dependency_is_already_present_with_the_reason():
         tool,
         health=Health.MISCONFIGURED,
         reasons=("partial: missing on Codex — details",),
-        unconfigured=(ConfigStep("install ponytail for Codex", "skill_install", "codex"),),
+        unconfigured=(ConfigStep("install ponytail for Codex", "hook_register", "codex"),),
     )
 
     row = _build_row(

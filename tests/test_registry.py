@@ -61,7 +61,6 @@ def test_the_dropped_ids_are_not_in_the_catalog() -> None:
     assert not {tool.id for tool in tools} & set(DROPPED_IDS)
     for tool in tools:
         assert not set(tool.recommends) & set(DROPPED_IDS), tool.id
-        assert not any(method.kind == "skill_pack" for method in tool.methods), tool.id
     tools_by_id = {tool.id: tool for tool in tools}
     for host_id in ("codex", "claude", "opencode", "cursor-agent"):
         assert tools_by_id[host_id].recommends == ("codegraph", "graphify"), host_id
@@ -2102,16 +2101,6 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
     assert native == set(expected)
 
 
-def test_install_state_probes_match_gsd_core() -> None:
-    for tool in load_tools(REGISTRY):
-        lifecycle = tool.skill_lifecycle
-        if lifecycle is None:
-            continue
-        for probe in lifecycle.status_probes:
-            if probe.via == "install-state":
-                assert probe.match == "gsd-core", tool.id
-
-
 def test_sublime_linux_tarballs_link_the_binary_inside_the_archive_dir() -> None:
     """Phase 17 SAFE-01/D-02: both Linux tarball archives unpack to a single
     top-level sublime_text/ directory holding the executable at
@@ -2453,7 +2442,6 @@ def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
 
 
 def test_registry_rows_carry_no_dead_attribution_keys() -> None:
-    # skill_lifecycle tables keep their own source/owner; only top-level tool keys are dead.
     with REGISTRY.open("rb") as fh:
         rows = cast(list[dict[str, object]], tomllib.load(fh)["tool"])
     dead = {"source", "owner", "uninstall"}

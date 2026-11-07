@@ -13,7 +13,6 @@ from installer.versions import meets_minimum
 _RANK = {
     "script": 10,
     "host_setup": 15,
-    "skill_pack": 15,
     "github_release": 20,
     "node": 20,
     "uv-tool": 20,
@@ -60,7 +59,6 @@ def _applies(method: Method, platform: Platform) -> bool:
         "app",
         "uv-tool",
         "host_setup",
-        "skill_pack",
     ):
         return True
     if kind == "brew":

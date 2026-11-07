@@ -12,7 +12,6 @@ from installer.model import (
     POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
     SENSITIVE_POST_INSTALL_ACTIONS,
-    SKILL_HARNESSES,
     SMOKE_CHECK_NAMES,
     TOOL_ID_RE,
     ConfigStep,
@@ -59,12 +58,6 @@ def _write(tmp_path: Path, content: str, *, seed_verified: bool = True) -> Path:
     text = _seed_verified_in_content(content) if seed_verified else content
     p.write_text(text)
     return p
-
-
-def test_skill_harnesses_include_factory_droid_and_gemini_cli() -> None:
-    assert "factory-droid" in SKILL_HARNESSES
-    assert "gemini-cli" in SKILL_HARNESSES
-    assert list(SKILL_HARNESSES) == sorted(SKILL_HARNESSES)
 
 
 def test_tool_requires_defaults_empty_and_parses(tmp_path: Path) -> None:
@@ -769,7 +762,6 @@ smoke_argv = {smoke_argv_toml}
     ("kind", "method_body"),
     [
         ("host_setup", 'setup_id = "pi"'),
-        ("skill_pack", ""),
     ],
 )
 def test_smoke_argv_is_rejected_where_nothing_is_installed(
@@ -1296,9 +1288,41 @@ kind = "brew"
     assert tools[0].methods[0].params == {}
 
 
+def test_a_skill_pack_kind_is_an_unknown_method_kind(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "ai"
+tier = "user"
+[[tool.method]]
+kind = "skill_pack"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown method kind 'skill_pack'"):
+        load_tools(manifest)
+
+
+def test_a_host_setup_method_still_loads(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "ai"
+tier = "user"
+[[tool.method]]
+kind = "host_setup"
+setup_id = "pi"
+""",
+    )
+    (tool,) = load_tools(manifest)
+    assert tool.methods[0].kind == "host_setup"
+
+
 def test_method_params_covers_every_kind() -> None:
     assert set(METHOD_PARAMS) == set(METHOD_KINDS)
-    assert METHOD_PARAMS["skill_pack"] == frozenset()
     for allowed in METHOD_PARAMS.values():
         assert "kind" not in allowed
         assert "os" not in allowed
@@ -1493,65 +1517,6 @@ def test_postinstall_hook_names_matches_the_real_dispatch_table() -> None:
     assert frozenset(POSTINSTALL_HOOKS) == POSTINSTALL_HOOK_NAMES
 
 
-def test_duplicate_status_probe_harness_fails_at_load(tmp_path: Path) -> None:
-    manifest = _write(
-        tmp_path,
-        """
-[[tool]]
-id = "demo-skills"
-category = "ai"
-tier = "user"
-[[tool.method]]
-kind = "skill_pack"
-
-[tool.skill_lifecycle]
-source = "https://github.com/example/skills"
-owner = "example"
-supported_harnesses = ["claude"]
-revision_policy = "upstream-latest"
-targets = [{ scope = "harness", path = "<codex-plugin-dir>/demo" }]
-status_probes = [
-  { harness = "claude", via = "plugin-cli", match = "demo" },
-  { harness = "claude", via = "plugin-cli", match = "other" },
-]
-
-[tool.skill_lifecycle.install]
-mode = "manual-required"
-instructions = ["Review and run the official install flow."]
-
-[tool.skill_lifecycle.status]
-mode = "manual-required"
-instructions = ["Review and run the official status flow."]
-
-[tool.skill_lifecycle.update]
-mode = "manual-required"
-instructions = ["Review and run the official update flow."]
-
-[tool.skill_lifecycle.removal]
-mode = "manual-required"
-instructions = ["Review and run the official removal flow."]
-""",
-    )
-
-    with pytest.raises(ValueError, match="demo-skills") as exc:
-        load_tools(manifest)
-    message = str(exc.value)
-    assert "claude" in message
-    assert "duplicate" in message
-
-
-def test_shipped_status_probes_do_not_repeat_a_harness() -> None:
-    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
-    tools = load_tools(registry)
-    assert tools
-    for tool in tools:
-        lifecycle = tool.skill_lifecycle
-        if lifecycle is None:
-            continue
-        harnesses = [probe.harness for probe in lifecycle.status_probes]
-        assert len(harnesses) == len(set(harnesses)), tool.id
-
-
 @pytest.mark.parametrize(
     "strip_line",
     [
@@ -1629,20 +1594,14 @@ member = "bin/demo"
 
 
 def test_config_step_is_frozen_with_closed_kinds() -> None:
-    step = ConfigStep(text="t", kind="plugin_enable")
+    step = ConfigStep(text="t", kind="terminal_sync")
     assert (step.harness, step.argv, step.cwd) == (None, (), None)
     field_name = "text"
     with pytest.raises(FrozenInstanceError):
         setattr(step, field_name, "u")
     assert typing.get_args(ConfigStepKind) == (
-        "skill_install",
-        "plugin_enable",
-        "plugin_uninstall",
-        "marketplace_remove",
         "terminal_sync",
         "pnpm_group_install",
-        "project_pack_global_uninstall",
-        "project_pack_install",
         "hook_register",
         "zshenv_shell",
     )
@@ -1673,83 +1632,6 @@ def test_every_registry_tool_id_is_a_safe_filename() -> None:
     tools = load_tools(REGISTRY)
     assert tools
     assert all(TOOL_ID_RE.fullmatch(tool.id) for tool in tools)
-
-
-def _lifecycle_manifest(
-    lifecycle_keys: str = "",
-    targets: str = '[{ scope = "project", path = "<project>/<selected-runtime-dir>" }]',
-) -> str:
-    operations = "\n".join(
-        f'[tool.skill_lifecycle.{operation}]\nmode = "manual-required"\n'
-        f'instructions = ["Review and run the official {operation} flow."]\n'
-        for operation in ("install", "status", "update", "removal")
-    )
-    return f"""
-[[tool]]
-id = "demo-pack"
-category = "ai"
-tier = "user"
-[[tool.method]]
-kind = "skill_pack"
-
-[tool.skill_lifecycle]
-source = "https://github.com/example/skills"
-owner = "example"
-supported_harnesses = ["claude"]
-revision_policy = "upstream-latest"
-targets = {targets}
-{lifecycle_keys}
-
-{operations}
-"""
-
-
-def test_skill_lifecycle_scope_defaults_to_user(tmp_path: Path) -> None:
-    (tool,) = load_tools(_write(tmp_path, _lifecycle_manifest()))
-
-    assert tool.skill_lifecycle is not None
-    assert tool.skill_lifecycle.scope == "user"
-    assert tool.skill_lifecycle.version is None
-
-
-def test_skill_lifecycle_rejects_an_unknown_scope(tmp_path: Path) -> None:
-    manifest = _write(tmp_path, _lifecycle_manifest('scope = "global"'))
-
-    with pytest.raises(ValueError, match="demo-pack") as exc_info:
-        load_tools(manifest)
-    assert "scope 'global'" in str(exc_info.value)
-
-
-@pytest.mark.parametrize("pin", ["", 'version = "latest"', 'version = "1.16"', "version = 1"])
-def test_project_pack_requires_a_semver_pin(tmp_path: Path, pin: str) -> None:
-    manifest = _write(tmp_path, _lifecycle_manifest(f'scope = "project"\n{pin}'))
-
-    with pytest.raises(ValueError, match="demo-pack") as exc_info:
-        load_tools(manifest)
-    assert "version" in str(exc_info.value)
-
-
-def test_project_pack_accepts_a_semver_pin(tmp_path: Path) -> None:
-    manifest = _write(tmp_path, _lifecycle_manifest('scope = "project"\nversion = "1.16.0"'))
-
-    (tool,) = load_tools(manifest)
-
-    assert tool.skill_lifecycle is not None
-    assert (tool.skill_lifecycle.scope, tool.skill_lifecycle.version) == ("project", "1.16.0")
-
-
-def test_project_pack_rejects_a_global_target(tmp_path: Path) -> None:
-    targets = (
-        '[{ scope = "global", path = "<selected-runtime-global-dir>" },'
-        ' { scope = "project", path = "<project>/<selected-runtime-dir>" }]'
-    )
-    manifest = _write(
-        tmp_path, _lifecycle_manifest('scope = "project"\nversion = "1.16.0"', targets)
-    )
-
-    with pytest.raises(ValueError, match="demo-pack") as exc_info:
-        load_tools(manifest)
-    assert "global" in str(exc_info.value)
 
 
 def _tool_block(tool_id: str, config: str = "") -> str:
