@@ -1,6 +1,8 @@
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Mapping
@@ -739,7 +741,12 @@ def test_streaming_runner_caller_argv_in_error_when_wrapped_command_fails(
     assert "stdbuf" not in str(exc.value)
 
 
-@pytest.mark.skipif(shutil.which("stdbuf") is None, reason="coreutils stdbuf not on PATH")
+_NEEDS_STDBUF = pytest.mark.skipif(
+    shutil.which("stdbuf") is None, reason="coreutils stdbuf not on PATH"
+)
+
+
+@_NEEDS_STDBUF
 def test_stdbuf_wrapper_is_applied_end_to_end() -> None:
     # Against the real binary: a real stdbuf was execed by the production argv
     # and configured the child's environment. The child reports _STDBUF_O=L.
@@ -755,6 +762,28 @@ def test_stdbuf_wrapper_is_applied_end_to_end() -> None:
 
     lines = [line for _tool, line in seen]
     assert "L" in lines, f"stdbuf wrapper did not set _STDBUF_O=L. Lines: {lines}"
+
+
+@_NEEDS_STDBUF
+def test_the_wired_guard_checks_what_stdbuf_wraps(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The guard sees real subprocess.run: stdbuf is a prefix, its command is judged too.
+    stdbuf = shutil.which("stdbuf")
+    assert stdbuf is not None
+    outside = Path(tempfile.mkdtemp(prefix="host-stdbuf-"))
+    try:
+        fake = outside / "uv"
+        fake.write_text(f'#!/bin/sh\necho ran > "{outside}/uv.ran"\n')
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{outside}{os.pathsep}{os.environ['PATH']}")
+        with pytest.raises(AssertionError, match="host's uv"):
+            subprocess.run([stdbuf, "-oL", "uv", "--version"], check=False)
+        assert not (outside / "uv.ran").exists()
+    finally:
+        shutil.rmtree(outside)
+    done = subprocess.run(
+        [stdbuf, "-oL", "sh", "-c", "printf x"], capture_output=True, text=True, check=False
+    )
+    assert done.stdout == "x"
 
 
 def test_every_child_runs_without_askpass_brew_sudo_or_brew_autoremove(

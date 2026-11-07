@@ -13,7 +13,6 @@ from typing import NamedTuple, cast
 import pytest
 
 import setup
-from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain
 from tests.sandbox import (
     CHECKOUT,
     FORBIDDEN_PROGRAM_NAMES,
@@ -243,17 +242,6 @@ def test_a_node_family_binary_outside_tmp_is_never_run(
         assert result.stdout == "forked\n"
     finally:
         shutil.rmtree(outside)
-
-
-def test_assert_not_host_toolchain_only_guards_the_named_programs(tmp_path: Path) -> None:
-    assert_not_host_toolchain(["/usr/bin/true"], env=None, cwd=None, allowed_root=tmp_path)
-    assert_not_host_toolchain(
-        ["node", "--version"], env={"PATH": ""}, cwd=None, allowed_root=tmp_path
-    )
-    assert_not_host_toolchain("brew shellenv", env=None, cwd=None, allowed_root=tmp_path)
-    expected = frozenset({"node", "npm", "npx", "pnpm", "corepack", "volta", "bun", "yarn", "brew"})
-    assert HOST_TOOLCHAIN.issuperset(expected)
-    assert expected.issuperset(HOST_TOOLCHAIN)
 
 
 def test_no_setup_home_constant_points_at_the_real_home() -> None:
@@ -720,3 +708,55 @@ def test_path_assignments_are_refused_but_reads_and_lookalikes_pass(
 ) -> None:
     _fake(shells.bindir, "uv")
     shells.run("bash", script, env={"PATH": str(shells.bindir)})
+
+
+# --- the wired guard: real subprocess.run through GuardedPopen (SPEC R6) ---
+
+
+def _marker_fake(directory: Path, name: str) -> Path:
+    """A fake that writes `<name>.ran` beside itself when it runs."""
+    directory.mkdir(parents=True, exist_ok=True)
+    program = directory / name
+    program.write_text(f'#!/bin/sh\necho ran > "{directory}/{name}.ran"\n')
+    program.chmod(0o755)
+    return program
+
+
+@pytest.fixture
+def host_fakes(outside: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Marker-writing `uv`, `curl` and `gh` outside the base temp, first on PATH."""
+    for name in ("uv", "curl", "gh"):
+        _marker_fake(outside, name)
+    monkeypatch.setenv("PATH", f"{outside}{os.pathsep}{os.environ['PATH']}")
+    return outside
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["uv", "--version"],
+        ["curl", "-V"],
+        ["sh", "-c", "uv --version"],
+        ["bash", "-c", "true && gh --version"],
+        [str(LINUXBREW_PREFIX / "bin" / "brew"), "--version"],
+    ],
+    ids=["uv", "curl", "sh-c", "bash-c-chain", "linuxbrew-binary"],
+)
+def test_the_guard_refuses_host_programs_before_launch(argv: list[str], host_fakes: Path) -> None:
+    with pytest.raises(AssertionError):
+        subprocess.run(argv, check=False)
+    assert list(host_fakes.glob("*.ran")) == []
+
+
+def test_the_guard_runs_allowed_programs(tmp_path: Path) -> None:
+    fake = tmp_path / "bin" / "tool"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\necho fake-ran\n")
+    fake.chmod(0o755)
+    script = tmp_path / "ok.sh"
+    script.write_text("true\n")
+
+    ran = subprocess.run([str(fake)], capture_output=True, text=True, check=False)
+    assert ran.stdout == "fake-ran\n"
+    assert subprocess.run(["sh", "-n", str(script)], check=False).returncode == 0
+    assert subprocess.run([sys.executable, "-c", "pass"], check=False).returncode == 0

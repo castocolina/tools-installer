@@ -20,6 +20,7 @@ files rather than re-typed assertions.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,38 @@ def _write_tester_path_payload() -> str:
     return payload
 
 
+_FAKE_TOOLS = {
+    # `touch FILE...`: create each file.
+    "touch": "for path in sys.argv[1:]:\n    open(path, 'a').close()\n",
+    # `grep -q PATTERN FILE`: exit 0 on a match, 1 on none, 2 when the file is missing.
+    "grep": (
+        "import re\n_, pattern, path = sys.argv[1:]\n"
+        "try:\n    text = open(path).read()\nexcept OSError:\n    sys.exit(2)\n"
+        "sys.exit(0 if re.search(pattern, text) else 1)\n"
+    ),
+    # `cat`: copy stdin to stdout (the payload only uses it for heredocs).
+    "cat": "sys.stdout.write(sys.stdin.read())\n",
+}
+
+
+def _payload_sandbox(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """The payload as a script file, plus an env whose touch, grep and cat are Python fakes.
+
+    A file, not `-c`: the guard cannot parse the payload's heredocs and command substitution.
+    Its command words are the builtins `printf`, `if` and `case` and the three fakes, so the
+    suite launches no host utility; each fake does what the payload uses of the real one.
+    """
+    fakes = tmp_path / "fakebin"
+    fakes.mkdir()
+    for name, body in _FAKE_TOOLS.items():
+        tool = fakes / name
+        tool.write_text(f"#!{sys.executable}\nimport sys\n{body}")
+        tool.chmod(0o755)
+    payload_file = tmp_path / "payload.sh"
+    payload_file.write_text(_write_tester_path_payload())
+    return payload_file, {"PATH": str(fakes), "HOME": str(tmp_path)}
+
+
 pytestmark = pytest.mark.skipif(_get_bash() is None, reason="bash not on PATH")
 
 
@@ -104,13 +137,12 @@ def test_the_container_rc_append_is_runtime_idempotent(tmp_path: Path) -> None:
     bash_path = _get_bash()
     assert bash_path, "bash not found"
 
-    payload = _write_tester_path_payload()
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    payload_file, env = _payload_sandbox(tmp_path)
 
     # Run the payload three times
     for run_num in range(3):
         result = subprocess.run(
-            [bash_path, "-c", payload],
+            [bash_path, str(payload_file)],
             env=env,
             capture_output=True,
             text=True,
@@ -177,13 +209,12 @@ def test_the_container_rc_append_is_idempotent_under_zsh(tmp_path: Path) -> None
     zsh_path = _get_zsh()
     assert zsh_path, "zsh not found"
 
-    payload = _write_tester_path_payload()
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    payload_file, env = _payload_sandbox(tmp_path)
 
     # Run the payload three times
     for run_num in range(3):
         result = subprocess.run(
-            [zsh_path, "-f", "-c", payload],
+            [zsh_path, "-f", str(payload_file)],
             env=env,
             capture_output=True,
             text=True,
@@ -243,13 +274,12 @@ def test_the_container_rc_append_is_idempotent_under_sh(tmp_path: Path) -> None:
     sh_path = _get_sh()
     assert sh_path, "/bin/sh not found"
 
-    payload = _write_tester_path_payload()
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    payload_file, env = _payload_sandbox(tmp_path)
 
     # Run the payload three times
     for run_num in range(3):
         result = subprocess.run(
-            [sh_path, "-c", payload],
+            [sh_path, str(payload_file)],
             env=env,
             capture_output=True,
             text=True,
