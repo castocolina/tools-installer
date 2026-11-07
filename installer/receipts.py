@@ -23,7 +23,7 @@ import os
 import re
 import stat as stat_module
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -35,6 +35,7 @@ from installer.checksums import sha256_file
 from installer.download import Artifact, artifact_paths
 from installer.locations import ensure_dir
 from installer.model import TOOL_ID_RE, Method, Tool
+from installer.sanitize import sanitize_log_line
 
 # The OS package manager or the agent harness owns these installs; a receipt
 # would claim files this installer did not create.
@@ -548,6 +549,46 @@ def receipt_exists(tool_id: str) -> bool:
     except OSError:
         return True
     return True
+
+
+@dataclass(frozen=True)
+class RetiredScan:
+    tools: tuple[Tool, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+def _shown(path: Path) -> str:
+    return sanitize_log_line(locations.display_path(path))
+
+
+def scan_retired(catalog_ids: Collection[str]) -> RetiredScan:
+    """Receipts whose tool id left the catalog, as retired tools. Never deletes or writes."""
+    folder = receipts_dir()
+    try:
+        names = sorted(os.listdir(folder))
+    except (FileNotFoundError, NotADirectoryError):
+        return RetiredScan()
+    except OSError as exc:
+        reason = sanitize_log_line(exc.strerror or str(exc).partition("\n")[0])
+        message = f"Could not read the receipts folder {_shown(folder)}: {reason}."
+        return RetiredScan(warnings=(message,))
+    tools: list[Tool] = []
+    warnings: list[str] = []
+    for name in names:
+        stem = name.removesuffix(".json")
+        if stem == name or not TOOL_ID_RE.fullmatch(stem) or stem in catalog_ids:
+            continue
+        path = receipt_path(stem)
+        if read(stem) is not None:
+            tools.append(
+                Tool(id=stem, name=stem, category="retired", cmd=stem, methods=(), retired=True)
+            )
+        elif os.path.lexists(path):
+            warnings.append(
+                f"Ignored the corrupt receipt {_shown(path)}: "
+                "it is kept; remove it yourself if it is stale."
+            )
+    return RetiredScan(tools=tuple(tools), warnings=tuple(warnings))
 
 
 def all_gone(receipt: Receipt) -> bool:

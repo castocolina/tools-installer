@@ -465,6 +465,8 @@ class Tool:
     skill_lifecycle: "SkillLifecycle | None" = None
     # Declared `~/` config paths, validated by _parse_config_paths at load.
     config_paths: tuple[str, ...] = ()
+    # Synthetic tool for a receipt whose id left the catalog (receipts.scan_retired).
+    retired: bool = False
 
     def __init__(
         self,
@@ -485,6 +487,7 @@ class Tool:
         owner_probes: tuple[str, ...] = (),
         skill_lifecycle: "SkillLifecycle | None" = None,
         config_paths: tuple[str, ...] = (),
+        retired: bool = False,
     ) -> None:
         object.__setattr__(self, "id", id)
         object.__setattr__(self, "name", name)
@@ -509,6 +512,7 @@ class Tool:
         object.__setattr__(self, "owner_probes", owner_probes)
         object.__setattr__(self, "skill_lifecycle", skill_lifecycle)
         object.__setattr__(self, "config_paths", config_paths)
+        object.__setattr__(self, "retired", retired)
 
 
 def _relative_parts(rest: str) -> tuple[str, ...] | None:
