@@ -368,3 +368,69 @@ def test_environment_d_dir_ignores_a_relative_xdg_config_home(tmp_path: Path) ->
         env_redirect.environment_d_dir(home, {"XDG_CONFIG_HOME": "relative/config"})
         == home / ".config" / "environment.d"
     )
+
+
+# Phase 23 / CONF-05, Task 3: one environment.d writer carries the desktop SHELL.
+
+_BUN_CONF_GOLDEN = (
+    "# tools-installer: cache-redirect\n"
+    "# Keep Bun's runtime transpiler cache on a disk-backed directory instead of the OS temp dir, "
+    "so a killed process does not orphan native artifacts there.\n"
+    "# Takes effect at the next login, when the systemd user manager reads environment.d.\n"
+    "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/fake-home/.cache/bun/transpiler-cache\n"
+)
+
+
+def test_the_bun_redirect_renders_byte_identically() -> None:
+    # Rendering only: the fake home is never written, so no host path is touched.
+    assert env_redirect.render_conf(_bun(), Path("/fake-home")) == _BUN_CONF_GOLDEN
+
+
+def test_shell_redirect_writes_and_removes_its_conf(tmp_path: Path) -> None:
+    zsh = tmp_path / "bin" / "zsh"
+    zsh.parent.mkdir()
+    zsh.write_text("")
+    conf_dir = tmp_path / "environment.d"
+    redirect = env_redirect.shell_redirect(str(zsh))
+
+    conf = env_redirect.write_linux_redirect(redirect, tmp_path, conf_dir)
+    assert conf == conf_dir / env_redirect.DESKTOP_SHELL_CONF
+    assert conf.read_text().splitlines()[-1] == f"SHELL={zsh}"
+    assert zsh.is_file()
+    assert env_redirect.linux_applied(redirect, tmp_path, conf_dir)
+
+    # A target that does not exist yet must not get a directory created at its path.
+    missing = tmp_path / "missing" / "zsh"
+    env_redirect.write_linux_redirect(env_redirect.shell_redirect(str(missing)), tmp_path, conf_dir)
+    assert not missing.exists()
+    assert not (tmp_path / "missing").exists()
+
+    assert env_redirect.remove_linux_redirect(redirect, conf_dir)
+    assert not env_redirect.linux_applied(redirect, tmp_path, conf_dir)
+
+
+@pytest.mark.parametrize("unsafe", ["zsh", '/opt/a"b/zsh', "/opt/$x/zsh"])
+def test_shell_redirect_rejects_an_unsafe_value(tmp_path: Path, unsafe: str) -> None:
+    with pytest.raises(ValueError):
+        env_redirect.target_path(env_redirect.shell_redirect(unsafe), tmp_path)
+
+
+def test_the_desktop_conf_is_owned_by_its_sentinel_alone(tmp_path: Path) -> None:
+    conf_dir = tmp_path / "environment.d"
+    basename = env_redirect.DESKTOP_SHELL_CONF
+    env_redirect.write_linux_redirect(
+        env_redirect.shell_redirect(str(tmp_path / "bin" / "zsh")), tmp_path, conf_dir
+    )
+
+    # A zsh that moved still reads as ours: ownership does not depend on which zsh is found.
+    moved = env_redirect.shell_redirect(str(tmp_path / "moved" / "zsh"))
+    assert env_redirect.conf_owned(conf_dir, basename)
+    assert not env_redirect.linux_applied(moved, tmp_path, conf_dir)
+    assert env_redirect.remove_owned_conf(conf_dir, basename)
+    assert not (conf_dir / basename).exists()
+
+    plain = conf_dir / basename
+    plain.write_text("SHELL=/bin/sh\n")
+    assert not env_redirect.conf_owned(conf_dir, basename)
+    assert not env_redirect.remove_owned_conf(conf_dir, basename)
+    assert plain.exists()

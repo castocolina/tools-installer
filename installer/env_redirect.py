@@ -37,7 +37,7 @@ _REJECTED_TARGET_CHARS = ('"', "\\", "`", "$", "\n", "\r")
 
 @dataclass(frozen=True)
 class CacheRedirect:
-    """One tool's cache redirect. ``target_parts`` are joined under home."""
+    """One tool's redirect: ``target_parts`` under home, or ``absolute`` verbatim."""
 
     id: str
     label: str
@@ -46,6 +46,7 @@ class CacheRedirect:
     reason: str
     coverage_caveat: str
     conf_basename: str
+    absolute: str | None = None
 
 
 # Path recorded by the source todo
@@ -75,6 +76,25 @@ BUN_CACHE_REDIRECT = CacheRedirect(
 
 REDIRECTS: tuple[CacheRedirect, ...] = (BUN_CACHE_REDIRECT,)
 
+# The desktop-menu SHELL conf. Not in REDIRECTS: it is opt-in (Policies row, 23-11).
+DESKTOP_SHELL_CONF = "52-tools-installer-desktop-shell.conf"
+
+
+def shell_redirect(zsh_path: str) -> CacheRedirect:
+    """The desktop SHELL export: the one environment.d writer, carrying an absolute value."""
+    return CacheRedirect(
+        id="desktop-shell",
+        label="SHELL for desktop apps",
+        variable="SHELL",
+        target_parts=(),
+        reason="Start apps launched from the desktop menu with zsh as their SHELL.",
+        coverage_caveat=(
+            "Takes effect at your next login; terminals already get SHELL from ~/.zshenv."
+        ),
+        conf_basename=DESKTOP_SHELL_CONF,
+        absolute=zsh_path,
+    )
+
 
 def environment_d_dir(home: Path, environ: Mapping[str, str]) -> Path:
     """``$XDG_CONFIG_HOME/environment.d``, or ``home/.config/environment.d``.
@@ -94,9 +114,13 @@ def _valid_name(name: str) -> None:
 
 
 def target_path(redirect: CacheRedirect, home: Path) -> Path:
-    """The absolute cache directory, rejecting anything unsafe to render."""
+    """The absolute cache directory (or the absolute value), rejecting anything unsafe to render."""
     _valid_name(redirect.variable)
-    target = home.joinpath(*redirect.target_parts)
+    target = (
+        Path(redirect.absolute)
+        if redirect.absolute is not None
+        else home.joinpath(*redirect.target_parts)
+    )
     if not target.is_absolute():
         raise ValueError(f"cache redirect target must be absolute, got {target}")
     rendered = str(target)
@@ -155,8 +179,24 @@ def write_linux_redirect(redirect: CacheRedirect, home: Path, conf_dir: Path) ->
         if existing is None or not _owned(existing):
             raise OSError(f"{path} exists and is not managed by tools-installer")
     atomic_write_bytes(path, text.encode("utf-8"), mode=0o644)
-    target_path(redirect, home).mkdir(parents=True, exist_ok=True)
+    # An absolute value is a binary, not a cache dir: a mkdir there would create one.
+    if redirect.absolute is None:
+        target_path(redirect, home).mkdir(parents=True, exist_ok=True)
     return path
+
+
+def conf_owned(conf_dir: Path, basename: str) -> bool:
+    """True when the named conf exists and carries the ownership sentinel, whatever it assigns."""
+    existing = _read(conf_dir / basename)
+    return existing is not None and _owned(existing)
+
+
+def remove_owned_conf(conf_dir: Path, basename: str) -> bool:
+    """Delete the named conf only when it carries the ownership sentinel."""
+    if not conf_owned(conf_dir, basename):
+        return False
+    (conf_dir / basename).unlink()
+    return True
 
 
 def remove_linux_redirect(redirect: CacheRedirect, conf_dir: Path) -> bool:
@@ -165,12 +205,7 @@ def remove_linux_redirect(redirect: CacheRedirect, conf_dir: Path) -> bool:
     Returns False, deleting nothing, when the file is absent or lacks the
     ownership sentinel.
     """
-    path = conf_dir / redirect.conf_basename
-    existing = _read(path)
-    if existing is None or not _owned(existing):
-        return False
-    path.unlink()
-    return True
+    return remove_owned_conf(conf_dir, redirect.conf_basename)
 
 
 def linux_applied(redirect: CacheRedirect, home: Path, conf_dir: Path) -> bool:
