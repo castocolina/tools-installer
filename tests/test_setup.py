@@ -16,7 +16,7 @@ from rich.console import Console
 from textual.pilot import Pilot
 
 import setup
-from installer import pnpm_globals, post_install, postinstall, systemd_daemon
+from installer import pnpm_globals, post_install, postinstall, receipts, systemd_daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
@@ -65,6 +65,7 @@ from tests.state_doubles import (
     plan_state,
     presence_service,
 )
+from tests.test_uninstall import loop_tool, write_receipt
 
 # Aliased once, matching tests/test_daemon.py's convention for pinning a
 # private composition-root function under test.
@@ -4287,6 +4288,64 @@ def test_the_cli_uninstall_strips_legacy_alias_blocks(
     assert "Removed the codex-skip alias block(s) from ~/.myshellrc." in buffer.getvalue()
     assert "tools-installer tweak:codex-skip" not in rc.read_text()
     assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def _plant_retired_rtk(home: Path) -> Path:
+    """A raw download's bin-dir file and its receipt, the id absent from the (empty) catalog."""
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    write_receipt(loop_tool("rtk"), [(rtk, "file")])
+    return rtk
+
+
+def _headless_teardown(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
+    """Run the real headless teardown; stub only the host collaborators it would touch."""
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+
+    def no_daemon_policy(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
+        return TerminalShellResult()
+
+    monkeypatch.setattr(setup, "_build_daemon_policy", no_daemon_policy)
+    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    return buffer
+
+
+def test_cli_uninstall_removes_a_retired_receipt_and_its_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tracer (D-09): the headless route removes a receipt whose id left the catalog."""
+    _sandbox(monkeypatch, tmp_path)
+    rtk = _plant_retired_rtk(tmp_path)
+    buffer = _headless_teardown(monkeypatch)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    out = buffer.getvalue()
+    assert "retired — no longer in the catalog" in out
+    assert "rtk (retired)" in out
+    assert not rtk.exists()
+    assert not receipts.receipt_exists("rtk")
+
+
+def test_a_second_cli_uninstall_finds_nothing_retired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SPEC edge R3: once the retired receipt is gone, a second run prints no retired section."""
+    _sandbox(monkeypatch, tmp_path)
+    _plant_retired_rtk(tmp_path)
+    buffer = _headless_teardown(monkeypatch)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert not receipts.receipt_exists("rtk")
+    buffer.seek(0)
+    buffer.truncate()
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert "retired —" not in buffer.getvalue()
 
 
 def test_every_route_survives_a_non_utf8_myshellrc(

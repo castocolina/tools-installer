@@ -72,6 +72,7 @@ from installer.policy import (
 )
 from installer.postinstall import BREW_BIN_DIRS, which_with_brew
 from installer.prompt import CallbackPrompter
+from installer.receipts import scan_retired
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
 from installer.run import OutputRunner, Runner, apply_child_env, run_captured
@@ -1362,8 +1363,12 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         console.print(text, markup=False, soft_wrap=True)
     for text, _severity in repairs:
         console.print(text, markup=False, soft_wrap=True)
+    # Retired receipts join the teardown only; `installed` and the daemon policy stay catalog-only.
+    scan = scan_retired(frozenset(tool.id for tool in tools))
+    for text in scan.warnings:
+        console.print(text, markup=False, soft_wrap=True)
     _removed, failed = run_uninstall(
-        tools,
+        [*tools, *scan.tools],
         console,
         runner=run_captured,
         default_bin_dir=_DEFAULT_BIN_DIR,
