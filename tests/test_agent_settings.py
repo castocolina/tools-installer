@@ -998,3 +998,31 @@ def test_a_recorded_file_that_is_gone_is_reported_and_no_other_file_is_touched()
     assert settings_change_lines(("opencode",), platform_os="linux") == (
         "opencode: cannot remove permission: ~/.config/opencode/opencode.json is missing",
     )
+
+
+def test_an_untrusted_ledger_is_kept_aside_and_blocks_every_write() -> None:
+    from installer.receipts import config_ledger_dir
+
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    ledger_path = config_ledger_dir() / "claude.json"
+    tampered = json.loads(ledger_path.read_text(encoding="utf-8"))
+    tampered["v"] = 2  # e.g. written by a newer installer build
+    ledger_path.write_text(json.dumps(tampered), encoding="utf-8")
+    recorded = ledger_path.read_bytes()
+    written = settings.read_bytes()
+
+    applied = apply_setting("claude", "no-attribution", home=home, platform_os="linux")
+    reverted = revert_agent("claude", home=home, platform_os="linux")
+
+    aside = config_ledger_dir() / "claude.json.untrusted"
+    assert applied.refused is not None
+    assert applied.refused.startswith("blocked: the claude config ledger could not be trusted")
+    assert [result.refused for result in reverted] == [applied.refused]
+    assert aside.read_bytes() == recorded
+    assert not ledger_path.exists()
+    assert settings.read_bytes() == written
+    assert apply_setting("claude", "auto-approve", home=home, platform_os="linux").refused
+    assert settings.read_bytes() == written

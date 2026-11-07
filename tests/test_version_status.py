@@ -5056,6 +5056,16 @@ def test_an_unparsable_managed_settings_file_reads_blocked(tmp_path: Path) -> No
     assert settings.read_text(encoding="utf-8") == '{"a": 1,,}'
 
 
+def test_an_untrusted_settings_ledger_reads_blocked(tmp_path: Path) -> None:
+    agent_settings.apply_setting("claude", "auto-approve", home=Path.home(), platform_os="fedora")
+    ledger = receipts.config_ledger_dir() / "claude.json"
+    ledger.write_text('{"v": 2}', encoding="utf-8")
+    claude = _settled_states(_hook_service(tmp_path, frozenset()), [_agent_tool()])["claude"]
+    assert claude.health is Health.MISCONFIGURED
+    assert claude.reasons[0].startswith("blocked: the claude config ledger could not be trusted")
+    assert (receipts.config_ledger_dir() / "claude.json.untrusted").read_text("utf-8") == '{"v": 2}'
+
+
 def test_an_unparsable_unmanaged_settings_file_reads_nothing(tmp_path: Path) -> None:
     settings = Path.home() / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)

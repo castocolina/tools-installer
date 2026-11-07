@@ -697,6 +697,10 @@ def _settings_facts(platform: Platform) -> dict[str, _ConfigFacts]:
     """
     facts: dict[str, _ConfigFacts] = {}
     for agent in receipts.CONFIG_AGENTS:
+        aside = receipts.untrusted_ledger(agent)
+        if aside is not None:
+            facts[agent] = _ConfigFacts((str(agent_settings.LedgerUntrusted(agent, aside)),))
+            continue
         ledger = receipts.read_ledger(agent)
         if ledger is None:
             continue

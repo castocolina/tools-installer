@@ -21,7 +21,13 @@ from typing import Final, Literal, cast
 from installer.agent_env import adapters
 from installer.atomic import FileSnapshot, atomic_write_text, read_snapshot, snapshot_matches
 from installer.locations import display_path
-from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_ledger
+from installer.receipts import (
+    ConfigLedger,
+    ConfigWrite,
+    read_ledger,
+    untrusted_ledger,
+    write_ledger,
+)
 
 SettingsFormat = Literal["json", "jsonc", "toml"]
 KeyPath = tuple[str, ...]
@@ -64,6 +70,25 @@ class SettingsChanged(OSError):
 
     def __init__(self) -> None:
         super().__init__(CHANGED_WHILE_WRITING)
+
+
+class LedgerUntrusted(OSError):
+    """The agent's ledger did not validate: it was kept aside and nothing is written or reverted."""
+
+    def __init__(self, agent: str, aside: Path) -> None:
+        super().__init__(
+            f"blocked: the {agent} config ledger could not be trusted and was kept as "
+            f"{display_path(aside)}; restore or delete it"
+        )
+
+
+def _ledger(agent: str) -> ConfigLedger:
+    """The agent's ledger, empty when missing; LedgerUntrusted when one exists but does not
+    validate, so a bad ledger is never read as empty and then overwritten."""
+    aside = untrusted_ledger(agent)
+    if aside is not None:
+        raise LedgerUntrusted(agent, aside)
+    return read_ledger(agent) or ConfigLedger(agent)
 
 
 class _Absent:
@@ -648,8 +673,8 @@ def _apply_once(
 ) -> FileResult:
     """One read, compute and reserve-then-commit write; SettingsChanged goes to the caller."""
     file = str(path)
-    ledger = read_ledger(agent) or ConfigLedger(agent)
     try:
+        ledger = _ledger(agent)
         snap = read_settings(path)
         text = _text_of(snap, fmt)
         step = _apply_pass(text, fmt, setting, file, keys)
@@ -748,7 +773,10 @@ def _revert_once(
 ) -> FileResult:
     """One read, compute and write. SettingsChanged is for the caller to retry."""
     file = str(path)
-    ledger = read_ledger(agent) or ConfigLedger(agent)
+    try:
+        ledger = _ledger(agent)
+    except LedgerUntrusted as exc:
+        return FileResult(agent, setting, path, fmt, refused=str(exc))
     mine = tuple(
         entry
         for entry in ledger.entries
@@ -815,9 +843,12 @@ def _revert_results(
 ) -> tuple[FileResult, ...]:
     """One result per file the ledger recorded this setting in; each is reverted at the path
     that was written, never at the file the agent's settings resolve to now (CR-02)."""
-    files = _recorded_files(read_ledger(agent) or ConfigLedger(agent), setting)
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    try:
+        files = _recorded_files(_ledger(agent), setting)
+    except LedgerUntrusted as exc:
+        return (FileResult(agent, setting, path, _format(agent), refused=str(exc)),)
     if not files:
-        path = settings_file(agent, home=home, platform_os=platform_os)
         return (FileResult(agent, setting, path, _format(agent)),)
     return tuple(
         _revert_file(agent, setting, file, home=home, platform_os=platform_os) for file in files
@@ -877,7 +908,7 @@ class SettingFacts:
 
 def setting_facts(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingFacts:
     """The one classification of a setting's keys; the only place SettingsUnreadable is raised."""
-    ledger = read_ledger(agent) or ConfigLedger(agent)
+    ledger = _ledger(agent)  # LedgerUntrusted is an OSError: callers read it as unreadable
     recorded_files = _recorded_files(ledger, setting)
     # The recorded file, so a written key never reads as yours after a rename (CR-02).
     path = (
@@ -934,7 +965,11 @@ def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> 
 
 def revert_agent(agent: str, *, home: Path, platform_os: str) -> tuple[FileResult, ...]:
     """Revert every setting the ledger records for this agent, in ledger order."""
-    ledger = read_ledger(agent) or ConfigLedger(agent)
+    try:
+        ledger = _ledger(agent)
+    except LedgerUntrusted as exc:
+        path = settings_file(agent, home=home, platform_os=platform_os)
+        return (FileResult(agent, "", path, _format(agent), refused=str(exc)),)
     settings = tuple(dict.fromkeys(entry.setting for entry in ledger.entries))
     return tuple(
         result

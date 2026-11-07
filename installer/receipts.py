@@ -328,6 +328,21 @@ def read_ledger(agent: str) -> ConfigLedger | None:
     return ConfigLedger(agent, tuple(cast(list[str], files)), tuple(entries))
 
 
+def untrusted_ledger(agent: str) -> Path | None:
+    """Where an agent's untrusted ledger is kept aside, or None when it can be trusted. A ledger
+    that exists but does not validate is moved there, never rewritten or deleted (CR-03)."""
+    path = _config_ledger_path(agent)
+    aside = path.with_name(f"{path.name}.untrusted")
+    with _WRITE_LOCK:
+        if os.path.lexists(path) and read_ledger(agent) is None:
+            target, count = aside, 0
+            while os.path.lexists(target):
+                count += 1
+                target = aside.with_name(f"{aside.name}.{count}")
+            os.replace(path, target)
+    return aside if os.path.lexists(aside) else None
+
+
 def write_ledger(ledger: ConfigLedger) -> None:
     """Atomically write one agent's ledger; a ledger with nothing in it deletes the file."""
     path = _config_ledger_path(ledger.agent)
