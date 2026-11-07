@@ -47,7 +47,8 @@ from installer.skill_lifecycle import (
     present_harnesses,
 )
 
-REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+# Frozen copy of the pack entries removed from the shipped registry (23.1-01); deleted in 23.1-15.
+PACK_REGISTRY = Path(__file__).resolve().parent / "retired_skill_packs.toml"
 
 SKILL_PACK_IDS = (
     "ponytail",
@@ -61,7 +62,7 @@ SKILL_PACK_IDS = (
 
 
 def _tools() -> dict[str, Tool]:
-    return {tool.id: tool for tool in load_tools(REGISTRY)}
+    return {tool.id: tool for tool in load_tools(PACK_REGISTRY)}
 
 
 def _write(tmp_path: Path, content: str) -> Path:
@@ -1083,7 +1084,7 @@ def test_claude_scope_outside_the_closed_set_is_unknown(tmp_path: Path, scope: s
 
 def test_registry_claude_plugin_probes_use_canonical_ids() -> None:
     checked = 0
-    for tool in load_tools(REGISTRY):
+    for tool in load_tools(PACK_REGISTRY):
         lifecycle = tool.skill_lifecycle
         if lifecycle is None:
             continue
@@ -1439,7 +1440,9 @@ def _home_fingerprint(home: Path) -> dict[str, tuple[bytes | None, int]]:
 
 
 def test_registry_opengsd_is_a_pinned_project_pack() -> None:
-    packs = {tool.id: tool.skill_lifecycle for tool in load_tools(REGISTRY) if tool.skill_lifecycle}
+    packs = {
+        tool.id: tool.skill_lifecycle for tool in load_tools(PACK_REGISTRY) if tool.skill_lifecycle
+    }
     opengsd = packs["opengsd"]
 
     assert (opengsd.scope, opengsd.version) == ("project", "1.16.0")

@@ -76,7 +76,7 @@ from tests.state_doubles import (
     pass_state,
     seeded_service,
 )
-from tests.test_registry import REGISTRY
+from tests.test_registry import DROPPED_IDS, REGISTRY
 
 # The developer's home, read at import time before any test patches HOME.
 _REAL_HOME = Path.home()
@@ -637,7 +637,7 @@ async def test_selection_made_in_one_tier_view_resolves_against_the_whole_catalo
 
 async def test_marking_claude_in_the_user_view_offers_its_recommends_and_r_stages_them() -> None:
     # claude is tier="user" (the human launches and drives it directly) but
-    # recommends tier="ai" tooling (codegraph/graphify/rtk) -- proving a
+    # recommends tier="ai" tooling (codegraph/graphify) -- proving a
     # cross-tier recommend still surfaces and stages correctly.
     tools = load_tools(REGISTRY)
     blurbs = load_categories(REGISTRY)
@@ -652,12 +652,29 @@ async def test_marking_claude_in_the_user_view_offers_its_recommends_and_r_stage
         await pilot.pause()
         await pilot.press("space")
         await pilot.pause()
-        assert "claude pairs well with codegraph, graphify, rtk - press r" in screen.recommends_text
+        assert "claude pairs well with codegraph, graphify - press r" in screen.recommends_text
         assert screen.selected == {"claude"}
         await pilot.press("r")
         await pilot.pause()
-        assert screen.selected == {"claude", "codegraph", "graphify", "rtk"}
+        assert screen.selected == {"claude", "codegraph", "graphify"}
         assert screen.recommends_text == ""
+
+
+async def test_catalog_views_list_none_of_the_dropped_ids() -> None:
+    tools = load_tools(REGISTRY)
+    installed = {tool.id: False for tool in tools}
+    app = _unified_app(tools, installed, load_categories(REGISTRY))
+    async with app.run_test(size=(80, 20)) as pilot:
+        for key, tier in (("1", "system"), ("2", "user"), ("3", "ai")):
+            await pilot.press(key)
+            await pilot.pause()
+            keys = _row_keys(app.catalog_for(tier).query_one(DataTable[Any]))
+            assert not set(keys) & set(DROPPED_IDS), tier
+            # A section heading ("#category") must be followed by a tool row, never empty.
+            for index, key in enumerate(keys):
+                if key.startswith("#"):
+                    following = keys[index + 1 : index + 2]
+                    assert following and not following[0].startswith("#"), (tier, key)
 
 
 def _recommends_catalog() -> tuple[list[Tool], dict[str, bool]]:
