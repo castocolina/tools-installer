@@ -447,7 +447,7 @@ Unchanged from Phases 20–22: one cell size; two weights (regular, bold); `dim`
 | Accent (10%) | the per-view `accent` in `VIEWS` | The view's header glyph and Rule only; unchanged. Not used for any mark or word added here |
 | Destructive | `red` | `remove failed — unregister: …`, `blocked` rows (existing) |
 | Success | `green` | `[x]` option cells, `● [on]`, `● [yours]`, ok status lines |
-| Attention | `yellow` | `≈`, `! [drift]`, `will reconfigure`, `⚠ … postinstall warning`, warn status lines (refusals, migration warnings, kept alias) |
+| Attention | `yellow` | `≈`, `! [drift]`, `will reconfigure`, `⚠ … postinstall warning`, warn status lines (refusals, alias removal warnings, kept alias) |
 | Info | `cyan` | the existing `{id} — after install:` handoff heading only |
 | Muted | `dim` | option continuation notes, finished option rows, `○ [off]`, Effect column |
 
@@ -565,7 +565,7 @@ Applicable state considerations resolved: 19 covered, 6 backstop, 0 unresolved (
 | zero-one-many | hosts per hook (0 / 1 / many) | ✅ covered | 0 → no line; 1 or many → sorted comma list in one line and one step |
 | zero-one-many | aliases removed (1 / 3) (amended 2026-11-06) | ✅ covered | One `Removed the {alias} alias; …` line per alias; the cursor wrapper gets its own warn line |
 | overflow | 92-cell unregister command in the review and CLI | ✅ covered | Folds with the 2-cell hanging indent, never truncated (A24) |
-| overflow | long agent list, long path in a toggle result, three-line StatusLine at 80×20 | 🧪 backstop | Held-out render test over the launch migration status (three lines) and the removal result status including `Kept settings you changed since this installer wrote them: {ids}.` (73 cells with `claude, codex`): option rows fold at column 4; status wraps; table header and footer stay visible |
+| overflow | long agent list, long path in a toggle result, three-line StatusLine at 80×20 | 🧪 backstop | Held-out render test over the launch alias-removal status and the removal result status including `Kept settings you changed since this installer wrote them: {ids}.` (73 cells with `claude, codex`): option rows fold at column 4; status wraps; table header and footer stay visible |
 | overflow | report lines in the no-wrap `#execute-log` | ✅ covered | Report width rule (section 4): one key per line, every fixed-copy line ≤ 78 cells (A8b) |
 | overflow | Policies with every new row at 80×20 | 🧪 backstop | Held-out test: pane sizes unchanged vs `main`; every detail ≤ 9 wrapped lines; State column ≤ 9 cells |
 | long-text | markup/ANSI in user settings values and errors | 🧪 backstop | Held-out test over review, status, detail, report, modal (A32) |
