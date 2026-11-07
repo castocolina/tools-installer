@@ -12,9 +12,7 @@ from typing import IO, Any, Literal
 import pytest
 
 import installer.atomic as atomic
-import installer.engine as engine
 import installer.skill_lifecycle as skill_lifecycle
-from installer.engine import install_tool
 from installer.model import (
     SKILL_HARNESSES,
     ConfigStep,
@@ -27,7 +25,6 @@ from installer.model import (
     Tool,
     load_tools,
 )
-from installer.platform import Platform
 from installer.skill_lifecycle import (
     INSTALL_STATE_HARNESS_DIRS,
     PROJECT_GLOBAL_MACHINERY,
@@ -460,28 +457,6 @@ def test_every_shipped_skill_pack_has_typed_authority_harness_revision_and_targe
         }
         assert lifecycle.targets
         assert all(target.path for target in lifecycle.targets)
-
-
-@pytest.mark.parametrize("tool_id", SKILL_PACK_IDS)
-def test_every_shipped_skill_pack_install_is_an_honest_manual_handoff(
-    tool_id: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def not_installed(_tool: Tool) -> bool:
-        return False
-
-    monkeypatch.setattr(engine, "is_installed", not_installed)
-    calls: list[list[str]] = []
-
-    outcome = install_tool(
-        _tools()[tool_id],
-        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
-        runner=calls.append,
-    )
-
-    assert outcome.status == "manual-required"
-    assert outcome.method_kind == "skill_pack"
-    assert outcome.handoff
-    assert calls == []
 
 
 @pytest.mark.parametrize("tool_id", SKILL_PACK_IDS)

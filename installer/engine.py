@@ -24,14 +24,13 @@ from installer.post_install import ConfirmSensitiveAction, run_post_install
 from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
-from installer.skill_lifecycle import perform_action
 from installer.status import is_installed
 from installer.uninstall import MANAGER_UNINSTALL_ARGV
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
 
 Status = InstallStatus
 ChecksumPolicy = Literal["fail", "continue"]
-_HANDOFF_KINDS = frozenset({"host_setup", "skill_pack"})
+_HANDOFF_KINDS = frozenset({"host_setup"})
 
 
 def _manager_method(method: Method) -> bool:
@@ -82,8 +81,8 @@ class InstallOutcome:
     # left a package installed (Ledger L-18-16). Never changes `status` away
     # from INSTALLED — the tool's own binary is on PATH and usable regardless.
     postinstall_warning: str | None = None
-    # Only on MANUAL_REQUIRED (a host_setup or skill_pack method): reviewed
-    # console instructions to run after the installer releases the terminal.
+    # Only on MANUAL_REQUIRED (a host_setup method): reviewed console
+    # instructions to run after the installer releases the terminal.
     handoff: tuple[str, ...] = ()
     # Reviewed instruction lines from plural post_install actions. Never
     # executed by the installer; the user runs them after leaving Textual.
@@ -122,9 +121,7 @@ class InstallOutcome:
         object.__setattr__(self, "hooks", hooks)
 
 
-def _perform(
-    tool: Tool, method: Method, ctx: ExecContext
-) -> tuple[bool, str | None, tuple[str, ...]]:
+def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[str, ...]]:
     """Route download kinds to the download executor; everything else to a command executor.
 
     Returns ``(verified, unverified_reason, handoff)``. `verified` is True when
@@ -132,7 +129,7 @@ def _perform(
     verified — their package managers do their own checks; pinned or declared
     app zips are sha256-verified). A non-empty `handoff` means the reviewed
     setup must run in a console after the installer releases the terminal (a
-    host_setup or skill_pack method never performs its own install here).
+    host_setup method never performs its own install here).
     """
     if method.kind in download.DOWNLOAD_KINDS:
         reason = download.install_download(method, ctx)
@@ -140,9 +137,6 @@ def _perform(
     if method.kind in apps.APP_KINDS:
         reason = apps.install_app(method, ctx.runner)
         return reason is None, reason, ()
-    if method.kind == "skill_pack":
-        outcome = perform_action(tool, "install", ctx.runner)
-        return False, None, outcome.instructions
     if method.kind == "host_setup":
         return False, None, executors.host_setup_handoff(method)
     executors.execute(method, ctx.runner)
@@ -271,7 +265,7 @@ def install_tool(
         already_there = _package_already_there(method, package, manager_inventory)
         path_before = os.environ.get("PATH", "")
         try:
-            verified, unverified_reason, handoff = _perform(tool, method, ctx)
+            verified, unverified_reason, handoff = _perform(method, ctx)
             if handoff:
                 return InstallOutcome(
                     tool.id,

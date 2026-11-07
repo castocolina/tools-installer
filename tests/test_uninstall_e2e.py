@@ -579,9 +579,7 @@ def test_every_receipt_kind_installs_and_removes_in_both_directions(
     tool = Tool(id="kt", name="kt", category="dev", cmd="kt", methods=(method,))
     calls: list[list[str]] = []
 
-    def fake_perform(
-        _tool: Tool, _method: Method, ctx: object
-    ) -> tuple[bool, str | None, tuple[str, ...]]:
+    def fake_perform(_method: Method, ctx: object) -> tuple[bool, str | None, tuple[str, ...]]:
         if method.kind in MANAGER_UNINSTALL_ARGV:
             # The manager's own install command, recorded, never run.
             calls.append(["install", str(method_package(method))])

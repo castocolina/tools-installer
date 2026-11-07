@@ -12,16 +12,13 @@ from rich.console import Console
 
 import installer.engine as engine
 import installer.session as session_module
-from installer import executors, postinstall, receipts, skill_lifecycle
+from installer import executors, postinstall, receipts
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.model import (
     ConfigStep,
     ConfigStepKind,
     Method,
-    SkillLifecycle,
-    SkillOperation,
-    SkillTarget,
     Tool,
 )
 from installer.platform import Platform
@@ -50,7 +47,6 @@ from installer.session import (
     run_options,
     summary_counts,
 )
-from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
 from installer.update import UpdateOutcome, UpdateService
 from installer.versions import TagResolver
 from tests.state_doubles import RunRecorder, ScriptedUpdates
@@ -1339,7 +1335,7 @@ def test_sensitive_install_protocol_parameters_are_unchanged() -> None:
 # 20-08 Task 2: the three argv-less step kinds, plus the promise that no kind is
 # silently unhandled. pnpm_group_install runs the executor install and update
 # already use (19 L-19-28), terminal_sync calls the bound synchronizer, and an
-# argv-less skill_install is a reviewed handoff, never a command (19 L-19-07).
+# argv-less skill_install fails closed: there is no command to run (19 L-19-07).
 # ---------------------------------------------------------------------------
 
 
@@ -1361,27 +1357,6 @@ def _node_tool(*methods: Method) -> Tool:
         category="ai",
         cmd="superpowers",
         methods=methods or (_group_method(),),
-    )
-
-
-def _handoff_tool(install: SkillOperation) -> Tool:
-    return Tool(
-        id="superpowers",
-        name="Superpowers",
-        category="ai",
-        cmd="superpowers",
-        methods=(Method(kind="skill_pack"),),
-        skill_lifecycle=SkillLifecycle(
-            source="https://github.com/obra/superpowers",
-            owner="obra",
-            supported_harnesses=("codex", "claude"),
-            revision_policy="upstream-latest",
-            targets=(SkillTarget("harness", "<codex-plugin-dir>/superpowers"),),
-            install=install,
-            status=SkillOperation("manual-required"),
-            update=SkillOperation("manual-required"),
-            removal=SkillOperation("manual-required"),
-        ),
     )
 
 
@@ -1557,30 +1532,6 @@ def test_a_raising_terminal_sync_step_fails_its_row_and_the_batch_continues() ->
 
 
 @pytest.mark.parametrize(
-    ("steps", "expected"),
-    [
-        (
-            (
-                ConfigStep("run command", "skill_install", "codex", ("run",)),
-                ConfigStep("handoff", "skill_install", "codex"),
-            ),
-            True,
-        ),
-        ((ConfigStep("handoff", "skill_install", "codex"),), False),
-    ],
-)
-def test_a_manual_reconfigure_row_ran_only_when_it_had_a_command_step(
-    steps: tuple[ConfigStep, ...], expected: bool
-) -> None:
-    outcome = RowOutcome(
-        _reconfigure_row("manual", *steps),
-        "manual",
-        install=InstallOutcome("manual", InstallStatus.MANUAL_REQUIRED, handoff=("do it",)),
-    )
-    assert ran_anything([outcome]) is expected
-
-
-@pytest.mark.parametrize(
     "warning, expected_detail",
     [(None, ""), ("Terminal sync needed: run iTerm2>", "Terminal sync needed: run iTerm2>")],
 )
@@ -1614,132 +1565,19 @@ def test_terminal_sync_step_calls_the_bound_synchronizer(
     assert missing.detail == f"{step.text}: no terminal synchronizer bound"
 
 
-def test_skill_install_without_argv_is_a_reviewed_handoff_and_manual(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """19 L-19-07: a harness the installer cannot write to gets instructions.
-
-    `partial_steps` builds this step with an empty argv because the pack is
-    reviewed manual-only, so running one is never an option: the lines land on
-    `RowOutcome.install.handoff` and `render_handoff` prints them unchanged.
-    """
-    instructions = (
-        "Run each block inside the named host.",
-        "Codex:",
-        "  codex plugin add superpowers",
-    )
-
-    def _handoff(*_args: object) -> LifecycleOutcome:
-        return LifecycleOutcome("manual-required", instructions)
-
-    monkeypatch.setattr(session_module, "perform_action", _handoff)
-    tool = _handoff_tool(SkillOperation("manual-required", by_harness=(("codex", instructions),)))
-    _reasons, steps = skill_lifecycle.partial_steps(tool, ["codex"])
-    assert steps[0].argv == ()
-
+def test_an_argv_less_skill_install_fails_closed_without_running_anything() -> None:
+    """With the pack runner gone, a skill_install step without argv has no command to run."""
     recorder = RunRecorder()
-    outcome = execute_plan(
-        [_reconfigure_row("superpowers", *steps)],
-        _run_context(recorder, catalog={"superpowers": tool}),
-    )[0]
-
-    assert outcome.result == "manual"
-    assert outcome.install is not None
-    assert outcome.install.status is InstallStatus.MANUAL_REQUIRED
-    assert outcome.install.handoff == instructions
-    assert recorder.argv == []
-
-    enable = ConfigStep("enable superpowers in user scope", "plugin_enable", "claude", _ENABLE)
-    mixed_recorder = RunRecorder()
-    mixed = execute_plan(
-        [_reconfigure_row("superpowers", enable, *steps)],
-        _run_context(mixed_recorder, catalog={"superpowers": tool}),
-    )[0]
-    assert mixed.result == "manual"
-    assert mixed_recorder.argv == [list(_ENABLE)]
-    assert mixed.install is not None
-    assert mixed.install.handoff == instructions
-
-
-@pytest.mark.parametrize(
-    "status, expected_detail",
-    [
-        ("completed", ""),
-        ("present", ""),
-        ("absent", "skill install reported absent"),
-        ("unknown", "skill install reported unknown"),
-    ],
-)
-def test_skill_install_reports_what_the_lifecycle_returned(
-    monkeypatch: pytest.MonkeyPatch, status: LifecycleStatus, expected_detail: str
-) -> None:
-    """The step takes the lifecycle's own answer, including the two failure words."""
-
-    def _outcome(*_args: object) -> LifecycleOutcome:
-        return LifecycleOutcome(status)
-
-    monkeypatch.setattr(session_module, "perform_action", _outcome)
-    tool = _handoff_tool(SkillOperation("manual-required"))
     step = ConfigStep("install superpowers for Codex", "skill_install", "codex")
 
     outcome = execute_plan(
         [_reconfigure_row("superpowers", step)],
-        _run_context(RunRecorder(), catalog={"superpowers": tool}),
+        _run_context(recorder, catalog={"superpowers": _node_tool()}),
     )[0]
 
-    if expected_detail:
-        assert outcome.result == "failed"
-        assert outcome.detail == f"{step.text}: {expected_detail}"
-    else:
-        assert outcome.result == "done"
-        assert outcome.detail == ""
-
-
-def test_skill_install_with_argv_runs_it() -> None:
-    """A pack the installer CAN write to runs its own reviewed argv instead."""
-    recorder = RunRecorder()
-    tool = _handoff_tool(SkillOperation("manual-required"))
-    step = ConfigStep(
-        "install superpowers for Codex", "skill_install", "codex", ("codex", "plugin", "add", "x")
-    )
-
-    outcome = execute_plan(
-        [_reconfigure_row("superpowers", step)],
-        _run_context(recorder, catalog={"superpowers": tool}),
-    )[0]
-
-    assert outcome.result == "done"
-    assert recorder.argv == [["codex", "plugin", "add", "x"]]
-
-
-def test_skill_install_without_an_executable_operation_crashes_the_row(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Fail closed: a producer that broke the partial_steps invariant is a bug.
-
-    `perform_action` raises ValueError when the lifecycle has no reviewed
-    executable operation for the action. That stays outside the per-step catch
-    list, so the row takes the per-row crashed path from 20-07 (exit 1, row
-    kept selected) instead of reading as a clean step failure.
-    """
-
-    def _raise(*_args: object) -> LifecycleOutcome:
-        raise ValueError("no reviewed executable lifecycle operation for 'install'")
-
-    monkeypatch.setattr(session_module, "perform_action", _raise)
-    tool = _handoff_tool(SkillOperation("manual-required"))
-    step = ConfigStep("install superpowers for Codex", "skill_install", "codex")
-    recorder = RunRecorder()
-
-    outcomes = execute_plan(
-        [_reconfigure_row("superpowers", step)],
-        _run_context(recorder, catalog={"superpowers": tool}),
-    )
-
-    assert outcomes[0].result == "crashed"
-    assert outcomes[0].detail.startswith("ValueError:")
+    assert outcome.result == "failed"
+    assert outcome.detail == f"{step.text}: step has no command"
     assert recorder.argv == []
-    assert exit_code(outcomes) == 1
 
 
 def test_an_unknown_step_kind_fails_closed_instead_of_running_argv() -> None:
