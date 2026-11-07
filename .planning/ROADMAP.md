@@ -465,7 +465,7 @@ Plans:
 
   1. The onboarding skill's research for Neovim is recorded (release assets per OS/arch, brew, distro packages, removal paths), and the registry entry carries a `verified` key and passes `make verify-registry`.
   2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
-  3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes"; kickstart is never cloned over an existing `~/.config/nvim` and starts zero LSP processes for Python, Lua, TypeScript, Go and Java files, and `EDITOR` is reverted on removal.
+  3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes" *(amended 2026-11-07, 24.1 D-14/D-15, needs confirmation: applied at install with no question — `EDITOR` only when the user set none, kickstart only into an absent or empty dir)*; kickstart is never cloned over an existing `~/.config/nvim` and starts zero LSP processes for Python, Lua, TypeScript, Go and Java files, and `EDITOR` is reverted on removal.
 
 **Plans**: TBD
 
