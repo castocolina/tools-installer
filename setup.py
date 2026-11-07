@@ -72,6 +72,7 @@ from installer.policy import (
 )
 from installer.postinstall import BREW_BIN_DIRS, which_with_brew
 from installer.prompt import CallbackPrompter
+from installer.receipts import scan_retired
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
 from installer.run import OutputRunner, Runner, apply_child_env, run_captured
@@ -929,6 +930,7 @@ def _build_app(
     # are bound with (D-01/15.6-06 Task 3) -- defined just above this
     # construction so the reference resolves at statement-execution time,
     # not only at call time.
+    catalog_ids = frozenset(tool.id for tool in tools)
     uninstall_inputs = UninstallInputs(
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
         has_path_block=lambda: has_managed_block(_MYSHELLRC),
@@ -942,6 +944,7 @@ def _build_app(
             extra_policies=(*redirects, *desktop),
         ),
         terminal_sync=_uninstall_terminals,
+        retired=lambda: scan_retired(catalog_ids).tools,
     )
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
@@ -949,6 +952,8 @@ def _build_app(
     legacy_strip, repairs = _launch_repairs()
     startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
     startup_lines += [text for text, _severity in (*legacy_strip.launch_lines(), *repairs)]
+    # Launch-time warnings come from this one scan only; the `retired` predicate drops its own.
+    startup_lines += scan_retired(catalog_ids).warnings
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -1362,8 +1367,12 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         console.print(text, markup=False, soft_wrap=True)
     for text, _severity in repairs:
         console.print(text, markup=False, soft_wrap=True)
+    # Retired receipts join the teardown only; `installed` and the daemon policy stay catalog-only.
+    scan = scan_retired(frozenset(tool.id for tool in tools))
+    for text in scan.warnings:
+        console.print(text, markup=False, soft_wrap=True)
     _removed, failed = run_uninstall(
-        tools,
+        [*tools, *scan.tools],
         console,
         runner=run_captured,
         default_bin_dir=_DEFAULT_BIN_DIR,

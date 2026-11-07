@@ -128,13 +128,14 @@ class UninstallInputs:
     the active ban names, whether a managed PATH block exists, the active
     shell-tweak ids, and the live removal closure bound by the composition root.
 
-    `ban_names`, `has_path_block` and `tweak_ids` are PREDICATES, not their
+    `ban_names`, `has_path_block`, `tweak_ids` and `retired` are PREDICATES, not their
     results, because each is mutated live by another view in the same process:
     the Policies view writes the ban's shims and aliases and toggles the tweaks,
     and the Doctor view writes the very managed PATH block `has_path_block`
     detects. A value frozen at construction goes stale the moment the user
-    does. `UninstallScreen` re-reads all three on every entry and on every
-    publish. The tool rows are not an input: they are a projection of the
+    does. `UninstallScreen` re-reads all four on every entry and on every
+    publish. `retired` re-lists the receipts whose tool id left the catalog (D-09).
+    The tool rows are not an input: they are a projection of the
     published state (`version_status.uninstall_group`, `uninstall_label` and
     `uninstall_detail`), so no second classification can disagree with it."""
 
@@ -142,6 +143,8 @@ class UninstallInputs:
     has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
+    # D-09: the screen does not read it yet; the retired rows land in 23.1-17.
+    retired: Callable[[], Sequence[Tool]] = tuple
     # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
     # direct `u` update, unattended installation, the CLI uninstall route,
     # and interactive ExecuteScreen close already reuse. Called from
