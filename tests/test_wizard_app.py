@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
+from rich.cells import cell_len
 from rich.text import Text
 from textual.app import App
 from textual.pilot import Pilot
@@ -9369,3 +9370,182 @@ async def test_a_retired_row_and_a_catalog_row_are_removed_together() -> None:
         assert not receipts.receipt_exists("yq")
         assert not receipts.receipt_exists("rtk")
         assert not any(key.startswith("#retired") or key == "rtk" for key in _row_keys(screen))
+
+
+# -- retired receipts: confirm lines, keys, sanitizing, refresh, order and scroll (Task 3) -----
+
+_RETIRED_KEY = "#retired — no longer in the catalog"
+
+
+async def test_c_on_a_retired_row_is_refused() -> None:
+    """UI-SPEC section 2 keys: `c` on a retired row is refused with the no-config line."""
+    _plant_retired("rtk", kind="brew", package="rtk")
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "c")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (screen.status.text, screen.status.severity) == (
+            "This row has no config to delete.",
+            Severity.WARN,
+        )
+        assert screen.selected == set()
+
+
+@pytest.mark.parametrize("case", ["artifact-with-stray", "manager", "nothing"])
+async def test_confirm_lists_retired_lines_in_the_existing_structure(case: str) -> None:
+    """A selected retired row adds lines to the review in the shape a catalog row's runs line
+    already has (`<id>: ...`), and no block heading: deleted paths, kept paths and the manager
+    package as `remove it yourself`, and nothing-to-delete. Orchestrator decision, 23.1-17 Task 3.
+    """
+    home = Path.home()
+    bin_file = home / ".local" / "bin" / "rtk"
+    bin_file.parent.mkdir(parents=True, exist_ok=True)
+    if case == "artifact-with-stray":
+        stray = home / ".ssh" / "id_test"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("planted key")
+        bin_file.write_text("rtk raw binary")
+        _plant_retired("rtk", [(bin_file, "file"), (stray, "file")])
+        expected = [f"rtk: deletes {bin_file}", f"rtk: remove it yourself: {stray}"]
+    elif case == "manager":
+        _plant_retired("rtk", kind="brew", package="rtk")
+        expected = ["rtk: remove it yourself: brew rtk"]
+    else:
+        _plant_retired("rtk")
+        expected = ["rtk: nothing to delete; confirming retires the receipt"]
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_recorder(captured),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "space", "enter")
+        await pilot.pause()
+        # The review folds long lines at its column (a long path can break mid-word), so each line
+        # is compared without whitespace; the count, the order and the characters are exact.
+        folded = [line.plain for line in _confirm(app).review]
+        assert [re.sub(r"\s", "", line) for line in folded] == [
+            re.sub(r"\s", "", line) for line in expected
+        ]
+        await pilot.press("escape")
+        await pilot.pause()
+    assert captured == []
+
+
+async def test_retired_text_renders_literally() -> None:
+    """T-23.1-41: receipt-derived path text with markup and an escape renders literally, the
+    escape byte removed from the detail bar and every cell. (A receipt id cannot carry these:
+    receipts only lists ids matching TOOL_ID_RE, so the id cell is sanitized as defense in depth.)
+    """
+    home = Path.home()
+    bin_file = home / ".local" / "bin" / "rtk"
+    bin_file.parent.mkdir(parents=True, exist_ok=True)
+    bin_file.write_text("rtk raw binary")
+    stray_dir = home / ".ssh"
+    stray_dir.mkdir(parents=True, exist_ok=True)
+    stray = stray_dir / "[red]stray\x1b[31m"
+    stray.write_text("planted")
+    _plant_retired("rtk", [(bin_file, "file"), (stray, "file")])
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, "rtk", "tool") == "rtk (retired)"
+        await pilot.press("down")
+        assert screen.detail_text == (
+            f"{_RETIRED_HEAD} · recorded files re-checked before deletion"
+            f" · remove it yourself: {stray_dir}/[red]stray[31m"
+        )
+        row_text = " ".join(str(cell) for cell in table.get_row("rtk"))
+        assert "[red]" in screen.detail_text
+        assert "\x1b" not in screen.detail_text
+        assert "\x1b" not in row_text
+
+
+async def test_retired_rows_follow_the_predicate_on_entry_and_publish() -> None:
+    """The live predicate is re-read on entry and on every publish (D-09, UI-SPEC E2 error)."""
+    app = _app(
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == ["#removable here", "rg"]
+        _plant_retired("rtk")
+        screen.enter_view()
+        assert _row_keys(screen) == ["#removable here", "rg", _RETIRED_KEY, "rtk"]
+        receipts.delete("rtk")
+        screen.state_refreshed()
+        assert _row_keys(screen) == ["#removable here", "rg"]
+
+
+async def test_retired_rows_sort_by_id_after_the_catalog() -> None:
+    """SPEC edge R3: retired rows sort by id after every catalog row and before the environment."""
+    _plant_retired("zeta")
+    _plant_retired("alpha")
+    app = _app(
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(
+            ban_names=["pip"],
+            retired=lambda: receipts.scan_retired(set()).tools,
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == [
+            "#removable here",
+            "rg",
+            _RETIRED_KEY,
+            "alpha",
+            "zeta",
+            "#environment",
+            "#ban",
+        ]
+
+
+async def test_many_retired_rows_scroll_at_80x20() -> None:
+    """UI-SPEC E1 overflow: 30 retired rows at 80x20; the last row and the heading are reachable."""
+    for index in range(30):
+        _plant_retired(f"tool{index:02d}")
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert _RETIRED_KEY in _row_keys(screen)
+        assert cell_len(_uninstall_cell(table, _RETIRED_KEY, "tool")) <= 78
+        # The cursor starts on the first retired row; `down` reaches the last one, and the table
+        # binds `end` and `home` to scrolling the viewport.
+        await pilot.press(*["down"] * 29)
+        assert screen.detail_text.startswith("retired: tool29 is no longer in the catalog")
+        await pilot.press("end")
+        assert table.scroll_y == table.max_scroll_y > 0
+        # The heading is the first row of the table, above every retired row.
+        assert table.get_row_index(_RETIRED_KEY) == 0
