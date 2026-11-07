@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from installer.agent_settings import apply_setting, ledger_summary
-from installer.app import UninstallDecision, perform_uninstall
+from installer.app import HOST_SETTINGS_OS, UninstallDecision, perform_uninstall
 from installer.doctor import DoctorReport
 from installer.download import artifact_paths
 from installer.guards import guard_status, install_shims, write_ban_aliases
@@ -794,8 +794,8 @@ async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
 ) -> None:
     """O5: the environment row shows the ledgered files, refuses `c`, and reverts every key."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
-    apply_setting("vscode", "vscode-ai-off", home=tmp_path, platform_os="linux")
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os=HOST_SETTINGS_OS)
+    apply_setting("vscode", "vscode-ai-off", home=tmp_path, platform_os=HOST_SETTINGS_OS)
     app, _opt, _bin_dir, _myshellrc = _build_real_app(Path.home())
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
@@ -814,8 +814,8 @@ async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
         await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
-    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
-    assert ledger_summary("vscode", home=tmp_path, platform_os="linux") == ()
+    assert ledger_summary("claude", home=tmp_path, platform_os=HOST_SETTINGS_OS) == ()
+    assert ledger_summary("vscode", home=tmp_path, platform_os=HOST_SETTINGS_OS) == ()
 
 
 async def test_the_settings_row_is_absent_without_a_ledger(
