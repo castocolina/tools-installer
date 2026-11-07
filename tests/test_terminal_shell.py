@@ -3,6 +3,8 @@
 import contextlib
 import os
 import shlex
+import shutil
+import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -64,7 +66,7 @@ def test_sync_writes_kitty_login_shell_for_each_supported_linux_distro(
     )
 
     kitty_conf = tmp_path / ".config" / "kitty" / "kitty.conf"
-    assert result.configured == ("kitty", "wezterm")
+    assert result.configured == ("zshenv", "kitty", "wezterm")
     assert "shell /usr/bin/zsh -l" in kitty_conf.read_text()
 
 
@@ -274,7 +276,7 @@ def test_wezterm_generates_an_owned_login_program_before_return_config(tmp_path:
 
     wezterm = config_home / "wezterm" / "wezterm.lua"
     content = wezterm.read_text()
-    assert result.configured == ("kitty", "wezterm")
+    assert result.configured == ("zshenv", "kitty", "wezterm")
     assert 'config.default_prog = { "/usr/bin/zsh", "-l" }' in content
     assert content.index("tools-installer terminal-shell wezterm") < content.index("return config")
 
@@ -335,7 +337,7 @@ def test_konsole_creates_an_owned_profile_and_records_the_prior_default(tmp_path
 
     profile = data_home / "konsole" / "tools-installer-zsh.profile"
     state = data_home / "tools-installer" / "terminal-shell-konsole-default"
-    assert result.configured == ("kitty", "wezterm", "konsole")
+    assert result.configured == ("zshenv", "kitty", "wezterm", "konsole")
     profile_text = profile.read_text()
     assert "Command=/usr/bin/zsh -l" in profile_text
     # CR-05: every real Konsole profile carries a Name= (confirmed against
@@ -445,7 +447,7 @@ def test_zsh_removal_reverts_only_complete_owned_terminal_configuration(tmp_path
         lookup=_lookup(konsole="/usr/bin/konsole"),
     )
 
-    assert result.reverted == ("kitty", "wezterm", "konsole")
+    assert result.reverted == ("zshenv", "kitty", "wezterm", "konsole")
     assert (
         "tools-installer terminal-shell kitty"
         not in (config_home / "kitty" / "kitty.conf").read_text()
@@ -684,7 +686,7 @@ def test_dry_run_reports_kitty_drift_without_writing(tmp_path: Path) -> None:
         write=False,
     )
 
-    assert result.drifted == ("kitty",)
+    assert result.drifted == ("zshenv", "kitty")
     assert not (tmp_path / ".config").exists()
     assert list(tmp_path.iterdir()) == []
 
@@ -769,7 +771,7 @@ def test_write_true_default_unchanged(tmp_path: Path) -> None:
         lookup=_lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
     )
 
-    assert result.configured == ("kitty",)
+    assert result.configured == ("zshenv", "kitty")
     assert "shell /usr/bin/zsh -l" in (tmp_path / ".config" / "kitty" / "kitty.conf").read_text()
 
 
@@ -823,3 +825,124 @@ def test_dry_run_konsole_user_owned_profile_warns(tmp_path: Path) -> None:
     assert result.warnings == ("konsole: installer profile path is already user-owned",)
     assert "konsole" not in result.drifted
     assert _fingerprint(tmp_path) == before
+
+
+# Phase 23 / CONF-05: every zsh exports SHELL as the real zsh through a managed ~/.zshenv block.
+_ZSHENV_BEGIN = "# >>> tools-installer shell >>>"
+_ZSHENV_END = "# <<< tools-installer shell <<<"
+
+
+def test_zsh_in_a_scratch_home_prints_the_zsh_path(tmp_path: Path) -> None:
+    zsh = shutil.which("zsh")
+    if zsh is None:
+        pytest.skip("zsh is not on PATH; the real-shell probe needs it")
+
+    result = sync_terminal_shells(
+        home=tmp_path, environ={}, platform=_platform(), lookup=_lookup(zsh=zsh)
+    )
+    probe = subprocess.run(
+        [zsh, "-c", "echo $SHELL"],
+        env={"HOME": str(tmp_path), "SHELL": "/bin/bash", "PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert probe.stdout.strip() == zsh
+    assert result.zsh == zsh
+    assert ("zshenv", tmp_path / ".zshenv") in result.paths
+
+
+def test_a_user_shell_line_stays_and_the_block_comes_after(tmp_path: Path) -> None:
+    zshenv = tmp_path / ".zshenv"
+    zshenv.write_text("export SHELL=/bin/sh\nexport EDITOR=vim\n")
+
+    sync_terminal_shells(
+        home=tmp_path, environ={}, platform=_platform(), lookup=_lookup(zsh="/usr/bin/zsh")
+    )
+
+    text = zshenv.read_text()
+    assert text.startswith("export SHELL=/bin/sh\nexport EDITOR=vim\n")
+    assert text.index(_ZSHENV_BEGIN) > text.index("export EDITOR=vim")
+    assert "export SHELL=/usr/bin/zsh" in text
+
+
+def test_the_zshenv_dry_run_reports_drift_and_writes_nothing(tmp_path: Path) -> None:
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh"),
+    }
+
+    assert "zshenv" in sync_terminal_shells(**args, write=False).drifted
+    assert not (tmp_path / ".zshenv").exists()
+
+    sync_terminal_shells(**args, write=True)
+    assert "zshenv" not in sync_terminal_shells(**args, write=False).drifted
+
+    other_zsh = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/local/bin/zsh"),
+        write=False,
+    )
+    assert "zshenv" in other_zsh.drifted
+
+
+def test_no_zsh_strips_the_zshenv_block(tmp_path: Path) -> None:
+    zshenv = tmp_path / ".zshenv"
+    zshenv.write_text(
+        f"export EDITOR=vim\n\n{_ZSHENV_BEGIN}\nexport SHELL=/usr/bin/zsh\n{_ZSHENV_END}\n"
+    )
+    before = zshenv.read_bytes()
+    gone: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(),
+    }
+
+    dry = sync_terminal_shells(**gone, write=False)
+    assert "zshenv" not in dry.drifted
+    assert zshenv.read_bytes() == before
+
+    sync_terminal_shells(**gone, write=True)
+    text = zshenv.read_text()
+    assert _ZSHENV_BEGIN not in text
+    assert "export EDITOR=vim" in text
+
+
+def test_macos_writes_no_zshenv(tmp_path: Path) -> None:
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform("macos"),
+        lookup=_lookup(zsh="/usr/bin/zsh"),
+    )
+
+    assert not (tmp_path / ".zshenv").exists()
+
+
+def test_an_unreadable_zshenv_is_a_warning_and_terminals_still_sync(tmp_path: Path) -> None:
+    zshenv = tmp_path / ".zshenv"
+    zshenv.write_bytes(b"export X=\xff\n")
+    kitty = tmp_path / ".config" / "kitty" / "kitty.conf"
+    kitty.parent.mkdir(parents=True)
+    kitty.write_text("font_size 14\n")
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    }
+
+    dry = sync_terminal_shells(**args, write=False)
+    assert any(warning.startswith("zshenv: ") for warning in dry.warnings)
+    assert "kitty" in dry.drifted
+
+    result = sync_terminal_shells(**args, write=True)
+    assert any(warning.startswith("zshenv: ") for warning in result.warnings)
+    assert zshenv.read_bytes() == b"export X=\xff\n"
+    assert "shell /usr/bin/zsh -l" in kitty.read_text()
