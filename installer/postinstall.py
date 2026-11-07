@@ -63,18 +63,39 @@ BREW_BIN_DIRS: tuple[Path, ...] = (
 )
 
 
+def which_with_brew(name: str) -> str | None:
+    """Resolve an executable like `shutil.which`, falling back to well-known
+    Homebrew prefixes checked by disk presence.
+
+    CR-04: on an immutable host -- Bazzite, the only host class this phase
+    targets -- registry.toml's zsh entry has no rpm-ostree method and
+    installs via the brew method (`formula = "zsh"`). `engine.py` only calls
+    `prepend_path` for a method whose params include `bin_dir`, and the brew
+    method declares none, so `/home/linuxbrew/.linuxbrew/bin` is never added
+    to THIS process's own PATH. Immediately after the install this phase
+    exists to react to, a bare `shutil.which("zsh")` still returned `None` in
+    that same process, and the synchronizer took its revert branch instead of
+    configuring anything -- silently, on the exact host this phase was built
+    for. Reuses the fix pattern this project already has for the identical
+    chicken-and-egg problem (`_resolve_binary`, `BREW_BIN_DIRS`).
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for brew_dir in BREW_BIN_DIRS:
+        candidate = brew_dir / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def _resolve_binary(method: Method, cmd: str) -> str:
-    """Absolute path of a hook's binary: `shutil.which` for a brew install already on
-    PATH, else a well-known brew prefix checked by disk presence, else the method's
-    bin_dir (only reached for a non-brew method, which never reaches the brew branch)."""
+    """Absolute path of a hook's binary: `which_with_brew` for a brew install, else the
+    method's bin_dir (only reached for a non-brew method, which never reaches the brew branch)."""
     if method.kind == "brew":
-        found = shutil.which(cmd)
+        found = which_with_brew(cmd)
         if found:
             return found
-        for brew_dir in BREW_BIN_DIRS:
-            candidate = brew_dir / cmd
-            if candidate.exists():
-                return str(candidate)
     return str(bin_dir(_resolve_bin_override(method)) / cmd)
 
 

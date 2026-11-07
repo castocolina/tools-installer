@@ -1850,3 +1850,24 @@ def test_review_problems_name_an_unparsable_settings_file() -> None:
     config.write_text("not = [valid\n")
     skipped = [PlanRow("codex", Disposition.SKIP, "")]
     assert review_problems(skipped, home=home, platform_os="fedora") == {}
+
+
+def test_desktop_shell_option_writes_environment_d(monkeypatch: pytest.MonkeyPatch) -> None:
+    def which_zsh(name: str) -> str | None:
+        return "/z/bin/zsh" if name == "zsh" else None
+
+    monkeypatch.setattr(postinstall, "which_with_brew", which_zsh)
+    conf = Path.home() / ".config" / "environment.d" / "52-tools-installer-desktop-shell.conf"
+    ctx = replace(
+        _run_context(RunRecorder(), catalog={"zsh": _tool("zsh")}),
+        options=frozenset({"desktop-shell"}),
+    )
+    outcomes = execute_plan([PlanRow("zsh", Disposition.INSTALL, "not installed")], ctx)
+    assert "SHELL=/z/bin/zsh" in conf.read_text().splitlines()
+    lines = _report(outcomes).splitlines()
+    assert "environment.d — ~/.config/environment.d/52-tools-installer-desktop-shell.conf:" in lines
+    assert "  SHELL=/z/bin/zsh; log in again to use it" in lines
+    conf.unlink()
+    mac = replace(ctx, platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True))
+    execute_plan([PlanRow("zsh", Disposition.INSTALL, "not installed")], mac)
+    assert not conf.exists()

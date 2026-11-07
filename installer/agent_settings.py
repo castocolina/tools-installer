@@ -618,7 +618,7 @@ def _apply_pass(
             writes.append(
                 ConfigWrite(setting, file, key.path, key.value, "", replaced_default=True)
             )
-            results.append(KeyResult(name, "replaced_default", _dump(key.value)))
+            results.append(KeyResult(name, "replaced_default", _dump(key.cli_default)))
         else:
             results.append(KeyResult(name, "set_by_you", _dump(current)))
             dropped.append(key.path)

@@ -443,3 +443,33 @@ def test_a_failed_tldr_update_is_a_warning() -> None:
         (),
         "tldr --update failed: boom; run it yourself later",
     )
+
+
+def test_which_with_brew_finds_a_linuxbrew_binary_shutil_which_cannot_see(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CR-04: right after a brew install, `shutil.which` cannot see the brew bin dir yet.
+
+    `which_with_brew` falls back to the well-known brew prefixes, by disk presence.
+    """
+
+    def which_misses(_name: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(shutil, "which", which_misses)
+    linuxbrew = tmp_path / "linuxbrew"
+    linuxbrew.mkdir()
+    (linuxbrew / "zsh").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(pi, "BREW_BIN_DIRS", (linuxbrew,))
+
+    assert pi.which_with_brew("zsh") == str(linuxbrew / "zsh")
+    assert pi.which_with_brew("does-not-exist") is None
+
+
+def test_which_with_brew_prefers_a_real_shutil_which_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def which_hits(_name: str) -> str | None:
+        return "/usr/bin/zsh"
+
+    monkeypatch.setattr(shutil, "which", which_hits)
+
+    assert pi.which_with_brew("zsh") == "/usr/bin/zsh"

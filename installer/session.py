@@ -4,6 +4,7 @@ The Phase 20 model (`Disposition`, `PlanRow`, `WORDS`, and `build_plan`) and
 its executor (`execute_plan`) live together here.
 """
 
+import os
 import stat
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -25,6 +26,13 @@ from installer.agent_settings import (
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
+from installer.env_redirect import (
+    DESKTOP_SHELL_CONF,
+    environment_d_dir,
+    shell_redirect,
+    write_linux_redirect,
+)
+from installer.locations import display_path
 from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (
     UNMANAGEABLE_OWNERS,
@@ -199,6 +207,9 @@ class RowOutcome:
     # The chosen run options' writes to this row's settings file, and whether an option skipped it.
     settings: tuple[FileResult, ...] = ()
     settings_skipped: bool = False
+    # The desktop SHELL conf: (display path, zsh path) when written, (display path, error) when not.
+    desktop_shell: tuple[str, str] | None = None
+    desktop_shell_error: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -648,6 +659,39 @@ def _apply_option(agent: str, setting: str, home: Path, platform_os: str) -> Fil
         return FileResult(agent, setting, path, AGENT_FORMATS[agent], refused=first_line(exc))
 
 
+def _desktop_shell(outcomes: list[RowOutcome]) -> list[RowOutcome]:
+    """SHELL for desktop apps: one environment.d conf, from the first done zsh/kitty/wezterm row.
+
+    The zsh comes from `which_with_brew`, the lookup the terminal sync also uses.
+    """
+    index = next(
+        (
+            position
+            for position, outcome in enumerate(outcomes)
+            if outcome.row.tool_id in _DESKTOP_SHELL_IDS
+            and outcome.row.disposition in RUNNABLE
+            and outcome.result == "done"
+        ),
+        None,
+    )
+    if index is None:
+        return outcomes
+    home = Path.home()
+    conf_dir = environment_d_dir(home, os.environ)
+    shown = display_path(conf_dir / DESKTOP_SHELL_CONF)
+    zsh = postinstall.which_with_brew("zsh")
+    if zsh is None:
+        outcomes[index] = replace(outcomes[index], desktop_shell_error=(shown, "zsh not found"))
+        return outcomes
+    try:
+        write_linux_redirect(shell_redirect(zsh), home, conf_dir)
+    except (ValueError, OSError) as exc:
+        outcomes[index] = replace(outcomes[index], desktop_shell_error=(shown, first_line(exc)))
+    else:
+        outcomes[index] = replace(outcomes[index], desktop_shell=(shown, zsh))
+    return outcomes
+
+
 def _apply_run_options(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcome]:
     """D-09: each chosen option writes its settings to every runnable row that ended done.
 
@@ -667,6 +711,8 @@ def _apply_run_options(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowO
                 continue
             written = _apply_option(outcome.row.tool_id, setting, home, ctx.platform.os)
             outcomes[index] = replace(outcome, settings=(*outcome.settings, written))
+    if "desktop-shell" in ctx.options and ctx.platform.os != "macos":
+        outcomes = _desktop_shell(outcomes)
     return outcomes
 
 
