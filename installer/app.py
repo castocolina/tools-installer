@@ -107,6 +107,7 @@ from installer.uninstall import (
     removal_plan,
     remove_paths,
     remove_proven,
+    retired_manager_package,
     sweep_policies,
     sweep_tweaks,
 )
@@ -758,6 +759,16 @@ def removal_result_lines(result: SweepResult) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _retired_sentence(tool_id: str, managed: tuple[str, str] | None) -> str:
+    """The result of retiring a receipt that deletes nothing (UI-SPEC section 2)."""
+    if managed is None:
+        return f"Retired the {tool_id} receipt; there was nothing to delete."
+    manager, package = (sanitize_log_line(part) for part in managed)
+    return (
+        f"Retired the {tool_id} receipt; {manager} {package} stays installed — remove it yourself."
+    )
+
+
 def remove_tool(
     tool: Tool,
     *,
@@ -778,6 +789,14 @@ def remove_tool(
     undo or command deletes nothing and keeps the receipt, so a later plan still sees the tool."""
     try:
         fresh = removal_plan(tool, bin_dir, verify=True)
+        if fresh.level == "receipt":
+            # A retired receipt with nothing to delete (review R1-03): checked before the
+            # `not (paths or argv)` refusal below, which every receipt-only preview would trip.
+            if paths or argv or unregister:
+                return ToolRemoval(tool.id, False, "changed since the preview; not removed")
+            managed = retired_manager_package(tool.id)
+            receipts.delete(tool.id)
+            return ToolRemoval(tool.id, True, _retired_sentence(tool.id, managed))
         named = {*fresh.removable, *fresh.yourself}
         # A command runs only on the proof it was previewed against: with a command, every
         # previewed path must still be removable, not merely named (review R2-02).
@@ -848,6 +867,12 @@ def _print_retired_preview(rows: Sequence[tuple[Tool, RemovalPlan]], console: Co
         if plan.yourself:
             kept = ", ".join(sanitize_log_line(str(path)) for path in plan.yourself)
             console.print(f"  remove it yourself: {kept}", markup=False, soft_wrap=True)
+        if plan.hint:
+            console.print(f"  {sanitize_log_line(plan.hint)}", markup=False, soft_wrap=True)
+        elif plan.level == "receipt":
+            console.print(
+                "  nothing to delete; confirming retires the receipt", markup=False, soft_wrap=True
+            )
 
 
 def run_uninstall(
@@ -1063,7 +1088,7 @@ def run_uninstall(
                     markup=False,
                 )
             if outcome.detail:
-                console.print(f"{tool.id}: {outcome.detail}")
+                console.print(f"{tool.id}: {outcome.detail}", markup=False, soft_wrap=True)
             else:
                 for member, group in retire_group_members(plan.argv, tools, handled):
                     handled.add(member)

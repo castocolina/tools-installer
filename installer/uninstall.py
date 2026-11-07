@@ -60,7 +60,7 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
-RemovalLevel = Literal["manager", "artifacts", "recipe", "none"]
+RemovalLevel = Literal["manager", "artifacts", "recipe", "receipt", "none"]
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,8 @@ class RemovalPlan:
     )
     # How the tool is removed (D-06): `manager` (argv = the manager's uninstall for the
     # receipt's package), `recipe` (argv = the vendor `remove`, bound to a proven leaf,
-    # or none, plus the proven paths), `artifacts` (proven paths only), or `none`.
+    # or none, plus the proven paths), `artifacts` (proven paths only), `receipt` (a retired
+    # receipt with nothing to delete: only the receipt is retired), or `none`.
     level: RemovalLevel = "none"
     argv: tuple[str, ...] = ()
     # Declared config entries that exist now, expanded; never deleted by this module.
@@ -211,6 +212,14 @@ def _quarantined(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
                         seen.add(path)
                         found.append(path)
     return found
+
+
+def retired_manager_package(tool_id: str) -> tuple[str, str] | None:
+    """(manager kind, package) of a readable manager-kind receipt that names a package (D-08)."""
+    receipt = receipts.read(tool_id)
+    if receipt is None or receipt.method.kind not in MANAGER_UNINSTALL_ARGV or not receipt.package:
+        return None
+    return receipt.method.kind, receipt.package
 
 
 def _retired_leftovers(tool: Tool, proven: set[Path]) -> list[Path]:
@@ -402,6 +411,13 @@ def removal_plan(
         level = "recipe"
     elif base.removable:
         level = "artifacts"
+    if tool.retired:
+        # D-08: a retired manager package is the user's to remove; nothing is ever run for it.
+        managed = retired_manager_package(tool.id)
+        if managed is not None:
+            hint = f"remove it yourself: {managed[0]} {managed[1]}"
+        if level == "none" and receipt is not None and not base.yourself:
+            level = "receipt"
     unregister, hook_hosts = _hook_undo(tool, receipt, base)
     return replace(
         base,

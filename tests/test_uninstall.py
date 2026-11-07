@@ -2843,3 +2843,205 @@ def test_a_retired_file_changed_before_confirm_is_refused(
     assert "changed since the preview; not removed" in outcome.detail
     assert rtk.read_text() == "RTK RAW BINARY"
     assert receipts.receipt_exists("rtk")
+
+
+def _write_bare_receipt(tool_id: str, kind: str, *, package: str | None = None) -> Tool:
+    """A retired receipt that records no artifact (a manager package, or nothing at all)."""
+    receipts.write(
+        Receipt(
+            tool=tool_id,
+            at="2026-10-16T00:00:00Z",
+            method=ReceiptMethod(kind=kind, key="k"),
+            package=package,
+            artifacts=(),
+            smoke=None,
+            hooks={},
+        )
+    )
+    (tool,) = [t for t in receipts.scan_retired(set()).tools if t.id == tool_id]
+    return tool
+
+
+MANAGER_SENTENCE = "Retired the {id} receipt; brew {id} stays installed — remove it yourself."
+EMPTY_SENTENCE = "Retired the {id} receipt; there was nothing to delete."
+
+
+def test_a_retired_manager_receipt_retires_without_a_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-08, T-23.1-32: no manager command is built or run; the package stays installed."""
+    from installer.app import remove_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = _write_bare_receipt("rtk", "brew", package="rtk")
+
+    plan = removal_plan(tool, bin_dir)
+    assert plan.level == "receipt"
+    assert plan.argv == ()
+    assert plan.hint == "remove it yourself: brew rtk"
+
+    outcome = remove_tool(tool, paths=(), argv=(), bin_dir=bin_dir, runner=_no_removal_runner)
+    assert outcome.removed
+    assert outcome.detail == MANAGER_SENTENCE.format(id="rtk")
+    assert not receipts.receipt_exists("rtk")
+
+
+def test_an_empty_retired_receipt_retires_with_nothing_to_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import remove_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = _write_bare_receipt("rtk", "github_release")
+
+    plan = removal_plan(tool, bin_dir)
+    assert plan.level == "receipt"
+    assert plan.hint is None
+
+    outcome = remove_tool(tool, paths=(), argv=(), bin_dir=bin_dir, runner=_no_removal_runner)
+    assert outcome.removed
+    assert outcome.detail == EMPTY_SENTENCE.format(id="rtk")
+    assert not receipts.receipt_exists("rtk")
+
+
+def test_a_receipt_only_removal_is_refused_when_a_path_came_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recorded file was gone at preview time (receipt-only row) and is back at confirm."""
+    from installer.app import remove_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    tool = _retired_tool("rtk", [(rtk, "file")])
+    rtk.unlink()
+    assert removal_plan(tool, bin_dir).level == "receipt"
+
+    rtk.write_text("something else now lives here")
+    outcome = remove_tool(tool, paths=(), argv=(), bin_dir=bin_dir, runner=_no_removal_runner)
+
+    assert not outcome.removed
+    assert "changed since the preview; not removed" in outcome.detail
+    assert receipts.receipt_exists("rtk")
+    assert rtk.read_text() == "something else now lives here"
+
+
+def _plant_four_retired(home: Path) -> tuple[list[Tool], Path, Path]:
+    """alpha (proven, a path holding markup), bravo (drifted), charlie (brew), delta (empty)."""
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    proven = bin_dir / "[red]alpha"
+    proven.write_text("alpha binary")
+    drifted = bin_dir / "bravo"
+    drifted.write_text("bravo binary")
+    tools = [
+        _retired_tool("alpha", [(proven, "file")]),
+        _retired_tool("bravo", [(drifted, "file")]),
+        _write_bare_receipt("charlie", "brew", package="charlie"),
+        _write_bare_receipt("delta", "github_release"),
+    ]
+    drifted.write_text("bravo binary, edited by the user")
+    return tools, proven, drifted
+
+
+def _retired_block(output: str, count: int) -> list[str]:
+    lines = output.splitlines()
+    start = lines.index("retired — no longer in the catalog")
+    return lines[start : start + count]
+
+
+def test_retired_preview_lines_cover_every_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review R1-47: the exact retired block and the exact result lines."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools, proven, drifted = _plant_four_retired(tmp_path)
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over(tools, tmp_path, (console, buf), _no_removal_runner)
+    output = buf.getvalue()
+
+    block = _retired_block(output, 9)
+    assert block == [
+        "retired — no longer in the catalog",
+        "alpha (retired)",
+        f"  {proven}",
+        "bravo (retired)",
+        f"  remove it yourself: {drifted}",
+        "charlie (retired)",
+        "  remove it yourself: brew charlie",
+        "delta (retired)",
+        "  nothing to delete; confirming retires the receipt",
+    ]
+    lines = output.splitlines()
+    assert f"charlie: {MANAGER_SENTENCE.format(id='charlie')}" in lines
+    assert f"delta: {EMPTY_SENTENCE.format(id='delta')}" in lines
+    # Every fixed part fits 78 cells; only the lines carrying a path are longer.
+    for line in block:
+        if str(tmp_path) not in line:
+            assert len(line) <= 78
+    assert len("  remove it yourself: ") <= 78
+    assert not proven.exists()
+    assert drifted.exists()
+    assert not receipts.receipt_exists("alpha")
+    assert receipts.receipt_exists("bravo")
+
+
+def test_retired_preview_offers_removal_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prohibition: no install, update or reinstall wording and no pnpm dlx in the retired text."""
+    import re
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools, _proven, _drifted = _plant_four_retired(tmp_path)
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over(tools, tmp_path, (console, buf), _no_removal_runner)
+    output = buf.getvalue()
+
+    scanned = [
+        *_retired_block(output, 9),
+        f"charlie: {MANAGER_SENTENCE.format(id='charlie')}",
+        f"delta: {EMPTY_SENTENCE.format(id='delta')}",
+    ]
+    text = "\n".join(scanned)
+    assert re.search(r"\b(install|update|reinstall)\b", text, re.IGNORECASE) is None
+    assert "pnpm dlx" not in text
+
+
+def test_a_lone_manager_receipt_is_not_nothing_to_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool = _write_bare_receipt("charlie", "brew", package="charlie")
+    asked: list[str] = []
+
+    def confirm(message: str) -> bool:
+        asked.append(message)
+        return True
+
+    console, buf = _uninstall_console()
+    run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+    )
+
+    assert "Nothing to uninstall" not in buf.getvalue()
+    assert len(asked) == 1
+    assert not receipts.receipt_exists("charlie")
