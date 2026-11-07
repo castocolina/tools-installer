@@ -258,7 +258,7 @@ BUNDLES: tuple[TweakBundle, ...] = (
     ),
     _shell_init(
         "volta",
-        "exports VOLTA_HOME and puts Volta's bin directory on PATH",
+        "exports VOLTA_HOME; its bin directory is on PATH via the PATH block",
         _VOLTA_BODY,
     ),
     TweakBundle(

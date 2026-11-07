@@ -127,7 +127,7 @@ Prompt (Label, 70 text cells, wraps): `Turn on {tool} shell init? It adds one gu
 | zoxide | `adds z, a cd that learns the directories you use` |
 | fzf | `adds ctrl+r history search, ctrl+t file picker and alt+c` |
 | fnm | `switches Node versions from .node-version or .nvmrc as you cd` |
-| volta | `exports VOLTA_HOME and puts Volta's bin directory on PATH` |
+| volta | `exports VOLTA_HOME; its bin directory is on PATH via the PATH block` (amended 2026-11-07, ledger Q4 amended: the bundle no longer edits PATH) |
 
 Choices: `Yes, turn it on` (id `opt-yes`) / `No, leave it off` (id `opt-no`). `esc` = no and writes the existing log line `{tool}: sensitive-action prompt dismissed; the answer was therefore no.` The `set_login_shell` prompt and its choices keep today's text byte for byte. The headless interactive route asks the same prompt sentence through `prompter.confirm` (default no).
 
