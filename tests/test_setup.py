@@ -4348,6 +4348,111 @@ def test_a_second_cli_uninstall_finds_nothing_retired(
     assert "retired —" not in buffer.getvalue()
 
 
+def _plant_corrupt_receipt(stem: str) -> Path:
+    """A receipt file that does not parse, its id absent from the (empty) catalog."""
+    path = receipts.receipt_path(stem)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{not json")
+    return path
+
+
+def test_cli_uninstall_reports_a_corrupt_receipt_and_keeps_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SPEC R3: the corrupt receipt is named before the preview, and its bytes are kept."""
+    _sandbox(monkeypatch, tmp_path)
+    corrupt = _plant_corrupt_receipt("old")
+    before = corrupt.read_bytes()
+    buffer = _headless_teardown(monkeypatch)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    out = buffer.getvalue()
+    assert "Ignored the corrupt receipt " in out
+    assert out.index("Ignored the corrupt receipt ") < out.index("Nothing to uninstall")
+    assert corrupt.read_bytes() == before
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 folder anyway")
+def test_cli_uninstall_survives_an_unreadable_receipts_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """T-23-39: an unreadable receipts folder is one warning line, and the launch still exits 0."""
+    _sandbox(monkeypatch, tmp_path)
+    folder = receipts.receipts_dir()
+    folder.mkdir(parents=True)
+    buffer = _headless_teardown(monkeypatch)
+    folder.chmod(0)
+    try:
+        assert setup.main(["--uninstall", "--yes"]) == 0
+    finally:
+        folder.chmod(0o755)
+    assert "Could not read the receipts folder " in buffer.getvalue()
+
+
+def test_the_tui_startup_warning_names_a_corrupt_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review R1-55: one launch warning per corrupt receipt; the live predicate adds none."""
+    _sandbox(monkeypatch, tmp_path)
+    _plant_corrupt_receipt("old")
+    seen = _wired(monkeypatch, [])
+    warning = seen["startup_warning"]
+    assert isinstance(warning, str)
+    assert warning.count("Ignored the corrupt receipt ") == 1
+    inputs = seen["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    assert all(inputs.retired() == () for _ in range(3))
+    assert warning.count("Ignored the corrupt receipt ") == 1
+
+
+def test_the_uninstall_inputs_list_retired_receipts_live(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-09: the Uninstall view re-lists retired receipts on every call, not a launch snapshot."""
+    _sandbox(monkeypatch, tmp_path)
+    _plant_retired_rtk(tmp_path)
+    inputs = _wired(monkeypatch, [])["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    assert [tool.id for tool in inputs.retired()] == ["rtk"]
+    receipts.delete("rtk")
+    assert inputs.retired() == ()
+
+
+def test_install_routes_never_include_a_retired_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """T-23.1-40: a retired id reaches the uninstall predicate only, never an install route."""
+    _sandbox(monkeypatch, tmp_path)
+    _plant_retired_rtk(tmp_path)
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    wizard_tools: list[list[Tool]] = []
+    fake_run_wizard = setup.run_wizard
+
+    def spy_run_wizard(tools: list[Tool], *args: Any, **kwargs: Any) -> list[RowOutcome] | None:
+        wizard_tools.append(list(tools))
+        return fake_run_wizard(tools, *args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", spy_run_wizard)
+    assert setup.main(["--all", "--yes"]) == 0
+    assert wizard_tools
+    assert "rtk" not in [tool.id for tool in wizard_tools[0]]
+
+    app_tools: list[list[Tool]] = []
+    build_app = cast("Callable[..., UnifiedApp]", vars(setup)["_build_app"])
+
+    def spy_build_app(tools: list[Tool], platform: Platform, **kwargs: Any) -> UnifiedApp:
+        app_tools.append(list(tools))
+        return build_app(tools, platform, **kwargs)
+
+    monkeypatch.setattr(setup, "_build_app", spy_build_app)
+    _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    assert app_tools
+    assert "rtk" not in [tool.id for tool in app_tools[0]]
+
+
 def test_every_route_survives_a_non_utf8_myshellrc(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

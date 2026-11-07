@@ -930,6 +930,7 @@ def _build_app(
     # are bound with (D-01/15.6-06 Task 3) -- defined just above this
     # construction so the reference resolves at statement-execution time,
     # not only at call time.
+    catalog_ids = frozenset(tool.id for tool in tools)
     uninstall_inputs = UninstallInputs(
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
         has_path_block=lambda: has_managed_block(_MYSHELLRC),
@@ -943,6 +944,7 @@ def _build_app(
             extra_policies=(*redirects, *desktop),
         ),
         terminal_sync=_uninstall_terminals,
+        retired=lambda: scan_retired(catalog_ids).tools,
     )
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
@@ -950,6 +952,8 @@ def _build_app(
     legacy_strip, repairs = _launch_repairs()
     startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
     startup_lines += [text for text, _severity in (*legacy_strip.launch_lines(), *repairs)]
+    # Launch-time warnings come from this one scan only; the `retired` predicate drops its own.
+    startup_lines += scan_retired(catalog_ids).warnings
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
