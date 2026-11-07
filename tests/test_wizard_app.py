@@ -1,4 +1,5 @@
 import inspect
+import re
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
@@ -6,13 +7,14 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
+from rich.cells import cell_len
 from rich.text import Text
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Label, ListItem, ListView, OptionList, Static
 
-from installer import daemon
-from installer.app import UninstallDecision
+from installer import daemon, receipts
+from installer.app import UninstallDecision, perform_uninstall
 from installer.catalog_tui import CatalogScreen, RefreshRequested, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -104,6 +106,7 @@ from tests.state_doubles import (
     removable_state,
     unavailable_state,
 )
+from tests.test_uninstall import loop_tool, plant_raw_yq, write_receipt
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -175,6 +178,7 @@ def _uninstall_inputs(
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     terminal_sync: Callable[[], str | None] | None = None,
+    retired: Callable[[], Sequence[Tool]] = tuple,
 ) -> UninstallInputs:
     """The environment inputs keep the plain-value convenience: they are
     predicates, and most tests only care about one fixed reading."""
@@ -184,6 +188,7 @@ def _uninstall_inputs(
         remove=remove,
         tweak_ids=_predicate(tweak_ids),
         terminal_sync=terminal_sync,
+        retired=retired,
     )
 
 
@@ -9057,3 +9062,490 @@ async def test_an_unregister_failure_row_reads_remove_failed() -> None:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.detail_text.startswith("remove failed — unregister: boom")
+
+
+# -- retired receipts in the Uninstall view (23.1-17, UI-SPEC section 2) -------
+
+
+def _retired_rtk() -> tuple[Tool, Path]:
+    """A retired `rtk` raw download: its bin-dir file and receipt, as the live scan lists them."""
+    bin_dir = Path.home() / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    rtk = bin_dir / "rtk"
+    rtk.write_text("rtk raw binary")
+    write_receipt(loop_tool("rtk"), [(rtk, "file")])
+    return _scanned("rtk"), rtk
+
+
+def _scanned(tool_id: str) -> Tool:
+    """The retired tool the live scan lists for `tool_id` (every receipt is outside the catalog)."""
+    return next(tool for tool in receipts.scan_retired(set()).tools if tool.id == tool_id)
+
+
+def _removing_closure(
+    catalog: Sequence[Tool] = (), commands: list[list[str]] | None = None
+) -> Callable[[UninstallDecision], SweepResult]:
+    """The production remover (`perform_uninstall`) over the scratch HOME. A command it runs is
+    appended to `commands`, so a test can assert that none ran."""
+    home = Path.home()
+    ran: list[list[str]] = [] if commands is None else commands
+
+    def run(cmd: list[str]) -> None:
+        ran.append(cmd)
+
+    def remove(decision: UninstallDecision) -> SweepResult:
+        return perform_uninstall(
+            decision,
+            bin_dir=home / ".local" / "bin",
+            myshellrc_path=home / ".myshellrc",
+            rc_paths=[],
+            bundles=(),
+            zshrc_path=home / ".zshrc",
+            daemon_policy=None,
+            extra_policies=(),
+            runner=run,
+            catalog=catalog,
+        )
+
+    return remove
+
+
+def _plant_retired(
+    tool_id: str,
+    artifacts: Sequence[tuple[Path, str]] = (),
+    *,
+    kind: str = "github_release",
+    package: str | None = None,
+) -> Tool:
+    """A receipt for `tool_id` (outside the catalog) as the live scan lists it. A `package` makes
+    a manager-kind receipt, which lists no paths."""
+    if package is None:
+        write_receipt(loop_tool(tool_id), list(artifacts), kind=kind)
+    else:
+        receipts.write(
+            Receipt(
+                tool=tool_id,
+                at="2026-10-16T00:00:00Z",
+                method=ReceiptMethod(kind=kind, key="k"),
+                package=package,
+                artifacts=(),
+                smoke=None,
+                hooks={},
+            )
+        )
+    return _scanned(tool_id)
+
+
+async def test_a_retired_receipt_shows_its_own_section() -> None:
+    """Tracer: a retired receipt is a selectable row under its own heading after the catalog."""
+    rtk, _rtk_bin = _retired_rtk()
+    app = _app(
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(retired=lambda: (rtk,)),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        heading = "#retired — no longer in the catalog"
+        assert _row_keys(screen) == ["#removable here", "rg", heading, "rtk"]
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, heading, "tool").strip() == (
+            "── retired — no longer in the catalog (1)"
+        )
+        assert _uninstall_cell(table, "rtk", "tool") == "rtk (retired)"
+        await pilot.press("down", "down")
+        assert screen.detail_text == (
+            "retired: rtk is no longer in the catalog · recorded files re-checked before deletion"
+        )
+
+
+async def test_removing_a_retired_row_deletes_its_file_and_receipt() -> None:
+    """Tracer: selecting the retired row and confirming removes its file and receipt; the
+    next publish drops the row and its heading."""
+    _rtk, rtk_bin = _retired_rtk()
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_removing_closure(),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert "rtk" in _row_keys(screen)
+        await pilot.press("space", "enter", "enter")
+        await settle(app, pilot)
+        assert not rtk_bin.exists()
+        assert not receipts.receipt_exists("rtk")
+        assert _row_keys(screen) == []
+
+
+async def test_no_retired_receipt_means_no_section() -> None:
+    """A3 (UI-SPEC E1 empty): with no retired receipt there is no heading and no retired row.
+
+    Regression guard: it passes before the change, because nothing renders without a receipt.
+    """
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs(), initial_view="uninstall")
+    async with app.run_test(size=(80, 20)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == ["#removable here", "rg"]
+
+
+_RETIRED_HEAD = "retired: rtk is no longer in the catalog"
+
+
+@pytest.mark.parametrize("case", ["proven-with-stray", "drifted", "manager", "script", "empty"])
+async def test_retired_detail_clauses_per_receipt_kind(case: str) -> None:
+    """UI-SPEC section 2 detail bar, one clause per receipt kind and proof outcome (R1-48)."""
+    home = Path.home()
+    bin_file = home / ".local" / "bin" / "rtk"
+    bin_file.parent.mkdir(parents=True, exist_ok=True)
+    if case == "proven-with-stray":
+        stray = home / ".ssh" / "id_test"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("planted key")
+        bin_file.write_text("rtk raw binary")
+        rtk = _plant_retired("rtk", [(bin_file, "file"), (stray, "file")])
+        expected = (
+            f"{_RETIRED_HEAD} · recorded files re-checked before deletion"
+            f" · remove it yourself: {stray}"
+        )
+    elif case == "drifted":
+        bin_file.write_text("rtk raw binary")
+        rtk = _plant_retired("rtk", [(bin_file, "file")])
+        bin_file.write_text("rtk raw binary, rewritten since the install")
+        expected = f"{_RETIRED_HEAD} · remove it yourself: {bin_file}"
+    elif case == "manager":
+        rtk = _plant_retired("rtk", kind="brew", package="rtk")
+        expected = f"{_RETIRED_HEAD} · remove it yourself: brew rtk"
+    elif case == "script":
+        leaf = home / ".local" / "opt" / "rtk" / "rtk"
+        leaf.parent.mkdir(parents=True)
+        leaf.write_text("rtk script leaf")
+        rtk = _plant_retired("rtk", [(leaf, "file")], kind="script")
+        expected = f"{_RETIRED_HEAD} · remove it yourself: {leaf}"
+    else:
+        rtk = _plant_retired("rtk")
+        expected = f"{_RETIRED_HEAD} · nothing to delete; confirming retires the receipt"
+    app = _app(
+        cases=[], uninstall=_uninstall_inputs(retired=lambda: (rtk,)), initial_view="uninstall"
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("down")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert screen.detail_text == expected
+
+
+async def test_confirming_a_manager_row_retires_only_the_receipt() -> None:
+    """UI-SPEC results: a manager-kind receipt retires alone; its package is named, never run."""
+    _plant_retired("rtk", kind="brew", package="rtk")
+    commands: list[list[str]] = []
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_removing_closure(commands=commands),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "space", "enter", "enter")
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (screen.status.text, screen.status.severity) == (
+            "Retired the rtk receipt; brew rtk stays installed — remove it yourself.",
+            Severity.OK,
+        )
+    assert commands == []
+    assert not receipts.receipt_exists("rtk")
+
+
+async def test_confirming_an_empty_row_says_nothing_to_delete() -> None:
+    """UI-SPEC results: a receipt with nothing recorded retires with the nothing-to-delete line."""
+    _plant_retired("rtk")
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_removing_closure(),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "space", "enter", "enter")
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (screen.status.text, screen.status.severity) == (
+            "Retired the rtk receipt; there was nothing to delete.",
+            Severity.OK,
+        )
+    assert not receipts.receipt_exists("rtk")
+
+
+async def test_a_retired_file_changed_since_the_preview_is_kept() -> None:
+    """Prohibition (T-23.1-42): a file rewritten after its row was painted is refused and kept."""
+    _rtk, rtk_bin = _retired_rtk()
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_removing_closure(),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        rtk_bin.write_text("rewritten after the row was painted")
+        await pilot.press("down", "space", "enter", "enter")
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert "changed since the preview" in screen.status.text
+    assert rtk_bin.read_text() == "rewritten after the row was painted"
+    assert receipts.receipt_exists("rtk")
+
+
+async def test_retired_rows_offer_removal_only() -> None:
+    """Prohibition (T-23.1-43): no install, update or reinstall wording in the section, the detail
+    bars or the result lines."""
+    _plant_retired("rtk", kind="brew", package="rtk")
+    _plant_retired("zeta")
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_removing_closure(),
+        ),
+        initial_view="uninstall",
+    )
+    shown: list[str] = []
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        shown += [str(cell) for key in _row_keys(screen) for cell in table.get_row(key)]
+        for _ in range(2):
+            await pilot.press("down")
+            shown.append(screen.detail_text)
+        await pilot.press("home", "space", "enter", "enter")
+        await settle(app, pilot)
+        shown.append(screen.status.text)
+    text = " ".join(shown)
+    assert not re.search(r"\b(install|update|reinstall)\b|pnpm dlx", text), text
+
+
+async def test_a_retired_row_and_a_catalog_row_are_removed_together() -> None:
+    """Review R1-57: one confirm, one removal pass and one publish remove a catalog row and a
+    retired row together, and the retired heading goes with them."""
+    catalog_tool, catalog_bin = plant_raw_yq(Path.home())
+    catalog_file = catalog_bin / "yq"
+    _rtk, rtk_bin = _retired_rtk()
+    app = _app(
+        cases=[(catalog_tool, removable_state(catalog_tool, [catalog_file]))],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired({"yq"}).tools,
+            remove=_removing_closure(catalog=[catalog_tool]),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("space", "down", "down", "space", "enter", "enter")
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert not catalog_file.exists()
+        assert not rtk_bin.exists()
+        assert not receipts.receipt_exists("yq")
+        assert not receipts.receipt_exists("rtk")
+        assert not any(key.startswith("#retired") or key == "rtk" for key in _row_keys(screen))
+
+
+# -- retired receipts: confirm lines, keys, sanitizing, refresh, order and scroll (Task 3) -----
+
+_RETIRED_KEY = "#retired — no longer in the catalog"
+
+
+async def test_c_on_a_retired_row_is_refused() -> None:
+    """UI-SPEC section 2 keys: `c` on a retired row is refused with the no-config line."""
+    _plant_retired("rtk", kind="brew", package="rtk")
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "c")
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert (screen.status.text, screen.status.severity) == (
+            "This row has no config to delete.",
+            Severity.WARN,
+        )
+        assert screen.selected == set()
+
+
+@pytest.mark.parametrize("case", ["artifact-with-stray", "manager", "nothing"])
+async def test_confirm_lists_retired_lines_in_the_existing_structure(case: str) -> None:
+    """A selected retired row adds lines to the review in the shape a catalog row's runs line
+    already has (`<id>: ...`), and no block heading: deleted paths, kept paths and the manager
+    package as `remove it yourself`, and nothing-to-delete. Orchestrator decision, 23.1-17 Task 3.
+    """
+    home = Path.home()
+    bin_file = home / ".local" / "bin" / "rtk"
+    bin_file.parent.mkdir(parents=True, exist_ok=True)
+    if case == "artifact-with-stray":
+        stray = home / ".ssh" / "id_test"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("planted key")
+        bin_file.write_text("rtk raw binary")
+        _plant_retired("rtk", [(bin_file, "file"), (stray, "file")])
+        expected = [f"rtk: deletes {bin_file}", f"rtk: remove it yourself: {stray}"]
+    elif case == "manager":
+        _plant_retired("rtk", kind="brew", package="rtk")
+        expected = ["rtk: remove it yourself: brew rtk"]
+    else:
+        _plant_retired("rtk")
+        expected = ["rtk: nothing to delete; confirming retires the receipt"]
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(
+            retired=lambda: receipts.scan_retired(set()).tools,
+            remove=_recorder(captured),
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("down", "space", "enter")
+        await pilot.pause()
+        # The review folds long lines at its column (a long path can break mid-word), so each line
+        # is compared without whitespace; the count, the order and the characters are exact.
+        folded = [line.plain for line in _confirm(app).review]
+        assert [re.sub(r"\s", "", line) for line in folded] == [
+            re.sub(r"\s", "", line) for line in expected
+        ]
+        await pilot.press("escape")
+        await pilot.pause()
+    assert captured == []
+
+
+async def test_retired_text_renders_literally() -> None:
+    """T-23.1-41: receipt-derived path text with markup and an escape renders literally, the
+    escape byte removed from the detail bar and every cell. (A receipt id cannot carry these:
+    receipts only lists ids matching TOOL_ID_RE, so the id cell is sanitized as defense in depth.)
+    """
+    home = Path.home()
+    bin_file = home / ".local" / "bin" / "rtk"
+    bin_file.parent.mkdir(parents=True, exist_ok=True)
+    bin_file.write_text("rtk raw binary")
+    stray_dir = home / ".ssh"
+    stray_dir.mkdir(parents=True, exist_ok=True)
+    stray = stray_dir / "[red]stray\x1b[31m"
+    stray.write_text("planted")
+    _plant_retired("rtk", [(bin_file, "file"), (stray, "file")])
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert _uninstall_cell(table, "rtk", "tool") == "rtk (retired)"
+        await pilot.press("down")
+        assert screen.detail_text == (
+            f"{_RETIRED_HEAD} · recorded files re-checked before deletion"
+            f" · remove it yourself: {stray_dir}/[red]stray[31m"
+        )
+        row_text = " ".join(str(cell) for cell in table.get_row("rtk"))
+        assert "[red]" in screen.detail_text
+        assert "\x1b" not in screen.detail_text
+        assert "\x1b" not in row_text
+
+
+async def test_retired_rows_follow_the_predicate_on_entry_and_publish() -> None:
+    """The live predicate is re-read on entry and on every publish (D-09, UI-SPEC E2 error)."""
+    app = _app(
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == ["#removable here", "rg"]
+        _plant_retired("rtk")
+        screen.enter_view()
+        assert _row_keys(screen) == ["#removable here", "rg", _RETIRED_KEY, "rtk"]
+        receipts.delete("rtk")
+        screen.state_refreshed()
+        assert _row_keys(screen) == ["#removable here", "rg"]
+
+
+async def test_retired_rows_sort_by_id_after_the_catalog() -> None:
+    """SPEC edge R3: retired rows sort by id after every catalog row and before the environment."""
+    _plant_retired("zeta")
+    _plant_retired("alpha")
+    app = _app(
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(
+            ban_names=["pip"],
+            retired=lambda: receipts.scan_retired(set()).tools,
+        ),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)):
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        assert _row_keys(screen) == [
+            "#removable here",
+            "rg",
+            _RETIRED_KEY,
+            "alpha",
+            "zeta",
+            "#environment",
+            "#ban",
+        ]
+
+
+async def test_many_retired_rows_scroll_at_80x20() -> None:
+    """UI-SPEC E1 overflow: 30 retired rows at 80x20; the last row and the heading are reachable."""
+    for index in range(30):
+        _plant_retired(f"tool{index:02d}")
+    app = _app(
+        cases=[],
+        uninstall=_uninstall_inputs(retired=lambda: receipts.scan_retired(set()).tools),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        table = screen.query_one(DataTable[Any])
+        assert _RETIRED_KEY in _row_keys(screen)
+        assert cell_len(_uninstall_cell(table, _RETIRED_KEY, "tool")) <= 78
+        # The cursor starts on the first retired row; `down` reaches the last one, and the table
+        # binds `end` and `home` to scrolling the viewport.
+        await pilot.press(*["down"] * 29)
+        assert screen.detail_text.startswith("retired: tool29 is no longer in the catalog")
+        await pilot.press("end")
+        assert table.scroll_y == table.max_scroll_y > 0
+        # The heading is the first row of the table, above every retired row.
+        assert table.get_row_index(_RETIRED_KEY) == 0
