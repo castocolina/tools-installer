@@ -942,6 +942,91 @@ def test_a_zsh_reconfigure_reports_konsole_and_zshenv() -> None:
     ]
 
 
+def _install_codex_run(recorder: RunRecorder, runner: Runner) -> list[RowOutcome]:
+    return execute_plan(
+        [PlanRow("codex", Disposition.INSTALL, "not installed")],
+        _run_context(
+            recorder,
+            catalog={"codegraph": _codegraph_tool(), "codex": _tool("codex")},
+            runner=runner,
+        ),
+    )
+
+
+def test_installing_codex_resyncs_codegraph_for_codex_only(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+    argvs: list[list[str]] = []
+    outcomes = _install_codex_run(RunRecorder(), lambda command: argvs.append(list(command)))
+    assert len(argvs) == 1
+    assert argvs[0][argvs[0].index("--target") + 1] == "codex"
+    assert "claude" not in argvs[0]
+    assert outcomes[0].result == "done"
+    assert outcomes[0].resynced == (("codegraph", ("codex",)),)
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks["codegraph-mcp-register"] == ("claude", "codex")
+
+
+def test_a_run_without_a_host_install_runs_no_sweep(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+
+    def hosts() -> frozenset[str]:
+        calls.append("hosts")
+        return frozenset({"claude", "codex"})
+
+    monkeypatch.setattr(postinstall, "present_hosts", hosts)
+    recorder = RunRecorder()
+    outcomes = execute_plan(
+        [
+            PlanRow("rg", Disposition.INSTALL, "not installed"),
+            PlanRow("codex", Disposition.SKIP, "already current"),
+        ],
+        _run_context(recorder, catalog={"rg": _tool("rg"), "codex": _tool("codex")}),
+    )
+    assert [outcome.result for outcome in outcomes] == ["done", "skipped"]
+    assert calls == []
+    assert recorder.argv == []
+
+
+def test_the_sweep_reads_hosts_after_the_rows(monkeypatch: pytest.MonkeyPatch):
+    recorder = RunRecorder()
+    installs_seen: list[int] = []
+
+    def hosts() -> frozenset[str]:
+        installs_seen.append(len(recorder.installs))
+        return frozenset({"claude", "codex"})
+
+    monkeypatch.setattr(postinstall, "present_hosts", hosts)
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+    _install_codex_run(recorder, recorder.runner)
+    assert installs_seen == [1]
+
+
+def test_a_receipt_without_recorded_hooks_is_not_swept(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    _codegraph_receipt({})
+    recorder = RunRecorder()
+    outcomes = _install_codex_run(recorder, recorder.runner)
+    assert recorder.argv == []
+    assert outcomes[0].resynced == ()
+
+
+def test_a_failed_resync_is_a_warning_and_the_row_stays_done(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+
+    def runner(command: list[str]) -> None:
+        raise CommandError(command, 1, detail="boom")
+
+    outcomes = _install_codex_run(RunRecorder(), runner)
+    assert outcomes[0].result == "done"
+    assert outcomes[0].resync_warnings == (
+        ("codegraph", "codegraph MCP registration failed: boom"),
+    )
+    assert exit_code(outcomes) == 0
+
+
 @pytest.mark.parametrize(
     "status, expected, detail",
     [

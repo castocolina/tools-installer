@@ -24,6 +24,7 @@ from installer.guidance import (
 )
 from installer.links import TROUBLESHOOTING_URL
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.postinstall import host_labels
 from installer.sanitize import sanitize_log_line
 from installer.session import (
     RESULT_WORDS,
@@ -308,9 +309,35 @@ def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     render_handoff(installs, console)
     render_post_install_handoff(installs, console)
     render_postinstall_warnings(installs, console)
+    render_resync_warnings(outcomes, console)
+    render_hook_lines(outcomes, console)
     render_done_notes(outcomes, console)
     render_verification(installs, console)
     render_shell_section(outcomes, console)
+
+
+def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print each end-of-run sweep warning in the postinstall warning form (UI-SPEC 4, A22)."""
+    for outcome in outcomes:
+        for tool_id, warning in outcome.resync_warnings:
+            line = sanitize_log_line(f"⚠ {tool_id} postinstall warning: {warning}")
+            console.print(Text(line, style="yellow"), soft_wrap=True)
+
+
+def render_hook_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
+    """Print the Agent-host hooks section: each install's registrations and the sweep's hosts."""
+    lines: list[str] = []
+    for outcome in outcomes:
+        if outcome.install is not None and outcome.install.hooks:
+            labels = host_labels(outcome.install.hooks)
+            lines.append(f"{outcome.row.tool_id}: registered for {labels}")
+        for tool_id, hosts in outcome.resynced:
+            lines.append(f"{tool_id}: registered for {host_labels(hosts)} (new host)")
+    if not lines:
+        return
+    console.print("Agent-host hooks", style="bold", markup=False, highlight=False)
+    for line in lines:
+        console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
 
 
 def render_shell_section(outcomes: Sequence[RowOutcome], console: Console) -> None:

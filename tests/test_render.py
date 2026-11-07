@@ -24,6 +24,7 @@ from installer.render import (
     render_guard,
     render_guard_status,
     render_handoff,
+    render_hook_lines,
     render_node_globals,
     render_post_install_handoff,
     render_postinstall_warnings,
@@ -1247,6 +1248,54 @@ def test_reconfigure_report_lines_fit_78_cells() -> None:
     lines = buf.getvalue().splitlines()
     assert len(lines) == 6
     assert max(cell_len(line) for line in lines) <= 78
+
+
+def test_the_agent_host_hooks_section() -> None:
+    codegraph = RowOutcome(
+        PlanRow("codegraph", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("codegraph", InstallStatus.INSTALLED, hooks=("claude", "cursor")),
+    )
+    codex = RowOutcome(
+        PlanRow("codex", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("codex", InstallStatus.INSTALLED),
+        resynced=(("codegraph", ("codex",)),),
+        resync_warnings=(("codegraph", "codegraph MCP registration failed: exit 1"),),
+    )
+    console, buf = _console()
+
+    render_run_report([codegraph, codex], console)
+
+    lines = buf.getvalue().splitlines()
+    start = lines.index("Agent-host hooks")
+    assert lines[start + 1 : start + 3] == [
+        "codegraph: registered for claude, cursor-agent",
+        "codegraph: registered for codex (new host)",
+    ]
+    assert "⚠ codegraph postinstall warning: codegraph MCP registration failed: exit 1" in lines
+    assert max(cell_len(line) for line in lines[start + 1 : start + 3]) <= 78
+
+    quiet = RowOutcome(
+        PlanRow("rg", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("rg", InstallStatus.INSTALLED),
+    )
+    console, buf = _console()
+    render_run_report([quiet], console)
+    assert "Agent-host hooks" not in buf.getvalue()
+
+    four = RowOutcome(
+        PlanRow("opencode", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("opencode", InstallStatus.INSTALLED),
+        resynced=(("codegraph", ("claude", "codex", "opencode", "cursor")),),
+    )
+    console, buf = _console()
+    render_hook_lines([four], console)
+    wide = "codegraph: registered for claude, codex, cursor-agent, opencode (new host)"
+    assert buf.getvalue().splitlines() == ["Agent-host hooks", wide]
+    assert cell_len(wide) <= 78
 
 
 def test_render_done_notes_is_silent_without_extras() -> None:

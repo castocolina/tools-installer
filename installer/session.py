@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol, get_args
 
-from installer import executors, receipts
+from installer import executors, postinstall, receipts
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
@@ -184,6 +184,9 @@ class RowOutcome:
     install: InstallOutcome | None = None
     update: UpdateOutcome | None = None
     detail: str = ""
+    # The end-of-run sweep's answer for a new agent host: (tool id, harness ids registered).
+    resynced: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    resync_warnings: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -503,6 +506,58 @@ _INSTALL_RESULT: dict[InstallStatus, Result] = {
 }
 
 
+# The rows whose install can add an agent host, and the catalog ids of those hosts.
+_HOST_INSTALL_DISPOSITIONS: frozenset[Disposition] = frozenset(
+    {Disposition.INSTALL, Disposition.REPAIR, Disposition.REINSTALL}
+)
+_HOST_CATALOG_IDS: frozenset[str] = frozenset(postinstall.HOST_CATALOG_IDS.values())
+
+
+def _resync_hooks(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowOutcome]:
+    """D-03: when a run installed an agent host, register each installed hook tool for it.
+
+    One sweep after every row, reading the present hosts once. Only a receipt that records
+    hooks takes part: a receipt written before hooks were recorded is left to RECONFIGURE,
+    whose unrecorded hosts already read `≈`. `register_hooks` never re-runs a recorded host.
+    shortcut: the sweep's command output is attributed to the last host row in the TUI log,
+    upgrade when the log gains a run-level attribution.
+    """
+    installed = [
+        index
+        for index, outcome in enumerate(outcomes)
+        if outcome.row.disposition in _HOST_INSTALL_DISPOSITIONS
+        and outcome.result == "done"
+        and outcome.row.tool_id in _HOST_CATALOG_IDS
+    ]
+    if not installed:
+        return outcomes
+    present = postinstall.present_hosts()
+    resynced: list[tuple[str, tuple[str, ...]]] = []
+    warnings: list[tuple[str, str]] = []
+    for tool in ctx.catalog.values():
+        name = tool.postinstall or ""
+        pair = postinstall.POSTINSTALL_HOOKS.get(name)
+        if pair is None or pair.targets is None:
+            continue
+        receipt = receipts.read(tool.id)
+        method = hook_method(tool, receipt) if receipt is not None else None
+        if receipt is None or method is None or not receipt.hooks.get(name):
+            continue
+        try:
+            registered, warning = register_hooks(tool, method, ctx.runner, hosts=present)
+        except Exception as exc:  # the sweep is never a failed row; its failure is a warning
+            registered, warning = (), first_line(exc)
+        if registered:
+            resynced.append((tool.id, registered))
+        if warning:
+            warnings.append((tool.id, _first_line_of(warning)))
+    last = installed[-1]
+    outcomes[last] = replace(
+        outcomes[last], resynced=tuple(resynced), resync_warnings=tuple(warnings)
+    )
+    return outcomes
+
+
 def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
     """Execute a settled plan and return one truthful outcome per row."""
     if any(row.disposition is Disposition.WAIT for row in rows):
@@ -633,7 +688,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
         outcomes.append(outcome)
         if ctx.on_outcome is not None:
             ctx.on_outcome(outcome)
-    return outcomes
+    return _resync_hooks(outcomes, ctx)
 
 
 def _settled(state: ToolState | None) -> bool:
