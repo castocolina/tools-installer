@@ -376,7 +376,7 @@ Plans:
   5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active.
   6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME).
 
-**Plans:** 13/16 plans executed (7 waves)
+**Plans:** 15/16 plans executed (7 waves)
 
 Plans:
 **Wave 1**
@@ -398,8 +398,8 @@ Plans:
 - [x] 23-12-PLAN.md — TUI review run options with `space` and the keyed sensitive modal
 - [x] 23-13-PLAN.md — Headless run-option and shell-init questions default to no; `--yes` asks nothing
 **Wave 6**
-- [ ] 23-14-PLAN.md — Alias bundles leave Policies; legacy alias blocks stripped at launch/uninstall with a notice (no migration); app composition
-- [ ] 23-15-PLAN.md — Removal reverts settings and shell init; `agent/editor settings` uninstall row; ConfirmUninstall blocks
+- [x] 23-14-PLAN.md — Alias bundles leave Policies; legacy alias blocks stripped at launch/uninstall with a notice (no migration); app composition
+- [x] 23-15-PLAN.md — Removal reverts settings and shell init; `agent/editor settings` uninstall row; ConfirmUninstall blocks
 **Wave 7**
 - [ ] 23-16-PLAN.md — Container e2e: codegraph hook register/unregister and a settings write reverted by `--uninstall --yes`
 
@@ -473,7 +473,7 @@ Plans:
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
-| 23. Configuration as a lifecycle step | 13/16 | In Progress | - |
+| 23. Configuration as a lifecycle step | 15/16 | In Progress | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
