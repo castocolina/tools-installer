@@ -1,9 +1,9 @@
 """The unit-test subprocess allowlist: pure functions, judged by resolved real path.
 
-A test may start only a program that sits under pytest's base temp dir, a script of
-this checkout, or an allowlisted interpreter or utility. `tests/conftest.py` wires
-`check_launch` into its Popen guard; nothing here runs a process or reads the host
-beyond `os.path.realpath`, `shutil.which` and `Path.exists`.
+A test may start only a program that sits under pytest's base temp dir, a reviewed
+checkout script (`CHECKOUT_SCRIPTS`), or an allowlisted interpreter or utility.
+`tests/conftest.py` wires `check_launch` into its Popen guard; nothing here runs a process
+or reads the host beyond `os.path.realpath`, `shutil.which` and `Path.exists`.
 
 Messages carry program names, paths and script text only, never environment values.
 """
@@ -147,16 +147,53 @@ def _argv(args: object, shell: bool) -> list[str]:
     return ["/bin/sh", "-c", *items] if shell else items
 
 
-def _under_checkout_roots(path: Path, policy: LaunchPolicy) -> bool:
-    return (
-        path.is_relative_to(policy.checkout / "scripts")
-        or path == policy.checkout / "install.sh"
-        or path == policy.checkout / "setup.py"
-    )
+# The checkout files a test may run or source (D-20, narrowed by review C-06), each with the
+# toolchain names it may reach: on the child's PATH each must resolve to a fake under the base
+# temp or to nothing. The guard cannot see inside the child, so every other checkout file
+# (setup.py, the container scripts, any new script) is refused until it is reviewed in here.
+CHECKOUT_SCRIPTS: Mapping[str, tuple[str, ...]] = {
+    "install.sh": ("curl", "wget", "git", "uv"),
+    "scripts/prune-user-tmpdir.sh": (),
+    "scripts/prune-tmp-linux.sh": (),
+    "scripts/lib/prune-tmp-common.sh": (),
+}
 
 
-def _file_allowed(path: Path, policy: LaunchPolicy) -> bool:
-    return path.is_relative_to(policy.allowed_root) or _under_checkout_roots(path, policy)
+def _search(program: str, env: Mapping[str, str] | None, base: Path) -> str | None:
+    """The program the exec layer would find: a PATH-less env means os.defpath, and an empty
+    or relative entry is relative to the child's cwd."""
+    search = os.pathsep.join(str(base / entry) for entry in os.get_exec_path(env))
+    return shutil.which(program, path=search)
+
+
+def _checkout_refusal(
+    path: Path, env: Mapping[str, str] | None, base: Path, policy: LaunchPolicy
+) -> AssertionError | None:
+    """None when `path` is a reviewed checkout file whose toolchain the child cannot reach."""
+    relative = path.relative_to(policy.checkout).as_posix()
+    names = CHECKOUT_SCRIPTS.get(relative)
+    if names is None:
+        return AssertionError(
+            f"the suite tried to run the checkout file {relative}, which no test may run; "
+            "copy what the test needs under tmp_path instead"
+        )
+    for name in names:
+        found = _search(name, env, base)
+        if found is not None and not _real(found).is_relative_to(policy.allowed_root):
+            return _host_refusal(name, _real(found))
+    return None
+
+
+def _check_file(
+    path: Path, env: Mapping[str, str] | None, base: Path, policy: LaunchPolicy
+) -> AssertionError | None:
+    """None when a script file may run: it sits under the base temp, or it is a reviewed
+    checkout file with its toolchain faked; else the refusal to raise."""
+    if path.is_relative_to(policy.allowed_root):
+        return None
+    if path.is_relative_to(policy.checkout):
+        return _checkout_refusal(path, env, base, policy)
+    return _host_refusal(path.name, path)
 
 
 def _in_linuxbrew(path: Path) -> bool:
@@ -394,9 +431,12 @@ class _ScriptChecker:
             raise self.refuse("source has no file")
         base = Path(self.cwd if isinstance(self.cwd, (str, Path)) else os.getcwd())
         target = _real(base / arguments[0])
-        if not _file_allowed(target, self.policy):
+        refusal = _check_file(target, self.env, base, self.policy)
+        if refusal is not None:
+            if target.is_relative_to(self.policy.checkout):
+                raise refusal
             raise self.refuse(f"it sources {target}, outside tmp_path and the checkout scripts")
-        if _under_checkout_roots(target, self.policy):
+        if target.is_relative_to(self.policy.checkout):
             try:
                 text = target.read_text()
             except (OSError, UnicodeDecodeError):
@@ -462,9 +502,9 @@ def check_shell_args(
         check_script(remaining[0], env=env, cwd=cwd, policy=policy)
         return
     base = Path(cwd if isinstance(cwd, (str, Path)) else os.getcwd())
-    script = _real(base / remaining[0])
-    if not _file_allowed(script, policy):
-        raise _host_refusal(Path(remaining[0]).name, script)
+    refusal = _check_file(_real(base / remaining[0]), env, base, policy)
+    if refusal is not None:
+        raise refusal
 
 
 def check_launch(
@@ -487,10 +527,7 @@ def check_launch(
     if os.sep in program:
         literal: Path | None = Path(os.path.abspath(base / program))
     else:
-        # The search the exec layer makes: a PATH-less env means os.defpath, and an empty or
-        # relative entry is relative to the child's cwd.
-        search = os.pathsep.join(str(base / entry) for entry in os.get_exec_path(env))
-        found = shutil.which(program, path=search)
+        found = _search(program, env, base)
         literal = Path(found) if found is not None else None
     resolved = _real(literal) if literal is not None else None
 
@@ -518,11 +555,10 @@ def check_launch(
             f"the suite tried to run {name}, which exists nowhere; "
             "plant a fake under tmp_path instead"
         )
-    # 4. the roots
-    if _file_allowed(resolved, policy):
-        return
-    # 5. anything else is a host program
-    raise _host_refusal(name, resolved)
+    # 4. the base temp and the reviewed checkout files; 5. anything else is a host program
+    refusal = _check_file(resolved, env, base, policy)
+    if refusal is not None:
+        raise refusal
 
 
 # --- the refusal registry: a refusal that production code catches must still fail the test ---

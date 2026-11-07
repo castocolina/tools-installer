@@ -328,17 +328,56 @@ def test_check_launch_allows_temp_fakes_and_the_interpreter(
     check_launch([str(fake), "--x"], env=None, cwd=None, policy=policy)
     check_launch(["tool"], env={"PATH": str(fake.parent)}, cwd=None, policy=policy)
     check_launch([sys.executable, "-c", "pass"], env=None, cwd=None, policy=policy)
-    script = CHECKOUT / "scripts" / "detect-container-runtime.sh"
+    script = CHECKOUT / "scripts" / "prune-tmp-linux.sh"
     check_launch([script, "--help"], env=None, cwd=None, policy=policy)
 
     # D-20: .venv tools are not checkout scripts. A scratch checkout keeps this deterministic.
     repo = outside / "repo"
     ruff = _fake(repo / ".venv" / "bin", "ruff")
-    _fake(repo / "scripts", "ok.sh")
+    _fake(repo / "scripts", "prune-user-tmpdir.sh")
     scratch = replace(policy, checkout=repo.resolve())
-    with pytest.raises(AssertionError, match="host's ruff"):
+    with pytest.raises(AssertionError, match="checkout file .venv/bin/ruff"):
         check_launch([ruff], env=None, cwd=None, policy=scratch, missing_ok=False)
-    check_launch([repo / "scripts" / "ok.sh"], env=None, cwd=None, policy=scratch)
+    check_launch([repo / "scripts" / "prune-user-tmpdir.sh"], env=None, cwd=None, policy=scratch)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["setup.py", "scripts/container-e2e-verify.sh", "scripts/detect-container-runtime.sh"],
+)
+def test_an_unreviewed_checkout_file_is_never_launched(
+    relative: str, tmp_path: Path, policy: LaunchPolicy
+) -> None:
+    """C-06: only the reviewed checkout files may run; the rest reach host toolchains."""
+    fakes = tmp_path / "fakes"
+    fakes.mkdir()
+    env = {"PATH": str(fakes)}
+    with pytest.raises(AssertionError, match="checkout file"):
+        check_launch([CHECKOUT / relative], env=env, cwd=None, policy=policy)
+    with pytest.raises(AssertionError, match="checkout file"):
+        check_launch(["/bin/sh", CHECKOUT / relative], env=env, cwd=None, policy=policy)
+    with pytest.raises(AssertionError, match="checkout file"):
+        check_launch(
+            ["/bin/sh", "-c", f'. "{CHECKOUT / relative}"'], env=env, cwd=None, policy=policy
+        )
+
+
+def test_install_sh_runs_only_when_its_toolchain_is_faked(
+    tmp_path: Path, outside: Path, policy: LaunchPolicy
+) -> None:
+    """C-06 (X-01): install.sh, run or sourced, may reach curl, wget, git and uv; each must
+    resolve on the child's PATH to a fake under the base temp or to nothing."""
+    install = CHECKOUT / "install.sh"
+    fakes = tmp_path / "fakes"
+    for name in ("curl", "git", "uv"):
+        _fake(fakes, name)
+    _fake(outside, "wget")
+    for argv in (["/bin/sh", install], ["/bin/sh", "-c", f'. "{install}"; detect_os']):
+        check_launch(argv, env={"PATH": str(fakes)}, cwd=None, policy=policy)
+        with pytest.raises(AssertionError, match="host's wget"):
+            check_launch(
+                argv, env={"PATH": f"{fakes}{os.pathsep}{outside}"}, cwd=None, policy=policy
+            )
 
 
 def test_check_launch_judges_the_resolved_path(
@@ -546,7 +585,7 @@ def test_shell_scripts_allow_builtins_functions_and_fakes(shells: _Shells) -> No
     shells.run("bash", "command -v uv")
     shells.run("bash", "if true; then echo y; fi")
     shells.run("bash", 'source "{FILE}" && alias x')
-    shells.run("sh", f'. "{CHECKOUT / "install.sh"}"; detect_os')
+    shells.run("sh", f'. "{CHECKOUT / "install.sh"}"; detect_os', env={"PATH": str(shells.bindir)})
     shells.run("zsh", "echo $SHELL")
     shells.run("bash", f"{tool} --x")
     shells.run("bash", "tool --x", env={"PATH": str(shells.bindir)})

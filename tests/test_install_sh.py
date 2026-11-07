@@ -41,7 +41,9 @@ class Harness:
 
     def _env(self, extra: dict[str, str]) -> dict[str, str]:
         env: dict[str, str] = {
-            "PATH": f"{self.fakebin}:/usr/bin:/bin",
+            # Only the fake bin: the launch guard runs install.sh only when curl, wget, git
+            # and uv resolve to a stub or to nothing (tests/sandbox.py CHECKOUT_SCRIPTS).
+            "PATH": str(self.fakebin),
             "HOME": str(self.home),
             "TI_LOG": str(self.log),
             "TI_DIR": str(self.repo_dir),
@@ -85,6 +87,10 @@ def harness(tmp_path: Path) -> Harness:
         log=tmp_path / "calls.log",
         repo_dir=tmp_path / "repo",
     )
+    # The real utilities install.sh and the stubs use; PATH excludes /usr/bin and /bin
+    # entirely, the only way to make the real curl, wget, git and uv invisible.
+    for name in ("sh", "cat", "chmod", "mkdir"):
+        (fakebin / name).symlink_to(f"/bin/{name}")
     h.stub(
         "uname",
         'printf "uname %s\\n" "$*" >> "$TI_LOG"\n'
@@ -149,15 +155,7 @@ def test_ensure_uv_installs_via_curl_when_missing(harness: Harness) -> None:
     assert (harness.fakebin / "uv").exists()
 
 
-def _link_real_tools(harness: Harness) -> None:
-    """Symlink the real sh/cat/chmod into the fake bin so PATH can exclude
-    /usr/bin and /bin entirely (the only way to make the real curl invisible)."""
-    for name in ("sh", "cat", "chmod"):
-        (harness.fakebin / name).symlink_to(f"/bin/{name}")
-
-
 def test_ensure_uv_installs_via_wget_when_curl_is_missing(harness: Harness) -> None:
-    _link_real_tools(harness)
     harness.stub(
         "wget",
         'printf "wget %s\\n" "$*" >> "$TI_LOG"\n'
@@ -167,7 +165,7 @@ def test_ensure_uv_installs_via_wget_when_curl_is_missing(harness: Harness) -> N
         "INNER\n"
         f'chmod +x "{harness.fakebin}/uv"',
     )
-    result = harness.source("ensure_uv", PATH=str(harness.fakebin))
+    result = harness.source("ensure_uv")
     assert result.returncode == 0
     log = harness.log_text()
     assert "wget" in log
@@ -176,8 +174,7 @@ def test_ensure_uv_installs_via_wget_when_curl_is_missing(harness: Harness) -> N
 
 
 def test_ensure_uv_requires_curl_or_wget(harness: Harness) -> None:
-    _link_real_tools(harness)
-    result = harness.source("ensure_uv", PATH=str(harness.fakebin))
+    result = harness.source("ensure_uv")
     assert result.returncode != 0
     assert "curl or wget is required" in result.stderr
 
@@ -201,9 +198,8 @@ def test_fetch_repo_pulls_when_present(harness: Harness) -> None:
 
 
 def test_fetch_repo_requires_git(harness: Harness) -> None:
-    # Drop git and restrict PATH to the fake bin so no system git is found.
     (harness.fakebin / "git").unlink()
-    result = harness.source("fetch_repo", PATH=str(harness.fakebin))
+    result = harness.source("fetch_repo")
     assert result.returncode != 0
     assert "git is required" in result.stderr
 
