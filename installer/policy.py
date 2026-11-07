@@ -15,10 +15,9 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 
 from installer import daemon, env_redirect, systemd_daemon
-from installer.agent_env import AgentAdapter
 from installer.atomic import atomic_write_bytes
 from installer.enums import DaemonState
 from installer.guards import (
@@ -31,6 +30,7 @@ from installer.guards import (
     remove_shims,
     write_ban_aliases,
 )
+from installer.locations import display_path as _display_path
 from installer.omz import omz_root, owned_plugins, plugins_owned, remove_plugins, write_plugins
 from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.shellrc import ShellrcRefusal, ensure_source
@@ -43,9 +43,6 @@ from installer.tweaks import (
     tweak_present,
     write_tweak,
 )
-
-if TYPE_CHECKING:
-    from installer.agent_policy import AgentAudit, AuditState
 
 # The wrapper's installed filename, imported (not re-declared) for the
 # validation-only render_plist call daemon_policy's apply/set_schedule make
@@ -92,13 +89,6 @@ _CACHE_REDIRECT_LINUX_REMOVE_HINT = (
     "to every process it has already started, and no new shell can undo that."
 )
 _CACHE_REDIRECT_MACOS_HINT = _TWEAK_ENABLE_HINT
-
-
-def _display_path(path: Path) -> str:
-    """Collapse a HOME-relative path to ~/… so feedback reads as a shell path
-    rather than a long absolute (or pytest temp) dump; leave others verbatim."""
-    home = Path.home()
-    return f"~/{path.relative_to(home)}" if path.is_relative_to(home) else str(path)
 
 
 @dataclass(frozen=True)
@@ -303,106 +293,6 @@ def move_link_mode(
             continue
         report.append(PolicyMove(policy.id, "moved", f"moved from {old_mode} to {new_mode}"))
     return tuple(report)
-
-
-@dataclass(frozen=True)
-class AgentEnvironmentPolicy:
-    """One audited agent row and its optional safe apply action."""
-
-    id: str
-    label: str
-    state: "AuditState"
-    detail: str
-    apply: Callable[[], PolicyResult] | None
-    refresh: Callable[[], "AgentEnvironmentPolicy"] | None = None
-    guidance_pending: bool = False
-    action_detail: str | None = None
-
-
-def agent_environment_policy(
-    audit: "AgentAudit",
-    *,
-    home: Path,
-    audit_agent: Callable[[AgentAdapter, Path], "AgentAudit"],
-    apply_agent: Callable[[AgentAdapter, Path], PolicyResult],
-    apply_guidance: Callable[[AgentAdapter, Path], PolicyResult] | None = None,
-) -> AgentEnvironmentPolicy:
-    """Bind permission and guidance actions according to their separate audits."""
-
-    if apply_guidance is None:
-        from installer.agent_policy import apply_agent_guidance
-
-        apply_guidance = apply_agent_guidance
-
-    permission_pending = (
-        audit.state == "fixable" if audit.permission_pending is None else audit.permission_pending
-    )
-
-    def _apply() -> PolicyResult:
-        layers: list[PolicyLayer] = []
-        if audit.guidance_pending:
-            layers.extend(apply_guidance(audit.adapter, home).layers)
-        if permission_pending:
-            layers.extend(apply_agent(audit.adapter, home).layers)
-        return PolicyResult(tuple(layers), reload_hint=None, warning=None)
-
-    actionable = audit.guidance_pending or permission_pending
-    action = _apply if actionable else None
-    if audit.guidance_pending and permission_pending:
-        action_detail = "write shared guidance/reference and apply read-only permissions"
-    elif audit.guidance_pending:
-        action_detail = "write shared guidance/reference"
-        if audit.state == "manual-required":
-            action_detail += "; permissions remain manual/audit-only"
-    elif permission_pending:
-        action_detail = "apply read-only permissions"
-    else:
-        action_detail = None
-    return AgentEnvironmentPolicy(
-        id=audit.adapter.id,
-        label=audit.adapter.label,
-        state=audit.state,
-        detail=audit.detail,
-        apply=action,
-        refresh=lambda: compose_agent_environment_policy(
-            audit.adapter,
-            home=home,
-            audit_agent=audit_agent,
-            apply_agent=apply_agent,
-            apply_guidance=apply_guidance,
-        ),
-        guidance_pending=audit.guidance_pending,
-        action_detail=action_detail,
-    )
-
-
-def compose_agent_environment_policy(
-    adapter: AgentAdapter,
-    *,
-    home: Path,
-    audit_agent: Callable[[AgentAdapter, Path], "AgentAudit"],
-    apply_agent: Callable[[AgentAdapter, Path], PolicyResult],
-    apply_guidance: Callable[[AgentAdapter, Path], PolicyResult] | None = None,
-) -> AgentEnvironmentPolicy:
-    """Audit one adapter without allowing an invalid path to abort the whole UI."""
-
-    try:
-        audit = audit_agent(adapter, home)
-    except (OSError, RuntimeError, ValueError) as error:
-        from installer.agent_policy import AgentAudit
-
-        audit = AgentAudit(
-            adapter,
-            "manual-required",
-            f"manual setup required: {error}",
-        )
-    return agent_environment_policy(
-        audit,
-        home=home,
-        audit_agent=audit_agent,
-        apply_agent=apply_agent,
-        apply_guidance=apply_guidance,
-    )
 
 
 def ban_policy(
