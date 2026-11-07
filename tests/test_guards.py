@@ -541,6 +541,75 @@ def test_npx_redirect_shim_execs_into_pnpm_dlx_with_real_exit_code(tmp_path: Pat
     assert "dlx a b" in result.stdout
 
 
+def _npx_with_fake_pnpm(tmp_path: Path, exit_code: int = 0) -> tuple[Path, Path]:
+    """An npx redirect shim over a fake pnpm that records its argv NUL-separated."""
+    record = tmp_path / "argv.bin"
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text(
+        '#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > '
+        f"{shlex.quote(str(record))}\nexit {exit_code}\n"
+    )
+    pnpm.chmod(0o755)
+    shim = tmp_path / "npx"
+    shim.write_text(redirect_shim_script("npx", str(pnpm)))
+    shim.chmod(0o755)
+    return shim, record
+
+
+def _run_npx(shim: Path, *argv: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(shim), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+
+
+def _recorded(record: Path) -> list[str]:
+    return [arg.decode() for arg in record.read_bytes().split(b"\0")[:-1]]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (("-y", "-p", "pkg", "bin", "a", "b"), ["dlx", "--package=pkg", "bin", "a", "b"]),
+        (("--package=a", "-p", "b", "cmd"), ["dlx", "--package=a", "--package=b", "cmd"]),
+        (("--package", "a", "cmd"), ["dlx", "--package=a", "cmd"]),
+        (("--yes", "pkg@1", "x"), ["dlx", "pkg@1", "x"]),
+        (("pkg@1", "x"), ["dlx", "pkg@1", "x"]),
+        (("cmd", "-p", "x", "--yes"), ["dlx", "cmd", "-p", "x", "--yes"]),
+    ],
+)
+def test_npx_shim_translates_package_options(
+    tmp_path: Path, argv: tuple[str, ...], expected: list[str]
+):
+    shim, record = _npx_with_fake_pnpm(tmp_path)
+    result = _run_npx(shim, *argv)
+    assert result.returncode == 0, result.stderr
+    assert _recorded(record) == expected
+
+
+def test_npx_shim_returns_pnpm_exit_code(tmp_path: Path):
+    shim, _ = _npx_with_fake_pnpm(tmp_path, exit_code=3)
+    assert _run_npx(shim, "cmd").returncode == 3
+
+
+def test_npx_shim_body_keeps_the_contract(tmp_path: Path):
+    target = "/fake/bin/pnpm"
+    body = redirect_shim_script("npx", target)
+    lines = body.splitlines()
+    assert lines[1] == REDIRECT_SENTINEL
+    exec_lines = [line for line in lines if line.strip().startswith("exec ")]
+    assert exec_lines == [f'exec {shlex.quote(target)} {shlex.quote("dlx")} "$@"']
+    assert lines[-1] == exec_lines[0]
+    assert exec_targets(body) == (target,)
+    shim = tmp_path / "npx"
+    shim.write_text(body)
+    syntax = subprocess.run(["sh", "-n", str(shim)], capture_output=True, text=True, check=False)
+    assert syntax.returncode == 0, syntax.stderr
+
+
 def test_banned_npm_hint_names_volta_not_global_add():
     hint = BANNED["npm"]
     assert "volta install" in hint

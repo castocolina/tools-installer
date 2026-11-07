@@ -142,11 +142,65 @@ def shim_script(name: str) -> str:
     return f"#!/bin/sh\n{SHIM_SENTINEL}\n{ban_body(name)}"
 
 
+# The shim's stderr copy (UI-SPEC section 3). The token reaches printf as a %s argument.
+_NPX_NOT_SUPPORTED = (
+    "npx: option '%s' is not supported by this redirect (it runs pnpm dlx); nothing was run."
+)
+# npx's option translator for `pnpm dlx` (D-11, D-12). Options before the first
+# positional are translated or refused, never forwarded: pnpm reads an option
+# npx does not know differently, and that mismatch can run a package's default bin.
+# Packages end up as --package= entries ahead of the command; the command and its
+# arguments are rotated through untouched, the same way global_redirect_shim_script rotates.
+_NPX_TRANSLATE = rf"""pkgs=0
+argc=$#
+while [ "$argc" -gt 0 ]; do
+  case "$1" in -*) ;; *) break ;; esac
+  arg="$1"
+  shift
+  argc=$((argc - 1))
+  case "$arg" in
+    -y|--yes) ;;
+    -p|--package)
+      set -- "$@" "--package=$1"
+      shift
+      argc=$((argc - 1))
+      pkgs=$((pkgs + 1))
+      ;;
+    --package=*)
+      set -- "$@" "$arg"
+      pkgs=$((pkgs + 1))
+      ;;
+    *)
+      printf "{_NPX_NOT_SUPPORTED}\n" "$arg" >&2
+      exit {EXIT_CODE}
+      ;;
+  esac
+done
+argc=$(($# - pkgs))
+while [ "$argc" -gt 0 ]; do
+  arg="$1"
+  shift
+  set -- "$@" "$arg"
+  argc=$((argc - 1))
+done
+"""
+
+
 def redirect_shim_script(name: str, target_path: str) -> str:
-    """POSIX-sh shim that execs into the redirect target, preserving exit code."""
+    """POSIX-sh shim that translates npx's options for pnpm dlx, then execs into the target.
+
+    Translation: -y/--yes is dropped; -p X, --package X and --package=X become
+    --package=X entries placed before the command, in order. Refusal: any other option
+    before the first positional (a bare -- included) prints one stderr line and exits
+    EXIT_CODE without running anything. The last line is the single exec, so pnpm's exit
+    code is the shim's. REDIRECTED holds only npx, so the translator is npx's alone.
+    """
     spec = REDIRECTED[name]
     quoted_args = " ".join(shlex.quote(arg) for arg in spec.args)
-    return f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec {shlex.quote(target_path)} {quoted_args} "$@"\n'
+    return (
+        f"#!/bin/sh\n{REDIRECT_SENTINEL}\n{_NPX_TRANSLATE}"
+        f'exec {shlex.quote(target_path)} {quoted_args} "$@"\n'
+    )
 
 
 def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path: str | None) -> str:
