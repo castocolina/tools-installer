@@ -137,14 +137,13 @@ def run_wizard(
 ) -> list[RowOutcome] | None:
     """Print and execute a fresh plan, or return None when confirmation is declined.
 
-    The synchronous pass covers version state and skill-pack host answers. Held
-    bookkeeping writes commit only after consent, before execution starts.
+    The synchronous pass covers version state. Held bookkeeping writes commit
+    only after consent, before execution starts.
     """
     selected = _choose_tools(tools, options)
     refresh.hold_writes()
     try:
         refresh.refresh(tools)
-        refresh.refresh_skills(tools)
     except (OSError, CommandError, ValueError) as exc:
         lines = str(exc).splitlines()
         detail = lines[0] if lines and lines[0] else type(exc).__name__

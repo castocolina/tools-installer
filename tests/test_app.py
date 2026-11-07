@@ -38,7 +38,6 @@ from tests.state_doubles import (
     offline_service,
     plan_state,
     presence_service,
-    skill_pack_tool,
 )
 
 
@@ -401,10 +400,6 @@ def test_run_wizard_commits_held_writes_only_after_consent(tmp_path: Path, scena
                 raise OSError("state check failed")
             super().refresh(tools)
 
-        def refresh_skills(self, tools: Sequence[Tool]):
-            events.append("refresh_skills")
-            return super().refresh_skills(tools)
-
         def commit_writes(self) -> list[str]:
             events.append("commit")
             return super().commit_writes()
@@ -492,16 +487,29 @@ def test_headless_uses_the_same_plan_order_as_the_tui():
     assert output_rows == expected
 
 
-def test_headless_all_settles_skill_packs_before_planning() -> None:
-    tools = [_tool("rg", "search"), skill_pack_tool("superpowers")]
+def test_headless_all_runs_one_refresh_pass_before_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = [_tool("rg", "search")]
     refresh = offline_service(
         Path.home() / "versions.json",
         skill_home=Path.home(),
         resolve_tag=lambda _repo: (_ for _ in ()).throw(OSError("offline")),
         probe_output=lambda _argv: None,
-        skill_probe=lambda _argv: "not json",
         present=lambda _tool: False,
     )
+    passes: list[Sequence[Tool]] = []
+    run_refresh = refresh.refresh
+
+    def counted_refresh(batch: Sequence[Tool]) -> None:
+        passes.append(batch)
+        run_refresh(batch)
+
+    def no_skills_pass(_batch: Sequence[Tool]) -> None:
+        raise AssertionError("the headless route runs no skills pass")
+
+    monkeypatch.setattr(refresh, "refresh", counted_refresh)
+    monkeypatch.setattr(refresh, "refresh_skills", no_skills_pass)
     installed, install = _recording_install()
     console, buf = _console()
 
@@ -517,6 +525,7 @@ def test_headless_all_settles_skill_packs_before_planning() -> None:
         updates=ScriptedUpdates({}),
     )
 
+    assert len(passes) == 1
     assert "State check failed" not in buf.getvalue()
     assert isinstance(outcomes, list)
     assert all(outcome.result != "not_attempted" for outcome in outcomes)
