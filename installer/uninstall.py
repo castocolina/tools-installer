@@ -125,31 +125,40 @@ def _placement_shape(
     artifact: receipts.ReceiptArtifact,
     bin_dir: Path,
     *,
-    link_names: frozenset[str],
+    links: Mapping[str, Path],
 ) -> bool:
     """Is this recorded artifact exactly where `download.artifact_paths` would place one (D-07)?
 
     A download kind's `link` or `file` is a direct child of `bin_dir`; its `dir` is
-    `opt_dir(N)` for a `link` named `N` recorded beside it (`link_names`), so a bare child of
-    the opt dir proves nothing. Anything else, any other recorded type and every other kind
-    is never proven. The name check rejects `""`, `.`, `..`, a separator and a NUL."""
+    `opt_dir(N)` only while the `link` named `N` recorded beside it (`links`) resolves inside
+    it, so a bare child of the opt dir proves nothing. An app bundle sits directly under
+    ~/Applications and is proven only by a recorded bin link that resolves inside it (review
+    C-02). Anything else, any other recorded type and every other kind is never proven. The
+    name check rejects `""`, `.`, `..`, a separator and a NUL."""
     path = artifact.path
     if not _safe_name(path.name):
         return False
     if kind in DOWNLOAD_KINDS:
         if artifact.type in ("link", "file"):
             return path.parent == bin_dir
-        return artifact.type == "dir" and path == opt_dir(path.name) and path.name in link_names
+        link = links.get(path.name)
+        return (
+            artifact.type == "dir"
+            and path == opt_dir(path.name)
+            and link is not None
+            and is_still_proven(link)
+        )
     if kind == "app":
-        # The bundle sits directly under ~/Applications; its optional cli link in the bin dir.
         if artifact.type == "dir":
-            return path.parent == applications_dir()
+            return path.parent == applications_dir() and any(
+                is_still_proven(link, path) for link in links.values()
+            )
         return artifact.type == "link" and path.parent == bin_dir
     return False
 
 
 def _receipt_proof(
-    tool: Tool, default_bin_dir: Path, *, verify: bool
+    tool: Tool, default_bin_dir: Path, *, verify: bool, claimed: frozenset[Path] = frozenset()
 ) -> tuple[receipts.ReceiptArtifact, ...]:
     """The artifacts a tool's receipt proves: receipt ∩ `artifact_paths` (L-19-06).
 
@@ -160,22 +169,23 @@ def _receipt_proof(
     into a recursive directory delete, review H6). A corrupt receipt, or any
     drifted artifact — authorized or not (review H7) — proves nothing. The
     proven artifact itself is returned, so the type that authorized a path
-    reaches the delete."""
+    reaches the delete. A retired tool never proves a path in `claimed` (another receipt's)."""
     receipt = receipts.read(tool.id)
     if receipt is None or receipts.drifted(receipt, rehash=verify):
         return ()
     if tool.retired:
         # D-07: a retired tool declares no method, so the registry formula is replaced by the
         # shape of what install itself places. The drift check above still runs first.
-        link_names = frozenset(
-            a.path.name
-            for a in receipt.artifacts
+        mine = [a for a in receipt.artifacts if a.path not in claimed]
+        links = {
+            a.path.name: a.path
+            for a in mine
             if a.type == "link" and a.path.parent == default_bin_dir and _safe_name(a.path.name)
-        )
+        }
         return tuple(
             a
-            for a in receipt.artifacts
-            if _placement_shape(receipt.method.kind, a, default_bin_dir, link_names=link_names)
+            for a in mine
+            if _placement_shape(receipt.method.kind, a, default_bin_dir, links=links)
         )
     allowed = {
         (artifact.path, artifact.kind)
@@ -223,11 +233,13 @@ def retired_manager_package(tool_id: str) -> tuple[str, str] | None:
 
 
 def _retired_leftovers(tool: Tool, proven: set[Path]) -> list[Path]:
-    """A retired receipt's recorded paths that are not proven and still exist (D-06 extension).
+    """A retired receipt's recorded paths that are not in `proven` and still exist (D-06
+    extension).
 
     The catalog formula that normally names them is empty for a tool with no methods, so they
     are listed here for the user and never deleted. A manager kind's recorded paths belong to
-    that manager, so none are listed."""
+    that manager, so none are listed. The caller passes another receipt's paths in `proven`
+    too: those are that tool's to remove, so this row never mentions them (review C-02)."""
     receipt = receipts.read(tool.id)
     if receipt is None or receipt.method.kind in MANAGER_UNINSTALL_ARGV:
         return []
@@ -262,9 +274,10 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     leftovers: list[Path] = []
     for tool in tools:
         if receipts.receipt_exists(tool.id):
-            proven = _receipt_proof(tool, default_bin_dir, verify=verify)
+            claimed = receipts.recorded_elsewhere(tool.id) if tool.retired else frozenset[Path]()
+            proven = _receipt_proof(tool, default_bin_dir, verify=verify, claimed=claimed)
             if tool.retired:
-                leftovers.extend(_retired_leftovers(tool, {a.path for a in proven}))
+                leftovers.extend(_retired_leftovers(tool, {a.path for a in proven} | claimed))
             if proven:
                 by_tool[tool.id] = tuple(a.path for a in proven)
             for artifact in proven:

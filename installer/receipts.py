@@ -591,6 +591,26 @@ def scan_retired(catalog_ids: Collection[str]) -> RetiredScan:
     return RetiredScan(tools=tuple(tools), warnings=tuple(warnings))
 
 
+def recorded_elsewhere(tool_id: str) -> frozenset[Path]:
+    """Every path a readable receipt of another tool records, live or retired (review C-02).
+
+    A retired receipt's removal never deletes one of these: the same link or opt dir may belong
+    to a catalog tool whose id was renamed. An unreadable folder or receipt claims nothing."""
+    try:
+        names = os.listdir(receipts_dir())
+    except OSError:
+        return frozenset()
+    claimed: set[Path] = set()
+    for name in names:
+        stem = name.removesuffix(".json")
+        if stem in (name, tool_id) or not TOOL_ID_RE.fullmatch(stem):
+            continue
+        other = read(stem)
+        if other is not None:
+            claimed.update(artifact.path for artifact in other.artifacts)
+    return frozenset(claimed)
+
+
 def all_gone(receipt: Receipt) -> bool:
     """True only when every artifact is conclusively absent.
 

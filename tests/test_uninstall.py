@@ -2799,6 +2799,102 @@ def test_a_retired_app_bundle_is_removed(tmp_path: Path, monkeypatch: pytest.Mon
     assert not receipts.receipt_exists("x")
 
 
+def test_a_retired_opt_dir_needs_its_link_to_resolve_inside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-02 (X-02): a recorded link of the same name that points elsewhere proves no opt dir."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir, link, opt = _plant_opt_tool(tmp_path, "tool")
+    elsewhere = tmp_path / "elsewhere" / "tool"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text("not in the opt dir")
+    link.unlink()
+    link.symlink_to(elsewhere)
+    tool = _retired_tool("tool", [(link, "link"), (opt, "dir")], kind="tarball", dir_key="tool")
+
+    plan = removal_plan(tool, bin_dir)
+    assert opt not in plan.removable
+    assert opt in plan.yourself
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert (opt / "tool").read_text() == "tool binary"
+
+
+@pytest.mark.parametrize("case", ["no-link", "link-outside"])
+def test_a_retired_app_bundle_needs_its_link_to_resolve_inside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """C-02 (X-02): a bundle is proven only by its recorded bin link resolving into it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    bundle = tmp_path / "Applications" / "X.app"
+    (bundle / "Contents").mkdir(parents=True)
+    (bundle / receipts.APP_KEY_FILE).write_text("plist")
+    artifacts = [(bundle, "dir")]
+    if case == "link-outside":
+        outside = tmp_path / "outside-x"
+        outside.write_text("x")
+        link = bin_dir / "x"
+        link.symlink_to(outside)
+        artifacts.append((link, "link"))
+    tool = _retired_tool("x", artifacts, kind="app")
+
+    plan = removal_plan(tool, bin_dir)
+    assert bundle not in plan.removable
+    assert bundle in plan.yourself
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert (bundle / receipts.APP_KEY_FILE).read_text() == "plist"
+
+
+def test_a_retired_receipt_never_removes_what_a_live_receipt_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-02 (WR-06): an id renamed in the catalog leaves an old receipt for the same link and
+    opt dir; retiring it retires the receipt only, and the live tool's paths stay unmentioned."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir, link, opt = _plant_opt_tool(tmp_path, "foo")
+    write_receipt(_dl_tool("foo-cli", "foo"), [(link, "link"), (opt, "dir")])
+    tool = _retired_tool("foo", [(link, "link"), (opt, "dir")], kind="tarball", dir_key="foo")
+
+    plan = removal_plan(tool, bin_dir)
+    assert plan.removable == ()
+    assert plan.yourself == ()
+    assert plan.level == "receipt"
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over([tool], tmp_path, (console, buf), _no_removal_runner)
+    assert link.is_symlink()
+    assert (opt / "foo").read_text() == "foo binary"
+    assert not receipts.receipt_exists("foo")
+    live = receipts.read("foo-cli")
+    assert live is not None
+    assert not receipts.drifted(live, rehash=True)
+
+
+def test_two_retired_receipts_never_remove_a_path_they_share(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-02: a path another retired receipt also records is never deleted by either removal."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    shared = bin_dir / "shared"
+    shared.write_text("shared binary")
+    alpha = _retired_tool("alpha", [(shared, "file")])
+    bravo = _retired_tool("bravo", [(shared, "file")])
+
+    for tool in (alpha, bravo):
+        assert removal_plan(tool, bin_dir).removable == ()
+
+    console, buf = _uninstall_console()
+    _run_uninstall_over([alpha, bravo], tmp_path, (console, buf), _no_removal_runner)
+    assert shared.read_text() == "shared binary"
+
+
 def test_unrecorded_files_are_never_touched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
