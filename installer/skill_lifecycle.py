@@ -14,7 +14,6 @@ from typing import Literal, cast
 
 from installer.atomic import read_capped
 from installer.model import (
-    HARNESS_MARKER_DIRS,
     SKILL_HARNESSES,
     ConfigStep,
     SkillLifecycle,
@@ -22,6 +21,7 @@ from installer.model import (
     SkillStatusProbe,
     Tool,
 )
+from installer.postinstall import present_harnesses
 from installer.run import Runner
 
 LifecycleAction = Literal["install", "update", "removal"]
@@ -223,39 +223,6 @@ SKILL_LOCK_HARNESS_DIRS: dict[str, str] = {
     "qwen": ".qwen/skills",
     "windsurf": ".codeium/windsurf/skills",
     "zed": ".agents/skills",
-}
-
-# Command names verified on this host 2026-10-09, plus binaries named in
-# https://github.com/obra/superpowers/blob/main/README.md (agy, devin, grok,
-# qwen, hermes, muse). factory-droid `.factory` and gemini-cli `.gemini` are
-# the global roots in https://github.com/vercel-labs/skills/blob/main/README.md
-# (Droid ~/.factory/skills, Gemini CLI ~/.gemini/skills). antigravity, windsurf,
-# kilo, and kimi dirs are the opengsd resolver defaults in
-# .claude/gsd-core/references/gsd-run-resolver.md. Devin/Grok/Qwen/Hermes/Muse
-# docs disagree on a config dir, so those disk tuples stay empty.
-_HARNESS_COMMANDS: dict[str, tuple[str, ...]] = {
-    "antigravity": ("agy",),
-    "claude": ("claude",),
-    "codex": ("codex",),
-    "copilot": ("copilot",),
-    "cursor": ("cursor-agent", "cursor"),
-    "devin": ("devin",),
-    "factory-droid": ("droid",),
-    "gemini-cli": ("gemini",),
-    "grok": ("grok",),
-    "hermes": ("hermes",),
-    "kilo": (),
-    "kimi": (),
-    "muse": ("muse",),
-    "opencode": ("opencode",),
-    "pi": ("pi",),
-    "qwen": ("qwen",),
-    "windsurf": (),
-}
-# Marker dirs come from model.HARNESS_MARKER_DIRS, the same denylist config_paths uses.
-HARNESS_PRESENCE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    harness: (commands, HARNESS_MARKER_DIRS[harness])
-    for harness, commands in _HARNESS_COMMANDS.items()
 }
 
 _NO_HOST_HEADER = (
@@ -628,17 +595,6 @@ def _operation(lifecycle: SkillLifecycle, action: LifecycleAction) -> SkillOpera
     if action == "update":
         return lifecycle.update
     return lifecycle.removal
-
-
-def present_harnesses(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
-    """Hosts detectable from PATH or a closed home-relative marker."""
-    found: set[str] = set()
-    for harness, (commands, markers) in HARNESS_PRESENCE.items():
-        if any(which(command) for command in commands) or any(
-            (home / marker).exists() for marker in markers
-        ):
-            found.add(harness)
-    return frozenset(found)
 
 
 def _filtered_install_lines(

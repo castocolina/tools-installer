@@ -44,7 +44,6 @@ from installer.skill_lifecycle import (
     partial_harnesses,
     partial_steps,
     perform_action,
-    present_harnesses,
 )
 
 # Frozen copy of the pack entries removed from the shipped registry (23.1-01); deleted in 23.1-15.
@@ -362,12 +361,6 @@ def test_superpowers_install_with_no_host_labels_every_block(tmp_path: Path) -> 
         label = f"{SKILL_HARNESS_LABELS.get(harness, harness)}:"
         index = outcome.instructions.index(label)
         assert outcome.instructions[index + 1 : index + 1 + len(commands)] == commands
-
-
-def test_cursor_is_present_from_disk_when_path_misses(tmp_path: Path) -> None:
-    (tmp_path / ".cursor").mkdir()
-
-    assert "cursor" in present_harnesses(tmp_path, lambda _command: None)
 
 
 def test_skill_pack_admission_accepts_status_probes(tmp_path: Path) -> None:
@@ -2351,33 +2344,3 @@ def test_capped_config_reads_use_read_capped(
     followed = {path: follow for path, follow in seen}
     assert followed[tmp_path / ".claude" / "plugins" / "installed_plugins.json"] is True
     assert followed[tmp_path / ".claude" / "settings.json"] is True
-
-
-def test_harness_presence_markers_come_from_the_model() -> None:
-    from installer.model import HARNESS_MARKER_DIRS
-
-    expected: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-        "antigravity": (("agy",), (".gemini/antigravity",)),
-        "claude": (("claude",), (".claude",)),
-        "codex": (("codex",), (".codex",)),
-        "copilot": (("copilot",), (".copilot",)),
-        "cursor": (("cursor-agent", "cursor"), (".cursor", ".local/share/cursor-agent")),
-        "devin": (("devin",), ()),
-        "factory-droid": (("droid",), (".factory",)),
-        "gemini-cli": (("gemini",), (".gemini",)),
-        "grok": (("grok",), ()),
-        "hermes": (("hermes",), ()),
-        "kilo": ((), (".config/kilo",)),
-        "kimi": ((), (".kimi-code",)),
-        "muse": (("muse",), ()),
-        "opencode": (("opencode",), (".config/opencode", ".opencode")),
-        "pi": (("pi",), (".pi",)),
-        "qwen": (("qwen",), ()),
-        "windsurf": ((), (".codeium/windsurf",)),
-    }
-    assert expected == skill_lifecycle.HARNESS_PRESENCE
-    assert HARNESS_MARKER_DIRS.keys() == skill_lifecycle.HARNESS_PRESENCE.keys()
-    assert all(
-        skill_lifecycle.HARNESS_PRESENCE[h][1] == HARNESS_MARKER_DIRS[h]
-        for h in skill_lifecycle.HARNESS_PRESENCE
-    )

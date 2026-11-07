@@ -19,9 +19,8 @@ from pathlib import Path
 
 from installer import receipts
 from installer.locations import bin_dir
-from installer.model import Method, Tool
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool
 from installer.run import CommandError, NotingRunner, Runner, command_error_line
-from installer.skill_lifecycle import present_harnesses
 
 # (harness ids registered, warning). A warning never fails the install.
 HookOutcome = tuple[tuple[str, ...], str | None]
@@ -33,6 +32,51 @@ HOST_CATALOG_IDS: dict[str, str] = {
     "opencode": "opencode",
     "cursor": "cursor-agent",
 }
+
+
+# Command names verified on this host 2026-10-09, plus binaries named in
+# https://github.com/obra/superpowers/blob/main/README.md (agy, devin, grok,
+# qwen, hermes, muse). factory-droid `.factory` and gemini-cli `.gemini` are
+# the global roots in https://github.com/vercel-labs/skills/blob/main/README.md
+# (Droid ~/.factory/skills, Gemini CLI ~/.gemini/skills). antigravity, windsurf,
+# kilo, and kimi dirs are the opengsd resolver defaults in
+# .claude/gsd-core/references/gsd-run-resolver.md. Devin/Grok/Qwen/Hermes/Muse
+# docs disagree on a config dir, so those disk tuples stay empty.
+_HARNESS_COMMANDS: dict[str, tuple[str, ...]] = {
+    "antigravity": ("agy",),
+    "claude": ("claude",),
+    "codex": ("codex",),
+    "copilot": ("copilot",),
+    "cursor": ("cursor-agent", "cursor"),
+    "devin": ("devin",),
+    "factory-droid": ("droid",),
+    "gemini-cli": ("gemini",),
+    "grok": ("grok",),
+    "hermes": ("hermes",),
+    "kilo": (),
+    "kimi": (),
+    "muse": ("muse",),
+    "opencode": ("opencode",),
+    "pi": ("pi",),
+    "qwen": ("qwen",),
+    "windsurf": (),
+}
+# Marker dirs come from model.HARNESS_MARKER_DIRS, the same denylist config_paths uses.
+HARNESS_PRESENCE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    harness: (commands, HARNESS_MARKER_DIRS[harness])
+    for harness, commands in _HARNESS_COMMANDS.items()
+}
+
+
+def present_harnesses(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
+    """Hosts detectable from PATH or a closed home-relative marker."""
+    found: set[str] = set()
+    for harness, (commands, markers) in HARNESS_PRESENCE.items():
+        if any(which(command) for command in commands) or any(
+            (home / marker).exists() for marker in markers
+        ):
+            found.add(harness)
+    return frozenset(found)
 
 
 def present_hosts() -> frozenset[str]:
