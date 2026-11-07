@@ -185,15 +185,20 @@ def _checkout_refusal(
 
 
 def _check_file(
-    path: Path, env: Mapping[str, str] | None, base: Path, policy: LaunchPolicy
+    path: Path,
+    env: Mapping[str, str] | None,
+    base: Path,
+    policy: LaunchPolicy,
+    invoked: str | None = None,
 ) -> AssertionError | None:
     """None when a script file may run: it sits under the base temp, or it is a reviewed
-    checkout file with its toolchain faked; else the refusal to raise."""
+    checkout file with its toolchain faked; else the refusal to raise, naming `invoked` (what
+    the test ran: /usr/bin/true may resolve to gnutrue) when given."""
     if path.is_relative_to(policy.allowed_root):
         return None
     if path.is_relative_to(policy.checkout):
         return _checkout_refusal(path, env, base, policy)
-    return _host_refusal(path.name, path)
+    return _host_refusal(invoked or path.name, path)
 
 
 def _in_linuxbrew(path: Path) -> bool:
@@ -560,7 +565,7 @@ def check_launch(
             "plant a fake under tmp_path instead"
         )
     # 4. the base temp and the reviewed checkout files; 5. anything else is a host program
-    refusal = _check_file(resolved, env, base, policy)
+    refusal = _check_file(resolved, env, base, policy, invoked=name)
     if refusal is not None:
         raise refusal
 

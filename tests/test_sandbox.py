@@ -1226,3 +1226,13 @@ def test_posix_spawn_with_an_inherited_environment_is_checked(
     assert recorder.calls == []
     spawn(str(fake), [str(fake)], None)
     assert recorder.calls == [(str(fake), [str(fake)], None)]
+
+
+def test_a_refusal_names_the_program_the_test_invoked(outside: Path) -> None:
+    """On the ubuntu runner /usr/bin/true is a link to gnutrue: a refusal names what the test
+    ran (`true`) and shows the real path it resolved to."""
+    target = _marker_fake(outside, "gnutrue")
+    (outside / "true").symlink_to(target)
+    env = {"PATH": str(outside)}
+    with pytest.raises(AssertionError, match=f"host's true at {target}"):
+        check_launch(["true"], env=env, cwd=None, policy=launch_policy())
