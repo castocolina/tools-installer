@@ -749,6 +749,21 @@ def test_host_setup_kind_routes_to_host_setup_handoff(monkeypatch: pytest.Monkey
     assert outcome.handoff == executors.host_setup_handoff(method)
 
 
+def test_a_host_setup_method_still_hands_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SPEC edge R2: host_setup stays the one reviewed handoff kind and runs no command."""
+
+    def fake_not_installed(tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
+    method = Method(kind="host_setup", params={"setup_id": "pi"})
+    commands: list[list[str]] = []
+    outcome = install_tool(_tool(method), _platform(), runner=commands.append)
+    assert outcome.status == InstallStatus.MANUAL_REQUIRED
+    assert outcome.handoff == executors.host_setup_handoff(method)
+    assert commands == []
+
+
 def test_postinstall_hook_dispatches_after_a_successful_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2007,15 +2022,11 @@ def test_archive_install_writes_a_receipt(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert written.artifacts[1].target == os.readlink(link)
 
 
-def _fake_perform(
-    monkeypatch: pytest.MonkeyPatch,
-    place: Callable[[], None] | None = None,
-    handoff: tuple[str, ...] = (),
-) -> None:
-    def fake(_tool: Tool, _method: Method, _ctx: ExecContext) -> tuple[bool, None, tuple[str, ...]]:
+def _fake_perform(monkeypatch: pytest.MonkeyPatch, place: Callable[[], None] | None = None) -> None:
+    def fake(_method: Method, _ctx: ExecContext) -> tuple[bool, None, tuple[str, ...]]:
         if place is not None:
             place()
-        return False, None, handoff
+        return False, None, ()
 
     monkeypatch.setattr(engine, "_perform", fake)
 
@@ -2186,11 +2197,6 @@ def test_receiptless_install_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> 
         _tool(Method(kind="dnf", params={"package": "ripgrep"})),
         _platform(),
         runner=lambda _cmd: None,
-    )
-    assert outcome.status == InstallStatus.MANUAL_REQUIRED
-    _fake_perform(monkeypatch, handoff=("run the reviewed setup",))
-    outcome = install_tool(
-        _tool(Method(kind="skill_pack", params={})), _platform(), runner=lambda _cmd: None
     )
     assert outcome.status == InstallStatus.MANUAL_REQUIRED
     assert receipts.read("rg") is None

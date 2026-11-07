@@ -47,7 +47,6 @@ from installer.receipts import CHANGED_SINCE_INSTALL, CONFIG_AGENTS
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
 from installer.selection import select_tools
-from installer.skill_lifecycle import perform_action
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget, update_refusal
 from installer.version_status import Health, ToolState
 from installer.versions import TagResolver, VersionError
@@ -62,7 +61,7 @@ _PRIORITY_RANK = {Priority.P0: 0, Priority.P1: 1, Priority.P2: 2, Priority.P3: 3
 # DEPENDENCY_FAILED is a member of its own set on purpose: that membership,
 # and nothing else, is what carries a failure down a multi-link requires chain.
 # MANUAL_REQUIRED belongs here too: the tool only got as far as reviewed
-# handoff instructions (host_setup / skill_pack), not an actual install, so a
+# handoff instructions (host_setup), not an actual install, so a
 # dependent naming it in `requires` must be blocked the same as any other
 # not-actually-installed status.
 # A row that starts from an installed tool loses it only when a reinstall ran and failed.
@@ -253,8 +252,7 @@ _FAILURE = frozenset(
     {"failed", "mismatch", "dependency_failed", "not_attempted", "crashed", "remove_failed"}
 )
 _KEEP = _FAILURE | {"blocked", "manual"}
-# These results represent executed work; manual counts only for a reconfigure row
-# whose reviewed steps include an actual command.
+# These results represent executed work.
 _RAN = frozenset({"done", "failed", "mismatch", "crashed"})
 
 
@@ -266,25 +264,8 @@ def retained(outcomes: Sequence[RowOutcome]) -> set[str]:
     return {outcome.row.tool_id for outcome in outcomes if outcome.result in _KEEP}
 
 
-def _step_runs_command(step: ConfigStep) -> bool:
-    return bool(step.argv) or step.kind in {
-        "terminal_sync",
-        "pnpm_group_install",
-        "hook_register",
-        "zshenv_shell",
-    }
-
-
 def ran_anything(outcomes: Sequence[RowOutcome]) -> bool:
-    return any(
-        outcome.result in _RAN
-        or (
-            outcome.result == "manual"
-            and outcome.row.disposition is Disposition.RECONFIGURE
-            and any(_step_runs_command(step) for step in outcome.row.steps)
-        )
-        for outcome in outcomes
-    )
+    return any(outcome.result in _RAN for outcome in outcomes)
 
 
 def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
@@ -383,16 +364,14 @@ def first_line(exc: Exception) -> str:
 
 @dataclass(frozen=True)
 class _StepResult:
-    """One step's answer: a refusal detail, reviewed handoff lines, or a warning.
+    """One step's answer: a refusal detail or a warning.
 
     `failed` means the step did not take and the row stops. `warning` means it
-    ran and has something to report. `handoff` is the reviewed instruction lines
-    a step produced instead of running a command.
+    ran and has something to report.
     """
 
     failed: str | None = None
     warning: str | None = None
-    handoff: tuple[str, ...] = ()
 
 
 # The kinds the model declares. The dispatcher below branches on every
@@ -464,18 +443,6 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         except (CommandError, OSError, executors.ExecutorError, VersionError) as exc:
             return _StepResult(failed=first_line(exc))
         return _StepResult()
-    if step.kind == "skill_install" and not step.argv:
-        # L-19-07: a harness the installer cannot write to gets a reviewed
-        # handoff, never a command. `ValueError` (no executable operation for
-        # this action) is deliberately not caught here: `partial_steps` builds
-        # this step only for a lifecycle that has one, so a raise means a
-        # producer broke that invariant and the row fails closed as `crashed`.
-        outcome = perform_action(tool, "install", ctx.runner)
-        if outcome.status == "manual-required":
-            return _StepResult(handoff=outcome.instructions)
-        if outcome.status in ("completed", "present"):
-            return _StepResult()
-        return _StepResult(failed=f"skill install reported {outcome.status}")
     if not step.argv:
         return _StepResult(failed="step has no command")
     if step.cwd is not None:
@@ -499,10 +466,8 @@ def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:
 
     The order is the fix (19 D-18): the canonical copy is enabled before the
     duplicates are removed, so continuing past a failed enable would delete
-    the only working copy. A row that ran every step but produced handoff
-    lines is `manual` — the user still has reviewed steps to run themselves.
+    the only working copy.
     """
-    handoff: list[str] = []
     warnings: list[str] = []
     for step in row.steps:
         result = _run_step(step, tool, ctx)
@@ -510,15 +475,7 @@ def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:
             return RowOutcome(row, "failed", detail=f"{step.text}: {result.failed}")
         if result.warning:
             warnings.append(result.warning)
-        handoff.extend(result.handoff)
-    detail = "\n".join(warnings)
-    if handoff:
-        lines = tuple(handoff)
-        install = InstallOutcome(
-            tool.id, InstallStatus.MANUAL_REQUIRED, handoff=lines, method_kind="skill_pack"
-        )
-        return RowOutcome(row, "manual", install=install, detail=detail)
-    return RowOutcome(row, "done", detail=detail)
+    return RowOutcome(row, "done", detail="\n".join(warnings))
 
 
 _INSTALL_RESULT: dict[InstallStatus, Result] = {
