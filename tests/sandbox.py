@@ -598,6 +598,58 @@ def guarded_getaddrinfo(describe: Callable[[], str]) -> Callable[..., NoReturn]:
     return getaddrinfo
 
 
+# --- the os launchers: the same allowlist as subprocess.Popen (SPEC R6, D-21) ---
+
+# execl*/spawnl* are pure-Python wrappers over these (through module globals), so they are covered.
+GUARDED_OS_FUNCTIONS = (
+    "system",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
+    "spawnvpe",
+    "posix_spawn",
+    "posix_spawnp",
+)
+
+
+def guarded_os_call(
+    name: str,
+    original: Callable[..., Any],
+    check: Callable[[list[str], Mapping[str, str] | None], None],
+) -> Callable[..., Any]:
+    """Wrap an os launcher: build its argv (command, path and arguments through `os.fsdecode`),
+    `check` it, record a refusal before re-raising, then call `original` with the untouched
+    arguments. The check is pure, so a Popen that already passed may pass again at `posix_spawn`."""
+    first = 1 if name.startswith("spawn") else 0  # spawn* takes a mode before the path
+    has_env = name.endswith("e") or name.startswith("posix_spawn")
+    needed = 1 if name == "system" else first + (3 if has_env else 2)
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        try:
+            if len(args) < needed:
+                raise AssertionError(f"the guard needs os.{name} called with positional arguments")
+            if name == "system":
+                argv = ["/bin/sh", "-c", os.fsdecode(args[0])]
+            else:
+                argv = [os.fsdecode(args[first]), *(os.fsdecode(a) for a in args[first + 1][1:])]
+            env = (
+                {os.fsdecode(k): os.fsdecode(v) for k, v in args[first + 2].items()}
+                if has_env
+                else None
+            )
+            check(argv, env)
+        except AssertionError as refusal:
+            record_refusal(str(refusal))
+            raise
+        return original(*args, **kwargs)
+
+    return call
+
+
 # --- the test PATH and environment (23.1 D-16, D-17): applied before collection ---
 
 RUN_USER = Path("/run/user")
