@@ -29,6 +29,11 @@ copy gaps. Each renders the same at 390f464, before Phase 21, so none was introd
    status after a toggle shrinks the table to its header row, so the new `● [on]` is hidden until the
    status clears (Phase 21 round 3 pilot: identical output at 390f464).
 
+7. (Real-TTY UAT 2026-11-07, `.planning/uat/2026-11-07-real-tty.md` F-2/F-3) The bottom key-hint line is cut at 80
+   columns on the System/User/AI and Uninstall screens, so `q quit` / `esc back` never show; the detail bar cuts the
+   `to configure:` step (only the install review shows it); the removal confirm box scrolls and its last line
+   (`puppeteer included.`) appears only after pressing down; the Policies `Effect` column is cut short.
+
 ## Solution
 
 Make the Doctor card its own focusable scroll container under fixed chrome (header, badge, status, footer),
