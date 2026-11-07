@@ -362,6 +362,28 @@ def test_check_launch_refuses_malformed_argv(policy: LaunchPolicy) -> None:
         )
 
 
+@pytest.mark.parametrize("env", [{"HOME": "/nonexistent-23-1"}, {}])
+def test_check_launch_searches_the_path_the_child_sees(
+    env: dict[str, str], policy: LaunchPolicy
+) -> None:
+    """An env with no PATH makes the exec layer search os.defpath, so the guard must too."""
+    with pytest.raises(AssertionError, match="host's true"):
+        check_launch(["true"], env=env, cwd=None, policy=policy)
+
+
+def test_check_launch_resolves_an_empty_path_entry_in_the_child_cwd(
+    outside: Path, policy: LaunchPolicy
+) -> None:
+    _fake(outside, "tool")
+    with pytest.raises(AssertionError, match="host's tool"):
+        check_launch(["tool"], env={"PATH": ""}, cwd=outside, policy=policy)
+
+
+def test_the_guard_refuses_a_host_program_under_a_path_less_env(tmp_path: Path) -> None:
+    with refused("host's true"):
+        subprocess.run(["true"], env={"HOME": str(tmp_path)}, check=False)
+
+
 def test_check_launch_allows_a_missing_path_only_when_missing_ok(
     tmp_path: Path, policy: LaunchPolicy
 ) -> None:

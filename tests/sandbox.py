@@ -468,7 +468,10 @@ def check_launch(
     if os.sep in program:
         literal: Path | None = Path(os.path.abspath(base / program))
     else:
-        found = shutil.which(program, path=(env if env is not None else os.environ).get("PATH", ""))
+        # The search the exec layer makes: a PATH-less env means os.defpath, and an empty or
+        # relative entry is relative to the child's cwd.
+        search = os.pathsep.join(str(base / entry) for entry in os.get_exec_path(env))
+        found = shutil.which(program, path=search)
         literal = Path(found) if found is not None else None
     resolved = _real(literal) if literal is not None else None
 
