@@ -6274,7 +6274,7 @@ def test_the_settings_pseudo_row_reverts_every_written_key(
     before = claude.read_bytes()
     apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
     apply_setting("vscode", "vscode-ai-off", home=tmp_path, platform_os="linux")
-    assert len(ledger_summary("vscode", home=tmp_path, platform_os="linux")) == 1
+    assert len(ledger_summary("vscode", home=tmp_path)) == 1
     decision = UninstallDecision(
         tools=(),
         paths={},
@@ -6297,8 +6297,8 @@ def test_the_settings_pseudo_row_reverts_every_written_key(
     )
     assert result.settings_reverted == ("claude", "vscode")
     assert claude.read_bytes() == before
-    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
-    assert ledger_summary("vscode", home=tmp_path, platform_os="linux") == ()
+    assert ledger_summary("claude", home=tmp_path) == ()
+    assert ledger_summary("vscode", home=tmp_path) == ()
 
 
 def test_the_cli_uninstall_reverts_every_written_key(

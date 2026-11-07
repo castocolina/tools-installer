@@ -69,6 +69,11 @@ class CommandError(RuntimeError):
         super().__init__(f"{message}\n{detail}" if detail else message)
 
 
+def command_error_line(exc: CommandError) -> str:
+    """The line a failed command shows: its first non-empty output line, else its message's."""
+    return next((ln for ln in exc.detail.splitlines() if ln.strip()), str(exc).splitlines()[0])
+
+
 class InteractiveTerminalUnavailable(RuntimeError):
     """An approved interactive command has no terminal from which to read."""
 

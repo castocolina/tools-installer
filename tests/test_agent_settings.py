@@ -810,7 +810,7 @@ def test_revert_agent_and_ledger_summary_cover_every_setting() -> None:
     apply_setting("claude", "auto-approve", home=home, platform_os="linux")
     apply_setting("claude", "no-attribution", home=home, platform_os="linux")
 
-    summary = ledger_summary("claude", home=home, platform_os="linux")
+    summary = ledger_summary("claude", home=home)
     assert summary == (
         (
             settings,
@@ -994,8 +994,8 @@ def test_a_recorded_file_that_is_gone_is_reported_and_no_other_file_is_touched()
     ]
     assert jsonc.read_bytes() == renamed
     assert read_ledger("opencode") == ledger_before
-    assert ledger_summary("opencode", home=home, platform_os="linux") == ((plain, ("permission",)),)
-    assert settings_change_lines(("opencode",), platform_os="linux") == (
+    assert ledger_summary("opencode", home=home) == ((plain, ("permission",)),)
+    assert settings_change_lines(("opencode",)) == (
         "opencode: cannot remove permission: ~/.config/opencode/opencode.json is missing",
     )
 

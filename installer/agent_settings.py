@@ -978,9 +978,7 @@ def revert_agent(agent: str, *, home: Path, platform_os: str) -> tuple[FileResul
     )
 
 
-def ledger_summary(
-    agent: str, *, home: Path, platform_os: str
-) -> tuple[tuple[Path, tuple[str, ...]], ...]:
+def ledger_summary(agent: str, *, home: Path) -> tuple[tuple[Path, tuple[str, ...]], ...]:
     """Per settings file under home, the dotted keys the ledger records there (removal previews)."""
     ledger = read_ledger(agent) or ConfigLedger(agent)
     keys_by_file: dict[str, list[str]] = {}

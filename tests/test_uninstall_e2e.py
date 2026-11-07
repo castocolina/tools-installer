@@ -727,7 +727,7 @@ def test_removing_claude_reverts_its_settings(
     result = _remove_claude(tmp_path)
     assert result.removed == ("claude",)
     assert settings.read_bytes() == before
-    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
+    assert ledger_summary("claude", home=tmp_path) == ()
     assert result.settings_reverted == ("claude",)
 
 
@@ -787,7 +787,7 @@ def test_a_failed_removal_reverts_nothing(tmp_path: Path, monkeypatch: pytest.Mo
     assert result.remove_failed
     assert result.settings_reverted == ()
     assert settings.read_bytes() == before
-    assert ledger_summary("claude", home=tmp_path, platform_os="linux") != ()
+    assert ledger_summary("claude", home=tmp_path) != ()
 
 
 async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
@@ -804,9 +804,7 @@ async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
         # From the first row down: fd, the environment title, the PATH wiring row, then this row.
         await pilot.press("down", "down", "down", "down")
         # The editor's settings path differs per OS; read it from the ledger the row reads.
-        vscode_settings = display_path(
-            ledger_summary("vscode", home=tmp_path, platform_os=HOST_SETTINGS_OS)[0][0]
-        )
+        vscode_settings = display_path(ledger_summary("vscode", home=tmp_path)[0][0])
         assert screen.detail_text == (
             "reverts only keys that still hold this installer's value: "
             f"~/.claude/settings.json, {vscode_settings}"
@@ -819,8 +817,8 @@ async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
         await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert app.screen.applied is True
-    assert ledger_summary("claude", home=tmp_path, platform_os=HOST_SETTINGS_OS) == ()
-    assert ledger_summary("vscode", home=tmp_path, platform_os=HOST_SETTINGS_OS) == ()
+    assert ledger_summary("claude", home=tmp_path) == ()
+    assert ledger_summary("vscode", home=tmp_path) == ()
 
 
 async def test_the_settings_row_is_absent_without_a_ledger(

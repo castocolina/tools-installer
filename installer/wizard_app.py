@@ -34,7 +34,6 @@ from textual.worker import Worker, WorkerCancelled, WorkerFailed
 from installer import daemon, env_redirect, receipts
 from installer.agent_settings import ledger_summary
 from installer.app import (
-    HOST_SETTINGS_OS,
     UninstallDecision,
     path_writer_lines_for,
     pnpm_removal_packages,
@@ -1486,7 +1485,7 @@ class UninstallScreen(AppScreen):
         settings_files = tuple(
             path
             for agent in receipts.CONFIG_AGENTS
-            for path, _keys in ledger_summary(agent, home=Path.home(), platform_os=HOST_SETTINGS_OS)
+            for path, _keys in ledger_summary(agent, home=Path.home())
         )
         return (
             self._ban_names_of(),
@@ -1634,11 +1633,9 @@ class UninstallScreen(AppScreen):
             if argv := decision.argv.get(tool.id):
                 lines.append(_review_line(sanitize_log_line(removal_runs_line(tool.id, argv))))
         # Block 3b, what changes (UI-SPEC section 6): the same lines the CLI previews.
-        changes = removal_change_lines(
-            decision.tools, platform_os=HOST_SETTINGS_OS, active_tweaks=self._tweak_ids
-        )
+        changes = removal_change_lines(decision.tools, active_tweaks=self._tweak_ids)
         if decision.revert_settings:
-            changes += settings_change_lines(receipts.CONFIG_AGENTS, platform_os=HOST_SETTINGS_OS)
+            changes += settings_change_lines(receipts.CONFIG_AGENTS)
         lines.extend(_review_line(sanitize_log_line(line)) for line in dict.fromkeys(changes))
         deleted = [
             _review_line(sanitize_log_line(f"  {entry} ({tool.id})"))

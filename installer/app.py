@@ -70,7 +70,7 @@ from installer.render import (
     run_option_lines,
     shell_init_left_off_line,
 )
-from installer.run import CommandError, Runner, run_command
+from installer.run import CommandError, Runner, command_error_line, run_command
 from installer.sanitize import sanitize_log_line
 from installer.session import (
     RUNNABLE,
@@ -638,16 +638,11 @@ def removal_order(tools: Sequence[Tool]) -> list[Tool]:
     return list(reversed(resolution.closure))
 
 
-def _command_error_line(exc: CommandError) -> str:
-    """The line a failed command shows: its first non-empty output line, else its message's."""
-    return next((ln for ln in exc.detail.splitlines() if ln.strip()), first_line(exc))
-
-
 # Settings are written and reverted under the host's OS; only "macos" is compared, never "linux".
 HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
 
 
-def settings_change_lines(agent_ids: Iterable[str], *, platform_os: str) -> tuple[str, ...]:
+def settings_change_lines(agent_ids: Iterable[str]) -> tuple[str, ...]:
     """The settings keys the ledgers record, one line per ledgered file (UI-SPEC section 6). A
     recorded file that is gone is named as such: the revert reports it and touches nothing."""
     return tuple(
@@ -655,12 +650,12 @@ def settings_change_lines(agent_ids: Iterable[str], *, platform_os: str) -> tupl
         if os.path.lexists(path)
         else f"{agent}: cannot remove {', '.join(keys)}: {display_path(path)} is missing"
         for agent in agent_ids
-        for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
+        for path, keys in ledger_summary(agent, home=Path.home())
     )
 
 
 def removal_change_lines(
-    tools: Iterable[Tool], *, platform_os: str, active_tweaks: Collection[str]
+    tools: Iterable[Tool], *, active_tweaks: Collection[str]
 ) -> tuple[str, ...]:
     """What removing these tools changes: the settings keys a removal reverts and the shell-init
     bundle it turns off (UI-SPEC section 6, block 3b). `active_tweaks` is the policy-id list the
@@ -668,7 +663,7 @@ def removal_change_lines(
     lines: list[str] = []
     for tool in tools:
         if tool.id in receipts.CONFIG_AGENTS:
-            lines.extend(settings_change_lines((tool.id,), platform_os=platform_os))
+            lines.extend(settings_change_lines((tool.id,)))
         if tool.id in SHELL_INIT_TOOLS and f"tweak:{tool.id}" in active_tweaks:
             lines.append(f"{tool.id}: turns off its shell init in ~/.myshellrc")
     return tuple(lines)
@@ -786,7 +781,7 @@ def remove_tool(
             try:
                 runner(list(undo))
             except CommandError as exc:
-                return ToolRemoval(tool.id, False, f"unregister: {_command_error_line(exc)}")
+                return ToolRemoval(tool.id, False, f"unregister: {command_error_line(exc)}")
         if fresh.unregister and tool.postinstall:
             receipts.forget_hooks(tool.id, tool.postinstall)
         manager = next(
@@ -810,7 +805,7 @@ def remove_tool(
             try:
                 runner(list(command))
             except CommandError as exc:
-                return ToolRemoval(tool.id, False, _command_error_line(exc))
+                return ToolRemoval(tool.id, False, command_error_line(exc))
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
             # The vendor command may have removed part of what the receipt recorded; only
             # what is still there is re-proven, so a path it already removed is not a refusal.
@@ -897,7 +892,7 @@ def run_uninstall(
     settings_files = [
         (agent, path, keys)
         for agent in receipts.CONFIG_AGENTS
-        for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
+        for path, keys in ledger_summary(agent, home=Path.home())
     ]
     # A machine whose only tools-installer footprint is an enabled tweak or a settings key must
     # not be told there is nothing to uninstall.
@@ -966,7 +961,6 @@ def run_uninstall(
             console.print(f"  {entry}", markup=False, soft_wrap=True)
     for line in removal_change_lines(
         (tool for tool, plan in ordered if plan.level != "none"),
-        platform_os=platform_os,
         active_tweaks=tweaks,
     ):
         console.print(line, markup=False, soft_wrap=True)

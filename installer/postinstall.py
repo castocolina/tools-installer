@@ -20,7 +20,7 @@ from pathlib import Path
 from installer import receipts
 from installer.locations import bin_dir
 from installer.model import Method, Tool
-from installer.run import CommandError, NotingRunner, Runner
+from installer.run import CommandError, NotingRunner, Runner, command_error_line
 from installer.skill_lifecycle import present_harnesses
 
 # (harness ids registered, warning). A warning never fails the install.
@@ -130,7 +130,7 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     try:
         runner(argv)
     except CommandError as exc:
-        return (), f"codegraph MCP registration failed: {_failure_line(exc)}"
+        return (), f"codegraph MCP registration failed: {command_error_line(exc)}"
     return tuple(sorted(harnesses)), None
 
 
@@ -138,11 +138,6 @@ def _codegraph_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tupl
     """codegraph's own uninstall for exactly these hosts; `--keep-cli` leaves the binary."""
     csv = ",".join(_CODEGRAPH_TARGETS[harness] for harness in harnesses)
     return ((binary, "uninstall", "--target", csv, "--location", "global", "--yes", "--keep-cli"),)
-
-
-def _failure_line(exc: CommandError) -> str:
-    """The first non-empty line the command printed, else of its message (app.py's rule)."""
-    return next((ln for ln in exc.detail.splitlines() if ln.strip()), str(exc).splitlines()[0])
 
 
 # herdr's own target ids (herdr 0.9.3: `herdr integration install <TARGET>`).
@@ -163,7 +158,7 @@ def _herdr_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) 
         try:
             runner([binary, "integration", "install", _HERDR_TARGETS[harness]])
         except CommandError as exc:
-            failures.append(f"{harness}: {_failure_line(exc)}")
+            failures.append(f"{harness}: {command_error_line(exc)}")
         else:
             done.append(harness)
     return tuple(done), "; ".join(failures) or None
@@ -181,7 +176,7 @@ def _tealdeer_cache(method: Method, runner: Runner, _harnesses: tuple[str, ...])
     try:
         runner([_resolve_binary(method, "tldr"), "--update"])
     except CommandError as exc:
-        return (), f"tldr --update failed: {_failure_line(exc)}; run it yourself later"
+        return (), f"tldr --update failed: {command_error_line(exc)}; run it yourself later"
     return (), None
 
 
