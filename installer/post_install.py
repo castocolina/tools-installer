@@ -14,6 +14,11 @@ run themselves and never spawns a child process. This follows
 `installer/host_setup.py`'s documented doctrine: setup that needs a real
 terminal is displayed, never launched from the installer's worker thread.
 
+The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme writes
+keep that rule: they write only the installer-owned `~/.myshellrc` block (and,
+in split mode, the rc `source` line) through the Policies tweak writer, and the
+`.zshrc` theme line through the theme writer. They never spawn a child process.
+
 A tool the installer detects as already present is a SKIP on the review and
 does not reach this table. Pressing `r` marks it REINSTALL and sends it through
 the install ladder, so a successful reinstall dispatches actions once more. A
@@ -22,14 +27,74 @@ the reinstall dispatches its actions directly. No path re-applies post-install
 actions on their own (D-06); sensitive actions still ask.
 """
 
+import os
 import shutil
 from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
 
+from installer.locations import zshrc_path
 from installer.model import Tool
+from installer.omz import apply_theme
 from installer.platform import Platform
+from installer.policy import tweak_policy
+from installer.tweaks import shell_init_bundle
 
 ConfirmSensitiveAction = Callable[[str, str], bool]
 PostInstallAction = Callable[[Tool, Platform, ConfirmSensitiveAction | None], tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class SensitivePrompt:
+    """The consent question one sensitive action asks, with its own choices and headless default."""
+
+    prompt: str
+    yes: str
+    no: str
+    default: bool
+
+
+# `{tool}` is the tool id and `{effect}` the shell-init bundle's description.
+SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {
+    "set_login_shell": SensitivePrompt(
+        "Show a reviewed command to change the login shell to zsh for {tool}, "
+        "which you run in your own terminal after the installer exits?",
+        "Yes, show the reviewed command",
+        "No, skip this",
+        True,
+    ),
+    "source_shell_init": SensitivePrompt(
+        "Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. "
+        "It stays off unless you choose yes; Policies can change it later.",
+        "Yes, turn it on",
+        "No, leave it off",
+        False,
+    ),
+}
+
+
+def sensitive_prompt(tool_id: str, action: str) -> SensitivePrompt:
+    """The prompt for a sensitive action. An action with no entry raises KeyError."""
+    entry = SENSITIVE_PROMPTS[action]
+    bundle = shell_init_bundle(tool_id)
+    effect = "" if bundle is None else bundle.description
+    return replace(entry, prompt=entry.prompt.format(tool=tool_id, effect=effect))
+
+
+def _no_shell_init_sourcing() -> tuple[Path, ...]:
+    return ()
+
+
+# Split link mode sources ~/.myshellrc from the rc files only through the composition
+# root. The action has no RunContext, so the root injects this reader once.
+_shell_init_sourced_from: Callable[[], tuple[Path, ...]] = _no_shell_init_sourcing
+
+
+def use_shell_init_sourcing(reader: Callable[[], tuple[Path, ...]]) -> None:
+    """Inject the split-mode rc reader that `source_shell_init` wires through."""
+    global _shell_init_sourced_from
+    _shell_init_sourced_from = reader
+
 
 _SET_LOGIN_SHELL_INSTRUCTIONS: tuple[str, ...] = (
     "After leaving the installer, run this command in your own terminal "
@@ -60,8 +125,29 @@ def _set_login_shell(
     return _SET_LOGIN_SHELL_INSTRUCTIONS
 
 
+def _source_shell_init(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del platform
+    bundle = shell_init_bundle(tool.id)
+    if bundle is None or confirm is None or not confirm(tool.id, "source_shell_init"):
+        return ()
+    home = Path.home()
+    tweak_policy(
+        bundle,
+        rc_path=home / ".myshellrc",
+        ensure_sourced_from=lambda: _shell_init_sourced_from(),
+    ).apply()
+    if tool.id == "starship":
+        apply_theme(zshrc_path(home, os.environ), home / ".myshellrc", "")
+    return ("Shell init on: open a new terminal to use it.",)
+
+
 POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "set_login_shell": _set_login_shell,
+    "source_shell_init": _source_shell_init,
 }
 
 

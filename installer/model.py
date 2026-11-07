@@ -127,8 +127,11 @@ SCRIPT_ROOTS: frozenset[str] = frozenset({"omz_root"})
 POST_INSTALL_ACTIONS = (
     "configure_path",
     "set_login_shell",
+    "source_shell_init",
+    "set_omz_theme",
+    "show_lean_tips",
 )
-SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell",)
+SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell", "source_shell_init")
 OWNER_PROBES = (
     "host-setup",
     "brew",

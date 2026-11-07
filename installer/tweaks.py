@@ -153,6 +153,34 @@ _APT_BODY = (
 # the alias only errors if actually run on a non-apt distro.
 _LINUX = ("debian", "arch", "fedora")
 
+# Shell init (D-11): one bundle per tool, id = tool id, offered at install and
+# default off. The `if command -v` guard picks the zsh or the bash line, which a
+# bare one-line eval cannot do. No registry string reaches these bodies.
+SHELL_INIT_TOOLS = ("starship", "direnv", "zoxide", "fzf", "fnm", "volta")
+
+
+def _guarded_init(tool: str, zsh_line: str, bash_line: str) -> str:
+    return (
+        f"if command -v {tool} >/dev/null; then\n"
+        f'  if [ -n "$ZSH_VERSION" ]; then {zsh_line}\n'
+        f'  elif [ -n "$BASH_VERSION" ]; then {bash_line}; fi\n'
+        "fi"
+    )
+
+
+# Exports VOLTA_HOME only: a PATH prepend here would trip the repo's PATH-accumulation
+# invariant. ~/.volta/bin reaches PATH through the managed PATH block (volta's registry
+# bin_dir). shortcut: a custom VOLTA_HOME outside ~/.volta is not supported, upgrade by
+# giving the managed PATH block the custom bin dir.
+_VOLTA_BODY = (
+    'if command -v volta >/dev/null; then\n  export VOLTA_HOME="${VOLTA_HOME:-$HOME/.volta}"\nfi'
+)
+
+
+def _shell_init(tool: str, description: str, body: str) -> TweakBundle:
+    return TweakBundle(tool, f"{tool} shell init", description, (), body, requires=(tool,))
+
+
 BUNDLES: tuple[TweakBundle, ...] = (
     TweakBundle(
         "docker",
@@ -198,6 +226,40 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "alias apt-upgrade — upgrade only packages that have updates (Linux)",
         _LINUX,
         _APT_BODY,
+    ),
+    _shell_init(
+        "starship",
+        'makes starship draw your prompt and sets ZSH_THEME="" so Oh-My-Zsh draws none',
+        _guarded_init("starship", 'eval "$(starship init zsh)"', 'eval "$(starship init bash)"'),
+    ),
+    _shell_init(
+        "direnv",
+        "loads and unloads a directory's .envrc as you cd",
+        _guarded_init("direnv", 'eval "$(direnv hook zsh)"', 'eval "$(direnv hook bash)"'),
+    ),
+    _shell_init(
+        "zoxide",
+        "adds z, a cd that learns the directories you use",
+        _guarded_init("zoxide", 'eval "$(zoxide init zsh)"', 'eval "$(zoxide init bash)"'),
+    ),
+    _shell_init(
+        "fzf",
+        "adds ctrl+r history search, ctrl+t file picker and alt+c",
+        _guarded_init("fzf", "source <(fzf --zsh)", 'eval "$(fzf --bash)"'),
+    ),
+    _shell_init(
+        "fnm",
+        "switches Node versions from .node-version or .nvmrc as you cd",
+        _guarded_init(
+            "fnm",
+            'eval "$(fnm env --use-on-cd --shell zsh)"',
+            'eval "$(fnm env --use-on-cd --shell bash)"',
+        ),
+    ),
+    _shell_init(
+        "volta",
+        "exports VOLTA_HOME and puts Volta's bin directory on PATH",
+        _VOLTA_BODY,
     ),
     TweakBundle(
         "opencode-auto",
@@ -326,3 +388,8 @@ def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:
 def applicable_bundles(platform: Platform) -> tuple[TweakBundle, ...]:
     """Bundles offered on this platform (empty `platforms` = every platform)."""
     return tuple(b for b in BUNDLES if not b.platforms or platform.os in b.platforms)
+
+
+def shell_init_bundle(tool_id: str) -> TweakBundle | None:
+    """The shell-init bundle of a tool, or None when the tool has none."""
+    return next((b for b in BUNDLES if b.id == tool_id and tool_id in SHELL_INIT_TOOLS), None)

@@ -36,6 +36,12 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "claude-skip",
         "codex-skip",
         "apt-upgrade",
+        "starship",
+        "direnv",
+        "zoxide",
+        "fzf",
+        "fnm",
+        "volta",
         "opencode-auto",
         "cursor-agent-model",
     ]
