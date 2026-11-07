@@ -188,20 +188,30 @@ POSTINSTALL_HOOKS: dict[str, HookPair] = {
 }
 
 
+def unregister_hosts(name: str, recorded: tuple[str, ...]) -> tuple[str, ...]:
+    """The recorded hosts hook `name` can undo, in target-map order (D-04).
+
+    `recorded` comes from a receipt a user can hand-edit, so it is filtered through
+    the code-owned target map: an id outside it (`all`, `auto`, a path) is dropped.
+    """
+    pair = POSTINSTALL_HOOKS.get(name)
+    if pair is None or pair.targets is None or pair.unregister is None:
+        return ()
+    return tuple(harness for harness in pair.targets if harness in recorded)
+
+
 def unregister_argvs(
     name: str, binary: str, recorded: tuple[str, ...]
 ) -> tuple[tuple[str, ...], ...]:
     """The argvs that undo hook `name` for the recorded hosts only (D-04).
 
-    `recorded` comes from a receipt a user can hand-edit, so it is filtered through
-    the code-owned target map: an id outside it (`all`, `auto`, a path) never reaches
-    an argv. Nothing left, or no undo for this hook, is `()`.
+    Nothing left, or no undo for this hook, is `()`.
     """
+    wanted = unregister_hosts(name, recorded)
     pair = POSTINSTALL_HOOKS.get(name)
-    if pair is None or pair.targets is None or pair.unregister is None:
+    if pair is None or pair.unregister is None or not wanted:
         return ()
-    wanted = tuple(harness for harness in pair.targets if harness in recorded)
-    return pair.unregister(binary, wanted) if wanted else ()
+    return pair.unregister(binary, wanted)
 
 
 def hook_method(tool: Tool, receipt: receipts.Receipt) -> Method | None:

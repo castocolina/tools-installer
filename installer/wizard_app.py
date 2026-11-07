@@ -1013,6 +1013,8 @@ class _UninstallEntry:
     group: UninstallState | None = None
     # The command the row's preview showed (L1/L3); the decision hands it back to the remover.
     argv: tuple[str, ...] = ()
+    # The hook undo the row's preview showed (D-04); the decision hands it back the same way.
+    unregister: tuple[tuple[str, ...], ...] = ()
 
 
 # Section titles per state, in display order. The "environment" section holds the
@@ -1197,6 +1199,7 @@ class UninstallScreen(AppScreen):
         style = "" if selectable else "dim"
         paths = state.removable.removable if selectable else ()
         argv = state.removable.argv if selectable else ()
+        unregister = state.removable.unregister if selectable else ()
         shown = ([shlex.join(argv)] if argv else []) + [str(path) for path in paths]
         flagged = selectable and tool.id in self._config_on
         removes = Text(("config + " if flagged else "") + (", ".join(shown) or "—"), style=style)
@@ -1222,6 +1225,7 @@ class UninstallScreen(AppScreen):
             tool=tool,
             group=group,
             argv=argv,
+            unregister=unregister,
         )
         self._painted[tool.id] = entry
         return entry
@@ -1673,6 +1677,7 @@ class UninstallScreen(AppScreen):
             tools=tuple(tools.values()),
             paths={tool_id: self._by_key[tool_id].paths for tool_id in tools},
             argv={tool_id: self._by_key[tool_id].argv for tool_id in tools},
+            unregister={tool_id: self._by_key[tool_id].unregister for tool_id in tools},
             remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,

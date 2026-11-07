@@ -8,7 +8,7 @@ import pytest
 from rich.console import Console
 
 from installer import receipts
-from installer.download import link_name
+from installer.download import artifact_paths, link_name
 from installer.enums import UninstallState
 from installer.model import Method, Tool
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
@@ -22,6 +22,7 @@ from installer.uninstall import (
     manager_name,
     plan_removal,
     plan_uninstall,
+    removal_plan,
     remove_paths,
     remove_proven,
     sweep_tweaks,
@@ -2413,3 +2414,118 @@ def test_symlinked_config_is_unlinked_not_followed(
     delete_config_path(link)
     assert not link.is_symlink()
     assert (elsewhere / "keep").exists()
+
+
+def plant_codegraph(home: Path, hosts: tuple[str, ...] = ()) -> Tool:
+    """A github_release codegraph installed under ``home``: its opt tree, its proven bin link,
+    its receipt, and the hook hosts that receipt records (``hosts`` may be empty).
+
+    Public: tests/test_uninstall_e2e.py and tests/test_app.py plant the same install."""
+    method = Method(
+        kind="github_release", params={"repo": "a/codegraph", "asset": "x", "member": "codegraph"}
+    )
+    tool = Tool(
+        id="codegraph",
+        name="codegraph",
+        category="dev",
+        cmd="codegraph",
+        methods=(method,),
+        postinstall="codegraph-mcp-register",
+    )
+    bin_dir = home / ".local" / "bin"
+    paths = {artifact.kind: artifact.path for artifact in artifact_paths(method, bin_dir)}
+    paths["dir"].mkdir(parents=True)
+    (paths["dir"] / "codegraph").write_text("codegraph binary")
+    paths["link"].parent.mkdir(parents=True, exist_ok=True)
+    paths["link"].symlink_to(paths["dir"] / "codegraph")
+    receipts.record(
+        tool, method, package=None, smoke=None, default_bin_dir=bin_dir, preexisting=frozenset()
+    )
+    if hosts:
+        receipts.record_hooks("codegraph", "codegraph-mcp-register", hosts)
+    return tool
+
+
+def test_removal_plan_builds_unregister_from_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    plan = removal_plan(tool, bin_dir, verify=True)
+    link = str(bin_dir / "codegraph")
+    assert plan.unregister == (
+        (
+            link,
+            "uninstall",
+            "--target",
+            "claude,codex",
+            "--location",
+            "global",
+            "--yes",
+            "--keep-cli",
+        ),
+    )
+    assert plan.hook_hosts == ("claude", "codex")
+
+
+def test_no_proven_executable_means_no_unregister(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("claude",))
+    link = bin_dir / "codegraph"
+    link.unlink()
+    link.write_text("a foreign file replaced the proven link")
+    plan = removal_plan(tool, bin_dir, verify=True)
+    assert (plan.unregister, plan.hook_hosts) == ((), ())
+
+
+def test_a_pre_phase_23_receipt_unregisters_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt written before hooks were recorded holds hooks={}: nothing is unregistered
+    (review R1-39), and the removal itself still succeeds."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path)
+    plan = removal_plan(tool, bin_dir, verify=True)
+    assert (plan.unregister, plan.hook_hosts) == ((), ())
+    removed, refused = remove_proven([tool], list(plan.removable), bin_dir)
+    assert refused == ()
+    assert not (bin_dir / "codegraph").is_symlink()
+    assert not receipts.receipt_exists("codegraph")
+    assert removed
+
+
+@pytest.mark.parametrize(
+    ("recorded", "hosts"),
+    [
+        pytest.param(("claude", "all", "../x", "pi"), ("claude",), id="filtered"),
+        pytest.param(("all",), (), id="nothing-left"),
+    ],
+)
+def test_a_tampered_receipt_host_list_is_filtered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded: tuple[str, ...],
+    hosts: tuple[str, ...],
+) -> None:
+    """T-23-19: a hand-edited host list reaches an argv only through the closed target map."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, recorded)
+    plan = removal_plan(tool, bin_dir, verify=True)
+    undo = (
+        str(bin_dir / "codegraph"),
+        "uninstall",
+        "--target",
+        ",".join(hosts),
+        "--location",
+        "global",
+        "--yes",
+        "--keep-cli",
+    )
+    assert plan.unregister == ((undo,) if hosts else ())
+    assert plan.hook_hosts == hosts

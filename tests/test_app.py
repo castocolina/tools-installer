@@ -5746,3 +5746,211 @@ def test_an_unreadable_listing_runs_the_uninstall_and_a_failure_keeps_the_receip
     )
     assert (outcome.removed, outcome.detail) == (False, keg)
     assert receipts.read("jq") is not None
+
+
+def test_a_failed_unregister_stops_the_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O4 / T-23-20: a failed undo deletes nothing, keeps the receipt, and runs no other command."""
+    from installer import receipts
+    from installer.app import remove_tool
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("claude", "codex"))
+    plan = removal_plan(tool, bin_dir, verify=True)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        raise CommandError(cmd, 1, detail="boom")
+
+    outcome = remove_tool(
+        tool,
+        paths=plan.removable,
+        argv=plan.argv,
+        bin_dir=bin_dir,
+        runner=runner,
+        unregister=plan.unregister,
+    )
+    assert (outcome.removed, outcome.detail) == (False, "unregister: boom")
+    assert calls == [list(undo) for undo in plan.unregister]
+    assert all(path.exists() or path.is_symlink() for path in plan.removable)
+    assert receipts.receipt_exists("codegraph")
+
+
+def test_an_unregister_that_changed_since_the_preview_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-23-21: the undo that runs is the one the user saw; a changed set refuses the whole tool."""
+    from installer import receipts
+    from installer.app import remove_tool
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("claude",))
+    plan = removal_plan(tool, bin_dir, verify=True)
+    calls: list[list[str]] = []
+    outcome = remove_tool(
+        tool,
+        paths=plan.removable,
+        argv=plan.argv,
+        bin_dir=bin_dir,
+        runner=calls.append,
+        unregister=(),
+    )
+    assert (outcome.removed, outcome.detail) == (False, "changed since the preview; not removed")
+    assert calls == []
+    assert all(path.exists() or path.is_symlink() for path in plan.removable)
+    assert receipts.receipt_exists("codegraph")
+
+
+_UNREGISTER_LINE = (
+    "codegraph: runs codegraph uninstall --target claude,codex --location global --yes --keep-cli"
+)
+
+
+def test_the_cli_prints_the_unregister_line_before_the_remove_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A24: the undo line is printed before the confirm; a declined run runs nothing."""
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    console, buf = _console()
+    printed_at_confirm: list[str] = []
+
+    def confirm(_message: str) -> bool:
+        printed_at_confirm.append(buf.getvalue())
+        return False
+
+    removed, failed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+    )
+    assert _UNREGISTER_LINE in printed_at_confirm[0]
+    assert (removed, failed) == ([], ())
+    assert (bin_dir / "codegraph").is_symlink()
+
+
+def test_the_cli_reports_the_unregistered_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    (tmp_path / ".myshellrc").write_text("")
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    calls: list[list[str]] = []
+    console, buf = _console()
+    _removed, failed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=lambda _message: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=calls.append,
+    )
+    assert failed == ()
+    undo = [str(bin_dir / "codegraph"), "uninstall", "--target", "claude,codex"]
+    assert calls == [[*undo, "--location", "global", "--yes", "--keep-cli"]]
+    assert "Unregistered from agent hosts: claude, codex." in buf.getvalue()
+
+
+def test_the_cli_reports_a_failed_unregister(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    (tmp_path / ".myshellrc").write_text("")
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    console, buf = _console()
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="boom")
+
+    _removed, failed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=lambda _message: True,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=runner,
+    )
+    assert failed == ("codegraph",)
+    assert "codegraph: remove failed — unregister: boom" in buf.getvalue()
+    assert (bin_dir / "codegraph").is_symlink()
+    assert receipts.receipt_exists("codegraph")
+
+
+def test_perform_uninstall_passes_the_previewed_unregister(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    plan = removal_plan(tool, bin_dir)
+    decision = UninstallDecision(
+        tools=(tool,),
+        paths={tool.id: plan.removable},
+        argv={tool.id: plan.argv},
+        remove_ban=False,
+        remove_path_block=False,
+        unregister={tool.id: plan.unregister},
+    )
+    calls: list[list[str]] = []
+    result = _apply(decision, tmp_path, runner=calls.append, catalog=[tool])
+    assert (result.removed, result.unregistered) == (("codegraph",), ("claude", "codex"))
+    assert calls == [list(undo) for undo in plan.unregister]
+
+    # The same tool without the previewed undo is refused: nothing runs and nothing goes.
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    plan = removal_plan(tool, bin_dir)
+    decision = UninstallDecision(
+        tools=(tool,),
+        paths={tool.id: plan.removable},
+        argv={tool.id: plan.argv},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    calls.clear()
+    result = _apply(decision, tmp_path, runner=calls.append, catalog=[tool])
+    assert result.remove_failed == (("codegraph", "changed since the preview; not removed"),)
+    assert calls == []
+    assert receipts.receipt_exists("codegraph")

@@ -624,3 +624,53 @@ def test_every_receipt_kind_installs_and_removes_in_both_directions(
             assert not path.is_symlink() and not path.exists()
         if method.kind in MANAGER_UNINSTALL_ARGV:
             assert calls[-1][1:] == list(plan.argv[1:])
+
+
+def test_removing_codegraph_unregisters_exactly_the_recorded_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R1: the undo runs first, for the recorded hosts only, while the link still exists."""
+    from installer import postinstall, receipts
+    from installer.app import remove_tool
+    from installer.uninstall import removal_plan
+    from tests.test_uninstall import plant_codegraph
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # opencode is present on this machine but its hook never recorded it: removal must not reach it.
+    monkeypatch.setattr(
+        postinstall, "present_hosts", lambda: frozenset({"claude", "codex", "opencode"})
+    )
+    bin_dir = tmp_path / ".local" / "bin"
+    tool = plant_codegraph(tmp_path, ("codex", "claude"))
+    link = bin_dir / "codegraph"
+    plan = removal_plan(tool, bin_dir, verify=True)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        assert link.is_symlink(), "the undo must run while the proven link still exists"
+        calls.append(cmd)
+
+    outcome = remove_tool(
+        tool,
+        paths=plan.removable,
+        argv=plan.argv,
+        bin_dir=bin_dir,
+        runner=runner,
+        unregister=plan.unregister,
+    )
+    assert calls == [
+        [
+            str(link),
+            "uninstall",
+            "--target",
+            "claude,codex",
+            "--location",
+            "global",
+            "--yes",
+            "--keep-cli",
+        ]
+    ]
+    assert (outcome.removed, outcome.unregistered) == (True, ("claude", "codex"))
+    for path in plan.removable:
+        assert not path.is_symlink() and not path.exists()
+    assert not receipts.receipt_exists("codegraph")
