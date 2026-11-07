@@ -8113,6 +8113,39 @@ async def test_an_l3_row_shows_the_vendor_command_then_the_paths() -> None:
     assert captured[0].paths == {"vend": (leaf,)}
 
 
+async def test_the_uninstall_view_decision_carries_unregister() -> None:
+    """A11: the row hands the undo it previewed to the same remover the CLI uses."""
+    cg_method = Method(
+        kind="github_release", params={"repo": "a/codegraph", "asset": "x", "member": "codegraph"}
+    )
+    cg = Tool(
+        id="codegraph",
+        name="codegraph",
+        category="dev",
+        cmd="codegraph",
+        methods=(cg_method,),
+        postinstall="codegraph-mcp-register",
+    )
+    leaf = Path("/home/u/.local/bin/codegraph")
+    undo = (str(leaf), "uninstall", "--target", "claude,codex", "--location", "global")
+    removable = RemovalPlan(
+        (leaf,), (), level="artifacts", unregister=(undo,), hook_hosts=("claude", "codex")
+    )
+    captured: list[UninstallDecision] = []
+    app = _app(
+        cases=[(cg, plan_state(cg, removable=removable))],
+        uninstall=_uninstall_inputs(remove=_recorder(captured)),
+    )
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.press("5")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert len(captured) == 1
+    assert captured[0].unregister == {"codegraph": (undo,)}
+
+
 # -- 22-10: the per-row "delete config too" toggle (UI-04, D-11) --------------
 
 

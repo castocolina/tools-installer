@@ -41,6 +41,7 @@ from installer.pnpm_globals import (
     pnpm_global_packages,
 )
 from installer.policy import Policy, omz_removal_detail
+from installer.postinstall import host_labels
 from installer.prompt import Prompter
 from installer.rcclean import (
     PathWriterLine,
@@ -526,6 +527,11 @@ def removal_runs_line(tool_id: str, argv: Sequence[str]) -> str:
     return f"{tool_id}: runs {shlex.join(argv)}"
 
 
+def unregister_runs_line(tool_id: str, argv: Sequence[str]) -> str:
+    """The undo line: the executable shown by name, while the proven absolute path runs."""
+    return removal_runs_line(tool_id, (Path(argv[0]).name, *argv[1:]))
+
+
 ALREADY_REMOVED = "already removed"
 
 
@@ -752,9 +758,12 @@ def run_uninstall(
         return [], ()
     if paths:
         render_uninstall(paths, console)
-    for tool_id, argv in commands:
-        # Shown before the confirm: the user sees the exact command that will run.
-        console.print(removal_runs_line(tool_id, argv), markup=False, soft_wrap=True)
+    for tool, plan in ordered:
+        # Shown before the confirm: the user sees the exact undo and command that will run.
+        for undo in plan.unregister:
+            console.print(unregister_runs_line(tool.id, undo), markup=False, soft_wrap=True)
+        if plan.argv:
+            console.print(removal_runs_line(tool.id, plan.argv), markup=False, soft_wrap=True)
     # LIFE-08: a co-install member's removal warns about its group before anything runs.
     pnpm_packages = pnpm_removal_packages(plan.argv for _tool, plan in ordered)
 
@@ -816,11 +825,17 @@ def run_uninstall(
             argv=plan.argv,
             bin_dir=default_bin_dir,
             runner=runner,
+            unregister=plan.unregister,
         )
         for line in outcome.refused:
             console.print(line)
         if outcome.removed:
             removed.extend(plan.removable)
+            if outcome.unregistered:
+                console.print(
+                    f"Unregistered from agent hosts: {host_labels(outcome.unregistered)}.",
+                    markup=False,
+                )
             if outcome.detail:
                 console.print(f"{tool.id}: {outcome.detail}")
             else:
@@ -889,6 +904,10 @@ class UninstallDecision:
     # Per tool id: the declared config paths (expanded) the user chose to delete (D-11).
     # Empty by default, and the CLI never sets it: only the Uninstall view does.
     config: Mapping[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
+    # The hook undo each tool's preview showed (D-04); empty for a tool with none.
+    unregister: Mapping[str, tuple[tuple[str, ...], ...]] = field(
+        default_factory=dict[str, tuple[tuple[str, ...], ...]]
+    )
 
 
 def _config_step(
@@ -973,6 +992,7 @@ def perform_uninstall(
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
     with_group: list[str] = []
+    unregistered: list[str] = []
     for tool in removal_order(decision.tools):
         if tool.id in removed:  # retired with its pnpm group earlier in this run
             continue
@@ -983,8 +1003,10 @@ def perform_uninstall(
             argv=argv,
             bin_dir=bin_dir,
             runner=runner,
+            unregister=decision.unregister.get(tool.id, ()),
         )
         refused += outcome.refused
+        unregistered.extend(outcome.unregistered)
         if outcome.removed:
             removed.append(tool.id)
         else:
@@ -1034,6 +1056,7 @@ def perform_uninstall(
             config_deleted=config_deleted,
             config_not_deleted=config_not_deleted,
             with_group=tuple(with_group),
+            unregistered=tuple(sorted(set(unregistered))),
         )
     # decision.remove_tweaks is False here -- either the user genuinely left
     # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
@@ -1057,4 +1080,5 @@ def perform_uninstall(
         config_deleted=config_deleted,
         config_not_deleted=config_not_deleted,
         with_group=tuple(with_group),
+        unregistered=tuple(sorted(set(unregistered))),
     )
