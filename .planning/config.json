@@ -59,6 +59,10 @@
       "opencode-referee-three": {
         "cli": "opencode",
         "model": "router-env/my-referee-three"
+      },
+      "opencode-referee-two": {
+        "cli": "opencode",
+        "model": "router-env/my-referee-two"
       }
     },
     "default_reviewers": [
