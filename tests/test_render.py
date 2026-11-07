@@ -1180,6 +1180,19 @@ def test_render_done_notes_prints_every_successful_update_extra() -> None:
     )
 
 
+def test_a_hook_reconfigure_prints_its_done_note() -> None:
+    outcome = RowOutcome(
+        PlanRow("codegraph", Disposition.RECONFIGURE, "not registered for codex"),
+        "done",
+        detail="registered for codex",
+    )
+    console, buf = _console()
+
+    render_done_notes([outcome], console)
+
+    assert buf.getvalue().splitlines() == ["codegraph reconfigured — registered for codex"]
+
+
 def test_render_done_notes_is_silent_without_extras() -> None:
     successful = RowOutcome(
         PlanRow("rg", Disposition.UPDATE, "new version"),

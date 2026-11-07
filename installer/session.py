@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol, get_args
 
-from installer import executors
+from installer import executors, receipts
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
@@ -25,6 +25,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
+from installer.postinstall import hook_method, host_labels, register_hooks
 from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
@@ -238,7 +239,12 @@ def retained(outcomes: Sequence[RowOutcome]) -> set[str]:
 
 
 def _step_runs_command(step: ConfigStep) -> bool:
-    return bool(step.argv) or step.kind in {"terminal_sync", "pnpm_group_install"}
+    return bool(step.argv) or step.kind in {
+        "terminal_sync",
+        "pnpm_group_install",
+        "hook_register",
+        "zshenv_shell",
+    }
 
 
 def ran_anything(outcomes: Sequence[RowOutcome]) -> bool:
@@ -361,11 +367,35 @@ class _StepResult:
     handoff: tuple[str, ...] = ()
 
 
-# The eight kinds the model declares. The dispatcher below branches on every
+# The kinds the model declares. The dispatcher below branches on every
 # member and `test_each_config_step_kind_dispatches` asserts this set equals
 # `get_args(ConfigStepKind)`, so a ninth kind added to the model fails there
 # instead of reaching a command path no one reviewed.
 _STEP_KINDS: frozenset[str] = frozenset(get_args(ConfigStepKind))
+
+
+def _first_line_of(text: str) -> str:
+    """The first line of a warning or refusal, for a one-line row detail."""
+    return text.splitlines()[0]
+
+
+def _register_hook_step(tool: Tool, ctx: RunContext) -> _StepResult:
+    """Register the present hosts the hook's receipt does not record, then record them (D-02).
+
+    `register_hooks` already subtracts the recorded hosts and writes what it registered;
+    a run with nothing left to register is a failure with a reason, never an empty `done`.
+    """
+    receipt = receipts.read(tool.id)
+    method = hook_method(tool, receipt) if receipt is not None else None
+    if receipt is None or method is None:
+        return _StepResult(failed="no install receipt to record the hook in")
+    registered, warning = register_hooks(tool, method, ctx.runner)
+    if registered:
+        note = f"registered for {host_labels(registered)}"
+        return _StepResult(warning=f"{note}; {_first_line_of(warning)}" if warning else note)
+    if warning:
+        return _StepResult(failed=_first_line_of(warning))
+    return _StepResult(failed="no unregistered host is present any more")
 
 
 def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
@@ -375,7 +405,9 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         # plausible-looking argv one: its producer is unreviewed, so refusing
         # is the only answer that cannot run something nobody agreed to.
         return _StepResult(failed="step kind has no branch")
-    if step.kind == "terminal_sync":
+    if step.kind == "hook_register":
+        return _register_hook_step(tool, ctx)
+    if step.kind in {"terminal_sync", "zshenv_shell"}:
         if ctx.terminal_sync is None:
             return _StepResult(failed="no terminal synchronizer bound")
         try:
@@ -435,14 +467,15 @@ def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:
     lines is `manual` — the user still has reviewed steps to run themselves.
     """
     handoff: list[str] = []
-    detail = ""
+    warnings: list[str] = []
     for step in row.steps:
         result = _run_step(step, tool, ctx)
         if result.failed is not None:
             return RowOutcome(row, "failed", detail=f"{step.text}: {result.failed}")
-        if result.warning is not None:
-            detail = result.warning
+        if result.warning:
+            warnings.append(result.warning)
         handoff.extend(result.handoff)
+    detail = "\n".join(warnings)
     if handoff:
         lines = tuple(handoff)
         install = InstallOutcome(

@@ -261,14 +261,23 @@ def render_plan(
         )
 
 
+def _print_reconfigure_notes(outcome: RowOutcome, console: Console) -> None:
+    """One done note per detail line; an indented line is a path under the note above it."""
+    done = WORDS[outcome.row.disposition].done
+    for line in outcome.detail.splitlines():
+        text = line if line.startswith("  ") else f"{outcome.row.tool_id} {done} — {line}"
+        console.print(sanitize_log_line(text), markup=False, highlight=False, soft_wrap=True)
+
+
 def render_done_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print what a successful update or reconfiguration reported beside its row."""
     for outcome in outcomes:
         if outcome.result != "done":
             continue
         if outcome.row.disposition is Disposition.RECONFIGURE:
-            notes = [outcome.detail] if outcome.detail else []
-        elif outcome.row.disposition is Disposition.UPDATE:
+            _print_reconfigure_notes(outcome, console)
+            continue
+        if outcome.row.disposition is Disposition.UPDATE:
             update = outcome.update
             if update is None:
                 continue

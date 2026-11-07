@@ -109,7 +109,7 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     try:
         runner(argv)
     except CommandError as exc:
-        return (), f"codegraph MCP registration failed: {exc}"
+        return (), f"codegraph MCP registration failed: {_failure_line(exc)}"
     return tuple(sorted(harnesses)), None
 
 

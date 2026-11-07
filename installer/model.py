@@ -376,6 +376,8 @@ ConfigStepKind = Literal[
     "pnpm_group_install",
     "project_pack_global_uninstall",
     "project_pack_install",
+    "hook_register",
+    "zshenv_shell",
 ]
 
 
@@ -390,6 +392,9 @@ class ConfigStep:
     harness: str | None = None
     argv: tuple[str, ...] = ()
     cwd: Path | None = None
+    # The text a successful terminal_sync or zshenv_shell step reports (its done note);
+    # empty for every other kind.
+    report: str = ""
 
 
 @dataclass(frozen=True)

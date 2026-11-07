@@ -90,6 +90,7 @@ from installer.pnpm_globals import (
     node_install_policy,
     pnpm_global_packages,
 )
+from installer.postinstall import POSTINSTALL_HOOKS, host_labels
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
@@ -687,6 +688,30 @@ def _merge_facts(*maps: Mapping[str, _ConfigFacts]) -> dict[str, _ConfigFacts]:
         for tool_id, fact in facts.items():
             merged[tool_id] = merged.get(tool_id, _NO_FACTS).plus(fact)
     return merged
+
+
+def _hook_fact(
+    tool: Tool, receipt: Receipt | None, hosts: frozenset[str], presence_error: str | None
+) -> _ConfigFacts:
+    """D-02: a present, supported host the receipt does not record is a `≈` with its register step.
+
+    A tool with no receipt, or a hook with no per-host targets, has no hosts to record (D-03).
+    """
+    name = tool.postinstall or ""
+    pair = POSTINSTALL_HOOKS.get(name)
+    if receipt is None or pair is None or pair.targets is None:
+        return _NO_FACTS
+    if presence_error is not None:
+        return _ConfigFacts(unchecked=(f"agent hosts not checked: {presence_error}",))
+    recorded = receipt.hooks.get(name, ())
+    missing = [harness for harness in pair.targets if harness in hosts and harness not in recorded]
+    if not missing:
+        return _NO_FACTS
+    labels = host_labels(missing)
+    return _ConfigFacts(
+        (f"{tool.id} is not registered for {labels}",),
+        (ConfigStep(f"register {tool.id} for {labels}", "hook_register"),),
+    )
 
 
 PNPM_GROUP_UNREADABLE_NOTE = "pnpm group not checked: the pnpm inventory is unreadable"
@@ -1299,7 +1324,17 @@ class VersionRefreshService:
             self._write_or_queue(clear_manager_snapshot)
             return self._epoch
 
-    def _scan_packs(self, packs: Sequence[Tool]) -> _PackScan:
+    def _present_hosts(self) -> tuple[frozenset[str], str | None]:
+        """The harness hosts, read once per pass (23-REUSE 07-2). A failure is a note, never
+        a failed pass: it returns no hosts and the reason."""
+        try:
+            return present_harnesses(self._skill_home, self._looked_through), None
+        except Exception as exc:  # a read-only secondary fact must never fail the pass
+            return frozenset(), str(exc)
+
+    def _scan_packs(
+        self, packs: Sequence[Tool], present: frozenset[str], presence_error: str | None
+    ) -> _PackScan:
         """Harnesses and project reports, read once, outside `_lock` (D-17, D-21).
 
         Every scan takes `self._skill_home` explicitly (checker W5).
@@ -1307,11 +1342,8 @@ class VersionRefreshService:
         failures: dict[str, str] = {}
         if not packs:
             return _PackScan(present=frozenset(), projects={}, failures=failures)
-        try:
-            present = present_harnesses(self._skill_home, self._looked_through)
-        except Exception as exc:  # a read-only secondary fact must never fail the pass
-            present = frozenset[str]()
-            failures = {tool.id: f"{SKILL_NOT_CHECKED}{exc}" for tool in packs}
+        if presence_error is not None:
+            failures = {tool.id: f"{SKILL_NOT_CHECKED}{presence_error}" for tool in packs}
         projects: dict[str, ProjectPackReport] = {}
         for tool in packs:
             lifecycle = tool.skill_lifecycle
@@ -1793,6 +1825,7 @@ class VersionRefreshService:
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
         which = self._looked_through
+        hosts, presence_error = self._present_hosts()
         config = _merge_facts(
             self._terminal_facts(platform),
             _pnpm_group_facts(tools, inventory.pnpm_globals),
@@ -1869,7 +1902,9 @@ class VersionRefreshService:
                 ):
                     # No receipt, adoption or layout proves it (review C2-M2).
                     receipt_notes += (UNPROVEN_NOTE,)
-                facts = config.get(tool.id, _NO_FACTS)
+                facts = config.get(tool.id, _NO_FACTS).plus(
+                    _hook_fact(tool, receipt, hosts, presence_error)
+                )
                 found_broken, found_notes = evidence.get(tool.id, ((), ()))
                 states[tool.id] = tool_state(
                     tool,
@@ -1897,7 +1932,7 @@ class VersionRefreshService:
                 fetches += 1
             if new_entry is not None:
                 produced[tool.id] = new_entry
-        scan = self._scan_packs([pack for pack, *_rest in packs])
+        scan = self._scan_packs([pack for pack, *_rest in packs], hosts, presence_error)
         with self._lock:
             if self._epoch != started_epoch:
                 # RACED: an invalidate landed while this pass was resolving,

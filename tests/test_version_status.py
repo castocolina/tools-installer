@@ -4876,6 +4876,106 @@ def test_no_terminal_drift_seam_adds_nothing(tmp_path: Path) -> None:
     assert all(state.health is Health.OK for state in states.values())
 
 
+# -- 23-07 Task 1: a present host the hook receipt does not record reads ≈ (D-02, CONF-01) --
+
+
+def _hook_tool(tool_id: str = "codegraph") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd="codegraph",
+        methods=(Method(kind="github_release", params={}),),
+        tier="ai",
+        postinstall="codegraph-mcp-register",
+    )
+
+
+def _hook_receipt(hooks: Mapping[str, tuple[str, ...]], tool_id: str = "codegraph") -> None:
+    receipts.write(
+        Receipt(
+            tool=tool_id,
+            at="2026-11-07T00:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks=hooks,
+        )
+    )
+
+
+def _hook_service(tmp_path: Path, commands: frozenset[str]) -> VersionRefreshService:
+    return VersionRefreshService(
+        platform=_LINUX,
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=tmp_path / "managed",
+        which=lambda cmd: f"/usr/bin/{cmd}" if cmd in commands else None,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+        skill_home=tmp_path / "home",
+        present=lambda _tool: True,
+    )
+
+
+def test_an_unrecorded_present_host_reads_misconfigured(tmp_path: Path) -> None:
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    service = _hook_service(tmp_path, frozenset({"claude", "codex"}))
+    codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert codegraph.health is Health.MISCONFIGURED
+    assert codegraph.reasons[0] == "codegraph is not registered for codex"
+    assert codegraph.unconfigured == (ConfigStep("register codegraph for codex", "hook_register"),)
+
+    service = _hook_service(tmp_path, frozenset({"claude", "codex", "cursor-agent"}))
+    codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert codegraph.reasons[0] == "codegraph is not registered for codex, cursor-agent"
+    assert codegraph.unconfigured == (
+        ConfigStep("register codegraph for codex, cursor-agent", "hook_register"),
+    )
+
+
+def test_hook_drift_ignores_absent_unsupported_and_receiptless_tools(tmp_path: Path) -> None:
+    _hook_receipt({"codegraph-mcp-register": ()})
+    only_pi = _settled_states(_hook_service(tmp_path, frozenset({"pi"})), [_hook_tool()])
+    assert only_pi["codegraph"].unconfigured == ()
+    assert only_pi["codegraph"].health is not Health.MISCONFIGURED
+
+    receiptless = _hook_tool("codegraph-bare")
+    present_all = frozenset({"claude", "codex", "opencode", "cursor-agent", "pi"})
+    bare = _settled_states(_hook_service(tmp_path, present_all), [receiptless])
+    assert bare["codegraph-bare"].unconfigured == ()
+    assert bare["codegraph-bare"].health is not Health.MISCONFIGURED
+
+    _hook_receipt({"codegraph-mcp-register": ("claude", "codex", "opencode", "cursor")})
+    recorded = _settled_states(_hook_service(tmp_path, present_all), [_hook_tool()])
+    assert recorded["codegraph"].unconfigured == ()
+    assert recorded["codegraph"].health is not Health.MISCONFIGURED
+
+
+def test_the_pass_calls_present_harnesses_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[Path] = []
+    real = version_status.present_harnesses
+
+    def counted(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
+        calls.append(home)
+        return real(home, which)
+
+    monkeypatch.setattr(version_status, "present_harnesses", counted)
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    service = _hook_service(tmp_path, frozenset({"claude", "codex"}))
+    service.refresh([_hook_tool(), _claude_pack()])
+    assert len(calls) == 1
+
+
 # -- 19-16 Task 2: incomplete pnpm co-install groups (D-19, review H10/M11, checker I6) --
 
 _MMDC_PKG = "@mermaid-js/mermaid-cli"

@@ -8,7 +8,7 @@ import pytest
 
 import installer.engine as engine
 import installer.session as session_module
-from installer import executors, skill_lifecycle
+from installer import executors, postinstall, receipts, skill_lifecycle
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.model import (
@@ -836,6 +836,87 @@ def test_reconfigure_step_without_a_command_fails():
     assert recorder.argv == []
 
 
+def _codegraph_tool() -> Tool:
+    return Tool(
+        id="codegraph",
+        name="codegraph",
+        category="ai",
+        cmd="codegraph",
+        methods=(Method(kind="github_release", params={}),),
+        tier="ai",
+        postinstall="codegraph-mcp-register",
+    )
+
+
+def _codegraph_receipt(hooks: Mapping[str, tuple[str, ...]]) -> None:
+    receipts.write(
+        receipts.Receipt(
+            tool="codegraph",
+            at="2026-11-07T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="github_release", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks=hooks,
+        )
+    )
+
+
+_REGISTER_CODEX = ConfigStep("register codegraph for codex", "hook_register")
+
+
+def test_reconfigure_registers_the_missing_host(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+    recorder = RunRecorder()
+    outcomes = execute_plan(
+        [_reconfigure_row("codegraph", _REGISTER_CODEX)],
+        _run_context(recorder, catalog={"codegraph": _codegraph_tool()}),
+    )
+    assert len(recorder.argv) == 1
+    argv = recorder.argv[0]
+    assert argv[argv.index("--target") + 1] == "codex"
+    assert outcomes[0].result == "done"
+    assert outcomes[0].detail == "registered for codex"
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks["codegraph-mcp-register"] == ("claude", "codex")
+
+
+def test_a_failed_register_step_fails_the_row(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+
+    def runner(command: list[str]) -> None:
+        raise CommandError(command, 1, detail="boom")
+
+    outcomes = execute_plan(
+        [_reconfigure_row("codegraph", _REGISTER_CODEX)],
+        _run_context(RunRecorder(), catalog={"codegraph": _codegraph_tool()}, runner=runner),
+    )
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].detail == (
+        "register codegraph for codex: codegraph MCP registration failed: boom"
+    )
+
+
+def test_a_register_step_with_nothing_left_fails_with_a_reason(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude"}))
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+    recorder = RunRecorder()
+    outcomes = execute_plan(
+        [_reconfigure_row("codegraph", _REGISTER_CODEX)],
+        _run_context(recorder, catalog={"codegraph": _codegraph_tool()}),
+    )
+    assert recorder.argv == []
+    assert outcomes[0].result == "failed"
+    assert outcomes[0].detail == (
+        "register codegraph for codex: no unregistered host is present any more"
+    )
+
+
 @pytest.mark.parametrize(
     "status, expected, detail",
     [
@@ -1139,7 +1220,12 @@ _ALL_KIND_STEPS: dict[ConfigStepKind, ConfigStep] = {
     "project_pack_install": ConfigStep(
         "install gsd for Claude in repo", "project_pack_install", "claude", _GSD_INSTALL
     ),
+    "hook_register": ConfigStep("register codegraph for codex", "hook_register"),
+    "zshenv_shell": ConfigStep("export SHELL=/bin/zsh in ~/.zshenv", "zshenv_shell"),
 }
+
+# The details a dispatched step reports as a done note; every other kind reports none.
+_DISPATCH_DETAIL: dict[ConfigStepKind, str] = {"hook_register": "registered for codex"}
 
 
 def _execute_nothing(_method: Method, _runner: Runner) -> None:
@@ -1152,8 +1238,8 @@ def test_each_config_step_kind_dispatches(
 ) -> None:
     """Every ConfigStepKind has a branch, and the branches match the model's set.
 
-    One test per member (the plan asks for one per kind, and eight collected
-    tests are the evidence) plus the set equality, which is the guard: a ninth
+    One test per member (the plan asks for one per kind, and one collected
+    test per kind is the evidence) plus the set equality, which is the guard: a ninth
     kind added to `model.ConfigStepKind` fails here rather than reaching a
     command path nobody reviewed. The node executor is stubbed because the pnpm
     group is another test's subject; here the branch only has to be reached.
@@ -1163,17 +1249,23 @@ def test_each_config_step_kind_dispatches(
     assert declared == getattr(session_module, "_STEP" + "_KINDS")
     assert frozenset(_ALL_KIND_STEPS) == declared
 
+    tool_id = "superpowers"
     tool = _node_tool(Method(kind="host", params={"host_setup": True}), _group_method())
+    if kind == "hook_register":
+        tool_id, tool = "codegraph", _codegraph_tool()
+        monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
+        _codegraph_receipt({})
     recorder = RunRecorder()
     outcomes = execute_plan(
-        [_reconfigure_row("superpowers", _ALL_KIND_STEPS[kind])],
-        _run_context(recorder, catalog={"superpowers": tool}),
+        [_reconfigure_row(tool_id, _ALL_KIND_STEPS[kind])],
+        _run_context(recorder, catalog={tool_id: tool}),
     )
     assert outcomes[0].result == "done", kind
-    assert outcomes[0].detail == "", kind
-    # The two built-in kinds act through a bound seam instead of the runner,
-    # so nothing is recorded as a command; the other six run exactly one argv.
-    assert len(recorder.argv) == (0 if kind in {"terminal_sync", "pnpm_group_install"} else 1), kind
+    assert outcomes[0].detail == _DISPATCH_DETAIL.get(kind, ""), kind
+    # The built-in kinds act through a bound seam instead of the runner, so nothing is
+    # recorded as a command for them; hook_register runs one register argv, the rest one argv.
+    seam_only = {"terminal_sync", "pnpm_group_install", "zshenv_shell"}
+    assert len(recorder.argv) == (0 if kind in seam_only else 1), kind
 
 
 def test_pnpm_group_install_runs_the_tools_first_node_method(
