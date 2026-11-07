@@ -1086,6 +1086,19 @@ async def test_sensitive_action_screen_names_the_tool_and_the_reviewed_command()
     assert captured == [None]
 
 
+async def test_enter_on_open_takes_the_shell_init_default_of_no() -> None:
+    """F-1: the modal starts on the question's own default; shell init defaults to no."""
+    screen_cls = _sensitive_action_screen()
+    captured: list[str | None] = []
+    app = _host(_inputs())
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(screen_cls("fzf", "source_shell_init"), captured.append)
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured == ["no"]
+
+
 async def test_accepting_the_login_shell_prompt_returns_true_to_the_install_seam() -> None:
     received, answers, install = _recording_sensitive_install()
     inputs = _inputs(install=install)

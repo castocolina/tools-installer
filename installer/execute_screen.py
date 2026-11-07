@@ -182,6 +182,8 @@ class SensitiveActionScreen(ModalScreen[str | None]):
         yield ListView(
             ListItem(Label(prompt.yes), id="opt-yes"),
             ListItem(Label(prompt.no), id="opt-no"),
+            # Start on the question's own default, so one enter never opts in by accident (F-1).
+            initial_index=0 if prompt.default else 1,
         )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
