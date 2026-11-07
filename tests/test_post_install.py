@@ -23,7 +23,8 @@ from installer.post_install import (
     use_shell_init_sourcing,
 )
 from installer.postinstall import POSTINSTALL_HOOKS
-from installer.tweaks import shell_init_bundle
+from installer.shellrc import write_myshellrc
+from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -306,3 +307,34 @@ def test_every_sensitive_action_has_a_prompt() -> None:
     with pytest.raises(KeyError):
         sensitive_prompt("zoxide", "no_such_action")
     assert not hasattr(post_install, "SHELL_INIT_EFFECTS")
+
+
+@pytest.mark.parametrize("tool", SHELL_INIT_TOOLS)
+def test_each_shell_init_tool_follows_yes_and_no(tool: str) -> None:
+    home = Path.home()
+    marker = f"# >>> tools-installer tweak:{tool} >>>"
+    no = run_post_install(_shell_init_tool(tool), _mutable(), lambda _t, _a: False)
+    assert no == ()
+    assert not (home / ".myshellrc").exists()
+    yes = run_post_install(_shell_init_tool(tool), _mutable(), _yes)
+    assert yes == ("Shell init on: open a new terminal to use it.",)
+    run_post_install(_shell_init_tool(tool), _mutable(), _yes)
+    assert (home / ".myshellrc").read_text().count(marker) == 1
+
+
+def test_only_starship_touches_the_theme() -> None:
+    zshrc = Path.home() / ".zshrc"
+    zshrc.write_text(_OMZ_ZSHRC)
+    before = zshrc.read_bytes()
+    run_post_install(_shell_init_tool("zoxide"), _mutable(), _yes)
+    assert zshrc.read_bytes() == before
+
+
+def test_a_first_install_puts_the_path_block_above_shell_init() -> None:
+    home = Path.home()
+    run_post_install(_shell_init_tool("zoxide"), _mutable(), _yes)
+    write_myshellrc([home / ".local" / "bin"], home / ".myshellrc")
+    lines = (home / ".myshellrc").read_text().split("\n")
+    assert lines.index("# >>> tools-installer path >>>") < lines.index(
+        "# >>> tools-installer tweak:zoxide >>>"
+    )

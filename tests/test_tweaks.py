@@ -12,12 +12,14 @@ from installer.helper_assets import wait_time
 from installer.platform import Platform
 from installer.tweaks import (
     BUNDLES,
+    SHELL_INIT_TOOLS,
     TweakBundle,
     applicable_bundles,
     bundle_marker_present,
     install_tweak_executables,
     remove_tweak,
     remove_tweak_executables,
+    shell_init_bundle,
     tweak_block,
     tweak_executables_present,
     tweak_present,
@@ -523,3 +525,33 @@ def test_apt_upgrade_offered_on_linux_absent_on_macos() -> None:
     assert "apt-upgrade" in linux_ids
     assert "apt-upgrade" not in macos_ids
     assert {"docker", "countdown", "claude-skip"} <= set(macos_ids)
+
+
+def test_shell_init_bundles_sit_after_apt_upgrade_in_tool_order() -> None:
+    ids = [b.id for b in BUNDLES]
+    start = ids.index("apt-upgrade") + 1
+    assert tuple(ids[start : start + len(SHELL_INIT_TOOLS)]) == SHELL_INIT_TOOLS
+
+
+@pytest.mark.parametrize("tool", SHELL_INIT_TOOLS)
+def test_each_shell_init_body_is_guarded_and_parses(tool: str) -> None:
+    bundle = shell_init_bundle(tool)
+    assert bundle is not None
+    assert bundle.id == tool
+    assert bundle.requires == (tool,)
+    assert bundle.body.split("\n")[0] == f"if command -v {tool} >/dev/null; then"
+    result = subprocess.run(
+        ["bash", "-n", "-c", bundle.body], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not on PATH; zsh -n not run")
+@pytest.mark.parametrize("tool", SHELL_INIT_TOOLS)
+def test_each_shell_init_body_parses_in_zsh(tool: str) -> None:
+    bundle = shell_init_bundle(tool)
+    assert bundle is not None
+    result = subprocess.run(
+        ["zsh", "-n", "-c", bundle.body], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr

@@ -231,10 +231,24 @@ def has_managed_block(path: Path) -> bool:
     return _PATH_BEGIN in lines
 
 
+def _apply_path_block(content: str, block: str) -> str:
+    """Replace the PATH block in place; a first install puts it above tweak and source blocks.
+
+    A `command -v` guard in a tweak block only sees the managed bin dirs when the PATH
+    block comes first, so a file with no PATH block yet gets it above those blocks.
+    """
+    lines = content.split("\n")
+    if _PATH_BEGIN not in lines:
+        for index, line in enumerate(lines):
+            if line.startswith("# >>> tools-installer tweak:") or line == _SOURCE_BEGIN:
+                return "\n".join([*lines[:index], *block.split("\n"), "", *lines[index:]])
+    return apply_block(content, block)
+
+
 def write_myshellrc(bin_dirs: list[Path], path: Path) -> None:
     """Idempotently write the managed PATH block into ~/.myshellrc, preserving the rest."""
     existing = path.read_text() if path.exists() else ""
-    atomic_write_text(path, apply_block(existing, managed_block(bin_dirs)))
+    atomic_write_text(path, _apply_path_block(existing, managed_block(bin_dirs)))
 
 
 def write_managed_path(rc_path: Path, bin_dirs: list[Path]) -> None:
@@ -244,7 +258,7 @@ def write_managed_path(rc_path: Path, bin_dirs: list[Path]) -> None:
     preserved. Used when the user opts out of the ~/.myshellrc indirection.
     """
     existing = rc_path.read_text() if rc_path.exists() else ""
-    atomic_write_text(rc_path, apply_block(existing, managed_block(bin_dirs)))
+    atomic_write_text(rc_path, _apply_path_block(existing, managed_block(bin_dirs)))
 
 
 def ensure_source(rc_path: Path, myshellrc_path: Path) -> None:
