@@ -376,14 +376,14 @@ Plans:
   5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active.
   6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME).
 
-**Plans:** 16 plans (7 waves)
+**Plans:** 4/16 plans executed (7 waves)
 
 Plans:
 **Wave 1**
-- [ ] 23-01-PLAN.md — Hook register path on one host list (`present_harnesses`), hosts recorded in `receipt.hooks`, rtk hook deleted, `tools` removed from install/update
-- [ ] 23-02-PLAN.md — Guarded JSON/JSONC/TOML settings splice with byte-identical revert and compare-before-commit writes
-- [ ] 23-03-PLAN.md — Oh-My-Zsh honors `$ZSH`; one theme writer with a default only where none exists
-- [ ] 23-04-PLAN.md — Managed `~/.zshenv` SHELL block, kitty/WezTerm SHELL lines, environment.d carries the zsh path
+- [x] 23-01-PLAN.md — Hook register path on one host list (`present_harnesses`), hosts recorded in `receipt.hooks`, rtk hook deleted, `tools` removed from install/update
+- [x] 23-02-PLAN.md — Guarded JSON/JSONC/TOML settings splice with byte-identical revert and compare-before-commit writes
+- [x] 23-03-PLAN.md — Oh-My-Zsh honors `$ZSH`; one theme writer with a default only where none exists
+- [x] 23-04-PLAN.md — Managed `~/.zshenv` SHELL block, kitty/WezTerm SHELL lines, environment.d carries the zsh path
 **Wave 2**
 - [ ] 23-05-PLAN.md — Unregister builders from recorded hosts, herdr pair shape, tealdeer cache fetch
 - [ ] 23-06-PLAN.md — Agent/editor settings API and per-agent config-write ledger
@@ -473,7 +473,7 @@ Plans:
 | 20. Install plan with dispositions | 0/TBD | Not started | - |
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
-| 23. Configuration as a lifecycle step | 0/TBD | Not started | - |
+| 23. Configuration as a lifecycle step | 4/16 | In Progress | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
