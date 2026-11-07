@@ -1,6 +1,7 @@
 import json
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from typing import NamedTuple, cast
 import pytest
 
 import setup
+from tests.conftest import GuardedPopen, launch_policy
 from tests.sandbox import (
     CHECKOUT,
     FORBIDDEN_PROGRAM_NAMES,
@@ -760,3 +762,42 @@ def test_the_guard_runs_allowed_programs(tmp_path: Path) -> None:
     assert ran.stdout == "fake-ran\n"
     assert subprocess.run(["sh", "-n", str(script)], check=False).returncode == 0
     assert subprocess.run([sys.executable, "-c", "pass"], check=False).returncode == 0
+
+
+def test_the_guard_judges_symlinks_by_target(tmp_path: Path, host_fakes: Path) -> None:
+    link = tmp_path / "friendly-name"
+    link.symlink_to(host_fakes / "uv")
+    with pytest.raises(AssertionError, match=re.escape(str(host_fakes / "uv"))):
+        subprocess.run([str(link)], check=False)
+    assert list(host_fakes.glob("*.ran")) == []
+
+
+def test_the_guard_rejects_malformed_argv(host_fakes: Path) -> None:
+    for refused_call in (
+        lambda: subprocess.run([], check=False),
+        lambda: subprocess.run(["sh", "-c", ""], check=False),
+        lambda: subprocess.run("uv --version", check=False),
+        lambda: subprocess.run("uv x", shell=True, check=False),
+    ):
+        with pytest.raises(AssertionError):
+            refused_call()
+    assert list(host_fakes.glob("*.ran")) == []
+    done = subprocess.run("echo hi", shell=True, capture_output=True, text=True, check=False)
+    assert done.stdout == "hi\n"
+
+
+@pytest.mark.parametrize("script", ["echo a; uv x", "echo a | uv x", "echo a && uv x"])
+def test_the_guard_checks_every_command_of_a_script(script: str, host_fakes: Path) -> None:
+    with pytest.raises(AssertionError, match="host's uv"):
+        subprocess.run(["bash", "-c", script], check=False)
+    assert list(host_fakes.glob("*.ran")) == []
+    done = subprocess.run(
+        ["bash", "-c", "echo a; echo b"], capture_output=True, text=True, check=False
+    )
+    assert done.stdout == "a\nb\n"
+
+
+def test_each_worker_installs_the_guard(tmp_path_factory: pytest.TempPathFactory) -> None:
+    # Each xdist worker runs its own session fixture: the policy lives in the worker's module.
+    assert subprocess.Popen is GuardedPopen
+    assert launch_policy().allowed_root == tmp_path_factory.getbasetemp().resolve()
