@@ -310,12 +310,17 @@ def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:
         atomic_write_text(rc_path, stripped)
 
 
-def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:
-    """True when rc_path exists and carries the bundle's begin marker."""
+def bundle_marker_present(bundle_id: str, rc_path: Path) -> bool:
+    """True when rc_path exists and carries the begin marker of the bundle's block."""
     if not rc_path.exists():
         return False
-    begin, _ = _markers(bundle.id)
+    begin, _ = _markers(bundle_id)
     return begin in rc_path.read_text().split("\n")
+
+
+def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:
+    """True when rc_path exists and carries the bundle's begin marker."""
+    return bundle_marker_present(bundle.id, rc_path)
 
 
 def applicable_bundles(platform: Platform) -> tuple[TweakBundle, ...]:
