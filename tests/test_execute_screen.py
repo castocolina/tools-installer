@@ -5068,3 +5068,146 @@ async def test_update_row_transitions_from_review_to_running_to_finished(tmp_pat
 
     assert "✓ rg  updated" in _log_text(screen)
     assert _outcomes_by_id(screen)["rg"].result == "done"
+
+
+# --- Run options in the install review (plan 23-12, Task 1) ----------------
+
+_RUN_OPTION_HEADING = "run options — off unless you turn them on with space"
+_OPTION_LOCKED = "A run option is set before start; it cannot change now."
+_OPTION_PLAN_ROW_ONLY = "space toggles run options only; plan rows change with r."
+
+
+def _codex_inputs(
+    *, install: SensitiveInstall | None = None, unattended: bool = False
+) -> tuple[Tool, ExecuteInputs]:
+    codex = _tool("codex")
+    inputs = _inputs(
+        tools=[codex],
+        install=install,
+        unattended=unattended,
+        states=[plan_state(codex, health=Health.MISSING)],
+    )
+    return codex, inputs
+
+
+async def test_an_auto_approve_option_toggles_and_reaches_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex, inputs = _codex_inputs()
+    handed: list[frozenset[str]] = []
+    real_execute_plan = installer.execute_screen.execute_plan
+
+    def recording_execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
+        handed.append(ctx.options)
+        return real_execute_plan(rows, ctx)
+
+    monkeypatch.setattr(installer.execute_screen, "execute_plan", recording_execute_plan)
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        prompts = _plan_prompts(screen)
+        assert prompts == [
+            "○ codex  will install — not installed",
+            _RUN_OPTION_HEADING,
+            "[ ] auto-approve agents — codex: no permission prompts",
+        ]
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("run-opt-auto-approve")
+        await pilot.press("space")
+        await pilot.pause()
+        assert _plan_prompts(screen)[2] == "[x] auto-approve agents — codex: no permission prompts"
+        await pilot.press("enter")
+        await _settle_execute(screen, pilot)
+    assert handed == [frozenset({"auto-approve"})]
+
+
+async def test_space_on_a_plan_row_warns_and_changes_nothing() -> None:
+    codex, inputs = _codex_inputs()
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("space")
+        await pilot.pause()
+        assert screen.status.text == _OPTION_PLAN_ROW_ONLY
+        assert _plan_prompts(screen)[2] == "[ ] auto-approve agents — codex: no permission prompts"
+
+
+async def test_space_after_enter_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    started, release = threading.Event(), threading.Event()
+    handed: list[frozenset[str]] = []
+    real_execute_plan = installer.execute_screen.execute_plan
+
+    def recording_execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
+        handed.append(ctx.options)
+        return real_execute_plan(rows, ctx)
+
+    def install(
+        tool: Tool, platform: Platform, runner: Runner, resolve_tag: TagResolver, **kwargs: Any
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, kwargs
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    monkeypatch.setattr(installer.execute_screen, "execute_plan", recording_execute_plan)
+    codex, inputs = _codex_inputs(install=install)
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        options = screen.query_one("#plan-rows", OptionList)
+        options.highlighted = options.get_option_index("run-opt-auto-approve")
+        await pilot.press("space")
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        await pilot.press("space")
+        await pilot.pause()
+        assert screen.status.text == _OPTION_LOCKED
+        release.set()
+        await _settle_execute(screen, pilot)
+        await pilot.press("space")
+        await pilot.pause()
+        assert screen.status.text == _OPTION_LOCKED
+    assert handed == [frozenset({"auto-approve"})]
+
+
+async def test_a_skip_only_plan_shows_no_run_options() -> None:
+    codex = _tool("codex")
+    inputs = _inputs(tools=[codex], states=[plan_state(codex, health=Health.OK)])
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _plan_prompts(screen) == ["✓ codex  skipped — already current (r: reinstall)"]
+        assert _keys_text(screen) == "enter continue · r reinstall · up/down move · esc cancel"
+
+
+async def test_the_review_shows_an_unparsable_file_note() -> None:
+    config = Path.home() / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("not = [valid\n")
+    codex, inputs = _codex_inputs()
+    app = _host(inputs, [codex])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen(["codex"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        assert _plan_prompts(screen)[2] == (
+            "[ ] auto-approve agents — codex: no permission prompts\n"
+            "    codex: config.toml is not valid TOML; nothing will be written"
+        )
