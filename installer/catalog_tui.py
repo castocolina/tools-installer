@@ -24,14 +24,12 @@ from installer.enums import Audience, MutationHolder, Priority
 from installer.model import Tool
 from installer.ownership import (
     MUTATION_GRADE,
-    OWNER_LABELS,
     active_path_note,
     declared_manager_label,
     owner_label,
 )
 from installer.resolve import UnavailableReason
 from installer.selection import select_tools, unstaged_recommends
-from installer.skill_lifecycle import SKILL_HARNESS_LABELS
 from installer.status import is_default_shell
 from installer.tool_browser import BrowserAdapter, Section, ToolBrowser
 from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, AppScreen, StatusLine, mark, run_live
@@ -40,7 +38,6 @@ from installer.version_status import (
     HEALTH_DETAIL,
     HEALTH_MARKS,
     Health,
-    SkillHostStatus,
     ToolState,
     VersionRefreshService,
 )
@@ -210,8 +207,6 @@ _HEALTH_WORD = {
     Health.MISSING: "missing",
     Health.UNAVAILABLE: "unavailable",
 }
-# Already this wide for one owner, so a host list truncates only if it would widen the column (D-13)
-_OWNER_CELL_MAX = max(len(label) for label in OWNER_LABELS.values())
 
 # 19-UI-SPEC "Legend", verbatim: three lines of at most 78 cells (the 80-column
 # minimum minus `padding: 0 1`); lines 1 and 2 have no slack, so a new entry
@@ -370,31 +365,16 @@ class CatalogScreen(AppScreen):
         return Text(text)
 
     # -- catalog data wiring for the browser adapter -----------------------
-    def _skill_owner_cell(self, status: SkillHostStatus) -> Text:
-        labels = [
-            SKILL_HARNESS_LABELS.get(harness, harness)
-            for harness, value in status.hosts.items()
-            if value == "present"
-        ]
-        if not labels:
-            return Text("")
-        if len(labels) == 1 or len(", ".join(labels)) <= _OWNER_CELL_MAX:
-            return Text(", ".join(labels))
-        return Text(f"{labels[0]} +{len(labels) - 1}")
-
     def _owner_cell(
         self, tool: Tool, painted: Mapping[str, ToolState | None] | None = None
     ) -> Text:
-        """The owner label, or the hosts for a skill pack, from the state. Empty
-        without a state (the Health `…` already says checking) and for an
-        unknown owner. Not gated on presence: ownership comes from the live
-        binary path, so an absent-reading tool can still carry a real owner."""
+        """The owner label from the state. Empty without a state (the Health `…`
+        already says checking) and for an unknown owner. Not gated on presence:
+        ownership comes from the live binary path, so an absent-reading tool can
+        still carry a real owner."""
         state = self._state(tool, painted)
         if state is None:
             return Text("")
-        if tool.skill_lifecycle is not None:
-            hosts = state.skill_hosts
-            return self._skill_owner_cell(hosts) if hosts is not None else Text("")
         label = owner_label(state.ownership)
         if not label:
             return Text("")

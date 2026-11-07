@@ -2999,8 +2999,8 @@ class DaemonDefaultApplied(Message):
 
 
 class RefreshPublished(Message):
-    """The refresh worker published a stage. `error` is the first error of the
-    pass, carried on both stages so a clean publication means both succeeded."""
+    """The refresh worker published a pass. `error` is the pass's first error;
+    a clean publication means the pass succeeded."""
 
     def __init__(self, error: str | None, warning: str | None) -> None:
         super().__init__()
@@ -3300,11 +3300,6 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         try:
             if service is not None:
                 _result, error = run_live(lambda: service.refresh(self._tools))
-                self.post_message(
-                    RefreshPublished(error, service.warning if error is None else None)
-                )
-                _hosts, skills_error = run_live(lambda: service.refresh_skills(self._tools))
-                error = error or skills_error
                 self.post_message(
                     RefreshPublished(error, service.warning if error is None else None)
                 )
