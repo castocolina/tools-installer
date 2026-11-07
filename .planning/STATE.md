@@ -4,18 +4,18 @@ milestone: v0.50.0
 milestone_name: Truthful lifecycle
 current_phase: "23.2"
 current_phase_name: Install-time tuning instead of Policies knobs
-status: Verifying — human_needed (UAT fixes in progress)
-stopped_at: Phase 23.1 UI-SPEC approved
-last_updated: "2026-11-07T23:43:38.126Z"
+status: executing
+stopped_at: Phase 23.1 complete; Phase 23.2 planned (8 plans), cross-AI review cycle 1
+last_updated: "2026-11-07T23:47:59.884Z"
 last_activity: 2026-11-07
-last_activity_desc: Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
-state_head: c07b4f03e275d71741003092213a72ae28baef5d
+last_activity_desc: Phase 23.1 complete, transitioned to Phase 17
+state_head: dbed162b7eaa2b0f5cf041134ee1d7acb04d42ad
 progress:
   total_phases: 15
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 202
   completed_plans: 194
-  percent: 7
+  percent: 13
 ---
 
 # Project State
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 ## Current Position
 
 Phase: 23.2 (Install-time tuning instead of Policies knobs) — READY TO EXECUTE
-Plan: 16 of 16
-Status: Verifying — human_needed (UAT fixes in progress)
-Last activity: 2026-11-07 — Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
+Plan: 21
+Status: Ready to execute
+Last activity: 2026-11-07 — Phase 23.1 complete, transitioned to Phase 17
 
-Progress: [█░░░░░░░░░] 7%
+Progress: [█░░░░░░░░░] 13%
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 20 | 31 | - | - |
+| 23.1 | 18 | - | - |
 
 *Updated after each plan completion*
 
@@ -106,9 +107,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-07T13:32:07.078Z
-Stopped at: Phase 23.1 UI-SPEC approved
-Resume file: .planning/phases/23.1-host-safety-drop-the-skill-pack-catalog-entries-sandboxed-te/23.1-UI-SPEC.md
+Last session: 2026-11-07T23:47:58.922Z
+Stopped at: Phase 23.1 complete; Phase 23.2 planned (8 plans), cross-AI review cycle 1
+Resume file: .planning/phases/23.2-install-time-tuning-instead-of-policies-knobs/23.2-01-PLAN.md
 
 ## Deferred Verification
 

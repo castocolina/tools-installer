@@ -41,12 +41,12 @@
     {
       "number": "23.1",
       "name": "Host safety",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "23.2",
       "name": "Install-time tuning",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "24",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 8 of 15 · 7% · executing"
+    "reason": "Phase 9 of 15 · 13% · executing"
   },
-  "updated_at": "2026-11-07T17:50:30.591Z"
+  "updated_at": "2026-11-07T23:47:53.315Z"
 }
