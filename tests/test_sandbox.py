@@ -3,10 +3,13 @@ import pwd
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+import setup
 from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain, host_free_path
 
 
@@ -65,3 +68,18 @@ def test_assert_not_host_toolchain_only_guards_the_named_programs(tmp_path: Path
     expected = frozenset({"node", "npm", "npx", "pnpm", "corepack", "volta", "bun", "yarn", "brew"})
     assert HOST_TOOLCHAIN.issuperset(expected)
     assert expected.issuperset(HOST_TOOLCHAIN)
+
+
+def test_no_setup_home_constant_points_at_the_real_home() -> None:
+    """setup.py resolves its home paths at import; the autouse sandbox must re-root them (R1-07)."""
+    real_home = Path(os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir))
+    # The checkout may sit under HOME (package data such as _REGISTRY); only home paths count.
+    project = Path(os.path.realpath(setup.__file__)).parent
+    for name, value in vars(setup).items():
+        items: Sequence[object] = (
+            cast(Sequence[object], value) if isinstance(value, (list, tuple)) else [value]
+        )
+        for item in items:
+            if isinstance(item, Path) and not Path(os.path.realpath(item)).is_relative_to(project):
+                assert not Path(os.path.realpath(item)).is_relative_to(real_home), name
+    assert vars(setup)["_MYSHELLRC"] == Path.home() / ".myshellrc"

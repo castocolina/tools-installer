@@ -2169,7 +2169,6 @@ def test_undeclared_brew_cellar_groovy(tmp_path: Path) -> None:
         platform=_MAC,
         runner=calls.append,
         resolve_tag=lambda _repo: "v1.0.0",
-        tools={},
     )
     assert outcome.status == "updated"
     assert calls == [["brew", "upgrade", "groovy"]]

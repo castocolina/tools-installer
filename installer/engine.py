@@ -2,7 +2,7 @@
 
 import os
 import shutil
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -21,7 +21,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction, run_post_install
-from installer.postinstall import run_postinstall
+from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
 from installer.skill_lifecycle import perform_action
@@ -90,6 +90,8 @@ class InstallOutcome:
     post_install_handoff: tuple[str, ...] = ()
     # Only on MANUAL_REQUIRED from a native-package method: the exact command the user runs.
     manual_command: str | None = None
+    # Harness ids this install registered its postinstall hook for (INSTALLED only).
+    hooks: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -104,6 +106,7 @@ class InstallOutcome:
         handoff: tuple[str, ...] = (),
         post_install_handoff: tuple[str, ...] = (),
         manual_command: str | None = None,
+        hooks: tuple[str, ...] = (),
     ) -> None:
         object.__setattr__(self, "tool_id", tool_id)
         object.__setattr__(self, "status", InstallStatus(status))
@@ -116,6 +119,7 @@ class InstallOutcome:
         object.__setattr__(self, "handoff", handoff)
         object.__setattr__(self, "post_install_handoff", post_install_handoff)
         object.__setattr__(self, "manual_command", manual_command)
+        object.__setattr__(self, "hooks", hooks)
 
 
 def _perform(
@@ -152,7 +156,6 @@ def install_tool(
     resolve_tag: TagResolver = resolve_github_tag,
     *,
     checksum_policy: ChecksumPolicy = "fail",
-    tools: Mapping[str, Tool] | None = None,
     confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     repair: bool = False,
     present: Callable[[Tool], bool] | None = None,
@@ -168,11 +171,6 @@ def install_tool(
     not silently degrade to another channel); checksum_policy="continue"
     restores ordinary fall-through and is only ever set by an explicit user
     choice.
-
-    `tools` is the full loaded catalog, keyed by id — required only when
-    `tool.postinstall` names a hook that needs to check another host's
-    presence; `None` is safe for any `Tool` with `postinstall=None`,
-    including every existing call site and test predating this phase.
 
     After a method succeeds, a tool declaring `postinstall` is dispatched
     immediately, before this function returns; a postinstall problem is
@@ -328,9 +326,10 @@ def install_tool(
                 except OSError as exc:
                     leftovers.append(f"install receipt not written: {exc}")
             warning = None
+            registered: tuple[str, ...] = ()
             if tool.postinstall:
                 try:
-                    warning = run_postinstall(tool.postinstall, method, runner, tools or {})
+                    registered, warning = register_hooks(tool, method, runner)
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
             post_install_handoff, crash = _dispatch_post_install(
@@ -349,6 +348,7 @@ def install_tool(
                 unverified_reason=unverified_reason,
                 postinstall_warning=warning,
                 post_install_handoff=post_install_handoff,
+                hooks=registered,
             )
     return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))
 

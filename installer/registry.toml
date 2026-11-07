@@ -1713,28 +1713,15 @@ desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its ow
 # global|local`, and `--yes` (non-interactive). `--target auto` is UNSAFE here:
 # reading codegraph's own installer/targets/registry.js::resolveTargetFlag directly
 # found it silently falls back to registering `claude` when it detects ZERO installed
-# hosts. This postinstall hook (installer/postinstall.py::_codegraph_mcp_register)
-# never passes "auto" -- it computes an explicit CSV via installer.status.is_installed
-# on each of claude/codex/opencode/cursor-agent (mapping cursor-agent -> codegraph's own
-# "cursor" id) and skips the `codegraph install` call entirely when none are present.
-# `codegraph install` merges into each target's own config file rather than
-# duplicating an entry, so re-running it is a safe no-op -- no separate "already
-# registered" check is needed on this project's side. Per D-01 (09-CONTEXT.md), this
-# fires ONLY from codegraph's own successful install and is never re-triggered by
-# installing a NEW agent host afterward -- a known, accepted limitation. Also passes
-# `--no-permissions`: codegraph's own `--yes` help text documents that flag as ALSO
-# enabling a Claude Code auto-allow permissions list and a UserPromptSubmit hook, not
-# merely non-interactivity -- `--no-permissions` (Claude-only, a no-op for other
-# targets) keeps this call scoped to MCP registration only, matching
-# REQ-codegraph-mcp-postinstall's literal wording (dual-lane review, codex-sol-high).
-# Known, accepted limitation (dual-lane review, codex-sol-high): host detection uses
-# the current process's live PATH via `is_installed`; a P0 agent host installed
-# EARLIER IN THE SAME wizard run may not yet be on PATH (wiring happens in a later,
-# separate `configure_path`/`make fix` step), so this hook could under-detect a
-# same-run install. This matches REQ-codegraph-mcp-postinstall's own literal scope
-# ("agent hosts already present" on the machine, not concurrently installed this
-# run) and this codebase's existing `is_installed`/live-PATH detection convention
-# used everywhere else -- not a regression this phase introduces.
+# hosts. The hook (installer/postinstall.py::_codegraph_register) never passes "auto":
+# it builds an explicit CSV from the present harnesses (cursor-agent -> codegraph's own
+# "cursor" id) and skips the `codegraph install` call when none are present.
+# `codegraph install` merges into each target's config file, so a rerun is a no-op.
+# `--no-permissions` keeps the call to MCP registration: codegraph's `--yes` also
+# enables a Claude Code auto-allow list and a UserPromptSubmit hook.
+# Verified 2026-11-07 (Phase 23, CONF-02/CONF-03): hosts come from
+# skill_lifecycle.present_harnesses; receipt.hooks records the registered hosts. The
+# new-host sweep (CONF-02) lands in plan 23-07.
 postinstall = "codegraph-mcp-register"
 [[tool.method]]
 kind = "github_release"
@@ -1838,22 +1825,6 @@ audience = "ai"
 tier = "ai"
 verified = 2026-11-03
 desc = "CLI proxy that rewrites/compresses common dev-command output to cut LLM-visible token usage 60-90%."
-# Audit F3 (v0.52.0): `--opencode` implies Claude install; `--agent cursor` no longer touches ~/.claude (#2097).
-postinstall = "rtk-register"
-# Verified 2026-09-11: rtk v0.49.0's `claude` host registration
-# (`rtk init -g --auto-patch`) live-tested against a freshly downloaded,
-# checksum-verified binary in an isolated scratch $HOME -- confirmed
-# idempotent on rerun and merge-safe against pre-existing permissions/hooks/
-# statusLine content. See 12.4-01-SUMMARY.md for the full transcript.
-# Verified 2026-09-11: `opencode`/`codex` host registration live-tested
-# against the same v0.49.0 binary; `codex` never receives --auto-patch
-# (rejected outright: "--codex cannot be combined with --auto-patch").
-# `cursor-agent`'s `--agent cursor` mode STILL unconditionally also writes
-# Claude Code's RTK.md/settings.json as a side effect in v0.49.0 (unchanged
-# from the stale v0.44.1 research finding) -- installer/postinstall.py's
-# _rtk_register only fires the cursor-agent branch when `claude` is ALSO
-# present, to avoid writing unrequested Claude Code scaffolding on a
-# Cursor-only machine. See 12.4-01-SUMMARY.md for the full transcript.
 [[tool.method]]
 kind = "github_release"
 os = ["macos"]

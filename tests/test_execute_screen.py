@@ -564,7 +564,6 @@ async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
             runner,
             resolve_tag,
             checksum_policy=checksum_policy,
-            tools=tools,
         )
 
     inputs = _inputs(install=install, unattended=True)
@@ -959,7 +958,6 @@ async def test_cancel_is_inert_while_the_mismatch_modal_is_open() -> None:
                 runner,
                 resolve_tag,
                 checksum_policy=checksum_policy,
-                tools=tools,
             )
         fd_started.set()
         assert fd_release.wait(timeout=5)
@@ -1184,7 +1182,6 @@ async def test_cancel_is_inert_while_the_sensitive_prompt_is_open() -> None:
                 runner,
                 resolve_tag,
                 checksum_policy=checksum_policy,
-                tools=tools,
                 confirm_sensitive_action=confirm_sensitive_action,
             )
         fd_started.set()
@@ -1494,7 +1491,6 @@ class _RecordingUpdateService(UpdateService):
             platform=_PLATFORM,
             runner=lambda _cmd: None,
             resolve_tag=lambda _repo: "v1",
-            tools={},
             managed_packages=lambda: (),
             replay_globals=lambda packages: tuple(packages),
             reresolve_ownership=_brew_ownership,
@@ -3239,7 +3235,6 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
             runner=refuse_run,
             resolve_tag=resolve_tag,
             checksum_policy=checksum_policy,
-            tools=tools,
             confirm_sensitive_action=confirm_sensitive_action,
             repair=repair,
             present=lambda _tool: True,
@@ -3321,7 +3316,6 @@ async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_reviewed_chsh_h
             runner=lambda command: calls.append(command),
             resolve_tag=resolve_tag,
             checksum_policy=checksum_policy,
-            tools=tools,
             confirm_sensitive_action=confirm_sensitive_action,
             present=lambda _tool: False,
         )

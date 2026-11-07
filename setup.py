@@ -648,7 +648,7 @@ def _which_with_brew(name: str) -> str | None:
     that same process, and the synchronizer took its revert branch instead of
     configuring anything -- silently, on the exact host this phase was built
     for. Reuses the fix pattern this project already has for the identical
-    chicken-and-egg problem (`installer/postinstall.py::_resolve_rtk_binary`,
+    chicken-and-egg problem (`installer/postinstall.py::_resolve_binary`,
     `BREW_BIN_DIRS`).
     """
     found = shutil.which(name)
@@ -755,7 +755,6 @@ def _build_services(
         live_platform=lambda: version_refresh.platform,
         runner=run_captured,
         resolve_tag=resolve_github_tag,
-        tools={tool.id: tool for tool in tools},
         managed_packages=pnpm_globals.pnpm_global_packages,
         replay_globals=_reinstall_globals,
         # The pass's own evidence, freshly gathered (live platform, a fresh

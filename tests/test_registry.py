@@ -2072,8 +2072,8 @@ def test_codegraph_entry_records_the_postinstall_research_findings() -> None:
         "codegraph-mcp-register",
         "--target auto",
         "cursor-agent",
-        "is_installed",
-        "D-01",
+        "present_harnesses",
+        "CONF-02",
     ):
         assert needle in window, f"missing {needle!r} in codegraph's postinstall window"
 
@@ -2868,3 +2868,12 @@ def test_script_tools_declare_their_documented_config_dirs(
     tool_id: str, config: tuple[str, ...]
 ) -> None:
     assert _tools_by_id()[tool_id].config_paths == config
+
+
+def test_rtk_has_no_hook() -> None:
+    from installer.model import POSTINSTALL_HOOK_NAMES
+    from installer.postinstall import POSTINSTALL_HOOKS
+
+    assert "rtk-register" not in POSTINSTALL_HOOKS
+    assert "rtk-register" not in POSTINSTALL_HOOK_NAMES
+    assert _tools_by_id()["rtk"].postinstall is None

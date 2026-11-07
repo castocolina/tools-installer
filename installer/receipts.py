@@ -24,7 +24,7 @@ import re
 import stat as stat_module
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal, TypeGuard, cast
@@ -155,6 +155,20 @@ def write(receipt: Receipt) -> None:
         _write_unlocked(receipt)
 
 
+def record_hooks(tool_id: str, name: str, hosts: tuple[str, ...]) -> bool:
+    """Merge `hosts` into the receipt's `hooks[name]` (sorted, unique).
+
+    False, with nothing written, when the tool has no receipt: a registration
+    nothing records could never be undone (review R1-08)."""
+    with _WRITE_LOCK:
+        receipt = read(tool_id)
+        if receipt is None:
+            return False
+        merged = tuple(sorted({*receipt.hooks.get(name, ()), *hosts}))
+        _write_unlocked(replace(receipt, hooks={**receipt.hooks, name: merged}))
+    return True
+
+
 def read(tool_id: str) -> Receipt | None:
     """Read back the receipt written for `tool_id`; None when it cannot be trusted.
 
@@ -231,6 +245,7 @@ def _build_receipt(
     *,
     package: str | None,
     smoke: str | None,
+    hooks: Mapping[str, tuple[str, ...]],
 ) -> Receipt:
     """The one receipt constructor; callers pass fingerprints they already hold.
 
@@ -243,7 +258,7 @@ def _build_receipt(
         package=package,
         artifacts=artifacts,
         smoke=smoke,
-        hooks={},
+        hooks=hooks,
     )
 
 
@@ -294,7 +309,9 @@ def record(
         )
         is not None
     )
-    receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke)
+    # A re-record keeps the hosts a hook already registered (research Pitfall 1).
+    hooks: Mapping[str, tuple[str, ...]] = previous.hooks if previous is not None else {}
+    receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke, hooks=hooks)
     existed = receipt_exists(tool.id)
     try:
         write(receipt)
@@ -364,7 +381,7 @@ def adopt(
         fresh = fingerprint(artifact.path, artifact.type, rehash=True)
         if fresh is None or fresh != artifact:
             return None
-        receipt = _build_receipt(tool, method, (fresh,), package=package, smoke=None)
+        receipt = _build_receipt(tool, method, (fresh,), package=package, smoke=None, hooks={})
         if write:
             _write_unlocked(receipt)
         return receipt

@@ -1569,3 +1569,34 @@ def test_record_without_a_snapshot_fails_closed(
     )
     assert hashed is not None
     assert [artifact.type for artifact in hashed.artifacts] == ["file"]
+
+
+def _hooked_receipt(hooks: dict[str, tuple[str, ...]]) -> Receipt:
+    return Receipt(
+        tool="yq",
+        at="2026-11-07T00:00:00+00:00",
+        method=ReceiptMethod(kind="brew", key="k"),
+        package=None,
+        artifacts=(),
+        smoke=None,
+        hooks=hooks,
+    )
+
+
+def test_record_keeps_the_hooks_on_a_re_record() -> None:
+    method = Method(kind="brew", params={"formula": "yq"})
+    write(_hooked_receipt({"h": ("claude",)}))
+    receipts.record(_record_tool("yq", method), method, package=None, smoke=None)
+    written = receipts.read("yq")
+    assert written is not None
+    assert written.hooks == {"h": ("claude",)}
+
+
+def test_record_hooks_merges_sorted_and_skips_a_missing_receipt() -> None:
+    write(_hooked_receipt({"h": ("opencode",)}))
+    assert receipts.record_hooks("yq", "h", ("codex", "claude")) is True
+    written = receipts.read("yq")
+    assert written is not None
+    assert written.hooks == {"h": ("claude", "codex", "opencode")}
+    assert receipts.record_hooks("nothing", "h", ("codex",)) is False
+    assert not receipts.receipt_path("nothing").exists()

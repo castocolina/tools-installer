@@ -139,7 +139,7 @@ def test_execute_plan_passes_run_context_dependencies_to_install():
     def resolve_tag(_repo: str) -> str:
         return "1.0.0"
 
-    seen: list[tuple[Tool, Platform, Runner, TagResolver, Mapping[str, Tool] | None]] = []
+    seen: list[tuple[Tool, Platform, Runner, TagResolver]] = []
 
     def install(
         tool: Tool,
@@ -148,12 +148,11 @@ def test_execute_plan_passes_run_context_dependencies_to_install():
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         assert checksum_policy == "fail"
         assert confirm_sensitive_action is None
-        seen.append((tool, platform, runner, resolve_tag, tools))
+        seen.append((tool, platform, runner, resolve_tag))
         return InstallOutcome(tool.id, "installed")
 
     context = RunContext(
@@ -167,12 +166,11 @@ def test_execute_plan_passes_run_context_dependencies_to_install():
 
     assert outcomes[0].result == "done"
     assert len(seen) == 1
-    actual_tool, actual_platform, actual_runner, actual_resolve_tag, actual_catalog = seen[0]
+    actual_tool, actual_platform, actual_runner, actual_resolve_tag = seen[0]
     assert actual_tool is tool
     assert actual_platform is platform
     assert actual_runner is runner
     assert actual_resolve_tag is resolve_tag
-    assert actual_catalog is catalog
 
 
 def test_execute_plan_refuses_a_plan_with_a_wait_row():
@@ -365,7 +363,6 @@ def test_a_headless_update_row_on_a_pinned_app_reads_blocked(
         platform=_platform(),
         runner=lambda _cmd: None,
         resolve_tag=lambda _repo: "1.0.0",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -556,7 +553,7 @@ def test_execute_plan_mismatch_retry_skip_and_fallback(
 ):
     from installer.enums import InstallStatus
 
-    seen: list[tuple[ChecksumPolicy, Mapping[str, Tool] | None]] = []
+    seen: list[ChecksumPolicy] = []
 
     def install(
         tool: Tool,
@@ -565,11 +562,10 @@ def test_execute_plan_mismatch_retry_skip_and_fallback(
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
-        seen.append((checksum_policy, tools))
+        seen.append(checksum_policy)
         status = InstallStatus.CHECKSUM_MISMATCH if len(seen) == 1 else InstallStatus.INSTALLED
         return InstallOutcome(tool.id, status)
 
@@ -590,8 +586,7 @@ def test_execute_plan_mismatch_retry_skip_and_fallback(
         ),
     )
     assert len(seen) == calls
-    assert [policy for policy, _mapping in seen] == policies
-    assert all(mapping is catalog for _policy, mapping in seen)
+    assert seen == policies
     assert [outcome.result for outcome in outcomes] == (
         ["mismatch", "dependency_failed"] if choice == "skip" else ["done", "done"]
     )
@@ -1003,7 +998,7 @@ def test_execute_plan_confirmation_reaches_the_post_install_gate(
 
 
 def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
-    seen: list[tuple[ChecksumPolicy, Mapping[str, Tool] | None, ConfirmSensitiveAction | None]] = []
+    seen: list[tuple[ChecksumPolicy, ConfirmSensitiveAction | None]] = []
 
     def recording_install(
         tool: Tool,
@@ -1012,10 +1007,9 @@ def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
         confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        seen.append((checksum_policy, tools, confirm_sensitive_action))
+        seen.append((checksum_policy, confirm_sensitive_action))
         return InstallOutcome(tool.id, "installed", method_kind="brew")
 
     def confirm(tool_id: str, action: str) -> bool:
@@ -1031,7 +1025,7 @@ def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
         confirm_sensitive=confirm,
     )
     execute_plan([PlanRow("rg", Disposition.INSTALL, "")], context)
-    assert seen == [("fail", catalog, confirm)]
+    assert seen == [("fail", confirm)]
 
 
 def test_execute_plan_without_a_confirmation_produces_no_instructions(
@@ -1071,7 +1065,6 @@ def test_sensitive_install_protocol_parameters_are_unchanged() -> None:
         "runner",
         "resolve_tag",
         "checksum_policy",
-        "tools",
         "confirm_sensitive_action",
     ]
 

@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import typing
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,11 +32,12 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
-from installer.postinstall import run_postinstall
+from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
 from installer.update import (
     InvalidateFn,
+    PostinstallFn,
     UpdateError,
     UpdateOutcome,
     UpdateService,
@@ -145,15 +146,13 @@ def _perform(
     *,
     platform: Platform | None = None,
     resolve_tag: TagResolver = lambda _repo: "v1.0.0",
-    tools: Mapping[str, Tool] | None = None,
-    postinstall: Callable[..., str | None] = run_postinstall,
+    postinstall: PostinstallFn = register_hooks,
 ) -> UpdateOutcome:
     return perform_update(
         target,
         platform=platform or _platform(),
         runner=runner,
         resolve_tag=resolve_tag,
-        tools=tools if tools is not None else {},
         postinstall=postinstall,
     )
 
@@ -525,9 +524,11 @@ def test_postinstall_dispatched_with_owning_method_after_success() -> None:
     tool = _tool("codegraph", brew, postinstall="codegraph-mcp-register")
     seen: list[tuple[str, Method]] = []
 
-    def spy(name: str, method: Method, runner: object, tools: object) -> str | None:
-        seen.append((name, method))
-        return None
+    def spy(
+        tool_arg: Tool, method: Method, runner: object, hosts: object
+    ) -> tuple[tuple[str, ...], str | None]:
+        seen.append((tool_arg.postinstall or "", method))
+        return (), None
 
     outcome = _perform(
         _target(tool, "brew", method=brew, package="codegraph"),
@@ -543,7 +544,9 @@ def test_postinstall_crash_is_warning_not_failure() -> None:
     brew = Method(kind="brew", params={"formula": "codegraph"})
     tool = _tool("codegraph", brew, postinstall="codegraph-mcp-register")
 
-    def boom(name: str, method: Method, runner: object, tools: object) -> str | None:
+    def boom(
+        tool_arg: Tool, method: Method, runner: object, hosts: object
+    ) -> tuple[tuple[str, ...], str | None]:
         raise RuntimeError("hook bug")
 
     outcome = _perform(
@@ -556,14 +559,54 @@ def test_postinstall_crash_is_warning_not_failure() -> None:
     assert "hook bug" in outcome.postinstall_warning
 
 
+def test_update_re_record_keeps_hooks_and_registers_only_new_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import installer.postinstall as postinstall
+
+    brew = Method(kind="brew", params={"formula": "codegraph"})
+    tool = _tool("codegraph", brew, postinstall="codegraph-mcp-register")
+    receipts.write(
+        receipts.Receipt(
+            tool="codegraph",
+            at="2026-11-07T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="brew", key=receipts.method_key(brew)),
+            package="codegraph",
+            artifacts=(),
+            smoke=None,
+            hooks={"codegraph-mcp-register": ("claude",)},
+        )
+    )
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    calls: list[list[str]] = []
+    outcome = _perform(
+        _target(tool, "brew", method=brew, package="codegraph"),
+        lambda cmd: calls.append(cmd),
+    )
+    assert outcome.status == "updated"
+    hook_targets = [cmd[cmd.index("--target") + 1] for cmd in calls if "--target" in cmd]
+    assert hook_targets == ["codex"]
+    written = receipts.read("codegraph")
+    assert written is not None
+    assert written.hooks == {"codegraph-mcp-register": ("claude", "codex")}
+
+
+def test_update_service_takes_no_catalog() -> None:
+    import inspect
+
+    assert "tools" not in inspect.signature(UpdateService).parameters
+
+
 def test_no_postinstall_never_calls_hook() -> None:
     brew = Method(kind="brew", params={"formula": "ripgrep"})
     tool = _tool("rg", brew, cmd="rg")
     calls: list[str] = []
 
-    def spy(name: str, method: Method, runner: object, tools: object) -> str | None:
-        calls.append(name)
-        return None
+    def spy(
+        tool_arg: Tool, method: Method, runner: object, hosts: object
+    ) -> tuple[tuple[str, ...], str | None]:
+        calls.append(tool_arg.postinstall or "")
+        return (), None
 
     outcome = _perform(
         _target(tool, "brew", method=brew, package="ripgrep"),
@@ -796,7 +839,6 @@ def _service(
         platform=_platform(),
         runner=runner or (lambda _cmd: None),
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=managed,
         replay_globals=replay or _replay,
         reresolve_ownership=reresolve,
@@ -1400,13 +1442,12 @@ def test_updating_graphify_runs_no_host_registration(
     tools = {t.id: t for t in load_tools(registry)}
     graphify = tools["graphify"]
 
-    def all_installed(_tool: Tool) -> bool:
-        return True
-
     def fake_resolve_tag(*_argv: str, **_kwargs: str) -> str:
         return "v0"
 
-    monkeypatch.setattr(pi, "is_installed", all_installed)
+    monkeypatch.setattr(
+        pi, "present_hosts", lambda: frozenset({"claude", "codex", "opencode", "cursor"})
+    )
     home = tmp_path / "home"
     home.mkdir()
     cwd = tmp_path / "cwd"
@@ -1419,7 +1460,6 @@ def test_updating_graphify_runs_no_host_registration(
         platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=calls.append,
         resolve_tag=fake_resolve_tag,
-        tools=tools,
     )
     assert outcome.status == "updated"
     assert outcome.postinstall_warning is None
@@ -1648,7 +1688,6 @@ def test_update_service_reads_the_live_platform(monkeypatch: pytest.MonkeyPatch)
         platform=_platform(has_brew=False),
         live_platform=lambda: current[0],
         runner=lambda _cmd: None,
-        tools={},
         managed_packages=lambda: (),
         replay_globals=tuple,
         reresolve_ownership=reresolve,

@@ -2253,7 +2253,6 @@ async def test_native_owner_update_key_reaches_the_service_and_renders_its_refus
         platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=recording_runner,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=reresolve,
@@ -2319,7 +2318,6 @@ async def test_u_on_a_pinned_app_is_refused_before_the_lock(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=runner_calls.append,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=reresolve,
@@ -2451,7 +2449,6 @@ def _update_service(reresolve: Callable[[Tool], ManagerOwnership]) -> UpdateServ
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _cmd: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=reresolve,
@@ -2834,7 +2831,6 @@ async def test_update_success_renders_new_version_on_status_line(tmp_path: Path)
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -2897,7 +2893,6 @@ async def test_an_in_catalog_update_restores_the_whole_owner_column(tmp_path: Pa
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership_rg,
@@ -2940,12 +2935,15 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
 ) -> None:
     import installer.update as update_module
     from installer.download import ExecContext, UpdateExecResult
-    from installer.postinstall import POSTINSTALL_HOOKS
+    from installer.postinstall import POSTINSTALL_HOOKS, HookPair
 
     monkeypatch.setitem(
         POSTINSTALL_HOOKS,
         "fake-warn-hook",
-        lambda method, runner, tools: "postinstall shim needs manual review",
+        HookPair(
+            targets=None,
+            register=lambda method, runner, harnesses: ((), "postinstall shim needs manual review"),
+        ),
     )
 
     def fake_update_download(_method: Method, _ctx: ExecContext) -> UpdateExecResult:
@@ -2984,7 +2982,6 @@ async def test_update_success_reports_replay_cleanup_and_postinstall_warnings(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v2",
-        tools={"pnpm": tool},
         managed_packages=lambda: ("typescript", "eslint"),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -3030,7 +3027,6 @@ async def test_update_success_reports_terminal_follow_up_warning_without_downgra
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -3076,7 +3072,6 @@ async def test_update_via_u_calls_the_injected_terminal_follow_up_exactly_once(
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -3113,7 +3108,6 @@ async def test_update_failure_renders_status_line(tmp_path: Path) -> None:
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=failing_runner,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -3155,7 +3149,6 @@ async def test_update_unknown_owner_refusal_from_fresh_reresolution(tmp_path: Pa
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: fresh_unknown,
@@ -3201,7 +3194,6 @@ async def test_second_update_press_shows_already_in_flight(tmp_path: Path) -> No
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=blocking_runner,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda _tool: ownership,
@@ -3795,7 +3787,6 @@ async def test_a_failed_direct_update_folds_into_the_session_summary(
             platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
             runner=lambda _cmd: None,
             resolve_tag=lambda _repo: "v1",
-            tools={},
             managed_packages=lambda: (),
             replay_globals=lambda packages: tuple(packages),
             reresolve_ownership=lambda _tool: ownership,
@@ -4282,7 +4273,6 @@ async def test_update_shows_checking_on_every_row_until_the_full_pass(tmp_path: 
         platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
         runner=lambda _argv: None,
         resolve_tag=lambda _repo: "v1",
-        tools={},
         managed_packages=lambda: (),
         replay_globals=lambda packages: tuple(packages),
         reresolve_ownership=lambda tool: _ownership(tool, owner="brew", package=tool.id),

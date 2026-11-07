@@ -15,13 +15,13 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-from installer import app, executors, locations, receipts, version_status
+from installer import app, executors, locations, postinstall, receipts, version_status
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
 # this stays the developer's real home no matter what a test does later.
@@ -31,7 +31,9 @@ _REAL_HOME = Path(os.path.expanduser("~"))  # noqa: PTH111 -- must not follow a 
 # below replaces it, so the tests that ARE the probe can put it back through
 # the `real_launch_probe` fixture without reaching past the module's surface.
 _REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
-_GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".profile")
+# The same trick for the host reader, restored by `real_present_hosts`.
+_REAL_PRESENT_HOSTS: Callable[[], frozenset[str]] = postinstall.present_hosts
+_GUARDED_DOTFILES = (".myshellrc", ".shellrc", ".bashrc", ".zshrc", ".zshenv", ".profile")
 # The node-family names answered by Volta, fnm, pnpm and bun, plus brew.
 # Tests that need one plant a fake under tmp_path.
 HOST_TOOLCHAIN: frozenset[str] = frozenset(
@@ -136,14 +138,17 @@ def _real_home_fingerprint() -> dict[str, tuple[int, float] | None]:
         else:
             fingerprint[name] = (stat.st_size, stat.st_mtime)
     fingerprint["<backups>"] = (len(list(_REAL_HOME.glob("*.tools-installer.old"))), 0.0)
-    receipts_dir = _REAL_HOME / ".local" / "state" / "tools-installer" / "receipts"
-    if receipts_dir.is_dir():
-        fingerprint["<receipts>"] = (
-            len(list(receipts_dir.iterdir())),
-            receipts_dir.stat().st_mtime,
-        )
-    else:
-        fingerprint["<receipts>"] = None
+    # Listings only: live agent CLI files (settings.json, cli-config.json) are never fingerprinted.
+    listed = {
+        "<receipts>": _REAL_HOME / ".local" / "state" / "tools-installer" / "receipts",
+        "<environment.d>": _REAL_HOME / ".config" / "environment.d",
+        "<config-ledger>": _REAL_HOME / ".local" / "state" / "tools-installer" / "config",
+    }
+    for label, directory in listed.items():
+        if directory.is_dir():
+            fingerprint[label] = (len(list(directory.iterdir())), directory.stat().st_mtime)
+        else:
+            fingerprint[label] = None
     return fingerprint
 
 
@@ -227,6 +232,42 @@ def sandboxed_home(
     home = tmp_path_factory.getbasetemp() / "home" / uuid.uuid4().hex
     home.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+
+
+def _rerooted(path: Path, real_home: Path, project: Path, scratch: Path) -> Path:
+    """Move `path` from the real HOME onto `scratch`; keep paths outside HOME or in the checkout."""
+    resolved = Path(os.path.realpath(path))
+    if resolved.is_relative_to(project) or not resolved.is_relative_to(real_home):
+        return path
+    return scratch / resolved.relative_to(real_home)
+
+
+# setup.py resolves its home paths at IMPORT, before any fixture runs, so HOME alone
+# cannot reach them. Re-root every such attribute, generically, so a constant added
+# later is covered too; `real_home_untouched` stays the net underneath (review R1-07).
+@pytest.fixture(autouse=True)
+def sandboxed_setup_paths(sandboxed_home: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    setup_module = sys.modules.get("setup")
+    if setup_module is None:
+        return
+    real_home = Path(os.path.realpath(_REAL_HOME))
+    project = Path(os.path.realpath(setup_module.__file__ or "."))
+    project = project.parent if project.is_file() else project
+    scratch = Path.home()
+    for name, value in list(vars(setup_module).items()):
+        if isinstance(value, Path):
+            monkeypatch.setattr(setup_module, name, _rerooted(value, real_home, project, scratch))
+        elif isinstance(value, (list, tuple)):
+            items = cast(Sequence[object], value)
+            if items and all(isinstance(item, Path) for item in items):
+                moved = [
+                    _rerooted(item, real_home, project, scratch)
+                    for item in items
+                    if isinstance(item, Path)
+                ]
+                monkeypatch.setattr(
+                    setup_module, name, moved if isinstance(value, list) else tuple(moved)
+                )
 
 
 @pytest.fixture(autouse=True)
@@ -329,6 +370,18 @@ def sandboxed_puppeteer_cache(empty_browser_cache: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(empty_browser_cache))
     monkeypatch.delenv("PUPPETEER_EXECUTABLE_PATH", raising=False)
     monkeypatch.setattr(executors, "launch_puppeteer", lambda: NO_BROWSER_DETAIL)
+
+
+@pytest.fixture(autouse=True)
+def no_host_presence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reads the developer's agent hosts: `present_hosts` answers that none is present."""
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset[str]())
+
+
+@pytest.fixture
+def real_present_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore the real host reader, for the tests that exercise it."""
+    monkeypatch.setattr(postinstall, "present_hosts", _REAL_PRESENT_HOSTS)
 
 
 @pytest.fixture(autouse=True)
