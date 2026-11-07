@@ -9,6 +9,7 @@ import pytest
 
 from installer import receipts
 from installer.app import remove_tool
+from installer.catalog_tui import group_tools
 from installer.deps import requires_integrity_errors, resolve_dependencies
 from installer.download import Artifact, artifact_paths, pinned_url
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
@@ -64,6 +65,24 @@ def test_the_dropped_ids_are_not_in_the_catalog() -> None:
     tools_by_id = {tool.id: tool for tool in tools}
     for host_id in ("codex", "claude", "opencode", "cursor-agent"):
         assert tools_by_id[host_id].recommends == ("codegraph", "graphify"), host_id
+
+
+def test_the_residue_allowlist_names_no_dropped_tool() -> None:
+    allowlist = REGISTRY.parent.parent / "scripts" / "e2e-residue-allowlist.txt"
+    for line in allowlist.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        path = line.split("#", 1)[0].strip()
+        assert not set(path.split("/")) & set(DROPPED_IDS), line
+
+
+def test_catalog_order_is_priority_then_id() -> None:
+    # The category view's own grouping must list each category's tools priority-then-id.
+    tools = load_tools(REGISTRY)
+    groups = group_tools(tools, lambda _tool: None, "category", load_categories(REGISTRY))
+    for title, _, members in groups:
+        expected = sorted(members, key=lambda tool: (tool.priority, tool.id))
+        assert [tool.id for tool in members] == [tool.id for tool in expected], title
 
 
 def test_registry_includes_requested_installable_entries() -> None:
