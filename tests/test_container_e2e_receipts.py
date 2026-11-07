@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -178,14 +179,21 @@ def _run(
         "CALLS": str(scratch / "calls"),
         "LANG": "C",
     }
-    return subprocess.run(
-        [_bash(), "-c", script],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+    # D-18: run the script as a file, not a `-c` string, so extracted bodies that a
+    # `-c` parser refuses still run. The file sits beside the scratch HOME, never in it.
+    script_file = scratch.parent / f"harness-{uuid.uuid4().hex}.sh"
+    script_file.write_text(script, encoding="utf-8")
+    try:
+        return subprocess.run(
+            [_bash(), str(script_file)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    finally:
+        script_file.unlink()
 
 
 def test_assert_receipt_functions_in_bash(tmp_path: Path) -> None:
@@ -461,6 +469,73 @@ def test_receipt_checks_are_wired_into_the_passes() -> None:
     assert rerun < ready < uninstall < removed
 
 
+@pytest.mark.parametrize(
+    ("planted", "clean", "present"),
+    [
+        pytest.param([], True, [], id="no-claude-dir"),
+        pytest.param([("dir", ".claude")], True, [], id="empty-claude-dir"),
+        pytest.param([("dir", ".claude/gsd-core")], False, [".claude/gsd-core"], id="gsd-core-dir"),
+        pytest.param(
+            [("file", ".claude/.gsd-source")], False, [".claude/.gsd-source"], id="gsd-source-file"
+        ),
+        pytest.param(
+            [("link", ".claude/gsd-core")], False, [".claude/gsd-core"], id="dangling-gsd-core-link"
+        ),
+        pytest.param(
+            [("dir", ".claude/gsd-core"), ("file", ".claude/.gsd-source")],
+            False,
+            [".claude/gsd-core", ".claude/.gsd-source"],
+            id="both",
+        ),
+    ],
+)
+def test_assert_gsd_absent_in_bash(
+    tmp_path: Path, planted: list[tuple[str, str]], clean: bool, present: list[str]
+) -> None:
+    """No GSD tree in the tester's home passes; each planted one fails and is named."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    for kind, relative in planted:
+        path = scratch / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "dir":
+            path.mkdir()
+        elif kind == "file":
+            path.write_text("", encoding="utf-8")
+        else:
+            path.symlink_to(scratch / "missing")
+    result = _run(_harness("assert_gsd_absent") + "\nassert_gsd_absent install\n", scratch)
+    if clean:
+        assert result.returncode == 0, result.stderr
+        assert "TRACER_GSD_ABSENT_OK pass=install" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert "TRACER_GSD_ABSENT_OK" not in result.stdout
+    for relative in present:
+        assert f"TRACER_GSD_PRESENT path=$HOME/{relative}" in result.stdout
+    assert result.stdout.count("TRACER_GSD_PRESENT") == len(present)
+
+
+def test_gsd_checks_are_wired_after_each_pass() -> None:
+    """Install, uninstall and reinstall each prove the GSD tree is absent, in pass order."""
+    text = _script_text()
+    pass1 = _function("cmd_pass1", text)
+    pass2 = _function("cmd_pass2", text)
+    assert "assert_gsd_absent install || return 1" in pass1
+    assert pass1.index('assert_receipt_present "$categories" || return 1') < pass1.index(
+        "assert_gsd_absent install || return 1"
+    )
+    assert "assert_gsd_absent uninstall" in pass2
+    assert "assert_gsd_absent reinstall" in pass2
+    settled = pass2.index("settings_probe_revert")
+    uninstall = pass2.index("assert_gsd_absent uninstall")
+    reinstall_run = pass2.index('run_pass2_step "--all --yes"', uninstall)
+    reinstalled = pass2.index("TRACER_REINSTALL_OK")
+    reinstall = pass2.index("assert_gsd_absent reinstall")
+    teardown = pass2.index("TRACER_CONTAINER_TEARDOWN_OK")
+    assert settled < uninstall < reinstall_run < reinstalled < reinstall < teardown
+
+
 def test_receipt_check_is_skipped_for_other_categories(tmp_path: Path) -> None:
     """A chunked run without the probe category skips; it never calls exec_tester."""
     applies = _function("receipt_check_applies")
@@ -515,11 +590,11 @@ def test_uv_stub_survives_a_spaced_interpreter_path(
     assert result.stdout.strip() == "42"
 
 
-def test_assignment_survives_a_spaced_workspace() -> None:
+def test_assignment_survives_a_spaced_workspace(tmp_path: Path) -> None:
     """A workspace path with a space stays one word in a generated assignment (G19)."""
     result = _run(
         _assign("TESTER_WORKSPACE", "/a b/c") + '\nprintf "%s" "$TESTER_WORKSPACE"\n',
-        Path("/unused"),
+        tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "/a b/c"

@@ -1,6 +1,9 @@
 """Parse the Makefile and assert launcher vs quality-gate recipes stay separated."""
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -9,6 +12,8 @@ MAKEFILE = ROOT / "Makefile"
 _LAUNCHER_LINE = re.compile(
     r"^\s*uv run(\s+--?[A-Za-z][-A-Za-z]*)*\s+setup\.py\b",
 )
+_FORBIDDEN_RUNS = {"setup.py", "install.sh", "container-e2e-verify.sh"}
+_SHELLS = {"bash", "sh", "python", "python3"}
 
 
 def _recipes() -> dict[str, tuple[list[str], list[str]]]:
@@ -91,3 +96,56 @@ def test_verify_registry_target_is_read_only_by_default() -> None:
     assert re.search(r"^verify-registry:.*?## .+$", makefile, re.MULTILINE), (
         "verify-registry needs a ## help comment"
     )
+
+
+def _invoked_names(line: str) -> list[str]:
+    """Basenames a recipe line runs: the program, and the script a shell or python runs."""
+    words = [word for word in line.strip().lstrip("@-").split() if not word.startswith("-")]
+    if words[:2] == ["uv", "run"]:
+        words = words[2:]
+    names = [Path(words[0]).name] if words else []
+    if names and names[0] in _SHELLS and len(words) > 1:
+        names.append(Path(words[1]).name)
+    return names
+
+
+def test_gate_recipes_never_run_a_real_install() -> None:
+    recipes = _recipes()
+    for name in ("validate", "test"):
+        prereqs, lines = recipes[name]
+        for line in lines:
+            code = line.strip()
+            if not code or code.startswith("#"):
+                continue
+            assert not set(_invoked_names(code)) & _FORBIDDEN_RUNS, f"{name}: {code}"
+        text = "\n".join([*prereqs, *lines])
+        assert "container-e2e-verify.sh" not in text, name
+        assert not re.search(r"\be2e\b", text), name
+
+
+def test_e2e_script_refuses_without_a_container_runtime(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    for name in ("container-e2e-verify.sh", "detect-container-runtime.sh"):
+        shutil.copy2(ROOT / "scripts" / name, repo / "scripts" / name)
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    for tool in ("bash", "dirname", "uname"):
+        found = shutil.which(tool)
+        assert found is not None, f"{tool} is required on every supported host"
+        (fakebin / tool).symlink_to(os.path.realpath(found))
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    bash = shutil.which("bash")
+    assert bash is not None
+    result = subprocess.run(
+        [bash, str(repo / "scripts" / "container-e2e-verify.sh"), "all"],
+        env={"PATH": str(fakebin), "HOME": str(scratch), "LANG": "C"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "CONTAINER_TOOL unset after detection" in result.stderr
+    assert not (repo / ".e2e-artifacts").exists()
