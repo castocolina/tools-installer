@@ -160,7 +160,15 @@ def _lua_string(value: str) -> str:
 
 def _wezterm_content(existing: str, zsh_path: str) -> str | None:
     """Add the owned Lua region before a recognised `return config` boundary."""
-    body = f'config.default_prog = {{ {_lua_string(zsh_path)}, "-l" }}'
+    # `or {}` keeps a user's own environment table set above the region.
+    shell = _lua_string(zsh_path)
+    body = "\n".join(
+        (
+            f'config.default_prog = {{ {shell}, "-l" }}',
+            "config.set_environment_variables = config.set_environment_variables or {}",
+            f"config.set_environment_variables.SHELL = {shell}",
+        )
+    )
     updated = _replace_owned_region(existing, "wezterm", body, comment="--")
     if "tools-installer terminal-shell wezterm" in existing:
         return (
@@ -325,6 +333,10 @@ def _edit_zshenv(
         return False, f"zshenv: {first_line}"
 
 
+def _konsole_profile_path(home: Path, environ: Mapping[str, str]) -> Path:
+    return _xdg_data_home(home, environ) / "konsole" / "tools-installer-zsh.profile"
+
+
 def _sync_konsole(
     *, home: Path, environ: Mapping[str, str], zsh_path: str, lookup: Lookup, write: bool = True
 ) -> tuple[bool, str | None, bool]:
@@ -338,7 +350,7 @@ def _sync_konsole(
         return False, None, False
 
     data_home = _xdg_data_home(home, environ)
-    profile = data_home / "konsole" / "tools-installer-zsh.profile"
+    profile = _konsole_profile_path(home, environ)
     state = data_home / "tools-installer" / "terminal-shell-konsole-default"
     konsolerc = _xdg_config_home(home, environ) / "konsolerc"
     profile_content = _read_text(profile)
@@ -510,12 +522,16 @@ def sync_terminal_shells(
         skipped.append("kitty unavailable")
     else:
         config_path = _kitty_config_path(home, environ)
+        # kitty's `env` line takes the rest of the line as the value, so the path is not quoted.
         updated = _replace_owned_region(
-            _read_text(config_path), "kitty", f"shell {shlex.join((zsh_path, '-l'))}"
+            _read_text(config_path),
+            "kitty",
+            f"shell {shlex.join((zsh_path, '-l'))}\nenv SHELL={zsh_path}",
         )
         if _write_if_changed(config_path, updated, write=write):
             drifted.append("kitty")
         configured.append("kitty")
+        paths.append(("kitty", config_path))
 
     if _safe_executable(lookup("wezterm")) is None:
         # CR-03: kitty (above) and Konsole (_sync_konsole) both gate on a
@@ -537,12 +553,14 @@ def sync_terminal_shells(
             if _write_if_changed(wezterm_path, wezterm_content, write=write):
                 drifted.append("wezterm")
             configured.append("wezterm")
+            paths.append(("wezterm", wezterm_path))
 
     konsole_configured, konsole_warning, konsole_drifted = _sync_konsole(
         home=home, environ=environ, zsh_path=zsh_path, lookup=lookup, write=write
     )
     if konsole_configured:
         configured.append("konsole")
+        paths.append(("konsole", _konsole_profile_path(home, environ)))
     if konsole_drifted:
         drifted.append("konsole")
     if konsole_warning is not None:

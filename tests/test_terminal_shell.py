@@ -946,3 +946,88 @@ def test_an_unreadable_zshenv_is_a_warning_and_terminals_still_sync(tmp_path: Pa
     assert any(warning.startswith("zshenv: ") for warning in result.warnings)
     assert zshenv.read_bytes() == b"export X=\xff\n"
     assert "shell /usr/bin/zsh -l" in kitty.read_text()
+
+
+# Phase 23 / CONF-05, Task 2: kitty and WezTerm regions also carry SHELL.
+
+
+def test_a_kitty_config_without_the_shell_line_drifts_and_is_fixed(tmp_path: Path) -> None:
+    kitty = tmp_path / ".config" / "kitty" / "kitty.conf"
+    kitty.parent.mkdir(parents=True)
+    kitty.write_text(
+        "# >>> tools-installer terminal-shell kitty >>>\n"
+        "shell /usr/bin/zsh -l\n"
+        "# <<< tools-installer terminal-shell kitty <<<\n"
+    )
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    }
+
+    assert "kitty" in sync_terminal_shells(**args, write=False).drifted
+
+    result = sync_terminal_shells(**args, write=True)
+    text = kitty.read_text()
+    assert "shell /usr/bin/zsh -l" in text
+    assert "env SHELL=/usr/bin/zsh" in text
+    assert "kitty" not in sync_terminal_shells(**args, write=False).drifted
+    assert ("kitty", kitty) in result.paths
+
+
+def test_an_uninstalled_terminal_gives_no_drift(tmp_path: Path) -> None:
+    lookup = _lookup(zsh="/usr/bin/zsh")
+
+    dry = sync_terminal_shells(
+        home=tmp_path, environ={}, platform=_platform(), lookup=lookup, write=False
+    )
+    assert set(dry.drifted) <= {"zshenv"}
+    assert not (tmp_path / ".config").exists()
+
+    sync_terminal_shells(home=tmp_path, environ={}, platform=_platform(), lookup=lookup)
+    assert not (tmp_path / ".config").exists()
+
+
+def test_wezterm_keeps_a_user_environment_table(tmp_path: Path) -> None:
+    wezterm = tmp_path / ".config" / "wezterm" / "wezterm.lua"
+    wezterm.parent.mkdir(parents=True)
+    user_line = 'config.set_environment_variables = { FOO = "1" }'
+    wezterm.write_text(
+        f'local wezterm = require "wezterm"\nlocal config = {{}}\n{user_line}\nreturn config\n'
+    )
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", wezterm="/usr/bin/wezterm"),
+    )
+
+    lines = wezterm.read_text().splitlines()
+    start = lines.index("-- >>> tools-installer terminal-shell wezterm >>>")
+    end = lines.index("-- <<< tools-installer terminal-shell wezterm <<<")
+    assert lines.index(user_line) < start < lines.index("return config")
+    assert lines[start + 1 : end] == [
+        'config.default_prog = { "/usr/bin/zsh", "-l" }',
+        "config.set_environment_variables = config.set_environment_variables or {}",
+        'config.set_environment_variables.SHELL = "/usr/bin/zsh"',
+    ]
+
+
+def test_the_region_bodies_quote_an_unusual_zsh_path(tmp_path: Path) -> None:
+    zsh = "/opt/my shells/zsh"
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh=zsh, kitty="/usr/bin/kitty", wezterm="/usr/bin/wezterm"),
+    )
+
+    kitty_text = (tmp_path / ".config" / "kitty" / "kitty.conf").read_text()
+    assert "shell '/opt/my shells/zsh' -l" in kitty_text
+    assert "env SHELL=/opt/my shells/zsh" in kitty_text
+    wezterm_text = (tmp_path / ".config" / "wezterm" / "wezterm.lua").read_text()
+    assert 'config.default_prog = { "/opt/my shells/zsh", "-l" }' in wezterm_text
+    assert 'config.set_environment_variables.SHELL = "/opt/my shells/zsh"' in wezterm_text
