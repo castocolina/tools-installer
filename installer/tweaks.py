@@ -14,6 +14,7 @@ from importlib import resources
 from pathlib import Path
 
 from installer.atomic import atomic_write_text
+from installer.locations import display_path
 from installer.platform import Platform
 from installer.shellrc import apply_block, strip_block
 
@@ -65,79 +66,6 @@ _DOCKER_BODY = (
 _COUNTDOWN_BODY = (
     "wait_time() {\n"
     f'    uv run --no-project --script "{_BIN_DIR_PLACEHOLDER}/tools-installer-wait-time" "$@"\n'
-    "}"
-)
-
-_CLAUDE_BODY = "alias claude='claude --dangerously-skip-permissions'"
-
-# codex --help and codex exec --help both print this flag verbatim, confirmed
-# live 2026-09-06 (10-RESEARCH.md Summary #1).
-_CODEX_BODY = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'"
-
-# opencode --help's own text for --auto is "auto-approve permissions that are
-# not explicitly denied (dangerous!)" — narrower than claude-skip/codex-skip's
-# full bypass — confirmed live 2026-09-06 (10-RESEARCH.md Summary #2).
-_OPENCODE_BODY = "alias opencode='opencode --auto'"
-
-# The slug was live-confirmed via `cursor-agent models` on 2026-09-06
-# (10-RESEARCH.md Summary #3); effort is baked into the slug itself (no
-# separate --effort flag). Per CONTEXT.md D-01's "re-verify, don't override"
-# instruction: Cursor's own CLI changelog (fetched live 2026-09-06, MEDIUM
-# confidence per 10-RESEARCH.md's own confidence breakdown — an official doc,
-# not an independently spent API call) documents a 2026-07-13 fix superseding
-# REQUIREMENTS.md's prior "Max-Mode-only, unreachable non-interactively"
-# finding, so headless --model selections requiring Max Mode now activate it
-# automatically. This wrapper REQUESTS that model and never claims to
-# independently verify the context window actually reached in any given
-# response (10-RESEARCH.md Pitfall 4/Assumption A2) — copy in this project's
-# UI must say "requests", never "guarantees" or "verifies".
-_CURSOR_DEFAULT_MODEL = "gpt-5.6-sol-high"
-
-# cursor-agent()'s own two calls to the real binary always go through
-# `command cursor-agent "$@"` so the function can never recurse into itself
-# (Pitfall 3). cursor() contains exactly one intentional BARE delegation to
-# the cursor-agent shell FUNCTION (a different name, not itself), which is
-# how it inherits the same argv-scan/injection logic. Both functions are
-# preceded by `unalias cursor-agent cursor 2>/dev/null || true` so a
-# pre-existing same-named alias never collides with the function definitions
-# that follow — live-verified on this machine (bash 3.2.57(1)-release, zsh
-# 5.9.2): a bare `name() { ... }` definition against an already-active
-# same-named alias is a hard syntax error in bash 3.2 and behaves
-# inconsistently in zsh 5.9 across interactive/non-interactive contexts;
-# `unalias` first makes the outcome identical and correct in every
-# shell/context combination. The trailing `|| true` (dual-lane review
-# WR-01/codex-sol-high) is required, not cosmetic: `unalias` exits nonzero
-# when neither name is currently an alias -- the common case -- and
-# `2>/dev/null` alone only silences the message, not the exit status; under
-# `set -e`/`setopt err_exit` that nonzero status would abort the rest of
-# `~/.myshellrc` with zero diagnostic output. `local a` (dual-lane review
-# WR-02) prevents the loop variable from leaking into the calling
-# interactive shell's global namespace. The loop breaks at a literal `--`
-# token (dual-lane review, codex-sol-high) since cursor-agent's own
-# commander.js-based parser treats everything after `--` as positional
-# prompt text, never as flags -- live-verified that `cursor-agent --model
-# ... update`/`--version` both tolerate the injected --model ahead of a
-# subcommand (exit 0, correct behavior), so no subcommand allowlist is
-# needed; the sole real gap was the unbounded `--` boundary.
-_CURSOR_AGENT_BODY = (
-    "unalias cursor-agent cursor 2>/dev/null || true\n"
-    "function cursor-agent {\n"
-    "    local a\n"
-    '    for a in "$@"; do\n'
-    '        case "$a" in\n'
-    "            --)\n"
-    "                break\n"
-    "                ;;\n"
-    "            --model|--model=*)\n"
-    '                command cursor-agent "$@"\n'
-    "                return $?\n"
-    "                ;;\n"
-    "        esac\n"
-    "    done\n"
-    f'    command cursor-agent --model {_CURSOR_DEFAULT_MODEL} "$@"\n'
-    "}\n"
-    "function cursor {\n"
-    '    cursor-agent "$@"\n'
     "}"
 )
 
@@ -207,20 +135,6 @@ BUNDLES: tuple[TweakBundle, ...] = (
         ),
     ),
     TweakBundle(
-        "claude-skip",
-        "claude skip-permissions",
-        "alias claude='claude --dangerously-skip-permissions'",
-        (),
-        _CLAUDE_BODY,
-    ),
-    TweakBundle(
-        "codex-skip",
-        "codex skip-permissions",
-        "alias codex='codex --dangerously-bypass-approvals-and-sandbox'",
-        (),
-        _CODEX_BODY,
-    ),
-    TweakBundle(
         "apt-upgrade",
         "apt selective upgrade",
         "alias apt-upgrade — upgrade only packages that have updates (Linux)",
@@ -260,22 +174,6 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "volta",
         "exports VOLTA_HOME; its bin directory is on PATH via the PATH block",
         _VOLTA_BODY,
-    ),
-    TweakBundle(
-        "opencode-auto",
-        "opencode auto-approve",
-        "alias opencode='opencode --auto' — auto-approves permissions not explicitly"
-        " denied; not a full bypass",
-        (),
-        _OPENCODE_BODY,
-    ),
-    TweakBundle(
-        "cursor-agent-model",
-        "cursor-agent default model",
-        f"injects --model {_CURSOR_DEFAULT_MODEL} into a bare cursor-agent/cursor call;"
-        " skipped whenever --model is already present",
-        (),
-        _CURSOR_AGENT_BODY,
     ),
 )
 
@@ -361,15 +259,76 @@ def write_tweak(bundle: TweakBundle, rc_path: Path, bin_dir: Path | None = None)
     )
 
 
-def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:
-    """Strip the bundle's block. A missing file or absent block is a no-op."""
+def strip_tweak_block(bundle_id: str, rc_path: Path) -> bool:
+    """Strip the block of bundle_id from rc_path. True when the file changed."""
     if not rc_path.exists():
-        return
-    begin, end = _markers(bundle.id)
+        return False
+    begin, end = _markers(bundle_id)
     original = rc_path.read_text()
     stripped = strip_block(original, begin, end)
-    if stripped != original:
-        atomic_write_text(rc_path, stripped)
+    if stripped == original:
+        return False
+    atomic_write_text(rc_path, stripped)
+    return True
+
+
+def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:
+    """Strip the bundle's block. A missing file or absent block is a no-op."""
+    strip_tweak_block(bundle.id, rc_path)
+
+
+# The retired alias bundles: no longer offered, only stripped from ~/.myshellrc. The value is
+# the agent whose auto-approve Policies row the launch notice points at (None: the cursor wrapper).
+LEGACY_ALIAS_BUNDLES: dict[str, str | None] = {
+    "claude-skip": "claude",
+    "codex-skip": "codex",
+    "opencode-auto": "opencode",
+    "cursor-agent-model": None,
+}
+
+
+@dataclass(frozen=True)
+class LegacyStrip:
+    """What strip_legacy_aliases removed from one rc file, for the launch and uninstall copy."""
+
+    rc: str
+    stripped: tuple[str, ...] = ()
+    failed: tuple[tuple[str, str], ...] = ()
+
+    def launch_lines(self) -> tuple[tuple[str, str], ...]:
+        lines: list[tuple[str, str]] = []
+        for alias_id in self.stripped:
+            agent = LEGACY_ALIAS_BUNDLES[alias_id]
+            if agent is None:
+                text = f"{alias_id} alias removed: pick the model with /model in cursor-agent."
+                lines.append((text, "warn"))
+            else:
+                text = f"Removed the {alias_id} alias; turn on {agent} auto-approve in Policies."
+                lines.append((text, "ok"))
+        for alias_id, reason in self.failed:
+            text = f"Could not remove the {alias_id} alias from {self.rc}: {reason}."
+            lines.append((text, "warn"))
+        return tuple(lines)
+
+    def uninstall_line(self) -> str | None:
+        if not self.stripped:
+            return None
+        return f"Removed the {', '.join(self.stripped)} alias block(s) from {self.rc}."
+
+
+def strip_legacy_aliases(rc_path: Path) -> LegacyStrip:
+    """Strip every legacy alias block from rc_path. Idempotent; no agent file is touched."""
+    stripped: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for alias_id in LEGACY_ALIAS_BUNDLES:
+        if not bundle_marker_present(alias_id, rc_path):
+            continue
+        try:
+            if strip_tweak_block(alias_id, rc_path):
+                stripped.append(alias_id)
+        except OSError as exc:
+            failed.append((alias_id, (str(exc).splitlines() or [""])[0]))
+    return LegacyStrip(rc=display_path(rc_path), stripped=tuple(stripped), failed=tuple(failed))
 
 
 def bundle_marker_present(bundle_id: str, rc_path: Path) -> bool:

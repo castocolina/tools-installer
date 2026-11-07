@@ -2,8 +2,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from installer.platform import Platform
 from installer.policy import Policy, PolicyResult, ban_policy, tweak_policy
-from installer.tweaks import BUNDLES
+from installer.tweaks import BUNDLES, LEGACY_ALIAS_BUNDLES, applicable_bundles, strip_legacy_aliases
 
 
 def _bundle(bundle_id: str):
@@ -87,10 +88,10 @@ def test_tweak_policy_requires_bin_dir_for_managed_executables(tmp_path: Path) -
 
 def test_remove_strips_block(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
-    policy = tweak_policy(_bundle("claude-skip"), rc_path=rc)
+    policy = tweak_policy(_bundle("docker"), rc_path=rc)
     policy.apply()
     result = policy.remove()
-    assert "claude --dangerously-skip-permissions" not in rc.read_text()
+    assert "docker-stats" not in rc.read_text()
     assert "cleared" in result.layers[0].detail
 
 
@@ -110,41 +111,6 @@ def test_remove_cleans_countdown_managed_executable(tmp_path: Path) -> None:
     assert "wait_time()" not in rc.read_text()
     assert not helper.exists()
     assert result.layers[1].detail.startswith("1 removed")
-
-
-def test_codex_skip_policy_round_trips(tmp_path: Path) -> None:
-    rc = tmp_path / ".myshellrc"
-    policy = tweak_policy(_bundle("codex-skip"), rc_path=rc)
-    policy.apply()
-    assert "dangerously-bypass-approvals-and-sandbox" in rc.read_text()
-    result = policy.remove()
-    assert "dangerously-bypass-approvals-and-sandbox" not in rc.read_text()
-    assert "cleared" in result.layers[0].detail
-
-
-def test_opencode_auto_policy_round_trips(tmp_path: Path) -> None:
-    rc = tmp_path / ".myshellrc"
-    policy = tweak_policy(_bundle("opencode-auto"), rc_path=rc)
-    policy.apply()
-    assert "opencode --auto" in rc.read_text()
-    result = policy.remove()
-    assert "opencode --auto" not in rc.read_text()
-    assert "cleared" in result.layers[0].detail
-
-
-def test_cursor_agent_model_policy_round_trips(tmp_path: Path) -> None:
-    rc = tmp_path / ".myshellrc"
-    policy = tweak_policy(_bundle("cursor-agent-model"), rc_path=rc)
-    assert policy.id == "tweak:cursor-agent-model"
-    policy.apply()
-    text = rc.read_text()
-    assert "function cursor-agent" in text
-    assert "function cursor " in text
-    result = policy.remove()
-    text = rc.read_text()
-    assert "function cursor-agent" not in text
-    assert "function cursor " not in text
-    assert "cleared" in result.layers[0].detail
 
 
 def test_tweak_policy_enable_hint_names_source_not_hash_r(tmp_path: Path) -> None:
@@ -198,7 +164,7 @@ def test_tweak_policy_ensure_sourced_from_callable_is_reread_at_apply(
         return current
 
     policy = tweak_policy(
-        _bundle("codex-skip"),
+        _bundle("docker"),
         rc_path=myshellrc,
         ensure_sourced_from=ensure_sourced_from,
     )
@@ -217,10 +183,10 @@ def test_tweak_policy_ensure_sourced_from_wires_myshellrc_into_the_given_rc_path
     split_rc = tmp_path / ".bashrc"
     other_rc = tmp_path / ".zshrc"
 
-    tweak_policy(_bundle("codex-skip"), rc_path=myshellrc, ensure_sourced_from=(split_rc,)).apply()
+    tweak_policy(_bundle("docker"), rc_path=myshellrc, ensure_sourced_from=(split_rc,)).apply()
     assert str(myshellrc) in split_rc.read_text()
 
-    tweak_policy(_bundle("codex-skip"), rc_path=myshellrc).apply()
+    tweak_policy(_bundle("docker"), rc_path=myshellrc).apply()
     assert not other_rc.exists()
 
 
@@ -230,14 +196,14 @@ def test_tweak_policy_split_mode_alias_resolves_in_a_fresh_shell(tmp_path: Path)
         return
     myshellrc = tmp_path / ".myshellrc"
     split_rc = tmp_path / ".bashrc"
-    tweak_policy(_bundle("codex-skip"), rc_path=myshellrc, ensure_sourced_from=(split_rc,)).apply()
+    tweak_policy(_bundle("docker"), rc_path=myshellrc, ensure_sourced_from=(split_rc,)).apply()
     result = subprocess.run(
-        [bash, "-c", f'source "{split_rc}" && alias codex'],
+        [bash, "-c", f'source "{split_rc}" && alias docker-stats'],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert "dangerously-bypass-approvals-and-sandbox" in result.stdout
+    assert "docker stats" in result.stdout
 
 
 def test_tweak_policy_reads_requirements_live(tmp_path: Path) -> None:
@@ -261,3 +227,23 @@ def test_tweak_policy_mapping_callers_are_unchanged(tmp_path: Path) -> None:
     unknown = tweak_policy(_bundle("docker"), rc_path=tmp_path / ".zshrc", installed_tools=None)
     assert unknown.missing_requires == ("watch",)
     assert unknown.missing_requirements() == ("watch",)
+
+
+def test_policies_list_none_of_the_four_alias_bundles(tmp_path: Path) -> None:
+    alias_ids = set(LEGACY_ALIAS_BUNDLES)
+    assert alias_ids == {"claude-skip", "codex-skip", "opencode-auto", "cursor-agent-model"}
+    assert not alias_ids & {bundle.id for bundle in BUNDLES}
+    for os_name in ("debian", "macos"):
+        platform = Platform(os=os_name, arch="arm64", immutable=False, has_brew=False)
+        assert not alias_ids & {bundle.id for bundle in applicable_bundles(platform)}
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(
+        "".join(
+            f"# >>> tools-installer tweak:{alias_id} >>>\nalias x=1\n"
+            f"# <<< tools-installer tweak:{alias_id} <<<\n"
+            for alias_id in alias_ids
+        )
+    )
+    lines = strip_legacy_aliases(rc).launch_lines()
+    assert len(lines) == len(alias_ids)
+    assert all(len(text) <= 78 for text, _severity in lines)

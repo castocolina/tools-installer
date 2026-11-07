@@ -1050,7 +1050,7 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
     assert setup.main(["--guard", "--link-mode", "split"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
@@ -1171,7 +1171,7 @@ def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(
     assert setup.main(["--guard"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert not (tmp_path / ".bashrc").exists()
 
@@ -1188,7 +1188,7 @@ def test_the_normal_interactive_flow_wires_split_mode_myshellrc_sourcing_before_
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
 
@@ -1201,7 +1201,7 @@ def test_the_normal_interactive_flow_does_not_wire_split_sourcing_under_centrali
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    codex_skip = next(p for p in policies.policies if p.id == "tweak:codex-skip")
+    codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
     codex_skip.apply()
     assert not (tmp_path / ".bashrc").exists()
 
@@ -2663,7 +2663,7 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
     assert ".zshrc" in alias_detail
     assert ".bashrc" in alias_detail
     assert ".myshellrc" not in alias_detail
-    tweak = next(policy for policy in policies.policies if policy.id == "tweak:codex-skip")
+    tweak = next(policy for policy in policies.policies if policy.id == "tweak:docker")
     tweak.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()

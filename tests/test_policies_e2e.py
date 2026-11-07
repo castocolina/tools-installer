@@ -721,10 +721,11 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         path_value=f"{bin_dir}:{real_dir}",
         which=lambda _name: None,
     )
-    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    bundle = next(b for b in BUNDLES if b.id == "docker")
     tweak = tweak_policy(
         bundle,
         rc_path=rc,
+        installed_tools={"watch": True},
         ensure_sourced_from=lambda: (zshrc, bashrc) if mode["v"] == "split" else (),
     )
     app = UnifiedApp(
@@ -762,7 +763,7 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         assert "tools-installer ban" not in rc.read_text()
         assert "tools-installer ban" in zshrc.read_text()
         assert "tools-installer ban" in bashrc.read_text()
-        assert "tools-installer tweak:claude-skip" in rc.read_text()
+        assert "tools-installer tweak:docker" in rc.read_text()
         for split_rc in (zshrc, bashrc):
             assert f'. "{rc}"' in split_rc.read_text()
         assert "Link mode saved: split" in screen.status.text
@@ -809,7 +810,7 @@ def _test_tweak(home: Path, mode: dict[str, str]) -> Policy:
     rc = home / ".myshellrc"
     zshrc = home / ".zshrc"
     bashrc = home / ".bashrc"
-    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    bundle = next(b for b in BUNDLES if b.id == "docker")
     return tweak_policy(
         bundle,
         rc_path=rc,
@@ -946,7 +947,7 @@ async def test_policies_screen_reports_a_failed_move(
 
         assert mode["v"] == "split"
         assert "Moved: ban" in screen.status.text
-        assert "Failed: tweak:claude-skip" in screen.status.text
+        assert "Failed: tweak:docker" in screen.status.text
         assert "apply boom" in screen.status.text
         assert screen.status.severity == "warn"
         assert str(screen.status.severity) != "error"
@@ -955,7 +956,7 @@ async def test_policies_screen_reports_a_failed_move(
 def _test_tweak_with_failing_split_apply(home: Path, mode: dict[str, str]) -> Policy:
     base = _test_tweak(home, mode)
     rc = home / ".myshellrc"
-    bundle = next(b for b in BUNDLES if b.id == "claude-skip")
+    bundle = next(b for b in BUNDLES if b.id == "docker")
 
     def apply() -> PolicyResult:
         if mode["v"] == "split":
@@ -1005,9 +1006,9 @@ async def test_policies_screen_shows_lost_policies_off_after_a_failed_restore(
         await pilot.press("m", "down", "down", "enter")  # pick split
         await pilot.pause()
 
-        assert "not restored: tweak:claude-skip" in screen.status.text
+        assert "not restored: tweak:docker" in screen.status.text
         assert screen.status.severity == "error"
-        assert screen.active_state["tweak:claude-skip"] is False
+        assert screen.active_state["tweak:docker"] is False
 
 
 async def test_link_mode_change_after_an_uninstall_does_not_resurrect(
