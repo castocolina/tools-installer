@@ -47,6 +47,7 @@ from installer.wizard_app import (
     MutationLock,
     NavScreen,
     PolicyInputs,
+    RefreshPublished,
     TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
@@ -344,23 +345,25 @@ async def test_an_unexpected_pass_failure_writes_the_retry_copy(tmp_path: Path):
         assert app.catalog.status.severity is Severity.WARN
 
 
-async def test_a_failed_skills_stage_writes_the_retry_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    service = frozen_service(tmp_path)
+async def test_one_refresh_publishes_once(tmp_path: Path):
+    rg = _tool("rg")
+    service = HeldRefreshService(tmp_path, [])
+    service.pending = (pass_state(rg, platform=service.platform, present=True),)
+    service.release.set()
+    publications: list[RefreshPublished] = []
 
-    def failing(tools: Sequence[Tool]) -> dict[str, Any]:
-        del tools
-        raise OSError("skills")
+    class PublicationRecorder(UnifiedApp):
+        def on_refresh_published(self, message: RefreshPublished) -> None:
+            # Textual runs the base handler through the MRO, so this only records.
+            publications.append(message)
 
-    monkeypatch.setattr(service, "refresh_skills", failing)
-    app = _family_app(version_refresh=service)
+    app = _family_app(version_refresh=service, app_cls=PublicationRecorder)
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
-        assert app.catalog.status_text == (
-            "tool state check failed: skills — the next change retries it"
-        )
-        assert app.catalog.status.severity is Severity.WARN
+        assert service.calls == [frozenset({"rg", "fd"})]
+        assert len(publications) == 1
+        assert _health(app, "rg") == "✓"
+        assert "tool state check failed" not in app.catalog.status_text
 
 
 def _brew_owned(tool: Tool) -> ManagerOwnership:

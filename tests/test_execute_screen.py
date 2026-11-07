@@ -77,7 +77,6 @@ from tests.state_doubles import (
     pass_state,
     plan_state,
     presence_service,
-    skill_pack_tool,
 )
 
 
@@ -4102,47 +4101,6 @@ async def test_a_late_publication_after_esc_starts_nothing(tmp_path: Path) -> No
         finally:
             service.release.set()
     assert dismissed == []
-
-
-async def test_enter_settles_a_pack_selected_before_its_host_check(tmp_path: Path) -> None:
-    captured: list[str] = []
-    pack = skill_pack_tool("superpowers")
-    probe_started = threading.Event()
-    release_probe = threading.Event()
-
-    def skill_probe(_argv: list[str]) -> str:
-        probe_started.set()
-        release_probe.wait(timeout=10)
-        return "not json"
-
-    service = offline_service(
-        tmp_path / "versions.json",
-        skill_home=tmp_path,
-        resolve_tag=lambda _repo: "1.0.0",
-        probe_output=lambda _argv: None,
-        skill_probe=skill_probe,
-        present=lambda _tool: False,
-    )
-    inputs = _inputs(tools=[pack], install=_install_with_output(captured), version_refresh=service)
-    app = _host(inputs, [pack])
-    async with app.run_test(size=(80, 20)) as pilot:
-        app.push_screen(ExecuteScreen([pack.id], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        for _ in range(40):
-            if probe_started.is_set():
-                break
-            await pilot.pause()
-        assert probe_started.is_set()
-        assert _plan_prompts(screen) == ["… superpowers  checking…"]
-        await pilot.press("enter")
-        release_probe.set()
-        await _settle_execute(screen, pilot)
-        assert "State check failed" not in screen.status.text
-        assert captured == ["superpowers"]
-        assert _head_text(screen).startswith("Summary —")
-        assert all(outcome.result != "not_attempted" for outcome in screen.outcomes or ())
 
 
 async def test_a_refresh_raising_value_error_settles_with_the_error_and_enter_retries(
