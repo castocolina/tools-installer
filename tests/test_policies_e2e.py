@@ -29,7 +29,7 @@ from installer.policy import (
     settings_policy,
     tweak_policy,
 )
-from installer.tweaks import BUNDLES, TweakBundle
+from installer.tweaks import BUNDLES, TweakBundle, shell_init_bundle, tweak_present
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
     LinkModeScreen,
@@ -1664,3 +1664,59 @@ async def test_settings_values_render_literally(
         assert f"Set by you: permissions.defaultMode = {shown} (left as is)." in (
             _policies(app).detail_text
         )
+
+
+async def test_a_shell_init_row_toggles_its_bundle_under_a_scratch_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard (written after the implementation): space writes and removes the block."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+    rc = tmp_path / ".myshellrc"
+    row = tweak_policy(
+        bundle,
+        rc_path=rc,
+        bin_dir=tmp_path / ".local" / "bin",
+        installed_tools={"zoxide": True},
+    )
+    app = _settings_app(tmp_path, row)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert _cell(app, "tweak:zoxide", "state") == "○ [off]"
+        await pilot.press("space")
+        await pilot.pause()
+        assert tweak_present(bundle, rc)
+        assert _cell(app, "tweak:zoxide", "state") == "● [on]"
+        await pilot.press("space")
+        await pilot.pause()
+        assert not tweak_present(bundle, rc)
+        assert _cell(app, "tweak:zoxide", "state") == "○ [off]"
+
+
+@pytest.mark.parametrize(
+    "policy_id",
+    ["tweak:claude-skip", "tweak:codex-skip", "tweak:opencode-auto", "tweak:cursor-agent-model"],
+)
+async def test_retired_alias_rows_show_only_the_generic_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy_id: str
+) -> None:
+    """Regression guard (written after the implementation): the alias copy left the screen."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    row = Policy(
+        id=policy_id,
+        label="retired alias",
+        description="alias text",
+        active=False,
+        apply=lambda: PolicyResult(layers=(), reload_hint=None, warning=None),
+        remove=lambda: PolicyResult(layers=(), reload_hint=None, warning=None),
+    )
+    app = _settings_app(tmp_path, row)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        detail = _policies(app).detail_text
+        assert "Space toggles this reversible shell policy." in detail
+        assert "dangerously-skip-permissions" not in detail
+        assert "dangerously-bypass-approvals" not in detail
+        assert "--model gpt-5.6-sol-high" not in detail
+        assert "--auto" not in detail

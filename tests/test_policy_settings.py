@@ -18,6 +18,7 @@ from installer.policy import (
     tweak_policy,
 )
 from installer.tweaks import shell_init_bundle
+from installer.uninstall import active_policies, sweep_policies
 
 
 def _claude_row(home: Path, *, claude_installed: bool = True) -> Policy:
@@ -265,3 +266,37 @@ def test_vscode_and_cursor_details_follow_the_spec(
         "codex, opencode and pi have no documented attribution key; nothing is written for them."
         in details("fedora", "agent:claude:no-attribution")
     )
+
+
+def test_the_desktop_shell_row_is_swept_by_its_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard (written after the implementation): uninstall's sweep path finds the
+    conf by its sentinel, even after zsh has gone, and never touches a foreign file."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    zsh = tmp_path / "bin" / "zsh"
+    zsh.parent.mkdir()
+    zsh.write_text("")
+    conf = tmp_path / ".config" / "environment.d" / DESKTOP_SHELL_CONF
+    desktop_shell_policy(zsh_path=str(zsh), conf_dir=conf.parent, home=tmp_path).apply()
+    moved = desktop_shell_policy(zsh_path=None, conf_dir=conf.parent, home=tmp_path)
+    listed = active_policies(
+        (),
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / ".local" / "bin",
+        extra_policies=(moved,),
+    )
+    assert [policy.id for policy in listed] == ["desktop-shell"]
+    sweep_policies(listed)
+    assert not conf.exists()
+
+    conf.write_text("SHELL=/bin/bash\n", encoding="utf-8")  # no sentinel: not ours
+    foreign = active_policies(
+        (),
+        rc_path=tmp_path / ".myshellrc",
+        bin_dir=tmp_path / ".local" / "bin",
+        extra_policies=(moved,),
+    )
+    assert foreign == []
+    sweep_policies(foreign)
+    assert conf.read_text(encoding="utf-8") == "SHELL=/bin/bash\n"

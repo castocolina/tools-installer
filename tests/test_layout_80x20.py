@@ -22,8 +22,15 @@ from installer.doctor import DoctorReport
 from installer.enums import MutationHolder
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
-from installer.policy import Policy, PolicyResult
+from installer.policy import (
+    Policy,
+    PolicyResult,
+    desktop_shell_policy,
+    settings_policies,
+    tweak_policy,
+)
 from installer.resolve import resolve_methods
+from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
 from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
 from installer.uninstall import RemovalPlan, SweepResult
 from installer.version_status import (
@@ -34,6 +41,7 @@ from installer.version_status import (
 )
 from installer.wizard_app import (
     ConfirmUninstall,
+    PoliciesScreen,
     PolicyInputs,
     UnifiedApp,
     UninstallInputs,
@@ -533,3 +541,67 @@ async def test_a_long_review_scrolls_and_keeps_its_keys_line(tmp_path: Path) -> 
         assert rows_of(modal, keys)  # the keys line stays on screen after scrolling
         await pilot.press("escape")
         await pilot.pause()
+
+
+def _new_policy_rows(home: Path) -> list[Policy]:
+    """Task 3's rows as setup.py composes them: six shell-init, nine settings, desktop SHELL."""
+    shell: list[Policy] = []
+    for tool in SHELL_INIT_TOOLS:
+        bundle = shell_init_bundle(tool)
+        assert bundle is not None
+        shell.append(
+            tweak_policy(
+                bundle,
+                rc_path=home / ".myshellrc",
+                bin_dir=home / ".local" / "bin",
+                installed_tools={tool: True},
+            )
+        )
+    settings = settings_policies(
+        home=home, platform_os="fedora", installed_tools=lambda _tool_id: True
+    )
+    # Construction only reads the conf; nothing is written until a toggle.
+    desktop = desktop_shell_policy(
+        zsh_path="/home/linuxbrew/.linuxbrew/bin/zsh",
+        conf_dir=home / ".config" / "environment.d",
+        home=home,
+    )
+    return [*shell, *settings, desktop]
+
+
+async def test_policies_fit_80x20_with_the_new_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("HOME", str(tmp_path))  # so display_path shows ~/… as on a real host
+    rows = _new_policy_rows(tmp_path)
+    app = _app(tmp_path, policies=rows)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "policies")
+        assert isinstance(screen, PoliciesScreen)
+        _assert_chrome(screen)
+        table = screen.query_one(DataTable[Any])
+        assert rows_of(screen, table)
+        spans = _column_spans(table)
+        assert spans["State"][1] - spans["State"][0] <= 9, spans
+        assert spans["Policy"][1] <= 78, spans
+        assert all(cell_len(row.label) <= 28 for row in rows), [row.label for row in rows]
+        detail = screen.query_one("#policy-detail")
+        assert detail.size.height == 11  # the panel height the Policies screen declares
+        for index, row in enumerate(rows):
+            if index:
+                await pilot.press("down")
+                await pilot.pause()
+            lines = list(Text(screen.detail_text).wrap(Console(width=78), 78))
+            assert len(lines) <= 9, (row.id, [line.plain for line in lines])
+            assert all(cell_len(line.plain) <= 78 for line in lines), row.id
+        for _ in range(len(rows) - 1 - 6):  # back up to the first settings row
+            await pilot.press("up")
+            await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        status = app.view("policies").status
+        assert status.text.startswith("claude auto-approve enabled."), status.text
+        assert rows_of(screen, status), "the toggle result is not on screen"
+        assert "wrote permissions.defaultMode" in status.text
+        _assert_chrome(screen)
