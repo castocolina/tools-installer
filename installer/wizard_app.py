@@ -62,7 +62,7 @@ from installer.guidance import (
     doctor_guidance,
     guard_guidance,
 )
-from installer.locations import display_path
+from installer.locations import bin_dir, display_path
 from installer.model import Tool
 from installer.pnpm_globals import (
     PNPM_SMOKE_FAILED,
@@ -109,7 +109,14 @@ from installer.ui_common import (
     multiline_summary,
     run_live,
 )
-from installer.uninstall import SweepResult, config_targets, policy_owned, reverse_dependencies
+from installer.uninstall import (
+    RemovalPlan,
+    SweepResult,
+    config_targets,
+    policy_owned,
+    removal_plan,
+    reverse_dependencies,
+)
 from installer.update import UpdateService
 from installer.version_status import (
     Health,
@@ -143,7 +150,6 @@ class UninstallInputs:
     has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
-    # D-09: the screen does not read it yet; the retired rows land in 23.1-17.
     retired: Callable[[], Sequence[Tool]] = tuple
     # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
     # direct `u` update, unattended installation, the CLI uninstall route,
@@ -1026,6 +1032,8 @@ class _UninstallEntry:
     argv: tuple[str, ...] = ()
     # The hook undo the row's preview showed (D-04); the decision hands it back the same way.
     unregister: tuple[tuple[str, ...], ...] = ()
+    # A retired receipt's row (D-09): `tool` is set, `group` is None, there is no catalog state.
+    is_retired: bool = False
 
 
 # Section titles per state, in display order. The "environment" section holds the
@@ -1046,8 +1054,15 @@ _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _SETTINGS_KEY = "#settings"
 _ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY, _SETTINGS_KEY)
-# (ban names, PATH block present, active tweak ids, ledgered settings files)
-_EnvState = tuple[list[str], bool, tuple[str, ...], tuple[Path, ...]]
+# (ban names, PATH block present, active tweak ids, ledgered settings files, retired receipts
+# with the removal plan each one shows)
+_EnvState = tuple[
+    list[str],
+    bool,
+    tuple[str, ...],
+    tuple[Path, ...],
+    tuple[tuple[Tool, RemovalPlan], ...],
+]
 _REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 _REMOVAL_QUIT_CUT = "Quit before the removal finished; some files may remain."
 
@@ -1161,6 +1176,7 @@ class UninstallScreen(AppScreen):
         self._ban_names_of = inputs.ban_names
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
+        self._retired_of = inputs.retired
         # Evaluated THROUGH run_live (.claude/architecture.md rule 3), not
         # bare: construction happens outside the nav path `enter_view` guards,
         # so a bare call would let an OSError from the filesystem reads escape
@@ -1169,10 +1185,14 @@ class UninstallScreen(AppScreen):
         # stashed on `self._startup_error`; the first `enter_view` surfaces it
         # as a one-time warn and re-reads, so the screen self-heals.
         env, env_error = run_live(self._env_state)
-        empty_env: _EnvState = ([], False, (), ())
-        self._ban_names, self._has_path_block, self._tweak_ids, self._settings_files = (
-            env if env is not None else empty_env
-        )
+        empty_env: _EnvState = ([], False, (), (), ())
+        (
+            self._ban_names,
+            self._has_path_block,
+            self._tweak_ids,
+            self._settings_files,
+            self._retired,
+        ) = env if env is not None else empty_env
         self._startup_error: str | None = env_error
         self._remove = inputs.remove
         self._terminal_sync = inputs.terminal_sync
@@ -1192,6 +1212,8 @@ class UninstallScreen(AppScreen):
     # -- entry construction ------------------------------------------------
     def _build_entries(self) -> list[_UninstallEntry]:
         entries = [self._with_failure(self._tool_entry(tool), tool) for tool in self._tools]
+        # Built from the pairs the last re-read stored, so painting never reads the filesystem.
+        entries.extend(self._retired_entry(tool, plan) for tool, plan in self._retired)
         if self._ban_names:
             entries.append(self._ban_entry())
         if self._has_path_block:
@@ -1420,6 +1442,38 @@ class UninstallScreen(AppScreen):
             is_settings=True,
         )
 
+    def _retired_entry(self, tool: Tool, plan: RemovalPlan) -> _UninstallEntry:
+        """A retired receipt's row (D-09, UI-SPEC section 2): removal only, no install or update."""
+        selectable = plan.level != "none"
+        shown = ", ".join(str(path) for path in plan.removable) or "—"
+        removes = Text(sanitize_log_line(shown))
+        removes.truncate(_REMOVES_CELL_MAX, overflow="ellipsis")
+        name = Text(tool.id, style="bold")
+        name.append(" (retired)", style="dim")
+        return _UninstallEntry(
+            key=tool.id,
+            cells=[
+                mark(False) if selectable else Text(""),
+                name,
+                Text(""),
+                Text("retired", style="dim"),
+                Text(""),
+                removes,
+            ],
+            selectable=selectable,
+            detail=sanitize_log_line(
+                f"retired: {tool.id} is no longer in the catalog · "
+                "recorded files re-checked before deletion"
+            ),
+            paths=plan.removable,
+            is_ban=False,
+            is_path_block=False,
+            tool=tool,
+            argv=plan.argv,
+            unregister=plan.unregister,
+            is_retired=True,
+        )
+
     # -- browser adapter ---------------------------------------------------
     def _adapter(self) -> BrowserAdapter[_UninstallEntry]:
         return BrowserAdapter(
@@ -1451,6 +1505,12 @@ class UninstallScreen(AppScreen):
         sections: list[Section[_UninstallEntry]] = [
             (title, title, members) for title, members in by_title.items() if members
         ]
+        retired = sorted(
+            (entry for entry in self._entries if entry.is_retired), key=lambda entry: entry.key
+        )
+        if retired:
+            title = "retired — no longer in the catalog"
+            sections.append((title, title, retired))
         env = [
             entry
             for entry in self._entries
@@ -1490,21 +1550,35 @@ class UninstallScreen(AppScreen):
             for agent in receipts.CONFIG_AGENTS
             for path, _keys in ledger_summary(agent, home=Path.home())
         )
+        managed = (
+            self._version_refresh.managed_bin_dir
+            if self._version_refresh is not None
+            else bin_dir(None)
+        )
+        # D-09: the retired receipts re-listed live, each with the plan its row will show.
+        retired = tuple((tool, removal_plan(tool, managed)) for tool in self._retired_of())
         return (
             self._ban_names_of(),
             self._has_path_block_of(),
             self._tweak_ids_of(),
             settings_files,
+            retired,
         )
 
     def _reread_env(self) -> str | None:
-        """Re-read the environment predicates; the error text when that failed
-        (the last values are kept). A publish can follow a mutation that changed
+        """Re-read the environment predicates and the retired receipts; the error text when that
+        failed (the last values are kept). A publish can follow a mutation that changed
         them while this view is the visible one (D-06), so both `enter_view` and
         `state_refreshed` call it."""
         env, error = run_live(self._env_state)
         if env is not None:
-            self._ban_names, self._has_path_block, self._tweak_ids, self._settings_files = env
+            (
+                self._ban_names,
+                self._has_path_block,
+                self._tweak_ids,
+                self._settings_files,
+                self._retired,
+            ) = env
         return error
 
     def enter_view(self) -> None:
