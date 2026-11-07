@@ -948,9 +948,9 @@ def _build_app(
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
     # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
-    legacy_strip = strip_legacy_aliases(_MYSHELLRC)
+    legacy_strip, repairs = _launch_repairs()
     startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
-    startup_lines += [text for text, _severity in legacy_strip.launch_lines()]
+    startup_lines += [text for text, _severity in (*legacy_strip.launch_lines(), *repairs)]
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -1284,6 +1284,7 @@ def _run_doctor(console: Console) -> int:
             app = _build_app(tools, platform, initial_view="doctor", settings=store)
             app.run()
         return _session_exit_code(app)
+    _print_repairs(console, *_launch_repairs())
     cache = _timer_state_cache(
         platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
     )
@@ -1322,6 +1323,7 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
             )
             app.run()
         return _session_exit_code(app)
+    _print_repairs(console, *_launch_repairs())
     configure_path(
         tools,
         console,
@@ -1354,11 +1356,13 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # CLI teardown path gates fd/rg-aware daemon construction on the SAME
     # real-installed-status map the interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
-    legacy = strip_legacy_aliases(_MYSHELLRC)
+    legacy, repairs = _launch_repairs()
     notice = legacy.uninstall_line()
     if notice is not None:
         console.print(notice, markup=False, soft_wrap=True)
     for text in legacy.failure_lines():
+        console.print(text, markup=False, soft_wrap=True)
+    for text, _severity in repairs:
         console.print(text, markup=False, soft_wrap=True)
     _removed, failed = run_uninstall(
         tools,
@@ -1387,6 +1391,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
 def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:
     # The caller picks rc_paths: install targets the link-mode location, removal
     # sweeps every possible location (so it never depends on a link-mode guess).
+    _print_repairs(console, *_launch_repairs())
     confirm = (lambda _message: True) if assume_yes else ask_confirm
     acted = run_guard(
         remove=remove,
