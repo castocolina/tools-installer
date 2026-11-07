@@ -238,7 +238,7 @@ Lanes: R2 = opencode-referee-two, R3a/R3b = opencode-referee-three halves. Sever
 | R1-23 | 23-04 | LOW | R3a | REJECTED | — (planner decision 5, signed off) |
 | R1-24 | 23-05 | LOW | R3a | REJECTED | — (planner decision 6, signed off) |
 | R1-25 | 23-05, 23-08 | LOW | R3a | CONFIRMED | Record that 23-08 adds the postinstall import |
-| R1-26 | 23-06 | MEDIUM | R2, R3a | CONFIRMED | Route `agent_policy._apply_opencode` through the guarded splice (ledger decision) |
+| R1-26 | 23-06 | MEDIUM | R2, R3a | CONFIRMED | One writer for `opencode.json` (ledger decision); per the cycle 1 sign-off, delete the dead agent_policy chain instead of rerouting it |
 | R1-27 | 23-06 | MEDIUM | R2 | CONFIRMED | Move `_display_path` to `locations.display_path` (REUSE 06-1) |
 | R1-28 | 23-06 | LOW | R2 | CONFIRMED | Shared `_read_json_object`/`_write_json`; ledger dir from `default_receipts_dir()`; docstring (REUSE 06-3, 06-4) |
 | R1-29 | 23-02, 23-06 | LOW | R3a | CONFIRMED | Type-strict `same_value` |
@@ -287,7 +287,7 @@ CYCLE_SUMMARY: current_high=7 current_actionable=47
 
 ## Cycle 1 resolution
 
-Replanned in reviews mode at `3342273`. Plan count (16), task count (43), wave assignment (1: 01-04; 2: 05-06; 3: 07-08; 4: 09-10; 5: 11-13; 6: 14-15; 7: 16) and every plan ID are unchanged. Same-wave `files_modified` sets stay disjoint (checked mechanically after the additions). New `depends_on` edges, no wave moved: 23-07 on 23-06; 23-14 on 23-12. New files: 23-01 `tests/test_sandbox.py`; 23-02 `tests/test_shellrc.py`; 23-06 `installer/locations.py`, `installer/policy.py`, `installer/agent_policy.py`, `tests/test_locations.py`, `tests/test_agent_policy.py`; 23-09 `installer/shellrc.py`, `tests/test_shellrc.py` (registry.toml stays, for oh-my-zsh and vscode only); 23-10 `installer/postinstall.py`, `setup.py`, `tests/test_setup.py`, `tests/test_postinstall.py`; 23-14 `installer/registry.toml`, `tests/conftest.py`, `tests/test_policy.py`, `tests/test_policies_e2e.py`, `tests/test_registry.py`. Every plan's `<context>` cites 23-REUSE.md and its `## Review Dispositions Ledger` has a Round 2 table. New threats T-23-49..T-23-62. 23-VALIDATION.md updated (rows, Wave 0 conftest items, two manual checks). Test-first with one green commit per task, the `:(glob)` suppression gate against `git merge-base HEAD main`, and every task's automated verify are kept; new count gates record their HEAD baselines, and negative gates filter comment lines.
+Replanned in reviews mode at `3342273`. Plan count (16), task count (43), wave assignment (1: 01-04; 2: 05-06; 3: 07-08; 4: 09-10; 5: 11-13; 6: 14-15; 7: 16) and every plan ID are unchanged. Same-wave `files_modified` sets stay disjoint (checked mechanically after the additions). New `depends_on` edges, no wave moved: 23-07 on 23-06; 23-14 on 23-12. New files: 23-01 `tests/test_sandbox.py`; 23-02 `tests/test_shellrc.py`; 23-06 `installer/locations.py`, `installer/policy.py`, `installer/agent_policy.py`, `tests/test_locations.py`, `tests/test_agent_policy.py` (after the sign-off also `installer/agent_guidance.py`, `tests/test_agent_environment_policy.py`, `tests/test_agent_environment_e2e.py`; agent_policy.py, agent_guidance.py and the three test files are deleted); 23-09 `installer/shellrc.py`, `tests/test_shellrc.py` (registry.toml stays, for oh-my-zsh and vscode only); 23-10 `installer/postinstall.py`, `setup.py`, `tests/test_setup.py`, `tests/test_postinstall.py`; 23-14 `installer/registry.toml`, `tests/conftest.py`, `tests/test_policy.py`, `tests/test_policies_e2e.py`, `tests/test_registry.py`. Every plan's `<context>` cites 23-REUSE.md and its `## Review Dispositions Ledger` has a Round 2 table. New threats T-23-49..T-23-62. 23-VALIDATION.md updated (rows, Wave 0 conftest items, two manual checks). Test-first with one green commit per task, the `:(glob)` suppression gate against `git merge-base HEAD main`, and every task's automated verify are kept; new count gates record their HEAD baselines, and negative gates filter comment lines.
 
 | ID | Plan(s) changed | How resolved |
 |---|---|---|
@@ -312,7 +312,7 @@ Replanned in reviews mode at `3342273`. Plan count (16), task count (43), wave a
 | R1-21 | 23-04, 23-07 | `_sync_zshenv` contains `OSError` as `zshenv: …`; 23-07 maps the prefix to the zsh row; one test in each |
 | R1-22 | 23-04 | Built on `zshrc_path` |
 | R1-25 | 23-05, 23-08 | Recorded; 23-08 adds the import |
-| R1-26 | 23-06 | Task 3: `_apply_opencode` through `read_settings`/`parse_settings`/`insert_key`/`replace_value`/`write_if_unchanged`; `test_agent_policy_opencode_write_keeps_comments_and_user_keys`; grep gate |
+| R1-26 | 23-06 | Revised after the sign-off (RUN-LEDGER `23 | Cycle 1 replan sign-offs` (4)): Task 3 deletes the dead chain instead of rerouting it: `installer/agent_policy.py`, `installer/agent_guidance.py` (its only consumer), `policy.AgentEnvironmentPolicy` / `agent_environment_policy` / `compose_agent_environment_policy` with their imports, and tests/test_agent_policy.py, tests/test_agent_environment_policy.py, tests/test_agent_environment_e2e.py. `codegraph explore` and `rg` at `fbcbead`: agent_policy.py is imported only by policy.py (a `TYPE_CHECKING` import and two lazy imports inside the trio) and tests; the trio is called only from itself and tests; setup.py and every screen reference none of it. Proof: `test_opencode_json_has_a_single_writer` (the module is gone and only agent_settings imports the agent path table), file-existence and comment-filtered grep gates |
 | R1-27 | 23-06 | `locations.display_path`; policy.py re-binds; `test_display_path_lives_in_locations`; grep gates |
 | R1-28 | 23-06 | Shared private helpers; `config_ledger_dir()` from `default_receipts_dir().parent`; docstring reworded |
 | R1-29 | 23-02, 23-06 | `same_value` in 23-02, used by `_guarded` and every 23-06 comparison; two tests |
@@ -324,7 +324,7 @@ Replanned in reviews mode at `3342273`. Plan count (16), task count (43), wave a
 | R1-35 | 23-07 | Task 1 updates the existing assertions |
 | R1-36 | 23-08 | `hook_method` in `_recipe_argv`; grep gate (baseline 1 → 0) |
 | R1-37 | 23-08 | `_proven_named` and `_command_error_line`; grep gates |
-| R1-38 | 23-08, 23-16, 23-VALIDATION | No logic change (D-04/O4); 23-16 records an unregister failure as a finding; manual check |
+| R1-38 | 23-08, 23-16, 23-VALIDATION | No logic change now (D-04/O4). The orchestrator's conditional decision (RUN-LEDGER `23 | Cycle 1 replan sign-offs` (3)) is in 23-16's triage rule: if the run shows codegraph's unregister failing for a host whose config is gone, it is a finding to fix by removing an uninstalled host from every receipt's `hooks` (D-04's proof rule kept), never an allowlist entry; manual check |
 | R1-39 | 23-08, 23-VALIDATION | `shortcut:` comment, `test_a_pre_phase_23_receipt_unregisters_nothing`, manual check |
 | R1-40 | 23-08 | `shortcut:` comment names the self-upgrade |
 | R1-41 | 23-09, 23-11 | No `SHELL_INIT_EFFECTS`; prompt, Effect cell and `shell_init_detail` read the bundle description; grep gate |
@@ -343,9 +343,11 @@ Replanned in reviews mode at `3342273`. Plan count (16), task count (43), wave a
 | R1-57 | 23-14 | `strip_tweak_block` (`remove_tweak` delegates); `strip_legacy_aliases(rc_path)` |
 | R1-58, R1-59 | 23-15 | Config-supersedes branch dropped; `shortcut:` comment; `test_no_config_agent_declares_config_paths` guards it; `removal_change_lines` loses `config` |
 | R1-60 | 23-15 | One `_revert_settings`; grep gates |
-| R1-62 | 23-10 (deferral recorded) | Open for the orchestrator (below) |
+| R1-62 | 23-10 | Signed off (RUN-LEDGER `23 | Cycle 1 replan sign-offs` (2)): the UI-SPEC's static pi notes cover CONF-08's pi clause (pi stays out per D-05); no task; 23-10's ledger row records it |
 
 ### Decisions needing orchestrator sign-off
+
+Signed off in RUN-LEDGER `23 | Cycle 1 replan sign-offs` (fbcbead): (1) 23-01 at 19 files accepted; (2) R1-62 covered by the UI-SPEC's static pi notes, no task; (3) R1-38 conditional: drop an uninstalled host from every receipt's `hooks` if the e2e shows the failure (recorded in 23-16's triage); (4) R1-26: delete the dead agent_policy chain instead of rerouting it (23-06 revised); (5) R1-48 accepted. The original questions follow for the record.
 
 1. **23-01 grows to 19 files** (adds `tests/test_sandbox.py`, the self-test of the R1-07 guard). It extends the signed 23-01 scope override; the alternative (the guard in 23-14, wave 6) leaves waves 1-5 without prevention.
 2. **R1-62 (CONF-08 pi clause):** accept the approved UI-SPEC's static pi notes as satisfying "its state notes when a permission extension is installed", or commission research on A7 (detecting a pi permission extension under `~/.pi/agent`) plus UI copy and a task.
