@@ -54,7 +54,7 @@ Answer all of these; they drive every later step.
 | Question | Why it matters |
 |---|---|
 | OS/CLI tool, user-facing app, or LLM tooling? | tier + audience (step 5) |
-| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects `skill_pack`/`skill_lifecycle`, `host_setup`, or a plain binary install |
+| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects `host_setup`, a `postinstall` hook, or a plain binary install; skill packs are not catalog entries since 23.1 |
 | Does it have a marketplace/registry entry? | prefer the marketplace route when the host supports it; use symlinks into the host's skills dir only when no marketplace exists or the registry needs a pinned, auditable copy. State the choice and reason. |
 | Does it need other tools at install time or at runtime? | `requires` / `recommends` |
 
@@ -131,7 +131,7 @@ Apply `.claude/architecture.md`'s "Tier is a browsing label":
   and agent harness CLIs the human types into). AI branding alone does not
   make it `ai`.
 - **`ai`** — consumed BY an agent session (MCP servers, token proxies,
-  agent-oriented CLIs, skill packs).
+  agent-oriented CLIs).
 
 `audience` (`human`/`ai`/`both`) is independent of tier.
 
@@ -142,7 +142,7 @@ dependencies, and postinstall classification" — the canonical decision tree;
 read it rather than reconstructing it. A manager-installed tool names that
 manager in `requires`; a runtime-only expectation the catalog cannot
 guarantee also needs an edge, or a `# Verified` note when unsure. Walk the tree:
-`postinstall` hook / `skill_pack` + `skill_lifecycle` / `host_setup` / none. If
+`postinstall` hook / `host_setup` / none. If
 it straddles two branches, name the ambiguity.
 
 A hook is selected by NAME from the closed `POSTINSTALL_HOOKS` table, never a

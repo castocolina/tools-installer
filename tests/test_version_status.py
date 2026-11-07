@@ -2852,7 +2852,7 @@ def test_absent_tool_keeps_configuration_facts_as_reasons() -> None:
     pack = _gh_tool("alpha")
     fact = "disabled: superpowers@claude-plugins-official in user scope (6.4.1)"
     step = ConfigStep(
-        "enable superpowers@claude-plugins-official in user scope", "plugin_enable", "claude"
+        "enable superpowers@claude-plugins-official in user scope", "terminal_sync", "claude"
     )
 
     def build(*, present: bool) -> ToolState:

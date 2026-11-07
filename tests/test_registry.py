@@ -1,3 +1,4 @@
+import ast
 import os
 import re
 import tomllib
@@ -61,7 +62,6 @@ def test_the_dropped_ids_are_not_in_the_catalog() -> None:
     assert not {tool.id for tool in tools} & set(DROPPED_IDS)
     for tool in tools:
         assert not set(tool.recommends) & set(DROPPED_IDS), tool.id
-        assert not any(method.kind == "skill_pack" for method in tool.methods), tool.id
     tools_by_id = {tool.id: tool for tool in tools}
     for host_id in ("codex", "claude", "opencode", "cursor-agent"):
         assert tools_by_id[host_id].recommends == ("codegraph", "graphify"), host_id
@@ -2102,16 +2102,6 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
     assert native == set(expected)
 
 
-def test_install_state_probes_match_gsd_core() -> None:
-    for tool in load_tools(REGISTRY):
-        lifecycle = tool.skill_lifecycle
-        if lifecycle is None:
-            continue
-        for probe in lifecycle.status_probes:
-            if probe.via == "install-state":
-                assert probe.match == "gsd-core", tool.id
-
-
 def test_sublime_linux_tarballs_link_the_binary_inside_the_archive_dir() -> None:
     """Phase 17 SAFE-01/D-02: both Linux tarball archives unpack to a single
     top-level sublime_text/ directory holding the executable at
@@ -2452,8 +2442,43 @@ def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
     assert "linux64" in block
 
 
+def test_no_code_names_the_gsd_package() -> None:
+    """SPEC R1: no installer code or setup.py can run or offer the GSD package."""
+    root = Path(__file__).resolve().parent.parent
+    sources = [*sorted((root / "installer").rglob("*.py")), root / "setup.py"]
+    sources.append(root / "installer" / "registry.toml")
+    pattern = re.compile(r"pnpm\s+dlx\s+\S*gsd")
+    offenders = [
+        str(path.relative_to(root))
+        for path in sources
+        if "@opengsd/gsd-core" in path.read_text() or pattern.search(path.read_text())
+    ]
+    assert offenders == []
+
+
+def test_nothing_imports_the_skill_pack_module() -> None:
+    """The retired pack module is gone and no installer, test or setup.py module imports it."""
+    root = Path(__file__).resolve().parent.parent
+    assert not (root / "installer" / "skill_lifecycle.py").exists()
+    modules = [*(root / "installer").rglob("*.py"), *(root / "tests").rglob("*.py")]
+    modules.append(root / "setup.py")
+    offenders: list[str] = []
+    for path in modules:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                names = {alias.name for alias in node.names}
+                if node.module == "installer.skill_lifecycle" or (
+                    node.module == "installer" and "skill_lifecycle" in names
+                ):
+                    offenders.append(str(path.relative_to(root)))
+            elif isinstance(node, ast.Import) and any(
+                alias.name == "installer.skill_lifecycle" for alias in node.names
+            ):
+                offenders.append(str(path.relative_to(root)))
+    assert offenders == []
+
+
 def test_registry_rows_carry_no_dead_attribution_keys() -> None:
-    # skill_lifecycle tables keep their own source/owner; only top-level tool keys are dead.
     with REGISTRY.open("rb") as fh:
         rows = cast(list[dict[str, object]], tomllib.load(fh)["tool"])
     dead = {"source", "owner", "uninstall"}

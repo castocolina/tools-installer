@@ -39,7 +39,7 @@ from installer.sanitize import sanitize_log_line
 
 # The OS package manager or the agent harness owns these installs; a receipt
 # would claim files this installer did not create.
-RECEIPTLESS_KINDS = frozenset({"dnf", "apt", "pacman", "rpm_ostree", "skill_pack", "host_setup"})
+RECEIPTLESS_KINDS = frozenset({"dnf", "apt", "pacman", "rpm_ostree", "host_setup"})
 
 # 19-UI-SPEC locked copy (D-08). One owner: version_status and the update gate both read it.
 CHANGED_SINCE_INSTALL = "changed since install"

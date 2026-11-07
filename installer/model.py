@@ -29,7 +29,6 @@ METHOD_KINDS = (
     "uv-tool",
     "sdkman",
     "host_setup",
-    "skill_pack",
     "github_release",
     "tarball",
     "app",
@@ -66,7 +65,6 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
     "uv-tool": frozenset({"pypi_pkg", "smoke_argv"}),
     "sdkman": frozenset({"candidate", "bin_dir", "version", "smoke_argv"}),
     "host_setup": frozenset({"setup_id"}),
-    "skill_pack": frozenset(),
     "github_release": frozenset(
         {
             "repo",
@@ -142,66 +140,8 @@ OWNER_PROBES = (
     "pnpm",
     "sdkman",
 )
-SKILL_HARNESSES = (
-    "adal",
-    "aider",
-    "alquimia",
-    "amazon-q",
-    "amp",
-    "antigravity",
-    "auggie",
-    "bob",
-    "claude",
-    "cline",
-    "codeartsagent",
-    "codeassistant",
-    "codebuddy",
-    "codewhale",
-    "codex",
-    "command-code",
-    "continue",
-    "copilot",
-    "costrict",
-    "crush",
-    "cursor",
-    "devin",
-    "docker-agent",
-    "dsh",
-    "factory-droid",
-    "firebender",
-    "forge",
-    "forgecode",
-    "gemini-cli",
-    "goose",
-    "grok",
-    "hermes",
-    "iflow",
-    "jules",
-    "junie",
-    "kilo",
-    "kimi",
-    "kiro",
-    "lingma",
-    "minimax-code",
-    "muse",
-    "oh-my-pi",
-    "openclaw",
-    "opencode",
-    "pi",
-    "qoder",
-    "qwen",
-    "roocode",
-    "rovodev",
-    "shai",
-    "tabnine",
-    "trae",
-    "vibe",
-    "windsurf",
-    "zcode",
-    "zed",
-)
 # Harness marker dirs (home-relative): read by the config_paths validator and by
-# skill_lifecycle.HARNESS_PRESENCE, so one denylist governs both.
+# postinstall.HARNESS_PRESENCE, so one denylist governs both.
 HARNESS_MARKER_DIRS: dict[str, tuple[str, ...]] = {
     "antigravity": (".gemini/antigravity",),
     "claude": (".claude",),
@@ -221,26 +161,12 @@ HARNESS_MARKER_DIRS: dict[str, tuple[str, ...]] = {
     "qwen": (),
     "windsurf": (".codeium/windsurf",),
 }
-SKILL_REVISION_POLICIES = (
-    "host-marketplace-current",
-    "package-manager-latest",
-    "upstream-default-branch",
-    "upstream-latest",
-)
-SKILL_TARGET_SCOPES = ("global", "harness", "project")
-# Where a pack lives: user scope for the user's harness homes, project scope per repo (D-21).
-SKILL_PACK_SCOPES = ("user", "project")
-_PACK_PIN_RE = re.compile(r"\d+\.\d+\.\d+")
-SKILL_OPERATION_MODES = ("manual-required",)
-SKILL_STATUS_SOURCES = ("plugin-cli", "skills-lock", "install-state")
-_SKILL_MATCH_RE = re.compile(r"^[A-Za-z0-9@/._-]+$")
 _SCRIPT_ARG_RE = re.compile(r"^[A-Za-z0-9=._:/+-]+$")
 _SCRIPT_PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 _WRITABLE_PREFIX_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 _PINNED_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # A tool id names its receipt file, so it can never hold `/`, `..` or a leading `-`.
 TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
-SkillStatusVia = Literal["plugin-cli", "skills-lock", "install-state"]
 
 EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
 
@@ -357,28 +283,9 @@ def method_package(method: Method) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-@dataclass(frozen=True)
-class SkillTarget:
-    scope: Literal["global", "harness", "project"]
-    path: str
-
-
-@dataclass(frozen=True)
-class SkillStatusProbe:
-    harness: str
-    via: SkillStatusVia
-    match: str
-
-
 ConfigStepKind = Literal[
-    "skill_install",
-    "plugin_enable",
-    "plugin_uninstall",
-    "marketplace_remove",
     "terminal_sync",
     "pnpm_group_install",
-    "project_pack_global_uninstall",
-    "project_pack_install",
     "hook_register",
     "zshenv_shell",
 ]
@@ -398,36 +305,6 @@ class ConfigStep:
     # The text a successful terminal_sync step reports (its done note); a zshenv_shell
     # step's is "<zsh path>\n<the .zshenv it writes>". Empty for every other kind.
     report: str = ""
-
-
-@dataclass(frozen=True)
-class SkillOperation:
-    mode: Literal["manual-required"]
-    instructions: tuple[str, ...] = ()
-    # Ordered by SKILL_HARNESSES so a registry's TOML key order cannot reshuffle the handoff.
-    by_harness: tuple[tuple[str, tuple[str, ...]], ...] = ()
-
-
-@dataclass(frozen=True)
-class SkillLifecycle:
-    source: str
-    owner: str
-    supported_harnesses: tuple[str, ...]
-    revision_policy: Literal[
-        "host-marketplace-current",
-        "package-manager-latest",
-        "upstream-default-branch",
-        "upstream-latest",
-    ]
-    targets: tuple[SkillTarget, ...]
-    install: SkillOperation
-    status: SkillOperation
-    update: SkillOperation
-    removal: SkillOperation
-    approval_disclosures: tuple[str, ...] = ()
-    status_probes: tuple[SkillStatusProbe, ...] = ()
-    scope: Literal["user", "project"] = "user"
-    version: str | None = None
 
 
 @dataclass(frozen=True, init=False)
@@ -459,10 +336,8 @@ class Tool:
     # distinct from `postinstall` above.
     post_install: tuple[str, ...] = ()
     default_enabled_sensitive_actions: tuple[str, ...] = ()
-    # Ownership/skill-lifecycle attribution, dispatched by
-    # installer/install_ownership.py and installer/skill_lifecycle.py.
+    # Ownership attribution, dispatched by installer/install_ownership.py.
     owner_probes: tuple[str, ...] = ()
-    skill_lifecycle: "SkillLifecycle | None" = None
     # Declared `~/` config paths, validated by _parse_config_paths at load.
     config_paths: tuple[str, ...] = ()
     # Synthetic tool for a receipt whose id left the catalog (receipts.scan_retired).
@@ -485,7 +360,6 @@ class Tool:
         post_install: tuple[str, ...] = (),
         default_enabled_sensitive_actions: tuple[str, ...] = (),
         owner_probes: tuple[str, ...] = (),
-        skill_lifecycle: "SkillLifecycle | None" = None,
         config_paths: tuple[str, ...] = (),
         retired: bool = False,
     ) -> None:
@@ -510,7 +384,6 @@ class Tool:
             self, "default_enabled_sensitive_actions", default_enabled_sensitive_actions
         )
         object.__setattr__(self, "owner_probes", owner_probes)
-        object.__setattr__(self, "skill_lifecycle", skill_lifecycle)
         object.__setattr__(self, "config_paths", config_paths)
         object.__setattr__(self, "retired", retired)
 
@@ -648,292 +521,6 @@ def _script_paths_refusal(raw: object) -> str | None:
     return None
 
 
-def _required_skill_string(raw: dict[str, object], field: str, *, tool_id: object) -> str:
-    value = raw.get(field)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle '{field}' must be non-empty")
-    return value
-
-
-def _skill_string_tuple(raw: object, *, tool_id: object, field: str) -> tuple[str, ...]:
-    if not isinstance(raw, list) or not raw:
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle '{field}' must be a non-empty list")
-    values = cast(list[object], raw)
-    if not all(isinstance(value, str) and value for value in values):
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{field}' must contain non-empty strings"
-        )
-    return tuple(cast(list[str], values))
-
-
-def _parse_status_via(value: object, *, tool_id: object) -> SkillStatusVia:
-    if value == "plugin-cli":
-        return "plugin-cli"
-    if value == "skills-lock":
-        return "skills-lock"
-    if value == "install-state":
-        return "install-state"
-    raise ValueError(f"tool '{tool_id}': skill_lifecycle status_probes has unknown via '{value}'")
-
-
-def _parse_status_probes(
-    raw: object, *, tool_id: object, supported_harnesses: tuple[str, ...]
-) -> tuple[SkillStatusProbe, ...]:
-    if not isinstance(raw, list):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'status_probes' must be a list")
-    probes: list[SkillStatusProbe] = []
-    seen_harnesses: set[str] = set()
-    for item in cast(list[object], raw):
-        if not isinstance(item, dict):
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle status_probes entry must be a table"
-            )
-        row = cast(dict[str, object], item)
-        expected = {"harness", "via", "match"}
-        if unknown := set(row).difference(expected):
-            raise ValueError(
-                f"tool '{tool_id}': unknown status_probes field '{sorted(unknown)[0]}'"
-            )
-        if missing := expected.difference(row):
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle status_probes missing '{sorted(missing)[0]}'"
-            )
-        harness = row.get("harness")
-        match = row.get("match")
-        if not isinstance(harness, str) or harness not in SKILL_HARNESSES:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle status_probes has unknown harness '{harness}'"
-            )
-        if harness not in supported_harnesses:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle status_probes harness '{harness}' "
-                "is not in supported_harnesses"
-            )
-        if harness in seen_harnesses:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle status_probes repeats harness "
-                f"'{harness}' (duplicate)"
-            )
-        seen_harnesses.add(harness)
-        if not isinstance(match, str) or _SKILL_MATCH_RE.fullmatch(match) is None:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle status_probes match '{match}' "
-                "must fullmatch the closed token pattern"
-            )
-        probes.append(
-            SkillStatusProbe(
-                harness=harness,
-                via=_parse_status_via(row.get("via"), tool_id=tool_id),
-                match=match,
-            )
-        )
-    return tuple(probes)
-
-
-def _parse_by_harness(
-    raw: object, *, tool_id: object, supported_harnesses: tuple[str, ...]
-) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    if not isinstance(raw, dict):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'install.by_harness' must be a table")
-    row = cast(dict[str, object], raw)
-    supported = set(supported_harnesses)
-    for key in row:
-        if key not in supported:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle install.by_harness harness '{key}' "
-                "is not in supported_harnesses"
-            )
-    pairs: list[tuple[str, tuple[str, ...]]] = []
-    for harness in SKILL_HARNESSES:
-        if harness not in row:
-            continue
-        pairs.append(
-            (
-                harness,
-                _skill_string_tuple(
-                    row[harness],
-                    tool_id=tool_id,
-                    field=f"install.by_harness.{harness}",
-                ),
-            )
-        )
-    if not pairs:
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle 'install.by_harness' must be non-empty"
-        )
-    return tuple(pairs)
-
-
-def _parse_skill_operation(
-    raw: object, *, tool_id: object, operation: str, supported_harnesses: tuple[str, ...]
-) -> SkillOperation:
-    if not isinstance(raw, dict):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle '{operation}' must be declared")
-    row = cast(dict[str, object], raw)
-    allowed = {"mode", "instructions"}
-    if operation == "install":
-        allowed.add("by_harness")
-    if unknown := set(row).difference(allowed):
-        raise ValueError(f"tool '{tool_id}': unknown {operation} field '{sorted(unknown)[0]}'")
-    mode = row.get("mode")
-    if mode == "command":
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{operation}' cannot use mode 'command'; "
-            "declare status_probes"
-        )
-    if mode not in SKILL_OPERATION_MODES:
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{operation}' has unknown mode '{mode}'"
-        )
-    instructions_raw = row.get("instructions", [])
-    instructions = (
-        _skill_string_tuple(
-            instructions_raw,
-            tool_id=tool_id,
-            field=f"{operation}.instructions",
-        )
-        if instructions_raw
-        else ()
-    )
-    if not instructions:
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle '{operation}.instructions' must be non-empty"
-        )
-    by_harness = ()
-    if operation == "install" and "by_harness" in row:
-        by_harness = _parse_by_harness(
-            row.get("by_harness"),
-            tool_id=tool_id,
-            supported_harnesses=supported_harnesses,
-        )
-    return SkillOperation(mode="manual-required", instructions=instructions, by_harness=by_harness)
-
-
-def _parse_skill_lifecycle(raw: object, *, tool_id: object) -> SkillLifecycle:
-    if not isinstance(raw, dict):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle must be declared")
-    row = cast(dict[str, object], raw)
-    allowed_fields = {
-        "source",
-        "owner",
-        "supported_harnesses",
-        "revision_policy",
-        "targets",
-        "install",
-        "status",
-        "update",
-        "removal",
-        "approval_disclosures",
-        "status_probes",
-        "scope",
-        "version",
-    }
-    if unknown := set(row).difference(allowed_fields):
-        raise ValueError(f"tool '{tool_id}': unknown skill_lifecycle field '{sorted(unknown)[0]}'")
-    source = _required_skill_string(row, "source", tool_id=tool_id)
-    if not source.startswith("https://"):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'source' must be an HTTPS URL")
-    owner = _required_skill_string(row, "owner", tool_id=tool_id)
-    supported_harnesses = _skill_string_tuple(
-        row.get("supported_harnesses"),
-        tool_id=tool_id,
-        field="supported_harnesses",
-    )
-    if unknown := set(supported_harnesses).difference(SKILL_HARNESSES):
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle has unknown harness '{next(iter(unknown))}'"
-        )
-    revision_policy = row.get("revision_policy")
-    if revision_policy not in SKILL_REVISION_POLICIES:
-        raise ValueError(
-            f"tool '{tool_id}': skill_lifecycle has unknown revision_policy '{revision_policy}'"
-        )
-    raw_targets = row.get("targets")
-    if not isinstance(raw_targets, list) or not raw_targets:
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'targets' must be a non-empty list")
-    targets: list[SkillTarget] = []
-    for raw_target in cast(list[object], raw_targets):
-        if not isinstance(raw_target, dict):
-            raise ValueError(f"tool '{tool_id}': skill_lifecycle target must be a table")
-        target = cast(dict[str, object], raw_target)
-        if unknown := set(target).difference({"scope", "path"}):
-            raise ValueError(f"tool '{tool_id}': unknown target field '{sorted(unknown)[0]}'")
-        scope = target.get("scope")
-        if scope not in SKILL_TARGET_SCOPES:
-            raise ValueError(
-                f"tool '{tool_id}': skill_lifecycle has unknown target scope '{scope}'"
-            )
-        targets.append(
-            SkillTarget(
-                scope=scope,
-                path=_required_skill_string(target, "path", tool_id=tool_id),
-            )
-        )
-    pack_scope = row.get("scope", "user")
-    if pack_scope not in SKILL_PACK_SCOPES:
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle has unknown scope '{pack_scope}'")
-    version = row.get("version")
-    if version is not None and (
-        not isinstance(version, str) or _PACK_PIN_RE.fullmatch(version) is None
-    ):
-        raise ValueError(f"tool '{tool_id}': skill_lifecycle 'version' must be X.Y.Z")
-    if pack_scope == "project":
-        if version is None:
-            raise ValueError(f"tool '{tool_id}': a project-scope pack needs a 'version' pin")
-        # D-21: a project pack's machinery never goes into a harness's global dir.
-        if any(target.scope == "global" for target in targets):
-            raise ValueError(f"tool '{tool_id}': a project-scope pack cannot have a global target")
-    disclosures_raw = row.get("approval_disclosures", [])
-    approval_disclosures = (
-        _skill_string_tuple(
-            disclosures_raw,
-            tool_id=tool_id,
-            field="approval_disclosures",
-        )
-        if disclosures_raw
-        else ()
-    )
-    return SkillLifecycle(
-        source=source,
-        owner=owner,
-        supported_harnesses=supported_harnesses,
-        revision_policy=revision_policy,
-        targets=tuple(targets),
-        install=_parse_skill_operation(
-            row.get("install"),
-            tool_id=tool_id,
-            operation="install",
-            supported_harnesses=supported_harnesses,
-        ),
-        status=_parse_skill_operation(
-            row.get("status"),
-            tool_id=tool_id,
-            operation="status",
-            supported_harnesses=supported_harnesses,
-        ),
-        update=_parse_skill_operation(
-            row.get("update"),
-            tool_id=tool_id,
-            operation="update",
-            supported_harnesses=supported_harnesses,
-        ),
-        removal=_parse_skill_operation(
-            row.get("removal"),
-            tool_id=tool_id,
-            operation="removal",
-            supported_harnesses=supported_harnesses,
-        ),
-        approval_disclosures=approval_disclosures,
-        status_probes=_parse_status_probes(
-            row.get("status_probes", []),
-            tool_id=tool_id,
-            supported_harnesses=supported_harnesses,
-        ),
-        scope=pack_scope,
-        version=version,
-    )
-
-
 def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[Tool]:
     """Parse the registry TOML into validated Tool objects."""
     with open(manifest_path, "rb") as fh:
@@ -944,6 +531,11 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
         if not isinstance(tool_id, str) or TOOL_ID_RE.fullmatch(tool_id) is None:
             raise ValueError(
                 f"tool '{tool_id}': id must match [a-z0-9][a-z0-9._-]* (it names the receipt file)"
+            )
+        if "skill_lifecycle" in row:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle was retired in 23.1; "
+                "remove the [tool.skill_lifecycle] table"
             )
         raw_methods = row.get("method", [])
         if not raw_methods:
@@ -1127,10 +719,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                 setup_id = params.get("setup_id")
                 if not isinstance(setup_id, str) or setup_id not in HOST_SETUP_IDS:
                     raise ValueError(f"tool '{row['id']}': unknown host setup '{setup_id}'")
-            if kind == "skill_pack" and len(entry) != 1:
-                raise ValueError(
-                    f"tool '{row['id']}': skill_pack method accepts no unreviewed parameters"
-                )
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
         context = f"tool '{row['id']}'"
         requires = _parse_id_list(row.get("requires", []), "requires", context)
@@ -1171,19 +759,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             allowed=OWNER_PROBES,
             label="owner probe",
         )
-        has_skill_method = any(method.kind == "skill_pack" for method in methods)
-        raw_skill_lifecycle = row.get("skill_lifecycle")
-        if raw_skill_lifecycle is not None and not has_skill_method:
-            raise ValueError(f"tool '{row['id']}': skill_lifecycle requires a skill_pack method")
-        skill_lifecycle = (
-            _parse_skill_lifecycle(raw_skill_lifecycle, tool_id=row["id"])
-            if has_skill_method
-            else None
-        )
-        if skill_lifecycle is not None and len(methods) != 1:
-            raise ValueError(
-                f"tool '{row['id']}': skill_pack cannot declare fallback install methods"
-            )
         tools.append(
             Tool(
                 id=row["id"],
@@ -1201,7 +776,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                 post_install=post_install,
                 default_enabled_sensitive_actions=default_enabled_sensitive_actions,
                 owner_probes=owner_probes,
-                skill_lifecycle=skill_lifecycle,
                 config_paths=config_paths,
             )
         )
