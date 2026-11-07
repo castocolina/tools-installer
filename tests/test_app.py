@@ -6096,3 +6096,47 @@ def test_perform_uninstall_passes_the_previewed_unregister(
     assert result.remove_failed == (("codegraph", "changed since the preview; not removed"),)
     assert calls == []
     assert receipts.receipt_exists("codegraph")
+
+
+def test_the_cli_previews_and_reports_the_revert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.agent_settings import apply_setting
+    from installer.app import run_uninstall
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    (tmp_path / ".myshellrc").write_text("")
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}\n")
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    tool = plant_receipted_tool(tmp_path, "claude")
+    console, buf = _console()
+    shown_before_confirm: list[str] = []
+
+    def confirm(_message: str) -> bool:
+        shown_before_confirm.append(buf.getvalue())
+        return True
+
+    _removed, failed = run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=bin_dir,
+        myshellrc_path=tmp_path / ".myshellrc",
+        rc_paths=[],
+        confirm=confirm,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        platform_os="linux",
+    )
+    assert failed == ()
+    assert (
+        "claude: removes permissions.defaultMode, skipDangerousModePermissionPrompt "
+        "from ~/.claude/settings.json" in shown_before_confirm[0]
+    )
+    assert "Settings reverted for claude." in buf.getvalue()

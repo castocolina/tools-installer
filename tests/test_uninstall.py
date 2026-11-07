@@ -2416,31 +2416,38 @@ def test_symlinked_config_is_unlinked_not_followed(
     assert (elsewhere / "keep").exists()
 
 
+def plant_receipted_tool(home: Path, tool_id: str, postinstall: str | None = None) -> Tool:
+    """A github_release tool installed under ``home``: its opt tree, its proven bin link and
+    its receipt. Public: the removal tests plant claude and codegraph through this one form."""
+    method = Method(
+        kind="github_release", params={"repo": f"a/{tool_id}", "asset": "x", "member": tool_id}
+    )
+    tool = Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(method,),
+        postinstall=postinstall,
+    )
+    bin_dir = home / ".local" / "bin"
+    paths = {artifact.kind: artifact.path for artifact in artifact_paths(method, bin_dir)}
+    paths["dir"].mkdir(parents=True)
+    (paths["dir"] / tool_id).write_text(f"{tool_id} binary")
+    paths["link"].parent.mkdir(parents=True, exist_ok=True)
+    paths["link"].symlink_to(paths["dir"] / tool_id)
+    receipts.record(
+        tool, method, package=None, smoke=None, default_bin_dir=bin_dir, preexisting=frozenset()
+    )
+    return tool
+
+
 def plant_codegraph(home: Path, hosts: tuple[str, ...] = ()) -> Tool:
     """A github_release codegraph installed under ``home``: its opt tree, its proven bin link,
     its receipt, and the hook hosts that receipt records (``hosts`` may be empty).
 
     Public: tests/test_uninstall_e2e.py and tests/test_app.py plant the same install."""
-    method = Method(
-        kind="github_release", params={"repo": "a/codegraph", "asset": "x", "member": "codegraph"}
-    )
-    tool = Tool(
-        id="codegraph",
-        name="codegraph",
-        category="dev",
-        cmd="codegraph",
-        methods=(method,),
-        postinstall="codegraph-mcp-register",
-    )
-    bin_dir = home / ".local" / "bin"
-    paths = {artifact.kind: artifact.path for artifact in artifact_paths(method, bin_dir)}
-    paths["dir"].mkdir(parents=True)
-    (paths["dir"] / "codegraph").write_text("codegraph binary")
-    paths["link"].parent.mkdir(parents=True, exist_ok=True)
-    paths["link"].symlink_to(paths["dir"] / "codegraph")
-    receipts.record(
-        tool, method, package=None, smoke=None, default_bin_dir=bin_dir, preexisting=frozenset()
-    )
+    tool = plant_receipted_tool(home, "codegraph", postinstall="codegraph-mcp-register")
     if hosts:
         receipts.record_hooks("codegraph", "codegraph-mcp-register", hosts)
     return tool
