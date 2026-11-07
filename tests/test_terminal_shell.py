@@ -15,6 +15,7 @@ import pytest
 from installer.platform import Platform
 from installer.terminal_shell import (
     TerminalShellError,
+    sync_message,
     sync_terminal_shells,
     terminal_sync_warning,
 )
@@ -1031,3 +1032,68 @@ def test_the_region_bodies_quote_an_unusual_zsh_path(tmp_path: Path) -> None:
     wezterm_text = (tmp_path / ".config" / "wezterm" / "wezterm.lua").read_text()
     assert 'config.default_prog = { "/opt/my shells/zsh", "-l" }' in wezterm_text
     assert 'config.set_environment_variables.SHELL = "/opt/my shells/zsh"' in wezterm_text
+
+
+def test_a_zsh_removal_stops_at_a_zshenv_warning(tmp_path: Path) -> None:
+    kitty = tmp_path / ".config" / "kitty" / "kitty.conf"
+    present: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    }
+    sync_terminal_shells(**present)
+    owned_kitty = kitty.read_bytes()
+    zshenv = tmp_path / ".zshenv"
+    zshenv.write_bytes(zshenv.read_bytes() + b"# \xff\n")
+
+    result = sync_terminal_shells(
+        home=tmp_path, environ={}, platform=_platform(), lookup=_lookup(kitty="/usr/bin/kitty")
+    )
+
+    assert result.reverted == ()
+    assert [warning.split(":")[0] for warning in result.warnings] == ["zshenv"]
+    assert "left as they are" in result.warnings[0]
+    assert kitty.read_bytes() == owned_kitty
+
+
+def test_strip_only_never_writes_while_zsh_is_present(tmp_path: Path) -> None:
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    }
+    before = _fingerprint(tmp_path)
+
+    result = sync_terminal_shells(**args, strip_only=True)
+
+    assert _fingerprint(tmp_path) == before
+    assert not (tmp_path / ".zshenv").exists()
+    assert sync_message(result, report_changes=True) is None
+    sync_terminal_shells(**args)
+    gone = sync_terminal_shells(
+        home=tmp_path, environ={}, platform=_platform(), lookup=_lookup(), strip_only=True
+    )
+    assert set(gone.reverted) == {"zshenv", "kitty"}
+
+
+def test_a_post_run_sync_that_writes_reports_the_shell_lines(tmp_path: Path) -> None:
+    zdotdir = tmp_path / "zdot"
+    zdotdir.mkdir()
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": {"ZDOTDIR": str(zdotdir)},
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", kitty="/usr/bin/kitty"),
+    }
+
+    first = sync_terminal_shells(**args)
+    again = sync_terminal_shells(**args)
+
+    message = sync_message(first, report_changes=True)
+    assert message is not None
+    assert message.startswith(f"Shell: {zdotdir / '.zshenv'} now exports SHELL=/usr/bin/zsh")
+    assert "Shell: kitty now starts zsh" in message
+    assert sync_message(first) is None
+    assert sync_message(again, report_changes=True) is None

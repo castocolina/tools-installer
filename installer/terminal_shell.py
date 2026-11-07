@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from installer.atomic import atomic_write_text, read_capped
-from installer.locations import zshenv_path, zshrc_path
+from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
 from installer.shellrc import apply_block, strip_block
@@ -446,6 +446,13 @@ def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> Termin
     """Remove only complete terminal regions created by this synchronizer."""
     reverted: list[str] = []
     zshenv_changed, zshenv_warning = _edit_zshenv(home, environ, None, write=True)
+    if zshenv_warning is not None:
+        # Stop like a failed unregister: the terminals keep exporting the SHELL the
+        # .zshenv still names, so nothing is half-removed (X-02).
+        return TerminalShellResult(
+            skipped=("zsh unavailable",),
+            warnings=(f"{zshenv_warning}; kitty, WezTerm and Konsole left as they are",),
+        )
     if zshenv_changed:
         reverted.append("zshenv")
     kitty = _kitty_config_path(home, environ)
@@ -456,11 +463,7 @@ def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> Termin
         reverted.append("wezterm")
     if _revert_konsole(home=home, environ=environ):
         reverted.append("konsole")
-    return TerminalShellResult(
-        reverted=tuple(reverted),
-        skipped=("zsh unavailable",),
-        warnings=() if zshenv_warning is None else (zshenv_warning,),
-    )
+    return TerminalShellResult(reverted=tuple(reverted), skipped=("zsh unavailable",))
 
 
 def sync_terminal_shells(
@@ -470,6 +473,7 @@ def sync_terminal_shells(
     platform: Platform,
     lookup: Lookup,
     write: bool = True,
+    strip_only: bool = False,
 ) -> TerminalShellResult:
     """Synchronize zsh into detected Linux terminal emulators and the .zshenv zsh reads.
 
@@ -477,7 +481,9 @@ def sync_terminal_shells(
     Konsole. The caller injects every environment-dependent value so tests never
     consult or mutate the developer's actual home directory. `write=False` is a dry
     run (D-16, L-19-05): it reports `drifted` and writes, creates, renames and
-    deletes nothing -- no revert, no .zshrc repair, no terminal config.
+    deletes nothing -- no revert, no .zshrc repair, no terminal config. `strip_only`
+    is the uninstall form: it only strips the owned regions once zsh is gone and
+    never writes or creates one while zsh is still present (CR-09).
     """
     if platform.os == "macos":
         return TerminalShellResult(skipped=("macos",))
@@ -487,6 +493,8 @@ def sync_terminal_shells(
         if not write:
             return TerminalShellResult(skipped=("zsh unavailable",))
         return _revert_terminal_shells(home=home, environ=environ)
+    if strip_only:
+        return TerminalShellResult(skipped=("zsh present",), zsh=zsh_path)
 
     configured: list[str] = []
     skipped: list[str] = []
@@ -573,3 +581,27 @@ def sync_terminal_shells(
         zsh=zsh_path,
         paths=tuple(paths),
     )
+
+
+def sync_message(result: TerminalShellResult, *, report_changes: bool = False) -> str | None:
+    """The one line a lifecycle route shows for a synchronizer run, or None. With
+    `report_changes` (the post-run sync after an install, update or reconfigure) every
+    file the run wrote is named as a Shell line, so a write is never silent (X-01)."""
+    parts: list[str] = []
+    if report_changes:
+        paths = dict(result.paths)
+        if "zshenv" in result.drifted and "zshenv" in paths:
+            parts.append(
+                f"Shell: {display_path(paths['zshenv'])} now exports SHELL={result.zsh}; "
+                "new terminals start with it"
+            )
+        terminals = [name for name in result.drifted if name != "zshenv"]
+        if terminals:
+            verb = "starts" if len(terminals) == 1 else "start"
+            parts.append(f"Shell: {', '.join(terminals)} now {verb} zsh")
+    messages = list(result.warnings)
+    if result.reverted:
+        messages.append("zsh is no longer present; reverted " + ", ".join(result.reverted))
+    if messages:
+        parts.append("Terminal shell synchronization warning: " + "; ".join(messages))
+    return "; ".join(parts) or None

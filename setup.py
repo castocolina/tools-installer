@@ -84,7 +84,7 @@ from installer.settings import (
 )
 from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
-from installer.terminal_shell import sync_terminal_shells, terminal_sync_warning
+from installer.terminal_shell import sync_message, sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import BUNDLES, applicable_bundles, strip_legacy_aliases
 from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
@@ -636,7 +636,9 @@ def _cache_redirect_policies(
     )
 
 
-def _sync_terminals(platform: Platform) -> str | None:
+def _sync_terminals(
+    platform: Platform, *, report_changes: bool = False, strip_only: bool = False
+) -> str | None:
     """The single Phase 15.6 terminal-shell synchronizer every lifecycle route
     reuses (D-01): Policies' OMZ-plugin apply, the direct `u` update,
     interactive ExecuteScreen close, unattended installation, the
@@ -658,16 +660,14 @@ def _sync_terminals(platform: Platform) -> str | None:
         environ=os.environ,
         platform=platform,
         lookup=which_with_brew,
+        strip_only=strip_only,
     )
-    messages = list(result.warnings)
-    if result.reverted:
-        messages.append("zsh is no longer present; reverted " + ", ".join(result.reverted))
-    if messages:
-        return "Terminal shell synchronization warning: " + "; ".join(messages)
-    return None
+    return sync_message(result, report_changes=report_changes)
 
 
-def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
+def _sync_terminals_and_report(
+    console: Console, platform: Platform, *, strip_only: bool = False
+) -> None:
     """Run the shared terminal synchronizer and print any nonfatal warning to
     the console (D-01/15.6-06 Task 2) -- both non-interactive CLI lifecycle
     routes (`main`'s unattended install, `_run_uninstall`'s command-line
@@ -676,7 +676,9 @@ def _sync_terminals_and_report(console: Console, platform: Platform) -> None:
     exit code. WR-03: the catch and the message live in the one shared
     `terminal_sync_warning` contract, never in a try/except copied to this
     site."""
-    warning = terminal_sync_warning(lambda: _sync_terminals(platform))
+    warning = terminal_sync_warning(
+        lambda: _sync_terminals(platform, report_changes=not strip_only, strip_only=strip_only)
+    )
     if warning:
         console.print(warning)
 
@@ -721,8 +723,9 @@ def _build_services(
 
     def _terminal_follow_up() -> str | None:
         # D-01/15.6-05: the SAME terminal synchronizer every lifecycle route
-        # reuses (`_sync_terminals`), bound to this composition's platform.
-        return _sync_terminals(platform)
+        # reuses (`_sync_terminals`), bound to this composition's platform. A write is
+        # named in the update's detail (X-01).
+        return _sync_terminals(platform, report_changes=True)
 
     updates = UpdateService(
         platform=platform,
@@ -889,6 +892,14 @@ def _build_app(
         from any of them is corrected the same way."""
         return _sync_terminals(platform)
 
+    def _post_run_terminals() -> str | None:
+        # X-01: the interactive close after a run names every file the sync wrote.
+        return _sync_terminals(platform, report_changes=True)
+
+    def _uninstall_terminals() -> str | None:
+        # CR-09: after an uninstall only owned regions are stripped, and only once zsh is gone.
+        return _sync_terminals(platform, strip_only=True)
+
     # The three environment fields are predicates, not their results: the
     # Policies and Doctor views mutate them live in this same session, and the
     # Uninstall view re-reads them on entry and on every publish (see
@@ -911,7 +922,7 @@ def _build_app(
             daemon_policy=daemon,
             extra_policies=(*redirects, *desktop),
         ),
-        terminal_sync=_sync_omz_terminals,
+        terminal_sync=_uninstall_terminals,
     )
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
@@ -1106,8 +1117,8 @@ def _build_app(
         # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
         # `updates` above are wired with -- every interactive close
         # re-synchronizes terminal configuration exactly like Policies' own
-        # apply and the direct `u` update already do.
-        terminal_sync=_sync_omz_terminals,
+        # apply and the direct `u` update already do; a write is named (X-01).
+        terminal_sync=_post_run_terminals,
     )
 
 
@@ -1347,7 +1358,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # configuration (sync_terminal_shells' own no-zsh branch), so a teardown
     # that just removed zsh corrects the terminals the same way any other
     # completion route does.
-    _sync_terminals_and_report(console, platform)
+    _sync_terminals_and_report(console, platform, strip_only=True)
     # A removal that failed is a failed teardown, whatever else the sweep did (review R1-24).
     return 1 if failed else 0
 

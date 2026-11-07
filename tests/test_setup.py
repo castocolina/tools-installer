@@ -858,6 +858,7 @@ def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
         "environ": os.environ,
         "platform": platform,
         "lookup": postinstall.which_with_brew,
+        "strip_only": False,
     }
     assert (tmp_path / ".zshrc").exists()
 
@@ -1424,23 +1425,30 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
     assert forwarded[0]["runner"] is run_captured
 
 
-def test_build_app_wires_the_shared_terminal_closure_into_uninstall_inputs(
+def test_build_app_wires_a_strip_only_terminal_closure_into_uninstall_inputs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """D-01/15.6-06 Task 3, Test 3: _build_app passes the SAME
-    composition-root closure to UninstallInputs that Policies, updates,
-    unattended installation, the CLI uninstall route, and interactive close
-    already reuse -- never a second, independently constructed synchronizer.
-    `seen[0]["terminal_sync"]` is the exact closure `_build_app` handed
-    UnifiedApp's own `terminal_sync` kwarg (Task 1); identity with
-    `inputs.terminal_sync` is the proof."""
+    """CR-09: the interactive Uninstall reuses the one synchronizer, but in its strip-only
+    form, so a teardown never writes or creates a SHELL block; the interactive close after a
+    run converges and names what it wrote (X-01)."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
+    calls: list[dict[str, object]] = []
+
+    def sync(**kwargs: object) -> TerminalShellResult:
+        calls.append(kwargs)
+        return TerminalShellResult()
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
     assert inputs.terminal_sync is not None
-    assert inputs.terminal_sync is seen[0]["terminal_sync"]
+    close = seen[0]["terminal_sync"]
+    assert callable(close)
+    assert inputs.terminal_sync() is None
+    close()
+    assert [call["strip_only"] for call in calls] == [True, False]
 
 
 def _headless_main_fixture(
@@ -1762,6 +1770,7 @@ def test_build_app_wires_the_shared_terminal_closure_into_update_service(
         "environ": os.environ,
         "platform": platform,
         "lookup": postinstall.which_with_brew,
+        "strip_only": False,
     }
 
 
@@ -1821,7 +1830,7 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
 
     terminal_calls: list[Platform] = []
 
-    def fake_sync_terminals(seen: Platform) -> str | None:
+    def fake_sync_terminals(seen: Platform, **_kwargs: bool) -> str | None:
         terminal_calls.append(seen)
         return None
 
@@ -1989,6 +1998,55 @@ def test_the_noninteractive_all_route_survives_a_raising_terminal_synchronizer(
     text = buffer.getvalue()
     assert "Terminal shell synchronization failed" in text
     assert "EACCES" in text
+
+
+def test_the_cli_uninstall_never_writes_a_shell_block_while_zsh_stays(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CR-09: a system zsh the installer never installed stays, so the teardown's terminal
+    sync must not create ~/.zshenv or a SHELL block in it."""
+    _sandbox(monkeypatch, tmp_path)
+
+    def fake_run_uninstall(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ()
+
+    monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
+
+    def only_zsh(name: str) -> str | None:
+        return "/usr/bin/zsh" if name == "zsh" else None
+
+    monkeypatch.setattr(setup, "which_with_brew", only_zsh)
+    monkeypatch.setattr(setup, "detect", _linux)
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+    assert not (tmp_path / ".zshenv").exists()
+    assert "Shell:" not in buffer.getvalue()
+
+
+def test_the_noninteractive_all_route_names_a_shell_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """X-01: the post-run sync stays, but a write to .zshenv is printed, never silent."""
+    buffer = io.StringIO()
+    _noninteractive_all_fixture(monkeypatch, buffer, _headless_outcomes(fd="done"))
+    zshenv = Path.home() / ".zshenv"
+
+    def wrote(**_kwargs: object) -> TerminalShellResult:
+        return TerminalShellResult(
+            configured=("zshenv",),
+            drifted=("zshenv",),
+            zsh="/usr/bin/zsh",
+            paths=(("zshenv", zshenv),),
+        )
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", wrote)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert "Shell: ~/.zshenv now exports SHELL=/usr/bin/zsh" in buffer.getvalue()
 
 
 def test_the_cli_uninstall_route_survives_a_raising_terminal_synchronizer(
@@ -3765,7 +3823,7 @@ def _offline_tag(repo: str) -> str:
     raise OSError(f"offline in tests: {repo}")
 
 
-def _no_terminal_sync(_platform: Platform) -> str | None:
+def _no_terminal_sync(_platform: Platform, **_kwargs: bool) -> str | None:
     return None
 
 
