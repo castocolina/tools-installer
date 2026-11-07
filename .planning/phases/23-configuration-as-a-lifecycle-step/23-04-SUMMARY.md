@@ -60,6 +60,11 @@ requirements-completed: []  # CONF-05 core only; see Next Phase Readiness (not c
 duration: unmeasured (run start timestamp was not captured; commits 01:13:22, 01:18:06, 01:21:08 -03:00)
 completed: 2026-11-07
 status: complete
+
+# Measured commit ledger (#3968): base..plan_head_after, measured before this SUMMARY commit (b594da5).
+commits: 3
+plan_head_before: 97b9e0b418d4947f60e375e5613978007dfcc10b
+plan_head_after: bc567957560ce9b75e2f8fa7f61e82180f92c971
 ---
 
 # Phase 23: Configuration as a lifecycle step, plan 04 Summary
