@@ -9,12 +9,12 @@ import pytest
 
 from installer import receipts
 from installer.app import remove_tool
+from installer.catalog_tui import group_tools
 from installer.deps import requires_integrity_errors, resolve_dependencies
 from installer.download import Artifact, artifact_paths, pinned_url
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
-from installer.skill_lifecycle import inspect_project_pack
 from installer.tweaks import SHELL_INIT_TOOLS
 from installer.uninstall import removal_plan
 
@@ -43,6 +43,48 @@ def test_every_tool_has_at_least_one_method():
     assert all(t.methods for t in load_tools(REGISTRY))
 
 
+# The eight ids removed from the catalog (SPEC R1, D-02, D-03).
+DROPPED_IDS = (
+    "rtk",
+    "matt-pocock-skills",
+    "opengsd",
+    "ponytail",
+    "superpowers",
+    "softaworks-agent-toolkit",
+    "openspec",
+    "spec-kit",
+)
+
+
+def test_the_dropped_ids_are_not_in_the_catalog() -> None:
+    tools = load_tools(REGISTRY)
+    assert not {tool.id for tool in tools} & set(DROPPED_IDS)
+    for tool in tools:
+        assert not set(tool.recommends) & set(DROPPED_IDS), tool.id
+        assert not any(method.kind == "skill_pack" for method in tool.methods), tool.id
+    tools_by_id = {tool.id: tool for tool in tools}
+    for host_id in ("codex", "claude", "opencode", "cursor-agent"):
+        assert tools_by_id[host_id].recommends == ("codegraph", "graphify"), host_id
+
+
+def test_the_residue_allowlist_names_no_dropped_tool() -> None:
+    allowlist = REGISTRY.parent.parent / "scripts" / "e2e-residue-allowlist.txt"
+    for line in allowlist.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        path = line.split("#", 1)[0].strip()
+        assert not set(path.split("/")) & set(DROPPED_IDS), line
+
+
+def test_catalog_order_is_priority_then_id() -> None:
+    # The category view's own grouping must list each category's tools priority-then-id.
+    tools = load_tools(REGISTRY)
+    groups = group_tools(tools, lambda _tool: None, "category", load_categories(REGISTRY))
+    for title, _, members in groups:
+        expected = sorted(members, key=lambda tool: (tool.priority, tool.id))
+        assert [tool.id for tool in members] == [tool.id for tool in expected], title
+
+
 def test_registry_includes_requested_installable_entries() -> None:
     ids = set(_tools_by_id())
     assert {
@@ -66,7 +108,6 @@ def test_registry_includes_requested_installable_entries() -> None:
         "volta",
         "codegraph",
         "graphify",
-        "rtk",
         "cursor-agent",
         "antigravity",
         "zsh",
@@ -176,15 +217,8 @@ _PRE_15_3_HUMAN_TOOLS = {
     "cursor-agent",
     "jetbrains-toolbox",
     "kitty",
-    "matt-pocock-skills",
     "opencode",
-    "opengsd",
-    "openspec",
     "pi",
-    "ponytail",
-    "softaworks-agent-toolkit",
-    "spec-kit",
-    "superpowers",
     "wezterm",
 }
 
@@ -215,8 +249,8 @@ def test_registry_audience_distribution_is_pinned() -> None:
     # see -- neither set mentions `ai`.
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 47,
-        "ai": 9,
-        "human": 33,
+        "ai": 8,
+        "human": 26,
     }
 
 
@@ -915,7 +949,7 @@ def test_cursor_agent_uses_the_legacy_collision_safe_cmd_name() -> None:
     assert cursor_agent.priority == "P0"
     assert cursor_agent.audience == "human"
     assert cursor_agent.tier == "user"
-    assert cursor_agent.recommends == ("codegraph", "graphify", "rtk")
+    assert cursor_agent.recommends == ("codegraph", "graphify")
     assert len(cursor_agent.methods) == 1
     assert cursor_agent.methods[0].kind == "script"
     assert cursor_agent.methods[0].params["url"] == "https://cursor.com/install"
@@ -959,67 +993,6 @@ def test_cursor_agent_and_antigravity_entries_record_the_verification_findings()
     window_ag = text[max(0, idx_ag - 1500) : idx_ag]
     for needle in ("agy", "SHA-512", "cask", "D-01"):
         assert needle in window_ag, f"missing {needle!r} in antigravity's comment"
-
-
-def test_rtk_installs_via_checksum_verified_github_release_with_brew_fallback() -> None:
-    tools = {t.id: t for t in load_tools(REGISTRY)}
-    rtk = tools["rtk"]
-    assert rtk.name == "RTK (Rust Token Killer)"
-    assert rtk.category == "dev"
-    assert rtk.cmd == "rtk"
-    assert rtk.priority == "P1"
-    assert rtk.audience == "ai"
-    assert rtk.tier == "ai"
-    assert rtk.recommends == ()
-    kinds = [m.kind for m in rtk.methods]
-    assert kinds == ["github_release", "github_release", "github_release", "brew"]
-    for method in rtk.methods:
-        if method.kind == "github_release":
-            assert method.params["repo"] == "rtk-ai/rtk"
-            assert method.params["checksum"] == "checksums.txt"
-            assert method.params["member"] == "rtk"
-            assert method.params["strip"] == 0
-    brew_method = next(m for m in rtk.methods if m.kind == "brew")
-    assert brew_method.params["formula"] == "rtk"
-    assert brew_method.os == ()
-
-
-def test_rtk_linux_methods_are_arch_gated_by_the_real_musl_gnu_asset_split() -> None:
-    tools = {t.id: t for t in load_tools(REGISTRY)}
-    rtk = tools["rtk"]
-    for os_name in ("debian", "arch", "fedora"):
-        amd64 = Platform(os=os_name, arch="amd64", immutable=False, has_brew=True)
-        amd64_resolved = resolve_methods(rtk, amd64)
-        assert [m.kind for m in amd64_resolved] == ["github_release", "brew"]
-        assert amd64_resolved[0].params["asset"] == "rtk-{arch.machine}-unknown-linux-musl.tar.gz"
-
-        arm64 = Platform(os=os_name, arch="arm64", immutable=False, has_brew=True)
-        arm64_resolved = resolve_methods(rtk, arm64)
-        assert [m.kind for m in arm64_resolved] == ["github_release", "brew"]
-        assert arm64_resolved[0].params["asset"] == "rtk-{arch.machine}-unknown-linux-gnu.tar.gz"
-
-
-def test_rtk_macos_method_is_arch_unrestricted() -> None:
-    tools = {t.id: t for t in load_tools(REGISTRY)}
-    rtk = tools["rtk"]
-    for arch in ("amd64", "arm64"):
-        platform = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
-        assert [m.kind for m in resolve_methods(rtk, platform)] == ["github_release", "brew"]
-
-
-def test_rtk_resolves_via_download_and_brew_even_on_immutable_linux() -> None:
-    tools = {t.id: t for t in load_tools(REGISTRY)}
-    rtk = tools["rtk"]
-    platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
-    assert [m.kind for m in resolve_methods(rtk, platform)] == ["github_release", "brew"]
-
-
-def test_rtk_entry_records_the_musl_gnu_split_and_brew_confirmation() -> None:
-    text = REGISTRY.read_text()
-    idx = text.index('id = "rtk"')
-    window = text[max(0, idx - 2000) : idx]
-    for needle in ("checksums.txt", "musl", "gnu", "develop", "formulae.brew.sh", "0.48.0"):
-        assert needle in window, f"missing {needle!r} in rtk's comment"
 
 
 def test_no_chrome_headless_shell_catalog_entry() -> None:
@@ -1128,7 +1101,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 89
+    assert len(tools) == 81
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1182,7 +1155,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
-        "ai": 17,
+        "ai": 9,
         "user": 46,
     }
 
@@ -1229,22 +1202,6 @@ def test_reconciliation_tier_audit_confirms_all_11_re_added_rows() -> None:
     # cursor-agent/antigravity/aichat, all tier="user": the human launches
     # and drives it directly, which is what tier="user" now tracks.
     assert tools["pi"].tier == "user"
-
-    # ponytail/openspec/superpowers/softaworks-agent-toolkit/
-    # matt-pocock-skills/opengsd/spec-kit (all kind="skill_pack", each
-    # installing a plugin/workflow into an agent harness's own skill
-    # directory) match the existing codegraph/graphify/rtk precedent:
-    # ai-tier tools that exist specifically to serve agent hosts.
-    for tool_id in (
-        "ponytail",
-        "openspec",
-        "superpowers",
-        "softaworks-agent-toolkit",
-        "matt-pocock-skills",
-        "opengsd",
-        "spec-kit",
-    ):
-        assert tools[tool_id].tier == "ai"
 
 
 def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:
@@ -1771,7 +1728,6 @@ CHECKSUM_FILE_VERIFIED = {
     "gitleaks",
     "vale",
     "duf",
-    "rtk",
 }
 
 
@@ -2015,7 +1971,7 @@ def test_agent_hosts_recommend_existing_catalog_tools() -> None:
 
 def test_agent_host_recommends_match_the_researched_per_host_set() -> None:
     tools = _tools_by_id()
-    want = ("codegraph", "graphify", "rtk")
+    want = ("codegraph", "graphify")
     assert tools["claude"].recommends == want
     assert tools["opencode"].recommends == want
     assert tools["codex"].recommends == want
@@ -2023,16 +1979,14 @@ def test_agent_host_recommends_match_the_researched_per_host_set() -> None:
     assert tools["antigravity"].recommends == ()
 
 
-def test_agent_host_recommends_entries_record_the_rtk_codex_caveat() -> None:
+def test_agent_host_recommends_entries_name_the_companions() -> None:
     text = REGISTRY.read_text()
     for host_id in ("claude", "opencode", "codex", "cursor-agent"):
         idx = text.index(f'id = "{host_id}"')
         next_method = text.index("[[tool.method]]", idx)
         window = text[idx:next_method]
-        for needle in ("codegraph", "graphify", "rtk"):
+        for needle in ("codegraph", "graphify"):
             assert needle in window, f"missing {needle!r} in {host_id}'s recommends window"
-        if host_id == "codex":
-            assert "instructions-based rather than a runtime hook" in window
 
 
 def test_shipped_node_tools_require_pnpm() -> None:
@@ -2146,30 +2100,6 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
         tool.id for tool in load_tools(REGISTRY) if set(tool.owner_probes) & native_probe_names
     }
     assert native == set(expected)
-
-
-def test_every_skill_pack_records_a_verified_comment() -> None:
-    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
-    headers = [
-        index for index, line in enumerate(lines) if line.strip() == "[tool.skill_lifecycle]"
-    ]
-
-    assert len(headers) == 7
-    for index in headers:
-        window = lines[max(0, index - 15) : index]
-        assert any(line.startswith("# Verified ") for line in window), window
-
-
-def test_superpowers_by_harness_marks_claude_alternative_and_explains_codex() -> None:
-    lifecycle = _tools_by_id()["superpowers"].skill_lifecycle
-    assert lifecycle is not None
-    pairs = dict(lifecycle.install.by_harness)
-    claude = pairs["claude"]
-    assert claude == ("/plugin install superpowers@claude-plugins-official",)
-    codex = pairs["codex"]
-    assert len(codex) == 1
-    assert "/plugins" in codex[0]
-    assert "superpowers" in codex[0]
 
 
 def test_install_state_probes_match_gsd_core() -> None:
@@ -2513,111 +2443,6 @@ def test_audit_fix_f2_codegraph_comment_records_1_6_2() -> None:
     assert "codegraph upgrade" in block
 
 
-def test_audit_fix_f3_rtk_comment_records_0_52_0() -> None:
-    text = REGISTRY.read_text(encoding="utf-8")
-    block = (
-        text.split('[[tool]]\nid = "rtk"', 1)[0][-2500:]
-        + text.split('[[tool]]\nid = "rtk"', 1)[1].split("\n[[tool]]", 1)[0]
-    )
-    assert "0.52.0" in block
-    assert "--opencode" in block
-    assert "#2097" in block or "2097" in block
-
-
-def test_audit_fix_f4_ponytail_probes_pi_and_documents_claude_removal() -> None:
-    ponytail = _tools_by_id()["ponytail"]
-    assert ponytail.skill_lifecycle is not None
-    removal = "\n".join(ponytail.skill_lifecycle.removal.instructions)
-    assert "/plugin uninstall ponytail@ponytail" in removal
-    probes = ponytail.skill_lifecycle.status_probes
-    pi_probe = next((p for p in probes if p.harness == "pi"), None)
-    if pi_probe is not None:
-        assert pi_probe.via == "plugin-cli"
-        assert pi_probe.match == "DietrichGebert/ponytail"
-        return
-    snippet = (
-        REGISTRY.read_text(encoding="utf-8").split('id = "ponytail"', 1)[1].split("[[tool]]", 1)[0]
-    )
-    assert "/plugin uninstall ponytail@ponytail" in snippet
-    tmp_registry = REGISTRY.read_text(encoding="utf-8")
-    if (
-        '{ harness = "pi", via = "plugin-cli", match = "DietrichGebert/ponytail" }'
-        not in tmp_registry
-    ):
-        pi_probe_row = '{ harness = "pi", via = "plugin-cli", match = "DietrichGebert/ponytail" }'
-        codex_probe = '{ harness = "codex", via = "plugin-cli", match = "ponytail" }'
-        tmp_registry = tmp_registry.replace(
-            codex_probe,
-            f"{codex_probe}\n  {pi_probe_row}",
-            1,
-        )
-    import tempfile
-
-    with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as handle:
-        handle.write(tmp_registry)
-        tmp_path = Path(handle.name)
-    try:
-        with pytest.raises(ValueError, match="status_probes") as exc:
-            load_tools(tmp_path)
-        assert "pi" in str(exc.value)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-
-def test_audit_fix_f5_superpowers_has_one_claude_route() -> None:
-    superpowers = _tools_by_id()["superpowers"]
-    assert superpowers.skill_lifecycle is not None
-    claude = dict(superpowers.skill_lifecycle.install.by_harness)["claude"]
-    joined = "\n".join(claude)
-    assert "or, instead" not in joined.lower()
-    assert "obra/superpowers-marketplace" not in joined
-    text = REGISTRY.read_text(encoding="utf-8")
-    assert "or, instead, from the obra marketplace" not in text
-
-
-def test_audit_fix_f6_matt_pocock_default_is_the_plugin_route() -> None:
-    matt = _tools_by_id()["matt-pocock-skills"]
-    assert matt.skill_lifecycle is not None
-    default = "\n".join(matt.skill_lifecycle.install.instructions)
-    assert "claude plugin install mattpocock-skills@claude-plugins-official" in default
-    assert "codex plugin" in default
-    probes = matt.skill_lifecycle.status_probes
-    assert any(p.harness == "claude" and p.via == "plugin-cli" for p in probes)
-
-
-def test_audit_fix_f7_opengsd_notes_node_24() -> None:
-    opengsd = _tools_by_id()["opengsd"]
-    assert opengsd.skill_lifecycle is not None
-    joined = "\n".join(opengsd.skill_lifecycle.install.instructions)
-    assert "Node" in joined and "24" in joined
-    assert "npx" not in joined and "@latest" not in joined
-
-
-def test_opengsd_handoff_text_matches_scope_and_pin(tmp_path: Path) -> None:
-    opengsd = _tools_by_id()["opengsd"]
-    lifecycle = opengsd.skill_lifecycle
-    assert lifecycle is not None and lifecycle.version is not None
-    repo = tmp_path / "git" / "app"
-    (repo / ".planning").mkdir(parents=True)
-    (repo / ".planning" / "config.json").write_text("{}")
-    steps = inspect_project_pack(opengsd, tmp_path, frozenset({"claude"})).steps
-    assert [step.kind for step in steps] == ["project_pack_install"]
-    command = " ".join(steps[0].argv).replace("--claude", "--<runtime>")
-    assert command == "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --relative-includes"
-
-    install = lifecycle.install.instructions
-    update = lifecycle.update.instructions
-    removal = lifecycle.removal.instructions
-    assert command in install
-    assert command in update
-    for line in (*install, *update, *removal, *lifecycle.status.instructions):
-        if "@opengsd/gsd-core" in line:
-            assert f"@opengsd/gsd-core@{lifecycle.version}" in line
-    for line in (*install, *update):
-        assert "--global" not in line and "npx" not in line and "@latest" not in line
-    assert removal[-1] == "pnpm dlx @opengsd/gsd-core@1.16.0 --<runtime> --local --uninstall"
-
-
 def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
     text = REGISTRY.read_text(encoding="utf-8")
     anchor = text.index('[[tool]]\nid = "puppeteer"')
@@ -2887,15 +2712,6 @@ def test_script_tools_declare_their_documented_config_dirs(
     tool_id: str, config: tuple[str, ...]
 ) -> None:
     assert _tools_by_id()[tool_id].config_paths == config
-
-
-def test_rtk_has_no_hook() -> None:
-    from installer.model import POSTINSTALL_HOOK_NAMES
-    from installer.postinstall import POSTINSTALL_HOOKS
-
-    assert "rtk-register" not in POSTINSTALL_HOOKS
-    assert "rtk-register" not in POSTINSTALL_HOOK_NAMES
-    assert _tools_by_id()["rtk"].postinstall is None
 
 
 def test_omz_and_vscode_declare_their_actions() -> None:

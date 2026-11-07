@@ -35,6 +35,4 @@
 .homebrew/trust.json.lock  # brew trust-state lock file written by brew runs; a lock, not config
 .config/draw.io  # draw.io Electron profile (caches, GPU and local storage) written by its smoke run
 .config/google-chrome-for-testing  # Chrome for Testing profile and crash reports written by a browser run
-.config/rtk  # rtk runtime state; rtk removal is a later user phase
-.local/share/rtk  # rtk runtime state; rtk removal is a later user phase
 .local/share/pki  # NSS certificate db (nssdb) Chromium/Chrome for Testing creates on first launch; browser runtime state

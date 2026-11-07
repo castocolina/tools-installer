@@ -103,6 +103,8 @@ from tests.test_download import fixture_runner
 from tests.test_registry import REGISTRY
 
 _MANAGED = Path("/tmp/tools-installer-bin")
+# Frozen copy of the pack entries removed from the shipped registry (23.1-01); deleted in 23.1-15.
+PACK_REGISTRY = Path(__file__).resolve().parent / "retired_skill_packs.toml"
 
 
 def _empty_inventory(**_kwargs: object) -> ManagerInventory:
@@ -5382,7 +5384,7 @@ def _probed_state(service: VersionRefreshService, pack: Tool) -> ToolState:
 
 
 def _opengsd() -> Tool:
-    return next(tool for tool in load_tools(REGISTRY) if tool.id == "opengsd")
+    return next(tool for tool in load_tools(PACK_REGISTRY) if tool.id == "opengsd")
 
 
 def _gsd_repo(home: Path, name: str = "proj") -> Path:
