@@ -5,7 +5,6 @@ its executor (`execute_plan`) live together here.
 """
 
 import os
-import stat
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -325,37 +324,6 @@ def _with_force(
     return forced
 
 
-# The portable per-step directory shim: `sh` changes into the validated cwd and
-# execs the argv. argv stays a list of separate positional parameters, so no
-# step value is ever shell-interpreted, and no process-global chdir is taken.
-_CWD_SHIM = 'cd -- "$1" && shift && exec "$@"'
-
-
-def in_directory(cwd: Path, argv: Sequence[str]) -> list[str]:
-    """`argv` wrapped so the child runs in `cwd` — portable, and never via `os.chdir`."""
-    return ["sh", "-c", _CWD_SHIM, "sh", str(cwd), *argv]
-
-
-def _valid_cwd(path: Path) -> str | None:
-    """Why this step must not run in `cwd` right now; None when it may.
-
-    The plan can be minutes old and a repo path is discovered by a read-only
-    walk (T-20-14): a directory replaced by a symlink, or removed, must not
-    send a per-repo install somewhere else. `lstat` is used, never `stat`, so
-    a symlink is seen as itself — its mode is `S_ISLNK`, so the `S_ISDIR`
-    test below already refuses it, and an unreadable path refuses too.
-    """
-    if not path.is_absolute():
-        return "cwd is not absolute"
-    try:
-        mode = path.lstat().st_mode
-    except OSError:
-        return "cwd does not exist"
-    if not stat.S_ISDIR(mode):
-        return "cwd is not a directory"
-    return None
-
-
 def first_line(exc: Exception) -> str:
     """The exception's first line, or its type name when it carries no message."""
     text = str(exc).splitlines()[0] if str(exc) else ""
@@ -443,22 +411,7 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         except (CommandError, OSError, executors.ExecutorError, VersionError) as exc:
             return _StepResult(failed=first_line(exc))
         return _StepResult()
-    if not step.argv:
-        return _StepResult(failed="step has no command")
-    if step.cwd is not None:
-        refusal = _valid_cwd(step.cwd)
-        if refusal is not None:
-            return _StepResult(failed=refusal)
-        try:
-            ctx.runner(in_directory(step.cwd, step.argv))
-        except (CommandError, OSError) as exc:
-            return _StepResult(failed=first_line(exc))
-        return _StepResult()
-    try:
-        ctx.runner(list(step.argv))
-    except (CommandError, OSError) as exc:
-        return _StepResult(failed=first_line(exc))
-    return _StepResult()
+    return _StepResult(failed="step kind has no branch")
 
 
 def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:

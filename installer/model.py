@@ -294,14 +294,11 @@ ConfigStepKind = Literal[
 @dataclass(frozen=True)
 class ConfigStep:
     """One D-20 configuration step: the text shown after "to configure:" and the
-    exact fix Phase 20 RECONFIGURE runs. Argv values taken from probe output are
-    validated by the builder that makes the step, never here."""
+    kind of fix Phase 20 RECONFIGURE runs for it; each kind has its own branch in
+    `session._run_step`, and no step carries a command of its own."""
 
     text: str
     kind: ConfigStepKind
-    harness: str | None = None
-    argv: tuple[str, ...] = ()
-    cwd: Path | None = None
     # The text a successful terminal_sync step reports (its done note); a zshenv_shell
     # step's is "<zsh path>\n<the .zshenv it writes>". Empty for every other kind.
     report: str = ""

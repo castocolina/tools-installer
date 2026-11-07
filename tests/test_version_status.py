@@ -4281,7 +4281,6 @@ def test_kitty_drift_is_misconfigured(tmp_path: Path) -> None:
         ConfigStep(
             text="point Kitty at zsh",
             kind="terminal_sync",
-            harness=None,
             report="Kitty now starts zsh",
         ),
     )
@@ -4619,7 +4618,7 @@ def test_an_unparsable_unmanaged_settings_file_reads_nothing(tmp_path: Path) -> 
 
 _MMDC_PKG = "@mermaid-js/mermaid-cli"
 _GROUP_REASON = "pnpm group incomplete: missing puppeteer"
-_GROUP_STEP = ConfigStep(text="install puppeteer with pnpm", kind="pnpm_group_install", argv=())
+_GROUP_STEP = ConfigStep(text="install puppeteer with pnpm", kind="pnpm_group_install")
 _GROUP_UNREADABLE = "pnpm group not checked: the pnpm inventory is unreadable"
 
 
@@ -4682,8 +4681,6 @@ def test_incomplete_pnpm_group_is_misconfigured(tmp_path: Path) -> None:
     assert mmdc.reasons[0] == _GROUP_REASON
     assert mmdc.unconfigured == (_GROUP_STEP,)
     assert states["prettier"].unconfigured == ()
-    # Review H10: no step in the pass carries a standalone pnpm argv.
-    assert all(step.argv == () for state in states.values() for step in state.unconfigured)
 
 
 def test_group_step_repair_runs_the_grouped_node_install(

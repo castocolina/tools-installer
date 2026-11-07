@@ -1490,11 +1490,9 @@ def test_an_unknown_step_kind_fails_closed_instead_of_running_argv() -> None:
 
     The model's literal type rejects this kind at build time; a plan built by
     an older producer, or hand-edited, can still carry one, so the dispatcher
-    refuses it rather than treating its argv as just another command.
+    refuses it rather than running anything for it.
     """
-    step = ConfigStep(
-        "do the new thing", cast(ConfigStepKind, "brand_new_kind"), "claude", ("claude", "run", "x")
-    )
+    step = ConfigStep("do the new thing", cast(ConfigStepKind, "brand_new_kind"))
     recorder = RunRecorder()
 
     outcome = execute_plan(

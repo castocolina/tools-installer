@@ -1638,7 +1638,7 @@ member = "bin/demo"
 
 def test_config_step_is_frozen_with_closed_kinds() -> None:
     step = ConfigStep(text="t", kind="terminal_sync")
-    assert (step.harness, step.argv, step.cwd) == (None, (), None)
+    assert step.report == ""
     field_name = "text"
     with pytest.raises(FrozenInstanceError):
         setattr(step, field_name, "u")
