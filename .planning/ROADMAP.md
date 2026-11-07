@@ -476,9 +476,9 @@ Plans:
 **Requirements**: SCHED-01, SCHED-02, SCHED-03, SCHED-04, SCHED-05
 **Success Criteria** (what must be TRUE):
 
-  1. The Schedules view lists cache cleanup and the claude, opencode, Pi, cursor-agent and copilot update schedules with name, script, target, state, interval and next run; installed targets default on, missing ones show as unavailable.
+  1. The Schedules view lists cache cleanup and the claude, opencode, Pi, cursor-agent and copilot update schedules with name, script, target, state, interval and next run; installed targets default on, missing ones show as unavailable. *(amended 2026-11-07, 24.2 SPEC R9: the tmp cleanup moves in from Policies as a seventh row)*
   2. Turning a schedule on writes a user-level timer (systemd user unit or launchd agent) with the default 6 h interval from 00:00 or the user's choice, records it in a receipt, and turning it off or uninstalling removes it; no sudo anywhere.
-  3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model, with a model runs that model, and `agent` is unchanged.
+  3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
 **Plans**: TBD (run /gsd-plan-phase 24.2)
