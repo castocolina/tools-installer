@@ -6,9 +6,9 @@ import pytest
 
 import installer.engine as engine_mod
 import installer.postinstall as pi
-from installer import receipts, skill_lifecycle
+from installer import receipts
 from installer.engine import install_tool
-from installer.model import Method, Tool, load_tools
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_tools
 from installer.platform import Platform
 from installer.run import CommandError
 
@@ -253,7 +253,38 @@ def test_pi_is_in_no_target_map() -> None:
         if pair.targets is None:
             continue
         assert "pi" not in pair.targets, name
-        assert set(pair.targets) <= set(skill_lifecycle.HARNESS_PRESENCE), name
+        assert set(pair.targets) <= set(pi.HARNESS_PRESENCE), name
+
+
+def test_harness_presence_matches_the_marker_dirs() -> None:
+    expected: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+        "antigravity": (("agy",), (".gemini/antigravity",)),
+        "claude": (("claude",), (".claude",)),
+        "codex": (("codex",), (".codex",)),
+        "copilot": (("copilot",), (".copilot",)),
+        "cursor": (("cursor-agent", "cursor"), (".cursor", ".local/share/cursor-agent")),
+        "devin": (("devin",), ()),
+        "factory-droid": (("droid",), (".factory",)),
+        "gemini-cli": (("gemini",), (".gemini",)),
+        "grok": (("grok",), ()),
+        "hermes": (("hermes",), ()),
+        "kilo": ((), (".config/kilo",)),
+        "kimi": ((), (".kimi-code",)),
+        "muse": (("muse",), ()),
+        "opencode": (("opencode",), (".config/opencode", ".opencode")),
+        "pi": (("pi",), (".pi",)),
+        "qwen": (("qwen",), ()),
+        "windsurf": ((), (".codeium/windsurf",)),
+    }
+    assert expected == pi.HARNESS_PRESENCE
+    assert HARNESS_MARKER_DIRS.keys() == pi.HARNESS_PRESENCE.keys()
+    assert all(pi.HARNESS_PRESENCE[h][1] == HARNESS_MARKER_DIRS[h] for h in pi.HARNESS_PRESENCE)
+
+
+def test_a_marker_dir_alone_makes_a_host_present(tmp_path: Path) -> None:
+    (tmp_path / ".cursor").mkdir()
+
+    assert "cursor" in pi.present_harnesses(tmp_path, lambda _command: None)
 
 
 def test_no_receipt_means_no_registration() -> None:

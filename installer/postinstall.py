@@ -7,7 +7,7 @@ hook runs through the same `Runner` seam every other executor uses
 installer/engine.py::install_tool treats a warning as non-fatal, because the
 binary the succeeding method just installed is usable regardless.
 
-Hosts come from one list, `skill_lifecycle.present_harnesses` (CONF-03). A hook
+Hosts come from one list, `present_harnesses` in this module (CONF-03). A hook
 registers for the present, supported hosts its receipt does not record yet, and
 records what it registered in `receipt.hooks`, so removal can undo exactly that.
 """
@@ -19,9 +19,8 @@ from pathlib import Path
 
 from installer import receipts
 from installer.locations import bin_dir
-from installer.model import Method, Tool
+from installer.model import HARNESS_MARKER_DIRS, Method, Tool
 from installer.run import CommandError, NotingRunner, Runner, command_error_line
-from installer.skill_lifecycle import present_harnesses
 
 # (harness ids registered, warning). A warning never fails the install.
 HookOutcome = tuple[tuple[str, ...], str | None]
@@ -33,6 +32,51 @@ HOST_CATALOG_IDS: dict[str, str] = {
     "opencode": "opencode",
     "cursor": "cursor-agent",
 }
+
+
+# Command names verified on this host 2026-10-09, plus binaries named in
+# https://github.com/obra/superpowers/blob/main/README.md (agy, devin, grok,
+# qwen, hermes, muse). factory-droid `.factory` and gemini-cli `.gemini` are
+# the global roots in https://github.com/vercel-labs/skills/blob/main/README.md
+# (Droid ~/.factory/skills, Gemini CLI ~/.gemini/skills). antigravity, windsurf,
+# kilo, and kimi dirs are the opengsd resolver defaults in
+# .claude/gsd-core/references/gsd-run-resolver.md. Devin/Grok/Qwen/Hermes/Muse
+# docs disagree on a config dir, so those disk tuples stay empty.
+_HARNESS_COMMANDS: dict[str, tuple[str, ...]] = {
+    "antigravity": ("agy",),
+    "claude": ("claude",),
+    "codex": ("codex",),
+    "copilot": ("copilot",),
+    "cursor": ("cursor-agent", "cursor"),
+    "devin": ("devin",),
+    "factory-droid": ("droid",),
+    "gemini-cli": ("gemini",),
+    "grok": ("grok",),
+    "hermes": ("hermes",),
+    "kilo": (),
+    "kimi": (),
+    "muse": ("muse",),
+    "opencode": ("opencode",),
+    "pi": ("pi",),
+    "qwen": ("qwen",),
+    "windsurf": (),
+}
+# Marker dirs come from model.HARNESS_MARKER_DIRS, the same denylist config_paths uses.
+HARNESS_PRESENCE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    harness: (commands, HARNESS_MARKER_DIRS[harness])
+    for harness, commands in _HARNESS_COMMANDS.items()
+}
+
+
+def present_harnesses(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
+    """Hosts detectable from PATH or a closed home-relative marker."""
+    found: set[str] = set()
+    for harness, (commands, markers) in HARNESS_PRESENCE.items():
+        if any(which(command) for command in commands) or any(
+            (home / marker).exists() for marker in markers
+        ):
+            found.add(harness)
+    return frozenset(found)
 
 
 def present_hosts() -> frozenset[str]:

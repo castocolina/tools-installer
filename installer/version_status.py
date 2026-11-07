@@ -90,7 +90,7 @@ from installer.pnpm_globals import (
     node_install_policy,
     pnpm_global_packages,
 )
-from installer.postinstall import POSTINSTALL_HOOKS, host_labels
+from installer.postinstall import POSTINSTALL_HOOKS, host_labels, present_harnesses
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
@@ -102,7 +102,6 @@ from installer.skill_lifecycle import (
     inspect_skill_reports,
     partial_harnesses,
     partial_steps,
-    present_harnesses,
 )
 from installer.status import is_installed
 from installer.terminal_shell import TerminalShellResult

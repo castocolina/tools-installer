@@ -46,11 +46,12 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
+from installer.postinstall import HARNESS_PRESENCE
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError
 from installer.session import Disposition, build_plan
-from installer.skill_lifecycle import HARNESS_PRESENCE, inspect_skill_reports, inspect_status
+from installer.skill_lifecycle import inspect_skill_reports, inspect_status
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
