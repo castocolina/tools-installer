@@ -28,7 +28,7 @@
 - [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
 - [ ] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke
 - [ ] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install
-- [ ] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes
+- [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
 - [ ] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness
 - [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
@@ -210,7 +210,7 @@ Plans (W = execution wave):
   4. Headless `--all --yes` uses the same plan and engine: on a host with an outdated tool it updates it and exits 0, and a failed row exits 1.
   5. No screen promises an off-policy migration ("moving it there") that does not exist.
 
-**Plans:** 31/31 plans executed (19 + 12 gap closure)
+**Plans:** 31/31 plans complete (19 + 12 gap closure)
 
 Plans (W = execution wave):
 - [x] 20-01-PLAN.md — `Resolution.closure`/`blocked`/`requested_by`: the resolver exposes present tools, blocked reasons and first requesters as data (W1)
@@ -471,7 +471,7 @@ Plans:
 | 17. Stop the bleeding | 21/21 | In Progress | - |
 | 18. Registry truth and drift guard | 28/28 | In Progress | - |
 | 19. One tool state with health plus receipts | 46/46 | In Progress | - |
-| 20. Install plan with dispositions | 31/31 | In Progress | - |
+| 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |

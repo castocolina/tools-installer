@@ -49,14 +49,14 @@
 
 ### Install plan
 
-- [ ] **PLAN-01**: The review lists every selected and dragged tool with its disposition (will install / update / repair / reconfigure / be reinstalled / skipped / blocked) and the reason [TA §3, 999.1, G R4]
-- [ ] **PLAN-02**: A current installer-owned tool is skipped unless the user presses `r`, which shows "will be reinstalled" [O7]
-- [ ] **PLAN-03**: A broken tool is planned as repair and a misconfigured one as reconfigure, including dragged dependencies [TA §3.1]
-- [ ] **PLAN-04**: The summary counts outcomes with the same words as the review [999.1]
-- [ ] **PLAN-05**: After a run, failed, blocked and not-attempted selections stay selected and done/skipped ones clear; `esc` before start keeps the selection [999.1, B 13 WR-03]
-- [ ] **PLAN-06**: Headless `--all`/`--categories` uses the same plan and engine, and its exit code comes from outcomes [B 13, B 14 IN-01]
-- [ ] **PLAN-07**: While state is refreshing, rows show "checking…" and Enter waits for the refresh instead of acting on stale state [O9]
-- [ ] **PLAN-08**: The UI no longer promises an off-policy migration that does not exist [O8, B 16 D-04]
+- [x] **PLAN-01**: The review lists every selected and dragged tool with its disposition (will install / update / repair / reconfigure / be reinstalled / skipped / blocked) and the reason [TA §3, 999.1, G R4]
+- [x] **PLAN-02**: A current installer-owned tool is skipped unless the user presses `r`, which shows "will be reinstalled" [O7]
+- [x] **PLAN-03**: A broken tool is planned as repair and a misconfigured one as reconfigure, including dragged dependencies [TA §3.1]
+- [x] **PLAN-04**: The summary counts outcomes with the same words as the review [999.1]
+- [x] **PLAN-05**: After a run, failed, blocked and not-attempted selections stay selected and done/skipped ones clear; `esc` before start keeps the selection [999.1, B 13 WR-03]
+- [x] **PLAN-06**: Headless `--all`/`--categories` uses the same plan and engine, and its exit code comes from outcomes [B 13, B 14 IN-01]
+- [x] **PLAN-07**: While state is refreshing, rows show "checking…" and Enter waits for the refresh instead of acting on stale state [O9]
+- [x] **PLAN-08**: The UI no longer promises an off-policy migration that does not exist [O8, B 16 D-04]
 
 ### Screens
 
@@ -174,14 +174,14 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | STATE-05 | Phase 19 | Pending |
 | STATE-06 | Phase 19 | Pending |
 | STATE-07 | Phase 19 | Pending |
-| PLAN-01 | Phase 20 | Pending |
-| PLAN-02 | Phase 20 | Pending |
-| PLAN-03 | Phase 20 | Pending |
-| PLAN-04 | Phase 20 | Pending |
-| PLAN-05 | Phase 20 | Pending |
-| PLAN-06 | Phase 20 | Pending |
-| PLAN-07 | Phase 20 | Pending |
-| PLAN-08 | Phase 20 | Pending |
+| PLAN-01 | Phase 20 | Complete |
+| PLAN-02 | Phase 20 | Complete |
+| PLAN-03 | Phase 20 | Complete |
+| PLAN-04 | Phase 20 | Complete |
+| PLAN-05 | Phase 20 | Complete |
+| PLAN-06 | Phase 20 | Complete |
+| PLAN-07 | Phase 20 | Complete |
+| PLAN-08 | Phase 20 | Complete |
 | UI-01 | Phase 21 | Pending |
 | UI-02 | Phase 21 | Pending |
 | UI-03 | Phase 21 | Pending |

@@ -5,11 +5,11 @@ milestone_name: Truthful lifecycle
 current_phase: 23
 current_phase_name: Configuration as a lifecycle step
 status: Verifying — human_needed (UAT fixes in progress)
-stopped_at: "Phase 23 close-out: UAT fixes, final e2e, re-verify phase 20"
-last_updated: "2026-11-07T10:12:15.460Z"
+stopped_at: "Phase 23 close-out: UAT fixes, final e2e"
+last_updated: "2026-11-07T10:16:07.014Z"
 last_activity: 2026-11-07
-last_activity_desc: Phase 23 verified (human_needed), SECURED, container UAT 5/6, fixes running
-state_head: 18ab7f2f999dc0f6a7ed4e753df4b0cccc4f1a22
+last_activity_desc: Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
+state_head: 1647b8abd676d9e0a6cdd95b8c1bb55f5099d5fb
 progress:
   total_phases: 11
   completed_phases: 1
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 Phase: 23 (Configuration as a lifecycle step) — EXECUTING
 Plan: 16 of 16
 Status: Verifying — human_needed (UAT fixes in progress)
-Last activity: 2026-11-07 — Phase 23 verified (human_needed), SECURED, container UAT 5/6, fixes running
+Last activity: 2026-11-07 — Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
 
 Progress: [█░░░░░░░░░] 9%
 
@@ -48,7 +48,7 @@ Progress: [█░░░░░░░░░] 9%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 20 | 31 | - | - |
 
 *Updated after each plan completion*
 
@@ -103,7 +103,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-10-18T21:35:11.809Z
-Stopped at: Phase 21 UI-SPEC approved
+Stopped at: Phase 20 complete, ready to verify Phase 17
 Resume file: .planning/phases/21-one-screen-family/21-UI-SPEC.md
 
 ## Deferred Verification
