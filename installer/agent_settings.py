@@ -380,7 +380,12 @@ def remove_key(
     clean = _clean(text, fmt)
     members, member = _member_at(clean, key_path)
     located = text[member.key_start : member.value_end]
-    if fragment is not None and text.count(fragment) == 1 and located in fragment:
+    # A comma-less fragment cut from the last of several members would strand the comma
+    # before it, so that member takes the cut path, which removes the preceding comma.
+    stranded = (
+        len(members) > 1 and member is members[-1] and not (fragment or "").rstrip().endswith(",")
+    )
+    if not stranded and fragment is not None and text.count(fragment) == 1 and located in fragment:
         new_text = text.replace(fragment, "", 1)
     else:
         new_text = _cut_member(text, clean, members, member)
@@ -830,3 +835,24 @@ def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> 
     if table and all(same_value(lookup(doc, key.path), key.value) for key in table):
         return "yours"
     return "off"
+
+
+def revert_agent(agent: str, *, home: Path, platform_os: str) -> tuple[FileResult, ...]:
+    """Revert every setting the ledger records for this agent, in ledger order."""
+    ledger = read_ledger(agent) or ConfigLedger(agent)
+    settings = tuple(dict.fromkeys(entry.setting for entry in ledger.entries))
+    return tuple(
+        revert_setting(agent, setting, home=home, platform_os=platform_os) for setting in settings
+    )
+
+
+def ledger_summary(
+    agent: str, *, home: Path, platform_os: str
+) -> tuple[tuple[Path, tuple[str, ...]], ...]:
+    """Per settings file under home, the dotted keys the ledger records there (removal previews)."""
+    ledger = read_ledger(agent) or ConfigLedger(agent)
+    keys_by_file: dict[str, list[str]] = {}
+    for entry in ledger.entries:
+        if Path(entry.file).is_relative_to(home):
+            keys_by_file.setdefault(entry.file, []).append(".".join(entry.key_path))
+    return tuple((Path(file), tuple(keys)) for file, keys in keys_by_file.items())

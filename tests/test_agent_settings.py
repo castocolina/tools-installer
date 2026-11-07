@@ -1,4 +1,6 @@
+import importlib.util
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -15,11 +17,13 @@ from installer.agent_settings import (
     delete_if_unchanged,
     file_problem,
     insert_key,
+    ledger_summary,
     new_file_text,
     parse_settings,
     read_settings,
     remove_key,
     replace_value,
+    revert_agent,
     revert_setting,
     same_value,
     setting_state,
@@ -28,6 +32,8 @@ from installer.agent_settings import (
 )
 from installer.atomic import FileSnapshot
 from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_ledger
+
+ROOT = Path(__file__).resolve().parent.parent
 
 VSCODE_SETTINGS = (
     '// VS Code user settings\n{\n  /* editor */\n  "editor.fontSize": 14, // size\n}\n'
@@ -602,3 +608,253 @@ def test_opencode_prefers_the_existing_jsonc_and_refuses_both() -> None:
     assert applied.refused == "both opencode.json and opencode.jsonc exist"
     assert plain.read_bytes() == plain_before
     assert jsonc.read_bytes() == jsonc_before
+
+
+def test_codex_auto_approve_goes_to_the_top_level() -> None:
+    home = Path.home()
+    codex = home / ".codex" / "config.toml"
+    codex.parent.mkdir(parents=True, exist_ok=True)
+    original = (
+        'model = "gpt"\n\n[features]\nfoo = true\n\n[projects."/x"]\ntrust_level = "trusted"\n'
+    )
+    codex.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("codex", "auto-approve", home=home, platform_os="linux")
+
+    assert [key.kind for key in applied.keys] == ["wrote", "wrote"]
+    text = codex.read_text(encoding="utf-8")
+    assert text.index('approval_policy = "never"') < text.index("[features]")
+    assert text.index('sandbox_mode = "danger-full-access"') < text.index("[features]")
+    doc = tomllib.loads(text)
+    assert doc["approval_policy"] == "never"
+    assert doc["sandbox_mode"] == "danger-full-access"
+
+    revert_setting("codex", "auto-approve", home=home, platform_os="linux")
+
+    assert codex.read_text(encoding="utf-8") == original
+
+
+def test_claude_attribution_uses_empty_strings() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    original = '{"model": "opus"}\n'
+    settings.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("claude", "no-attribution", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind, key.value) for key in applied.keys] == [
+        ("attribution.commit", "wrote", '""'),
+        ("attribution.pr", "wrote", '""'),
+    ]
+    assert json.loads(settings.read_text(encoding="utf-8"))["attribution"] == {
+        "commit": "",
+        "pr": "",
+    }
+
+    revert_setting("claude", "no-attribution", home=home, platform_os="linux")
+
+    assert settings.read_text(encoding="utf-8") == original
+
+
+def test_cursor_attribution_replaces_cli_defaults_and_restores_them() -> None:
+    home = Path.home()
+    cursor = home / ".cursor" / "cli-config.json"
+    cursor.parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps(
+        {
+            "approvalMode": "allowlist",
+            "attribution": {"attributeCommitsToAgent": True, "attributePRsToAgent": True},
+        },
+        indent=2,
+    )
+    cursor.write_text(original + "\n", encoding="utf-8")
+
+    applied = apply_setting("cursor-agent", "no-attribution", home=home, platform_os="linux")
+
+    assert [key.kind for key in applied.keys] == ["replaced_default", "replaced_default"]
+    doc = json.loads(cursor.read_text(encoding="utf-8"))
+    assert doc["attribution"] == {"attributeCommitsToAgent": False, "attributePRsToAgent": False}
+
+    user = apply_setting("cursor-agent", "auto-approve", home=home, platform_os="linux")
+    assert [(key.key, key.kind, key.value) for key in user.keys] == [
+        ("approvalMode", "set_by_you", '"allowlist"')
+    ]
+
+    doc["attribution"]["attributeCommitsToAgent"] = True
+    cursor.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    reverted = revert_setting("cursor-agent", "no-attribution", home=home, platform_os="linux")
+
+    assert {(key.key, key.kind) for key in reverted.keys} == {
+        ("attribution.attributePRsToAgent", "removed"),
+        ("attribution.attributeCommitsToAgent", "kept_changed"),
+    }
+    restored = json.loads(cursor.read_text(encoding="utf-8"))
+    assert restored["attribution"]["attributeCommitsToAgent"] is True
+    assert restored["attribution"]["attributePRsToAgent"] is True
+
+
+def test_vscode_lean_adds_only_absent_keys_and_keeps_comments() -> None:
+    home = Path.home()
+    vscode = home / ".config" / "Code" / "User" / "settings.json"
+    vscode.parent.mkdir(parents=True, exist_ok=True)
+    original = '// VS Code user settings\n{\n  /* editor */\n  "editor.minimap.enabled": true,\n}\n'
+    vscode.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("vscode", "vscode-lean", home=home, platform_os="linux")
+
+    kinds = {key.key: key.kind for key in applied.keys}
+    assert kinds["editor.minimap.enabled"] == "set_by_you"
+    assert kinds["terminal.integrated.defaultProfile.linux"] == "wrote"
+    assert "update.mode" not in kinds
+    assert {kind for key, kind in kinds.items() if key != "editor.minimap.enabled"} == {"wrote"}
+    text = vscode.read_text(encoding="utf-8")
+    assert "// VS Code user settings" in text
+    assert "/* editor */" in text
+    doc = json.loads(strip_jsonc(text))
+    assert doc["editor.minimap.enabled"] is True
+    assert doc["terminal.integrated.defaultProfile.linux"] == "zsh"
+
+    revert_setting("vscode", "vscode-lean", home=home, platform_os="linux")
+
+    assert vscode.read_text(encoding="utf-8") == original
+
+
+def test_vscode_lean_on_macos_sets_update_mode_and_the_osx_profile() -> None:
+    home = Path.home()
+    path = home / "Library" / "Application Support" / "Code" / "User" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+
+    applied = apply_setting("vscode", "vscode-lean", home=home, platform_os="macos")
+
+    assert applied.path == path
+    kinds = {key.key: key.kind for key in applied.keys}
+    assert kinds["update.mode"] == "wrote"
+    assert kinds["terminal.integrated.defaultProfile.osx"] == "wrote"
+    assert "terminal.integrated.defaultProfile.linux" not in kinds
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["update.mode"] == "none"
+    assert doc["terminal.integrated.defaultProfile.osx"] == "zsh"
+
+
+def test_vscode_ai_off_and_ext_updates_off_are_separate_settings() -> None:
+    home = Path.home()
+    path = home / ".config" / "Code" / "User" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+
+    ai = apply_setting("vscode", "vscode-ai-off", home=home, platform_os="linux")
+    ext = apply_setting("vscode", "vscode-ext-updates-off", home=home, platform_os="linux")
+
+    assert [key.key for key in ai.keys] == ["chat.disableAIFeatures"]
+    assert [key.key for key in ext.keys] == ["extensions.autoUpdate", "extensions.autoCheckUpdates"]
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "chat.disableAIFeatures": True,
+        "extensions.autoUpdate": False,
+        "extensions.autoCheckUpdates": False,
+    }
+
+    revert_setting("vscode", "vscode-ai-off", home=home, platform_os="linux")
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "extensions.autoUpdate": False,
+        "extensions.autoCheckUpdates": False,
+    }
+
+
+def test_revert_agent_and_ledger_summary_cover_every_setting() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    apply_setting("claude", "no-attribution", home=home, platform_os="linux")
+
+    summary = ledger_summary("claude", home=home, platform_os="linux")
+    assert summary == (
+        (
+            settings,
+            (
+                "permissions.defaultMode",
+                "skipDangerousModePermissionPrompt",
+                "attribution.commit",
+                "attribution.pr",
+            ),
+        ),
+    )
+
+    results = revert_agent("claude", home=home, platform_os="linux")
+
+    assert {result.setting for result in results} == {"auto-approve", "no-attribution"}
+    assert read_ledger("claude") is None
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "opus"}
+
+
+def test_vscode_lean_on_fedora_writes_the_linux_profile() -> None:
+    home = Path.home()
+    path = home / ".config" / "Code" / "User" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+
+    applied = apply_setting("vscode", "vscode-lean", home=home, platform_os="fedora")
+
+    assert applied.refused is None
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["terminal.integrated.defaultProfile.linux"] == "zsh"
+    assert "update.mode" not in doc
+
+
+def test_a_user_zero_is_not_our_false() -> None:
+    home = Path.home()
+    cursor = home / ".cursor" / "cli-config.json"
+    cursor.parent.mkdir(parents=True, exist_ok=True)
+    cursor.write_text('{"attribution": {"attributeCommitsToAgent": 0}}\n', encoding="utf-8")
+
+    applied = apply_setting("cursor-agent", "no-attribution", home=home, platform_os="linux")
+
+    kinds = {key.key: (key.kind, key.value) for key in applied.keys}
+    assert kinds["attribution.attributeCommitsToAgent"] == ("set_by_you", "0")
+    ledger = read_ledger("cursor-agent")
+    assert ledger is not None
+    assert all(
+        entry.key_path != ("attribution", "attributeCommitsToAgent") for entry in ledger.entries
+    )
+
+    forged = ConfigWrite(
+        "no-attribution",
+        str(cursor),
+        ("attribution", "attributeCommitsToAgent"),
+        False,
+        '"attributeCommitsToAgent": false',
+        replaced_default=True,
+    )
+    write_ledger(ConfigLedger("cursor-agent", ledger.created_files, (*ledger.entries, forged)))
+    reverted = revert_setting("cursor-agent", "no-attribution", home=home, platform_os="linux")
+
+    assert {key.key: key.kind for key in reverted.keys}["attribution.attributeCommitsToAgent"] == (
+        "kept_changed"
+    )
+    assert (
+        json.loads(cursor.read_text(encoding="utf-8"))["attribution"]["attributeCommitsToAgent"]
+        == 0
+    )
+
+
+def test_opencode_json_has_a_single_writer() -> None:
+    assert importlib.util.find_spec("installer.agent_policy") is None
+    assert importlib.util.find_spec("installer.agent_guidance") is None
+    importers = {
+        source.name
+        for source in (ROOT / "installer").glob("*.py")
+        if re.search(
+            r"^from installer(\.agent_env| import .*\bagent_env\b)", source.read_text("utf-8"), re.M
+        )
+    }
+    assert importers == {"agent_settings.py"}
+    policy_source = (ROOT / "installer" / "policy.py").read_text(encoding="utf-8")
+    for name in (
+        "AgentEnvironmentPolicy",
+        "agent_environment_policy",
+        "compose_agent_environment_policy",
+    ):
+        assert f"def {name}(" not in policy_source
+        assert f"class {name}" not in policy_source
