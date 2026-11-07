@@ -884,7 +884,16 @@ def desktop_shell_policy(*, zsh_path: str | None, conf_dir: Path, home: Path) ->
         )
 
     def _remove() -> PolicyResult:
-        env_redirect.remove_owned_conf(conf_dir, env_redirect.DESKTOP_SHELL_CONF)
+        if not env_redirect.remove_owned_conf(conf_dir, env_redirect.DESKTOP_SHELL_CONF):
+            return PolicyResult(
+                layers=(),
+                reload_hint=None,
+                warning=(
+                    f"{env_redirect.DESKTOP_SHELL_CONF} was not ours or is already gone; "
+                    "nothing removed."
+                ),
+                changed=False,
+            )
         return PolicyResult(
             layers=(PolicyLayer("environment.d", f"removed {env_redirect.DESKTOP_SHELL_CONF}"),),
             reload_hint=None,

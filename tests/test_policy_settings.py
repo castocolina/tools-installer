@@ -213,8 +213,14 @@ def test_the_desktop_shell_row_writes_environment_d(
     assert result.layers == (PolicyLayer("environment.d", f"wrote {DESKTOP_SHELL_CONF}"),)
     assert result.reload_hint == "Log out and back in for desktop apps to see it."
     assert row.is_active is not None and row.is_active() is True
-    row.remove()
+    assert row.remove().layers == (PolicyLayer("environment.d", f"removed {DESKTOP_SHELL_CONF}"),)
     assert not conf.exists()
+    again = row.remove()  # CR-14: already gone, so nothing is reported as removed
+    assert again.layers == ()
+    assert again.changed is False
+    assert (
+        again.warning == f"{DESKTOP_SHELL_CONF} was not ours or is already gone; nothing removed."
+    )
 
 
 def test_a_desktop_shell_file_outlives_zsh_and_is_still_swept(
