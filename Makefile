@@ -16,7 +16,7 @@ setup:  ## Launch the setup wizard (pass flags via ARGS, e.g. ARGS="--all --yes"
 
 run: setup  ## Alias for `setup`
 
-doctor:  ## Audit PATH (read-only report; `make fix` applies changes)
+doctor:  ## Audit PATH (report; launch repairs aside, `make fix` applies changes)
 	uv run --isolated --no-dev setup.py --doctor
 
 fix:  ## Wire PATH into your shell (~/.myshellrc + rc files)

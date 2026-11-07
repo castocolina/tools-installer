@@ -23,7 +23,14 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
-from installer.guards import install_shims
+from installer.guards import (
+    BAN_END,
+    REDIRECT_SENTINEL,
+    ban_alias_block,
+    install_shims,
+    redirect_shim_script,
+)
+from installer.locations import all_ban_rc_paths
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
@@ -4335,6 +4342,189 @@ def test_headless_main_strips_only_the_scratch_rc(monkeypatch: pytest.MonkeyPatc
 
     assert setup.main(["--all", "--yes"]) == 0
     assert "tools-installer tweak:claude-skip" not in scratch_rc.read_text()
+
+
+_OLD_NPX = f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec /x/pnpm dlx "$@"\n'
+_NPX_NOTICE = "Rewrote the npx redirect at"
+
+
+def _scratch_npx(body: str) -> Path:
+    npx = vars(setup)["_DEFAULT_BIN_DIR"] / "npx"
+    npx.parent.mkdir(parents=True, exist_ok=True)
+    npx.write_text(body)
+    return npx
+
+
+def test_headless_launch_rewrites_an_outdated_npx_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done, done])
+    npx = _scratch_npx(_OLD_NPX)
+    printed_before_plan: list[str] = []
+    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
+
+    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
+        printed_before_plan.append(buffer.getvalue())
+        return fake_run_wizard(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert _NPX_NOTICE in printed_before_plan[0]
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+
+    buffer.truncate(0)
+    buffer.seek(0)
+    assert setup.main(["--all", "--yes"]) == 0
+    assert _NPX_NOTICE not in buffer.getvalue()
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+
+
+_OLD_BAN = ban_alias_block().replace(BAN_END, f"alias npx='pnpm dlx'\n{BAN_END}")
+_GUARD_NOTICE = "Rewrote the guard aliases in"
+
+
+def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) -> None:
+    """Stub every heavy callee of the headless non-install routes; the repairs stay real."""
+
+    def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def uninstalled(
+        _tools: object, _console: object, **_kwargs: object
+    ) -> tuple[list[Path], tuple[str, ...]]:
+        return [], ()
+
+    def no_guard(**_kwargs: object) -> bool:
+        return False
+
+    def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
+        return TerminalShellResult()
+
+    monkeypatch.setattr(setup, "_has_controlling_tty", lambda: False)
+    monkeypatch.setattr(setup, "load_tools", _no_tools)
+    monkeypatch.setattr(setup, "detect", _platform)
+    monkeypatch.setattr(setup, "run_doctor", noop)
+    monkeypatch.setattr(setup, "configure_path", noop)
+    monkeypatch.setattr(setup, "run_uninstall", uninstalled)
+    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    monkeypatch.setattr(setup, "run_guard", no_guard)
+    monkeypatch.setattr(setup, "_timer_state_cache", noop)
+    monkeypatch.setattr(setup, "_disk_pressure_probe", noop)
+    monkeypatch.setattr(setup, "_competitor_probe", noop)
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=300, no_color=True))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        None,
+        ["--uninstall", "--yes"],
+        ["--doctor"],
+        ["--fix"],
+        ["--guard", "--yes"],
+        ["--unguard", "--yes"],
+    ],
+    ids=["tui", "uninstall", "doctor", "fix", "guard", "unguard"],
+)
+def test_every_route_rewrites_an_outdated_npx_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str] | None
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    buffer = io.StringIO()
+    if argv is not None:
+        _headless_route_stubs(monkeypatch, buffer)
+    npx = _scratch_npx(_OLD_NPX)
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(f"user\n{_OLD_BAN}\n")
+
+    def shown_notices() -> str:
+        if argv is None:
+            warning = _wired(monkeypatch, [])["startup_warning"]
+            return warning if isinstance(warning, str) else ""
+        buffer.truncate(0)
+        buffer.seek(0)
+        assert setup.main(argv) == 0
+        return buffer.getvalue()
+
+    first = shown_notices()
+    assert first.count(_NPX_NOTICE) == 1
+    assert first.count(_GUARD_NOTICE) == 1
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+    assert rc.read_text() == f"user\n{ban_alias_block()}\n"
+    second = shown_notices()
+    assert _NPX_NOTICE not in second
+    assert _GUARD_NOTICE not in second
+
+
+@pytest.mark.parametrize("route", ["headless", "tui"])
+def test_a_foreign_npx_is_never_touched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, route: str
+) -> None:
+    foreign = "#!/bin/sh\necho mine\n"
+    buffer = io.StringIO()
+    if route == "headless":
+        done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+        _headless_main_fixture(monkeypatch, buffer, [done])
+        npx = _scratch_npx(foreign)
+        assert setup.main(["--all", "--yes"]) == 0
+        shown = buffer.getvalue()
+    else:
+        _sandbox(monkeypatch, tmp_path)
+        npx = _scratch_npx(foreign)
+        warning = _wired(monkeypatch, [])["startup_warning"]
+        shown = warning if isinstance(warning, str) else ""
+    assert npx.read_text() == foreign
+    assert _NPX_NOTICE not in shown
+
+
+def test_a_launch_never_adds_or_edits_user_rc_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done, done])
+    paths = all_ban_rc_paths()
+    plain = {path: f"# {path.name}\nexport A=1\n" for path in paths}
+    for path, text in plain.items():
+        path.write_text(text)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert {path: path.read_text() for path in paths} == plain
+
+    myshellrc = Path.home() / ".myshellrc"
+    myshellrc.write_text(f"user1\nuser2\n{_OLD_BAN}\nuser3\nuser4\n")
+    assert setup.main(["--all", "--yes"]) == 0
+    assert myshellrc.read_text() == f"user1\nuser2\n{ban_alias_block()}\nuser3\nuser4\n"
+    assert {path: path.read_text() for path in paths if path != myshellrc} == {
+        path: text for path, text in plain.items() if path != myshellrc
+    }
+
+
+def test_launch_lines_put_the_alias_notices_before_the_npx_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    rc = Path.home() / ".myshellrc"
+    rc.write_text(_legacy_alias_block("claude-skip", _CLAUDE_LEGACY) + _OLD_BAN + "\n")
+    _scratch_npx(_OLD_NPX)
+    printed_before_plan: list[str] = []
+    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
+
+    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
+        printed_before_plan.append(buffer.getvalue())
+        return fake_run_wizard(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    shown = printed_before_plan[0]
+    legacy = shown.index("Removed the claude-skip alias")
+    guard = shown.index(_GUARD_NOTICE)
+    npx = shown.index(_NPX_NOTICE)
+    assert legacy < guard < npx
 
 
 def _linux() -> Platform:

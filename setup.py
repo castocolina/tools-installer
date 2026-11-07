@@ -43,6 +43,7 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
+from installer.guards import rewrite_outdated_ban_aliases, rewrite_outdated_npx
 from installer.install_ownership import run_probe
 from installer.locations import (
     all_ban_rc_paths,
@@ -85,7 +86,7 @@ from installer.settings import (
 from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_message, sync_terminal_shells, terminal_sync_warning
-from installer.tweaks import BUNDLES, applicable_bundles, strip_legacy_aliases
+from installer.tweaks import BUNDLES, LegacyStrip, applicable_bundles, strip_legacy_aliases
 from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
@@ -782,6 +783,26 @@ def _desktop_shell_policies(platform: Platform) -> tuple[Policy, ...]:
     )
 
 
+def _launch_repairs() -> tuple[LegacyStrip, tuple[tuple[str, str], ...]]:
+    """The one repair step every route runs before anything else (D-15).
+
+    Strips legacy alias blocks, rewrites an outdated guard alias block (every rc file a guard
+    could have written to, marker-owned block only) and an outdated npx redirect. Each part
+    never raises and never adds a file or a block.
+    """
+    return strip_legacy_aliases(_MYSHELLRC), (
+        *rewrite_outdated_ban_aliases(all_ban_rc_paths()),
+        *rewrite_outdated_npx(_DEFAULT_BIN_DIR),
+    )
+
+
+def _print_repairs(
+    console: Console, legacy: LegacyStrip, repairs: tuple[tuple[str, str], ...]
+) -> None:
+    for text, _severity in (*legacy.launch_lines(), *repairs):
+        console.print(text, markup=False, soft_wrap=True)
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -927,9 +948,9 @@ def _build_app(
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
     # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
-    legacy_strip = strip_legacy_aliases(_MYSHELLRC)
+    legacy_strip, repairs = _launch_repairs()
     startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
-    startup_lines += [text for text, _severity in legacy_strip.launch_lines()]
+    startup_lines += [text for text, _severity in (*legacy_strip.launch_lines(), *repairs)]
     policy_inputs = PolicyInputs(
         policies=[
             ban_policy(
@@ -1263,6 +1284,7 @@ def _run_doctor(console: Console) -> int:
             app = _build_app(tools, platform, initial_view="doctor", settings=store)
             app.run()
         return _session_exit_code(app)
+    _print_repairs(console, *_launch_repairs())
     cache = _timer_state_cache(
         platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
     )
@@ -1301,6 +1323,7 @@ def _run_fix(console: Console, *, link_mode_option: str | None) -> int:
             )
             app.run()
         return _session_exit_code(app)
+    _print_repairs(console, *_launch_repairs())
     configure_path(
         tools,
         console,
@@ -1333,11 +1356,13 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
     # CLI teardown path gates fd/rg-aware daemon construction on the SAME
     # real-installed-status map the interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
-    legacy = strip_legacy_aliases(_MYSHELLRC)
+    legacy, repairs = _launch_repairs()
     notice = legacy.uninstall_line()
     if notice is not None:
         console.print(notice, markup=False, soft_wrap=True)
     for text in legacy.failure_lines():
+        console.print(text, markup=False, soft_wrap=True)
+    for text, _severity in repairs:
         console.print(text, markup=False, soft_wrap=True)
     _removed, failed = run_uninstall(
         tools,
@@ -1366,6 +1391,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
 def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:
     # The caller picks rc_paths: install targets the link-mode location, removal
     # sweeps every possible location (so it never depends on a link-mode guess).
+    _print_repairs(console, *_launch_repairs())
     confirm = (lambda _message: True) if assume_yes else ask_confirm
     acted = run_guard(
         remove=remove,
@@ -1461,8 +1487,7 @@ def main(argv: list[str]) -> int:
             settings=store,
             prompt_link_mode=needs_choice,
         )
-    for text, _severity in strip_legacy_aliases(_MYSHELLRC).launch_lines():
-        console.print(text, markup=False, soft_wrap=True)
+    _print_repairs(console, *_launch_repairs())
     post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
     refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(

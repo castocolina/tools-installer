@@ -112,7 +112,7 @@ make setup                   # launch the wizard (make run is an alias)
 ```sh
 make setup ARGS="--all"                      # install everything
 make setup ARGS="--categories search,data"   # only some categories
-make doctor                                  # audit PATH (read-only report)
+make doctor                                  # audit PATH (a report; runs the launch repairs first)
 make fix                                     # wire PATH into your shell
 ```
 
@@ -199,11 +199,13 @@ does not cascade to dependents.
 
 ## PATH doctor & fix
 
-`make doctor` is a **read-only report**: it audits the live PATH against the bin
+`make doctor` is a **report**: it audits the live PATH against the bin
 dirs the installer manages and reports any that are **missing** from PATH,
 **broken** (directory gone), or **duplicated** — then points you at `make fix`.
 Only directories that actually exist on disk are managed, so tools you never
-installed are never reported. It changes nothing.
+installed are never reported. Like every launch, it first repairs installer-owned
+leftovers: legacy alias blocks, an outdated guard alias block in your shell rc files
+and an outdated `npx` redirect in the managed bin dir.
 
 `make fix` applies the wiring:
 
@@ -292,7 +294,7 @@ workflow has a `make` target so local runs and CI are identical:
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` — create `.venv`, install runtime + dev deps          |
 | `make setup`     | launch the wizard (`uv run --isolated --no-dev setup.py`, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); flags via `ARGS`; `make run` is an alias) |
-| `make doctor`    | audit `PATH` (read-only report)                                 |
+| `make doctor`    | audit `PATH` (a report; runs the launch repairs first)          |
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
 | `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode |
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
