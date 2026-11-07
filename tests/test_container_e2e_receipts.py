@@ -487,6 +487,13 @@ def test_receipt_checks_are_wired_into_the_passes() -> None:
             [".claude/gsd-core", ".claude/.gsd-source"],
             id="both",
         ),
+        pytest.param(
+            [("file", ".claude/gsd-file-manifest.json")],
+            False,
+            [".claude/gsd-file-manifest.json"],
+            id="gsd-manifest",
+        ),
+        pytest.param([("dir", ".gsd")], False, [".gsd"], id="dot-gsd"),
     ],
 )
 def test_assert_gsd_absent_in_bash(
@@ -512,8 +519,24 @@ def test_assert_gsd_absent_in_bash(
         assert result.returncode != 0
         assert "TRACER_GSD_ABSENT_OK" not in result.stdout
     for relative in present:
-        assert f"TRACER_GSD_PRESENT path=$HOME/{relative}" in result.stdout
+        assert f"TRACER_GSD_PRESENT path={scratch}/{relative}" in result.stdout
     assert result.stdout.count("TRACER_GSD_PRESENT") == len(present)
+
+
+@pytest.mark.parametrize(
+    "probe",
+    ["exec_tester() { return 125; }", "exec_tester() { :; }", "exec_tester() { echo PRESENT; }"],
+    ids=["exec-fails", "no-completion-token", "token-missing-after-output"],
+)
+def test_assert_gsd_absent_fails_when_the_probe_did_not_run(tmp_path: Path, probe: str) -> None:
+    """C-10 (WR-09, PT-04): only a probe that ran to its token inside the container counts."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _harness("assert_gsd_absent") + f"\n{probe}\nassert_gsd_absent install\n"
+    result = _run(script, scratch)
+    assert result.returncode != 0
+    assert "TRACER_GSD_ABSENT_OK" not in result.stdout
+    assert "TRACER_GSD_PROBE_FAILED pass=install" in result.stdout
 
 
 def test_gsd_checks_are_wired_after_each_pass() -> None:

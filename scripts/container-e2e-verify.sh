@@ -337,15 +337,32 @@ uv run --isolated --no-dev python -c 'import sys; from installer import receipts
 }
 
 # D-26: no global GSD tree in the tester's home after a pass. $1 names the pass.
-# `-L` also catches a dangling link; a `.gsd-source` file is a hit too.
+# The probe runs inside the container and must end with its completion token, so a failed
+# `ct exec` or `su` fails the tracer instead of reading as "absent" (review C-10). It checks
+# the GSD paths the unit-test fingerprint watches; `-L` also catches a dangling link.
 assert_gsd_absent() {
-  local pass="$1" rel hit=0
-  for rel in .claude/gsd-core .claude/.gsd-source; do
-    if exec_tester "test -e \$HOME/${rel} || test -L \$HOME/${rel}"; then
-      printf 'TRACER_GSD_PRESENT path=%s\n' "\$HOME/${rel}"
-      hit=1
-    fi
-  done
+  local pass="$1" out line hit=0 done=0
+  # shellcheck disable=SC2016 # $HOME expands in the tester's shell, not here
+  if ! out="$(exec_tester 'for p in .claude/gsd-core .claude/.gsd-source .claude/gsd-file-manifest.json .gsd; do
+  if [ -e "$HOME/$p" ] || [ -L "$HOME/$p" ]; then printf "PRESENT %s\n" "$HOME/$p"; fi
+done
+echo GSD_PROBE_DONE')"; then
+    printf 'TRACER_GSD_PROBE_FAILED pass=%s\n' "$pass"
+    return 1
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      "PRESENT "*)
+        printf 'TRACER_GSD_PRESENT path=%s\n' "${line#PRESENT }"
+        hit=1
+        ;;
+      GSD_PROBE_DONE) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_GSD_PROBE_FAILED pass=%s\n' "$pass"
+    return 1
+  fi
   if [[ "$hit" -eq 0 ]]; then
     printf 'TRACER_GSD_ABSENT_OK pass=%s\n' "$pass"
     return 0
