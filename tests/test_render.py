@@ -1276,10 +1276,11 @@ def test_the_agent_host_hooks_section() -> None:
     start = lines.index("Agent-host hooks")
     assert lines[start + 1 : start + 3] == [
         "codegraph: registered for claude, cursor-agent",
-        "codegraph: registered for codex (new host)",
+        "  claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md",
     ]
+    assert lines[start + 3] == "codegraph: registered for codex (new host)"
     assert "⚠ codegraph postinstall warning: codegraph MCP registration failed: exit 1" in lines
-    assert max(cell_len(line) for line in lines[start + 1 : start + 3]) <= 78
+    assert max(cell_len(line) for line in lines[start + 1 : start + 4]) <= 78
 
     quiet = RowOutcome(
         PlanRow("rg", Disposition.INSTALL, "not installed"),
@@ -1299,8 +1300,36 @@ def test_the_agent_host_hooks_section() -> None:
     console, buf = _console()
     render_hook_lines([four], console)
     wide = "codegraph: registered for claude, codex, cursor-agent, opencode (new host)"
-    assert buf.getvalue().splitlines() == ["Agent-host hooks", wide]
-    assert cell_len(wide) <= 78
+    assert buf.getvalue().splitlines() == [
+        "Agent-host hooks",
+        wide,
+        "  claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md",
+    ]
+    assert max(cell_len(line) for line in buf.getvalue().splitlines()) <= 78
+
+
+def test_a_codegraph_claude_registration_discloses_its_prompt_hook() -> None:
+    """F-2: codegraph's installer writes a Claude prompt hook and CLAUDE.md; say so."""
+    no_claude = RowOutcome(
+        PlanRow("codegraph", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("codegraph", InstallStatus.INSTALLED, hooks=("codex",)),
+    )
+    console, buf = _console()
+    render_hook_lines([no_claude], console)
+    assert "CLAUDE.md" not in buf.getvalue()
+
+    claude = RowOutcome(
+        PlanRow("codegraph", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("codegraph", InstallStatus.INSTALLED, hooks=("claude",)),
+    )
+    console, buf = _console()
+    render_hook_lines([claude], console)
+    assert buf.getvalue().splitlines()[1:] == [
+        "codegraph: registered for claude",
+        "  claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md",
+    ]
 
 
 def test_render_done_notes_is_silent_without_extras() -> None:

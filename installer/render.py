@@ -26,7 +26,7 @@ from installer.guidance import (
 from installer.links import TROUBLESHOOTING_URL
 from installer.locations import display_path
 from installer.pnpm_globals import NodeGlobalsReport
-from installer.postinstall import host_labels
+from installer.postinstall import CLAUDE_EXTRAS, host_labels
 from installer.sanitize import sanitize_log_line
 from installer.session import (
     NO_ATTRIBUTION_KEY_IDS,
@@ -490,6 +490,12 @@ def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> 
             console.print(Text(line, style="yellow"), soft_wrap=True)
 
 
+def _claude_extras(tool_id: str, hosts: Sequence[str]) -> list[str]:
+    """The indented disclosure of what the tool's own installer wrote for claude, if any."""
+    extra = CLAUDE_EXTRAS.get(tool_id) if "claude" in hosts else None
+    return [f"  {extra}"] if extra else []
+
+
 def render_hook_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print the Agent-host hooks section: each install's registrations and the sweep's hosts."""
     lines: list[str] = []
@@ -497,8 +503,10 @@ def render_hook_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
         if outcome.install is not None and outcome.install.hooks:
             labels = host_labels(outcome.install.hooks)
             lines.append(f"{outcome.row.tool_id}: registered for {labels}")
+            lines.extend(_claude_extras(outcome.row.tool_id, outcome.install.hooks))
         for tool_id, hosts in outcome.resynced:
             lines.append(f"{tool_id}: registered for {host_labels(hosts)} (new host)")
+            lines.extend(_claude_extras(tool_id, hosts))
     if not lines:
         return
     console.print("Agent-host hooks", style="bold", markup=False, highlight=False)

@@ -113,8 +113,9 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     """Register codegraph's MCP server for `harnesses` in one explicit `--target` CSV.
 
     Never `--target auto`: codegraph registers claude when it detects no host, an
-    unrequested write. `--no-permissions` keeps the call to MCP registration, since
-    codegraph's `--yes` also enables a Claude auto-allow list and a UserPromptSubmit hook.
+    unrequested write. `--no-permissions` skips codegraph's Claude auto-allow list
+    only: for claude it still writes a UserPromptSubmit hook into settings.json and
+    creates ~/.claude/CLAUDE.md, and has no flag to skip them (CLAUDE_EXTRAS).
     """
     csv = ",".join(_CODEGRAPH_TARGETS[harness] for harness in harnesses)
     argv = [
@@ -132,6 +133,13 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     except CommandError as exc:
         return (), f"codegraph MCP registration failed: {command_error_line(exc)}"
     return tuple(sorted(harnesses)), None
+
+
+# What a tool's own installer writes for claude beyond MCP registration, shown with
+# the hook line; `codegraph uninstall` removes both (UAT F-2).
+CLAUDE_EXTRAS: Mapping[str, str] = {
+    "codegraph": "claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md",
+}
 
 
 def _codegraph_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:

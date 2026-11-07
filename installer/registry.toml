@@ -1726,8 +1726,9 @@ desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its ow
 # it builds an explicit CSV from the present harnesses (cursor-agent -> codegraph's own
 # "cursor" id) and skips the `codegraph install` call when none are present.
 # `codegraph install` merges into each target's config file, so a rerun is a no-op.
-# `--no-permissions` keeps the call to MCP registration: codegraph's `--yes` also
-# enables a Claude Code auto-allow list and a UserPromptSubmit hook.
+# `--no-permissions` skips only codegraph's Claude Code auto-allow list; the
+# UserPromptSubmit hook and ~/.claude/CLAUDE.md are still written (see above), and
+# the run report discloses them (postinstall.CLAUDE_EXTRAS).
 # Verified 2026-11-07 (Phase 23, CONF-02/CONF-03): hosts come from
 # skill_lifecycle.present_harnesses; receipt.hooks records the registered hosts. The
 # new-host sweep (CONF-02) lands in plan 23-07.
