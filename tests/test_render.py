@@ -34,6 +34,7 @@ from installer.render import (
     render_shell_section,
     render_uninstall,
     render_verification,
+    run_option_lines,
     running_row_text,
     summary_head,
 )
@@ -1453,3 +1454,52 @@ def test_the_review_row_folds_a_long_manual_reason() -> None:
     lines = plan_row_text(row, 12, 78, hint=False).plain.splitlines()
     assert len(lines) > 1
     assert all(cell_len(line) <= 78 for line in lines)
+
+
+def test_run_option_lines_match_the_ui_spec() -> None:
+    rows = [
+        PlanRow("claude", Disposition.INSTALL, ""),
+        PlanRow("codex", Disposition.INSTALL, ""),
+        PlanRow("pi", Disposition.INSTALL, ""),
+    ]
+    assert run_option_lines("no-attribution", rows, platform_os="fedora") == (
+        "attribution off — claude: no agent credit in commits/PRs",
+        ("no documented key: codex, pi (nothing written for them)",),
+    )
+    assert run_option_lines("auto-approve", rows, platform_os="fedora") == (
+        "auto-approve agents — claude, codex: no permission prompts",
+        ("pi: nothing written; its approvals come only from extensions",),
+    )
+    with_cursor = [*rows, PlanRow("cursor-agent", Disposition.INSTALL, "")]
+    assert run_option_lines("no-attribution", with_cursor, platform_os="fedora")[1] == (
+        "no documented key: codex, pi (nothing written for them)",
+        "cursor-agent: its CLI ignores the commit opt-out (as of 2026-10-04)",
+    )
+    vscode = [PlanRow("vscode", Disposition.UPDATE, "")]
+    assert run_option_lines("vscode-lean", vscode, platform_os="fedora") == (
+        "VS Code lean mode — telemetry, experiments, minimap, auto-detect off",
+        ("zsh terminal; update.mode not written on Linux (this installer updates it)",),
+    )
+    assert run_option_lines("vscode-lean", vscode, platform_os="macos")[1] == (
+        "zsh terminal; update.mode set to none",
+    )
+    assert run_option_lines("vscode-ai-off", vscode, platform_os="fedora") == (
+        "VS Code built-in AI off — chat.disableAIFeatures",
+        (),
+    )
+    assert run_option_lines("vscode-ext-updates-off", vscode, platform_os="fedora") == (
+        "VS Code extension auto-update off — security fixes only on demand",
+        (),
+    )
+    zsh = [PlanRow("zsh", Disposition.INSTALL, "")]
+    assert run_option_lines("desktop-shell", zsh, platform_os="fedora") == (
+        "SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)",
+        (),
+    )
+
+
+def test_an_unparsable_target_file_adds_a_review_note() -> None:
+    rows = [PlanRow("codex", Disposition.INSTALL, "")]
+    problems = {"codex": ("config.toml", "TOML")}
+    notes = run_option_lines("auto-approve", rows, platform_os="fedora", problems=problems)[1]
+    assert notes == ("codex: config.toml is not valid TOML; nothing will be written",)

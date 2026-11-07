@@ -15,8 +15,10 @@ from typing import Literal, Protocol, get_args
 from installer import executors, postinstall, receipts
 from installer.agent_settings import (
     AGENT_FORMATS,
+    FORMAT_NAMES,
     FileResult,
     apply_setting,
+    file_problem,
     setting_keys,
     settings_file,
 )
@@ -591,13 +593,50 @@ ATTRIBUTION_IDS: tuple[str, ...] = _ids_with_setting("no-attribution")
 # Agents with no documented attribution key; pi has no ledger agent, so it stays a literal.
 NO_ATTRIBUTION_KEY_IDS: tuple[str, ...] = ("codex", "opencode", "pi")
 # Each option's (settings group, row ids it covers).
-_OPTION_COVERS: dict[str, tuple[str, tuple[str, ...]]] = {
+OPTION_COVERS: dict[str, tuple[str, tuple[str, ...]]] = {
     "auto-approve": ("auto-approve", AGENT_OPTION_IDS),
     "no-attribution": ("no-attribution", ATTRIBUTION_IDS),
     "vscode-lean": ("vscode-lean", ("vscode",)),
     "vscode-ai-off": ("vscode-ai-off", ("vscode",)),
     "vscode-ext-updates-off": ("vscode-ext-updates-off", ("vscode",)),
 }
+
+
+# The rows whose settings the desktop SHELL option can export (its environment.d conf).
+_DESKTOP_SHELL_IDS: frozenset[str] = frozenset({"zsh", "kitty", "wezterm"})
+
+
+def run_options(rows: Sequence[PlanRow], platform_os: str) -> tuple[str, ...]:
+    """The options a plan shows: each only when a runnable row triggers it (UI-SPEC O2)."""
+    shown: set[str] = set()
+    for row in rows:
+        if row.disposition not in RUNNABLE:
+            continue
+        if row.tool_id in AGENT_OPTION_IDS:
+            shown.add("auto-approve")
+        if row.tool_id in ATTRIBUTION_IDS:
+            shown.add("no-attribution")
+        if row.tool_id == "vscode":
+            shown.update(("vscode-lean", "vscode-ai-off", "vscode-ext-updates-off"))
+        if platform_os != "macos" and row.tool_id in _DESKTOP_SHELL_IDS:
+            shown.add("desktop-shell")
+    return tuple(option for option in RUN_OPTIONS if option in shown)
+
+
+def review_problems(
+    rows: Sequence[PlanRow], *, home: Path, platform_os: str
+) -> dict[str, tuple[str, str]]:
+    """O7: each runnable agent whose settings file does not parse, as (file name, format name)."""
+    runnable = {row.tool_id for row in rows if row.disposition in RUNNABLE}
+    problems: dict[str, tuple[str, str]] = {}
+    for agent in CONFIG_AGENTS:
+        if agent not in runnable:
+            continue
+        problem = file_problem(agent, home=home, platform_os=platform_os)
+        if problem is not None and problem.startswith("not valid "):
+            path = settings_file(agent, home=home, platform_os=platform_os)
+            problems[agent] = (path.name, FORMAT_NAMES[AGENT_FORMATS[agent]])
+    return problems
 
 
 def _apply_option(agent: str, setting: str, home: Path, platform_os: str) -> FileResult:
@@ -617,9 +656,9 @@ def _apply_run_options(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowO
     """
     home = Path.home()
     for option in RUN_OPTIONS:
-        if option not in ctx.options or option not in _OPTION_COVERS:
+        if option not in ctx.options or option not in OPTION_COVERS:
             continue
-        setting, covered = _OPTION_COVERS[option]
+        setting, covered = OPTION_COVERS[option]
         for index, outcome in enumerate(outcomes):
             if outcome.row.disposition not in RUNNABLE or outcome.row.tool_id not in covered:
                 continue

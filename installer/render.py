@@ -29,7 +29,10 @@ from installer.pnpm_globals import NodeGlobalsReport
 from installer.postinstall import host_labels
 from installer.sanitize import sanitize_log_line
 from installer.session import (
+    NO_ATTRIBUTION_KEY_IDS,
+    OPTION_COVERS,
     RESULT_WORDS,
+    RUNNABLE,
     WORDS,
     Disposition,
     PlanRow,
@@ -349,6 +352,52 @@ def _settings_lines(outcomes: Sequence[RowOutcome]) -> list[str]:
 
 def _file_lines(written: FileResult) -> list[str]:
     return [f"  wrote {key.key}" for key in written.keys if key.kind == "wrote"]
+
+
+def run_option_lines(
+    option: str,
+    rows: Sequence[PlanRow],
+    *,
+    platform_os: str,
+    problems: Mapping[str, tuple[str, str]] | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """One run option's review text: its first line (no `[ ] ` cell) and its dim notes.
+
+    The strings are UI-SPEC section 1's, read by the TUI review and the headless prompts alike.
+    """
+    ran = {row.tool_id for row in rows if row.disposition in RUNNABLE}
+    _, covered = OPTION_COVERS.get(option, ("", ()))
+    listed = [agent for agent in covered if agent in ran]
+    notes: list[str] = []
+    if option == "auto-approve":
+        first = f"auto-approve agents — {', '.join(listed)}: no permission prompts"
+        if "pi" in ran:
+            notes.append("pi: nothing written; its approvals come only from extensions")
+    elif option == "no-attribution":
+        first = f"attribution off — {', '.join(listed)}: no agent credit in commits/PRs"
+        keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in ran]
+        if keyless:
+            notes.append(f"no documented key: {', '.join(keyless)} (nothing written for them)")
+        if "cursor-agent" in ran:
+            notes.append("cursor-agent: its CLI ignores the commit opt-out (as of 2026-10-04)")
+    elif option == "vscode-lean":
+        first = "VS Code lean mode — telemetry, experiments, minimap, auto-detect off"
+        notes.append(
+            "zsh terminal; update.mode set to none"
+            if platform_os == "macos"
+            else "zsh terminal; update.mode not written on Linux (this installer updates it)"
+        )
+    elif option == "vscode-ai-off":
+        first = "VS Code built-in AI off — chat.disableAIFeatures"
+    elif option == "vscode-ext-updates-off":
+        first = "VS Code extension auto-update off — security fixes only on demand"
+    else:
+        first = "SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)"
+    for agent in listed:
+        if problems and agent in problems:
+            file, fmt = problems[agent]
+            notes.append(f"{agent}: {file} is not valid {fmt}; nothing will be written")
+    return first, tuple(notes)
 
 
 def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:

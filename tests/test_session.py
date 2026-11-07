@@ -46,6 +46,8 @@ from installer.session import (
     ran_anything,
     retained,
     review_counts,
+    review_problems,
+    run_options,
     summary_counts,
 )
 from installer.skill_lifecycle import LifecycleOutcome, LifecycleStatus
@@ -1807,3 +1809,44 @@ def test_a_failed_agent_row_writes_nothing_and_says_so() -> None:
     assert outcomes[0].settings_skipped
     assert not (Path.home() / ".claude" / "settings.json").exists()
     assert "claude: not installed by this run; nothing written" in _report(outcomes)
+
+
+def test_run_options_follow_the_plan() -> None:
+    def row(tool_id: str, disposition: Disposition = Disposition.INSTALL) -> PlanRow:
+        return PlanRow(tool_id, disposition, "")
+
+    assert run_options([row("codex")], "fedora") == ("auto-approve",)
+    assert run_options([row("claude"), row("codex"), row("pi")], "fedora") == (
+        "auto-approve",
+        "no-attribution",
+    )
+    assert run_options([row("codex", Disposition.SKIP)], "fedora") == ()
+    assert run_options([row("vscode", Disposition.UPDATE)], "fedora") == (
+        "vscode-lean",
+        "vscode-ai-off",
+        "vscode-ext-updates-off",
+    )
+    assert run_options([row("zsh")], "fedora") == ("desktop-shell",)
+    assert run_options([row("zsh")], "macos") == ()
+    assert run_options([row("cursor-agent", Disposition.RECONFIGURE)], "fedora") == (
+        "auto-approve",
+        "no-attribution",
+    )
+
+
+def test_review_problems_name_an_unparsable_settings_file() -> None:
+    config = Path.home() / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("not = [valid\n")
+    home = Path.home()
+    install = [PlanRow("codex", Disposition.INSTALL, "")]
+    assert review_problems(install, home=home, platform_os="fedora") == {
+        "codex": ("config.toml", "TOML")
+    }
+    config.write_text('approval_policy = "never"\n')
+    assert review_problems(install, home=home, platform_os="fedora") == {}
+    config.unlink()
+    assert review_problems(install, home=home, platform_os="fedora") == {}
+    config.write_text("not = [valid\n")
+    skipped = [PlanRow("codex", Disposition.SKIP, "")]
+    assert review_problems(skipped, home=home, platform_os="fedora") == {}
