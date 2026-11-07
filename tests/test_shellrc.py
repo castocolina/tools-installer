@@ -29,6 +29,7 @@ from installer.shellrc import (
     remove_source_block,
     sources_file,
     strip_block,
+    write_managed_path,
     write_myshellrc,
 )
 
@@ -3212,3 +3213,56 @@ def test_copy_forward_preserves_bytes_a_shell_does_not_treat_as_newlines(
 
     assert original.rstrip(b"\n") in myshellrc.read_bytes()
     assert _backup_path(shellrc).read_bytes() == original
+
+
+_PATH_MARK = "# >>> tools-installer path >>>"
+_PATH_END_MARK = "# <<< tools-installer path <<<"
+_TWEAK_MARK = "# >>> tools-installer tweak:zoxide >>>"
+_TWEAK_BLOCK = f'{_TWEAK_MARK}\neval "$(zoxide init zsh)"\n# <<< tools-installer tweak:zoxide <<<'
+_SOURCE_MARK = "# >>> tools-installer source >>>"
+_SOURCE_BLOCK = (
+    f'{_SOURCE_MARK}\n[ -f "$HOME/.myshellrc" ] && . "$HOME/.myshellrc"\n'
+    "# <<< tools-installer source <<<"
+)
+
+
+def test_a_new_path_block_lands_above_the_first_tweak_block(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(f"export KEEP=1\n\n{_TWEAK_BLOCK}\n")
+    write_myshellrc([tmp_path / "bin"], rc)
+    lines = rc.read_text().split("\n")
+    assert lines[0] == "export KEEP=1"
+    path_end = lines.index(_PATH_END_MARK)
+    assert lines[path_end + 1] == ""
+    assert lines[path_end + 2] == _TWEAK_MARK
+
+
+def test_a_new_path_block_lands_above_the_source_block(tmp_path: Path) -> None:
+    rc = tmp_path / ".zshrc"
+    rc.write_text(f"alias ll='ls -l'\n\n{_SOURCE_BLOCK}\n")
+    write_managed_path(rc, [tmp_path / "bin"])
+    lines = rc.read_text().split("\n")
+    assert lines[0] == "alias ll='ls -l'"
+    assert lines.index(_PATH_MARK) < lines.index(_SOURCE_MARK)
+
+
+def test_an_existing_path_block_is_replaced_in_place(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    old_path = f'{_PATH_MARK}\nexport PATH="/old/bin${{PATH:+:$PATH}}"\n{_PATH_END_MARK}'
+    rc.write_text(f"{_TWEAK_BLOCK}\n\n{old_path}\n")
+    new_dir = tmp_path / "new"
+    write_myshellrc([new_dir], rc)
+    text = rc.read_text()
+    assert text.index(_TWEAK_MARK) < text.index(_PATH_MARK)
+    assert "/old/bin" not in text
+    assert str(new_dir) in text
+
+
+def test_a_file_without_path_or_tweak_block_appends_the_path_block(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    rc.write_text("export KEEP=1\n")
+    write_myshellrc([tmp_path / "bin"], rc)
+    lines = rc.read_text().split("\n")
+    assert lines[0] == "export KEEP=1"
+    assert lines[1] == ""
+    assert lines[2] == _PATH_MARK

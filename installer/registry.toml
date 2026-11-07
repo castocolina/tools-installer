@@ -600,7 +600,7 @@ audience = "human"
 tier = "system"
 verified = 2026-11-04
 requires = ["zsh", "git"]
-post_install = ["set_login_shell"]
+post_install = ["set_login_shell", "set_omz_theme"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
 [[tool.method]]
 kind = "script"
@@ -2379,6 +2379,7 @@ audience = "human"
 tier = "user"
 verified = 2026-11-03
 desc = "GUI editor with a `code` CLI; on Linux this installs the official tarball to ~/.local/opt (userspace, safe on immutable distros like Bazzite)."
+post_install = ["show_lean_tips"]
 # Arch-split `latest` aliases (each 302s to the current build's CDN zip); the
 # universal zip is ~120 MB larger per download and ~2x on disk -> not used.
 [[tool.method]]

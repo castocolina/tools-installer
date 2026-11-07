@@ -11,6 +11,7 @@ from installer.model import (
     METHOD_PARAMS,
     POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
+    SENSITIVE_POST_INSTALL_ACTIONS,
     SKILL_HARNESSES,
     SMOKE_CHECK_NAMES,
     TOOL_ID_RE,
@@ -1970,8 +1971,17 @@ def test_unknown_script_key_is_still_rejected(tmp_path: Path) -> None:
         load_tools(manifest)
 
 
-def test_post_install_actions_are_the_live_ones() -> None:
-    assert POST_INSTALL_ACTIONS == ("configure_path", "set_login_shell")
+def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> None:
+    assert POST_INSTALL_ACTIONS == (
+        "configure_path",
+        "set_login_shell",
+        "source_shell_init",
+        "set_omz_theme",
+        "show_lean_tips",
+    )
+    assert SENSITIVE_POST_INSTALL_ACTIONS == ("set_login_shell", "source_shell_init")
+    manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["source_shell_init"]'))
+    assert load_tools(manifest)[0].post_install == ("source_shell_init",)
 
 
 @pytest.mark.parametrize("name", ["source", "owner", "uninstall"])
