@@ -1049,6 +1049,35 @@ def test_a_hook_tool_that_recorded_no_host_is_registered_for_the_new_host(
     assert outcomes[0].resynced == (("codegraph", ("codex",)),)
 
 
+@pytest.mark.parametrize("checks", [[True, False], [True, True, False]])
+def test_after_stop_no_hook_sweep_and_no_settings_write_run(
+    monkeypatch: pytest.MonkeyPatch, checks: list[bool]
+):
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+    answers = iter(checks)
+    argvs: list[list[str]] = []
+    rows = [PlanRow("codex", Disposition.INSTALL, "not installed")]
+    if len(checks) == 3:
+        rows.append(PlanRow("rg", Disposition.INSTALL, "not installed"))
+    ctx = replace(
+        _run_context(
+            RunRecorder(),
+            catalog={"codegraph": _codegraph_tool(), "codex": _tool("codex"), "rg": _tool("rg")},
+            runner=lambda command: argvs.append(list(command)),
+            should_continue=lambda: next(answers),
+        ),
+        options=frozenset({"auto-approve"}),
+    )
+
+    outcomes = execute_plan(rows, ctx)
+
+    assert outcomes[0].result == "done"
+    assert outcomes[0].resynced == ()
+    assert argvs == []
+    assert not (Path.home() / ".codex" / "config.toml").exists()
+
+
 def test_a_receipt_without_recorded_hooks_is_not_swept(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
     _codegraph_receipt({})

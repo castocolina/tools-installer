@@ -848,6 +848,9 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
         outcomes.append(outcome)
         if ctx.on_outcome is not None:
             ctx.on_outcome(outcome)
+    if halted or (ctx.should_continue is not None and not ctx.should_continue()):
+        # Stop means nothing further starts: no hook sweep, no settings write (CR-07).
+        return outcomes
     return _apply_run_options(_resync_hooks(outcomes, ctx), ctx)
 
 
