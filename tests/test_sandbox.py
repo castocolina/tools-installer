@@ -542,6 +542,7 @@ def test_shell_scripts_allow_builtins_functions_and_fakes(shells: _Shells) -> No
     shells.run("bash", "echo hi; printf x")
     shells.run("bash", "X=1 echo hi")
     shells.run("bash", "f() { echo hi; }; f")
+    shells.run("bash", "uv() { :; }; uv x")
     shells.run("bash", "command -v uv")
     shells.run("bash", "if true; then echo y; fi")
     shells.run("bash", 'source "{FILE}" && alias x')
@@ -572,6 +573,25 @@ def test_shell_scripts_allow_builtins_functions_and_fakes(shells: _Shells) -> No
     ],
 )
 def test_shell_scripts_refuse_what_the_guard_cannot_parse(shells: _Shells, script: str) -> None:
+    with pytest.raises(AssertionError):
+        shells.run("bash", script)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "uv --version; uv() { :; }",
+        "if false; then uv() { :; }; fi; uv sync",
+        "while false; do uv() { :; }; done; uv",
+        "{ uv() { :; }; }; uv",
+        "(uv() { :; }); uv",
+        "f() { uv() { :; }; }; f; uv",
+    ],
+)
+def test_a_function_counts_only_after_its_top_level_definition(
+    shells: _Shells, script: str
+) -> None:
+    """WR-01: commands are checked in order, and a nested or conditional definition never counts."""
     with pytest.raises(AssertionError):
         shells.run("bash", script)
 

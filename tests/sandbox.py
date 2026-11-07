@@ -234,6 +234,8 @@ _REFUSED_WORDS = frozenset(
 _SKIPPED_KEYWORDS = frozenset(
     {"{", "}", "(", ")", "!", "if", "then", "elif", "else", "fi", "while", "until", "do", "done"}
 )
+_OPENERS = frozenset({"{", "(", "if", "while", "until"})
+_CLOSERS = frozenset({"}", ")", "fi", "done"})
 _PRECOMMAND_WORDS = frozenset({"noglob", "nocorrect"})
 _DECLARERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
 _OPERATOR_CHARS = frozenset(";&|()<>\n")
@@ -301,6 +303,8 @@ class _ScriptChecker:
         self.cwd = cwd
         self.policy = policy
         self.functions: set[str] = set()
+        # How deep the parser is inside `{ }`, `( )`, `if`, `while`, `until` and `for` bodies.
+        self.depth = 0
 
     def refuse(self, reason: str) -> AssertionError:
         return AssertionError(
@@ -320,9 +324,6 @@ class _ScriptChecker:
             tokens = _tokens(self.script)
         except ValueError as error:
             raise self.refuse(f"it does not parse: {error}") from error
-        for index in range(1, len(tokens) - 1):
-            if tokens[index : index + 2] == ["(", ")"] and not _is_operator(tokens[index - 1]):
-                self.functions.add(tokens[index - 1])
         command: list[str] = []
         for token in [*tokens, "\n"]:
             if token not in _SEPARATORS:
@@ -348,8 +349,13 @@ class _ScriptChecker:
             elif _ASSIGNMENT.match(word):
                 index += 1
             elif words[index + 1 : index + 3] == ["(", ")"] and not _is_operator(word):
-                index += 3  # `name ( )`: a function header, recorded up front
+                # `name ( )`: a function counts from here on, and only when defined at the top
+                # level; a nested or conditional one may never run, so its name stays unknown
+                if self.depth == 0:
+                    self.functions.add(word)
+                index += 3
             elif word in _SKIPPED_KEYWORDS:
+                self.depth += (word in _OPENERS) - (word in _CLOSERS)
                 index += 1
             elif word == "time":
                 index += 2 if words[index + 1 : index + 2] == ["-p"] else 1
@@ -364,6 +370,7 @@ class _ScriptChecker:
         if word in _REFUSED_WORDS:
             raise self.refuse(f"{word} can run a command the guard cannot see")
         if word == "for":
+            self.depth += 1  # closed by its `done`
             return
         if _PATH_ASSIGNMENT.match(word):
             raise self.refuse(_PATH_REASON)
