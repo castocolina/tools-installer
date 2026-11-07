@@ -140,7 +140,7 @@
 
 - [ ] **AUDIT-01**: A catalog-audit skill loops over every registry entry and compares the pinned/verified version, the installed version and the latest online release, reads the changelog between them, and checks that install, update, removal and tuning steps still match upstream docs [user request 2026-11-07]
 - [ ] **AUDIT-02**: The skill audits the install and customization scripts (postinstall, shims, tweaks) for drift and unsafe patterns, writes one report per entry plus a summary of proposed registry and script changes, keeps per-entry state so the loop can resume, and changes nothing without approval [user request 2026-11-07]
-- [ ] **AUDIT-03**: Its first run covers opencode v2 and Pi coding agent's MCP support, and the resulting registry and postinstall updates land (e.g. Pi joins the agent-host list for MCP-registering hooks) [user report 2026-11-07]
+- [ ] **AUDIT-03**: Its first run covers opencode v2 and Pi coding agent's MCP support, and the resulting registry and postinstall updates land (e.g. Pi joins the agent-host list for MCP-registering hooks) [user report 2026-11-07] *(amended 2026-11-07, 24.3 SPEC R6-R9: the registry still installs OpenCode 1 through the v1-only installer, so R6 moves it to `opencode.ai/v2/install` and R7 writes v2's `permissions` rule; codegraph 1.6.2 has no `pi` target, so R8 registers Pi only through a supported path and never leaves a dangling `≈`; copilot joins the codegraph hook, absorbing Backlog 999.12)*
 - [ ] **AUDIT-04**: The skill is scored with skill-judge [user request 2026-11-07]
 
 ### Lean

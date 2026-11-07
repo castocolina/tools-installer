@@ -491,7 +491,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. Running the skill produces one report per registry entry (pinned, installed and latest versions, changelog notes, install/update/removal/tuning checks, script findings) and a summary of proposed changes, and it can resume mid-loop.
-  2. The opencode v2 and Pi MCP findings are applied to the registry and postinstall steps, with `make verify-registry` green.
+  2. The opencode v2 and Pi MCP findings are applied to the registry and postinstall steps, with `make verify-registry` green. *(amended 2026-11-07, 24.3 SPEC R9: copilot also joins the codegraph hook, absorbing Backlog 999.12)*
   3. The skill's skill-judge score is recorded.
 
 **Plans**: TBD (run /gsd-plan-phase 24.3)
@@ -763,7 +763,17 @@ Plans:
 **Goal:** When copilot (added in 23.2) is present, the codegraph and graphify postinstall hooks register for it like the other agent hosts, are recorded in `receipt.hooks`, and unregister on removal.
 **Requirements:** TBD
 **Evidence (live, 2026-11-07, 23.2 analyzer):** codegraph 1.6.2's target id is `copilot-cli` (writes `~/.copilot/mcp-config.json`; `copilot` is rejected); graphify accepts `install --platform copilot`.
-**Why deferred (23.2 D-22):** 23.2 TUNE-06 asks only for `recommends`; adding the host to `_CODEGRAPH_TARGETS` makes codegraph read `≈` on every machine with `~/.copilot`, a behaviour change for existing installs that needs its own spec. Phase 24.3's catalog audit may pick it up.
+**Why deferred (23.2 D-22):** 23.2 TUNE-06 asks only for `recommends`; adding the host to `_CODEGRAPH_TARGETS` makes codegraph read `≈` on every machine with `~/.copilot`, a behaviour change for existing installs that needs its own spec. Phase 24.3's catalog audit may pick it up. *(amended 2026-11-07, 24.3 SPEC R9: the codegraph half is absorbed by Phase 24.3 — copilot joins `_CODEGRAPH_TARGETS` as `copilot-cli`; graphify stays unregistered because its installs are project-scoped)*
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.13: Move Pi off the host-setup handoff to a directly installed, updatable method (BACKLOG)
+
+**Goal:** The catalog installs, updates and removes Pi itself instead of printing a pnpm handoff: a method the installer runs with no privilege escalation (the `node` kind through pnpm with Pi's Node floor, or Pi's own installer only if it can run without `sudo`), with `pi update` or the manager's update as the update route, a receipt, and the scheduled update from Phase 24.2 following it.
+**Requirements:** TBD
+**Evidence (live, 2026-11-07, 24.3 analyzer):** Pi's README now leads with `curl -fsSL https://pi.dev/install.sh | sh` ("pins all dependencies and updates Pi with `pi update`"), with `npm install -g --ignore-scripts` as the alternative; that installer mentions `sudo` six times (Node install) and writes PATH profile lines. npm `@earendil-works/pi-coding-agent` latest 1.5.0, `engines.node >=22.19.0`. The registry entry is a `host_setup` handoff (`installer/host_setup.py:28-41`) whose desc "setup remains interactive" is stale. The host's Pi 1.3.0 is a bun global install.
+**Why deferred (24.3 D-14):** Phase 24.2 D-16 builds Pi's scheduled update around the reviewed host-setup command, and 24.3's scope applies only Pi's MCP finding; changing the method there would make 24.2's path dead code. If this is promoted before 24.2 executes, amend 24.2 D-16 first.
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
