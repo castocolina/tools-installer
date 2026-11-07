@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 23
-current_phase_name: Configuration as a lifecycle step
+current_phase: "23.1"
+current_phase_name: "Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e"
 status: Verifying — human_needed (UAT fixes in progress)
-stopped_at: "Spec+discuss done for 23.1, 23.2, 24, 24.1, 24.2, 24.3 (auto path); next: gsd-autonomous --convergence 23.1..24.3"
-last_updated: "2026-11-07T13:25:55.393Z"
+stopped_at: Phase 23.1 UI-SPEC approved
+last_updated: "2026-11-07T14:49:45.789Z"
 last_activity: 2026-11-07
 last_activity_desc: Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
-state_head: c489875a2d04aa66fcb8f74b560767f11f63e116
+state_head: fd28c81cab199d0df1048e5acc578cafc34c687b
 progress:
   total_phases: 15
   completed_phases: 1
-  total_plans: 176
+  total_plans: 194
   completed_plans: 176
   percent: 7
 ---
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 23 (Configuration as a lifecycle step) — EXECUTING
+Phase: 23.1 (Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e) — READY TO EXECUTE
 Plan: 16 of 16
 Status: Verifying — human_needed (UAT fixes in progress)
 Last activity: 2026-11-07 — Phase 20 re-verified at HEAD and marked complete; Phase 23 close-out in progress
@@ -106,9 +106,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-07T13:25:54.433Z
-Stopped at: Spec+discuss done for 23.1, 23.2, 24, 24.1, 24.2, 24.3 (auto path); next: gsd-autonomous --convergence 23.1..24.3
-Resume file: .planning/phases/24.3-catalog-audit-skill/24.3-CONTEXT.md
+Last session: 2026-11-07T13:32:07.078Z
+Stopped at: Phase 23.1 UI-SPEC approved
+Resume file: .planning/phases/23.1-host-safety-drop-the-skill-pack-catalog-entries-sandboxed-te/23.1-UI-SPEC.md
 
 ## Deferred Verification
 

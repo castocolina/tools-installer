@@ -39,6 +39,16 @@
       "status": "in_progress"
     },
     {
+      "number": "23.1",
+      "name": "Host safety",
+      "status": "pending"
+    },
+    {
+      "number": "23.2",
+      "name": "Install-time tuning",
+      "status": "pending"
+    },
+    {
       "number": "24",
       "name": "Onboarding through the skill and e2e",
       "status": "pending"
@@ -46,6 +56,16 @@
     {
       "number": "24.1",
       "name": "Onboard Neovim through the tool-onboarding skill",
+      "status": "pending"
+    },
+    {
+      "number": "24.2",
+      "name": "Schedules view",
+      "status": "pending"
+    },
+    {
+      "number": "24.3",
+      "name": "Catalog audit skill",
       "status": "pending"
     },
     {
@@ -62,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 7 of 15 · 9% · executing"
+    "reason": "Phase 8 of 15 · 7% · executing"
   },
-  "updated_at": "2026-11-07T10:54:52.072Z"
+  "updated_at": "2026-11-07T14:49:45.797Z"
 }
