@@ -421,7 +421,7 @@ Plans:
   3. A test that tries to run a real toolchain (directly, via `sh -c`, or via a linuxbrew binary) or open a network socket fails, and the widened real-HOME fingerprint fails the run when any watched path changes.
   4. The container e2e is the only place real packages are installed or removed, and it asserts that `~/.claude/gsd-core` and `~/.claude/.gsd-source` stay absent.
 
-**Plans**: 14/18 plans executed
+**Plans**: 16/18 plans executed
 
 Plans:
 **Wave 1**
@@ -447,8 +447,8 @@ Plans:
 - [x] 23.1-14-PLAN.md — Switch the suite's Popen guard to the allowlist, fail swallowed refusals, fix the fallout (alone in its wave)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 23.1-15-PLAN.md — Delete the skill-pack module and kind; targeted `[tool.skill_lifecycle]` refusal; no GSD package in code
-- [ ] 23.1-16-PLAN.md — Headless `--uninstall` removes retired receipts; launch warnings; Uninstall view predicate
+- [x] 23.1-15-PLAN.md — Delete the skill-pack module and kind; targeted `[tool.skill_lifecycle]` refusal; no GSD package in code
+- [x] 23.1-16-PLAN.md — Headless `--uninstall` removes retired receipts; launch warnings; Uninstall view predicate
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 23.1-17-PLAN.md — Uninstall view retired section, detail clauses and result sentences
@@ -569,7 +569,7 @@ Plans:
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
-| 23.1 Host safety | 14/18 | In Progress | - |
+| 23.1 Host safety | 16/18 | In Progress | - |
 | 23.2 Install-time tuning | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
