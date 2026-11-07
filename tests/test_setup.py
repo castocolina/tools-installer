@@ -23,7 +23,7 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
-from installer.guards import install_shims
+from installer.guards import REDIRECT_SENTINEL, install_shims, redirect_shim_script
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
@@ -4335,6 +4335,44 @@ def test_headless_main_strips_only_the_scratch_rc(monkeypatch: pytest.MonkeyPatc
 
     assert setup.main(["--all", "--yes"]) == 0
     assert "tools-installer tweak:claude-skip" not in scratch_rc.read_text()
+
+
+_OLD_NPX = f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec /x/pnpm dlx "$@"\n'
+_NPX_NOTICE = "Rewrote the npx redirect at"
+
+
+def _scratch_npx(body: str) -> Path:
+    npx = vars(setup)["_DEFAULT_BIN_DIR"] / "npx"
+    npx.parent.mkdir(parents=True, exist_ok=True)
+    npx.write_text(body)
+    return npx
+
+
+def test_headless_launch_rewrites_an_outdated_npx_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done, done])
+    npx = _scratch_npx(_OLD_NPX)
+    printed_before_plan: list[str] = []
+    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
+
+    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
+        printed_before_plan.append(buffer.getvalue())
+        return fake_run_wizard(*args, **kwargs)
+
+    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert _NPX_NOTICE in printed_before_plan[0]
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+
+    buffer.truncate(0)
+    buffer.seek(0)
+    assert setup.main(["--all", "--yes"]) == 0
+    assert _NPX_NOTICE not in buffer.getvalue()
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
 
 
 def _linux() -> Platform:

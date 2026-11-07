@@ -38,6 +38,7 @@ from installer.guards import (
     remove_ban_aliases,
     remove_shims,
     rewrite_outdated_ban_aliases,
+    rewrite_outdated_npx,
     shell_path,
     shim_script,
     write_ban_aliases,
@@ -291,6 +292,37 @@ def test_rewrite_outdated_ban_aliases_sanitizes_the_path(tmp_path: Path):
     ((message, level),) = rewrite_outdated_ban_aliases([rc])
     assert level == "ok"
     assert not any(ord(ch) < 32 or ord(ch) == 127 for ch in message)
+
+
+def _old_npx_body(target: str = "/x/pnpm") -> str:
+    """The pre-phase redirect: the sentinel, then one exec into pnpm dlx."""
+    return f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec {target} dlx "$@"\n'
+
+
+def test_rewrite_outdated_npx_rewrites_an_old_body(tmp_path: Path):
+    npx = tmp_path / "npx"
+    npx.write_text(_old_npx_body())
+    message = (
+        f"Rewrote the npx redirect at {display_path(npx)}: "
+        "the old one could run a package's default bin."
+    )
+    assert rewrite_outdated_npx(tmp_path) == ((message, "ok"),)
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+    assert npx.stat().st_mode & 0o777 == 0o755
+    assert rewrite_outdated_npx(tmp_path) == ()
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+
+
+def test_rewrite_outdated_npx_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    (tmp_path / "npx").write_text(_old_npx_body())
+    calls: list[tuple[Path, str, int | None]] = []
+
+    def spy(path: Path, text: str, *, mode: int | None = None) -> None:
+        calls.append((path, text, mode))
+
+    monkeypatch.setattr("installer.guards.atomic_write_text", spy)
+    rewrite_outdated_npx(tmp_path)
+    assert calls == [(tmp_path / "npx", redirect_shim_script("npx", "/x/pnpm"), 0o755)]
 
 
 def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):

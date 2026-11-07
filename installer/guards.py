@@ -29,6 +29,7 @@ https://docs.astral.sh/uv/pip/compatibility/ and
 import os
 import shlex
 import shutil
+import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -710,6 +711,45 @@ def rewrite_outdated_ban_aliases(rc_paths: Sequence[Path]) -> tuple[tuple[str, s
             (f"Rewrote the guard aliases in {shown}: npx now runs through its redirect.", "ok")
         )
     return tuple(results)
+
+
+def rewrite_outdated_npx(shim_dir: Path) -> tuple[tuple[str, str], ...]:
+    """Rewrite an installer-written `npx` redirect whose body is not the current one.
+
+    Only `shim_dir / "npx"` is touched, and only a regular file (its own lstat, never a
+    symlink) of at most `_SHIM_MAX_BYTES` that carries REDIRECT_SENTINEL and an `exec` target.
+    It deliberately avoids is_our_shim, which follows symlinks. The new body bakes the target
+    the old body names: pnpm is never re-resolved at launch, so a hand-edited target survives
+    and a launch with pnpm off PATH cannot turn a live redirect into a hard block. Whole-file
+    bytes decide "outdated". It never raises, so a launch cannot fail on it.
+    """
+    path = shim_dir / "npx"
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return ()
+        data = read_capped(path, _SHIM_MAX_BYTES, follow_symlinks=False)
+        old = None if data is None else data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ()
+    if old is None or REDIRECT_SENTINEL not in old or not exec_targets(old):
+        return ()
+    new = redirect_shim_script("npx", exec_targets(old)[0])
+    if new.encode("utf-8") == data:
+        return ()
+    shown = sanitize_log_line(installer.locations.display_path(path))
+    try:
+        atomic_write_text(path, new, mode=0o755)
+    except OSError as exc:
+        first = sanitize_log_line(((exc.strerror or str(exc)).splitlines() or [""])[0])
+        return (
+            (
+                f"Could not rewrite the npx redirect at {shown}: {first}; "
+                "fix the bin dir permissions, then relaunch.",
+                "warn",
+            ),
+        )
+    message = f"Rewrote the npx redirect at {shown}: the old one could run a package's default bin."
+    return ((message, "ok"),)
 
 
 def guard_path_warning(

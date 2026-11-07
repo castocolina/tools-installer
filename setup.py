@@ -43,6 +43,7 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs
+from installer.guards import rewrite_outdated_ban_aliases, rewrite_outdated_npx
 from installer.install_ownership import run_probe
 from installer.locations import (
     all_ban_rc_paths,
@@ -85,7 +86,7 @@ from installer.settings import (
 from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_message, sync_terminal_shells, terminal_sync_warning
-from installer.tweaks import BUNDLES, applicable_bundles, strip_legacy_aliases
+from installer.tweaks import BUNDLES, LegacyStrip, applicable_bundles, strip_legacy_aliases
 from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
@@ -782,6 +783,26 @@ def _desktop_shell_policies(platform: Platform) -> tuple[Policy, ...]:
     )
 
 
+def _launch_repairs() -> tuple[LegacyStrip, tuple[tuple[str, str], ...]]:
+    """The one repair step every route runs before anything else (D-15).
+
+    Strips legacy alias blocks, rewrites an outdated guard alias block (every rc file a guard
+    could have written to, marker-owned block only) and an outdated npx redirect. Each part
+    never raises and never adds a file or a block.
+    """
+    return strip_legacy_aliases(_MYSHELLRC), (
+        *rewrite_outdated_ban_aliases(all_ban_rc_paths()),
+        *rewrite_outdated_npx(_DEFAULT_BIN_DIR),
+    )
+
+
+def _print_repairs(
+    console: Console, legacy: LegacyStrip, repairs: tuple[tuple[str, str], ...]
+) -> None:
+    for text, _severity in (*legacy.launch_lines(), *repairs):
+        console.print(text, markup=False, soft_wrap=True)
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -1461,8 +1482,7 @@ def main(argv: list[str]) -> int:
             settings=store,
             prompt_link_mode=needs_choice,
         )
-    for text, _severity in strip_legacy_aliases(_MYSHELLRC).launch_lines():
-        console.print(text, markup=False, soft_wrap=True)
+    _print_repairs(console, *_launch_repairs())
     post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
     refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(
