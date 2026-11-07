@@ -1321,6 +1321,49 @@ setup_id = "pi"
     assert tool.methods[0].kind == "host_setup"
 
 
+def test_a_skill_lifecycle_table_is_refused_by_name(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "ai"
+tier = "user"
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+
+[tool.skill_lifecycle]
+source = "https://github.com/example/skills"
+""",
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"tool 'demo': skill_lifecycle was retired in 23\.1; "
+        r"remove the \[tool\.skill_lifecycle\] table",
+    ):
+        load_tools(manifest)
+
+
+def test_other_unknown_tool_keys_stay_lenient(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "ai"
+tier = "user"
+frobnicate = 1
+[[tool.method]]
+kind = "host_setup"
+setup_id = "pi"
+""",
+    )
+    (tool,) = load_tools(manifest)
+    assert tool.id == "demo"
+
+
 def test_method_params_covers_every_kind() -> None:
     assert set(METHOD_PARAMS) == set(METHOD_KINDS)
     for allowed in METHOD_PARAMS.values():

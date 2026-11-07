@@ -281,9 +281,8 @@ make something `ai`-tier, what matters is whether the human is the one
 typing into it; `ai` = tooling that operates underneath or is consumed BY an
 agent session, never launched directly by the human as their own interface —
 MCP servers, token-reduction proxies, knowledge-graph builders (codegraph,
-graphify, rtk), agent-oriented CLI utilities (rg, fd, sd, bat, eza), or an
-agent-ecosystem skill pack (ponytail, superpowers, opengsd, openspec,
-spec-kit, softaworks-agent-toolkit, matt-pocock-skills). `Tool.audience`
+graphify, rtk), or agent-oriented CLI utilities (rg, fd, sd, bat, eza).
+Skill packs are not catalog entries since 23.1. `Tool.audience`
 (`human`/`ai`/`both`) is a separate, independent field recording who
 *benefits* from a tool regardless of tier — it is not derived from tier and
 tier is not derived from it. Like the brew preference below, tier
@@ -310,15 +309,6 @@ New registry tool needs post-install setup?
 │     installer/postinstall.py's closed POSTINSTALL_HOOKS table.
 │     Worked examples: codegraph (Phase 9), rtk/graphify (Phase 12.4).
 │
-├─ Delivered AS a skill into one or more AI-assistant hosts, where
-│  install/status/update/removal are each either fundamentally
-│  interactive or need a human trust-review step?
-│  -> [[tool.method]] kind = "skill_pack" with [tool.skill_lifecycle]
-│     (mode = "manual-required", or mode = "command" for a closed,
-│     read-only operation_id status probe).
-│     Worked examples: ponytail, openspec, opengsd, and the other
-│     skill_pack entries already in installer/registry.toml.
-│
 ├─ Setup requires a live terminal or user-selected project target that
 │  cannot be safely scripted from a Textual worker thread?
 │  -> [[tool.method]] kind = "host_setup", setup_id = "<id>" resolved
@@ -330,8 +320,11 @@ New registry tool needs post-install setup?
    binary with nothing further to do.
 ```
 
+Skill packs are not catalog entries since 23.1: that method kind was
+retired, so this tree has no skill-pack branch.
+
 Restate explicitly: **the registry can only select a hook NAME from a
-closed, code-owned set in every one of these three mechanisms — never a
+closed, code-owned set in every one of these mechanisms — never a
 literal command string.** A registry edit alone can never introduce
 arbitrary post-install execution (see "Phase 9: postinstall hooks" above);
 this invariant must never be relaxed to give a future entry an

@@ -532,6 +532,11 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             raise ValueError(
                 f"tool '{tool_id}': id must match [a-z0-9][a-z0-9._-]* (it names the receipt file)"
             )
+        if "skill_lifecycle" in row:
+            raise ValueError(
+                f"tool '{tool_id}': skill_lifecycle was retired in 23.1; "
+                "remove the [tool.skill_lifecycle] table"
+            )
         raw_methods = row.get("method", [])
         if not raw_methods:
             raise ValueError(f"tool '{row['id']}' declares no install methods")

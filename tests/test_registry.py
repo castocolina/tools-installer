@@ -1,3 +1,4 @@
+import ast
 import os
 import re
 import tomllib
@@ -2439,6 +2440,42 @@ def test_audit_fix_f8_puppeteer_records_cft_linux_arm64() -> None:
     assert "linux-arm64" in block
     assert "@puppeteer/browsers" in block
     assert "linux64" in block
+
+
+def test_no_code_names_the_gsd_package() -> None:
+    """SPEC R1: no installer code or setup.py can run or offer the GSD package."""
+    root = Path(__file__).resolve().parent.parent
+    sources = [*sorted((root / "installer").rglob("*.py")), root / "setup.py"]
+    sources.append(root / "installer" / "registry.toml")
+    pattern = re.compile(r"pnpm\s+dlx\s+\S*gsd")
+    offenders = [
+        str(path.relative_to(root))
+        for path in sources
+        if "@opengsd/gsd-core" in path.read_text() or pattern.search(path.read_text())
+    ]
+    assert offenders == []
+
+
+def test_nothing_imports_the_skill_pack_module() -> None:
+    """The retired pack module is gone and no installer, test or setup.py module imports it."""
+    root = Path(__file__).resolve().parent.parent
+    assert not (root / "installer" / "skill_lifecycle.py").exists()
+    modules = [*(root / "installer").rglob("*.py"), *(root / "tests").rglob("*.py")]
+    modules.append(root / "setup.py")
+    offenders: list[str] = []
+    for path in modules:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                names = {alias.name for alias in node.names}
+                if node.module == "installer.skill_lifecycle" or (
+                    node.module == "installer" and "skill_lifecycle" in names
+                ):
+                    offenders.append(str(path.relative_to(root)))
+            elif isinstance(node, ast.Import) and any(
+                alias.name == "installer.skill_lifecycle" for alias in node.names
+            ):
+                offenders.append(str(path.relative_to(root)))
+    assert offenders == []
 
 
 def test_registry_rows_carry_no_dead_attribution_keys() -> None:
