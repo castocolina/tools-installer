@@ -25,6 +25,7 @@ from installer.run import (
     run_query,
     unbuffered_argv,
 )
+from tests.sandbox import refused
 
 
 class _PopenKwargs(TypedDict):
@@ -775,7 +776,7 @@ def test_the_wired_guard_checks_what_stdbuf_wraps(monkeypatch: pytest.MonkeyPatc
         fake.write_text(f'#!/bin/sh\necho ran > "{outside}/uv.ran"\n')
         fake.chmod(0o755)
         monkeypatch.setenv("PATH", f"{outside}{os.pathsep}{os.environ['PATH']}")
-        with pytest.raises(AssertionError, match="host's uv"):
+        with refused("host's uv"):
             subprocess.run([stdbuf, "-oL", "uv", "--version"], check=False)
         assert not (outside / "uv.ran").exists()
     finally:

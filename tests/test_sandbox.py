@@ -28,10 +28,14 @@ from tests.sandbox import (
     capture_home_overrides,
     check_launch,
     env_names_to_clear,
+    fail_on_refusals,
     host_free_path,
     host_zsh,
     link_interpreters,
     prepare_interpreter_dir,
+    record_refusal,
+    refused,
+    take_refusals,
 )
 
 
@@ -228,13 +232,13 @@ def test_a_node_family_binary_outside_tmp_is_never_run(
         fake.write_text("#!/bin/sh\necho forked\n")
         fake.chmod(0o755)
 
-        with pytest.raises(AssertionError, match="host's node"):
+        with refused("host's node"):
             subprocess.run([str(fake), "--version"], check=False)
 
         monkeypatch.setenv("PATH", str(outside))
-        with pytest.raises(AssertionError, match="host's node"):
+        with refused("host's node"):
             subprocess.run(["node", "--version"], check=False)
-        with pytest.raises(AssertionError, match="host's node"):
+        with refused("host's node"):
             subprocess.run(["node"], env={"PATH": str(outside)}, check=False)
 
         inside = tmp_path / "node"
@@ -745,7 +749,7 @@ def host_fakes(outside: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ids=["uv", "curl", "sh-c", "bash-c-chain", "linuxbrew-binary"],
 )
 def test_the_guard_refuses_host_programs_before_launch(argv: list[str], host_fakes: Path) -> None:
-    with pytest.raises(AssertionError):
+    with refused("host's"):
         subprocess.run(argv, check=False)
     assert list(host_fakes.glob("*.ran")) == []
 
@@ -767,7 +771,7 @@ def test_the_guard_runs_allowed_programs(tmp_path: Path) -> None:
 def test_the_guard_judges_symlinks_by_target(tmp_path: Path, host_fakes: Path) -> None:
     link = tmp_path / "friendly-name"
     link.symlink_to(host_fakes / "uv")
-    with pytest.raises(AssertionError, match=re.escape(str(host_fakes / "uv"))):
+    with refused(re.escape(str(host_fakes / "uv"))):
         subprocess.run([str(link)], check=False)
     assert list(host_fakes.glob("*.ran")) == []
 
@@ -779,7 +783,7 @@ def test_the_guard_rejects_malformed_argv(host_fakes: Path) -> None:
         lambda: subprocess.run("uv --version", check=False),
         lambda: subprocess.run("uv x", shell=True, check=False),
     ):
-        with pytest.raises(AssertionError):
+        with refused("the guard|host's uv"):
             refused_call()
     assert list(host_fakes.glob("*.ran")) == []
     done = subprocess.run("echo hi", shell=True, capture_output=True, text=True, check=False)
@@ -788,7 +792,7 @@ def test_the_guard_rejects_malformed_argv(host_fakes: Path) -> None:
 
 @pytest.mark.parametrize("script", ["echo a; uv x", "echo a | uv x", "echo a && uv x"])
 def test_the_guard_checks_every_command_of_a_script(script: str, host_fakes: Path) -> None:
-    with pytest.raises(AssertionError, match="host's uv"):
+    with refused("host's uv"):
         subprocess.run(["bash", "-c", script], check=False)
     assert list(host_fakes.glob("*.ran")) == []
     done = subprocess.run(
@@ -801,3 +805,40 @@ def test_each_worker_installs_the_guard(tmp_path_factory: pytest.TempPathFactory
     # Each xdist worker runs its own session fixture: the policy lives in the worker's module.
     assert subprocess.Popen is GuardedPopen
     assert launch_policy().allowed_root == tmp_path_factory.getbasetemp().resolve()
+
+
+# --- the refusal registry: a refusal the code under test catches still fails the test ---
+
+
+def _probe_version(argv: list[str]) -> str | None:
+    """Production-shaped: a broad catch around a launch, as installer/version_status.py has."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, check=False).stdout
+    except Exception:
+        return None
+
+
+def test_a_swallowed_refusal_still_fails_the_test(host_fakes: Path) -> None:
+    assert _probe_version(["uv", "--version"]) is None
+    assert list(host_fakes.glob("*.ran")) == []
+    with pytest.raises(pytest.fail.Exception) as failure:
+        fail_on_refusals()
+    message = str(failure.value)
+    assert "host's uv" in message
+    assert "a broad except in the code under test caught a guard refusal" in message
+    assert take_refusals() == ()
+
+
+def test_the_refusal_check_runs_after_every_test(request: pytest.FixtureRequest) -> None:
+    assert "refusals_fail_the_test" in request.fixturenames
+
+
+def test_refused_consumes_only_what_its_block_raised(host_fakes: Path) -> None:
+    record_refusal("an earlier refusal")
+    with refused("host's uv"):
+        subprocess.run(["uv"], check=False)
+    assert take_refusals() == ("an earlier refusal",)
+
+    with pytest.raises(pytest.fail.Exception), refused("host's uv"):
+        pass
+    assert take_refusals() == ()

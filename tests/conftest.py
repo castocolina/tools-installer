@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,9 +34,12 @@ from tests.sandbox import (
     capture_home_overrides,
     check_launch,
     env_names_to_clear,
+    fail_on_refusals,
     host_zsh_stash,
     prepare_interpreter_dir,
+    record_refusal,
     sandboxed_path,
+    take_refusals,
 )
 
 # Captured at conftest IMPORT time, before any test can monkeypatch $HOME, so
@@ -68,14 +71,18 @@ class GuardedPopen(subprocess.Popen[Any]):
     """Subscriptable Popen replacement, as installer/run.py annotates Popen[str]."""
 
     def __init__(self, args: Any, *pargs: Any, **kwargs: Any) -> None:
-        check_launch(
-            args,
-            env=kwargs.get("env"),
-            cwd=kwargs.get("cwd"),
-            policy=launch_policy(),
-            shell=bool(kwargs.get("shell", False)),
-            executable=kwargs.get("executable", pargs[1] if len(pargs) > 1 else None),
-        )
+        try:
+            check_launch(
+                args,
+                env=kwargs.get("env"),
+                cwd=kwargs.get("cwd"),
+                policy=launch_policy(),
+                shell=bool(kwargs.get("shell", False)),
+                executable=kwargs.get("executable", pargs[1] if len(pargs) > 1 else None),
+            )
+        except AssertionError as refusal:
+            record_refusal(str(refusal))  # the test fails at teardown even if this is caught
+            raise
         super().__init__(args, *pargs, **kwargs)
 
 
@@ -93,6 +100,19 @@ def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
 def no_host_toolchain_exec(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every subprocess.run resolves Popen here; the allowlist refuses before launch."""
     monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def refusals_fail_the_test() -> Iterator[None]:
+    """A refused launch fails its test even when the code under test catches the exception.
+
+    Every refusal is recorded before it is raised; leftovers from before the test are dropped
+    here and anything recorded during it fails the test at teardown. A test that expects a
+    refusal consumes it through `tests.sandbox.refused`.
+    """
+    take_refusals()
+    yield
+    fail_on_refusals()
 
 
 def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:

@@ -8,16 +8,19 @@ beyond `os.path.realpath`, `shutil.which` and `Path.exists`.
 Messages carry program names, paths and script text only, never environment values.
 """
 
+import contextlib
 import json
 import os
 import re
 import shlex
 import shutil
 import sys
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Generator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+
+import pytest
 
 CHECKOUT = Path(os.path.realpath(__file__)).parent.parent
 LINUXBREW_PREFIX = Path("/home/linuxbrew/.linuxbrew")
@@ -497,6 +500,53 @@ def check_launch(
         return
     # 5. anything else is a host program
     raise _host_refusal(name, resolved)
+
+
+# --- the refusal registry: a refusal that production code catches must still fail the test ---
+
+# Process-wide, so a refusal raised in a Textual worker thread is recorded too; appends are
+# atomic under the GIL. The wired guards record, then raise; the pure checks above do not.
+_REFUSALS: list[str] = []
+
+
+def record_refusal(message: str) -> None:
+    _REFUSALS.append(message)
+
+
+def take_refusals() -> tuple[str, ...]:
+    """Return the recorded refusals and forget exactly those."""
+    taken = tuple(_REFUSALS)
+    del _REFUSALS[: len(taken)]
+    return taken
+
+
+def fail_on_refusals() -> None:
+    """Fail the running test when any refusal was recorded, even one the code under test caught."""
+    taken = take_refusals()
+    if taken:
+        pytest.fail(
+            f"{len(taken)} launch refusal(s) in this test; the first: {taken[0]}\n"
+            "a broad except in the code under test caught a guard refusal; "
+            "plant a fake under tmp_path instead",
+            pytrace=False,
+        )
+
+
+@contextlib.contextmanager
+def refused(match: str) -> Generator[None]:
+    """Expect a wired refusal matching `match` in the block and consume exactly those entries."""
+    start = len(_REFUSALS)
+    try:
+        yield
+    except AssertionError as error:
+        if re.search(match, str(error)) is None:
+            raise
+    else:
+        pytest.fail(f"expected a launch refusal matching {match!r}; none was raised", pytrace=False)
+    block = _REFUSALS[start:]
+    if not any(re.search(match, message) for message in block):
+        pytest.fail(f"no launch refusal matching {match!r} was recorded", pytrace=False)
+    _REFUSALS[start:] = [message for message in block if re.search(match, message) is None]
 
 
 # --- the test PATH and environment (23.1 D-16, D-17): applied before collection ---
