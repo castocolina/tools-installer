@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from installer import guards
 from installer.guards import (
     BAN_BEGIN,
     BAN_END,
@@ -333,6 +334,26 @@ def test_rewrite_outdated_npx_is_atomic(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("installer.guards.atomic_write_text", spy)
     rewrite_outdated_npx(tmp_path)
     assert calls == [(tmp_path / "npx", redirect_shim_script("npx", "/x/pnpm"), 0o755)]
+
+
+def test_rewrite_outdated_npx_never_replaces_an_npx_swapped_in_after_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """C-15 (IN-02): a real npx installed between the read and the replace is kept."""
+    npx = tmp_path / "npx"
+    npx.write_text(_old_npx_body())
+    foreign = "#!/bin/sh\necho a real npx\n"
+    original = guards.redirect_shim_script
+
+    def swap_then_render(name: str, target: str) -> str:
+        tmp = tmp_path / "npx.new"
+        tmp.write_text(foreign)
+        os.replace(tmp, npx)  # what an npm or Volta install does at the same moment
+        return original(name, target)
+
+    monkeypatch.setattr(guards, "redirect_shim_script", swap_then_render)
+    assert rewrite_outdated_npx(tmp_path) == ()
+    assert npx.read_text() == foreign
 
 
 def _npx_snapshot(*paths: Path) -> list[tuple[Path, bytes]]:

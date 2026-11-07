@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import installer.locations
-from installer.atomic import atomic_write_text, read_capped
+from installer.atomic import atomic_write_text, read_capped, read_snapshot, snapshot_matches
 from installer.sanitize import sanitize_log_line
 from installer.shellrc import apply_block, strip_block
 
@@ -733,14 +733,19 @@ def rewrite_outdated_npx(shim_dir: Path) -> tuple[tuple[str, str], ...]:
     try:
         if not stat.S_ISREG(os.lstat(path).st_mode):
             return ()
-        data = read_capped(path, _SHIM_MAX_BYTES, follow_symlinks=False)
-        old = None if data is None else data.decode("utf-8")
+        # One O_NOFOLLOW read bound to the file's identity, re-checked right before the replace.
+        snapshot = read_snapshot(path)
+        data = snapshot.data
+        old = None if len(data) > _SHIM_MAX_BYTES else data.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return ()
     if old is None or REDIRECT_SENTINEL not in old or not exec_targets(old):
         return ()
     new = redirect_shim_script("npx", exec_targets(old)[0])
     if new.encode("utf-8") == data:
+        return ()
+    # A real npx an npm or Volta install dropped here since the read is never replaced (C-15).
+    if not snapshot_matches(path, snapshot):
         return ()
     shown = sanitize_log_line(installer.locations.display_path(path))
     try:
