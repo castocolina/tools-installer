@@ -325,6 +325,122 @@ def test_rewrite_outdated_npx_is_atomic(tmp_path: Path, monkeypatch: pytest.Monk
     assert calls == [(tmp_path / "npx", redirect_shim_script("npx", "/x/pnpm"), 0o755)]
 
 
+def _npx_snapshot(*paths: Path) -> list[tuple[Path, bytes]]:
+    return [(path, path.read_bytes()) for path in paths]
+
+
+@pytest.mark.parametrize("shape", ["absent", "foreign", "hard_block", "symlink", "current"])
+def test_rewrite_outdated_npx_skips_what_it_does_not_own(tmp_path: Path, shape: str):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text(_old_npx_body())
+    npx = bin_dir / "npx"
+    bodies = {
+        "foreign": "#!/bin/sh\necho mine\n",
+        "hard_block": shim_script("npx"),
+        "current": redirect_shim_script("npx", "/x/pnpm"),
+    }
+    if shape in bodies:
+        npx.write_text(bodies[shape])
+    if shape == "symlink":
+        npx.symlink_to(elsewhere)
+    before = _npx_snapshot(*(path for path in (npx, elsewhere) if path.exists()))
+    assert rewrite_outdated_npx(bin_dir) == ()
+    assert before == _npx_snapshot(*(path for path in (npx, elsewhere) if path.exists()))
+    assert npx.is_symlink() == (shape == "symlink")
+    assert npx.exists() == (shape != "absent")
+
+
+def test_rewrite_outdated_npx_never_follows_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def boom(_path: Path) -> bool:
+        raise AssertionError("is_our_shim follows symlinks")
+
+    monkeypatch.setattr("installer.guards.is_our_shim", boom)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text(_old_npx_body())
+    (bin_dir / "npx").symlink_to(elsewhere)
+    assert rewrite_outdated_npx(bin_dir) == ()
+    assert elsewhere.read_text() == _old_npx_body()
+    assert (bin_dir / "npx").is_symlink()
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "npx").write_text(_old_npx_body())
+    assert len(rewrite_outdated_npx(other)) == 1
+
+
+def test_rewrite_outdated_npx_leaves_the_npm_and_pnpm_wrappers(tmp_path: Path):
+    shim_dir, volta, pnpm = _plant_volta_pnpm(tmp_path)
+    path_value = f"{shim_dir}{os.pathsep}{volta.parent}"
+    lookup = _volta_pnpm_lookup(volta, pnpm)
+    install_global_redirect_shims(shim_dir, path_value=path_value, lookup=lookup)
+    wrappers = {name: (shim_dir / name).read_bytes() for name in GLOBAL_REDIRECTED}
+    assert set(wrappers) == {"npm", "pnpm"}
+    (shim_dir / "npx").write_text(_old_npx_body())
+    assert len(rewrite_outdated_npx(shim_dir)) == 1
+    assert {name: (shim_dir / name).read_bytes() for name in GLOBAL_REDIRECTED} == wrappers
+
+
+def test_rewrite_outdated_npx_trailing_whitespace_is_rewritten_once(tmp_path: Path):
+    npx = tmp_path / "npx"
+    npx.write_text(redirect_shim_script("npx", "/x/pnpm") + " ")
+    assert len(rewrite_outdated_npx(tmp_path)) == 1
+    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
+    assert rewrite_outdated_npx(tmp_path) == ()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
+def test_rewrite_outdated_npx_warns_on_a_read_only_bin_dir(tmp_path: Path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    npx = locked / "npx"
+    npx.write_text(_old_npx_body())
+    locked.chmod(0o555)
+    try:
+        results = rewrite_outdated_npx(locked)
+    finally:
+        locked.chmod(0o755)
+    assert len(results) == 1
+    message, level = results[0]
+    assert level == "warn"
+    assert message.startswith("Could not rewrite the npx redirect at ")
+    assert message.endswith("; fix the bin dir permissions, then relaunch.")
+    assert npx.read_text() == _old_npx_body()
+
+
+def test_rewrite_outdated_npx_never_reresolves_pnpm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("PATH", "")
+    npx = tmp_path / "npx"
+    npx.write_text(_old_npx_body("/gone/pnpm"))
+    assert len(rewrite_outdated_npx(tmp_path)) == 1
+    assert npx.read_text() == redirect_shim_script("npx", "/gone/pnpm")
+    assert SHIM_SENTINEL not in npx.read_text()
+
+
+def test_rewrite_outdated_npx_keeps_a_hand_edited_target(tmp_path: Path):
+    npx = tmp_path / "npx"
+    npx.write_text(_old_npx_body("/custom/place/pnpm"))
+    assert len(rewrite_outdated_npx(tmp_path)) == 1
+    assert npx.read_text() == redirect_shim_script("npx", "/custom/place/pnpm")
+    assert rewrite_outdated_npx(tmp_path) == ()
+    assert npx.read_text() == redirect_shim_script("npx", "/custom/place/pnpm")
+
+
+def test_rewrite_outdated_npx_sanitizes_the_path(tmp_path: Path):
+    odd = tmp_path / "a\x1b[31mb"
+    odd.mkdir()
+    (odd / "npx").write_text(_old_npx_body())
+    ((message, level),) = rewrite_outdated_npx(odd)
+    assert level == "ok"
+    assert not any(ord(ch) < 32 or ord(ch) == 127 for ch in message)
+
+
 def test_guard_path_warning_when_shim_dir_not_on_path(tmp_path: Path):
     warning = guard_path_warning(tmp_path, path_value="/usr/bin:/bin", which=lambda _n: None)
     assert warning is not None
