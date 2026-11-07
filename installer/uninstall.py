@@ -647,6 +647,8 @@ class SweepResult:
     # "<id>: removed with the <group> group" for each unselected pnpm group member whose
     # receipt the run retired because pnpm took it along (22-UAT F-2).
     with_group: tuple[str, ...] = ()
+    # The result sentence of each retired receipt that was retired with no file deleted (UI-SPEC).
+    receipt_retired: tuple[str, ...] = ()
     # The hosts the hook undo ran for, over every removed tool (D-04), sorted.
     unregistered: tuple[str, ...] = ()
     # Agents whose ledgered settings keys were reverted, and those kept as the user changed them.

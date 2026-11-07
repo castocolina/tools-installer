@@ -1254,6 +1254,7 @@ def perform_uninstall(
     removed: list[str] = []
     remove_failed: list[tuple[str, str]] = []
     with_group: list[str] = []
+    receipt_retired: list[str] = []
     unregistered: list[str] = []
     after: list[SweepResult] = []
     for tool in removal_order(decision.tools):
@@ -1272,6 +1273,8 @@ def perform_uninstall(
         unregistered.extend(outcome.unregistered)
         if outcome.removed:
             removed.append(tool.id)
+            if tool.retired and outcome.detail:  # a receipt-only retirement's result sentence
+                receipt_retired.append(outcome.detail)
             after.append(
                 _after_removal(
                     tool,
@@ -1350,5 +1353,6 @@ def perform_uninstall(
         config_deleted=config_deleted,
         config_not_deleted=config_not_deleted,
         with_group=tuple(with_group),
+        receipt_retired=tuple(receipt_retired),
         unregistered=tuple(sorted(set(unregistered))),
     )

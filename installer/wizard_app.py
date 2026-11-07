@@ -1119,6 +1119,20 @@ def _review_line(text: str, style: str = "") -> Text:
     return line
 
 
+def _retired_detail(tool_id: str, plan: RemovalPlan) -> str:
+    """A retired row's detail bar (UI-SPEC section 2): what is proven and what the user removes."""
+    head = f"retired: {tool_id} is no longer in the catalog"
+    if plan.hint is not None:  # a manager kind: the user removes the package, nothing runs
+        return f"{head} · {plan.hint}"
+    if plan.yourself:
+        leftover = f"remove it yourself: {', '.join(str(path) for path in plan.yourself)}"
+        proven = " · recorded files re-checked before deletion" if plan.removable else ""
+        return f"{head}{proven} · {leftover}"
+    if plan.removable:
+        return f"{head} · recorded files re-checked before deletion"
+    return f"{head} · nothing to delete; confirming retires the receipt"
+
+
 class RemovalFinished(Message):
     """The removal worker ended. `swept` is None when the remover failed or raised
     (then `error` says why); `invalidate_error` is the post-removal cache failure."""
@@ -1461,10 +1475,7 @@ class UninstallScreen(AppScreen):
                 removes,
             ],
             selectable=selectable,
-            detail=sanitize_log_line(
-                f"retired: {tool.id} is no longer in the catalog · "
-                "recorded files re-checked before deletion"
-            ),
+            detail=sanitize_log_line(_retired_detail(tool.id, plan)),
             paths=plan.removable,
             is_ban=False,
             is_path_block=False,
@@ -1973,9 +1984,18 @@ class UninstallScreen(AppScreen):
             self._request_pass()
             return
         self.applied = True
+        # A receipt-only retirement (no path, no command) reports its own sentence, not a count.
+        receipt_only = {
+            tool.id
+            for tool in message.decision.tools
+            if tool.retired
+            and not message.decision.paths.get(tool.id)
+            and not message.decision.argv.get(tool.id)
+        }
         outcomes = [
             RowOutcome(PlanRow(tool_id, Disposition.REMOVE, ""), "done")
             for tool_id in swept.removed
+            if tool_id not in receipt_only
         ] + [
             RowOutcome(PlanRow(tool_id, Disposition.REMOVE, ""), "remove_failed", detail=line)
             for tool_id, line in swept.remove_failed
@@ -1989,6 +2009,7 @@ class UninstallScreen(AppScreen):
         self._repaint()
         summary_parts = [summary_counts(outcomes)] if outcomes else []
         summary_parts.extend(sanitize_log_line(line) for line in swept.with_group)
+        summary_parts.extend(sanitize_log_line(line) for line in swept.receipt_retired)
         failed = len(swept.remove_failed)
         fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
         if failed:
