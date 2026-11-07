@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -23,6 +24,14 @@ KeyPath = tuple[str, ...]
 FORMAT_NAMES: Final = {"json": "JSON", "jsonc": "JSONC", "toml": "TOML"}
 CHANGED_WHILE_WRITING: Final = "changed while being written"
 _WHITESPACE: Final = " \t\r\n"
+# A string is kept so that "//" inside a URL is data; a comment and a comma that
+# closes an object or array (a trailing comma) are blanked, newlines kept.
+_JSONC_TOKEN: Final = re.compile(
+    r'("(?:\\.|[^"\\])*")'
+    r"|(//[^\n]*|/\*.*?\*/)"
+    r"|(,)(?=(?:\s|//[^\n]*|/\*.*?\*/)*[}\]])",
+    re.DOTALL,
+)
 
 
 class SettingsParseError(ValueError):
@@ -92,14 +101,30 @@ def same_value(a: object, b: object) -> bool:
     return a == b
 
 
+def _blank(match: re.Match[str]) -> str:
+    if match.group(1) is not None:
+        return match.group(1)
+    return re.sub(r"[^\n]", " ", match.group(0))
+
+
+def strip_jsonc(text: str) -> str:
+    """JSONC with comments and trailing commas as spaces: same length, same newlines."""
+    return _JSONC_TOKEN.sub(_blank, text)
+
+
+def _clean(text: str, fmt: SettingsFormat) -> str:
+    """The text the scanner walks: positions match `text`, so edits are made on `text`."""
+    return strip_jsonc(text) if fmt == "jsonc" else text
+
+
 def parse_settings(text: str, fmt: SettingsFormat) -> dict[str, object]:
     """The document as a dict; whitespace-only text is an empty object."""
-    if fmt != "json":
-        raise NotImplementedError(fmt)  # JSONC and TOML are added by the next tasks of this plan
+    if fmt == "toml":
+        raise NotImplementedError(fmt)  # TOML is added by the last task of this plan
     if not text.strip():
         return {}
     try:
-        doc: object = json.loads(text)
+        doc: object = json.loads(_clean(text, fmt))
     except json.JSONDecodeError as exc:
         raise SettingsParseError(fmt, exc.lineno, exc.colno) from exc
     if not isinstance(doc, dict):
@@ -166,13 +191,26 @@ def _members(text: str, open_index: int) -> tuple[list[_Member], int]:
     return members, index
 
 
-def _object_open(text: str, path: KeyPath) -> int:
-    """Index of the `{` of the object at path; text must already parse."""
-    index = _skip_ws(text, 0)
+def _object_open(clean: str, path: KeyPath) -> int:
+    """Index of the `{` of the object at path, in cleaned text that already parses."""
+    index = _skip_ws(clean, 0)
     for key in path:
-        members, _ = _members(text, index)
+        members, _ = _members(clean, index)
         index = [member for member in members if member.key == key][-1].value_start
     return index
+
+
+def _member_at(clean: str, key_path: KeyPath) -> tuple[list[_Member], _Member]:
+    members, _ = _members(clean, _object_open(clean, key_path[:-1]))
+    return members, [member for member in members if member.key == key_path[-1]][-1]
+
+
+def _leading_ws(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _dump(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _guarded(new_text: str, fmt: SettingsFormat, expected: dict[str, object]) -> str:
@@ -187,11 +225,11 @@ def _guarded(new_text: str, fmt: SettingsFormat, expected: dict[str, object]) ->
 
 
 def _edited(doc: dict[str, object], key_path: KeyPath, value: object) -> dict[str, object]:
-    """A copy of doc with key_path set to value, or removed when value is ABSENT."""
+    """A copy of doc with key_path set to value (parents created), or without it for ABSENT."""
     expected = copy.deepcopy(doc)
     node = expected
     for key in key_path[:-1]:
-        node = cast(dict[str, object], node[key])
+        node = cast(dict[str, object], node.setdefault(key, {}))
     if value is ABSENT:
         del node[key_path[-1]]
     else:
@@ -207,49 +245,65 @@ class Inserted:
 
 
 def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object) -> Inserted:
-    """Insert one absent key by splice. The fragment is the text a later revert removes."""
+    """Insert one absent key by splice. A two-part key whose parent is absent creates the parent
+    as one member. The fragment is the text a later revert removes."""
     doc = parse_settings(text, fmt)
     if not text.strip():
         raise SettingsEditRefused("empty file: there is no object to insert into")
+    if len(key_path) not in (1, 2):
+        raise SettingsEditRefused("settings keys nest at most one level")
     if lookup(doc, key_path) is not ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is already set")
     parent = key_path[:-1]
-    if parent and not isinstance(lookup(doc, parent), dict):
+    created_parent = len(key_path) == 2 and lookup(doc, parent) is ABSENT
+    if parent and not created_parent and not isinstance(lookup(doc, parent), dict):
         raise SettingsEditRefused(f"{'.'.join(parent)} must be an existing object")
-    obj = _object_open(text, parent)
-    members, _ = _members(text, obj)
-    if not members:
-        raise SettingsEditRefused("empty object: inserting into it is not supported yet")
-    line_start = text.rfind("\n", 0, members[0].key_start) + 1
-    indent = text[line_start : members[0].key_start]
-    name = json.dumps(key_path[-1], ensure_ascii=False)
-    fragment = f"\n{indent}{name}: {json.dumps(value, ensure_ascii=False)},"
+    if created_parent:
+        target = key_path[:-2]
+        member = f"{_dump(parent[-1])}: {{{_dump(key_path[-1])}: {_dump(value)}}}"
+    else:
+        target = parent
+        member = f"{_dump(key_path[-1])}: {_dump(value)}"
+    clean = _clean(text, fmt)
+    obj = _object_open(clean, target)
+    members, _ = _members(clean, obj)
+    if members and "\n" not in clean[obj + 1 : members[0].key_start]:
+        fragment = f"{member}, "  # one-line object: keep it on the `{` line
+    elif members:
+        line_start = clean.rfind("\n", 0, members[0].key_start) + 1
+        fragment = f"\n{clean[line_start : members[0].key_start]}{member},"
+    else:
+        base = clean[clean.rfind("\n", 0, obj) + 1 : obj]
+        fragment = f"\n{_leading_ws(base)}  {member}"
     new_text = text[: obj + 1] + fragment + text[obj + 1 :]
     expected = _edited(doc, key_path, value)
-    return Inserted(_guarded(new_text, fmt, expected), fragment, created_parent=False)
+    return Inserted(_guarded(new_text, fmt, expected), fragment, created_parent)
 
 
-def _cut_member(text: str, members: list[_Member], member: _Member) -> str:
-    """Text without the member: its own line when it stands alone, plus the following comma
-    or, for the last member, the preceding one."""
+def _cut_member(text: str, clean: str, members: list[_Member], member: _Member) -> str:
+    """`text` without the member. Positions and punctuation come from `clean`. The member's
+    following comma (and the space after it) goes with it; the last member takes the
+    preceding comma instead; a member alone on its line takes its newline."""
     start = member.key_start
-    while start > 0 and text[start - 1] in " \t":
+    while start > 0 and clean[start - 1] in " \t":
         start -= 1
     end = member.value_end
-    after = _skip_ws(text, end)
+    after = _skip_ws(clean, end)
     comma_before = -1
-    if text[after] == ",":
+    if clean[after] == ",":
         end = after + 1
+        while clean[end] in " \t":
+            end += 1
     elif member is not members[0]:
         probe = start - 1
-        while text[probe] in _WHITESPACE:
+        while clean[probe] in _WHITESPACE:
             probe -= 1
         comma_before = probe
-    if start == 0 or text[start - 1] == "\n":
+    if start == 0 or clean[start - 1] == "\n":
         probe = end
-        while text[probe] in " \t":
+        while clean[probe] in " \t":
             probe += 1
-        if text[probe] == "\n":
+        if clean[probe] == "\n":
             end = probe + 1
     head = text[:start]
     if comma_before >= 0:
@@ -265,14 +319,29 @@ def remove_key(
     doc = parse_settings(text, fmt)
     if lookup(doc, key_path) is ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is not set")
-    members, _ = _members(text, _object_open(text, key_path[:-1]))
-    member = [m for m in members if m.key == key_path[-1]][-1]
+    clean = _clean(text, fmt)
+    members, member = _member_at(clean, key_path)
     located = text[member.key_start : member.value_end]
     if fragment is not None and text.count(fragment) == 1 and located in fragment:
         new_text = text.replace(fragment, "", 1)
     else:
-        new_text = _cut_member(text, members, member)
+        new_text = _cut_member(text, clean, members, member)
     return _guarded(new_text, fmt, _edited(doc, key_path, ABSENT))
+
+
+def replace_value(text: str, fmt: SettingsFormat, key_path: KeyPath, new: object) -> str:
+    """Swap one set value in place; every other byte of the file stays as it was."""
+    doc = parse_settings(text, fmt)
+    if lookup(doc, key_path) is ABSENT:
+        raise SettingsEditRefused(f"{'.'.join(key_path)} is not set")
+    _, member = _member_at(_clean(text, fmt), key_path)
+    new_text = text[: member.value_start] + _dump(new) + text[member.value_end :]
+    return _guarded(new_text, fmt, _edited(doc, key_path, new))
+
+
+def new_file_text(fmt: SettingsFormat) -> str:
+    """Content of a settings file the installer creates: an empty object, or empty TOML."""
+    return "" if fmt == "toml" else "{}\n"
 
 
 def read_settings(path: Path) -> FileSnapshot | None:
