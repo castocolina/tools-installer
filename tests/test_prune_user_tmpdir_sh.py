@@ -66,9 +66,10 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not o
 
 _HAVE_FD = shutil.which("fd") is not None
 
-# PATH configurations: WITH_FD is this test process's own real PATH (wherever
-# fd/rg actually resolve, so HAVE_FD/HAVE_RG detection inside the script is
-# genuine); WITHOUT_FD is restricted to /usr/bin:/bin, where neither tool
+# PATH configurations: WITH_FD is this test process's sandboxed PATH (23.1 D-19:
+# the real home and linuxbrew bins are stripped, so fd is found only where it
+# does not live under them; HAVE_FD detection inside the script stays genuine);
+# WITHOUT_FD is restricted to /usr/bin:/bin, where neither tool
 # resolves on the host this suite was authored against (fd/rg both live under
 # ~/.local/bin here, never /usr/bin or /bin).
 _PATH_WITH_FD = os.environ.get("PATH", "/usr/bin:/bin")
@@ -494,7 +495,10 @@ def test_days_to_minutes_conversion_deletes_25h_and_spares_23h(
     semantics into one.
     """
     if path_config is _PATH_WITH_FD and not _HAVE_FD:
-        pytest.skip("fd not present on this host's real PATH")
+        pytest.skip(
+            "fd is not on the sandboxed test PATH "
+            "(23.1 D-19: real-HOME and linuxbrew bins are stripped)"
+        )
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
     home = tmp_path / "home"
@@ -527,7 +531,10 @@ def test_47h_49h_boundary_pair_both_deleted(tmp_path: Path, path_config: str) ->
     reopening the fd/find divergence.
     """
     if path_config is _PATH_WITH_FD and not _HAVE_FD:
-        pytest.skip("fd not present on this host's real PATH")
+        pytest.skip(
+            "fd is not on the sandboxed test PATH "
+            "(23.1 D-19: real-HOME and linuxbrew bins are stripped)"
+        )
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
     home = tmp_path / "home"

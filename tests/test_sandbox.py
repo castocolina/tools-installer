@@ -17,6 +17,7 @@ from tests.conftest import HOST_TOOLCHAIN, assert_not_host_toolchain
 from tests.sandbox import (
     CHECKOUT,
     FORBIDDEN_PROGRAM_NAMES,
+    INTERPRETER_DIR_STASH,
     LINUXBREW_PREFIX,
     OVERRIDES_STASH,
     SHELL_BUILTINS,
@@ -27,6 +28,9 @@ from tests.sandbox import (
     check_launch,
     env_names_to_clear,
     host_free_path,
+    host_zsh,
+    link_interpreters,
+    prepare_interpreter_dir,
 )
 
 
@@ -117,6 +121,100 @@ def test_home_overrides_survive_the_configure_clearing() -> None:
         "PNPM_HOME": "/live/pnpm",
         "VOLTA_HOME": None,
     }
+
+
+def test_link_interpreters_links_only_what_the_strip_removed(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    original = root / "original"
+    kept = root / "kept"
+    _fake(original, "zsh")
+    _fake(original, "sh")
+    _fake(original, "python3")
+    _fake(kept, "sh")
+    original_path = os.pathsep.join([str(kept), str(original)])
+    link = root / "link"
+    link.mkdir()
+
+    assert link_interpreters(link, stripped_path=str(kept), original_path=original_path) is True
+    assert sorted(entry.name for entry in link.iterdir()) == ["zsh"]
+    assert os.readlink(link / "zsh") == os.path.realpath(original / "zsh")
+
+    nothing_missing = root / "nothing-missing"
+    nothing_missing.mkdir()
+    assert (
+        link_interpreters(nothing_missing, stripped_path=original_path, original_path=original_path)
+        is False
+    )
+    assert list(nothing_missing.iterdir()) == []
+
+
+def test_zsh_resolves_when_the_host_has_one(tmp_path_factory: pytest.TempPathFactory) -> None:
+    recorded = host_zsh()
+    if recorded is None:
+        pytest.skip("this host has no zsh at all")
+    found = shutil.which("zsh")
+    assert found is not None
+    assert Path(os.path.realpath(found)) == recorded
+    policy = build_launch_policy(
+        tmp_path_factory.getbasetemp().resolve(), path_value=os.environ["PATH"]
+    )
+    assert recorded in policy.interpreters
+    check_launch(["zsh", "-f", "-c", "true"], env=None, cwd=None, policy=policy)
+
+
+def test_the_interpreter_dir_is_prepended_once() -> None:
+    link = os.environ.get(INTERPRETER_DIR_STASH)
+    entries = os.environ["PATH"].split(os.pathsep)
+    if link is not None:
+        assert entries.count(link) == 1
+        assert entries[0] == link
+    without_link = os.pathsep.join(entry for entry in entries if entry != link)
+    if host_zsh() is not None and shutil.which("zsh", path=without_link) is None:
+        assert link is not None
+        found = shutil.which("zsh")
+        assert found is not None
+        assert Path(found).parent == Path(link)
+
+
+def test_a_worker_keeps_the_inherited_interpreter_dir(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    fake_home = root / "home"
+    link = fake_home / "tmp" / "link"
+    link.mkdir(parents=True)
+    kept = host_free_path(
+        os.pathsep.join([str(link), "/usr/bin"]), real_home=fake_home, keep=link
+    ).split(os.pathsep)
+    assert kept[0] == str(link)
+    assert "/usr/bin" in kept
+
+    def no_new_dir() -> Path:
+        raise AssertionError("a worker must reuse the controller's link dir")
+
+    environ = {INTERPRETER_DIR_STASH: str(link)}
+    assert prepare_interpreter_dir(environ, real_home=fake_home, make_dir=no_new_dir) == (
+        link,
+        None,
+    )
+
+
+def test_prepare_interpreter_dir_makes_no_dir_when_no_shell_is_missing(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    bin_dir = root / "bin"
+    for name in ("sh", "bash", "zsh"):
+        _fake(bin_dir, name)
+    link = root / "link"
+
+    def make_dir() -> Path:
+        link.mkdir()
+        return link
+
+    environ = {"PATH": str(bin_dir)}
+    assert prepare_interpreter_dir(environ, real_home=root / "home", make_dir=make_dir) == (
+        None,
+        None,
+    )
+    assert not link.exists()
+    assert INTERPRETER_DIR_STASH not in environ
 
 
 def test_a_node_family_binary_outside_tmp_is_never_run(
