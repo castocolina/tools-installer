@@ -21,6 +21,7 @@ from installer.download import (
     expand_script_token,
     is_still_proven,
 )
+from installer.locations import applications_dir, opt_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, method_package
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.postinstall import hook_method, unregister_argvs, unregister_hosts
@@ -59,7 +60,7 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
-RemovalLevel = Literal["manager", "artifacts", "recipe", "none"]
+RemovalLevel = Literal["manager", "artifacts", "recipe", "receipt", "none"]
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,8 @@ class RemovalPlan:
     )
     # How the tool is removed (D-06): `manager` (argv = the manager's uninstall for the
     # receipt's package), `recipe` (argv = the vendor `remove`, bound to a proven leaf,
-    # or none, plus the proven paths), `artifacts` (proven paths only), or `none`.
+    # or none, plus the proven paths), `artifacts` (proven paths only), `receipt` (a retired
+    # receipt with nothing to delete: only the receipt is retired), or `none`.
     level: RemovalLevel = "none"
     argv: tuple[str, ...] = ()
     # Declared config entries that exist now, expanded; never deleted by this module.
@@ -114,6 +116,38 @@ def config_targets(tool: Tool) -> tuple[tuple[str, Path], ...]:
     return tuple((entry, Path(entry).expanduser()) for entry in tool.config_paths)
 
 
+def _safe_name(name: str) -> bool:
+    return name not in ("", ".", "..") and "/" not in name and "\0" not in name
+
+
+def _placement_shape(
+    kind: str,
+    artifact: receipts.ReceiptArtifact,
+    bin_dir: Path,
+    *,
+    link_names: frozenset[str],
+) -> bool:
+    """Is this recorded artifact exactly where `download.artifact_paths` would place one (D-07)?
+
+    A download kind's `link` or `file` is a direct child of `bin_dir`; its `dir` is
+    `opt_dir(N)` for a `link` named `N` recorded beside it (`link_names`), so a bare child of
+    the opt dir proves nothing. Anything else, any other recorded type and every other kind
+    is never proven. The name check rejects `""`, `.`, `..`, a separator and a NUL."""
+    path = artifact.path
+    if not _safe_name(path.name):
+        return False
+    if kind in DOWNLOAD_KINDS:
+        if artifact.type in ("link", "file"):
+            return path.parent == bin_dir
+        return artifact.type == "dir" and path == opt_dir(path.name) and path.name in link_names
+    if kind == "app":
+        # The bundle sits directly under ~/Applications; its optional cli link in the bin dir.
+        if artifact.type == "dir":
+            return path.parent == applications_dir()
+        return artifact.type == "link" and path.parent == bin_dir
+    return False
+
+
 def _receipt_proof(
     tool: Tool, default_bin_dir: Path, *, verify: bool
 ) -> tuple[receipts.ReceiptArtifact, ...]:
@@ -130,6 +164,19 @@ def _receipt_proof(
     receipt = receipts.read(tool.id)
     if receipt is None or receipts.drifted(receipt, rehash=verify):
         return ()
+    if tool.retired:
+        # D-07: a retired tool declares no method, so the registry formula is replaced by the
+        # shape of what install itself places. The drift check above still runs first.
+        link_names = frozenset(
+            a.path.name
+            for a in receipt.artifacts
+            if a.type == "link" and a.path.parent == default_bin_dir and _safe_name(a.path.name)
+        )
+        return tuple(
+            a
+            for a in receipt.artifacts
+            if _placement_shape(receipt.method.kind, a, default_bin_dir, link_names=link_names)
+        )
     allowed = {
         (artifact.path, artifact.kind)
         for method in tool.methods
@@ -167,6 +214,26 @@ def _quarantined(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     return found
 
 
+def retired_manager_package(tool_id: str) -> tuple[str, str] | None:
+    """(manager kind, package) of a readable manager-kind receipt that names a package (D-08)."""
+    receipt = receipts.read(tool_id)
+    if receipt is None or receipt.method.kind not in MANAGER_UNINSTALL_ARGV or not receipt.package:
+        return None
+    return receipt.method.kind, receipt.package
+
+
+def _retired_leftovers(tool: Tool, proven: set[Path]) -> list[Path]:
+    """A retired receipt's recorded paths that are not proven and still exist (D-06 extension).
+
+    The catalog formula that normally names them is empty for a tool with no methods, so they
+    are listed here for the user and never deleted. A manager kind's recorded paths belong to
+    that manager, so none are listed."""
+    receipt = receipts.read(tool.id)
+    if receipt is None or receipt.method.kind in MANAGER_UNINSTALL_ARGV:
+        return []
+    return [a.path for a in receipt.artifacts if a.path not in proven and _exists(a.path)]
+
+
 def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = False) -> RemovalPlan:
     """Prove removability by receipt, else by the archive layout; name the rest.
 
@@ -192,9 +259,12 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
     seen: set[Path] = set()
     by_tool: dict[str, tuple[Path, ...]] = {}
     artifacts: dict[Path, receipts.ReceiptArtifact] = {}
+    leftovers: list[Path] = []
     for tool in tools:
         if receipts.receipt_exists(tool.id):
             proven = _receipt_proof(tool, default_bin_dir, verify=verify)
+            if tool.retired:
+                leftovers.extend(_retired_leftovers(tool, {a.path for a in proven}))
             if proven:
                 by_tool[tool.id] = tuple(a.path for a in proven)
             for artifact in proven:
@@ -223,9 +293,15 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
                     removable.append(artifact.path)
                     artifacts[artifact.path] = artifact
     yourself = tuple(
-        p
-        for p in (*plan_uninstall(tools, default_bin_dir), *_quarantined(tools, default_bin_dir))
-        if p not in seen
+        dict.fromkeys(
+            p
+            for p in (
+                *plan_uninstall(tools, default_bin_dir),
+                *_quarantined(tools, default_bin_dir),
+                *leftovers,
+            )
+            if p not in seen
+        )
     )
     return RemovalPlan(tuple(removable), yourself, by_tool, artifacts)
 
@@ -335,6 +411,13 @@ def removal_plan(
         level = "recipe"
     elif base.removable:
         level = "artifacts"
+    if tool.retired:
+        # D-08: a retired manager package is the user's to remove; nothing is ever run for it.
+        managed = retired_manager_package(tool.id)
+        if managed is not None:
+            hint = f"remove it yourself: {managed[0]} {managed[1]}"
+        if level == "none" and receipt is not None and not base.yourself:
+            level = "receipt"
     unregister, hook_hosts = _hook_undo(tool, receipt, base)
     return replace(
         base,

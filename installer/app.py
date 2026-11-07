@@ -98,6 +98,7 @@ from installer.systemd_daemon import CompetingUnit
 from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle
 from installer.uninstall import (
     MANAGER_UNINSTALL_ARGV,
+    RemovalPlan,
     SweepResult,
     active_policies,
     config_targets,
@@ -106,6 +107,7 @@ from installer.uninstall import (
     removal_plan,
     remove_paths,
     remove_proven,
+    retired_manager_package,
     sweep_policies,
     sweep_tweaks,
 )
@@ -757,6 +759,16 @@ def removal_result_lines(result: SweepResult) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _retired_sentence(tool_id: str, managed: tuple[str, str] | None) -> str:
+    """The result of retiring a receipt that deletes nothing (UI-SPEC section 2)."""
+    if managed is None:
+        return f"Retired the {tool_id} receipt; there was nothing to delete."
+    manager, package = (sanitize_log_line(part) for part in managed)
+    return (
+        f"Retired the {tool_id} receipt; {manager} {package} stays installed — remove it yourself."
+    )
+
+
 def remove_tool(
     tool: Tool,
     *,
@@ -777,6 +789,14 @@ def remove_tool(
     undo or command deletes nothing and keeps the receipt, so a later plan still sees the tool."""
     try:
         fresh = removal_plan(tool, bin_dir, verify=True)
+        if fresh.level == "receipt":
+            # A retired receipt with nothing to delete (review R1-03): checked before the
+            # `not (paths or argv)` refusal below, which every receipt-only preview would trip.
+            if paths or argv or unregister:
+                return ToolRemoval(tool.id, False, "changed since the preview; not removed")
+            managed = retired_manager_package(tool.id)
+            receipts.delete(tool.id)
+            return ToolRemoval(tool.id, True, _retired_sentence(tool.id, managed))
         named = {*fresh.removable, *fresh.yourself}
         # A command runs only on the proof it was previewed against: with a command, every
         # previewed path must still be removable, not merely named (review R2-02).
@@ -833,6 +853,28 @@ def remove_tool(
         return ToolRemoval(tool.id, False, first_line(exc))
 
 
+def _print_retired_preview(rows: Sequence[tuple[Tool, RemovalPlan]], console: Console) -> None:
+    """The `retired — no longer in the catalog` block: per tool what goes (UI-SPEC section 2).
+
+    Every line is plain text (`markup=False`) with ids and paths stripped of control characters."""
+    if not rows:
+        return
+    console.print("retired — no longer in the catalog", markup=False, soft_wrap=True)
+    for tool, plan in rows:
+        console.print(f"{sanitize_log_line(tool.id)} (retired)", markup=False, soft_wrap=True)
+        for path in plan.removable:
+            console.print(f"  {sanitize_log_line(str(path))}", markup=False, soft_wrap=True)
+        if plan.yourself:
+            kept = ", ".join(sanitize_log_line(str(path)) for path in plan.yourself)
+            console.print(f"  remove it yourself: {kept}", markup=False, soft_wrap=True)
+        if plan.hint:
+            console.print(f"  {sanitize_log_line(plan.hint)}", markup=False, soft_wrap=True)
+        elif plan.level == "receipt":
+            console.print(
+                "  nothing to delete; confirming retires the receipt", markup=False, soft_wrap=True
+            )
+
+
 def run_uninstall(
     tools: list[Tool],
     console: Console,
@@ -878,9 +920,19 @@ def run_uninstall(
     held by construction rather than by that argument staying true.
     """
     ordered = [(tool, removal_plan(tool, default_bin_dir)) for tool in removal_order(tools)]
-    paths = list(dict.fromkeys(p for _tool, plan in ordered for p in plan.removable))
+    # A retired tool is previewed in its own section after the catalog tools (UI-SPEC section 2).
+    catalog = [(tool, plan) for tool, plan in ordered if not tool.retired]
+    retired = sorted(
+        (
+            (tool, plan)
+            for tool, plan in ordered
+            if tool.retired and (plan.level != "none" or plan.yourself)
+        ),
+        key=lambda row: row[0].id,
+    )
+    paths = list(dict.fromkeys(p for _tool, plan in catalog for p in plan.removable))
     yourself = list(
-        dict.fromkeys(p for _tool, plan in ordered for p in plan.yourself if p not in paths)
+        dict.fromkeys(p for _tool, plan in catalog for p in plan.yourself if p not in paths)
     )
     commands = [(tool.id, plan.argv) for tool, plan in ordered if plan.argv]
     shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
@@ -906,7 +958,14 @@ def run_uninstall(
     ]
     # A machine whose only tools-installer footprint is an enabled tweak or a settings key must
     # not be told there is nothing to uninstall.
-    if not paths and not commands and not shimmed and not tweaks and not settings_files:
+    if (
+        not paths
+        and not commands
+        and not shimmed
+        and not tweaks
+        and not settings_files
+        and not retired
+    ):
         render_uninstall([], console)  # prints the "nothing to uninstall" line
         # Even here the user learns what matched by name and was left alone.
         render_remove_yourself(yourself, console)
@@ -939,6 +998,7 @@ def run_uninstall(
     for line in co_install_warnings(pnpm_packages, tools, present=present):
         console.print(line, markup=False, soft_wrap=True)
     render_remove_yourself(yourself, console)
+    _print_retired_preview(retired, console)
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:
@@ -1028,7 +1088,7 @@ def run_uninstall(
                     markup=False,
                 )
             if outcome.detail:
-                console.print(f"{tool.id}: {outcome.detail}")
+                console.print(f"{tool.id}: {outcome.detail}", markup=False, soft_wrap=True)
             else:
                 for member, group in retire_group_members(plan.argv, tools, handled):
                     handled.add(member)
