@@ -20,6 +20,7 @@ from typing import Final, Literal, cast
 
 from installer.agent_env import adapters
 from installer.atomic import FileSnapshot, atomic_write_text, read_snapshot, snapshot_matches
+from installer.locations import display_path
 from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_ledger
 
 SettingsFormat = Literal["json", "jsonc", "toml"]
@@ -525,9 +526,22 @@ def _format(agent: str) -> SettingsFormat:
 
 
 def settings_file(agent: str, *, home: Path, platform_os: str) -> Path:
-    """The file an agent's settings live in: its adapter path."""
+    """The file an agent's settings live in: its adapter path; opencode prefers .jsonc."""
     _format(agent)
-    return adapters(home, platform_os=platform_os)[agent].config_path
+    path = adapters(home, platform_os=platform_os)[agent].config_path
+    if agent == "opencode" and os.path.lexists(path.with_name("opencode.jsonc")):
+        return path.with_name("opencode.jsonc")
+    return path
+
+
+def _conflict(agent: str, *, home: Path, platform_os: str) -> str | None:
+    """The refusal when an agent's settings could live in either of two files (opencode)."""
+    if agent != "opencode":
+        return None
+    json_path = adapters(home, platform_os=platform_os)[agent].config_path
+    if os.path.lexists(json_path) and os.path.lexists(json_path.with_name("opencode.jsonc")):
+        return "both opencode.json and opencode.jsonc exist"
+    return None
 
 
 @dataclass(frozen=True)
@@ -619,16 +633,16 @@ def _kept_entries(
     return kept + step.writes
 
 
-def apply_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
-    """Write each absent key of one setting and record it; a key set differently is left."""
-    fmt = _format(agent)
-    path = settings_file(agent, home=home, platform_os=platform_os)
+def _apply_once(
+    agent: str, setting: str, path: Path, fmt: SettingsFormat, keys: tuple[SettingKey, ...]
+) -> FileResult:
+    """One read, compute and reserve-then-commit write; SettingsChanged goes to the caller."""
     file = str(path)
     ledger = read_ledger(agent) or ConfigLedger(agent)
     try:
         snap = read_settings(path)
         text = _text_of(snap, fmt)
-        step = _apply_pass(text, fmt, setting, file, setting_keys(agent, setting, platform_os))
+        step = _apply_pass(text, fmt, setting, file, keys)
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     entries = _kept_entries(ledger.entries, setting, file, step)
@@ -638,13 +652,35 @@ def apply_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> 
     created = ledger.created_files
     if snap is None and file not in created:
         created = (*created, file)
-    write_ledger(ConfigLedger(agent, created, entries))  # reserved before the file write
+    try:
+        write_ledger(ConfigLedger(agent, created, entries))  # reserved before the file write
+    except OSError as exc:
+        return FileResult(agent, setting, path, fmt, refused=str(exc))
     try:
         write_if_unchanged(path, snap, step.text)
+    except SettingsChanged:
+        write_ledger(ledger)
+        raise
     except OSError as exc:
         write_ledger(ledger)  # the write did not happen: the previous ledger stands
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     return FileResult(agent, setting, path, fmt, keys=step.keys)
+
+
+def apply_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+    """Write each absent key of one setting and record it; a key set differently is left."""
+    fmt = _format(agent)
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    conflict = _conflict(agent, home=home, platform_os=platform_os)
+    if conflict is not None:
+        return FileResult(agent, setting, path, fmt, refused=conflict)
+    keys = setting_keys(agent, setting, platform_os)
+    for _attempt in range(2):
+        try:
+            return _apply_once(agent, setting, path, fmt, keys)
+        except SettingsChanged:
+            continue
+    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
 
 
 def _revert_pass(
@@ -684,11 +720,14 @@ def _revert_pass(
     return text, tuple(results)
 
 
-def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
-    """Undo the ledger's keys for this setting that still hold our value; anything else is left."""
-    fmt = _format(agent)
-    table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
-    path = settings_file(agent, home=home, platform_os=platform_os)
+def _revert_once(
+    agent: str,
+    setting: str,
+    path: Path,
+    fmt: SettingsFormat,
+    table: dict[KeyPath, SettingKey],
+) -> FileResult:
+    """One read, compute and write. SettingsChanged is for the caller to retry."""
     file = str(path)
     ledger = read_ledger(agent) or ConfigLedger(agent)
     mine = tuple(
@@ -712,10 +751,82 @@ def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) ->
                 deleted = True
             else:
                 write_if_unchanged(path, snap, text)
+    except SettingsChanged:
+        raise
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     gone = deleted or (snap is None and file in ledger.created_files)
     created = tuple(name for name in ledger.created_files if not (gone and name == file))
     remaining = tuple(entry for entry in ledger.entries if entry not in mine)
-    write_ledger(ConfigLedger(agent, created, remaining))
+    try:
+        write_ledger(ConfigLedger(agent, created, remaining))
+    except OSError as exc:
+        return FileResult(agent, setting, path, fmt, refused=str(exc))
     return FileResult(agent, setting, path, fmt, keys=results)
+
+
+def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+    """Undo the ledger's keys for this setting that still hold our value; anything else is left."""
+    fmt = _format(agent)
+    table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    conflict = _conflict(agent, home=home, platform_os=platform_os)
+    if conflict is not None:
+        return FileResult(agent, setting, path, fmt, refused=conflict)
+    for _attempt in range(2):
+        try:
+            return _revert_once(agent, setting, path, fmt, table)
+        except SettingsChanged:
+            continue
+    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
+
+
+SettingState = Literal["on", "yours", "off", "drift"]
+
+
+class SettingsUnreadable(OSError):
+    """A settings file the ledger manages does not parse: its state is unknown until it does."""
+
+    def __init__(self, path: Path, fragment: str) -> None:
+        super().__init__(f"{display_path(path)} is {fragment}; nothing is written until it parses")
+
+
+def _read_document(
+    agent: str, path: Path, fmt: SettingsFormat, *, home: Path, platform_os: str
+) -> tuple[dict[str, object] | None, str | None]:
+    """The parsed document, or the fragment that says why the file cannot be read."""
+    conflict = _conflict(agent, home=home, platform_os=platform_os)
+    if conflict is not None:
+        return None, conflict
+    try:
+        return parse_settings(_text_of(read_settings(path), fmt), fmt), None
+    except (SettingsParseError, OSError) as exc:
+        return None, str(exc)
+
+
+def file_problem(agent: str, *, home: Path, platform_os: str) -> str | None:
+    """Why the settings file cannot be read (the O7 note), or None when it reads or is missing."""
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    return _read_document(agent, path, _format(agent), home=home, platform_os=platform_os)[1]
+
+
+def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingState:
+    """on: a recorded key still holds ours. drift: recorded keys were all changed by someone else.
+    yours: every key holds ours and nothing is recorded. off: anything else."""
+    fmt = _format(agent)
+    path = settings_file(agent, home=home, platform_os=platform_os)
+    ledger = read_ledger(agent) or ConfigLedger(agent)
+    in_file = tuple(entry for entry in ledger.entries if entry.file == str(path))
+    doc, problem = _read_document(agent, path, fmt, home=home, platform_os=platform_os)
+    if doc is None:
+        if in_file:
+            raise SettingsUnreadable(path, problem or "unreadable")
+        return "off"
+    entries = tuple(entry for entry in in_file if entry.setting == setting)
+    if entries:
+        holding = any(same_value(lookup(doc, entry.key_path), entry.value) for entry in entries)
+        return "on" if holding else "drift"
+    table = setting_keys(agent, setting, platform_os)
+    if table and all(same_value(lookup(doc, key.path), key.value) for key in table):
+        return "yours"
+    return "off"

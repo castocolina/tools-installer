@@ -4,12 +4,16 @@ from pathlib import Path
 
 import pytest
 
+from installer import agent_settings
 from installer.agent_settings import (
+    CHANGED_WHILE_WRITING,
     SettingsChanged,
     SettingsEditRefused,
     SettingsParseError,
+    SettingsUnreadable,
     apply_setting,
     delete_if_unchanged,
+    file_problem,
     insert_key,
     new_file_text,
     parse_settings,
@@ -18,10 +22,12 @@ from installer.agent_settings import (
     replace_value,
     revert_setting,
     same_value,
+    setting_state,
     strip_jsonc,
     write_if_unchanged,
 )
-from installer.receipts import read_ledger
+from installer.atomic import FileSnapshot
+from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_ledger
 
 VSCODE_SETTINGS = (
     '// VS Code user settings\n{\n  /* editor */\n  "editor.fontSize": 14, // size\n}\n'
@@ -425,3 +431,174 @@ def test_an_invalid_settings_file_is_refused_and_byte_identical() -> None:
     assert applied.keys == ()
     assert settings.read_text(encoding="utf-8") == original
     assert read_ledger("claude") is None
+
+
+def test_setting_state_reads_each_state() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "off"
+
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "on"
+
+    settings.write_text('{"permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8")
+    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "drift"
+
+    settings.write_text(
+        json.dumps(
+            {
+                "permissions": {"defaultMode": "bypassPermissions"},
+                "skipDangerousModePermissionPrompt": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_ledger(ConfigLedger("claude"))
+    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "yours"
+
+
+def test_apply_on_drift_rewrites_absent_keys_and_forgets_changed_ones() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    settings.write_text(
+        '{"model": "opus", "permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8"
+    )
+    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "drift"
+
+    applied = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind) for key in applied.keys] == [
+        ("permissions.defaultMode", "set_by_you"),
+        ("skipDangerousModePermissionPrompt", "wrote"),
+    ]
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    assert [entry.key_path for entry in ledger.entries] == [("skipDangerousModePermissionPrompt",)]
+    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "on"
+
+
+def test_an_unparsable_file_is_unreadable_only_with_a_ledger_record() -> None:
+    home = Path.home()
+    codex = home / ".codex" / "config.toml"
+    codex.parent.mkdir(parents=True, exist_ok=True)
+    codex.write_text('approval_policy = "never"\n[features\n', encoding="utf-8")
+    problem = file_problem("codex", home=home, platform_os="linux")
+    assert problem is not None
+    assert problem.startswith("not valid TOML (line ")
+    assert setting_state("codex", "auto-approve", home=home, platform_os="linux") == "off"
+
+    entry = ConfigWrite(
+        "auto-approve", str(codex), ("approval_policy",), "never", 'approval_policy = "never"\n'
+    )
+    write_ledger(ConfigLedger("codex", entries=(entry,)))
+    with pytest.raises(SettingsUnreadable) as caught:
+        setting_state("codex", "auto-approve", home=home, platform_os="linux")
+    assert (
+        str(caught.value)
+        == f"~/.codex/config.toml is {problem}; nothing is written until it parses"
+    )
+
+
+def test_a_tampered_ledger_never_removes_a_user_key() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+    other = home / ".claude" / "other.json"
+    other.write_text('{"skipDangerousModePermissionPrompt": true}\n', encoding="utf-8")
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    forged = (
+        ConfigWrite("auto-approve", str(settings), ("model",), "opus", '\n  "model": "opus"'),
+        ConfigWrite(
+            "auto-approve",
+            str(other),
+            ("skipDangerousModePermissionPrompt",),
+            True,
+            '\n  "skipDangerousModePermissionPrompt": true',
+        ),
+    )
+    write_ledger(ConfigLedger("claude", ledger.created_files, ledger.entries + forged))
+    other_before = other.read_bytes()
+
+    reverted = revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert {key.key for key in reverted.keys} <= {
+        "permissions.defaultMode",
+        "skipDangerousModePermissionPrompt",
+    }
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "opus"}
+    assert other.read_bytes() == other_before
+
+
+def test_a_file_that_changes_mid_write_is_retried_once_then_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+    real_write = agent_settings.write_if_unchanged
+    attempts: list[int] = []
+
+    def changed_once(path: Path, before: FileSnapshot | None, text: str) -> None:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise SettingsChanged()
+        real_write(path, before, text)
+
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", changed_once)
+    applied = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert applied.refused is None
+    assert [key.kind for key in applied.keys] == ["wrote", "wrote"]
+    assert len(attempts) == 2
+    assert json.loads(settings.read_text(encoding="utf-8"))["skipDangerousModePermissionPrompt"]
+
+    other_writer = '{"model": "sonnet"}\n'
+    settings.write_text(other_writer, encoding="utf-8")
+    ledger_before = read_ledger("claude")
+
+    def always_changed(path: Path, before: FileSnapshot | None, text: str) -> None:
+        raise SettingsChanged()
+
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", always_changed)
+    applied = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+
+    assert applied.refused == CHANGED_WHILE_WRITING
+    assert settings.read_text(encoding="utf-8") == other_writer
+    assert read_ledger("claude") == ledger_before
+
+
+def test_opencode_prefers_the_existing_jsonc_and_refuses_both() -> None:
+    home = Path.home()
+    base = home / ".config" / "opencode"
+    base.mkdir(parents=True, exist_ok=True)
+    jsonc = base / "opencode.jsonc"
+    plain = base / "opencode.json"
+    jsonc.write_text('// opencode\n{\n  /* theme */\n  "theme": "dark",\n}\n', encoding="utf-8")
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert applied.refused is None
+    assert applied.path == jsonc
+    assert [key.kind for key in applied.keys] == ["wrote"]
+    text = jsonc.read_text(encoding="utf-8")
+    assert "// opencode" in text
+    assert "/* theme */" in text
+    assert json.loads(strip_jsonc(text)) == {"theme": "dark", "permission": "allow"}
+    assert not plain.exists()
+
+    jsonc.unlink()
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    assert applied.path == plain
+    assert json.loads(plain.read_text(encoding="utf-8")) == {"permission": "allow"}
+
+    jsonc.write_text("{}\n", encoding="utf-8")
+    plain_before = plain.read_bytes()
+    jsonc_before = jsonc.read_bytes()
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    assert applied.refused == "both opencode.json and opencode.jsonc exist"
+    assert plain.read_bytes() == plain_before
+    assert jsonc.read_bytes() == jsonc_before
