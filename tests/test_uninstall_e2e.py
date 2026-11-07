@@ -787,3 +787,44 @@ def test_a_failed_removal_reverts_nothing(tmp_path: Path, monkeypatch: pytest.Mo
     assert result.settings_reverted == ()
     assert settings.read_bytes() == before
     assert ledger_summary("claude", home=tmp_path, platform_os="linux") != ()
+
+
+async def test_the_settings_pseudo_row_is_selected_and_refuses_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O5: the environment row shows the ledgered files, refuses `c`, and reverts every key."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    apply_setting("vscode", "vscode-ai-off", home=tmp_path, platform_os="linux")
+    app, _opt, _bin_dir, _myshellrc = _build_real_app(Path.home())
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        # From the first row down: fd, the environment title, the PATH wiring row, then this row.
+        await pilot.press("down", "down", "down", "down")
+        assert screen.detail_text == (
+            "reverts only keys that still hold this installer's value: "
+            "~/.claude/settings.json, ~/.config/Code/User/settings.json"
+        )
+        await pilot.press("c")
+        assert screen.status.text == "This row has no config to delete."
+        await pilot.press("a")  # select all: the tool, the PATH block and the settings row
+        await pilot.press("enter")  # accept -> confirmation modal
+        await pilot.press("enter")  # confirm: apply live
+        await settle(app, pilot)
+        assert isinstance(app.screen, UninstallScreen)
+        assert app.screen.applied is True
+    assert ledger_summary("claude", home=tmp_path, platform_os="linux") == ()
+    assert ledger_summary("vscode", home=tmp_path, platform_os="linux") == ()
+
+
+async def test_the_settings_row_is_absent_without_a_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, _opt, _bin_dir, _myshellrc = _build_real_app(Path.home())
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = app.screen
+        assert isinstance(screen, UninstallScreen)
+        await pilot.press("down", "down", "down", "down", "down")  # clamps at the last row
+        assert "reverts only keys" not in screen.detail_text

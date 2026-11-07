@@ -95,7 +95,7 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
-from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle
+from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle, shell_init_bundle, tweak_present
 from installer.uninstall import (
     MANAGER_UNINSTALL_ARGV,
     SweepResult,
@@ -647,14 +647,20 @@ def _command_error_line(exc: CommandError) -> str:
 HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
 
 
-def removal_change_lines(tools: Iterable[Tool], *, platform_os: str) -> tuple[str, ...]:
-    """The settings keys a removal of these tools reverts, one line per ledgered file."""
-    return tuple(
-        f"{tool.id}: removes {', '.join(keys)} from {display_path(path)}"
-        for tool in tools
-        if tool.id in receipts.CONFIG_AGENTS
-        for path, keys in ledger_summary(tool.id, home=Path.home(), platform_os=platform_os)
-    )
+def removal_change_lines(
+    tools: Iterable[Tool], *, platform_os: str, myshellrc_path: Path
+) -> tuple[str, ...]:
+    """What removing these tools changes: the settings keys a removal reverts (one line per
+    ledgered file) and the shell-init bundle it turns off (UI-SPEC section 6, block 3b)."""
+    lines: list[str] = []
+    for tool in tools:
+        if tool.id in receipts.CONFIG_AGENTS:
+            for path, keys in ledger_summary(tool.id, home=Path.home(), platform_os=platform_os):
+                lines.append(f"{tool.id}: removes {', '.join(keys)} from {display_path(path)}")
+        bundle = shell_init_bundle(tool.id) if tool.id in SHELL_INIT_TOOLS else None
+        if bundle is not None and tweak_present(bundle, myshellrc_path):
+            lines.append(f"{tool.id}: turns off its shell init in ~/.myshellrc")
+    return tuple(lines)
 
 
 def _revert_settings(
@@ -684,14 +690,29 @@ def _revert_settings(
     )
 
 
-def _after_removal(tool: Tool, *, platform_os: str) -> SweepResult:
-    """What a successful removal takes with it: the settings keys the installer wrote for it."""
-    if tool.id not in receipts.CONFIG_AGENTS:
-        return SweepResult()
-    # shortcut: no CONFIG_AGENTS tool declares config_paths, so a removal never deletes a settings
-    # file; when one does, revert first, then delete it and drop its ledger entries.
-    reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
-    return SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept)
+def _after_removal(
+    tool: Tool,
+    *,
+    bin_dir: Path,
+    myshellrc_path: Path,
+    extra_policies: tuple[Policy, ...],
+    platform_os: str,
+) -> SweepResult:
+    """What a successful removal takes with it: its settings keys, its shell-init bundle, and the
+    desktop SHELL row when zsh goes (T-23-62). Nothing else of the tweak sweep is touched."""
+    parts: list[SweepResult] = []
+    if tool.id in receipts.CONFIG_AGENTS:
+        # shortcut: no CONFIG_AGENTS tool declares config_paths, so a removal never deletes a
+        # settings file; when one does, revert first, then delete it and drop its ledger entries.
+        reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
+        parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
+    if tool.id in SHELL_INIT_TOOLS and (bundle := shell_init_bundle(tool.id)) is not None:
+        shell = sweep_policies(active_policies((bundle,), rc_path=myshellrc_path, bin_dir=bin_dir))
+        parts.append(dataclasses.replace(shell, shell_init_off=(tool.id,) if shell.swept else ()))
+    if tool.id == "zsh" and platform_os != "macos":
+        owned = [p for p in extra_policies if p.id == "desktop-shell" and policy_owned(p)]
+        parts.append(sweep_policies(owned))
+    return _merge(parts)
 
 
 def _merge(results: Sequence[SweepResult]) -> SweepResult:
@@ -858,9 +879,14 @@ def run_uninstall(
         extra_policies=extra_policies,
     )
     tweaks = tuple(policy.id for policy in policies)
-    # A machine whose only tools-installer footprint is an enabled tweak must
+    settings_files = [
+        (agent, path, keys)
+        for agent in receipts.CONFIG_AGENTS
+        for path, keys in ledger_summary(agent, home=Path.home(), platform_os=platform_os)
+    ]
+    # A machine whose only tools-installer footprint is an enabled tweak or a settings key must
     # not be told there is nothing to uninstall.
-    if not paths and not commands and not shimmed and not tweaks:
+    if not paths and not commands and not shimmed and not tweaks and not settings_files:
         render_uninstall([], console)  # prints the "nothing to uninstall" line
         # Even here the user learns what matched by name and was left alone.
         render_remove_yourself(yourself, console)
@@ -924,9 +950,21 @@ def run_uninstall(
         for entry in kept_config:
             console.print(f"  {entry}", markup=False, soft_wrap=True)
     for line in removal_change_lines(
-        (tool for tool, plan in ordered if plan.level != "none"), platform_os=platform_os
+        (tool for tool, plan in ordered if plan.level != "none"),
+        platform_os=platform_os,
+        myshellrc_path=myshellrc_path,
     ):
         console.print(line, markup=False, soft_wrap=True)
+    if settings_files:
+        console.print(
+            "Agent and editor settings this installer wrote (reverted):",
+            markup=False,
+            soft_wrap=True,
+        )
+        for _agent, path, keys in settings_files:
+            console.print(
+                f"  {display_path(path)}: {', '.join(keys)}", markup=False, soft_wrap=True
+            )
     if not confirm("Remove these artifacts?"):
         return [], ()
     # H1 (17-REVIEW-opencode.md): the preview is not a permission slip. Each tool
@@ -953,7 +991,15 @@ def run_uninstall(
             console.print(line)
         if outcome.removed:
             removed.extend(plan.removable)
-            after.append(_after_removal(tool, platform_os=platform_os))
+            after.append(
+                _after_removal(
+                    tool,
+                    bin_dir=default_bin_dir,
+                    myshellrc_path=myshellrc_path,
+                    extra_policies=extra_policies,
+                    platform_os=platform_os,
+                )
+            )
             if outcome.unregistered:
                 console.print(
                     f"Unregistered from agent hosts: {host_labels(outcome.unregistered)}.",
@@ -968,6 +1014,10 @@ def run_uninstall(
         else:
             console.print(f"{tool.id}: remove failed — {outcome.detail}")
             failed.append(tool.id)
+    # O5: the whole-environment run reverts every key the installer wrote, even for an agent
+    # whose tool is not being removed; each key still goes only while it holds our value.
+    reverted, kept, warnings = _revert_settings(receipts.CONFIG_AGENTS, platform_os=platform_os)
+    after.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
     done = _merge(after)
     remove_managed_block(myshellrc_path)
     remove_shims(default_bin_dir)
@@ -976,7 +1026,8 @@ def run_uninstall(
         remove_ban_aliases(rc_path)
     # Report the sweep's own result, not the preview: only this knows what came
     # off, and a per-policy failure no longer aborts the rest of the teardown.
-    swept = sweep_policies(policies)
+    # A policy a tool's own removal already turned off is not swept (and reported) twice.
+    swept = sweep_policies([policy for policy in policies if policy.id not in done.swept])
     if swept.swept:
         # Byte-identical to today ("Shell tweaks disabled: ...") when no
         # daemon: id is among what the sweep actually swept.
@@ -1034,6 +1085,8 @@ class UninstallDecision:
     unregister: Mapping[str, tuple[tuple[str, ...], ...]] = field(
         default_factory=dict[str, tuple[tuple[str, ...], ...]]
     )
+    # The environment row: revert every key the ledgers record, for every settings agent (O5).
+    revert_settings: bool = False
 
 
 def _config_step(
@@ -1137,7 +1190,15 @@ def perform_uninstall(
         unregistered.extend(outcome.unregistered)
         if outcome.removed:
             removed.append(tool.id)
-            after.append(_after_removal(tool, platform_os=platform_os))
+            after.append(
+                _after_removal(
+                    tool,
+                    bin_dir=bin_dir,
+                    myshellrc_path=myshellrc_path,
+                    extra_policies=extra_policies,
+                    platform_os=platform_os,
+                )
+            )
         else:
             remove_failed.append((tool.id, outcome.detail))
         if outcome.removed and not outcome.detail:
@@ -1153,6 +1214,9 @@ def perform_uninstall(
         for tool in decision.tools
         if decision.config.get(tool.id) and tool.id not in removed
     )
+    if decision.revert_settings:
+        reverted, kept, warnings = _revert_settings(receipts.CONFIG_AGENTS, platform_os=platform_os)
+        after.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
     done = _merge(after)
     if decision.remove_ban:
         remove_shims(bin_dir)
