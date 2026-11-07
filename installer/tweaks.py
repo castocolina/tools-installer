@@ -363,11 +363,13 @@ def strip_legacy_aliases(rc_path: Path) -> LegacyStrip:
 def bundle_marker_present(bundle_id: str, rc_path: Path) -> bool:
     """True when rc_path exists and carries the begin marker of the bundle's block."""
     begin, _ = _markers(bundle_id)
-    try:  # read at launch for every bundle row: an undecodable byte or a directory never raises
-        text = rc_path.read_bytes().decode("utf-8", errors="replace")
+    # Read at launch for every bundle row: an undecodable byte, a directory, a FIFO or an
+    # oversize file never raises or blocks (non-blocking capped read, like the alias strip).
+    try:
+        data = read_capped(rc_path, _RC_MAX_BYTES, follow_symlinks=True)
     except OSError:
         return False
-    return begin in text.split("\n")
+    return data is not None and begin in data.decode("utf-8", errors="replace").split("\n")
 
 
 def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:

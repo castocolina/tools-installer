@@ -276,6 +276,25 @@ def test_bundle_marker_present_reads_the_begin_marker(tmp_path: Path) -> None:
     assert tweak_present(bundle, rc) is True
 
 
+def test_bundle_marker_present_never_blocks_on_a_fifo(tmp_path: Path) -> None:
+    """O-1: a FIFO at ~/.myshellrc reads as no marker instead of hanging the launch."""
+    import os
+    import threading
+
+    rc = tmp_path / ".myshellrc"
+    os.mkfifo(rc)
+    answers: list[bool] = []
+    reader = threading.Thread(
+        target=lambda: answers.append(bundle_marker_present("countdown", rc)), daemon=True
+    )
+    reader.start()
+    reader.join(timeout=5)
+    if reader.is_alive():
+        os.close(os.open(rc, os.O_WRONLY | os.O_NONBLOCK))  # release the blocked reader
+        reader.join(timeout=5)
+    assert answers == [False]
+
+
 def test_re_enable_does_not_duplicate(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
     bundle = _bundle("docker")
