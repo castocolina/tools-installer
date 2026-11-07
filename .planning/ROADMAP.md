@@ -421,7 +421,7 @@ Plans:
   3. A test that tries to run a real toolchain (directly, via `sh -c`, or via a linuxbrew binary) or open a network socket fails, and the widened real-HOME fingerprint fails the run when any watched path changes.
   4. The container e2e is the only place real packages are installed or removed, and it asserts that `~/.claude/gsd-core` and `~/.claude/.gsd-source` stay absent.
 
-**Plans**: 6/18 plans executed
+**Plans**: 11/18 plans executed
 
 Plans:
 **Wave 1**
@@ -433,11 +433,11 @@ Plans:
 - [x] 23.1-11-PLAN.md — `Tool.retired` and `receipts.scan_retired` (corrupt and unreadable receipts warn)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 23.1-02-PLAN.md — Move agent-host detection (`present_harnesses`, 17-host table) into postinstall
-- [ ] 23.1-07-PLAN.md — Engine and session run no skill-pack action; host_setup still hands off
-- [ ] 23.1-08-PLAN.md — Front ends read no skill-pack state (headless pass, refresh worker, Owner cell)
-- [ ] 23.1-09-PLAN.md — Rewrite an outdated npx redirect and guard alias block at every launch route through one `_launch_repairs()`; doctor docs
-- [ ] 23.1-10-PLAN.md — Test PATH/env sandbox before collection; one interpreter link dir per run; with-fd skips recorded
+- [x] 23.1-02-PLAN.md — Move agent-host detection (`present_harnesses`, 17-host table) into postinstall
+- [x] 23.1-07-PLAN.md — Engine and session run no skill-pack action; host_setup still hands off
+- [x] 23.1-08-PLAN.md — Front ends read no skill-pack state (headless pass, refresh worker, Owner cell)
+- [x] 23.1-09-PLAN.md — Rewrite an outdated npx redirect and guard alias block at every launch route through one `_launch_repairs()`; doctor docs
+- [x] 23.1-10-PLAN.md — Test PATH/env sandbox before collection; one interpreter link dir per run; with-fd skips recorded
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 23.1-12-PLAN.md — Refresh service and version cache keep no skill-pack state; old caches load; `home` rename
@@ -569,7 +569,7 @@ Plans:
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
-| 23.1 Host safety | 6/18 | In Progress | - |
+| 23.1 Host safety | 11/18 | In Progress | - |
 | 23.2 Install-time tuning | 0/TBD | Not started | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
