@@ -9,6 +9,7 @@ and the event loop paints them.
 
 from __future__ import annotations
 
+import codecs
 import io
 import threading
 import time
@@ -328,6 +329,16 @@ class InstallRunStarted(Message):
     a hard abort inside it exits before InstallRunFinished can arrive, and
     the exit-code readers must see the run was interrupted, not clean.
     """
+
+
+def wants_ascii_spinner(encoding: str | None) -> bool:
+    """True unless the encoding is UTF-8: Braille frames do not encode on a legacy codec."""
+    if encoding is None:
+        return True
+    try:
+        return codecs.lookup(encoding).name != "utf-8"
+    except LookupError:
+        return True
 
 
 @dataclass(frozen=True)

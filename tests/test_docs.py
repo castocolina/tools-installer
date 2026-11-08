@@ -120,7 +120,7 @@ _PHASE_15_2_REQUIRED = (
     "LD_PRELOAD",
     "retried unwrapped",
     "unwrapped argv",
-    "waiting for output",
+    "still running",
     "silence generation",
     "per in-flight tool",
 )
@@ -139,10 +139,11 @@ def test_architecture_records_phase_15_2_mechanisms() -> None:
     sudo's setuid boundary. retried unwrapped / unwrapped argv: a launch that
     fails on the wrapped argv is retried unwrapped exactly once, safe only
     because Popen raised before the target command started, and CommandError
-    always reports the unwrapped argv a user can paste back. waiting for
-    output: the UI-side indicator, produced by ExecuteScreen's self-re-arming
-    one-shot timer, that claims only liveness and waiting -- never that the
-    child is healthy. silence generation: the token every transient carries,
+    always reports the unwrapped argv a user can paste back. still running:
+    the UI-side indicator and its timestamped heartbeat lines, produced by
+    ExecuteScreen's self-re-arming silence tick, that claim only liveness and
+    waiting -- never that the child is healthy. silence generation: the token
+    every transient carries,
     without which a stale reassurance could be rendered after the output it
     was waiting for. per in-flight tool: the indicator is cleared by THE
     tool that finished, matched by id, and established only by the first
