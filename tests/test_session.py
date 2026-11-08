@@ -1640,6 +1640,25 @@ def test_install_tuning_step_refusal_fails_and_carries_the_settings(
     assert settings.read_text(encoding="utf-8") == "{}\n"
 
 
+def test_install_tuning_step_fails_when_the_omz_plugin_write_is_refused() -> None:
+    """C-06: a refused Oh-My-Zsh plugins write is a failed step, not a done row."""
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    zshrc = home / ".zshrc"
+    refused = "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n"
+    zshrc.write_text(refused, encoding="utf-8")
+    catalog = {
+        "oh-my-zsh": replace(_shipped_catalog()["oh-my-zsh"], post_install=("set_omz_plugins",))
+    }
+    row = _reconfigure_row("oh-my-zsh", _ALL_KIND_STEPS["install_tuning"])
+
+    outcome = execute_plan([row], _run_context(RunRecorder(), catalog=catalog))[0]
+
+    assert outcome.result == "failed"
+    assert (outcome.detail or "").startswith("apply install tuning: The last plugins=(...) array")
+    assert zshrc.read_text(encoding="utf-8") == refused
+
+
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 

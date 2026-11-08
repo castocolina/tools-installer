@@ -364,6 +364,8 @@ def _install_tuning_step(tool: Tool, ctx: RunContext) -> _StepResult:
     if refused is not None:
         reason = f"{display_path(refused.path)}: {_first_line_of(refused.refused or 'refused')}"
         return _StepResult(failed=reason, settings=output.settings)
+    if output.refused is not None:
+        return _StepResult(failed=_first_line_of(output.refused), settings=output.settings)
     return _StepResult(warning="\n".join(output.lines) or None, settings=output.settings)
 
 
