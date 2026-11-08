@@ -4,7 +4,7 @@ The Phase 20 model (`Disposition`, `PlanRow`, `WORDS`, and `build_plan`) and
 its executor (`execute_plan`) live together here.
 """
 
-import shutil
+import os
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -18,7 +18,8 @@ from installer.agent_settings import (
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
-from installer.locations import display_path, prepend_path
+from installer.guards import real_binary
+from installer.locations import bin_dir, display_path, prepend_path
 from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (
     UNMANAGEABLE_OWNERS,
@@ -507,8 +508,9 @@ def _put_present_bin_dir_on_path(outcome: RowOutcome, ctx: RunContext) -> None:
     tool = ctx.catalog.get(outcome.row.tool_id)
     if outcome.result not in {"skipped", "done"} or tool is None:
         return
-    if shutil.which(tool.cmd) is not None:
-        return
+    shim_dir = bin_dir(None)
+    if real_binary(tool.cmd, shim_dir=shim_dir, path_value=os.environ.get("PATH", "")):
+        return  # a real binary answers; the installer's own shim never counts
     found = present_bin_dir(tool)
     if found is not None:
         prepend_path(found)

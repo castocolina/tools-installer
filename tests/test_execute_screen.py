@@ -3713,7 +3713,8 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_chsh_handoff_without_asking
 ) -> None:
     from installer import engine
 
-    def fake_which(_cmd: str) -> str:
+    def fake_which(_cmd: str, path: str | None = None) -> str:
+        del path
         return "/usr/bin/chsh"
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
@@ -3797,7 +3798,8 @@ async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_chsh_handoff_wi
 ) -> None:
     from installer import engine
 
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
+        del path
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
