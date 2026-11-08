@@ -2157,6 +2157,35 @@ async def test_silence_heartbeat_boundary_is_exactly_ten_seconds() -> None:
         await _settle_execute(screen, pilot)
 
 
+async def test_silence_heartbeat_after_a_stalled_loop_writes_one_line_per_window() -> None:
+    """C-08: a tick that lands late writes one heartbeat for its 10 s window, and the next
+    tick a second later writes none (SPEC R10: one line per further 10 s)."""
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        for at, expected in ((21.0, 1), (22.0, 1), (29.9, 1), (30.0, 2)):
+            clock.value = at
+            wall.value = _WALL_START + at
+            _tick(screen)
+            await pilot.pause()
+            assert len(_heartbeat_lines(screen)) == expected, f"at {at} s of silence"
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
 async def test_silence_a_step_printing_every_five_seconds_shows_no_heartbeat() -> None:
     clock = _FakeClock()
     started = threading.Event()

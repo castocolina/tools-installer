@@ -816,7 +816,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             return
         self._show_silence(self._silence_line(in_flight, int(elapsed)))
         if elapsed >= HEARTBEAT_SECONDS * (self._silence_heartbeats + 1):
-            self._silence_heartbeats += 1
+            # The window `elapsed` is in, so a late tick writes one line, not one per missed 10 s.
+            self._silence_heartbeats = int(elapsed // HEARTBEAT_SECONDS)
             stamp = time.strftime("%H:%M:%S", time.localtime(self._inputs.wall_clock()))
             self.post_message(
                 InstallLogLine(
