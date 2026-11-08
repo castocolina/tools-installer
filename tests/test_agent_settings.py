@@ -10,6 +10,7 @@ import pytest
 from installer import agent_settings, receipts
 from installer.agent_settings import (
     CHANGED_WHILE_WRITING,
+    FileResult,
     SettingsChanged,
     SettingsEditRefused,
     SettingsParseError,
@@ -25,7 +26,6 @@ from installer.agent_settings import (
     remove_key,
     replace_value,
     revert_agent,
-    revert_setting,
     same_value,
     setting_state,
     strip_jsonc,
@@ -341,6 +341,12 @@ def test_a_symlinked_settings_file_is_edited_through_its_target(tmp_path: Path) 
     assert json.loads(target.read_text(encoding="utf-8")) == {"model": "opus", "flag": True}
 
 
+def _reverted(agent: str, *, home: Path) -> FileResult:
+    """The one FileResult of reverting everything the ledger records for `agent`."""
+    (result,) = revert_agent(agent, home=home, platform_os="linux")
+    return result
+
+
 def _claude_settings_file() -> Path:
     path = Path.home() / ".claude" / "settings.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,7 +379,7 @@ def test_claude_auto_approve_writes_records_and_reverts_byte_identical() -> None
         ("skipDangerousModePermissionPrompt",),
     ]
 
-    reverted = revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+    reverted = _reverted("claude", home=home)
 
     assert [key.kind for key in reverted.keys] == ["removed", "removed"]
     assert settings.read_text(encoding="utf-8") == original
@@ -395,7 +401,7 @@ def test_a_user_accept_edits_stays_and_reads_set_by_you() -> None:
     assert ledger is not None
     assert [entry.key_path for entry in ledger.entries] == [("skipDangerousModePermissionPrompt",)]
 
-    reverted = revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+    reverted = _reverted("claude", home=home)
 
     assert [key.kind for key in reverted.keys] == ["removed"]
     assert json.loads(settings.read_text(encoding="utf-8")) == {
@@ -418,7 +424,7 @@ def test_a_missing_settings_file_is_created_and_deleted_on_revert() -> None:
     assert ledger is not None
     assert ledger.created_files == (str(settings),)
 
-    revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+    _reverted("claude", home=home)
 
     assert not settings.exists()
     assert read_ledger("claude") is None
@@ -615,9 +621,9 @@ def test_a_tampered_ledger_never_removes_a_user_key() -> None:
     write_ledger(ConfigLedger("claude", ledger.created_files, ledger.entries + forged))
     other_before = other.read_bytes()
 
-    reverted = revert_setting("claude", "auto-approve", home=home, platform_os="linux")
+    reverted = revert_agent("claude", home=home, platform_os="linux")
 
-    assert {key.key for key in reverted.keys} <= {
+    assert {key.key for result in reverted for key in result.keys} <= {
         "permissions.defaultMode",
         "skipDangerousModePermissionPrompt",
     }
@@ -715,7 +721,7 @@ def test_codex_auto_approve_goes_to_the_top_level() -> None:
     assert doc["approval_policy"] == "never"
     assert doc["sandbox_mode"] == "danger-full-access"
 
-    revert_setting("codex", "auto-approve", home=home, platform_os="linux")
+    _reverted("codex", home=home)
 
     assert codex.read_text(encoding="utf-8") == original
 
@@ -737,7 +743,7 @@ def test_claude_attribution_uses_empty_strings() -> None:
         "pr": "",
     }
 
-    revert_setting("claude", "no-attribution", home=home, platform_os="linux")
+    _reverted("claude", home=home)
 
     assert settings.read_text(encoding="utf-8") == original
 
@@ -768,7 +774,7 @@ def test_cursor_attribution_replaces_cli_defaults_and_restores_them() -> None:
 
     doc["attribution"]["attributeCommitsToAgent"] = True
     cursor.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    reverted = revert_setting("cursor-agent", "no-attribution", home=home, platform_os="linux")
+    reverted = _reverted("cursor-agent", home=home)
 
     assert {(key.key, key.kind) for key in reverted.keys} == {
         ("attribution.attributePRsToAgent", "removed"),
@@ -800,7 +806,7 @@ def test_vscode_lean_adds_only_absent_keys_and_keeps_comments() -> None:
     assert doc["editor.minimap.enabled"] is True
     assert doc["terminal.integrated.defaultProfile.linux"] == "zsh"
 
-    revert_setting("vscode", "vscode-lean", home=home, platform_os="linux")
+    _reverted("vscode", home=home)
 
     assert vscode.read_text(encoding="utf-8") == original
 
@@ -840,12 +846,9 @@ def test_vscode_ai_off_and_ext_updates_off_are_separate_settings() -> None:
         "extensions.autoCheckUpdates": False,
     }
 
-    revert_setting("vscode", "vscode-ai-off", home=home, platform_os="linux")
+    revert_agent("vscode", home=home, platform_os="linux")
 
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "extensions.autoUpdate": False,
-        "extensions.autoCheckUpdates": False,
-    }
+    assert json.loads(path.read_text(encoding="utf-8")) == {}
 
 
 def test_revert_agent_and_ledger_summary_cover_every_setting() -> None:
@@ -914,7 +917,7 @@ def test_a_user_zero_is_not_our_false() -> None:
         replaced_default=True,
     )
     write_ledger(ConfigLedger("cursor-agent", ledger.created_files, (*ledger.entries, forged)))
-    reverted = revert_setting("cursor-agent", "no-attribution", home=home, platform_os="linux")
+    reverted = _reverted("cursor-agent", home=home)
 
     assert {key.key: key.kind for key in reverted.keys}["attribution.attributeCommitsToAgent"] == (
         "kept_changed"
@@ -956,7 +959,7 @@ def test_vscode_lean_reverts_after_vscode_appends_a_user_key() -> None:
     close = text.rstrip().rfind("}")
     path.write_text(text[:close] + ',\n  "workbench.colorTheme": "x"\n' + text[close:], "utf-8")
 
-    reverted = revert_setting("vscode", "vscode-lean", home=home, platform_os="linux")
+    reverted = _reverted("vscode", home=home)
 
     assert reverted.refused is None
     assert {key.kind for key in reverted.keys} == {"removed"}
@@ -982,8 +985,8 @@ def test_opencode_and_a_created_claude_parent_revert_after_a_user_key_follows() 
         "utf-8",
     )
 
-    for agent, setting in (("opencode", "auto-approve"), ("claude", "no-attribution")):
-        assert revert_setting(agent, setting, home=home, platform_os="linux").refused is None
+    for agent in ("opencode", "claude"):
+        assert _reverted(agent, home=home).refused is None
 
     assert json.loads(opencode.read_text(encoding="utf-8")) == {"theme": "dark"}
     assert json.loads(claude.read_text(encoding="utf-8")) == {"x": 1, "model": "opus"}
@@ -1010,7 +1013,7 @@ def test_revert_follows_the_recorded_file_not_the_one_resolved_now() -> None:
     apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
     jsonc.write_text("{}\n", encoding="utf-8")  # e.g. codegraph's own registration file
 
-    reverted = revert_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    reverted = _reverted("opencode", home=home)
 
     assert reverted.refused is None
     assert reverted.path == plain
@@ -1086,7 +1089,7 @@ def test_an_empty_file_a_bom_and_a_nested_toml_array_are_edited_not_refused() ->
     vscode.write_bytes(original)
     assert apply_setting("vscode", "vscode-ai-off", home=home, platform_os="linux").refused is None
     assert vscode.read_bytes().startswith("﻿".encode())
-    assert revert_setting("vscode", "vscode-ai-off", home=home, platform_os="linux").refused is None
+    assert _reverted("vscode", home=home).refused is None
     assert vscode.read_bytes() == original
 
     nested = 'args = [\n  ["a"],\n]\n\n[features]\nx = true\n'
@@ -1115,7 +1118,7 @@ def test_a_created_file_the_user_commented_is_kept_on_revert() -> None:
     apply_setting("vscode", "vscode-ai-off", home=home, platform_os="linux")
     vscode.write_text("// mine\n" + vscode.read_text(encoding="utf-8"), encoding="utf-8")
 
-    assert revert_setting("vscode", "vscode-ai-off", home=home, platform_os="linux").refused is None
+    assert _reverted("vscode", home=home).refused is None
 
     assert vscode.read_text(encoding="utf-8") == "// mine\n{}\n"
     assert read_ledger("vscode") is None

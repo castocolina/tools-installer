@@ -36,13 +36,13 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
-from installer.policy import Policy, settings_policies
+from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import UnavailableReason
 from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
 from installer.terminal_shell import TerminalShellResult
-from installer.tweaks import BUNDLES
+from installer.tweaks import BUNDLES, SHELL_INIT_TOOLS, shell_init_bundle
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, VersionRefreshService
@@ -770,33 +770,93 @@ def test_the_uninstall_view_reads_the_app_catalog_and_service(
     assert "rows" not in {field.name for field in dataclasses.fields(UninstallInputs)}
 
 
-def test_the_policies_view_is_wired_ban_then_tweaks_then_omz(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """omz is offered after the platform's tweak bundles; the daemon (macOS-only,
-    the newest addition) is offered last of all, per _sandbox's fixed macOS
-    Platform."""
+_KEPT_POLICY_IDS = {
+    "fedora": [
+        "ban",
+        "tweak:docker",
+        "tweak:countdown",
+        "tweak:apt-upgrade",
+        "daemon:prune-tmp-linux",
+        "cache-redirect:bun",
+        "desktop-shell",
+    ],
+    "macos": [
+        "ban",
+        "tweak:docker",
+        "tweak:countdown",
+        "daemon:prune-tmpdir",
+        "cache-redirect:bun",
+    ],
+}
+
+
+def _no_daemon(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
+def _policy_ids(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str, *, daemon: bool = True
+) -> list[str]:
+    """The ids `setup.main(["--uninstall"])` hands the Policies view on `platform_os`."""
     _sandbox(monkeypatch, tmp_path)
+    if platform_os != "macos":
+        linux = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=False)
+        monkeypatch.setattr(setup, "detect", lambda: linux)
+        monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
+    if not daemon:
+        monkeypatch.setattr(setup, "_build_daemon_policy", _no_daemon)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
+    return [policy.id for policy in policies.policies]
 
-    ids = [policy.id for policy in policies.policies]
-    assert ids[0] == "ban"
-    daemon_at = ids.index("daemon:prune-tmpdir")
-    assert ids[daemon_at - 1] == "omz-plugins"
-    assert all(policy_id.startswith("tweak:") for policy_id in ids[1 : daemon_at - 1])
-    # Phase 23 appends the settings rows after the cache redirects (23-14);
-    # macOS has no desktop row.
-    settings = [
-        p.id for p in settings_policies(home=tmp_path, platform_os="macos", installed_tools=None)
-    ]
-    redirects = ids[daemon_at + 1 : len(ids) - len(settings)]
-    assert all(policy_id.startswith("cache-redirect:") for policy_id in redirects)
-    assert ids[len(ids) - len(settings) :] == settings
-    assert ids[daemon_at + 1 :]
-    assert len(ids) > 3
+
+@pytest.mark.parametrize("platform_os", ["fedora", "macos"])
+def test_policies_list_keeps_only_the_kept_ids(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str
+) -> None:
+    """SPEC R7: exactly the rows outside any install, in their current order, ids compared
+    as exact strings (so a `tweak:` shell tool does not hide behind the kept `tweak:docker`)."""
+    ids = _policy_ids(monkeypatch, tmp_path, platform_os)
+    assert ids == _KEPT_POLICY_IDS[platform_os]
+    assert not any(i.startswith(("agent:", "vscode:")) or i == "omz-plugins" for i in ids)
+    assert not {f"tweak:{tool}" for tool in SHELL_INIT_TOOLS} & set(ids)
+
+
+@pytest.mark.parametrize("platform_os", ["fedora", "macos"])
+def test_policies_list_without_the_daemon_is_the_rest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str
+) -> None:
+    ids = _policy_ids(monkeypatch, tmp_path, platform_os, daemon=False)
+    assert ids == [i for i in _KEPT_POLICY_IDS[platform_os] if not i.startswith("daemon:")]
+
+
+def test_uninstall_still_sweeps_shell_init_and_omz(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-09: the Policies list dropped the shell-init and OMZ rows, but a full uninstall still
+    reports and removes their blocks."""
+    _sandbox(monkeypatch, tmp_path)
+    zoxide = shell_init_bundle("zoxide")
+    assert zoxide is not None
+    rc_path = tmp_path / ".myshellrc"
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(z)\nsource omz\n")
+    tweak_policy(zoxide, rc_path=rc_path, bin_dir=tmp_path / ".local" / "bin").apply()
+    omz_plugins_policy(zshrc_path=zshrc, state_path=rc_path, present=True).apply()
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    inputs = seen[0]["uninstall"]
+    assert isinstance(inputs, UninstallInputs)
+    assert {"tweak:zoxide", "omz-plugins"} <= set(inputs.tweak_ids())
+    inputs.remove(
+        UninstallDecision(
+            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
+        )
+    )
+    assert not {"tweak:zoxide", "omz-plugins"} & set(inputs.tweak_ids())
+    assert zshrc.read_text().startswith("plugins=(z)\n")
 
 
 def test_the_policy_requirements_read_the_shared_state(
@@ -832,7 +892,7 @@ def test_zsh_is_cleared_without_a_local_delenv() -> None:
     assert "ZSH" not in os.environ
 
 
-def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
+def test_build_app_wires_one_terminal_sync_closure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
@@ -848,16 +908,10 @@ def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
 
     setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
 
-    policies = seen[0]["policies"]
-    assert isinstance(policies, PolicyInputs)
-    omz = next(policy for policy in policies.policies if policy.id == "omz-plugins")
-    assert omz.missing_requirements() == ("oh-my-zsh",)
-    (tmp_path / ".oh-my-zsh").mkdir()
-    assert omz.missing_requirements() == ()
-
-    result = omz.apply()
-
-    assert result.warning == (
+    execute = seen[0]["execute"]
+    assert isinstance(execute, ExecuteInputs)
+    assert execute.terminal_sync is not None
+    assert execute.terminal_sync() == (
         "Terminal shell synchronization warning: wezterm configuration is user-owned"
     )
     assert len(calls) == 1
@@ -868,7 +922,6 @@ def test_build_app_wires_live_omz_availability_and_one_terminal_sync_closure(
         "lookup": postinstall.which_with_brew,
         "strip_only": False,
     }
-    assert (tmp_path / ".zshrc").exists()
 
 
 def _no_systemctl(_name: str) -> str | None:
@@ -4697,20 +4750,12 @@ def _linux() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
 
 
-def test_the_app_composes_the_settings_rows(
+def test_the_uninstall_sweep_carries_the_desktop_shell_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "detect", _linux)
     seen = _wired(monkeypatch, [])
-    policies = seen["policies"]
-    assert isinstance(policies, PolicyInputs)
-    settings = [
-        p.id for p in settings_policies(home=tmp_path, platform_os="fedora", installed_tools=None)
-    ]
-    ids = [p.id for p in policies.policies]
-    assert ids[-(len(settings) + 1) :] == [*settings, "desktop-shell"]
-
     captured: list[dict[str, object]] = []
 
     def fake_perform(_decision: object, **kwargs: object) -> SweepResult:

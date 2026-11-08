@@ -945,24 +945,6 @@ def _revert_results(
     )
 
 
-def revert_setting(
-    agent: str,
-    setting: str,
-    *,
-    home: Path,
-    platform_os: str,
-    environ: Mapping[str, str] | None = None,
-) -> FileResult:
-    """Undo the ledger's keys for this setting that still hold our value; anything else is left.
-    Over several recorded files, the first refusal is reported, else every file's keys."""
-    results = _revert_results(agent, setting, home=home, platform_os=platform_os, environ=environ)
-    refused = next((result for result in results if result.refused is not None), None)
-    if refused is not None:
-        return refused
-    keys = tuple(key for result in results for key in result.keys)
-    return FileResult(agent, setting, results[0].path, results[0].fmt, keys=keys)
-
-
 SettingState = Literal["on", "yours", "off", "drift"]
 
 
