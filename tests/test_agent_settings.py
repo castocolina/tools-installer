@@ -27,7 +27,6 @@ from installer.agent_settings import (
     replace_value,
     revert_agent,
     same_value,
-    setting_state,
     strip_jsonc,
     write_if_unchanged,
 )
@@ -447,70 +446,6 @@ def test_an_invalid_settings_file_is_refused_and_byte_identical() -> None:
     assert read_ledger("claude") is None
 
 
-def test_setting_state_reads_each_state() -> None:
-    home = Path.home()
-    settings = _claude_settings_file()
-    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "off"
-
-    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
-    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "on"
-
-    settings.write_text('{"permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8")
-    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "drift"
-
-    settings.write_text(
-        json.dumps(
-            {
-                "permissions": {"defaultMode": "bypassPermissions"},
-                "skipDangerousModePermissionPrompt": True,
-            }
-        ),
-        encoding="utf-8",
-    )
-    write_ledger(ConfigLedger("claude"))
-    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "yours"
-
-
-def test_setting_facts_split_written_yours_already_and_drift() -> None:
-    home = Path.home()
-    settings = _claude_settings_file()
-    keys = ("permissions.defaultMode", "skipDangerousModePermissionPrompt")
-
-    def facts() -> agent_settings.SettingFacts:
-        return agent_settings.setting_facts(
-            "claude", "auto-approve", home=home, platform_os="linux"
-        )
-
-    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
-    recorded = facts()
-    assert (recorded.written, recorded.set_by_you, recorded.already, recorded.drifted) == (
-        keys,
-        (),
-        (),
-        (),
-    )
-
-    settings.write_text('{"permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8")
-    drifted = facts()
-    assert (drifted.written, drifted.drifted) == ((), keys)
-
-    write_ledger(ConfigLedger("claude"))
-    yours = facts()
-    assert yours.set_by_you == (("permissions.defaultMode", '"acceptEdits"'),)
-    assert yours.written == yours.already == yours.drifted == ()
-
-    settings.write_text(
-        json.dumps(
-            {
-                "permissions": {"defaultMode": "bypassPermissions"},
-                "skipDangerousModePermissionPrompt": True,
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert facts().already == keys
-
-
 def test_setting_facts_absent_lists_only_unrecorded_missing_keys_in_order() -> None:
     home = Path.home()
     settings = _claude_settings_file()
@@ -569,7 +504,7 @@ def test_a_malformed_blank_files_field_makes_the_ledger_untrusted(bad: object) -
     assert read_ledger("claude") is None
 
 
-def test_setting_facts_treat_a_non_object_parent_as_set_by_you_not_absent() -> None:
+def test_setting_facts_never_call_a_key_under_a_non_object_parent_absent() -> None:
     """C-02: the writer refuses a key under a non-object parent as `set_by_you`, so the
     facts must too, or the `≈` step it raises could never clear."""
     home = Path.home()
@@ -578,7 +513,6 @@ def test_setting_facts_treat_a_non_object_parent_as_set_by_you_not_absent() -> N
 
     facts = agent_settings.setting_facts("claude", "auto-approve", home=home, platform_os="linux")
     assert facts.absent == ("skipDangerousModePermissionPrompt",)
-    assert [key for key, _ in facts.set_by_you] == ["permissions.defaultMode"]
 
     applied = apply_setting(
         "claude", "auto-approve", home=home, platform_os="linux", skip_recorded=True
@@ -614,7 +548,6 @@ def test_apply_on_drift_rewrites_absent_keys_and_forgets_changed_ones() -> None:
     settings.write_text(
         '{"model": "opus", "permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8"
     )
-    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "drift"
 
     applied = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
 
@@ -625,7 +558,6 @@ def test_apply_on_drift_rewrites_absent_keys_and_forgets_changed_ones() -> None:
     ledger = read_ledger("claude")
     assert ledger is not None
     assert [entry.key_path for entry in ledger.entries] == [("skipDangerousModePermissionPrompt",)]
-    assert setting_state("claude", "auto-approve", home=home, platform_os="linux") == "on"
 
 
 def test_an_unparsable_file_is_unreadable_only_with_a_ledger_record() -> None:
@@ -636,14 +568,14 @@ def test_an_unparsable_file_is_unreadable_only_with_a_ledger_record() -> None:
     problem = file_problem("codex", home=home, platform_os="linux")
     assert problem is not None
     assert problem.startswith("not valid TOML (line ")
-    assert setting_state("codex", "auto-approve", home=home, platform_os="linux") == "off"
+    assert agent_settings.setting_facts("codex", "auto-approve", home=home, platform_os="linux")
 
     entry = ConfigWrite(
         "auto-approve", str(codex), ("approval_policy",), "never", 'approval_policy = "never"\n'
     )
     write_ledger(ConfigLedger("codex", entries=(entry,)))
     with pytest.raises(SettingsUnreadable) as caught:
-        setting_state("codex", "auto-approve", home=home, platform_os="linux")
+        agent_settings.setting_facts("codex", "auto-approve", home=home, platform_os="linux")
     assert (
         str(caught.value)
         == f"~/.codex/config.toml is {problem}; nothing is written until it parses"
@@ -1085,7 +1017,6 @@ def test_a_recorded_file_that_is_gone_is_reported_and_no_other_file_is_touched()
     renamed = jsonc.read_bytes()
     ledger_before = read_ledger("opencode")
 
-    assert setting_state("opencode", "auto-approve", home=home, platform_os="linux") != "yours"
     reverted = revert_agent("opencode", home=home, platform_os="linux")
 
     assert [(result.path, result.refused) for result in reverted] == [

@@ -953,9 +953,6 @@ def _revert_results(
     )
 
 
-SettingState = Literal["on", "yours", "off", "drift"]
-
-
 class SettingsUnreadable(OSError):
     """A settings file the ledger manages does not parse: its state is unknown until it does."""
 
@@ -994,14 +991,11 @@ def file_problem(
 
 @dataclass(frozen=True)
 class SettingFacts:
-    """Who put each of one setting's keys where it now is; `path` is the file they live in."""
+    """Where one setting stands: `path` is the file its keys live in, `absent` the keys the
+    installer never recorded that the file lacks (the pending install tuning)."""
 
     path: Path
-    written: tuple[str, ...]  # recorded keys still holding our value
-    set_by_you: tuple[tuple[str, str], ...]  # (key, JSON value): another value, no record
-    already: tuple[str, ...]  # keys holding our value, no record
-    drifted: tuple[str, ...]  # recorded keys that no longer hold our value
-    absent: tuple[str, ...] = ()  # keys never recorded and missing from the file
+    absent: tuple[str, ...] = ()
 
 
 def setting_facts(
@@ -1030,59 +1024,18 @@ def setting_facts(
     if doc is None:
         if in_file:
             raise SettingsUnreadable(path, problem or "unreadable")
-        return SettingFacts(path, (), (), (), ())  # absent stays empty: nothing is readable
-    holding = tuple(
-        ".".join(entry.key_path)
-        for entry in in_file
-        if same_value(lookup(doc, entry.key_path), entry.value)
-    )
-    drifted = tuple(
-        ".".join(entry.key_path)
-        for entry in in_file
-        if not same_value(lookup(doc, entry.key_path), entry.value)
-    )
+        return SettingFacts(path)  # absent stays empty: nothing is readable
     recorded = {entry.key_path for entry in in_file}
-    set_by_you: list[tuple[str, str]] = []
-    already: list[str] = []
     absent: list[str] = []
     for key in setting_keys(agent, setting, platform_os):
         if key.path in recorded:
             continue
         parent = lookup(doc, key.path[:-1])
         if parent is not ABSENT and not isinstance(parent, dict):
-            set_by_you.append((".".join(key.path), _dump(parent)))  # the writer's rule
-            continue
-        current = lookup(doc, key.path)
-        if current is ABSENT:
+            continue  # the writer reports it as set by you: never pending
+        if lookup(doc, key.path) is ABSENT:
             absent.append(".".join(key.path))
-            continue
-        if same_value(current, key.value):
-            already.append(".".join(key.path))
-        elif not (key.cli_default is not ABSENT and same_value(current, key.cli_default)):
-            # A CLI default is replaced on apply, so it is not the user's own value.
-            set_by_you.append((".".join(key.path), _dump(current)))
-    return SettingFacts(path, holding, tuple(set_by_you), tuple(already), drifted, tuple(absent))
-
-
-def setting_state(
-    agent: str,
-    setting: str,
-    *,
-    home: Path,
-    platform_os: str,
-    environ: Mapping[str, str] | None = None,
-) -> SettingState:
-    """on: a recorded key still holds ours. drift: recorded keys were all changed by someone else.
-    yours: every key holds ours and nothing is recorded. off: anything else."""
-    facts = setting_facts(agent, setting, home=home, platform_os=platform_os, environ=environ)
-    if facts.written:
-        return "on"
-    if facts.drifted:
-        return "drift"
-    keys = setting_keys(agent, setting, platform_os)
-    if keys and len(facts.already) == len(keys):
-        return "yours"
-    return "off"
+    return SettingFacts(path, tuple(absent))
 
 
 def revert_agent(

@@ -288,10 +288,6 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
 }
 
 
-# The actions that make up a tool's install tuning, in the order a tool declares them.
-TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning", "set_omz_plugins", "source_shell_init")
-
-
 def apply_install_tuning(
     tool: Tool, platform: Platform, *, skip_recorded: bool
 ) -> PostInstallOutput:

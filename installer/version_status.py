@@ -712,17 +712,15 @@ def _agent_tuning_fact(tool: Tool, present: bool, platform: Platform) -> _Config
                 )
                 return _ConfigFacts((str(agent_settings.SettingsUnreadable(path, problem)),))
         ledger = receipts.read_ledger(agent)
-        if ledger is not None:
-            for setting in dict.fromkeys(entry.setting for entry in ledger.entries):
-                agent_settings.setting_state(
-                    agent, setting, home=home, platform_os=platform.os, environ=os.environ
-                )
-        if tuned and any(
-            agent_settings.setting_facts(
-                agent, group, home=home, platform_os=platform.os, environ=os.environ
-            ).absent
-            for group in agent_settings.TUNING_GROUPS.get(agent, ())
-        ):
+        recorded = tuple(entry.setting for entry in ledger.entries) if ledger else ()
+        groups = agent_settings.TUNING_GROUPS.get(agent, ()) if tuned else ()
+        pending = False
+        for setting in dict.fromkeys((*recorded, *groups)):  # one read per setting
+            facts = agent_settings.setting_facts(
+                agent, setting, home=home, platform_os=platform.os, environ=os.environ
+            )
+            pending = pending or (setting in groups and bool(facts.absent))
+        if pending:
             return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
     except agent_settings.SettingsUnreadable as exc:
         return _ConfigFacts((str(exc),))  # one reason per file: stop this agent
