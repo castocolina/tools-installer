@@ -187,13 +187,6 @@ def test_without_yes_the_plan_is_printed_then_confirmed():
     assert isinstance(accepted_outcomes, list)
 
 
-_AUTO_APPROVE_QUESTION = "auto-approve agents — claude, codex: no permission prompts?"
-_ATTRIBUTION_QUESTION = "attribution off — claude: no agent credit in commits/PRs?"
-_PI_NOTE = "pi: nothing written; its approvals come only from extensions"
-_NO_KEY_NOTE = "no documented key: codex, pi (nothing written for them)"
-_LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
-
-
 class _ScriptedPrompter:
     """Answers from a script (an unscripted question is no) and records each question.
 
@@ -210,12 +203,12 @@ class _ScriptedPrompter:
         return self._answers.get(message, False)
 
 
-def test_headless_option_questions_default_to_no():
-    """D-09 / T-23-47: each run-option question defaults to no; only a yes turns one on."""
+def test_headless_run_asks_only_run_this_plan():
+    """D-10: the Phase 23 run-option questions are gone; the plan question is the only one."""
     tools = [_tool("claude", "agent"), _tool("codex", "agent"), _tool("pi", "agent")]
     _, install = _recording_install()
     console, buf = _console()
-    prompter = _ScriptedPrompter({_BATCH_QUESTION: True, _AUTO_APPROVE_QUESTION: True}, buf)
+    prompter = _ScriptedPrompter({_BATCH_QUESTION: True}, buf)
 
     outcomes = run_wizard(
         tools,
@@ -230,22 +223,14 @@ def test_headless_option_questions_default_to_no():
     )
 
     assert [(message, default) for message, default, _ in prompter.asked] == [
-        (_BATCH_QUESTION, True),
-        (_AUTO_APPROVE_QUESTION, False),
-        (_ATTRIBUTION_QUESTION, False),
+        (_BATCH_QUESTION, True)
     ]
-    printed = {message: text for message, _, text in prompter.asked}
-    assert _PI_NOTE in printed[_AUTO_APPROVE_QUESTION]
-    assert _NO_KEY_NOTE in printed[_ATTRIBUTION_QUESTION]
     assert outcomes is not None
-    home = Path.home()
-    assert "bypassPermissions" in (home / ".claude" / "settings.json").read_text()
-    assert "approval_policy" in (home / ".codex" / "config.toml").read_text()
-    assert '"attribution"' not in (home / ".claude" / "settings.json").read_text()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
 
 
-def test_headless_yes_asks_nothing_and_says_so():
-    """A7 / T-23-48: --yes asks no run-option question, turns no option on, and says so."""
+def test_headless_yes_asks_nothing_and_prints_no_run_option_notice():
+    """D-10: --yes asks nothing and prints no run-option notice (there are no run options)."""
     tools = [_tool("claude", "agent"), _tool("pi", "agent"), _tool("starship", "shell")]
     _, install = _recording_install()
     console, buf = _console()
@@ -267,7 +252,7 @@ def test_headless_yes_asks_nothing_and_says_so():
     assert outcomes is not None
     assert prompter.asked == []
     assert not (Path.home() / ".claude" / "settings.json").exists()
-    assert output.index(_LEFT_OFF) < output.index("Summary —")
+    assert "Run options" not in output
     assert "Shell init left off" not in output
 
 

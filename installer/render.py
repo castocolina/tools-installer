@@ -30,9 +30,7 @@ from installer.postinstall import CLAUDE_EXTRAS, host_labels
 from installer.sanitize import sanitize_log_line
 from installer.session import (
     NO_ATTRIBUTION_KEY_IDS,
-    OPTION_COVERS,
     RESULT_WORDS,
-    RUNNABLE,
     WORDS,
     Disposition,
     PlanRow,
@@ -306,12 +304,7 @@ def render_done_notes(outcomes: Sequence[RowOutcome], console: Console) -> None:
             console.print(line, markup=False, highlight=False, soft_wrap=True)
 
 
-def render_run_report(
-    outcomes: Sequence[RowOutcome],
-    console: Console,
-    *,
-    options: frozenset[str] = frozenset(),
-) -> None:
+def render_run_report(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print the summary followed by every outcome report in one fixed order."""
     render_run_summary(outcomes, console)
     installs = [outcome.install for outcome in outcomes if outcome.install is not None]
@@ -321,17 +314,15 @@ def render_run_report(
     render_postinstall_warnings(installs, console)
     render_resync_warnings(outcomes, console)
     render_hook_lines(outcomes, console)
-    render_settings_lines(outcomes, options, console)
+    render_settings_lines(outcomes, console)
     render_done_notes(outcomes, console)
     render_verification(installs, console)
     render_shell_section(outcomes, console)
 
 
-def render_settings_lines(
-    outcomes: Sequence[RowOutcome], options: frozenset[str], console: Console
-) -> None:
+def render_settings_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print the settings section (UI-SPEC section 4); silent when empty."""
-    lines = _settings_lines(outcomes, options)
+    lines = _settings_lines(outcomes)
     if not lines:
         return
     console.print("Agent and editor settings", style="bold", markup=False, highlight=False)
@@ -339,7 +330,7 @@ def render_settings_lines(
         console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
 
 
-def _settings_lines(outcomes: Sequence[RowOutcome], options: frozenset[str]) -> list[str]:
+def _settings_lines(outcomes: Sequence[RowOutcome]) -> list[str]:
     """One block per settings file in first-seen order, then the lines that have no file."""
     blocks: dict[tuple[str, Path], list[tuple[bool, str]]] = {}
     for outcome in outcomes:
@@ -349,29 +340,14 @@ def _settings_lines(outcomes: Sequence[RowOutcome], options: frozenset[str]) -> 
     for (agent, path), body in blocks.items():
         lines.append(f"{agent} — {display_path(path)}:")
         lines.extend(_with_revert_note(body))
-    ran = {outcome.row.tool_id for outcome in outcomes if outcome.row.disposition in RUNNABLE}
-    if "no-attribution" in options:
-        if "cursor-agent" in ran:
-            lines.append(
-                "cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)"
-            )
-        keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in ran]
-        if keyless:
-            lines.append(f"{', '.join(keyless)}: no documented attribution key; nothing written")
-    if "auto-approve" in options and "pi" in ran:
+    done = {outcome.row.tool_id for outcome in outcomes if outcome.result == "done"}
+    if "cursor-agent" in done:
+        lines.append("cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)")
+    keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in done]
+    if keyless:
+        lines.append(f"{', '.join(keyless)}: no documented attribution key; nothing written")
+    if "pi" in done:
         lines.append("pi: nothing written; pi has no approval setting in its core")
-    lines.extend(
-        f"{outcome.row.tool_id}: not installed by this run; nothing written"
-        for outcome in outcomes
-        if outcome.settings_skipped
-    )
-    for outcome in outcomes:
-        if outcome.desktop_shell is not None:
-            path, zsh = outcome.desktop_shell
-            lines += [f"environment.d — {path}:", f"  SHELL={zsh}; log in again to use it"]
-        if outcome.desktop_shell_error is not None:
-            path, error = outcome.desktop_shell_error
-            lines += [f"environment.d — {path}:", f"  not written: {error}"]
     return lines
 
 
@@ -379,7 +355,13 @@ def _file_lines(written: FileResult) -> list[tuple[bool, str]]:
     """(is a replaced CLI default, line) for each key of one settings result, or its refusal."""
     if written.refused is not None:
         if written.refused == CHANGED_WHILE_WRITING:
-            return [(False, f"  {CHANGED_WHILE_WRITING}; nothing written. Retry in Policies.")]
+            return [
+                (
+                    False,
+                    f"  {CHANGED_WHILE_WRITING}; nothing written. "
+                    "Reconfigure or reinstall the tool to retry.",
+                )
+            ]
         return [(False, f"  {written.refused}; nothing written")]
     lines: list[tuple[bool, str]] = []
     for key in written.keys:
@@ -416,55 +398,6 @@ def _with_revert_note(body: list[tuple[bool, str]]) -> list[str]:
         if index == last:
             lines.append("  revert restores the replaced defaults")
     return lines
-
-
-def run_option_lines(
-    option: str,
-    rows: Sequence[PlanRow],
-    *,
-    platform_os: str,
-    problems: Mapping[str, tuple[str, str]] | None = None,
-) -> tuple[str, tuple[str, ...]]:
-    """One run option's review text: its first line (no `[ ] ` cell) and its dim notes.
-
-    The strings are UI-SPEC section 1's, read by the TUI review and the headless prompts alike.
-    """
-    ran = {row.tool_id for row in rows if row.disposition in RUNNABLE}
-    _, covered = OPTION_COVERS.get(option, ("", ()))
-    listed = [agent for agent in covered if agent in ran]
-    notes: list[str] = []
-    if option == "auto-approve":
-        first = f"auto-approve agents — {', '.join(listed)}: no permission prompts"
-        if "pi" in ran:
-            notes.append("pi: nothing written; its approvals come only from extensions")
-    elif option == "no-attribution":
-        first = f"attribution off — {', '.join(listed)}: no agent credit in commits/PRs"
-        keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in ran]
-        if keyless:
-            notes.append(f"no documented key: {', '.join(keyless)} (nothing written for them)")
-        if "cursor-agent" in ran:
-            notes.append("cursor-agent: its CLI ignores the commit opt-out (as of 2026-10-04)")
-    elif option == "vscode-lean":
-        first = "VS Code lean mode — telemetry, experiments, minimap, auto-detect off"
-        notes.append(
-            "zsh terminal; update.mode set to none"
-            if platform_os == "macos"
-            else "zsh terminal; update.mode not written on Linux (this installer updates it)"
-        )
-    elif option == "vscode-ai-off":
-        first = "VS Code built-in AI off — chat.disableAIFeatures"
-    elif option == "vscode-ext-updates-off":
-        first = "VS Code extension auto-update off — security fixes only on demand"
-    else:
-        first = "SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)"
-    for agent in listed:
-        if problems and agent in problems:
-            file, fmt = problems[agent]
-            notes.append(f"{agent}: {file} is not valid {fmt}; nothing will be written")
-    return first, tuple(notes)
-
-
-RUN_OPTIONS_LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
 
 
 def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:

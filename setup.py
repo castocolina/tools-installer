@@ -53,7 +53,6 @@ from installer.locations import (
     zshrc_path,
 )
 from installer.model import Tool, load_categories, load_tools
-from installer.omz import omz_present
 from installer.ownership import read_inventory
 from installer.platform import Platform, detect
 from installer.policy import (
@@ -66,8 +65,6 @@ from installer.policy import (
     desktop_shell_policy,
     ensure_daemon_default,
     linux_daemon_policy,
-    omz_plugins_policy,
-    settings_policies,
     tweak_policy,
 )
 from installer.postinstall import BREW_BIN_DIRS, which_with_brew
@@ -87,7 +84,13 @@ from installer.settings import (
 from installer.shellrc import ShellrcRefusal, collect_bin_dirs, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_message, sync_terminal_shells, terminal_sync_warning
-from installer.tweaks import BUNDLES, LegacyStrip, applicable_bundles, strip_legacy_aliases
+from installer.tweaks import (
+    BUNDLES,
+    SHELL_INIT_TOOLS,
+    LegacyStrip,
+    applicable_bundles,
+    strip_legacy_aliases,
+)
 from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
@@ -932,10 +935,9 @@ def _build_app(
     # UninstallInputs). The tool rows are not an input: the view builds them
     # from the app's one published state, and the removal worker invalidates that
     # state through the app's own service (D-05). `terminal_sync` is the SAME closure
-    # `omz_plugins_policy` below and `UnifiedApp`'s own `terminal_sync` kwarg
-    # are bound with (D-01/15.6-06 Task 3) -- defined just above this
-    # construction so the reference resolves at statement-execution time,
-    # not only at call time.
+    # `UnifiedApp`'s own `terminal_sync` kwarg is bound with (D-01/15.6-06 Task 3) --
+    # defined just above this construction so the reference resolves at
+    # statement-execution time, not only at call time.
     catalog_ids = frozenset(tool.id for tool in tools)
     uninstall_inputs = UninstallInputs(
         ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
@@ -978,20 +980,10 @@ def _build_app(
                     ensure_sourced_from=_tweak_ensure_sourced_from,
                 )
                 for bundle in bundles
-            ),
-            omz_plugins_policy(
-                zshrc_path=_ZSHRC,
-                state_path=_MYSHELLRC,
-                present=lambda: omz_present(Path.home(), os.environ),
-                terminal_sync=_sync_omz_terminals,
+                if bundle.id not in SHELL_INIT_TOOLS
             ),
             *((daemon,) if daemon is not None else ()),
             *redirects,
-            *settings_policies(
-                home=Path.home(),
-                platform_os=platform.os,
-                installed_tools=version_refresh.installed_or(installed),
-            ),
             *desktop,
         ],
         link_mode=_current_link_mode if settings is not None else None,

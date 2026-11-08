@@ -15,7 +15,6 @@ from installer.executors import ExecutorError
 from installer.model import ConfigStep
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport
 from installer.render import (
-    RUN_OPTIONS_LEFT_OFF,
     outcome_detail_text,
     outcome_mark,
     outcome_row_text,
@@ -37,7 +36,6 @@ from installer.render import (
     render_shell_section,
     render_uninstall,
     render_verification,
-    run_option_lines,
     running_row_text,
     summary_head,
 )
@@ -1505,58 +1503,9 @@ def test_the_review_row_folds_a_long_manual_reason() -> None:
     assert all(cell_len(line) <= 78 for line in lines)
 
 
-def test_run_option_lines_match_the_ui_spec() -> None:
-    rows = [
-        PlanRow("claude", Disposition.INSTALL, ""),
-        PlanRow("codex", Disposition.INSTALL, ""),
-        PlanRow("pi", Disposition.INSTALL, ""),
-    ]
-    assert run_option_lines("no-attribution", rows, platform_os="fedora") == (
-        "attribution off — claude: no agent credit in commits/PRs",
-        ("no documented key: codex, pi (nothing written for them)",),
-    )
-    assert run_option_lines("auto-approve", rows, platform_os="fedora") == (
-        "auto-approve agents — claude, codex: no permission prompts",
-        ("pi: nothing written; its approvals come only from extensions",),
-    )
-    with_cursor = [*rows, PlanRow("cursor-agent", Disposition.INSTALL, "")]
-    assert run_option_lines("no-attribution", with_cursor, platform_os="fedora")[1] == (
-        "no documented key: codex, pi (nothing written for them)",
-        "cursor-agent: its CLI ignores the commit opt-out (as of 2026-10-04)",
-    )
-    vscode = [PlanRow("vscode", Disposition.UPDATE, "")]
-    assert run_option_lines("vscode-lean", vscode, platform_os="fedora") == (
-        "VS Code lean mode — telemetry, experiments, minimap, auto-detect off",
-        ("zsh terminal; update.mode not written on Linux (this installer updates it)",),
-    )
-    assert run_option_lines("vscode-lean", vscode, platform_os="macos")[1] == (
-        "zsh terminal; update.mode set to none",
-    )
-    assert run_option_lines("vscode-ai-off", vscode, platform_os="fedora") == (
-        "VS Code built-in AI off — chat.disableAIFeatures",
-        (),
-    )
-    assert run_option_lines("vscode-ext-updates-off", vscode, platform_os="fedora") == (
-        "VS Code extension auto-update off — security fixes only on demand",
-        (),
-    )
-    zsh = [PlanRow("zsh", Disposition.INSTALL, "")]
-    assert run_option_lines("desktop-shell", zsh, platform_os="fedora") == (
-        "SHELL=zsh for desktop apps — ~/.config/environment.d (log in again)",
-        (),
-    )
-
-
-def test_an_unparsable_target_file_adds_a_review_note() -> None:
-    rows = [PlanRow("codex", Disposition.INSTALL, "")]
-    problems = {"codex": ("config.toml", "TOML")}
-    notes = run_option_lines("auto-approve", rows, platform_os="fedora", problems=problems)[1]
-    assert notes == ("codex: config.toml is not valid TOML; nothing will be written",)
-
-
-def _settings_text(outcomes: list[RowOutcome], options: frozenset[str]) -> list[str]:
+def _settings_text(outcomes: list[RowOutcome]) -> list[str]:
     console, buf = _console()
-    render_settings_lines(outcomes, options, console)
+    render_settings_lines(outcomes, console)
     return buf.getvalue().splitlines()
 
 
@@ -1643,7 +1592,7 @@ def test_settings_report_lines_cover_every_outcome() -> None:
             ),
         ),
     ]
-    lines = _settings_text(outcomes, frozenset({"auto-approve", "no-attribution", "vscode-lean"}))
+    lines = _settings_text(outcomes)
     assert lines.count("claude — ~/.claude/settings.json:") == 1
     assert "  wrote permissions.defaultMode" in lines
     set_by_you = [line for line in lines if line.startswith("  set by you: attribution.commit = ")]
@@ -1657,11 +1606,13 @@ def test_settings_report_lines_cover_every_outcome() -> None:
     assert lines[first + 2] == "  revert restores the replaced defaults"
     assert lines.count("  revert restores the replaced defaults") == 1
     assert "  not valid TOML (line 2); nothing written" in lines
-    assert "  changed while being written; nothing written. Retry in Policies." in lines
+    assert (
+        "  changed while being written; nothing written. "
+        "Reconfigure or reinstall the tool to retry."
+    ) in lines
 
 
 def test_settings_report_lines_fit_78_cells() -> None:
-    zsh = "/home/linuxbrew/.linuxbrew/bin/zsh"
     outcomes = [
         RowOutcome(
             PlanRow("opencode", Disposition.INSTALL, ""),
@@ -1682,38 +1633,36 @@ def test_settings_report_lines_fit_78_cells() -> None:
         ),
         RowOutcome(PlanRow("codex", Disposition.INSTALL, ""), "done"),
         RowOutcome(PlanRow("pi", Disposition.INSTALL, ""), "done"),
-        RowOutcome(
-            PlanRow("zsh", Disposition.INSTALL, ""),
-            "done",
-            desktop_shell=("~/.config/environment.d/52-tools-installer-desktop-shell.conf", zsh),
-        ),
     ]
-    lines = _settings_text(outcomes, frozenset({"no-attribution", "desktop-shell"}))
+    lines = _settings_text(outcomes)
     assert "opencode — ~/.config/opencode/opencode.jsonc:" in lines
     assert "  wrote workbench.settings.enableNaturalLanguageSearch" in lines
-    assert "  SHELL=/home/linuxbrew/.linuxbrew/bin/zsh; log in again to use it" in lines
     assert all(cell_len(line) <= 78 for line in lines)
 
 
-def test_attribution_report_names_agents_without_a_key() -> None:
-    rows = [
-        RowOutcome(PlanRow(agent, Disposition.INSTALL, ""), "done")
-        for agent in ("claude", "codex", "opencode", "pi")
-    ]
-    lines = _settings_text(rows, frozenset({"no-attribution"}))
+def test_settings_notes_follow_the_rows_that_ran() -> None:
+    def ran(*agents: str, result: Result = "done") -> list[RowOutcome]:
+        return [RowOutcome(PlanRow(agent, Disposition.INSTALL, ""), result) for agent in agents]
+
+    lines = _settings_text(ran("claude", "codex", "opencode", "pi", "cursor-agent"))
     assert "codex, opencode, pi: no documented attribution key; nothing written" in lines
-    cursor = [*rows, RowOutcome(PlanRow("cursor-agent", Disposition.INSTALL, ""), "done")]
-    cursor_lines = _settings_text(cursor, frozenset({"no-attribution"}))
-    assert "cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)" in (
-        cursor_lines
-    )
-    assert "pi: nothing written; pi has no approval setting in its core" in _settings_text(
-        rows, frozenset({"auto-approve"})
-    )
-    assert _settings_text(cursor, frozenset()) == []
+    assert "cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)" in lines
+    assert "pi: nothing written; pi has no approval setting in its core" in lines
+    assert _settings_text(ran("claude")) == []
+    failed = ran("codex", "pi", "cursor-agent", result="failed")
+    assert _settings_text(failed) == []
 
 
-def test_run_options_left_off_note_is_unchanged() -> None:
-    assert RUN_OPTIONS_LEFT_OFF == (
-        "Run options left off (--yes never turns them on); change them in Policies."
+def test_changed_while_writing_line_points_to_reconfigure() -> None:
+    written = FileResult(
+        "claude",
+        "auto-approve",
+        Path.home() / ".claude" / "settings.json",
+        "json",
+        refused=CHANGED_WHILE_WRITING,
     )
+    outcome = RowOutcome(PlanRow("claude", Disposition.INSTALL, ""), "done", settings=(written,))
+    assert (
+        "  changed while being written; nothing written. "
+        "Reconfigure or reinstall the tool to retry."
+    ) in _settings_text([outcome])
