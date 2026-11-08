@@ -502,7 +502,24 @@ Plans:
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
   5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
 
-**Plans**: TBD
+**Plans**: 8 plans
+
+Plans:
+**Wave 1**
+- [ ] 24-01-PLAN.md — `cargo_distrobox` kind: Alacritty tracer install/removal, executor cleanup guarantees, closed params, precedence and the Node floor from per-pass host facts, newer tag reads `↑` (wave 1)
+- [ ] 24-02-PLAN.md — Guarded nested-TOML writer and herdr as a ledger settings agent: sidebar keys, dynamic `default_shell`, group revert (wave 1)
+- [ ] 24-03-PLAN.md — Tool-onboarding skill: lifecycle params and `cargo_distrobox`, TUNE-04 rule kept, skill-judge before/after; stale Alacritty and terminfo text (wave 1)
+- [ ] 24-04-PLAN.md — Container harness: `--distro` table, rerun gate, exclusion listing, herdr probes, nested-podman target (host-tested only) (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 24-05-PLAN.md — Alacritty update by rebuild; config dir untouched (wave 2)
+- [ ] 24-06-PLAN.md — Terminal sync: Alacritty shell region and keybinding install tuning, herdr `default_shell` with reload (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 24-07-PLAN.md — herdr entry, integrations for every shared host (user-owned rule), sidebar markers plugin, uninstall order (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 24-08-PLAN.md — Phase gate: full suite, orchestrator nested-podman build and three-distro runs, real-host UAT script (wave 4)
 
 ### Phase 24.1: Onboard Neovim through the tool-onboarding skill (INSERTED)
 

@@ -1,0 +1,1 @@
+No external API integration: the phase reuses the existing GitHub release resolver (release tags and asset digests, Phases 18-19) for herdr and Alacritty and drives vendor command-line tools (distrobox, podman, herdr) through argv; it adds no new API client or SDK, so there is no capability surface to enumerate.

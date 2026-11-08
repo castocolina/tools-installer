@@ -42,7 +42,28 @@ created: "2026-11-08"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| (filled by planner) | | | ONB-01..07 | | | | | | ⬜ pending |
+| 24-01-T1 | 01 | 1 | ONB-02, ONB-06 | T-24-02, T-24-08 | artifacts only under allowed roots; removal by receipt + formula | unit (fake runner, tracer) | `uv run pytest tests/test_cargo_distrobox.py -k "shipped_entry" -q --no-cov -n 0` | Wave 0 (new) | ⬜ pending |
+| 24-01-T2 | 01 | 1 | ONB-02 | T-24-01, T-24-04, T-24-05, T-24-07 | tag validated; box, pulled image, temp dir removed on every outcome; no sudo | unit | `uv run pytest tests/test_cargo_distrobox.py tests/test_model.py tests/test_registry.py -k "cargo or alacritty" -q --no-cov -n 0` | Wave 0 (new) | ⬜ pending |
+| 24-01-T3 | 01 | 1 | ONB-02, ONB-04 | T-24-07 | native fallback stays a MANUAL handoff; floor is a non-failure disposition | unit | `uv run pytest tests/test_resolve.py tests/test_platform.py tests/test_version_status.py -k "precedence or distrobox or podman or node_floor or rereads or outdated or deduplicates" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-02-T1 | 02 | 1 | ONB-01 | T-24-09 | guarded nested TOML splice, never a second header | unit (tracer) | `uv run pytest tests/test_agent_settings.py tests/test_agent_env.py -k "herdr" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-02-T2 | 02 | 1 | ONB-07 | T-24-10, T-24-11 | absent-only; revert only an unchanged value | unit | `uv run pytest tests/test_agent_settings.py -k "default_shell or dynamic or revert_group" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-02-T3 | 02 | 1 | ONB-01, ONB-07 | T-24-09, T-24-12 | compare-before-commit; sandbox clears HERDR_CONFIG_PATH | unit | `uv run pytest tests/test_agent_settings.py tests/test_sandbox.py -k "toml or herdr" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-03-T1 | 03 | 1 | ONB-03 | T-24-13, T-24-14 | TUNE-04 rule pinned verbatim | doc test + recorded judge | `uv run pytest tests/test_docs.py -k "tool_onboarding" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-03-T2 | 03 | 1 | ONB-03 | — | docs match the shipped design | doc test | `uv run pytest tests/test_docs.py -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-04-T1 | 04 | 1 | ONB-04 | T-24-15, T-24-17 | installs only via `ct exec`; per-distro names | bash extraction | `uv run pytest tests/test_container_e2e_receipts.py -k "distro" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-04-T2 | 04 | 1 | ONB-04, ONB-01 | T-24-18 | rerun gate; value-level herdr checks | bash extraction | `uv run pytest tests/test_container_e2e_receipts.py -k "rerun or blocked or misconfigured or herdr or residue or manual_set" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-04-T3 | 04 | 1 | ONB-02, ONB-06 | T-24-16 | outer container without --privileged, removed by trap | bash extraction | `uv run pytest tests/test_container_e2e_receipts.py -k "nested" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-05-T1 | 05 | 2 | ONB-02 | T-24-19, T-24-20 | config dir untouched on update | unit (tracer) | `uv run pytest tests/test_update.py -k "alacritty" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-05-T2 | 05 | 2 | ONB-02 | T-24-21 | failed/interrupted rebuild keeps the old install | unit | `uv run pytest tests/test_update.py tests/test_cargo_distrobox.py -k "rebuild or current_alacritty" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-06-T1 | 06 | 2 | ONB-07 | T-24-22 | owned regions only; stripped with the tool | unit (tracer) | `uv run pytest tests/test_terminal_shell.py tests/test_registry.py -k "alacritty" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-06-T2 | 06 | 2 | ONB-07 | T-24-22, T-24-24 | per-part guard; whole-document re-parse; compare-before-commit | unit | `uv run pytest tests/test_terminal_shell.py tests/test_version_status.py tests/test_post_install.py -k "alacritty or partial" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-06-T3 | 06 | 2 | ONB-07, ONB-01 | T-24-23, T-24-25, T-24-26 | user default_shell kept; no Policies row | unit | `uv run pytest tests/test_terminal_shell.py tests/test_version_status.py tests/test_setup.py tests/test_app.py -k "herdr" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-07-T1 | 07 | 3 | ONB-01 | T-24-28, T-24-32 | pinned plugin SHA; digest-verified binary | unit (tracer) | `uv run pytest tests/test_postinstall.py tests/test_registry.py tests/test_download.py -k "herdr" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-07-T2 | 07 | 3 | ONB-01 | T-24-27, T-24-30 | user-owned integrations never recorded or removed | unit | `uv run pytest tests/test_postinstall.py tests/test_version_status.py tests/test_session.py -k "herdr or settled or copilot" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-07-T3 | 07 | 3 | ONB-01 | T-24-27, T-24-31 | hooks unregister before agent reverts | unit | `uv run pytest tests/test_postinstall.py tests/test_app.py tests/test_uninstall.py -k "sidebar or plugin or rows or reload or unregisters_hooks or herdr_config" -q --no-cov -n 0` | exists | ⬜ pending |
+| 24-08-T1 | 08 | 4 | ONB-05 | T-24-35 | evidence recorded | full suite | `make validate && make test` | exists | ⬜ pending |
+| 24-08-T2 | 08 | 4 | ONB-02, ONB-06 | T-24-33 | orchestrator-only nested container, removed afterwards | container (orchestrator) | `scripts/container-e2e-verify.sh nested` (never on the host by an executor) | exists after 24-04 | ⬜ pending |
+| 24-08-T3 | 08 | 4 | ONB-04, ONB-01, ONB-05 | T-24-33, T-24-34 | sequential disposable containers; UAT by the user | container (orchestrator) + manual | `scripts/container-e2e-verify.sh all --distro fedora|debian|arch` | exists after 24-04 | ⬜ pending |
 
 Requirement-level map: see `24-RESEARCH.md` § Phase Requirements to Test Map (ONB-01 herdr entry, targets,
 sidebar plugin, container probes; ONB-02 `cargo_distrobox` argv/cleanup/precedence/load validation/receipt/
