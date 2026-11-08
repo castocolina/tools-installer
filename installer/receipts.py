@@ -275,6 +275,9 @@ class ConfigLedger:
     entries: tuple[ConfigWrite, ...] = ()
     # (file, original text) for a settings file that existed but held only whitespace.
     blank_files: tuple[tuple[str, str], ...] = ()
+    # Directories the writer created for a settings file, topmost first; a revert removes them
+    # (only when empty) after it deletes the file.
+    created_dirs: tuple[str, ...] = ()
 
 
 def config_ledger_dir() -> Path:
@@ -334,6 +337,15 @@ def _blank_files_from(raw: object) -> tuple[tuple[str, str], ...] | None:
     return tuple(pairs)
 
 
+def _created_dirs_from(raw: object) -> tuple[str, ...] | None:
+    """The optional created-directory records; None when the field is malformed (fail-closed)."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(d, str) for d in cast(list[object], raw)):
+        return None
+    return tuple(cast(list[str], raw))
+
+
 def read_ledger(agent: str) -> ConfigLedger | None:
     """The agent's ledger; None when it is missing or cannot be trusted (fail-closed)."""
     data = _read_json_object(_config_ledger_path(agent))
@@ -357,7 +369,10 @@ def read_ledger(agent: str) -> ConfigLedger | None:
     blanks = _blank_files_from(data.get("blank_files"))
     if blanks is None:
         return None
-    return ConfigLedger(agent, tuple(cast(list[str], files)), tuple(entries), blanks)
+    dirs = _created_dirs_from(data.get("created_dirs"))
+    if dirs is None:
+        return None
+    return ConfigLedger(agent, tuple(cast(list[str], files)), tuple(entries), blanks, dirs)
 
 
 def untrusted_ledger(agent: str) -> Path | None:
@@ -379,7 +394,9 @@ def write_ledger(ledger: ConfigLedger) -> None:
     """Atomically write one agent's ledger; a ledger with nothing in it deletes the file."""
     path = _config_ledger_path(ledger.agent)
     with _WRITE_LOCK:
-        if not ledger.entries and not ledger.created_files and not ledger.blank_files:
+        if not (
+            ledger.entries or ledger.created_files or ledger.blank_files or ledger.created_dirs
+        ):
             path.unlink(missing_ok=True)
             return
         payload: dict[str, object] = {
@@ -387,6 +404,7 @@ def write_ledger(ledger: ConfigLedger) -> None:
             "agent": ledger.agent,
             "created_files": list(ledger.created_files),
             "blank_files": [list(pair) for pair in ledger.blank_files],
+            "created_dirs": list(ledger.created_dirs),
             "entries": [
                 {
                     "setting": entry.setting,
