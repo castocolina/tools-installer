@@ -1647,6 +1647,7 @@ def test_config_step_is_frozen_with_closed_kinds() -> None:
         "pnpm_group_install",
         "hook_register",
         "zshenv_shell",
+        "install_tuning",
     )
 
 

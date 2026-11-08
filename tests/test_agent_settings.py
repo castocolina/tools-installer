@@ -505,6 +505,50 @@ def test_setting_facts_split_written_yours_already_and_drift() -> None:
     assert facts().already == keys
 
 
+def test_setting_facts_absent_lists_only_unrecorded_missing_keys_in_order() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    keys = ("permissions.defaultMode", "skipDangerousModePermissionPrompt")
+
+    def absent() -> tuple[str, ...]:
+        return agent_settings.setting_facts(
+            "claude", "auto-approve", home=home, platform_os="linux"
+        ).absent
+
+    # no file and no ledger yet: both keys read absent
+    assert absent() == keys
+
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    assert absent() == ()
+
+    settings.write_text("{}\n", encoding="utf-8")  # recorded then deleted: the user's choice
+    assert absent() == ()
+
+    write_ledger(ConfigLedger("claude"))  # never recorded: absent again
+    assert absent() == keys
+
+    settings.write_text('{"skipDangerousModePermissionPrompt": false}\n', encoding="utf-8")
+    assert absent() == ("permissions.defaultMode",)
+
+
+def test_apply_setting_skip_recorded_never_rewrites_a_recorded_key() -> None:
+    home = Path.home()
+    settings = _claude_settings_file()
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    settings.write_text('{"model": "opus"}\n', encoding="utf-8")
+
+    skipped = apply_setting(
+        "claude", "auto-approve", home=home, platform_os="linux", skip_recorded=True
+    )
+    assert skipped.keys == ()
+    assert settings.read_text(encoding="utf-8") == '{"model": "opus"}\n'
+    ledger = read_ledger("claude")
+    assert ledger is not None and len(ledger.entries) == 2  # the record survives
+
+    rewritten = apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    assert [key.kind for key in rewritten.keys] == ["wrote", "wrote"]
+
+
 def test_apply_on_drift_rewrites_absent_keys_and_forgets_changed_ones() -> None:
     home = Path.home()
     settings = _claude_settings_file()
@@ -1194,3 +1238,38 @@ def test_copilot_home_outside_home_is_reverted_but_not_previewed(tmp_path: Path)
 
     assert [key.kind for r in results for key in r.keys] == ["removed", "removed"]
     assert not (ch / "settings.json").exists()
+
+
+def test_pending_tuning_race_never_publishes_ok_before_the_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backstop (R2 concurrency): the ledger is reserved before the file commits, so a pass
+    that reads the keys as recorded never sees them pending, and one that reads them pending
+    sees them before the ledger has them (never `✓` ahead of the record)."""
+    home = Path.home()
+    _claude_settings_file().write_text("{}\n", encoding="utf-8")
+    keys = ("permissions.defaultMode", "skipDangerousModePermissionPrompt")
+    seen: dict[str, tuple[str, ...]] = {}
+    real_write_ledger = agent_settings.write_ledger
+    real_write_if_unchanged = agent_settings.write_if_unchanged
+
+    def absent() -> tuple[str, ...]:
+        return agent_settings.setting_facts(
+            "claude", "auto-approve", home=home, platform_os="linux"
+        ).absent
+
+    def ledger_spy(ledger: ConfigLedger) -> None:
+        seen.setdefault("before_reservation", absent())
+        real_write_ledger(ledger)
+
+    def write_spy(path: Path, before: FileSnapshot | None, text: str) -> None:
+        seen["between_reservation_and_commit"] = absent()
+        real_write_if_unchanged(path, before, text)
+
+    monkeypatch.setattr(agent_settings, "write_ledger", ledger_spy)
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", write_spy)
+
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux", skip_recorded=True)
+
+    assert seen == {"before_reservation": keys, "between_reservation_and_commit": ()}
+    assert absent() == ()

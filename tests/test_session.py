@@ -12,7 +12,7 @@ from rich.console import Console
 
 import installer.engine as engine
 import installer.session as session_module
-from installer import executors, postinstall, receipts
+from installer import agent_settings, executors, postinstall, receipts
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.model import (
@@ -1304,6 +1304,7 @@ _ALL_KIND_STEPS: dict[ConfigStepKind, ConfigStep] = {
     "pnpm_group_install": ConfigStep("install @obra/superpowers with pnpm", "pnpm_group_install"),
     "hook_register": ConfigStep("register codegraph for codex", "hook_register"),
     "zshenv_shell": ConfigStep("export SHELL=/bin/zsh in ~/.zshenv", "zshenv_shell"),
+    "install_tuning": ConfigStep("apply install tuning", "install_tuning"),
 }
 
 # The details a dispatched step reports as a done note; every other kind reports none.
@@ -1311,6 +1312,17 @@ _DISPATCH_DETAIL: dict[ConfigStepKind, str] = {
     "hook_register": "registered for codex",
     "zshenv_shell": "~/.zshenv exports SHELL",
 }
+
+
+def _tuned_claude() -> Tool:
+    return Tool(
+        id="claude",
+        name="Claude Code",
+        category="ai",
+        cmd="claude",
+        methods=(Method(kind="host", params={}),),
+        post_install=("apply_agent_tuning",),
+    )
 
 
 def _execute_nothing(_method: Method, _runner: Runner) -> None:
@@ -1340,6 +1352,8 @@ def test_each_config_step_kind_dispatches(
         tool_id, tool = "codegraph", _codegraph_tool()
         monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
         _codegraph_receipt({})
+    if kind == "install_tuning":
+        tool_id, tool = "claude", _tuned_claude()
     recorder = RunRecorder()
     outcomes = execute_plan(
         [_reconfigure_row(tool_id, _ALL_KIND_STEPS[kind])],
@@ -1349,7 +1363,7 @@ def test_each_config_step_kind_dispatches(
     assert outcomes[0].detail == _DISPATCH_DETAIL.get(kind, ""), kind
     # The built-in kinds act through a bound seam instead of the runner, so nothing is
     # recorded as a command for them; hook_register runs one register argv, the rest one argv.
-    seam_only = {"terminal_sync", "pnpm_group_install", "zshenv_shell"}
+    seam_only = {"terminal_sync", "pnpm_group_install", "zshenv_shell", "install_tuning"}
     assert len(recorder.argv) == (0 if kind in seam_only else 1), kind
 
 
@@ -1708,3 +1722,31 @@ def test_desktop_shell_option_writes_environment_d(monkeypatch: pytest.MonkeyPat
     mac = replace(ctx, platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True))
     execute_plan([PlanRow("zsh", Disposition.INSTALL, "not installed")], mac)
     assert not conf.exists()
+
+
+def test_install_tuning_step_refusal_fails_and_carries_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-03: a write that is refused fails the step with the refusal, and the row still reports
+    the FileResults the step produced, so the summary shows what was not written."""
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}\n", encoding="utf-8")
+
+    def always_changed(_path: Path, _before: object, _text: str) -> None:
+        raise agent_settings.SettingsChanged()
+
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", always_changed)
+    row = _reconfigure_row("claude", _ALL_KIND_STEPS["install_tuning"])
+
+    outcome = execute_plan([row], _run_context(RunRecorder(), catalog={"claude": _tuned_claude()}))[
+        0
+    ]
+
+    assert outcome.result == "failed"
+    assert outcome.detail == (
+        f"apply install tuning: ~/.claude/settings.json: {agent_settings.CHANGED_WHILE_WRITING}"
+    )
+    assert {file.refused for file in outcome.settings} == {agent_settings.CHANGED_WHILE_WRITING}
+    assert [file.setting for file in outcome.settings] == ["auto-approve", "no-attribution"]
+    assert settings.read_text(encoding="utf-8") == "{}\n"

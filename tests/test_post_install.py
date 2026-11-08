@@ -22,6 +22,7 @@ from installer.post_install import (
     ConfirmSensitiveAction,
     PostInstallOutput,
     SensitivePrompt,
+    apply_install_tuning,
     run_post_install,
     sensitive_prompt,
     use_shell_init_sourcing,
@@ -721,3 +722,23 @@ def test_tuning_targets_only_user_scope_files() -> None:
             assert path.name not in {"settings.local.json", "copilot.json"}
             assert ".github" not in relative.parts
             assert Path.cwd() not in path.parents
+
+
+def test_reinstall_rewrites_a_deleted_recorded_key() -> None:
+    """The install-time action rewrites what RECONFIGURE leaves alone (SPEC R2)."""
+    claude = _tuned("claude")
+    run_post_install(claude, _mutable())
+    path = _settings_path("claude")
+    path.write_text("{}\n", encoding="utf-8")  # the user deleted every recorded key
+
+    left_alone = apply_install_tuning(claude, _mutable(), skip_recorded=True)
+    assert _kinds(left_alone) == {}
+    assert path.read_text(encoding="utf-8") == "{}\n"
+
+    reinstalled = run_post_install(claude, _mutable())
+
+    assert set(_kinds(reinstalled).values()) == {"wrote"}
+    assert len(_kinds(reinstalled)) == 4
+    assert _document("claude")["skipDangerousModePermissionPrompt"] is True
+    ledger = read_ledger("claude")
+    assert ledger is not None and len(ledger.entries) == 4

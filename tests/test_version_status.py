@@ -46,7 +46,14 @@ from installer.postinstall import HARNESS_PRESENCE
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError
-from installer.session import Disposition, build_plan
+from installer.session import (
+    Disposition,
+    PlanRow,
+    RowOutcome,
+    RunContext,
+    build_plan,
+    execute_plan,
+)
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
@@ -4433,6 +4440,7 @@ def _hook_service(
     commands: frozenset[str],
     *,
     which: Callable[[str], str | None] | None = None,
+    present: bool = True,
 ) -> VersionRefreshService:
     return VersionRefreshService(
         platform=_LINUX,
@@ -4449,7 +4457,7 @@ def _hook_service(
         resolve_pnpm=lambda: None,
         query=lambda *_args, **_kwargs: "",
         home=tmp_path / "home",
-        present=lambda _tool: True,
+        present=lambda _tool: present,
     )
 
 
@@ -4612,6 +4620,258 @@ def test_an_unparsable_unmanaged_settings_file_reads_nothing(tmp_path: Path) -> 
     assert claude.health is not Health.MISCONFIGURED
     assert claude.unconfigured == ()
     assert not any("not valid" in reason or "not checked" in reason for reason in claude.reasons)
+
+
+# -- 23.2-03: a present tool that never got its install tuning reads `≈` (SPEC R2) --
+
+_TUNING_STEP = ConfigStep("apply install tuning", "install_tuning")
+_TUNING_REASON = "install tuning not applied"
+
+
+def _tuned_tool(tool_id: str = "claude") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={}),),
+        tier="ai",
+        post_install=("apply_agent_tuning",),
+    )
+
+
+def _tuning_context(tool: Tool) -> RunContext:
+    return RunContext(
+        catalog={tool.id: tool},
+        platform=_LINUX,
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=install_tool,
+    )
+
+
+def _reconfigure(service: VersionRefreshService, tool: Tool) -> RowOutcome:
+    """Plan and run the one RECONFIGURE row the settled state of `tool` produces."""
+    service.refresh([tool])
+    rows = build_plan([tool.id], [tool], service.state_of, _LINUX, reinstall=frozenset())
+    assert [(row.disposition, row.steps) for row in rows] == [
+        (Disposition.RECONFIGURE, (_TUNING_STEP,))
+    ]
+    return execute_plan(rows, _tuning_context(tool))[0]
+
+
+def _forced_reconfigure(tool: Tool) -> RowOutcome:
+    """Run the tuning step whether or not the state asks for it (a stale or stray row)."""
+    row = PlanRow(tool.id, Disposition.RECONFIGURE, "forced", steps=(_TUNING_STEP,))
+    return execute_plan([row], _tuning_context(tool))[0]
+
+
+def _tuning_state(tmp_path: Path, tool: Tool, *, present: bool = True) -> ToolState:
+    service = _hook_service(tmp_path, frozenset(), present=present)
+    return _settled_states(service, [tool])[tool.id]
+
+
+def _wrote(outcome: RowOutcome) -> list[str]:
+    return [key.key for file in outcome.settings for key in file.keys if key.kind == "wrote"]
+
+
+def _settings_of(tool_id: str) -> Path:
+    return agent_settings.settings_file(
+        tool_id, home=Path.home(), platform_os=_LINUX.os, environ=os.environ
+    )
+
+
+def _plant_settings(tool_id: str, text: str) -> Path:
+    path = _settings_of(tool_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_present_untuned_claude_reads_pending_tuning_and_reconfigure_applies_it(
+    tmp_path: Path,
+) -> None:
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}", encoding="utf-8")
+    tool = _tuned_tool()
+    service = _hook_service(tmp_path, frozenset())
+    claude = _settled_states(service, [tool])["claude"]
+    assert claude.health is Health.MISCONFIGURED
+    assert claude.reasons[0] == _TUNING_REASON
+    assert claude.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert {key.kind for file in outcome.settings for key in file.keys} == {"wrote"}
+    assert sorted(key.key for file in outcome.settings for key in file.keys) == [
+        "attribution.commit",
+        "attribution.pr",
+        "permissions.defaultMode",
+        "skipDangerousModePermissionPrompt",
+    ]
+    document = json.loads(settings.read_text(encoding="utf-8"))
+    assert document["permissions"] == {"defaultMode": "bypassPermissions"}
+    assert document["skipDangerousModePermissionPrompt"] is True
+    assert document["attribution"] == {"commit": "", "pr": ""}
+
+    again = _settled_states(service, [tool])["claude"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
+
+
+_CLAUDE_KEYS = [
+    "attribution.commit",
+    "attribution.pr",
+    "permissions.defaultMode",
+    "skipDangerousModePermissionPrompt",
+]
+
+
+def test_pending_tuning_a_deleted_recorded_key_is_the_users_choice(tmp_path: Path) -> None:
+    settings = _plant_settings("claude", "{}\n")
+    tool = _tuned_tool()
+    assert _reconfigure(_hook_service(tmp_path, frozenset()), tool).result == "done"
+
+    settings.write_text('{"attribution": {"commit": ""}}\n', encoding="utf-8")  # the user cut keys
+    state = _tuning_state(tmp_path, tool)
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+    before = settings.read_bytes()
+    forced = _forced_reconfigure(tool)
+    assert forced.result == "done"
+    assert _wrote(forced) == []
+    assert settings.read_bytes() == before
+
+
+def test_pending_tuning_with_no_file_and_no_ledger_reads_pending(tmp_path: Path) -> None:
+    assert not _settings_of("claude").exists()
+    state = _tuning_state(tmp_path, _tuned_tool())
+    assert state.health is Health.MISCONFIGURED
+    assert state.unconfigured == (_TUNING_STEP,)
+
+
+def test_pending_tuning_set_by_you_reads_ok(tmp_path: Path) -> None:
+    mine = (
+        '{"permissions": {"defaultMode": "acceptEdits"}, "skipDangerousModePermissionPrompt": '
+        'false, "attribution": {"commit": "mine", "pr": "mine"}}\n'
+    )
+    settings = _plant_settings("claude", mine)
+    tool = _tuned_tool()
+    state = _tuning_state(tmp_path, tool)
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+    forced = _forced_reconfigure(tool)
+    assert forced.result == "done"
+    assert {key.kind for file in forced.settings for key in file.keys} == {"set_by_you"}
+    assert settings.read_text(encoding="utf-8") == mine
+
+
+def test_pending_tuning_reconfigure_twice_writes_nothing_the_second_time(tmp_path: Path) -> None:
+    settings = _plant_settings("claude", "{}\n")
+    tool = _tuned_tool()
+    service = _hook_service(tmp_path, frozenset())
+    assert sorted(_wrote(_reconfigure(service, tool))) == _CLAUDE_KEYS
+    written = settings.read_bytes()
+
+    again = _settled_states(service, [tool])["claude"]
+    assert again.health is Health.OK
+    second = _forced_reconfigure(tool)
+    assert _wrote(second) == []
+    assert settings.read_bytes() == written
+
+
+def test_pending_tuning_ignores_a_cursor_cli_default_alone(tmp_path: Path) -> None:
+    tool = _tuned_tool("cursor-agent")
+    defaults = (
+        '{"approvalMode": "unrestricted", "attribution": '
+        '{"attributeCommitsToAgent": true, "attributePRsToAgent": true}}\n'
+    )
+    cursor = _plant_settings("cursor-agent", defaults)
+    quiet = _tuning_state(tmp_path, tool)
+    assert quiet.health is Health.OK
+    assert quiet.unconfigured == ()
+
+    cursor.write_text(defaults.replace('"approvalMode": "unrestricted", ', ""), encoding="utf-8")
+    pending = _tuning_state(tmp_path, tool)
+    assert pending.unconfigured == (_TUNING_STEP,)
+    outcome = _reconfigure(_hook_service(tmp_path, frozenset()), tool)
+    kinds = {key.key: key.kind for file in outcome.settings for key in file.keys}
+    assert kinds == {
+        "approvalMode": "wrote",
+        "attribution.attributeCommitsToAgent": "replaced_default",
+        "attribution.attributePRsToAgent": "replaced_default",
+    }
+    document = json.loads(cursor.read_text(encoding="utf-8"))
+    assert document["approvalMode"] == "unrestricted"
+    assert document["attribution"] == {
+        "attributeCommitsToAgent": False,
+        "attributePRsToAgent": False,
+    }
+
+
+def test_pending_tuning_unparsable_file_shows_the_reason_without_a_step(tmp_path: Path) -> None:
+    broken = '{"a": 1,,}'
+    settings = _plant_settings("claude", broken)
+    tool = _tuned_tool()
+    reason = (
+        "~/.claude/settings.json is not valid JSON (line 1, column 9); "
+        "nothing is written until it parses"
+    )
+    for ledger in (False, True):
+        if ledger:
+            settings.write_text("{}\n", encoding="utf-8")
+            assert _forced_reconfigure(tool).result == "done"  # the ledger now has entries
+            settings.write_text(broken, encoding="utf-8")
+        state = _tuning_state(tmp_path, tool)
+        assert state.health is Health.MISCONFIGURED, ledger
+        assert state.reasons[0] == reason, ledger
+        assert state.unconfigured == (), ledger
+        absent = _tuning_state(tmp_path, tool, present=False)
+        assert absent.unconfigured == (), ledger
+    assert settings.read_text(encoding="utf-8") == broken
+
+
+def test_pending_tuning_untrusted_ledger_reason_is_unchanged(tmp_path: Path) -> None:
+    ledger = receipts.config_ledger_dir() / "claude.json"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text('{"v": 2}', encoding="utf-8")
+    state = _tuning_state(tmp_path, _tuned_tool())
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0].startswith("blocked: the claude config ledger could not be trusted")
+    assert state.unconfigured == ()
+
+
+def test_pending_tuning_vscode_reads_pending(tmp_path: Path) -> None:
+    tool = _tuned_tool("vscode")
+    editor = _plant_settings("vscode", '// my comment\n{\n  "editor.fontSize": 14,\n}\n')
+    state = _tuning_state(tmp_path, tool)
+    assert state.health is Health.MISCONFIGURED
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(_hook_service(tmp_path, frozenset()), tool)
+
+    assert outcome.result == "done"
+    assert "telemetry.telemetryLevel" in _wrote(outcome)
+    text = editor.read_text(encoding="utf-8")
+    assert text.startswith("// my comment\n")
+    assert '"editor.fontSize": 14' in text
+    assert _tuning_state(tmp_path, tool).health is Health.OK
+
+
+def test_pending_tuning_several_groups_show_one_step(tmp_path: Path) -> None:
+    """Backstop (R2 ordering): two pending groups, one step line, equal across passes."""
+    _plant_settings("claude", "{}\n")
+    tool = _tuned_tool()
+    service = _hook_service(tmp_path, frozenset())
+    first = _settled_states(service, [tool])["claude"]
+    second = _settled_states(service, [tool])["claude"]
+    assert first.unconfigured == (_TUNING_STEP,)
+    assert first.unconfigured == second.unconfigured
+    assert first.reasons[0] == second.reasons[0] == _TUNING_REASON
 
 
 # -- 19-16 Task 2: incomplete pnpm co-install groups (D-19, review H10/M11, checker I6) --

@@ -289,6 +289,7 @@ ConfigStepKind = Literal[
     "pnpm_group_install",
     "hook_register",
     "zshenv_shell",
+    "install_tuning",
 ]
 
 
