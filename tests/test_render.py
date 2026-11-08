@@ -1653,6 +1653,16 @@ def test_settings_notes_follow_the_rows_that_ran() -> None:
     assert _settings_text(failed) == []
 
 
+def test_settings_notes_stay_silent_for_rows_that_wrote_no_settings() -> None:
+    """C-05: an update, removal or reconfigure tuned nothing, so it prints no tuning note."""
+    for disposition in (Disposition.UPDATE, Disposition.REMOVE, Disposition.RECONFIGURE):
+        outcomes = [
+            RowOutcome(PlanRow(agent, disposition, ""), "done")
+            for agent in ("codex", "opencode", "pi", "cursor-agent")
+        ]
+        assert _settings_text(outcomes) == [], disposition
+
+
 def test_changed_while_writing_line_points_to_reconfigure() -> None:
     written = FileResult(
         "claude",

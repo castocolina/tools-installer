@@ -330,6 +330,10 @@ def render_settings_lines(outcomes: Sequence[RowOutcome], console: Console) -> N
         console.print(sanitize_log_line(line), markup=False, highlight=False, soft_wrap=True)
 
 
+# The rows whose run applies install tuning; an update, removal or reconfigure notes nothing.
+_TUNED_DISPOSITIONS = frozenset({Disposition.INSTALL, Disposition.REPAIR, Disposition.REINSTALL})
+
+
 def _settings_lines(outcomes: Sequence[RowOutcome]) -> list[str]:
     """One block per settings file in first-seen order, then the lines that have no file."""
     blocks: dict[tuple[str, Path], list[tuple[bool, str]]] = {}
@@ -340,7 +344,11 @@ def _settings_lines(outcomes: Sequence[RowOutcome]) -> list[str]:
     for (agent, path), body in blocks.items():
         lines.append(f"{agent} — {display_path(path)}:")
         lines.extend(_with_revert_note(body))
-    done = {outcome.row.tool_id for outcome in outcomes if outcome.result == "done"}
+    done = {
+        outcome.row.tool_id
+        for outcome in outcomes
+        if outcome.result == "done" and outcome.row.disposition in _TUNED_DISPOSITIONS
+    }
     if "cursor-agent" in done:
         lines.append("cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)")
     keyless = [agent for agent in NO_ATTRIBUTION_KEY_IDS if agent in done]
