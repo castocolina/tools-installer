@@ -5,6 +5,7 @@ its executor (`execute_plan`) live together here.
 """
 
 import os
+import shutil
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -31,7 +32,7 @@ from installer.env_redirect import (
     shell_redirect,
     write_linux_redirect,
 )
-from installer.locations import display_path
+from installer.locations import display_path, prepend_path
 from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (
     UNMANAGEABLE_OWNERS,
@@ -46,6 +47,7 @@ from installer.receipts import CHANGED_SINCE_INSTALL, CONFIG_AGENTS
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
 from installer.selection import select_tools
+from installer.status import present_bin_dir
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget, update_refusal
 from installer.version_status import Health, ToolState
 from installer.versions import TagResolver, VersionError
@@ -645,6 +647,22 @@ def _apply_run_options(outcomes: list[RowOutcome], ctx: RunContext) -> list[RowO
     return outcomes
 
 
+def _put_present_bin_dir_on_path(outcome: RowOutcome, ctx: RunContext) -> None:
+    """D-24: a present tool's declared bin dir joins PATH so its dependents find it this run.
+
+    Only a SKIP or done row qualifies, and only when PATH does not already find the
+    tool, so a PATH that works is never reordered.
+    """
+    tool = ctx.catalog.get(outcome.row.tool_id)
+    if outcome.result not in {"skipped", "done"} or tool is None:
+        return
+    if shutil.which(tool.cmd) is not None:
+        return
+    found = present_bin_dir(tool)
+    if found is not None:
+        prepend_path(found)
+
+
 def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
     """Execute a settled plan and return one truthful outcome per row."""
     if any(row.disposition is Disposition.WAIT for row in rows):
@@ -774,6 +792,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                     else first_line(exc)
                 )
                 outcome = RowOutcome(row, "crashed", detail=detail)
+        _put_present_bin_dir_on_path(outcome, ctx)
         outcomes.append(outcome)
         if ctx.on_outcome is not None:
             ctx.on_outcome(outcome)
