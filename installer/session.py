@@ -555,9 +555,9 @@ def review_problems(
     for agent in CONFIG_AGENTS:
         if agent not in runnable:
             continue
-        problem = file_problem(agent, home=home, platform_os=platform_os)
+        problem = file_problem(agent, home=home, platform_os=platform_os, environ=os.environ)
         if problem is not None and problem.startswith("not valid "):
-            path = settings_file(agent, home=home, platform_os=platform_os)
+            path = settings_file(agent, home=home, platform_os=platform_os, environ=os.environ)
             problems[agent] = (path.name, FORMAT_NAMES[AGENT_FORMATS[agent]])
     return problems
 
@@ -565,9 +565,9 @@ def review_problems(
 def _apply_option(agent: str, setting: str, home: Path, platform_os: str) -> FileResult:
     """One option's write for one agent; an unexpected OS error is that file's refusal."""
     try:
-        return apply_setting(agent, setting, home=home, platform_os=platform_os)
+        return apply_setting(agent, setting, home=home, platform_os=platform_os, environ=os.environ)
     except OSError as exc:
-        path = settings_file(agent, home=home, platform_os=platform_os)
+        path = settings_file(agent, home=home, platform_os=platform_os, environ=os.environ)
         return FileResult(agent, setting, path, AGENT_FORMATS[agent], refused=first_line(exc))
 
 

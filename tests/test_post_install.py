@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from installer import post_install
+from installer.agent_settings import parse_settings
 from installer.model import (
     POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
@@ -118,6 +119,29 @@ def test_apply_agent_tuning_contributes_a_file_result_per_group_and_no_line() ->
     assert output.lines == ()
     assert [result.setting for result in output.settings] == list(TUNING_GROUPS["claude"])
     assert all(result.agent == "claude" for result in output.settings)
+
+
+def test_copilot_tuning_follows_copilot_home_and_removal_reverts_that_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer import app as app_module
+
+    ch = tmp_path / "ch"
+    monkeypatch.setenv("COPILOT_HOME", str(ch))
+    copilot = replace(_tool(post_install=("apply_agent_tuning",)), id="copilot")
+
+    output = run_post_install(copilot, _mutable())
+
+    assert [result.refused for result in output.settings] == [None, None]
+    assert parse_settings((ch / "settings.json").read_text(encoding="utf-8"), "jsonc") == {
+        "defaultPermissionMode": "allow-all",
+        "includeCoAuthoredBy": False,
+    }
+    revert = app_module._revert_settings(  # pyright: ignore[reportPrivateUsage]
+        ("copilot",), platform_os="linux"
+    )
+    assert revert == (("copilot",), (), ())
+    assert not (ch / "settings.json").exists()
 
 
 def test_run_post_install_skips_when_no_actions_declared() -> None:

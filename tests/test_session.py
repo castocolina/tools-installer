@@ -1672,6 +1672,23 @@ def test_review_problems_name_an_unparsable_settings_file() -> None:
     assert review_problems(skipped, home=home, platform_os="fedora") == {}
 
 
+def test_review_problems_reads_copilot_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review R1-01: the review check resolves copilot's file with the real environment."""
+    ch = tmp_path / "ch"
+    ch.mkdir()
+    (ch / "settings.json").write_text("{not json\n")
+    home = Path.home()
+    install = [PlanRow("copilot", Disposition.INSTALL, "")]
+
+    assert review_problems(install, home=home, platform_os="linux") == {}
+    monkeypatch.setenv("COPILOT_HOME", str(ch))
+    assert review_problems(install, home=home, platform_os="linux") == {
+        "copilot": ("settings.json", "JSONC")
+    }
+
+
 def test_desktop_shell_option_writes_environment_d(monkeypatch: pytest.MonkeyPatch) -> None:
     def which_zsh(name: str) -> str | None:
         return "/z/bin/zsh" if name == "zsh" else None

@@ -104,6 +104,7 @@ def test_env_names_to_clear_matches_prefixes_exactly() -> None:
             "HOMEBREW_PREFIX",
             "GH_TOKEN",
             "CODEX_HOME",
+            "COPILOT_HOME",
             "MY_UV_X",
             "KEEP_ME",
         ),
@@ -111,6 +112,7 @@ def test_env_names_to_clear_matches_prefixes_exactly() -> None:
     )
     assert env_names_to_clear(environ) == (
         "CODEX_HOME",
+        "COPILOT_HOME",
         "GH_TOKEN",
         "HOMEBREW_PREFIX",
         "NPM_CONFIG_BAR",
@@ -118,6 +120,10 @@ def test_env_names_to_clear_matches_prefixes_exactly() -> None:
         "UV_CACHE_DIR",
         "npm_config_foo",
     )
+
+
+def test_copilot_home_is_cleared_from_the_environment() -> None:
+    assert env_names_to_clear({"COPILOT_HOME": "x"}) == ("COPILOT_HOME",)
 
 
 def test_home_overrides_survive_the_configure_clearing() -> None:

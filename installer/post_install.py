@@ -215,10 +215,14 @@ def _apply_agent_tuning(
     results: list[FileResult] = []
     for group in TUNING_GROUPS.get(tool.id, ()):
         try:
-            results.append(apply_setting(tool.id, group, home=home, platform_os=platform.os))
+            results.append(
+                apply_setting(
+                    tool.id, group, home=home, platform_os=platform.os, environ=os.environ
+                )
+            )
         except OSError as exc:
             # One group's OS error is that group's refusal; the agent's other groups still run.
-            path = settings_file(tool.id, home=home, platform_os=platform.os)
+            path = settings_file(tool.id, home=home, platform_os=platform.os, environ=os.environ)
             lines = str(exc).splitlines()
             reason = lines[0] if lines and lines[0] else f"{type(exc).__name__} failed"
             results.append(FileResult(tool.id, group, path, AGENT_FORMATS[tool.id], refused=reason))

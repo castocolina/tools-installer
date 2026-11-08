@@ -692,7 +692,9 @@ def _revert_settings(
     kept: list[str] = []
     warnings: list[str] = []
     for agent in agent_ids:
-        for result in revert_agent(agent, home=Path.home(), platform_os=platform_os):
+        for result in revert_agent(
+            agent, home=Path.home(), platform_os=platform_os, environ=os.environ
+        ):
             if result.refused is not None:
                 warnings.append(f"could not revert {display_path(result.path)} — {result.refused}")
                 continue

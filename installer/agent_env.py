@@ -1,5 +1,6 @@
 """Static descriptions of supported agent configuration surfaces."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,11 +19,15 @@ class AgentAdapter:
     permission_mode: PermissionMode
 
 
-def adapters(home: Path, platform_os: str = "linux") -> dict[str, AgentAdapter]:
+def adapters(
+    home: Path, platform_os: str = "linux", environ: Mapping[str, str] | None = None
+) -> dict[str, AgentAdapter]:
     """Return supported agent adapters rooted in ``home``.
 
     Only macOS differs: VS Code keeps its user settings under Library there.
     Every other OS value (linux, fedora, ...) takes the ~/.config path.
+    `environ` is the caller's environment (None reads as empty): only an absolute
+    COPILOT_HOME moves copilot's settings file. Nothing here reads the process environment.
 
     This function does not inspect or modify the filesystem; callers can use
     the returned paths for detection, audit, and later policy application.
@@ -32,7 +37,18 @@ def adapters(home: Path, platform_os: str = "linux") -> dict[str, AgentAdapter]:
         if platform_os == "macos"
         else home / ".config" / "Code" / "User"
     )
+    # A relative COPILOT_HOME resolves against copilot's own working directory, which is
+    # unknowable here, so only an absolute value is honoured.
+    copilot_home = (environ or {}).get("COPILOT_HOME", "")
+    copilot_root = Path(copilot_home) if Path(copilot_home).is_absolute() else home / ".copilot"
     return {
+        "copilot": AgentAdapter(
+            id="copilot",
+            label="GitHub Copilot CLI",
+            config_path=copilot_root / "settings.json",
+            instruction_path=None,
+            permission_mode="configurable",
+        ),
         "cursor-agent": AgentAdapter(
             id="cursor-agent",
             label="Cursor Agent",
