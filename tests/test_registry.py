@@ -1252,7 +1252,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     tuned = {"claude", "codex", "opencode", "cursor-agent", "copilot"}
     assert declarers == {"oh-my-zsh", "vscode", *tuned, *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
-    assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
+    assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme", "set_omz_plugins")
     assert oh_my_zsh.requires == ("zsh", "git")
     method = oh_my_zsh.methods[0]
     assert method.kind == "script"
@@ -2743,7 +2743,11 @@ def test_script_tools_declare_their_documented_config_dirs(
 
 def test_omz_and_vscode_declare_their_actions() -> None:
     tools = _tools_by_id()
-    assert tools["oh-my-zsh"].post_install == ("set_login_shell", "set_omz_theme")
+    assert tools["oh-my-zsh"].post_install == (
+        "set_login_shell",
+        "set_omz_theme",
+        "set_omz_plugins",
+    )
     assert tools["vscode"].post_install == ("apply_agent_tuning", "show_lean_tips")
 
 
@@ -2803,3 +2807,23 @@ def test_copilot_entry_records_the_onboarding_findings() -> None:
         "config_paths",
     ):
         assert finding in block
+
+
+def test_fnm_installer_skips_its_shell_block() -> None:
+    import installer.executors as executors
+
+    fnm = _tools_by_id()["fnm"]
+    script = next(m for m in fnm.methods if m.kind == "script")
+    assert script.params["args"] == ["--skip-shell"]
+    assert script.params["bin_dir"] == "~/.local/share/fnm"
+    assert fnm.post_install == ("source_shell_init",)
+
+    calls: list[list[str]] = []
+    executors.execute(script, calls.append)
+    assert len(calls) == 1
+    assert calls[0][:2] == ["sh", "-c"]
+    assert calls[0][2].endswith("bash -s -- --skip-shell")
+
+    block = REGISTRY.read_text(encoding="utf-8").split('id = "fnm"', 1)[1].split("[[tool]]", 1)[0]
+    assert "--skip-shell" in block
+    assert "Verified 2026-11-08" in block

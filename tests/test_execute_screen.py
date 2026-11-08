@@ -46,7 +46,7 @@ from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
+from installer.post_install import SENSITIVE_PROMPTS, ConfirmSensitiveAction, SensitivePrompt
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
@@ -353,6 +353,34 @@ def _indicator_text(screen: ExecuteScreen) -> str:
 
 def _heartbeat_lines(screen: ExecuteScreen) -> list[str]:
     return [line for line in _log_text(screen).splitlines() if _HEARTBEAT_TAIL in line]
+
+
+@pytest.fixture(autouse=True)
+def legacy_sensitive_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`SENSITIVE_PROMPTS` has been empty since 23.2-06 (D-13), but SensitiveActionScreen stays
+    wired for Phase 24.1; these tests keep driving it with the prompts it used to show."""
+    monkeypatch.setitem(
+        SENSITIVE_PROMPTS,
+        "set_login_shell",
+        SensitivePrompt(
+            "Show a reviewed command to change the login shell to zsh for {tool}, "
+            "which you run in your own terminal after the installer exits?",
+            "Yes, show the reviewed command",
+            "No, skip this",
+            True,
+        ),
+    )
+    monkeypatch.setitem(
+        SENSITIVE_PROMPTS,
+        "source_shell_init",
+        SensitivePrompt(
+            "Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. "
+            "It stays off unless you choose yes; Policies can change it later.",
+            "Yes, turn it on",
+            "No, leave it off",
+            False,
+        ),
+    )
 
 
 def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
@@ -3680,7 +3708,7 @@ async def test_r_toggles_an_installer_owned_current_row_both_ways() -> None:
         assert options.get_option_at_index(options.highlighted).id == "rg"
 
 
-async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
+async def test_r_on_an_installed_oh_my_zsh_shows_the_chsh_handoff_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from installer import engine
@@ -3749,13 +3777,7 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
         assert isinstance(screen, ExecuteScreen)
         screen.query_one("#plan-rows", OptionList).highlighted = 0
         await pilot.press("r", "enter")
-        for _ in range(400):
-            if "SensitiveActionScreen" in type(app.screen).__name__:
-                break
-            await pilot.pause()
-        assert "SensitiveActionScreen" in type(app.screen).__name__
-        await pilot.press("enter")
-        await _settle_execute(screen, pilot)
+        await _settle_execute(screen, pilot)  # no question: the handoff prints on its own
         assert screen.outcomes is not None
         assert screen.outcomes[0].result == "manual"
         assert "chsh -s $(which zsh)" in _log_text(screen)
@@ -3770,7 +3792,7 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
     assert calls == []
 
 
-async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_reviewed_chsh_handoff(
+async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_chsh_handoff_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from installer import engine
@@ -3827,14 +3849,7 @@ async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_reviewed_chsh_h
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
         await pilot.press("enter")
-        for _ in range(400):
-            if "SensitiveActionScreen" in type(app.screen).__name__:
-                break
-            await pilot.pause()
-        assert screen.outcomes is None or screen.outcomes[0].result == "done", _log_text(screen)
-        assert "SensitiveActionScreen" in type(app.screen).__name__, _log_text(screen)
-        await pilot.press("enter")
-        await _settle_execute(screen, pilot)
+        await _settle_execute(screen, pilot)  # no question: the handoff prints on its own
         assert screen.outcomes is not None
         assert screen.outcomes[0].result == "done"
         assert "chsh -s $(which zsh)" in _log_text(screen)
@@ -5745,7 +5760,7 @@ async def test_unattended_runs_leave_every_option_off(monkeypatch: pytest.Monkey
         assert not any("[x]" in prompt for prompt in prompts)
         log = _log_text(screen)
         assert _UNATTENDED_OFF in log
-        assert "Shell init left off (--yes): starship. Turn it on in Policies." in log
+        assert "Shell init left off" not in log
     assert handed == [frozenset()]
 
 

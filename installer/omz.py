@@ -45,8 +45,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from installer.atomic import atomic_write_text
-from installer.shellrc import apply_block, strip_block
+from installer.atomic import FileSnapshot, atomic_write_text, read_snapshot, snapshot_matches
+from installer.shellrc import apply_block, read_record, strip_block
 from installer.tweaks import bundle_marker_present
 
 # `import os` is the monkeypatch surface tests/test_omz.py uses (`omz.os.replace`).
@@ -299,30 +299,10 @@ def _record(
 
     None and () are different answers: () means "we enabled the policy and the
     array already had every name", which is still ours to switch off, while
-    None means "we never touched this machine".
-
-    Only a CLOSED begin..end block counts. An orphan begin marker — which a
-    truncated write could once leave behind — must read as "no record": treating
-    it as "owns nothing" would report the policy ON while `_clear_owned`'s
-    `strip_block` deliberately refuses to strip an unpaired marker, leaving no
-    way to ever switch it off. Last closed block wins, mirroring the same
-    last-begin pairing rule apply_block/strip_block use.
+    None means "we never touched this machine". The closed-block rule is
+    `shellrc.read_record`'s: an orphan begin marker reads as "no record".
     """
-    try:  # a read-only probe at launch: an undecodable byte or a directory never raises
-        text = state_path.read_bytes().decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    record: tuple[str, ...] | None = None
-    names: tuple[str, ...] = ()
-    inside = False
-    for line in text.split("\n"):
-        if line == begin:
-            inside, names = True, ()
-        elif line == end and inside:
-            inside, record = False, names
-        elif inside and line.startswith(prefix):
-            names = tuple(line[len(prefix) :].split())
-    return record
+    return read_record(state_path, begin, end, prefix)
 
 
 def owned_plugins(state_path: Path) -> tuple[str, ...]:
@@ -398,8 +378,10 @@ def _repair_sourced_template(lines: list[str], source_idx: int) -> list[str] | N
     return lines
 
 
-def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
-    """Make .zshrc source Oh-My-Zsh with an editable plugins assignment.
+def _template_update(zshrc_path: Path, root: Path | None) -> str | None:
+    """What `ensure_zshrc_template` would write, or None when it leaves the file alone.
+
+    Make .zshrc source Oh-My-Zsh with an editable plugins assignment.
 
     KEEP_ZSHRC=yes preserves an existing .zshrc, which can leave oh-my-zsh
     installed but never sourced. Returns True when the file was written.
@@ -434,7 +416,7 @@ def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
     if source_idx is not None:
         repaired = _repair_sourced_template(lines, source_idx)
         if repaired is None:
-            return False
+            return None
         updated = "\n".join(repaired)
     else:
         updated = existing
@@ -447,9 +429,66 @@ def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
         if _locate(updated.split("\n")) is None:
             updated += "plugins=(git)\n"
         updated += "source $ZSH/oh-my-zsh.sh\n"
+    return updated
+
+
+def ensure_zshrc_template(zshrc_path: Path, root: Path | None = None) -> bool:
+    """Make .zshrc source Oh-My-Zsh with an editable plugins assignment (`_template_update`).
+
+    Returns True when the file was written.
+    """
+    updated = _template_update(zshrc_path, root)
+    if updated is None:
+        return False
     zshrc_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(zshrc_path, updated)
     return True
+
+
+def _needs_template(content: str) -> bool:
+    """Whether `write_plugins` runs the template repair first: a live source command, or no
+    plugins assignment at all (a governing multi-line array is left to refuse)."""
+    lines = content.split("\n")
+    return _sourced_oh_my_zsh(lines) is not None or not any(
+        _ANY_PLUGINS_OPEN.match(line) for line in lines
+    )
+
+
+def plugins_refusal(zshrc_path: Path) -> str | None:
+    """Why `write_plugins` would refuse this file, read-only; None when it would not.
+
+    A missing file gets the template, so it is never a refusal. The template repair a real
+    write would run is computed in memory, so the answer is the one `write_plugins` gives.
+    """
+    if not zshrc_path.exists():
+        return None
+    try:
+        content = _read_rc(zshrc_path)
+        if _needs_template(content):
+            content = _template_update(zshrc_path, None) or content
+    except OSError as exc:
+        return str(exc)
+    if _rewrite(content, MANAGED_PLUGINS, enable=True) is None:
+        return _refusal(content)
+    return None
+
+
+def _snapshot_text(path: Path) -> tuple[Path, FileSnapshot, str]:
+    """The file's real path (a symlinked dotfile resolves), its identity-bound snapshot and
+    its text; non-UTF-8 content is refused as `_read_rc` refuses it."""
+    real = path.resolve()
+    snapshot = read_snapshot(real)
+    try:
+        return real, snapshot, snapshot.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OmzPluginsError(f"{path} is not valid UTF-8; refusing to rewrite it") from exc
+
+
+def _commit_unless_changed(path: Path, real: Path, snapshot: FileSnapshot, updated: str) -> None:
+    """Write `updated` only when `path` still holds the bytes the edit was computed from."""
+    if not snapshot_matches(real, snapshot):
+        raise OmzPluginsError(f"{path} changed while it was being written; nothing was changed")
+    _atomic_write(path, updated)
 
 
 def write_plugins(
@@ -475,17 +514,11 @@ def write_plugins(
     out. An over-broad claim is recoverable (removing a name the array does not
     contain is a no-op); an absent one is not.
     """
-    if not zshrc_path.exists():
+    if not zshrc_path.exists() or _needs_template(_read_rc(zshrc_path)):
         ensure_zshrc_template(zshrc_path, root)
-    else:
-        lines = _read_rc(zshrc_path).split("\n")
-        if _sourced_oh_my_zsh(lines) is not None or not any(
-            _ANY_PLUGINS_OPEN.match(line) for line in lines
-        ):
-            ensure_zshrc_template(zshrc_path, root)
     if not zshrc_path.exists():
         raise OmzPluginsError(_NO_ARRAY)
-    original = _read_rc(zshrc_path)
+    real, snapshot, original = _snapshot_text(zshrc_path)
     current = plugins_in(original)
     added = tuple(name for name in plugins if name not in current)
     updated = enable_plugins(original, plugins)
@@ -495,7 +528,7 @@ def write_plugins(
     _record_owned(state_path, _owned_body(tuple(owned)))
     try:
         if updated != original:
-            _atomic_write(zshrc_path, updated)
+            _commit_unless_changed(zshrc_path, real, snapshot, updated)
     except OSError:
         # Restore the record to exactly its prior state, so a refused edit
         # leaves no claim over a file this installer did not change.
@@ -632,7 +665,7 @@ def apply_theme(zshrc_path: Path, state_path: Path, name: str) -> ThemeResult:
     """
     if not zshrc_path.exists():
         return ThemeResult("no-source", None)
-    original = _read_rc(zshrc_path)
+    real, snapshot, original = _snapshot_text(zshrc_path)
     lines = original.split("\n")
     if _sourced_oh_my_zsh(lines) is None:
         return ThemeResult("no-source", None)
@@ -646,7 +679,7 @@ def apply_theme(zshrc_path: Path, state_path: Path, name: str) -> ThemeResult:
         return ThemeResult("added" if previous == name == value else "yours", value)
     _record_theme(state_path, name)
     try:
-        _atomic_write(zshrc_path, updated)
+        _commit_unless_changed(zshrc_path, real, snapshot, updated)
     except OSError:
         if previous is None:
             _clear_owned(state_path, THEME_BEGIN, THEME_END)

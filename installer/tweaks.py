@@ -16,7 +16,7 @@ from pathlib import Path
 from installer.atomic import atomic_write_text, read_capped
 from installer.locations import display_path
 from installer.platform import Platform
-from installer.shellrc import apply_block, strip_block
+from installer.shellrc import apply_block, read_record, strip_block
 
 _BIN_DIR_PLACEHOLDER = "__TOOLS_INSTALLER_BIN_DIR__"
 
@@ -370,6 +370,54 @@ def bundle_marker_present(bundle_id: str, rc_path: Path) -> bool:
     except OSError:
         return False
     return data is not None and begin in data.decode("utf-8", errors="replace").split("\n")
+
+
+# The written-once record of shell init (23.2 D-08): a comment-only closed block in the managed
+# rc file listing the tool ids the install tuning wrote. A block present without a record is a
+# pre-23.2 Policies block, not pending.
+SHELL_INIT_RECORD_BEGIN = "# >>> tools-installer shell-init >>>"
+SHELL_INIT_RECORD_END = "# <<< tools-installer shell-init <<<"
+_SHELL_INIT_WRITTEN = "# written:"
+
+
+def shell_init_record(rc_path: Path) -> tuple[str, ...] | None:
+    """The tool ids whose shell init the installer wrote; None when it never recorded any."""
+    return read_record(rc_path, SHELL_INIT_RECORD_BEGIN, SHELL_INIT_RECORD_END, _SHELL_INIT_WRITTEN)
+
+
+def _store_shell_init_record(rc_path: Path, ids: tuple[str, ...]) -> None:
+    existing = rc_path.read_text() if rc_path.exists() else ""
+    if ids:
+        body = (
+            "# Shell init this installer wrote once. A block you delete is not written again.",
+            "# Comments only: nothing here is executed.",
+            f"{_SHELL_INIT_WRITTEN} {' '.join(ids)}",
+        )
+        block = "\n".join((SHELL_INIT_RECORD_BEGIN, *body, SHELL_INIT_RECORD_END))
+        updated = apply_block(existing, block, SHELL_INIT_RECORD_BEGIN, SHELL_INIT_RECORD_END)
+    else:
+        updated = strip_block(existing, SHELL_INIT_RECORD_BEGIN, SHELL_INIT_RECORD_END)
+    if updated != existing:
+        atomic_write_text(rc_path, updated)
+
+
+def record_shell_init(rc_path: Path, tool_id: str) -> None:
+    """Record that the installer wrote this tool's shell init; once per id, in write order."""
+    ids = shell_init_record(rc_path) or ()
+    if tool_id not in ids:
+        _store_shell_init_record(rc_path, (*ids, tool_id))
+
+
+def forget_shell_init(rc_path: Path, tool_id: str) -> None:
+    """Drop one id from the record (its block is gone); the block goes with the last id."""
+    ids = shell_init_record(rc_path)
+    if ids is not None and tool_id in ids:
+        _store_shell_init_record(rc_path, tuple(i for i in ids if i != tool_id))
+
+
+def clear_shell_init_record(rc_path: Path) -> None:
+    """Strip the whole record block, as the full uninstall does."""
+    _store_shell_init_record(rc_path, ())
 
 
 def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:

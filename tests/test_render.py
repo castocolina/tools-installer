@@ -39,7 +39,6 @@ from installer.render import (
     render_verification,
     run_option_lines,
     running_row_text,
-    shell_init_left_off_line,
     summary_head,
 )
 from installer.run import CommandError
@@ -1714,16 +1713,7 @@ def test_attribution_report_names_agents_without_a_key() -> None:
     assert _settings_text(cursor, frozenset()) == []
 
 
-def test_shell_init_left_off_line_lists_done_tools() -> None:
-    outcomes = [
-        RowOutcome(PlanRow("starship", Disposition.INSTALL, ""), "done"),
-        RowOutcome(PlanRow("zoxide", Disposition.INSTALL, ""), "failed"),
-        RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done"),
-    ]
-    assert shell_init_left_off_line(outcomes, ("starship", "zoxide")) == (
-        "Shell init left off (--yes): starship. Turn it on in Policies."
-    )
-    assert shell_init_left_off_line(outcomes[1:2], ("zoxide",)) is None
+def test_run_options_left_off_note_is_unchanged() -> None:
     assert RUN_OPTIONS_LEFT_OFF == (
         "Run options left off (--yes never turns them on); change them in Policies."
     )

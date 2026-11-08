@@ -1903,10 +1903,11 @@ def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> No
         "set_login_shell",
         "source_shell_init",
         "set_omz_theme",
+        "set_omz_plugins",
         "show_lean_tips",
         "apply_agent_tuning",
     )
-    assert SENSITIVE_POST_INSTALL_ACTIONS == ("set_login_shell", "source_shell_init")
+    assert SENSITIVE_POST_INSTALL_ACTIONS == ()
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["source_shell_init"]'))
     assert load_tools(manifest)[0].post_install == ("source_shell_init",)
 
@@ -1919,4 +1920,18 @@ def test_tool_has_no_dead_attribution_fields(name: str) -> None:
 def test_post_install_rejects_a_deleted_action(tmp_path: Path) -> None:
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["pnpm_setup"]'))
     with pytest.raises(ValueError, match="unknown post-install action 'pnpm_setup'"):
+        load_tools(manifest)
+
+
+def test_sensitive_tables_are_empty(tmp_path: Path) -> None:
+    assert SENSITIVE_POST_INSTALL_ACTIONS == ()
+    manifest = _write(
+        tmp_path,
+        _tool_block(
+            "demo",
+            'post_install = ["set_login_shell"]\n'
+            'default_enabled_sensitive_actions = ["set_login_shell"]',
+        ),
+    )
+    with pytest.raises(ValueError, match="unknown sensitive post-install action 'set_login_shell'"):
         load_tools(manifest)

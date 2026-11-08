@@ -1164,7 +1164,7 @@ def _mutable_platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
 
 
-def test_execute_plan_confirmation_reaches_the_post_install_gate(
+def test_execute_plan_prints_the_login_shell_handoff_whatever_the_confirmation_says(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1197,7 +1197,7 @@ def test_execute_plan_confirmation_reaches_the_post_install_gate(
     yes_outcome = run(lambda _id, _action: True)
     no_outcome = run(lambda _id, _action: False)
     assert yes_outcome is not None and yes_outcome.post_install_handoff
-    assert no_outcome is not None and no_outcome.post_install_handoff == ()
+    assert no_outcome is not None and no_outcome.post_install_handoff
 
 
 def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
@@ -1231,7 +1231,7 @@ def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
     assert seen == [("fail", confirm)]
 
 
-def test_execute_plan_without_a_confirmation_produces_no_instructions(
+def test_execute_plan_without_a_confirmation_still_prints_the_handoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1256,7 +1256,8 @@ def test_execute_plan_without_a_confirmation_produces_no_instructions(
         install=engine.install_tool,
     )
     outcome = execute_plan([PlanRow(tool.id, Disposition.INSTALL, "")], context)[0].install
-    assert outcome is not None and outcome.post_install_handoff == ()
+    assert outcome is not None
+    assert any("chsh -s" in line for line in outcome.post_install_handoff)
 
 
 def test_sensitive_install_protocol_parameters_are_unchanged() -> None:

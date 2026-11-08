@@ -3276,3 +3276,26 @@ def test_a_file_without_path_or_tweak_block_appends_the_path_block(tmp_path: Pat
     assert lines[0] == "export KEEP=1"
     assert lines[1] == ""
     assert lines[2] == _PATH_MARK
+
+
+def test_shellrc_read_record_is_the_closed_block_reader(tmp_path: Path) -> None:
+    from installer import omz
+    from installer.shellrc import read_record
+
+    begin, end, prefix = "# >>> r >>>", "# <<< r <<<", "# names:"
+    rc = tmp_path / "rc"
+    assert read_record(rc, begin, end, prefix) is None  # no file
+    rc.write_text("export A=1\n")
+    assert read_record(rc, begin, end, prefix) is None  # no block
+    rc.write_text(f"{begin}\n{prefix} a b\n")
+    assert read_record(rc, begin, end, prefix) is None  # orphan begin
+    rc.write_text(f"{begin}\n{end}\n")
+    assert read_record(rc, begin, end, prefix) == ()  # empty closed block
+    rc.write_text(f"{begin}\n{prefix} a\n{end}\n{begin}\n{prefix} b c\n{end}\n")
+    assert read_record(rc, begin, end, prefix) == ("b", "c")  # the last closed block wins
+    omz_rc = tmp_path / "omz"
+    omz_rc.write_text(
+        "# >>> tools-installer omz-plugins >>>\n# added: docker\n"
+        "# <<< tools-installer omz-plugins <<<\n"
+    )
+    assert omz.owned_plugins(omz_rc) == ("docker",)  # omz._record answers through it

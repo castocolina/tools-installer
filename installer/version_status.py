@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import installer.locations
-from installer import agent_settings, receipts
+from installer import agent_settings, omz, receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
@@ -96,6 +96,7 @@ from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
 from installer.status import is_installed
 from installer.terminal_shell import TerminalShellResult
+from installer.tweaks import bundle_marker_present, shell_init_bundle, shell_init_record
 from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
 from installer.update import update_refusal
 from installer.version_cache import (
@@ -644,6 +645,46 @@ TUNING_STEP = ConfigStep("apply install tuning", "install_tuning")
 
 
 def _tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
+    """The pending-install-tuning fact of one tool: an agent's settings, or Oh-My-Zsh's plugins."""
+    if present and "set_omz_plugins" in tool.post_install:
+        return _omz_tuning_fact()
+    if present and "source_shell_init" in tool.post_install:
+        return _shell_init_tuning_fact(tool, platform)
+    return _agent_tuning_fact(tool, present, platform)
+
+
+def _shell_init_tuning_fact(tool: Tool, platform: Platform) -> _ConfigFacts:
+    """A present shell tool whose bundle applies here, whose block is absent and whose id the
+    installer never recorded reads `≈` with the one step. A block the user deleted after the
+    installer wrote it is recorded, so it is theirs; a block with no record is pre-23.2."""
+    bundle = shell_init_bundle(tool.id)
+    if bundle is None or (bundle.platforms and platform.os not in bundle.platforms):
+        return _NO_FACTS
+    rc_path = Path.home() / ".myshellrc"
+    if bundle_marker_present(tool.id, rc_path) or tool.id in (shell_init_record(rc_path) or ()):
+        return _NO_FACTS
+    return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
+
+
+def _omz_tuning_fact() -> _ConfigFacts:
+    """A present Oh-My-Zsh the installer never wrote plugins for reads `≈` with the one step.
+
+    A record (even an empty one) means the install tuning ran, or the Policies row did (D-18):
+    nothing to say. A .zshrc `write_plugins` would refuse is a reason with no step.
+    """
+    home = Path.home()
+    try:
+        if omz.omz_root(home, os.environ) is None or omz.plugins_owned(home / ".myshellrc"):
+            return _NO_FACTS
+        refusal = omz.plugins_refusal(installer.locations.zshrc_path(home, os.environ))
+    except Exception as exc:  # a read-only secondary fact must never fail the pass
+        return _ConfigFacts(unchecked=(f"plugins not checked: {exc}",))
+    if refusal is not None:
+        return _ConfigFacts((refusal,))
+    return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
+
+
+def _agent_tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
     """Every settings-file fact of one agent (UI-SPEC section 5 O7, 23.2 D-04, D-05).
 
     An untrusted ledger blocks the row with its reason, present or not. A settings file the

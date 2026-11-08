@@ -921,3 +921,99 @@ def test_a_failed_zshrc_write_keeps_the_previous_theme_claim(
     with pytest.raises(OSError, match="disk full"):
         omz.apply_theme(zshrc, state, "")
     assert omz.owned_theme(state) == "robbyrussell"
+
+
+_TUNED = 'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n'
+
+
+def test_plugins_refusal_names_what_write_plugins_would_refuse(tmp_path: Path) -> None:
+    missing = tmp_path / "nope"
+    assert omz.plugins_refusal(missing) is None
+    ok, _ = _sandbox(tmp_path, _TUNED)
+    assert omz.plugins_refusal(ok) is None
+    multi = tmp_path / "multi"
+    multi.mkdir()
+    zshrc, state = _sandbox(multi, "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n")
+    reason = omz.plugins_refusal(zshrc)
+    assert reason is not None
+    with pytest.raises(OmzPluginsError) as caught:
+        write_plugins(zshrc, state)
+    assert str(caught.value) == reason  # the two share one preflight
+    assert omz.plugins_refusal(zshrc) == reason  # read-only: the file is unchanged
+    assert zshrc.read_text() == "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n"
+
+
+def test_plugins_refusal_is_read_only_for_a_file_that_would_get_the_template(
+    tmp_path: Path,
+) -> None:
+    zshrc, _ = _sandbox(tmp_path, "export PATH=$PATH\n")
+    assert omz.plugins_refusal(zshrc) is None
+    assert zshrc.read_text() == "export PATH=$PATH\n"
+
+
+def test_omz_plugins_existing_list_gains_only_docker(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, _TUNED)
+    assert write_plugins(zshrc, state) == ("docker",)
+    assert "plugins=(git z docker)" in zshrc.read_text()
+    assert owned_plugins(state) == ("docker",)  # git was the user's, never recorded as added
+
+
+def test_omz_plugins_on_missing_and_empty_arrays(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, "source $ZSH/oh-my-zsh.sh\n")
+    write_plugins(zshrc, state)
+    assert "plugins=(git docker)\n" in zshrc.read_text()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    zshrc, state = _sandbox(empty, "plugins=()\nsource $ZSH/oh-my-zsh.sh\n")
+    assert write_plugins(zshrc, state) == ("git", "docker")
+    assert "plugins=(git docker)\n" in zshrc.read_text()
+
+
+def test_omz_plugins_second_install_adds_nothing(tmp_path: Path) -> None:
+    zshrc, state = _sandbox(tmp_path, _TUNED)
+    write_plugins(zshrc, state)
+    rc_before, zshrc_before = state.read_bytes(), zshrc.read_bytes()
+    assert write_plugins(zshrc, state) == ()
+    assert (state.read_bytes(), zshrc.read_bytes()) == (rc_before, zshrc_before)
+
+
+def test_omz_plugins_keeps_non_ascii_comments(tmp_path: Path) -> None:
+    text = "# café ñandú — 日本語\nplugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n# fin ✓\n"
+    zshrc, state = _sandbox(tmp_path, text)
+    write_plugins(zshrc, state)
+    after = zshrc.read_text(encoding="utf-8")
+    assert after.replace(" docker", "").replace('ZSH_THEME="robbyrussell"\n', "") == text
+
+
+def _other_writer_after(monkeypatch: pytest.MonkeyPatch, name: str, zshrc: Path) -> None:
+    """Make another program edit `zshrc` right after the module's read, before its commit."""
+    real = getattr(omz, name)
+
+    def wrapped(*args: object, **kwargs: object) -> object:
+        result = real(*args, **kwargs)
+        zshrc.write_text(zshrc.read_text() + "# another writer\n")
+        return result
+
+    monkeypatch.setattr(omz, name, wrapped)
+
+
+def test_omz_plugins_refuses_a_zshrc_changed_before_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    zshrc, state = _sandbox(tmp_path, _TUNED)
+    _other_writer_after(monkeypatch, "_record_owned", zshrc)
+    with pytest.raises(OmzPluginsError, match="changed"):
+        write_plugins(zshrc, state)
+    assert zshrc.read_text() == _TUNED + "# another writer\n"
+    assert not state.exists() or not plugins_owned(state)
+
+
+def test_omz_theme_refuses_a_zshrc_changed_before_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    zshrc, state = _sandbox(tmp_path, _SOURCE_ONLY)
+    _other_writer_after(monkeypatch, "_record_theme", zshrc)
+    with pytest.raises(OmzPluginsError, match="changed"):
+        omz.apply_theme(zshrc, state, "robbyrussell")
+    assert zshrc.read_text() == _SOURCE_ONLY + "# another writer\n"
+    assert omz.owned_theme(state) is None

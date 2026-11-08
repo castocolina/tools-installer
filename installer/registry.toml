@@ -604,7 +604,7 @@ audience = "human"
 tier = "system"
 verified = 2026-11-04
 requires = ["zsh", "git"]
-post_install = ["set_login_shell", "set_omz_theme"]
+post_install = ["set_login_shell", "set_omz_theme", "set_omz_plugins"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
 [[tool.method]]
 kind = "script"
@@ -2222,6 +2222,10 @@ bin_dir = "~/.volta/bin"
 # shims are created by the script's `volta --version` (line 230, or `volta setup` at line 227):
 # the disposable-container run of this script (2026-11-04, fedora:latest) listed node, npm, npx, pnpm, yarn and
 # yarnpkg beside volta. No update and no remove: the install script names neither.
+# Verified 2026-11-08: get.volta.sh runs `volta setup` (line 228, read as text), and Volta's `setup`
+# (src/command/setup.rs) rewrites ~/.profile, ~/.zshenv or ~/.zshrc, ~/.bashrc and ~/.bash_profile with only
+# `export VOLTA_HOME="$HOME/.volta"` and `export PATH="$VOLTA_HOME/bin:$PATH"` (fish: `set -gx`). No line it
+# writes runs the volta binary, so unlike fnm there is no unguarded call to skip; `--skip-setup` stays unused.
 paths = [
     "~/.volta/bin/volta",
     "~/.volta/bin/volta-shim",
@@ -2255,7 +2259,15 @@ kind = "script"
 os = ["debian", "arch", "fedora"]
 url = "https://fnm.vercel.app/install"
 shell = "bash"
+args = ["--skip-shell"]
 bin_dir = "~/.local/share/fnm"
+# Verified 2026-11-08: fnm's installer (fnm.vercel.app/install, read as text) takes `-s`/`--skip-shell` (line 33)
+# to skip its `setup_shell` (lines 165-236), which is its only rc writer. Left on, it appends an `FNM_PATH`
+# block to ~/.bashrc / ~/.zshrc whose `eval "$(fnm env ...)"` is guarded by a directory test, not by the command,
+# and rcclean never strips indented lines. The directory outlives the binary (the node-versions store stays),
+# so every new shell ran `fnm` unguarded once it was gone (`.bashrc: line 45: fnm: command not found`, found
+# in the Phase 23.1 container e2e). With the flag, fnm's PATH comes from the managed PATH block (this
+# `bin_dir`) and its env from the installer's own `command -v fnm`-guarded shell-init block, written at install.
 # Verified 2026-11-04: fnm.vercel.app/install sets INSTALL_DIR to ~/.local/share/fnm by default (lines 12-19) and
 # moves the binary to $INSTALL_DIR/fnm (lines 111-117), so `paths` is that leaf. Its Node versions live in
 # node-versions under the same dir (fnm src/config.rs, installations_dir), so the dir is never a tree (review R1-13).

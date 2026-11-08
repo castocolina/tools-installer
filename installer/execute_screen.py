@@ -47,7 +47,6 @@ from installer.render import (
     render_run_report,
     run_option_lines,
     running_row_text,
-    shell_init_left_off_line,
     summary_head,
 )
 from installer.run import StreamingRunner
@@ -68,7 +67,6 @@ from installer.session import (
     review_problems,
     run_options,
 )
-from installer.tweaks import SHELL_INIT_TOOLS
 from installer.ui_common import SEVERITY_STYLE, StatusLine, run_live
 from installer.update import UpdateService
 from installer.version_status import VersionRefreshService
@@ -1017,10 +1015,6 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                 )
             )
         )
-        if self._inputs.unattended:
-            left_off = shell_init_left_off_line(message.outcomes, SHELL_INIT_TOOLS)
-            if left_off is not None:
-                log.write(left_off)
         if message.path_text:
             log.write("PATH wiring")
             log.write(message.path_text)

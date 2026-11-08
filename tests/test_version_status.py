@@ -29,6 +29,7 @@ from installer.model import (
     Tool,
     load_tools,
 )
+from installer.omz import plugins_refusal, write_plugins
 from installer.ownership import (
     OWNER_LABELS,
     ManagerInventory,
@@ -55,6 +56,13 @@ from installer.session import (
     execute_plan,
 )
 from installer.terminal_shell import TerminalShellResult
+from installer.tweaks import (
+    TweakBundle,
+    shell_init_bundle,
+    shell_init_record,
+    strip_tweak_block,
+    write_tweak,
+)
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
     MANAGER_RETRY_BACKOFF,
@@ -6165,3 +6173,125 @@ def test_the_detail_bar_names_the_hosts_to_unregister() -> None:
     assert uninstall_detail(tool, hooked) == (
         f"{LAYOUT_PROOF_NOTE} — unregisters it from claude, cursor-agent first"
     )
+
+
+def _omz_tool() -> Tool:
+    return next(t for t in load_tools(REGISTRY) if t.id == "oh-my-zsh")
+
+
+def _omz_zshrc(text: str) -> Path:
+    (Path.home() / ".oh-my-zsh").mkdir()
+    zshrc = Path.home() / ".zshrc"
+    zshrc.write_text(text, encoding="utf-8")
+    return zshrc
+
+
+_OMZ_UNTOUCHED = "plugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n"
+
+
+def test_pending_tuning_omz_untouched_reads_pending(tmp_path: Path) -> None:
+    zshrc = _omz_zshrc(_OMZ_UNTOUCHED)
+    tool = _omz_tool()
+    service = _hook_service(tmp_path, frozenset())
+    state = _settled_states(service, [tool])["oh-my-zsh"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert "plugins=(git z docker)" in zshrc.read_text(encoding="utf-8")
+    again = _settled_states(service, [tool])["oh-my-zsh"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
+
+
+def test_pending_tuning_omz_empty_record_reads_ok(tmp_path: Path) -> None:
+    zshrc = _omz_zshrc("plugins=(git docker)\nsource $ZSH/oh-my-zsh.sh\n")
+    write_plugins(zshrc, Path.home() / ".myshellrc")  # both names were already on: record ()
+    state = _tuning_state(tmp_path, _omz_tool())
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+
+def test_pending_tuning_omz_multiline_array_shows_the_refusal_without_a_step(
+    tmp_path: Path,
+) -> None:
+    _omz_zshrc("plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n")
+    state = _tuning_state(tmp_path, _omz_tool())
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == plugins_refusal(Path.home() / ".zshrc")
+    assert state.unconfigured == ()
+
+
+def test_omz_policies_era_record_is_honoured(tmp_path: Path) -> None:
+    zshrc = _omz_zshrc(_OMZ_UNTOUCHED)
+    myshellrc = Path.home() / ".myshellrc"
+    write_plugins(zshrc, myshellrc)  # what the Policies row did
+    before = (zshrc.read_bytes(), myshellrc.read_bytes())
+    state = _tuning_state(tmp_path, _omz_tool())
+    assert state.health is Health.OK
+    assert (zshrc.read_bytes(), myshellrc.read_bytes()) == before
+
+
+def _shell_tool(tool_id: str = "zoxide") -> Tool:
+    return next(t for t in load_tools(REGISTRY) if t.id == tool_id)
+
+
+def _myshellrc() -> Path:
+    return Path.home() / ".myshellrc"
+
+
+def test_pending_tuning_shell_init(tmp_path: Path) -> None:
+    tool = _shell_tool()
+    service = _hook_service(tmp_path, frozenset())
+    state = _settled_states(service, [tool])["zoxide"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert "# >>> tools-installer tweak:zoxide >>>" in _myshellrc().read_text()
+    assert shell_init_record(_myshellrc()) == ("zoxide",)
+    again = _settled_states(service, [tool])["zoxide"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
+
+
+def test_pending_tuning_shell_init_block_without_a_record_is_not_pending(tmp_path: Path) -> None:
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+    write_tweak(bundle, _myshellrc())  # a Policies-era block
+    state = _tuning_state(tmp_path, _shell_tool())
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+
+def test_shell_init_deleted_block_is_the_users_choice(tmp_path: Path) -> None:
+    tool = _shell_tool()
+    assert _reconfigure(_hook_service(tmp_path, frozenset()), tool).result == "done"
+    strip_tweak_block("zoxide", _myshellrc())  # the user cut the block; the record stays
+    state = _tuning_state(tmp_path, tool)
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+    before = _myshellrc().read_bytes()
+    forced = _forced_reconfigure(tool)
+    assert forced.result == "done"
+    assert _myshellrc().read_bytes() == before
+
+
+def test_pending_tuning_shell_init_bundle_absent_on_this_os_reads_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+
+    def macos_only(_tool_id: str) -> TweakBundle:
+        return replace(bundle, platforms=("macos",))
+
+    monkeypatch.setattr(version_status, "shell_init_bundle", macos_only)
+    assert _tuning_state(tmp_path, _shell_tool()).health is Health.OK

@@ -15,21 +15,22 @@ and never spawns a child process. This follows
 `installer/host_setup.py`'s documented doctrine: setup that needs a real
 terminal is displayed, never launched from the installer's worker thread.
 
-The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme writes
+The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme and plugin writes
 keep that rule: they write only the installer-owned `~/.myshellrc` block (and,
 in split mode, the rc `source` line) through the Policies tweak writer, and the
-`.zshrc` theme line through the theme writer. They never spawn a child process.
+`.zshrc` theme and plugin lines through the Oh-My-Zsh writers. They never spawn a child process.
 
-A tuning action (`apply_agent_tuning`) writes the tool's own user-scope settings
-through `agent_settings` (each key recorded in the agent's config-write ledger),
-never spawns a child, asks nothing and runs on every route.
+A tuning action (`apply_agent_tuning`, `set_omz_plugins`, `source_shell_init`) writes the
+tool's own settings (each agent key recorded in its config-write ledger), never spawns a
+child, asks nothing and runs on every route. `set_login_shell` only prints the reviewed
+command, or why there is none.
 
 A tool the installer detects as already present is a SKIP on the review and
 does not reach this table. Pressing `r` marks it REINSTALL and sends it through
 the install ladder, so a successful reinstall dispatches actions once more. A
 tool whose installer refuses to run over an existing install is not re-run;
 the reinstall dispatches its actions directly. No path re-applies post-install
-actions on their own (D-06); sensitive actions still ask.
+actions on their own (D-06). No action asks a question (23.2 D-13).
 """
 
 import os
@@ -47,11 +48,19 @@ from installer.agent_settings import (
 )
 from installer.locations import zshrc_path
 from installer.model import Tool
-from installer.omz import apply_theme, default_theme, ensure_zshrc_template, omz_root
+from installer.omz import (
+    MANAGED_PLUGINS,
+    apply_theme,
+    default_theme,
+    ensure_zshrc_template,
+    omz_root,
+    plugins_owned,
+    write_plugins,
+)
 from installer.platform import Platform
 from installer.policy import tweak_policy
 from installer.sanitize import sanitize_log_line
-from installer.tweaks import shell_init_bundle
+from installer.tweaks import record_shell_init, shell_init_bundle, shell_init_record
 
 ConfirmSensitiveAction = Callable[[str, str], bool]
 
@@ -79,23 +88,9 @@ class SensitivePrompt:
     default: bool
 
 
-# `{tool}` is the tool id and `{effect}` the shell-init bundle's description.
-SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {
-    "set_login_shell": SensitivePrompt(
-        "Show a reviewed command to change the login shell to zsh for {tool}, "
-        "which you run in your own terminal after the installer exits?",
-        "Yes, show the reviewed command",
-        "No, skip this",
-        True,
-    ),
-    "source_shell_init": SensitivePrompt(
-        "Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. "
-        "It stays off unless you choose yes; Policies can change it later.",
-        "Yes, turn it on",
-        "No, leave it off",
-        False,
-    ),
-}
+# No action asks (23.2 D-13); the prompt machinery stays wired for Phase 24.1. `{tool}` is the
+# tool id and `{effect}` the shell-init bundle's description in a prompt added here.
+SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {}
 
 
 def sensitive_prompt(tool_id: str, action: str) -> SensitivePrompt:
@@ -152,12 +147,28 @@ def _set_login_shell(
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    del platform
+    del tool, platform, confirm
     if shutil.which("chsh") is None:
         return _CHSH_ABSENT_EXPLANATION
-    if confirm is None or not confirm(tool.id, "set_login_shell"):
-        return ()
     return _SET_LOGIN_SHELL_INSTRUCTIONS
+
+
+def _tune_shell_init(tool: Tool, platform: Platform, *, skip_recorded: bool) -> tuple[str, ...]:
+    """Write the tool's guarded shell-init block and record it once. Nothing when the tool has
+    no bundle on this OS, or (reconfigure) when the record says the installer wrote it before."""
+    bundle = shell_init_bundle(tool.id)
+    if bundle is None or (bundle.platforms and platform.os not in bundle.platforms):
+        return ()
+    rc_path = Path.home() / ".myshellrc"
+    if skip_recorded and tool.id in (shell_init_record(rc_path) or ()):
+        return ()
+    tweak_policy(
+        bundle,
+        rc_path=rc_path,
+        ensure_sourced_from=lambda: _shell_init_sourced_from(),
+    ).apply()  # starship's theme rides the policy's own apply (CR-08)
+    record_shell_init(rc_path, tool.id)
+    return ("Shell init on: open a new terminal to use it.",)
 
 
 def _source_shell_init(
@@ -165,17 +176,8 @@ def _source_shell_init(
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    del platform
-    bundle = shell_init_bundle(tool.id)
-    if bundle is None or confirm is None or not confirm(tool.id, "source_shell_init"):
-        return ()
-    home = Path.home()
-    tweak_policy(
-        bundle,
-        rc_path=home / ".myshellrc",
-        ensure_sourced_from=lambda: _shell_init_sourced_from(),
-    ).apply()  # starship's theme rides the policy's own apply (CR-08)
-    return ("Shell init on: open a new terminal to use it.",)
+    del confirm
+    return _tune_shell_init(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
 def _set_omz_theme(
@@ -203,6 +205,32 @@ def _set_omz_theme(
     else:
         theme_line = f"Theme: {result.theme} (added because ~/.zshrc had no ZSH_THEME)."
     return (theme_line, *_OMZ_HANDOFF)
+
+
+def _tune_omz_plugins(*, skip_recorded: bool) -> tuple[str, ...]:
+    """Enable the bundled plugins in the user's .zshrc. A refusal is one line, never a raise."""
+    home = Path.home()
+    root = omz_root(home, os.environ)
+    myshellrc = home / ".myshellrc"
+    if root is None or (skip_recorded and plugins_owned(myshellrc)):
+        return ()
+    try:
+        added = write_plugins(zshrc_path(home, os.environ), myshellrc, root=root)
+    except OSError as exc:  # OmzPluginsError is one: a refused array, or a file that changed
+        lines = str(exc).splitlines()
+        return (f"Plugins not changed: {lines[0] if lines else type(exc).__name__}",)
+    if added:
+        return (f"Plugins: added {' '.join(added)} to ~/.zshrc.",)
+    return (f"Plugins: {' and '.join(MANAGED_PLUGINS)} are on.",)
+
+
+def _set_omz_plugins(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del tool, platform, confirm
+    return _tune_omz_plugins(skip_recorded=False)  # install and reinstall rewrite
 
 
 def _tune_agent(tool: Tool, platform: Platform, *, skip_recorded: bool) -> PostInstallOutput:
@@ -251,13 +279,14 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "set_login_shell": _set_login_shell,
     "source_shell_init": _source_shell_init,
     "set_omz_theme": _set_omz_theme,
+    "set_omz_plugins": _set_omz_plugins,
     "show_lean_tips": _show_lean_tips,
     "apply_agent_tuning": _apply_agent_tuning,
 }
 
 
 # The actions that make up a tool's install tuning, in the order a tool declares them.
-TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning",)
+TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning", "set_omz_plugins", "source_shell_init")
 
 
 def apply_install_tuning(
@@ -268,10 +297,14 @@ def apply_install_tuning(
     lines: list[str] = []
     settings: list[FileResult] = []
     for name in tool.post_install:
-        if name in TUNING_ACTIONS:
+        if name == "apply_agent_tuning":
             produced = _tune_agent(tool, platform, skip_recorded=skip_recorded)
             lines.extend(produced.lines)
             settings.extend(produced.settings)
+        elif name == "set_omz_plugins":
+            lines.extend(_tune_omz_plugins(skip_recorded=skip_recorded))
+        elif name == "source_shell_init":
+            lines.extend(_tune_shell_init(tool, platform, skip_recorded=skip_recorded))
     return PostInstallOutput(tuple(lines), tuple(settings))
 
 

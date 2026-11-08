@@ -176,9 +176,9 @@ def install_tool(
     carried on `postinstall_warning` and it never turns this INSTALLED outcome into a failure.
     Declared `post_install` actions are dispatched next, producing reviewed
     instruction lines on `post_install_handoff` and the tool's tuning writes on `settings`.
-    `confirm_sensitive_action` is the optional confirmation callback those actions consult;
-    `None` is the unattended case and skips them. The ALREADY_INSTALLED short-circuit never
-    dispatches postinstall or post_install at all.
+    `confirm_sensitive_action` is the optional confirmation callback an action could consult;
+    no action consults it any more (23.2 D-13), and it stays for Phase 24.1. The
+    ALREADY_INSTALLED short-circuit never dispatches postinstall or post_install at all.
 
     `repair` exists for D-18's broken state. It takes the identical ladder a
     fresh install takes, and is only ever set for a tool the user explicitly

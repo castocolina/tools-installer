@@ -15,6 +15,7 @@ from installer.download import ExecContext
 from installer.engine import install_tool
 from installer.enums import InstallStatus
 from installer.model import Method, Tool, load_tools
+from installer.omz import owned_plugins
 from installer.ownership import ManagerInventory
 from installer.platform import Platform
 from installer.run import CommandError
@@ -1062,7 +1063,7 @@ def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_ins
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
     assert len(calls) == 1
 
 
@@ -1140,18 +1141,15 @@ def test_manual_required_login_shell_never_invokes_confirm(
     assert asked == []
 
 
-def test_raising_confirm_degrades_to_named_warning_not_a_crash(
+def test_a_raising_action_degrades_to_named_warning_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
-        return "/usr/bin/chsh" if cmd == "chsh" else None
-
-    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_installed(monkeypatch)
 
-    def boom(tool_id: str, action: str) -> bool:
-        raise RuntimeError("confirm exploded")
+    def boom(_tool: Tool, _platform: Platform, _confirm: object) -> tuple[str, ...]:
+        raise RuntimeError("action exploded")
 
+    monkeypatch.setitem(post_install.POST_INSTALL_HOOKS, "set_login_shell", boom)
     outcome = install_tool(
         _tool(
             Method(kind="brew", params={"formula": "ripgrep"}),
@@ -1160,12 +1158,11 @@ def test_raising_confirm_degrades_to_named_warning_not_a_crash(
         ),
         _macos_with_brew(),
         runner=lambda cmd: None,
-        confirm_sensitive_action=boom,
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff == ()
     assert outcome.postinstall_warning is not None
-    assert "confirm exploded" in outcome.postinstall_warning
+    assert "action exploded" in outcome.postinstall_warning
 
 
 def test_repair_walks_the_ladder_past_already_installed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1353,7 +1350,7 @@ def test_repair_dispatches_post_install_like_a_fresh_install(
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
 
 
 def test_digest_mismatch_fails_with_nothing_linked(
@@ -2393,3 +2390,61 @@ def test_copilot_install_writes_its_tuning_keys(
         ("auto-approve", ("defaultPermissionMode",)),
         ("no-attribution", ("includeCoAuthoredBy",)),
     ]
+
+
+def _shipped_omz() -> Tool:
+    return next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "oh-my-zsh")
+
+
+def _omz_present_home(zshrc_text: str | None = None) -> Path:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    if zshrc_text is not None:
+        (home / ".zshrc").write_text(zshrc_text)
+    return home
+
+
+def test_omz_install_writes_plugins_and_theme_end_to_end() -> None:
+    home = _omz_present_home()
+    asked: list[tuple[str, str]] = []
+    calls: list[list[str]] = []
+
+    def confirm(tool_id: str, action: str) -> bool:
+        asked.append((tool_id, action))
+        return True
+
+    outcome = install_tool(
+        _shipped_omz(),
+        _platform(),
+        runner=lambda cmd: calls.append(cmd),
+        confirm_sensitive_action=confirm,
+        present=lambda _tool: False,
+    )
+
+    assert outcome.status == InstallStatus.INSTALLED
+    zshrc = (home / ".zshrc").read_text().split("\n")
+    assert "plugins=(git docker)" in zshrc
+    assert zshrc.index('ZSH_THEME="robbyrussell"') < zshrc.index("source $ZSH/oh-my-zsh.sh")
+    # The template the theme action writes first already holds `git`, so only `docker` is added.
+    assert owned_plugins(home / ".myshellrc") == ("docker",)
+    assert any(line.startswith("Plugins: added docker") for line in outcome.post_install_handoff)
+    assert any(line.startswith("Theme: robbyrussell") for line in outcome.post_install_handoff)
+    assert all(action != "set_omz_plugins" for _tool_id, action in asked)
+
+
+def test_omz_refuses_existing_reinstall_dispatches_set_omz_plugins() -> None:
+    home = _omz_present_home("plugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n")
+    calls: list[list[str]] = []
+
+    outcome = install_tool(
+        _shipped_omz(),
+        _platform(),
+        runner=lambda cmd: calls.append(cmd),
+        repair=True,
+        present=lambda _tool: True,
+    )
+
+    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert calls == []
+    assert "plugins=(git z docker)" in (home / ".zshrc").read_text()
+    assert any(line.startswith("Plugins: added docker") for line in outcome.post_install_handoff)

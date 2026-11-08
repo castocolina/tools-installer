@@ -68,7 +68,6 @@ from installer.render import (
     render_run_summary,
     render_uninstall,
     run_option_lines,
-    shell_init_left_off_line,
 )
 from installer.run import CommandError, Runner, command_error_line, run_command
 from installer.sanitize import sanitize_log_line
@@ -95,7 +94,12 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
-from installer.tweaks import SHELL_INIT_TOOLS, TweakBundle
+from installer.tweaks import (
+    SHELL_INIT_TOOLS,
+    TweakBundle,
+    clear_shell_init_record,
+    forget_shell_init,
+)
 from installer.uninstall import (
     MANAGER_UNINSTALL_ARGV,
     RemovalPlan,
@@ -199,10 +203,6 @@ def run_wizard(
     )
     outcomes = execute_plan(rows, context)
     render_run_report(outcomes, console, options=chosen)
-    if options.yes:
-        left_off = shell_init_left_off_line(outcomes, SHELL_INIT_TOOLS)
-        if left_off is not None:
-            console.print(left_off, markup=False, highlight=False, soft_wrap=True)
     return outcomes
 
 
@@ -730,6 +730,8 @@ def _after_removal(
     if tool.id in SHELL_INIT_TOOLS and bundle is not None:
         shell = sweep_policies(active_policies((bundle,), rc_path=myshellrc_path, bin_dir=bin_dir))
         parts.append(dataclasses.replace(shell, shell_init_off=(tool.id,) if shell.swept else ()))
+        if not shell.failed:  # gone with the tool, so a reinstall writes it again
+            forget_shell_init(myshellrc_path, tool.id)
     if tool.id == "zsh" and platform_os != "macos":
         owned = [p for p in extra_policies if p.id == "desktop-shell" and policy_owned(p)]
         parts.append(sweep_policies(owned))
@@ -1111,6 +1113,7 @@ def run_uninstall(
     after.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
     done = _merge(after)
     remove_managed_block(myshellrc_path)
+    clear_shell_init_record(myshellrc_path)
     remove_shims(default_bin_dir)
     remove_ban_aliases(myshellrc_path)
     for rc_path in rc_paths:
@@ -1330,6 +1333,7 @@ def perform_uninstall(
             daemon_policy=daemon_policy,
             extra_policies=extra_policies,
         )
+        clear_shell_init_record(myshellrc_path)
         # Same post-sweep, composition-root-only marker clear as run_uninstall
         # (see that function's own comment for the full ordering rationale).
         if (

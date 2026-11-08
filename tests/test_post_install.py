@@ -21,7 +21,6 @@ from installer.post_install import (
     SENSITIVE_PROMPTS,
     ConfirmSensitiveAction,
     PostInstallOutput,
-    SensitivePrompt,
     apply_install_tuning,
     run_post_install,
     sensitive_prompt,
@@ -30,7 +29,14 @@ from installer.post_install import (
 from installer.postinstall import POSTINSTALL_HOOKS
 from installer.receipts import read_ledger
 from installer.shellrc import write_myshellrc
-from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
+from installer.tweaks import (
+    SHELL_INIT_TOOLS,
+    TweakBundle,
+    shell_init_bundle,
+    shell_init_record,
+    strip_tweak_block,
+    write_tweak,
+)
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -92,20 +98,15 @@ def test_real_oh_my_zsh_entry_declares_set_login_shell() -> None:
     assert "set_login_shell" in tools["oh-my-zsh"].post_install
 
 
-def test_run_post_install_returns_chsh_instructions_when_confirmed(
+def test_run_post_install_returns_chsh_instructions_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
-    asked: list[tuple[str, str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
-
+    asked, confirm = _record()
     lines = run_post_install(_tool(post_install=("set_login_shell",)), _mutable(), confirm).lines
     assert lines
     assert any("chsh -s" in line for line in lines)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
 
 
 def test_run_post_install_returns_a_post_install_output() -> None:
@@ -192,14 +193,14 @@ def test_missing_chsh_explains_without_a_confirm_callback(
     assert not any("chsh -s" in line for line in lines)
 
 
-def test_immutable_host_with_chsh_still_uses_the_confirm_gate(
+def test_immutable_host_with_chsh_prints_the_command_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
     asked, confirm = _record()
     lines = run_post_install(_login_shell_tool(), _immutable(), confirm).lines
     assert any("chsh -s" in line for line in lines)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
 
 
 def test_missing_chsh_cannot_be_silenced_via_default_enabled(
@@ -212,16 +213,24 @@ def test_missing_chsh_cannot_be_silenced_via_default_enabled(
     assert asked == []
 
 
-def test_login_shell_skips_when_confirm_callback_is_none(
+def test_set_login_shell_prints_the_handoff_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
-    assert run_post_install(_login_shell_tool(), _mutable(), None).lines == ()
+    with_chsh = run_post_install(_login_shell_tool(), _mutable(), None).lines
+    assert with_chsh == (
+        "After leaving the installer, run this command in your own terminal "
+        "to set zsh as your login shell:",
+        "chsh -s $(which zsh)",
+        "Then log out and back in for the change to take effect.",
+    )
+    _stub_chsh(monkeypatch, present=False)
+    without_chsh = run_post_install(_login_shell_tool(), _mutable(), None).lines
+    assert any("removed chsh" in line for line in without_chsh)
+    assert not any("chsh -s" in line for line in without_chsh)  # never both
 
 
-def test_login_shell_skips_when_confirm_returns_false(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_set_login_shell_ignores_a_refusing_callback(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_chsh(monkeypatch, present=True)
     asked: list[tuple[str, str]] = []
 
@@ -229,8 +238,17 @@ def test_login_shell_skips_when_confirm_returns_false(
         asked.append((tool_id, action))
         return False
 
-    assert run_post_install(_login_shell_tool(), _mutable(), refuse).lines == ()
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    lines = run_post_install(_login_shell_tool(), _mutable(), refuse).lines
+    assert any("chsh -s" in line for line in lines)
+    assert asked == []
+
+
+def test_sensitive_tables_are_empty() -> None:
+    assert SENSITIVE_POST_INSTALL_ACTIONS == ()
+    assert SENSITIVE_PROMPTS == {}
+    for action in ("set_login_shell", "source_shell_init"):
+        with pytest.raises(KeyError):
+            sensitive_prompt("oh-my-zsh", action)
 
 
 def test_unknown_post_install_action_name_is_inert() -> None:
@@ -318,59 +336,109 @@ def test_the_default_reader_wires_no_rc_file() -> None:
     assert not (home / ".bashrc").exists()
 
 
-def test_shell_init_is_never_turned_on_without_a_yes() -> None:
+def test_headless_zoxide_install_writes_its_shell_init_with_no_prompt() -> None:
+    home = Path.home()
+    lines = run_post_install(_shell_init_tool("zoxide"), _mutable(), None).lines
+    assert lines == ("Shell init on: open a new terminal to use it.",)
+    assert "# >>> tools-installer tweak:zoxide >>>" in (home / ".myshellrc").read_text()
+    assert shell_init_record(home / ".myshellrc") == ("zoxide",)
+
+
+def test_headless_starship_install_writes_its_block_and_the_empty_theme() -> None:
     home = Path.home()
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_ZSHRC)
-    before = zshrc.read_bytes()
-    assert run_post_install(_shell_init_tool("starship"), _mutable(), None).lines == ()
-    assert (
-        run_post_install(_shell_init_tool("starship"), _mutable(), lambda _t, _a: False).lines == ()
-    )
-    assert not (home / ".myshellrc").exists()
-    assert zshrc.read_bytes() == before
+    run_post_install(_shell_init_tool("starship"), _mutable(), None)
+    assert "starship init zsh" in (home / ".myshellrc").read_text()
+    assert 'ZSH_THEME=""' in zshrc.read_text()
+    assert shell_init_record(home / ".myshellrc") == ("starship",)
 
 
-def test_the_shell_init_prompt_is_keyed_by_action() -> None:
+def test_shell_init_reinstall_leaves_one_block() -> None:
+    home = Path.home()
+    for _ in range(2):
+        run_post_install(_shell_init_tool("zoxide"), _mutable(), None)
+    text = (home / ".myshellrc").read_text()
+    assert text.count("# >>> tools-installer tweak:zoxide >>>") == 1
+    assert shell_init_record(home / ".myshellrc") == ("zoxide",)
+
+
+def test_shell_init_missing_myshellrc_is_created() -> None:
+    rc = Path.home() / ".myshellrc"
+    assert not rc.exists()
+    run_post_install(_shell_init_tool("fzf"), _mutable(), None)
+    assert "# >>> tools-installer tweak:fzf >>>" in rc.read_text()
+
+
+def test_shell_init_bundle_absent_on_this_os_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bundle = shell_init_bundle("zoxide")
     assert bundle is not None
-    assert bundle.description == "adds z, a cd that learns the directories you use"
-    assert sensitive_prompt("zoxide", "source_shell_init") == SensitivePrompt(
-        "Turn on zoxide shell init? It adds one guarded block to ~/.myshellrc that adds z, "
-        "a cd that learns the directories you use. It stays off unless you choose yes; "
-        "Policies can change it later.",
-        "Yes, turn it on",
-        "No, leave it off",
-        False,
-    )
-    assert sensitive_prompt("oh-my-zsh", "set_login_shell") == SensitivePrompt(
-        "Show a reviewed command to change the login shell to zsh for oh-my-zsh, which you "
-        "run in your own terminal after the installer exits?",
-        "Yes, show the reviewed command",
-        "No, skip this",
-        True,
-    )
+
+    def macos_only(_tool_id: str) -> TweakBundle:
+        return replace(bundle, platforms=("macos",))
+
+    monkeypatch.setattr(post_install, "shell_init_bundle", macos_only)
+    assert run_post_install(_shell_init_tool("zoxide"), _mutable(), None).lines == ()
+    assert not (Path.home() / ".myshellrc").exists()
 
 
-def test_every_sensitive_action_has_a_prompt() -> None:
-    for action in SENSITIVE_POST_INSTALL_ACTIONS:
-        assert action in SENSITIVE_PROMPTS
-    with pytest.raises(KeyError):
-        sensitive_prompt("zoxide", "no_such_action")
-    assert not hasattr(post_install, "SHELL_INIT_EFFECTS")
+def test_shell_init_policies_era_block_is_the_same_block() -> None:
+    home = Path.home()
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+    write_tweak(bundle, home / ".myshellrc")  # what the Policies row wrote before this phase
+    before = (home / ".myshellrc").read_text()
+    assert shell_init_record(home / ".myshellrc") is None
+    run_post_install(_shell_init_tool("zoxide"), _mutable(), None)
+    after = (home / ".myshellrc").read_text()
+    assert after.count("# >>> tools-installer tweak:zoxide >>>") == 1
+    assert after.startswith(before.rstrip("\n"))  # the block is untouched; the record is appended
+    assert shell_init_record(home / ".myshellrc") == ("zoxide",)  # backfilled
+    strip_tweak_block("zoxide", home / ".myshellrc")
+    assert "tweak:zoxide" not in (home / ".myshellrc").read_text()
+
+
+def test_shell_init_blocks_of_several_tools_keep_plan_order() -> None:
+    home = Path.home()
+    for tool in ("zoxide", "fzf", "direnv"):
+        run_post_install(_shell_init_tool(tool), _mutable(), None)
+    text = (home / ".myshellrc").read_text()
+    order = [
+        text.index(f"# >>> tools-installer tweak:{tool} >>>")
+        for tool in ("zoxide", "fzf", "direnv")
+    ]
+    assert order == sorted(order)
+    assert shell_init_record(home / ".myshellrc") == ("zoxide", "fzf", "direnv")
+    strip_tweak_block("fzf", home / ".myshellrc")
+    after = (home / ".myshellrc").read_text()
+    assert "tweak:fzf" not in after
+    assert "tweak:zoxide" in after
+    assert "tweak:direnv" in after
+
+
+def test_shell_init_two_blocks_never_interleave() -> None:
+    home = Path.home()
+    run_post_install(_shell_init_tool("zoxide"), _mutable(), None)
+    run_post_install(_shell_init_tool("fnm"), _mutable(), None)
+    lines = (home / ".myshellrc").read_text().split("\n")
+    for tool in ("zoxide", "fnm"):
+        begin = lines.index(f"# >>> tools-installer tweak:{tool} >>>")
+        end = lines.index(f"# <<< tools-installer tweak:{tool} <<<")
+        inner = lines[begin + 1 : end]
+        assert not any("tools-installer" in line for line in inner)
 
 
 @pytest.mark.parametrize("tool", SHELL_INIT_TOOLS)
-def test_each_shell_init_tool_follows_yes_and_no(tool: str) -> None:
+def test_each_shell_init_tool_writes_one_block_and_asks_nothing(tool: str) -> None:
     home = Path.home()
     marker = f"# >>> tools-installer tweak:{tool} >>>"
-    no = run_post_install(_shell_init_tool(tool), _mutable(), lambda _t, _a: False).lines
-    assert no == ()
-    assert not (home / ".myshellrc").exists()
-    yes = run_post_install(_shell_init_tool(tool), _mutable(), _yes).lines
-    assert yes == ("Shell init on: open a new terminal to use it.",)
-    run_post_install(_shell_init_tool(tool), _mutable(), _yes)
+    first = run_post_install(_shell_init_tool(tool), _mutable(), None).lines
+    assert first == ("Shell init on: open a new terminal to use it.",)
+    run_post_install(_shell_init_tool(tool), _mutable(), None)
     assert (home / ".myshellrc").read_text().count(marker) == 1
+    assert shell_init_record(home / ".myshellrc") == (tool,)
 
 
 def test_only_starship_touches_the_theme() -> None:
@@ -742,3 +810,62 @@ def test_reinstall_rewrites_a_deleted_recorded_key() -> None:
     assert _document("claude")["skipDangerousModePermissionPrompt"] is True
     ledger = read_ledger("claude")
     assert ledger is not None and len(ledger.entries) == 4
+
+
+_OMZ_USER_ZSHRC = 'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n'
+
+
+def _omz_home(zshrc_text: str | None) -> Path:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    if zshrc_text is not None:
+        (home / ".zshrc").write_text(zshrc_text)
+    return home
+
+
+def test_set_omz_plugins_reports_what_it_added_and_what_was_already_on() -> None:
+    home = _omz_home(_OMZ_USER_ZSHRC)
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    assert run_post_install(tool, _mutable(), None).lines == ("Plugins: added docker to ~/.zshrc.",)
+    assert "plugins=(git z docker)" in (home / ".zshrc").read_text()
+    assert run_post_install(tool, _mutable(), None).lines == ("Plugins: git and docker are on.",)
+
+
+def test_set_omz_plugins_without_an_oh_my_zsh_root_does_nothing() -> None:
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    assert run_post_install(tool, _mutable(), None).lines == ()
+    assert not (Path.home() / ".zshrc").exists()
+
+
+def test_set_omz_plugins_honours_zsh_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated-omz"
+    root.mkdir()
+    monkeypatch.setenv("ZSH", str(root))
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    run_post_install(tool, _mutable(), None)
+    zshrc = (Path.home() / ".zshrc").read_text()
+    assert f"export ZSH={root}" in zshrc
+    assert "plugins=(git docker)" in zshrc
+
+
+def test_set_omz_plugins_refusal_is_a_line_not_an_exception() -> None:
+    home = _omz_home("plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n")
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    lines = run_post_install(tool, _mutable(), None).lines
+    assert len(lines) == 1
+    assert lines[0].startswith("Plugins not changed: ")
+    assert (home / ".zshrc").read_text() == "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n"
+
+
+def test_omz_install_tuning_on_reconfigure_skips_a_recorded_record() -> None:
+    _omz_home(_OMZ_USER_ZSHRC)
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=True).lines != ()
+    zshrc = Path.home() / ".zshrc"
+    zshrc.write_text(_OMZ_USER_ZSHRC)  # the user cut docker again after the record was written
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=True).lines == ()
+    assert zshrc.read_text() == _OMZ_USER_ZSHRC
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=False).lines != ()
+    assert "docker" in zshrc.read_text()

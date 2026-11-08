@@ -457,3 +457,34 @@ def test_an_unreadable_rc_is_reported_and_never_raises() -> None:
     [(text, severity)] = strip_legacy_aliases(rc).launch_lines()
     assert severity == "warn"
     assert text.startswith("Could not check ~/.myshellrc for legacy alias blocks: ")
+
+
+def test_shell_init_record_round_trip(tmp_path: Path) -> None:
+    from installer.tweaks import (
+        clear_shell_init_record,
+        forget_shell_init,
+        record_shell_init,
+        shell_init_record,
+    )
+
+    rc = tmp_path / ".myshellrc"
+    rc.write_text("export KEEP=1\n")
+    assert shell_init_record(rc) is None
+    record_shell_init(rc, "zoxide")
+    record_shell_init(rc, "fzf")
+    record_shell_init(rc, "zoxide")  # once per id
+    assert shell_init_record(rc) == ("zoxide", "fzf")
+    assert rc.read_text().count("# >>> tools-installer shell-init >>>") == 1
+    forget_shell_init(rc, "zoxide")
+    assert shell_init_record(rc) == ("fzf",)
+    forget_shell_init(rc, "nope")  # an id never recorded changes nothing
+    assert shell_init_record(rc) == ("fzf",)
+    forget_shell_init(rc, "fzf")  # the last id takes the block with it
+    assert shell_init_record(rc) is None
+    assert "shell-init" not in rc.read_text()
+    assert "export KEEP=1" in rc.read_text()
+    record_shell_init(rc, "starship")
+    clear_shell_init_record(rc)
+    assert shell_init_record(rc) is None
+    clear_shell_init_record(tmp_path / "missing")  # nothing to clear, nothing created
+    assert not (tmp_path / "missing").exists()
