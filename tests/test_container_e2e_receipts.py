@@ -1382,6 +1382,28 @@ def test_settings_probe_revert_flags_a_key_ledger_or_copilot_left(
     ]
 
 
+def test_settings_probe_revert_flags_a_settings_file_that_outlived_the_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-09: the container starts with no settings files, so a file left behind (even a bare
+    `{}`) means the revert did not return it byte-identical or delete it."""
+    from installer import agent_settings
+
+    home = _tuned_home(tmp_path, monkeypatch)
+    assert home.run("settings_probe_installed").returncode == 0
+    for agent in _REQUIRED_TUNED:
+        agent_settings.revert_agent(agent, home=home.scratch, platform_os="linux")
+    (home.scratch / ".local" / "bin" / "copilot").unlink()
+    leftover = agent_settings.settings_file("claude", home=home.scratch, platform_os="linux")
+    assert not leftover.exists()
+    leftover.write_text("{\n}\n", encoding="utf-8")
+
+    result = home.run("settings_probe_revert")
+
+    assert result.returncode != 0
+    assert result.stdout.splitlines() == ["TRACER_SETTINGS_FILE_LEFT agent=claude"]
+
+
 def test_settings_probe_revert_reads_the_persisted_agents_not_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1424,7 +1446,8 @@ def test_settings_probe_revert_accepts_a_key_restored_to_the_cli_default(
     kept = home.run("settings_probe_revert")
     assert kept.returncode != 0
     assert kept.stdout.splitlines() == [
-        "TRACER_SETTINGS_REVERT_DIFF agent=cursor-agent key=attribution.attributeCommitsToAgent"
+        "TRACER_SETTINGS_REVERT_DIFF agent=cursor-agent key=attribution.attributeCommitsToAgent",
+        "TRACER_SETTINGS_FILE_LEFT agent=cursor-agent",
     ]
 
 
