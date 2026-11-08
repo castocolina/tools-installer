@@ -1343,11 +1343,19 @@ def test_settings_probe_installed_flags_a_missing_key_agent_or_version(
 def test_settings_probe_installed_persists_the_checked_agents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review R1-04: the revert probe needs the agents the install probe saw, not a PATH lookup."""
+    """Review R1-04: the revert probe needs the agents the install probe saw, not a PATH lookup.
+    It also needs which settings files the installer created (23.2 e2e #6)."""
+    from installer import agent_settings
+
     home = _tuned_home(tmp_path, monkeypatch)
     assert home.run("settings_probe_installed").returncode == 0
     persisted = json.loads((home.workspace / ".e2e-tuned-agents.json").read_text(encoding="utf-8"))
-    assert sorted(persisted) == sorted(_REQUIRED_TUNED)
+    assert sorted(persisted["agents"]) == sorted(_REQUIRED_TUNED)
+    # Each tuned file was absent before the tuning, so the ledger lists it as installer-created.
+    assert persisted["created"] == {
+        agent: [str(agent_settings.settings_file(agent, home=home.scratch, platform_os="linux"))]
+        for agent in persisted["agents"]
+    }
 
 
 def test_settings_probe_revert_flags_a_key_ledger_or_copilot_left(
@@ -1405,6 +1413,36 @@ def test_settings_probe_revert_flags_a_settings_file_that_outlived_the_uninstall
     assert result.stdout.splitlines() == ["TRACER_SETTINGS_FILE_LEFT agent=claude"]
 
 
+def test_settings_probe_revert_lets_a_file_the_install_did_not_create_stay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """23.2 e2e #6: another owner (the agent's own installer, hook registration) made the file
+    first, so it outlives the uninstall once none of our keys are left in it."""
+    from installer import agent_settings
+
+    home = _TunedHome(tmp_path, monkeypatch)
+    foreign = agent_settings.settings_file("claude", home=home.scratch, platform_os="linux")
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("{}\n", encoding="utf-8")
+    for agent in _REQUIRED_TUNED:
+        home.plant(agent)
+        home.tune(agent)
+    assert home.run("settings_probe_installed").returncode == 0
+    persisted = json.loads((home.workspace / ".e2e-tuned-agents.json").read_text(encoding="utf-8"))
+    assert persisted["created"]["claude"] == []
+    for agent in _REQUIRED_TUNED:
+        agent_settings.revert_agent(agent, home=home.scratch, platform_os="linux")
+    (home.scratch / ".local" / "bin" / "copilot").unlink()
+    assert foreign.exists()
+
+    result = home.run("settings_probe_revert")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == [
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(_REQUIRED_TUNED)}"
+    ]
+
+
 def test_settings_probe_revert_reads_the_persisted_agents_not_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1413,7 +1451,7 @@ def test_settings_probe_revert_reads_the_persisted_agents_not_path(
     assert home.run("settings_probe_installed").returncode != 0  # claude and codex are absent
     (home.scratch / ".local" / "bin" / "copilot").unlink()
     persisted = home.workspace / ".e2e-tuned-agents.json"
-    assert json.loads(persisted.read_text(encoding="utf-8")) == ["copilot"]
+    assert json.loads(persisted.read_text(encoding="utf-8"))["agents"] == ["copilot"]
     left = home.run("settings_probe_revert")
     assert left.returncode != 0
     assert "TRACER_SETTINGS_REVERT_DIFF agent=copilot key=defaultPermissionMode" in left.stdout
@@ -1431,8 +1469,11 @@ def test_settings_probe_revert_accepts_a_key_restored_to_the_cli_default(
     from installer import agent_settings
 
     home = _tuned_home(tmp_path, monkeypatch, ())
-    (home.workspace / ".e2e-tuned-agents.json").write_text('["cursor-agent"]', encoding="utf-8")
     path = agent_settings.settings_file("cursor-agent", home=home.scratch, platform_os="linux")
+    (home.workspace / ".e2e-tuned-agents.json").write_text(
+        json.dumps({"agents": ["cursor-agent"], "created": {"cursor-agent": [str(path)]}}),
+        encoding="utf-8",
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         '{"attribution": {"attributeCommitsToAgent": true, "attributePRsToAgent": true}}',

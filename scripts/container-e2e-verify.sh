@@ -817,8 +817,10 @@ hook_probe_after() {
 # writes nothing. For every agent in the installer's TUNING_GROUPS whose registry command is on PATH,
 # each key of each group must hold the installer's value and be recorded in the agent's config-write
 # ledger. claude, codex and copilot must be among those agents, and `copilot --version` must exit 0.
-# The agents it checked go to $TESTER_WORKSPACE/.e2e-tuned-agents.json for settings_probe_revert:
-# after the uninstall their commands are off PATH, so the revert probe never looks them up again.
+# The agents it checked, and per agent the settings file the config ledger lists as installer-created,
+# go to $TESTER_WORKSPACE/.e2e-tuned-agents.json ({"agents": [...], "created": {agent: [path]}}) for
+# settings_probe_revert: after the uninstall their commands are off PATH, so the revert probe never
+# looks them up again.
 # Prints TRACER_SETTINGS_INSTALLED_OK agents=N keys=N and TRACER_COPILOT_VERSION_OK, or one
 # TRACER_SETTINGS_INSTALLED_MISSING / TRACER_SETTINGS_AGENT_MISSING / TRACER_COPILOT_VERSION_FAILED
 # line per finding.
@@ -837,6 +839,7 @@ home = Path.home()
 search = os.pathsep.join([str(home / \".local/bin\"), str(home / \".opencode/bin\"), os.environ[\"PATH\"]])
 tools = {t.id: t for t in model.load_tools(Path(model.__file__).with_name(\"registry.toml\"))}
 checked = []
+created = {}
 count = 0
 for agent, groups in s.TUNING_GROUPS.items():
     if shutil.which(tools[agent].cmd, path=search) is None:
@@ -847,13 +850,14 @@ for agent, groups in s.TUNING_GROUPS.items():
     doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
     ledger = receipts.read_ledger(agent)
     recorded = {(e.setting, e.key_path) for e in ledger.entries} if ledger else set()
+    created[agent] = [f for f in ledger.created_files if f == str(path)] if ledger else []
     for group in groups:
         for key in s.setting_keys(agent, group, \"linux\"):
             count += 1
             holds = s.same_value(s.lookup(doc, key.path), key.value)
             if not holds or (group, key.path) not in recorded:
                 print(\"M\", agent, \".\".join(key.path))
-Path(\".e2e-tuned-agents.json\").write_text(json.dumps(checked), encoding=\"utf-8\")
+Path(\".e2e-tuned-agents.json\").write_text(json.dumps({\"agents\": checked, \"created\": created}), encoding=\"utf-8\")
 for agent in checked:
     print(\"A\", agent)
 print(\"K\", count)
@@ -891,9 +895,9 @@ print(\"K\", count)
 
 # After --uninstall --yes: for the agents settings_probe_installed persisted (never a fresh PATH
 # lookup: the uninstall just removed copilot's link), every tuning key must be gone from the agent's
-# settings file (the container starts with none; a key the revert restored to the CLI's own default
-# counts as gone), the file itself must be gone too (unless a CLI default was restored into it),
-# no config-write ledger may remain, and neither
+# settings file (a key the revert restored to the CLI's own default counts as gone), the file itself
+# must be gone too when the install created it (unless a CLI default was restored into it), no
+# config-write ledger may remain, and neither
 # copilot's ~/.local/bin link nor its opt dir may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N,
 # or one TRACER_SETTINGS_REVERT_DIFF / TRACER_SETTINGS_FILE_LEFT / TRACER_SETTINGS_LEDGER_LEFT /
 # TRACER_COPILOT_LEFT line per
@@ -910,7 +914,8 @@ from pathlib import Path
 from installer import agent_settings as s
 from installer import receipts
 home = Path.home()
-agents = json.loads(Path(\".e2e-tuned-agents.json\").read_text(encoding=\"utf-8\"))
+tuned = json.loads(Path(\".e2e-tuned-agents.json\").read_text(encoding=\"utf-8\"))
+agents = tuned[\"agents\"]
 count = 0
 for agent in agents:
     path = s.settings_file(agent, home=home, platform_os=\"linux\", environ=os.environ)
@@ -925,9 +930,10 @@ for agent in agents:
             restored_any = restored_any or restored
             if now is not s.ABSENT and not restored:
                 print(\"D\", agent, \".\".join(key.path))
-    # No settings file existed before the install, so one still here is a leftover unless
-    # the revert restored a CLI default into it (cursor-agent), which keeps the file.
-    if path.exists() and not restored_any:
+    # Another owner (an agent installer, hook registration) may have made the file, and
+    # it stays with its keys checked above; the installer owes the removal of only the files it
+    # created, unless the revert restored a CLI default into it (cursor-agent), which keeps it.
+    if path.exists() and str(path) in tuned[\"created\"].get(agent, []) and not restored_any:
         print(\"F\", agent)
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)
