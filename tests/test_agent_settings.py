@@ -537,6 +537,38 @@ def test_setting_facts_absent_lists_only_unrecorded_missing_keys_in_order() -> N
     assert absent() == ("permissions.defaultMode",)
 
 
+@pytest.mark.parametrize("agent", ["claude", "copilot", "codex"])
+@pytest.mark.parametrize("blank", [b"", b"\n", b"  \n\n"])
+def test_a_blank_settings_file_reverts_to_its_exact_bytes(agent: str, blank: bytes) -> None:
+    """C-03: a 0-byte or whitespace-only file that existed before the install comes back
+    byte-identical after the install and the removal, never as `{\\n}\\n`."""
+    home = Path.home()
+    path = agent_settings.settings_file(agent, home=home, platform_os="linux")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(blank)
+
+    for group in agent_settings.TUNING_GROUPS[agent]:
+        apply_setting(agent, group, home=home, platform_os="linux")
+    assert path.read_bytes() != blank
+
+    results = agent_settings.revert_agent(agent, home=home, platform_os="linux")
+
+    assert all(result.refused is None for result in results)
+    assert path.read_bytes() == blank
+    assert read_ledger(agent) is None
+
+
+@pytest.mark.parametrize("bad", ["x", [["only-one"]], [["f", "not blank"]], [[1, ""]]])
+def test_a_malformed_blank_files_field_makes_the_ledger_untrusted(bad: object) -> None:
+    write_ledger(ConfigLedger("claude", created_files=("f",)))
+    path = receipts.config_ledger_dir() / "claude.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["blank_files"] = bad
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert read_ledger("claude") is None
+
+
 def test_setting_facts_treat_a_non_object_parent_as_set_by_you_not_absent() -> None:
     """C-02: the writer refuses a key under a non-object parent as `set_by_you`, so the
     facts must too, or the `≈` step it raises could never clear."""

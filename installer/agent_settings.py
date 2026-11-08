@@ -15,7 +15,7 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Literal, cast
 
@@ -744,13 +744,17 @@ def _apply_once(
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     entries = _kept_entries(ledger.entries, setting, file, step)
     if step.text == text:
-        write_ledger(ConfigLedger(agent, ledger.created_files, entries))
+        write_ledger(replace(ledger, entries=entries))
         return FileResult(agent, setting, path, fmt, keys=step.keys)
     created = ledger.created_files
     if snap is None and file not in created:
         created = (*created, file)
+    blanks = ledger.blank_files
+    if snap is not None and not snap.data.strip() and file not in dict(blanks):
+        blanks = (*blanks, (file, snap.data.decode("ascii")))  # restored byte for byte on revert
     try:
-        write_ledger(ConfigLedger(agent, created, entries))  # reserved before the file write
+        # reserved before the file write
+        write_ledger(replace(ledger, created_files=created, entries=entries, blank_files=blanks))
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     try:
@@ -872,8 +876,11 @@ def _revert_once(
         if text != original:
             # A created file goes only when nothing of the user's is left in it, comments too.
             bare = "".join(text.split()) in ("", "{}")
+            blank = dict(ledger.blank_files).get(file)
             if snap is not None and file in ledger.created_files and bare:
                 delete_if_unchanged(path, snap)
+            elif snap is not None and blank is not None and bare:
+                write_if_unchanged(path, snap, blank)
             else:
                 write_if_unchanged(path, snap, _with_bom(snap, text))
     except SettingsChanged:
@@ -884,8 +891,9 @@ def _revert_once(
     # With no key of ours left in it, a created file is gone or holds only the user's content.
     released = not any(entry.file == file for entry in remaining)
     created = tuple(name for name in ledger.created_files if not (released and name == file))
+    blanks = tuple(pair for pair in ledger.blank_files if not (released and pair[0] == file))
     try:
-        write_ledger(ConfigLedger(agent, created, remaining))
+        write_ledger(replace(ledger, created_files=created, entries=remaining, blank_files=blanks))
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     return FileResult(agent, setting, path, fmt, keys=results)
