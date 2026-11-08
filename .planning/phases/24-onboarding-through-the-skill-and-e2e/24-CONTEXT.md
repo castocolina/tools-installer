@@ -43,6 +43,7 @@ None of these has landed as of 2026-10-14. *(amended 2026-11-07: 22 and 23 have 
   - `packages`: a closed string list of build dependencies, in the `_opt_pkg_list` shape (`executors.py:48`).
   - `artifacts`: a **list of tables** `[{box = "...", host = "..."}]` validated at load. Not parallel lists.
   - Host paths must sit under `~/.local` or `~/.config` (SPEC constraint).
+  - **Amended 2026-11-08 at plan time (orchestrator, 24-RESEARCH Q1/Q3):** `repo` is a GitHub `owner/name` slug (the version source is its release tag; the clone URL is derived as `https://github.com/<slug>.git`), not a free git URL. A required `image` string param (a fully qualified image reference) is added. Host paths may also sit under `~/.terminfo` (see D-07).
 - **D-02:** The executor owns `create → build (cargo at the tag, plus the in-box steps) → copy to staging` inside `try`. Its **`finally` always** runs `distrobox rm --force <name>` and then removes the image, even on failure, and re-raises afterwards.
   - The name is collision-proof: `ti-cargo-<tool>-<pid>-<rand>`.
   - Each step has a bounded timeout through the `run.py` runner conventions.
@@ -67,6 +68,7 @@ None of these has landed as of 2026-10-14. *(amended 2026-11-07: 22 and 23 have 
   - Nothing desktop-related exists in `installer/` today.
 - **D-07:** `tic -xe alacritty,alacritty-direct -o <box dir>` runs **inside the box**, and only the compiled tree is copied to `~/.local/share/terminfo`. This adds no host `tic`/ncurses dependency.
   - Acceptance: `infocmp alacritty` resolves through it, and `desktop-file-validate` passes. Both are checked in the container step.
+  - **Amended 2026-11-08 at plan time (orchestrator, 24-RESEARCH Q1):** the compiled terminfo tree goes to `~/.terminfo`, not `~/.local/share/terminfo`. Neither ncurses 6.6 nor Alacritty v0.17.0 searches `~/.local/share/terminfo` (reproduced in a scratch HOME); `~/.terminfo` is the standard user location both read. No `TERMINFO_DIRS` export. SPEC R3 / ONB-06 read with this path.
 - **D-08 (best, not easy):** Alacritty is one more branch of `sync_terminal_shells` (with 23 D-14 `write=False` and SHELL). Its owned region in `alacritty.toml` holds the shell, `SHELL`, Alt/Option word navigation and clear-scrollback.
   - **TOML guard:** before writing, scan the content outside the region for conflicting tables (`[terminal]`/`[terminal.shell]`, `[[keyboard.bindings]]` for the same keys). If one is found, write nothing and show `≈` with "partial: you already define X".
   - After writing, re-parse with `tomllib` and roll back on failure.
@@ -163,6 +165,7 @@ None of these has landed as of 2026-10-14. *(amended 2026-11-07: 22 and 23 have 
   - choice 0.88 (skipped_plus_same_manual).
 - **D-26: A tool the resolver offers but that cannot run on one distro is excluded through that distro's table entry (D-14) and listed with its reason.** First case: copilot's `node` method checks `min_node` against the system `node` (`executors.py:486-496`); the researcher compares Debian's and Arch's packaged nodejs with the floor 23.2 sets — exclude only where it is not met.
   - choice 0.80 (exclude_and_list): SPEC R8's edge already allows a listed per-distro exclusion; installing a newer Node by hand would hide what a real Debian user gets.
+  - **Amended 2026-11-08 at plan time (orchestrator, 24-RESEARCH Q5):** the copilot case is gone (23.2 ships copilot as a standalone binary); the real case is mmdc/puppeteer on Debian (packaged Node 20.19.2 < `min_node` 22.12.0). There is no new CLI flag (Phase 23 O1). A method whose `min_node` floor the system `node` does not meet is shown at plan time as a non-failure disposition with the reason ("needs Node >= 22.12; this system has 20.19.2"), like an unsupported OS. Dependents follow through the existing dependency disposition. The distro run then lists the exclusion by its reason.
 - **D-31: 23.1's `assert_gsd_absent` and 23.2's copilot / install-written-key assertions live in the shared `cmd_pass1`/`cmd_pass2`, so all three distros run them; D-14's table varies only the image (`:16`), the root prerequisites (`:123-130`) and the release record (`:117-121`). D-14 builds on 23.2's version of pass 2** (23.2 D-23 replaces `settings_probe_write`, `:781-828`). Analyzer, Confident.
 
 #### herdr integrations (D-10 refined)
