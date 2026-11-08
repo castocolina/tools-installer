@@ -15,21 +15,22 @@ and never spawns a child process. This follows
 `installer/host_setup.py`'s documented doctrine: setup that needs a real
 terminal is displayed, never launched from the installer's worker thread.
 
-The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme writes
+The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme and plugin writes
 keep that rule: they write only the installer-owned `~/.myshellrc` block (and,
 in split mode, the rc `source` line) through the Policies tweak writer, and the
-`.zshrc` theme line through the theme writer. They never spawn a child process.
+`.zshrc` theme and plugin lines through the Oh-My-Zsh writers. They never spawn a child process.
 
-A tuning action (`apply_agent_tuning`) writes the tool's own user-scope settings
-through `agent_settings` (each key recorded in the agent's config-write ledger),
-never spawns a child, asks nothing and runs on every route.
+A tuning action (`apply_agent_tuning`, `set_omz_plugins`, `source_shell_init`) writes the
+tool's own settings (each agent key recorded in its config-write ledger), never spawns a
+child, asks nothing and runs on every route. `set_login_shell` only prints the reviewed
+command, or why there is none.
 
 A tool the installer detects as already present is a SKIP on the review and
 does not reach this table. Pressing `r` marks it REINSTALL and sends it through
 the install ladder, so a successful reinstall dispatches actions once more. A
 tool whose installer refuses to run over an existing install is not re-run;
 the reinstall dispatches its actions directly. No path re-applies post-install
-actions on their own (D-06); sensitive actions still ask.
+actions on their own (D-06). No action asks a question (23.2 D-13).
 """
 
 import os
@@ -87,16 +88,9 @@ class SensitivePrompt:
     default: bool
 
 
-# `{tool}` is the tool id and `{effect}` the shell-init bundle's description.
-SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {
-    "set_login_shell": SensitivePrompt(
-        "Show a reviewed command to change the login shell to zsh for {tool}, "
-        "which you run in your own terminal after the installer exits?",
-        "Yes, show the reviewed command",
-        "No, skip this",
-        True,
-    ),
-}
+# No action asks (23.2 D-13); the prompt machinery stays wired for Phase 24.1. `{tool}` is the
+# tool id and `{effect}` the shell-init bundle's description in a prompt added here.
+SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {}
 
 
 def sensitive_prompt(tool_id: str, action: str) -> SensitivePrompt:
@@ -153,11 +147,9 @@ def _set_login_shell(
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    del platform
+    del tool, platform, confirm
     if shutil.which("chsh") is None:
         return _CHSH_ABSENT_EXPLANATION
-    if confirm is None or not confirm(tool.id, "set_login_shell"):
-        return ()
     return _SET_LOGIN_SHELL_INSTRUCTIONS
 
 

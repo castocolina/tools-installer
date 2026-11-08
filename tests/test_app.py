@@ -192,10 +192,6 @@ _ATTRIBUTION_QUESTION = "attribution off — claude: no agent credit in commits/
 _PI_NOTE = "pi: nothing written; its approvals come only from extensions"
 _NO_KEY_NOTE = "no documented key: codex, pi (nothing written for them)"
 _LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
-_LOGIN_SHELL_QUESTION = (
-    "Show a reviewed command to change the login shell to zsh for oh-my-zsh, "
-    "which you run in your own terminal after the installer exits?"
-)
 
 
 class _ScriptedPrompter:
@@ -212,27 +208,6 @@ class _ScriptedPrompter:
     def confirm(self, message: str, *, default: bool = True) -> bool:
         self.asked.append((message, default, self._buf.getvalue()))
         return self._answers.get(message, False)
-
-
-def _asking_install(asks: Sequence[tuple[str, str]]) -> SensitiveInstall:
-    """An install that asks the sensitive questions the real post-install step would ask."""
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
-    ) -> InstallOutcome:
-        for tool_id, action in asks:
-            if tool_id == tool.id and confirm_sensitive_action is not None:
-                confirm_sensitive_action(tool_id, action)
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    return install
 
 
 def test_headless_option_questions_default_to_no():
@@ -294,31 +269,6 @@ def test_headless_yes_asks_nothing_and_says_so():
     assert not (Path.home() / ".claude" / "settings.json").exists()
     assert output.index(_LEFT_OFF) < output.index("Summary —")
     assert "Shell init left off" not in output
-
-
-def test_the_headless_login_shell_question_is_keyed_and_default_yes():
-    """D-11 / R1-54: the login shell keeps its sentence with default yes; shell init asks none."""
-    tools = [_tool("zoxide", "shell"), _tool("oh-my-zsh", "shell")]
-    console, buf = _console()
-    prompter = _ScriptedPrompter({_BATCH_QUESTION: True}, buf)
-
-    run_wizard(
-        tools,
-        prompter,
-        console,
-        Options(all=True, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        install=_asking_install([("oh-my-zsh", "set_login_shell")]),
-        refresh=presence_service(tools),
-        updates=ScriptedUpdates({}),
-    )
-
-    assert len(prompter.asked) == 2
-    assert {(message, default) for message, default, _ in prompter.asked} == {
-        (_BATCH_QUESTION, True),
-        (_LOGIN_SHELL_QUESTION, True),
-    }
 
 
 def test_all_yes_on_an_all_current_host_runs_nothing_and_exits_zero_shaped():
@@ -3912,7 +3862,7 @@ def _not_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PATH", str(sandbox))
 
 
-def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
+def test_run_wizard_prints_login_shell_instructions_without_asking(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3921,88 +3871,24 @@ def test_run_wizard_prints_login_shell_instructions_when_sensitive_confirmed(
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(confirm=True)
-    tools = [_login_shell_tool()]
-    console, buf = _console()
-    outcomes = run_wizard(
-        tools,
-        prompter,
-        console,
-        Options(all=True, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        refresh=presence_service(tools),
-        updates=ScriptedUpdates({}),
-    )
-    out = buf.getvalue()
-    assert isinstance(outcomes, list)
-    assert outcomes[0].result == "done"
-    assert "chsh -s" in out
-    sensitive = [q for q in prompter.questions if q != _BATCH_QUESTION]
-    assert len(sensitive) == 1
-    question = sensitive[0]
-    assert "oh-my-zsh" in question
-    assert question != _BATCH_QUESTION
-    lowered = question.lower()
-    assert "command" in lowered
-    assert "run" in lowered
-    assert "will change" not in lowered
-    assert "will be changed" not in lowered
-
-
-def test_run_wizard_skips_login_shell_instructions_when_sensitive_refused(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def fake_which(cmd: str) -> str | None:
-        return "/usr/bin/chsh" if cmd == "chsh" else None
-
-    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-    _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(confirm=True, sensitive_confirm=False)
-    tools = [_login_shell_tool()]
-    console, buf = _console()
-    outcomes = run_wizard(
-        tools,
-        prompter,
-        console,
-        Options(all=True, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        refresh=presence_service(tools),
-        updates=ScriptedUpdates({}),
-    )
-    assert isinstance(outcomes, list)
-    assert outcomes[0].result == "done"
-    assert "chsh -s" not in buf.getvalue()
-
-
-def test_run_wizard_sensitive_unattended_never_asks_and_prints_no_instructions(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def fake_which(cmd: str) -> str | None:
-        return "/usr/bin/chsh" if cmd == "chsh" else None
-
-    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-    _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(confirm=True)
-    tools = [_login_shell_tool()]
-    console, buf = _console()
-    outcomes = run_wizard(
-        tools,
-        prompter,
-        console,
-        Options(all=True, categories=(), yes=True),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        refresh=presence_service(tools),
-        updates=ScriptedUpdates({}),
-    )
-    assert isinstance(outcomes, list)
-    assert outcomes[0].result == "done"
-    assert prompter.questions == []
-    assert "chsh -s" not in buf.getvalue()
+    for yes in (False, True):
+        prompter = FakePrompter(confirm=True)
+        tools = [_login_shell_tool()]
+        console, buf = _console()
+        outcomes = run_wizard(
+            tools,
+            prompter,
+            console,
+            Options(all=True, categories=(), yes=yes),
+            runner=_runner,
+            resolve_tag=_resolve_tag,
+            refresh=presence_service(tools),
+            updates=ScriptedUpdates({}),
+        )
+        assert isinstance(outcomes, list)
+        assert outcomes[0].result == "done"
+        assert "chsh -s" in buf.getvalue()
+        assert [q for q in prompter.questions if q != _BATCH_QUESTION] == []
 
 
 def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
@@ -6771,3 +6657,74 @@ def test_a_full_uninstall_clears_the_shell_init_record(
         platform_os="linux",
     )
     assert shell_init_record(myshellrc) is None
+
+
+class _NoQuestionPrompter:
+    """Records every question; the headless route must ask none."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def confirm(self, message: str, *, default: bool = True) -> bool:
+        self.asked.append(message)
+        return default
+
+
+def _headless_omz_install(
+    monkeypatch: pytest.MonkeyPatch, *, chsh_present: bool
+) -> tuple[str, list[list[str]], _NoQuestionPrompter]:
+    from dataclasses import replace
+
+    from installer.engine import install_tool
+    from installer.model import load_tools
+
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/chsh" if chsh_present and cmd == "chsh" else None
+
+    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
+    (Path.home() / ".oh-my-zsh").mkdir()
+    shipped = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "oh-my-zsh")
+    tool = replace(shipped, requires=())
+    calls: list[list[str]] = []
+    console, buf = _console()
+    prompter = _NoQuestionPrompter()
+    run_wizard(
+        [tool],
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=calls.append,
+        resolve_tag=_resolve_tag,
+        install=install_tool,
+        refresh=presence_service([tool]),
+        updates=ScriptedUpdates({}),
+    )
+    return buf.getvalue(), calls, prompter
+
+
+def test_headless_omz_install_prints_the_login_shell_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R8 / T-23.2-16: --yes prints the reviewed chsh lines once, after the row's other
+    output, asks nothing and never hands `chsh` to the runner."""
+    output, calls, prompter = _headless_omz_install(monkeypatch, chsh_present=True)
+
+    assert prompter.asked == []
+    assert all(call[0] != "chsh" for call in calls)
+    assert not any("chsh" in part.split() for call in calls for part in call)
+    assert "oh-my-zsh — after install:" in output
+    assert output.count("chsh -s $(which zsh)") == 1
+    after = output.split("oh-my-zsh — after install:", 1)[1]
+    assert "chsh -s $(which zsh)" in after  # once, inside the row's after-install block
+    assert "Plugins: added docker" in after  # the other tuning lines print in the same block
+
+
+def test_headless_omz_install_without_chsh_prints_the_explanation_instead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output, calls, prompter = _headless_omz_install(monkeypatch, chsh_present=False)
+
+    assert prompter.asked == []
+    assert "removed chsh" in output
+    assert "chsh -s" not in output
+    assert all(call[0] != "chsh" for call in calls)

@@ -1063,7 +1063,7 @@ def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_ins
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
     assert len(calls) == 1
 
 
@@ -1141,18 +1141,15 @@ def test_manual_required_login_shell_never_invokes_confirm(
     assert asked == []
 
 
-def test_raising_confirm_degrades_to_named_warning_not_a_crash(
+def test_a_raising_action_degrades_to_named_warning_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
-        return "/usr/bin/chsh" if cmd == "chsh" else None
-
-    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_installed(monkeypatch)
 
-    def boom(tool_id: str, action: str) -> bool:
-        raise RuntimeError("confirm exploded")
+    def boom(_tool: Tool, _platform: Platform, _confirm: object) -> tuple[str, ...]:
+        raise RuntimeError("action exploded")
 
+    monkeypatch.setitem(post_install.POST_INSTALL_HOOKS, "set_login_shell", boom)
     outcome = install_tool(
         _tool(
             Method(kind="brew", params={"formula": "ripgrep"}),
@@ -1161,12 +1158,11 @@ def test_raising_confirm_degrades_to_named_warning_not_a_crash(
         ),
         _macos_with_brew(),
         runner=lambda cmd: None,
-        confirm_sensitive_action=boom,
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff == ()
     assert outcome.postinstall_warning is not None
-    assert "confirm exploded" in outcome.postinstall_warning
+    assert "action exploded" in outcome.postinstall_warning
 
 
 def test_repair_walks_the_ladder_past_already_installed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1354,7 +1350,7 @@ def test_repair_dispatches_post_install_like_a_fresh_install(
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
 
 
 def test_digest_mismatch_fails_with_nothing_linked(

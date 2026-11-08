@@ -21,7 +21,6 @@ from installer.post_install import (
     SENSITIVE_PROMPTS,
     ConfirmSensitiveAction,
     PostInstallOutput,
-    SensitivePrompt,
     apply_install_tuning,
     run_post_install,
     sensitive_prompt,
@@ -99,20 +98,15 @@ def test_real_oh_my_zsh_entry_declares_set_login_shell() -> None:
     assert "set_login_shell" in tools["oh-my-zsh"].post_install
 
 
-def test_run_post_install_returns_chsh_instructions_when_confirmed(
+def test_run_post_install_returns_chsh_instructions_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
-    asked: list[tuple[str, str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
-
+    asked, confirm = _record()
     lines = run_post_install(_tool(post_install=("set_login_shell",)), _mutable(), confirm).lines
     assert lines
     assert any("chsh -s" in line for line in lines)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
 
 
 def test_run_post_install_returns_a_post_install_output() -> None:
@@ -199,14 +193,14 @@ def test_missing_chsh_explains_without_a_confirm_callback(
     assert not any("chsh -s" in line for line in lines)
 
 
-def test_immutable_host_with_chsh_still_uses_the_confirm_gate(
+def test_immutable_host_with_chsh_prints_the_command_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
     asked, confirm = _record()
     lines = run_post_install(_login_shell_tool(), _immutable(), confirm).lines
     assert any("chsh -s" in line for line in lines)
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    assert asked == []
 
 
 def test_missing_chsh_cannot_be_silenced_via_default_enabled(
@@ -219,16 +213,24 @@ def test_missing_chsh_cannot_be_silenced_via_default_enabled(
     assert asked == []
 
 
-def test_login_shell_skips_when_confirm_callback_is_none(
+def test_set_login_shell_prints_the_handoff_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
-    assert run_post_install(_login_shell_tool(), _mutable(), None).lines == ()
+    with_chsh = run_post_install(_login_shell_tool(), _mutable(), None).lines
+    assert with_chsh == (
+        "After leaving the installer, run this command in your own terminal "
+        "to set zsh as your login shell:",
+        "chsh -s $(which zsh)",
+        "Then log out and back in for the change to take effect.",
+    )
+    _stub_chsh(monkeypatch, present=False)
+    without_chsh = run_post_install(_login_shell_tool(), _mutable(), None).lines
+    assert any("removed chsh" in line for line in without_chsh)
+    assert not any("chsh -s" in line for line in without_chsh)  # never both
 
 
-def test_login_shell_skips_when_confirm_returns_false(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_set_login_shell_ignores_a_refusing_callback(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_chsh(monkeypatch, present=True)
     asked: list[tuple[str, str]] = []
 
@@ -236,8 +238,17 @@ def test_login_shell_skips_when_confirm_returns_false(
         asked.append((tool_id, action))
         return False
 
-    assert run_post_install(_login_shell_tool(), _mutable(), refuse).lines == ()
-    assert asked == [("oh-my-zsh", "set_login_shell")]
+    lines = run_post_install(_login_shell_tool(), _mutable(), refuse).lines
+    assert any("chsh -s" in line for line in lines)
+    assert asked == []
+
+
+def test_sensitive_tables_are_empty() -> None:
+    assert SENSITIVE_POST_INSTALL_ACTIONS == ()
+    assert SENSITIVE_PROMPTS == {}
+    for action in ("set_login_shell", "source_shell_init"):
+        with pytest.raises(KeyError):
+            sensitive_prompt("oh-my-zsh", action)
 
 
 def test_unknown_post_install_action_name_is_inert() -> None:
@@ -417,26 +428,6 @@ def test_shell_init_two_blocks_never_interleave() -> None:
         end = lines.index(f"# <<< tools-installer tweak:{tool} <<<")
         inner = lines[begin + 1 : end]
         assert not any("tools-installer" in line for line in inner)
-
-
-def test_the_login_shell_prompt_is_keyed_by_action() -> None:
-    with pytest.raises(KeyError):
-        sensitive_prompt("zoxide", "source_shell_init")  # shell init asks nothing any more
-    assert sensitive_prompt("oh-my-zsh", "set_login_shell") == SensitivePrompt(
-        "Show a reviewed command to change the login shell to zsh for oh-my-zsh, which you "
-        "run in your own terminal after the installer exits?",
-        "Yes, show the reviewed command",
-        "No, skip this",
-        True,
-    )
-
-
-def test_every_sensitive_action_has_a_prompt() -> None:
-    for action in SENSITIVE_POST_INSTALL_ACTIONS:
-        assert action in SENSITIVE_PROMPTS
-    with pytest.raises(KeyError):
-        sensitive_prompt("zoxide", "no_such_action")
-    assert not hasattr(post_install, "SHELL_INIT_EFFECTS")
 
 
 @pytest.mark.parametrize("tool", SHELL_INIT_TOOLS)

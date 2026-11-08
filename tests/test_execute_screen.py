@@ -3708,7 +3708,7 @@ async def test_r_toggles_an_installer_owned_current_row_both_ways() -> None:
         assert options.get_option_at_index(options.highlighted).id == "rg"
 
 
-async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
+async def test_r_on_an_installed_oh_my_zsh_shows_the_chsh_handoff_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from installer import engine
@@ -3777,13 +3777,7 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
         assert isinstance(screen, ExecuteScreen)
         screen.query_one("#plan-rows", OptionList).highlighted = 0
         await pilot.press("r", "enter")
-        for _ in range(400):
-            if "SensitiveActionScreen" in type(app.screen).__name__:
-                break
-            await pilot.pause()
-        assert "SensitiveActionScreen" in type(app.screen).__name__
-        await pilot.press("enter")
-        await _settle_execute(screen, pilot)
+        await _settle_execute(screen, pilot)  # no question: the handoff prints on its own
         assert screen.outcomes is not None
         assert screen.outcomes[0].result == "manual"
         assert "chsh -s $(which zsh)" in _log_text(screen)
@@ -3798,7 +3792,7 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_reviewed_chsh_handoff(
     assert calls == []
 
 
-async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_reviewed_chsh_handoff(
+async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_chsh_handoff_without_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from installer import engine
@@ -3855,14 +3849,7 @@ async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_reviewed_chsh_h
         screen = app.screen
         assert isinstance(screen, ExecuteScreen)
         await pilot.press("enter")
-        for _ in range(400):
-            if "SensitiveActionScreen" in type(app.screen).__name__:
-                break
-            await pilot.pause()
-        assert screen.outcomes is None or screen.outcomes[0].result == "done", _log_text(screen)
-        assert "SensitiveActionScreen" in type(app.screen).__name__, _log_text(screen)
-        await pilot.press("enter")
-        await _settle_execute(screen, pilot)
+        await _settle_execute(screen, pilot)  # no question: the handoff prints on its own
         assert screen.outcomes is not None
         assert screen.outcomes[0].result == "done"
         assert "chsh -s $(which zsh)" in _log_text(screen)
