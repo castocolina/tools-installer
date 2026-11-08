@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from installer.assets import arch_tokens, render_asset
 from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
 from installer.resolve import platform_could_support, resolve_methods, unavailable_reason
@@ -321,3 +322,24 @@ def test_platform_could_support_ignores_missing_brew_but_not_wrong_platform() ->
         )
         is False
     )
+
+
+def test_copilot_resolves_per_platform() -> None:
+    copilot = next(t for t in load_tools(_REGISTRY) if t.id == "copilot")
+    for arch in ("arm64", "amd64"):
+        mac = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
+        assert [(m.kind, m.params["cask"]) for m in resolve_methods(copilot, mac)] == [
+            ("cask", "copilot-cli")
+        ]
+    for os_name, arch, asset in (
+        ("fedora", "amd64", "copilot-linux-x64.tar.gz"),
+        ("debian", "amd64", "copilot-linux-x64.tar.gz"),
+        ("arch", "amd64", "copilot-linux-x64.tar.gz"),
+        ("fedora", "arm64", "copilot-linux-arm64.tar.gz"),
+    ):
+        linux = Platform(os=os_name, arch=arch, immutable=False, has_brew=False)
+        methods = resolve_methods(copilot, linux)
+        assert [m.kind for m in methods] == ["github_release"]
+        assert render_asset(str(methods[0].params["asset"]), "1.0.107", arch_tokens(arch)) == asset
+        with_brew = Platform(os=os_name, arch=arch, immutable=False, has_brew=True)
+        assert "cask" not in [m.kind for m in resolve_methods(copilot, with_brew)]
