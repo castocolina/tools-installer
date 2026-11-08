@@ -12,7 +12,7 @@ from rich.console import Console
 
 import installer.engine as engine
 import installer.session as session_module
-from installer import executors, postinstall, receipts
+from installer import agent_settings, executors, postinstall, receipts
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.model import (
@@ -1722,3 +1722,31 @@ def test_desktop_shell_option_writes_environment_d(monkeypatch: pytest.MonkeyPat
     mac = replace(ctx, platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True))
     execute_plan([PlanRow("zsh", Disposition.INSTALL, "not installed")], mac)
     assert not conf.exists()
+
+
+def test_install_tuning_step_refusal_fails_and_carries_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-03: a write that is refused fails the step with the refusal, and the row still reports
+    the FileResults the step produced, so the summary shows what was not written."""
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}\n", encoding="utf-8")
+
+    def always_changed(_path: Path, _before: object, _text: str) -> None:
+        raise agent_settings.SettingsChanged()
+
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", always_changed)
+    row = _reconfigure_row("claude", _ALL_KIND_STEPS["install_tuning"])
+
+    outcome = execute_plan([row], _run_context(RunRecorder(), catalog={"claude": _tuned_claude()}))[
+        0
+    ]
+
+    assert outcome.result == "failed"
+    assert outcome.detail == (
+        f"apply install tuning: ~/.claude/settings.json: {agent_settings.CHANGED_WHILE_WRITING}"
+    )
+    assert {file.refused for file in outcome.settings} == {agent_settings.CHANGED_WHILE_WRITING}
+    assert [file.setting for file in outcome.settings] == ["auto-approve", "no-attribution"]
+    assert settings.read_text(encoding="utf-8") == "{}\n"

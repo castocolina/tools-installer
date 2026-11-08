@@ -1238,3 +1238,38 @@ def test_copilot_home_outside_home_is_reverted_but_not_previewed(tmp_path: Path)
 
     assert [key.kind for r in results for key in r.keys] == ["removed", "removed"]
     assert not (ch / "settings.json").exists()
+
+
+def test_pending_tuning_race_never_publishes_ok_before_the_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backstop (R2 concurrency): the ledger is reserved before the file commits, so a pass
+    that reads the keys as recorded never sees them pending, and one that reads them pending
+    sees them before the ledger has them (never `✓` ahead of the record)."""
+    home = Path.home()
+    _claude_settings_file().write_text("{}\n", encoding="utf-8")
+    keys = ("permissions.defaultMode", "skipDangerousModePermissionPrompt")
+    seen: dict[str, tuple[str, ...]] = {}
+    real_write_ledger = agent_settings.write_ledger
+    real_write_if_unchanged = agent_settings.write_if_unchanged
+
+    def absent() -> tuple[str, ...]:
+        return agent_settings.setting_facts(
+            "claude", "auto-approve", home=home, platform_os="linux"
+        ).absent
+
+    def ledger_spy(ledger: ConfigLedger) -> None:
+        seen.setdefault("before_reservation", absent())
+        real_write_ledger(ledger)
+
+    def write_spy(path: Path, before: FileSnapshot | None, text: str) -> None:
+        seen["between_reservation_and_commit"] = absent()
+        real_write_if_unchanged(path, before, text)
+
+    monkeypatch.setattr(agent_settings, "write_ledger", ledger_spy)
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", write_spy)
+
+    apply_setting("claude", "auto-approve", home=home, platform_os="linux", skip_recorded=True)
+
+    assert seen == {"before_reservation": keys, "between_reservation_and_commit": ()}
+    assert absent() == ()
