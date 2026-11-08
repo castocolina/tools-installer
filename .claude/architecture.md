@@ -128,10 +128,13 @@ the policy's `active`. Content cannot prove ownership (`git` ships in
 Oh-My-Zsh's own default `.zshrc`), and a teardown that guessed from content
 would delete configuration the installer never wrote.
 `OmzPluginsError` subclasses `OSError` specifically so `ui_common.run_live`
-surfaces it under rule 3 without any screen adding an `except`. The feature is
-a `Policy` produced by `installer/policy.py::omz_plugins_policy` — not a `Tool`
-and not a `TweakBundle` — with its Oh-My-Zsh precondition carried by the
-`requires`/`missing_requires` fields `Policy` already has.
+surfaces it under rule 3 without any screen adding an `except`. The plugins
+are written at install by the `set_omz_plugins` post_install action (Phase
+23.2 install tuning), not by a Policies row. `installer/policy.py::omz_plugins_policy`
+remains only the writer and remover closure that the full-uninstall sweep
+uses through `uninstall._omz_policy`, with its Oh-My-Zsh precondition carried
+by the `requires`/`missing_requires` fields `Policy` already has. Ownership
+stays the comment-only record in `~/.myshellrc`.
 
 A full uninstall disables every still-enabled tweak through the same
 `Policy.remove` closures the Policies view calls, via
@@ -302,6 +305,15 @@ through some other path. Worked example: `mmdc.requires = ["pnpm",
 ```
 New registry tool needs post-install setup?
 │
+├─ An accepted customization of the tool's OWN configuration (agent or editor
+│  keys, shell init, a plugin list)?
+│  -> a plural Tool.post_install action in installer/post_install.py, applied
+│     at install with no question on every route (install tuning). A present
+│     tool shows `≈ apply install tuning` (RECONFIGURE writes it); removal
+│     reverts it with the tool. Worked examples: apply_agent_tuning (claude,
+│     codex, opencode, cursor-agent, copilot, vscode), set_omz_plugins,
+│     source_shell_init.
+│
 ├─ Fully-installable, on-PATH binary/CLI after a normal Method succeeds,
 │  AND needs a non-interactive, host-detection-aware follow-up (register
 │  an MCP server, patch a per-agent config file)?
@@ -322,6 +334,9 @@ New registry tool needs post-install setup?
 
 Skill packs are not catalog entries since 23.1: that method kind was
 retired, so this tree has no skill-pack branch.
+
+A Policies row is only for what lies outside any install, never the default for
+a new requirement.
 
 Restate explicitly: **the registry can only select a hook NAME from a
 closed, code-owned set in every one of these mechanisms — never a
@@ -349,7 +364,9 @@ Do not confuse this NAMED, singular `Tool.postinstall` mechanism with
 the two are separate, unrelated concepts despite the near-identical name.
 The plural field is read in production by `installer/post_install.py` at
 the post-success point of the install ladder; it must never be merged into
-the singular hook table.
+the singular hook table. The install-tuning actions (`apply_agent_tuning`,
+`set_omz_plugins`, `source_shell_init`) are plural actions, dispatched from the
+same table as the other post-install actions.
 
 The invocable skill at `.claude/skills/tool-onboarding/SKILL.md` walks this
 same three-question checklist interactively for a human or agent adding a

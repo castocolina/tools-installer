@@ -311,3 +311,26 @@ def test_tool_onboarding_skill_states_the_install_tuning_rule() -> None:
     for line in text.splitlines():
         if "Policies" in line:
             assert line.isascii(), f"non-ASCII line naming Policies: {line!r}"
+
+
+_INSTALL_TUNING_ARCHITECTURE_PHRASES = (
+    "install tuning",
+    "set_omz_plugins",
+    "apply_agent_tuning",
+    "outside any install",
+    "uninstall._omz_policy",
+)
+
+
+def test_architecture_records_the_install_tuning_rule() -> None:
+    """D-19, D-09, D-12: install tuning is the rule; omz_plugins_policy is no Policies row.
+
+    The phrases anchor the tree branch, the sentence after it and the rewritten
+    Oh-My-Zsh paragraph. The old sentence that called the plugins a Policy row
+    must be gone, so the paragraph cannot quietly keep the retired wiring.
+    """
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _INSTALL_TUNING_ARCHITECTURE_PHRASES:
+        assert phrase in text, f"missing install-tuning phrase: {phrase}"
+    retired = "a `Policy` produced by `installer/policy.py::omz_plugins_policy`"
+    assert retired not in text, "the Oh-My-Zsh paragraph still calls the plugins a Policy row"
