@@ -469,7 +469,7 @@ Plans:
   6. The catalog installs, tunes and removes GitHub Copilot CLI (`copilot`) on macOS and Linux (container e2e), and a hand-installed copy reads present with its owner.
   7. With pnpm installed by an earlier run and absent from the session PATH, installing mmdc in the same terminal succeeds; a truly absent pnpm keeps today's message.
 
-**Plans**: 7/8 plans executed
+**Plans**: 8/8 plans executed
 
 Plans:
 **Wave 1**
@@ -486,7 +486,7 @@ Plans:
 - [x] 23.2-07-PLAN.md — A present dependency off the session PATH runs from its known bin dir; pnpm message fixed (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 23.2-08-PLAN.md — Policies trimmed to 7/5 rows, run options deleted, phase gate with a container e2e (wave 4)
+- [x] 23.2-08-PLAN.md — Policies trimmed to 7/5 rows, run options deleted, phase gate with a container e2e (wave 4)
 
 ### Phase 24: Onboarding through the skill and e2e
 
@@ -587,7 +587,7 @@ Plans:
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
-| 23.2 Install-time tuning | 7/8 | In Progress | - |
+| 23.2 Install-time tuning | 8/8 | In Progress | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 24.2 Schedules view | 0/TBD | Not started | - |
