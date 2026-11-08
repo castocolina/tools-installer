@@ -9,6 +9,7 @@ and the event loop paints them.
 
 from __future__ import annotations
 
+import codecs
 import io
 import threading
 import time
@@ -102,7 +103,10 @@ _OPTION_LOCKED = "A run option is set before start; it cannot change now."
 _OPTION_PLAN_ROW_ONLY = "space toggles run options only; plan rows change with r."
 _OPTION_COLUMN = 4
 SILENCE_SECONDS = 2.0
-_WAITING_OUTPUT = "-- still running; waiting for output --"
+HEARTBEAT_SECONDS = 10.0
+SILENCE_TICK_SECONDS = 1.0
+_BRAILLE_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_ASCII_FRAMES = ("-", "\\", "|", "/")
 _UPDATE_STARTED = "-- updating --"
 
 
@@ -327,6 +331,16 @@ class InstallRunStarted(Message):
     """
 
 
+def wants_ascii_spinner(encoding: str | None) -> bool:
+    """True unless the encoding is UTF-8: Braille frames do not encode on a legacy codec."""
+    if encoding is None:
+        return True
+    try:
+        return codecs.lookup(encoding).name != "utf-8"
+    except LookupError:
+        return True
+
+
 @dataclass(frozen=True)
 class ExecuteInputs:
     """Everything ExecuteScreen needs, bound by the composition root.
@@ -348,6 +362,8 @@ class ExecuteInputs:
     updates: UpdateService | None = None
     now: Callable[[], float] = time.monotonic
     terminal_sync: Callable[[], str | None] | None = None
+    wall_clock: Callable[[], float] = time.time
+    ascii_spinner: bool = False
 
 
 class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
@@ -383,6 +399,13 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     ExecuteScreen #execute-head { height: auto; max-height: 3; padding: 0 1; }
     ExecuteScreen #plan-rows { height: 1fr; }
     ExecuteScreen #execute-log { display: none; height: 1fr; padding: 0 1; }
+    ExecuteScreen #execute-silence {
+        display: none;
+        height: 1;
+        padding: 0 1;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
     ExecuteScreen #execute-keys { height: 1; padding: 0 1; }
     ExecuteScreen.-running #plan-rows, ExecuteScreen.-finished #plan-rows {
         height: auto;
@@ -410,7 +433,9 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._in_flight: str | None = None
         self._last_tool_id: str | None = None
         self._last_output_at: float | None = None
-        self._silence_noted = False
+        # Heartbeats written this silence (0 means none; reset by output and by the row's end).
+        self._silence_heartbeats = 0
+        self._silence_frame = 0
         self._silence_generation = 0
         self._silence_timer: Timer | None = None
         self.cancel_event = threading.Event()
@@ -428,6 +453,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             highlight=False,
             auto_scroll=True,
         )
+        yield Static(id="execute-silence")
         yield self.status
         yield Static(_KEYS_EMPTY, id="execute-keys")
 
@@ -783,23 +809,46 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         """
         self._in_flight = tool_id
         self._last_output_at = self._inputs.now()
-        self._silence_noted = False
+        self._silence_heartbeats = 0
         self._silence_generation += 1
+        self._hide_silence()
 
     def _clear_in_flight(self) -> None:
         self._in_flight = None
         self._last_output_at = None
-        self._silence_noted = False
+        self._silence_heartbeats = 0
         self._silence_generation += 1
+        self._hide_silence()
 
     def _transient_is_current(self, message: InstallLogLine) -> bool:
         return (
             not self.finished
             and self._waiting_prompt is None
             and message.tool_id == self._in_flight
-            and self._silence_noted
+            and self._silence_heartbeats > 0
             and message.generation == self._silence_generation
         )
+
+    def _show_silence(self, line: str) -> None:
+        indicator = self.query_one("#execute-silence", Static)
+        indicator.update(line)
+        indicator.display = True
+
+    def _hide_silence(self) -> None:
+        self.query_one("#execute-silence", Static).display = False
+
+    def _stop_silence_timer(self) -> None:
+        if self._silence_timer is not None:
+            self._silence_timer.stop()
+            self._silence_timer = None
+
+    def _silence_line(self, tool_id: str, seconds: int) -> str:
+        """The live indicator's text: a spinner frame, the tool and the whole seconds of silence."""
+        frames, separator = (
+            (_ASCII_FRAMES, "-") if self._inputs.ascii_spinner else (_BRAILLE_FRAMES, "·")
+        )
+        frame = frames[self._silence_frame % len(frames)]
+        return f"{frame} {tool_id} running {separator} {seconds}s"
 
     def _arm_silence_timer(self, delay: float) -> None:
         """Arm the one-shot silence check, replacing any timer already pending.
@@ -819,36 +868,43 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self._silence_timer = self.set_timer(delay, self._check_output_silence)
 
     def _check_output_silence(self) -> None:
-        """One-shot silence check that re-arms itself; never a poll body.
+        """One silence check that re-arms itself; never a poll body.
 
         Re-arming from inside this callback -- rather than resetting a timer
         on every real log line -- keeps exactly one pending Timer at a time.
         A 500-line burst from a chatty installer creates zero extra timers.
+        While the indicator shows, the re-arm is the 1 s tick that refreshes
+        it; an open prompt or a finished run leaves no timer pending.
         """
         self._silence_timer = None
         if self.finished:
             return
+        if self._waiting_prompt is not None:
+            self._hide_silence()
+            return
         in_flight = self._in_flight
         last_output_at = self._last_output_at
-        if (
-            in_flight is None
-            or last_output_at is None
-            or self._waiting_prompt is not None
-            or self._silence_noted
-        ):
+        if in_flight is None or last_output_at is None:
             self._arm_silence_timer(SILENCE_SECONDS)
             return
         elapsed = self._inputs.now() - last_output_at
         if elapsed < SILENCE_SECONDS:
             self._arm_silence_timer(SILENCE_SECONDS - elapsed)
             return
-        self._silence_noted = True
-        self.post_message(
-            InstallLogLine(
-                in_flight, _WAITING_OUTPUT, transient=True, generation=self._silence_generation
+        self._show_silence(self._silence_line(in_flight, int(elapsed)))
+        if elapsed >= HEARTBEAT_SECONDS * (self._silence_heartbeats + 1):
+            self._silence_heartbeats += 1
+            stamp = time.strftime("%H:%M:%S", time.localtime(self._inputs.wall_clock()))
+            self.post_message(
+                InstallLogLine(
+                    in_flight,
+                    f"{stamp} {in_flight} still running ({int(elapsed)}s)",
+                    transient=True,
+                    generation=self._silence_generation,
+                )
             )
-        )
-        self._arm_silence_timer(SILENCE_SECONDS)
+        self._silence_frame += 1
+        self._arm_silence_timer(SILENCE_TICK_SECONDS)
 
     def _ask_mismatch(self, tool_id: str) -> MismatchChoice:
         self.post_message(PromptOpen(tool_id, True))
@@ -921,9 +977,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.finished = True
         self.remove_class("-running")
         self.add_class("-finished")
-        if self._silence_timer is not None:
-            self._silence_timer.stop()
-            self._silence_timer = None
+        self._stop_silence_timer()
         self._clear_in_flight()
         self.outcomes = list(message.outcomes)
         options = self.query_one("#plan-rows", OptionList)
@@ -1007,6 +1061,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         if message.waiting:
             self._waiting_prompt = message.tool_id
             self._silence_generation += 1
+            self._stop_silence_timer()
+            self._hide_silence()
             self.status.set(
                 f"Run paused on a question for {message.tool_id}; answer the prompt to continue.",
                 "warn",
@@ -1014,8 +1070,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             return
         self._waiting_prompt = None
         self._last_output_at = self._inputs.now()
-        self._silence_noted = False
+        self._silence_heartbeats = 0
         self._silence_generation += 1
+        # The pause the prompt explained is not silence: the window restarts at close.
+        self._arm_silence_timer(SILENCE_SECONDS)
         if self.started and not self.finished and not self.cancel_event.is_set():
             self.status.set(_CANCEL_AVAILABLE, "ok")
 

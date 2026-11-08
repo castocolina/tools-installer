@@ -766,17 +766,24 @@ side-effecting installer.
 paste back the command a failure names, so the wrapped list exists
 only as the value handed to `Popen`.
 
-The `waiting for output` indicator is UI-side only, produced by
-`ExecuteScreen`'s one-shot check at `SILENCE_SECONDS` and posted as a
-transient `InstallLogLine`. The timer re-arms itself for the exact
-remaining distance when a line arrived after it was armed, so it
-fires at the threshold rather than at a poll boundary, and it costs
-one pending timer rather than one per log line. `StreamingRunner`'s
-bounded `tail` is fed only by lines read from the child's stdout, so
-a failure report can never repeat it — that separation is the
-mechanism, not a filter. The copy claims only liveness and waiting,
-never that the child is healthy: from the parent, buffering and a
-hang look identical.
+The silence indicator is UI-side only. After `SILENCE_SECONDS` without
+output, a one-line `#execute-silence` widget under the append-only log
+shows a spinner frame, the in-flight tool and the whole seconds of
+silence, and the self-re-arming silence check turns into a 1 s tick
+that refreshes it. Every `HEARTBEAT_SECONDS` of continued silence the
+check appends a transient `InstallLogLine` reading
+`HH:MM:SS <tool> still running (Ns)`, the time taken from the injected
+`wall_clock`, so the log keeps a timestamped record of the wait. The
+timer re-arms for the exact remaining distance when a line arrived
+after it was armed, so it fires at the threshold rather than at a poll
+boundary, and it costs one pending timer rather than one per log line.
+`ExecuteInputs.ascii_spinner`, set once by the composition root from
+the encoding of `sys.__stderr__` (the stream Textual draws to), swaps
+the Braille frames for `-`, `\`, `|`, `/`. `StreamingRunner`'s bounded
+`tail` is fed only by lines read from the child's stdout, so a failure
+report can never repeat it — that separation is the mechanism, not a
+filter. The copy claims only liveness and waiting, never that the child
+is healthy: from the parent, buffering and a hang look identical.
 
 Every transient carries the `silence generation` it was minted
 under, and the handler drops it unless that generation, the in-flight

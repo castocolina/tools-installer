@@ -31,19 +31,16 @@ from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Severity
 from installer.execute_screen import (
-    # The indicator's exact copy, imported rather than hand-written: a test
-    # that constructs the message production posts must not be able to drift
-    # from it silently while looser `"waiting for output" in log` substring
-    # assertions elsewhere keep passing.
-    _WAITING_OUTPUT,  # pyright: ignore[reportPrivateUsage]
     SILENCE_SECONDS,
     ChecksumMismatchScreen,
     ExecuteInputs,
     ExecuteScreen,
     InstallLogLine,
     InstallRunFinished,
+    PromptOpen,
     RowFinished,
     sanitize_log_line,
+    wants_ascii_spinner,
 )
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
@@ -247,6 +244,8 @@ def _inputs(
     version_refresh: VersionRefreshService | None = None,
     updates: UpdateService | None = None,
     now: Callable[[], float] = time.monotonic,
+    wall_clock: Callable[[], float] = time.time,
+    ascii_spinner: bool = False,
 ) -> ExecuteInputs:
     catalog = tools if tools is not None else [_tool("rg"), _tool("fd")]
     return ExecuteInputs(
@@ -265,6 +264,8 @@ def _inputs(
         ),
         updates=updates,
         now=now,
+        wall_clock=wall_clock,
+        ascii_spinner=ascii_spinner,
     )
 
 
@@ -316,6 +317,42 @@ class _FakeClock:
 
     def __call__(self) -> float:
         return self.value
+
+
+# A fixed wall-clock start (local time is derived from it, never compared to "now").
+_WALL_START = 1_700_000_000.0
+# The heartbeat's stored text is `HH:MM:SS <tool> still running (Ns)` after the `tool │ ` prefix.
+_HEARTBEAT_TAIL = "rg still running"
+_HEARTBEAT_LINE = "00:00:10 rg still running (10s)"
+
+
+def _stamp(wall: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(wall))
+
+
+def _tick(screen: ExecuteScreen) -> None:
+    """One silence check, run directly. The only private-attribute route the new tests take."""
+    screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+
+
+def _silence_timer_pending(screen: ExecuteScreen) -> bool:
+    return screen._silence_timer is not None  # pyright: ignore[reportPrivateUsage]
+
+
+def _indicator(screen: ExecuteScreen) -> Static:
+    return screen.query_one("#execute-silence", Static)
+
+
+def _indicator_shown(screen: ExecuteScreen) -> bool:
+    return _indicator(screen).display
+
+
+def _indicator_text(screen: ExecuteScreen) -> str:
+    return str(_indicator(screen).content)
+
+
+def _heartbeat_lines(screen: ExecuteScreen) -> list[str]:
+    return [line for line in _log_text(screen).splitlines() if _HEARTBEAT_TAIL in line]
 
 
 def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
@@ -1862,12 +1899,13 @@ async def test_below_threshold_the_indicator_never_appears() -> None:
         await pilot.pause()
         log = _log_text(screen)
         assert log.splitlines()[-1] == "rg │ rg line 1"
-        assert "waiting for output" not in log
+        assert "still running" not in log
+        assert not _indicator_shown(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
 
-async def test_at_threshold_the_indicator_is_the_logs_last_line() -> None:
+async def test_at_threshold_the_indicator_shows_and_the_log_gets_no_line() -> None:
     clock = _FakeClock()
     started = threading.Event()
     release = threading.Event()
@@ -1880,16 +1918,456 @@ async def test_at_threshold_the_indicator_is_the_logs_last_line() -> None:
         assert isinstance(screen, ExecuteScreen)
         await _start_and_wait_for_first_line(screen, pilot, started)
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
+        assert _indicator_shown(screen)
+        assert "rg running" in _indicator_text(screen)
+        # The indicator lives under the log: the log itself gains no line at 2 s.
         log = _log_text(screen)
-        last_line = log.splitlines()[-1]
-        assert "rg" in last_line
-        assert "still running; waiting for output" in last_line
+        assert log.splitlines()[-1] == "rg │ rg line 1"
         # Only one region header for rg -- the indicator did not open a new one.
         assert log.count("── rg ──") == 1
         release.set()
         await _settle_execute(screen, pilot)
+
+
+async def test_silence_indicator_and_heartbeats_over_a_25_second_silent_step() -> None:
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        frames: list[str] = []
+        for second in range(1, 26):
+            clock.value += 1.0
+            wall.value += 1.0
+            _tick(screen)
+            await pilot.pause()
+            if second < 2:
+                assert not _indicator_shown(screen)
+                continue
+            assert _indicator_shown(screen)
+            text = _indicator_text(screen)
+            assert text.endswith(f"rg running · {second}s")
+            frames.append(text.split(" ", 1)[0])
+        assert all(before != after for before, after in zip(frames, frames[1:], strict=False))
+        log_lines = _log_text(screen).splitlines()
+        beats = [line for line in log_lines if _HEARTBEAT_TAIL in line]
+        assert beats == [
+            f"rg │ {_stamp(_WALL_START + 10)} rg still running (10s)",
+            f"rg │ {_stamp(_WALL_START + 20)} rg still running (20s)",
+        ]
+        assert log_lines.index(beats[0]) > log_lines.index("rg │ rg line 1")
+        assert log_lines.count("── rg ──") == 1
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silence_empty_step_shows_indicator_from_2s_and_heartbeats_at_10s() -> None:
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+    ) -> InstallOutcome:
+        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        # The opening "-- trying" line is the only output this step ever prints.
+        _emit_through_runner(runner, tool.id, ("-- trying cargo --",))
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, "installed")
+
+    inputs = _inputs(install=install, now=clock, wall_clock=wall)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        for _ in range(400):
+            if "-- trying cargo --" in _log_text(screen):
+                break
+            await pilot.pause()
+        for second in range(1, 21):
+            clock.value += 1.0
+            wall.value += 1.0
+            _tick(screen)
+            await pilot.pause()
+            assert _indicator_shown(screen) is (second >= 2)
+        assert _indicator_text(screen).endswith("rg running · 20s")
+        beats = [line for line in _log_text(screen).splitlines() if _HEARTBEAT_TAIL in line]
+        assert beats == [
+            f"rg │ {_stamp(_WALL_START + 10)} rg still running (10s)",
+            f"rg │ {_stamp(_WALL_START + 20)} rg still running (20s)",
+        ]
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+def _check_delays(recorded: list[tuple[float, Callable[[], None] | None]]) -> list[float]:
+    """The delays handed to set_timer for the silence check, identified by callback name."""
+    return [
+        delay
+        for delay, callback in recorded
+        if callback is not None and getattr(callback, "__name__", "") == "_check_output_silence"
+    ]
+
+
+async def test_silence_timer_cadence_follows_the_indicator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the delays actually passed to set_timer, not hand-driven checks alone (review R1-03)."""
+    recorded: list[tuple[float, Callable[[], None] | None]] = []
+    original_set_timer = ExecuteScreen.set_timer
+
+    def recording_set_timer(
+        self: ExecuteScreen,
+        delay: float,
+        callback: Callable[[], None] | None = None,
+        *,
+        name: str | None = None,
+        pause: bool = False,
+    ) -> object:
+        recorded.append((delay, callback))
+        return original_set_timer(self, delay, callback, name=name, pause=pause)
+
+    monkeypatch.setattr(ExecuteScreen, "set_timer", recording_set_timer)
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+
+        # Before the threshold: the re-arm is the remaining distance, never more than the threshold.
+        clock.value += 1.0
+        _tick(screen)
+        assert _check_delays(recorded)[-1] == 1.0
+        # Indicator showing: every re-arm is the 1 s tick.
+        for _ in range(4):
+            clock.value += 1.0
+            _tick(screen)
+            assert _check_delays(recorded)[-1] == 1.0
+        assert _indicator_shown(screen)
+
+        # A prompt hides the indicator and leaves no silence timer pending.
+        screen.on_prompt_open(PromptOpen("rg", True))
+        assert not _silence_timer_pending(screen)
+        armed_before_prompt_ticks = len(_check_delays(recorded))
+        clock.value += 5.0
+        _tick(screen)
+        assert len(_check_delays(recorded)) == armed_before_prompt_ticks
+        assert not _indicator_shown(screen)
+        assert not _silence_timer_pending(screen)
+
+        # Closing the prompt restarts the window: one re-arm at the full threshold.
+        screen.on_prompt_open(PromptOpen("rg", False))
+        assert _check_delays(recorded)[-1] == SILENCE_SECONDS
+        assert _silence_timer_pending(screen)
+
+        release.set()
+        await _settle_execute(screen, pilot)
+        # After the run ends no silence timer is pending.
+        assert not _silence_timer_pending(screen)
+
+
+async def test_silence_heartbeat_boundary_is_exactly_ten_seconds() -> None:
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        for at, expected in ((9.9, 0), (10.0, 1), (19.9, 1), (20.0, 2)):
+            clock.value = at
+            wall.value = _WALL_START + at
+            _tick(screen)
+            await pilot.pause()
+            assert len(_heartbeat_lines(screen)) == expected, f"at {at} s of silence"
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silence_a_step_printing_every_five_seconds_shows_no_heartbeat() -> None:
+    clock = _FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(install=_blocking_install_emitting_one_line(started, release), now=clock)
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        for second in range(1, 31):
+            clock.value = float(second)
+            if second % 5 == 0:
+                screen.on_install_log_line(InstallLogLine("rg", f"rg step {second}"))
+                await pilot.pause()
+                assert not _indicator_shown(screen)
+            else:
+                _tick(screen)
+                await pilot.pause()
+                assert _indicator_shown(screen) is (second % 5 >= 2)
+        assert "still running" not in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silence_output_at_a_due_heartbeat_resets_the_clock() -> None:
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        # Output lands exactly when the first heartbeat is due.
+        clock.value = 10.0
+        wall.value = _WALL_START + 10.0
+        screen.on_install_log_line(InstallLogLine("rg", "rg line 2"))
+        await pilot.pause()
+        _tick(screen)
+        await pilot.pause()
+        assert not _indicator_shown(screen)
+        assert _heartbeat_lines(screen) == []
+        clock.value = 19.9
+        wall.value = _WALL_START + 19.9
+        _tick(screen)
+        await pilot.pause()
+        assert _indicator_shown(screen)
+        assert _heartbeat_lines(screen) == []
+        clock.value = 20.0
+        wall.value = _WALL_START + 20.0
+        _tick(screen)
+        await pilot.pause()
+        assert _heartbeat_lines(screen) == [
+            f"rg │ {_stamp(_WALL_START + 20)} rg still running (10s)",
+        ]
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silence_indicator_hidden_while_a_prompt_is_open_and_after_the_row_ends() -> None:
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        clock.value = 2.0
+        _tick(screen)
+        await pilot.pause()
+        assert _indicator_shown(screen)
+
+        screen.on_prompt_open(PromptOpen("rg", True))
+        await pilot.pause()
+        clock.value = 12.5
+        wall.value = _WALL_START + 12.5
+        _tick(screen)
+        await pilot.pause()
+        assert not _indicator_shown(screen)
+        assert _heartbeat_lines(screen) == []
+
+        # The prompt's close restarts the window at 12.5 s, so 14.5 s is 2 s of silence.
+        screen.on_prompt_open(PromptOpen("rg", False))
+        clock.value = 14.5
+        _tick(screen)
+        await pilot.pause()
+        assert _indicator_shown(screen)
+
+        screen.on_row_finished(
+            RowFinished(RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done"))
+        )
+        await pilot.pause()
+        assert not _indicator_shown(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silence_heartbeats_follow_the_last_output_line() -> None:
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _start_and_wait_for_first_line(screen, pilot, started)
+        clock.value = 5.0
+        screen.on_install_log_line(InstallLogLine("rg", "rg line 2"))
+        await pilot.pause()
+        clock.value = 15.0
+        wall.value = _WALL_START + 15.0
+        _tick(screen)
+        await pilot.pause()
+        lines = _log_text(screen).splitlines()
+        assert lines[-1] == f"rg │ {_stamp(_WALL_START + 15)} rg still running (10s)"
+        assert lines.index("rg │ rg line 2") == len(lines) - 2
+        assert lines.count("── rg ──") == 1
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+async def test_silence_indicator_uses_ascii_frames_when_the_flag_is_set() -> None:
+    braille = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    for ascii_spinner, frames, separator in (
+        (True, ("-", "\\", "|", "/"), "-"),
+        (False, braille, "·"),
+    ):
+        clock = _FakeClock()
+        started = threading.Event()
+        release = threading.Event()
+        inputs = _inputs(
+            install=_blocking_install_emitting_one_line(started, release),
+            now=clock,
+            ascii_spinner=ascii_spinner,
+        )
+        app = _host(inputs)
+        seen: set[str] = set()
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(ExecuteScreen(["rg"], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await _start_and_wait_for_first_line(screen, pilot, started)
+            for _ in range(12):
+                clock.value += 1.0
+                _tick(screen)
+                await pilot.pause()
+                if clock.value < SILENCE_SECONDS:
+                    continue
+                text = _indicator_text(screen)
+                assert f" rg running {separator} " in text
+                seen.add(text.split(" ", 1)[0])
+            assert seen == set(frames)
+            release.set()
+            await _settle_execute(screen, pilot)
+
+
+async def test_silence_indicator_fits_80_columns_under_no_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    long_tool = _tool("r" * 40)
+    clock = _FakeClock()
+    wall = _FakeClock(_WALL_START)
+    started = threading.Event()
+    release = threading.Event()
+    inputs = _inputs(
+        tools=[long_tool],
+        install=_blocking_install_emitting_one_line(started, release),
+        now=clock,
+        wall_clock=wall,
+    )
+    app = _host(inputs, [long_tool])
+    async with app.run_test(size=(80, 20)) as pilot:
+        app.push_screen(ExecuteScreen([long_tool.id], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await pilot.press("enter")
+        for _ in range(400):
+            if started.is_set():
+                break
+            await pilot.pause()
+        assert started.is_set()
+        for _ in range(400):
+            if "line 1" in _log_text(screen):
+                break
+            await pilot.pause()
+        clock.value = SILENCE_SECONDS
+        _tick(screen)
+        await pilot.pause()
+        indicator = _indicator(screen)
+        assert indicator.display
+        assert indicator.size.height == 1
+        assert cell_len(_indicator_text(screen)) <= indicator.size.width
+        clock.value = 10.0
+        wall.value = _WALL_START + 10.0
+        _tick(screen)
+        await pilot.pause()
+        heartbeat = f"{_stamp(_WALL_START + 10)} {long_tool.id} still running (10s)"
+        assert sanitize_log_line(heartbeat) == heartbeat
+        assert "still running (10s)" in _log_text(screen)
+        release.set()
+        await _settle_execute(screen, pilot)
+
+
+def test_wants_ascii_spinner_follows_the_stream_encoding() -> None:
+    for encoding in ("utf-8", "UTF-8", "utf8"):
+        assert wants_ascii_spinner(encoding) is False
+    for encoding in ("ascii", "latin-1", "not-a-codec", None):
+        assert wants_ascii_spinner(encoding) is True
 
 
 async def test_below_threshold_check_rearms_the_timer() -> None:
@@ -2021,11 +2499,11 @@ async def test_stale_generation_transient_is_dropped_without_writing_anything() 
         assert isinstance(screen, ExecuteScreen)
         await _start_and_wait_for_first_line(screen, pilot, started)
         before = _log_text(screen)
-        stale = InstallLogLine("rg", _WAITING_OUTPUT, transient=True, generation=-1)
+        stale = InstallLogLine("rg", _HEARTBEAT_LINE, transient=True, generation=-1)
         screen.on_install_log_line(stale)
         await pilot.pause()
         assert _log_text(screen) == before
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2084,9 +2562,10 @@ async def test_second_indicator_appears_after_real_output_and_a_second_gap() -> 
             await pilot.pause()
 
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        assert _log_text(screen).count("still running; waiting for output") == 1
+        assert _indicator_shown(screen)
+        assert "still running" not in _log_text(screen)
 
         release1.set()
         for _ in range(400):
@@ -2099,15 +2578,16 @@ async def test_second_indicator_appears_after_real_output_and_a_second_gap() -> 
             await pilot.pause()
 
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        assert _log_text(screen).count("still running; waiting for output") == 2
+        assert _indicator_shown(screen)
+        assert "still running" not in _log_text(screen)
 
         release2.set()
         await _settle_execute(screen, pilot)
 
 
-async def test_indicator_occurs_exactly_once_across_three_checks_in_one_gap() -> None:
+async def test_indicator_refreshes_each_second_and_writes_no_heartbeat_before_ten_seconds() -> None:
     clock = _FakeClock()
     started = threading.Event()
     release = threading.Event()
@@ -2120,15 +2600,17 @@ async def test_indicator_occurs_exactly_once_across_three_checks_in_one_gap() ->
         assert isinstance(screen, ExecuteScreen)
         await _start_and_wait_for_first_line(screen, pilot, started)
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
         clock.value += 1.0
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
         clock.value += 1.0
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        assert _log_text(screen).count("still running; waiting for output") == 1
+        assert _indicator_shown(screen)
+        assert _indicator_text(screen).endswith("rg running · 4s")
+        assert "still running" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2202,12 +2684,11 @@ async def test_indicator_names_the_second_tool_when_the_first_has_finished() -> 
             await pilot.pause()
         assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        last_line = _log_text(screen).splitlines()[-1]
-        assert "fd" in last_line
-        assert "rg" not in last_line
-        assert "still running; waiting for output" in last_line
+        assert _indicator_shown(screen)
+        assert "fd running" in _indicator_text(screen)
+        assert "rg" not in _indicator_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2245,11 +2726,10 @@ async def test_stale_terminal_message_for_another_tool_does_not_clear_in_flight(
         assert screen._in_flight == "fd"  # pyright: ignore[reportPrivateUsage]
 
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        last_line = _log_text(screen).splitlines()[-1]
-        assert "fd" in last_line
-        assert "still running; waiting for output" in last_line
+        assert _indicator_shown(screen)
+        assert "fd running" in _indicator_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2257,30 +2737,31 @@ async def test_stale_terminal_message_for_another_tool_does_not_clear_in_flight(
 def _captured_transient(screen: ExecuteScreen, tool_id: str) -> InstallLogLine:
     """The transient the check would post right now, without posting it.
 
-    Reaches the state where the indicator WOULD be written (in flight, not
-    finished, no prompt open) by latching `_silence_noted` directly, then
-    returns the identical message `_check_output_silence` would construct at
-    the current generation -- the deterministic substitute for racing the
-    real timer against a real invalidation.
+    Reaches the state where a heartbeat WOULD be written (in flight, not
+    finished, no prompt open, one heartbeat counted this silence) by setting
+    `_silence_heartbeats` directly, then returns the identical message
+    `_check_output_silence` would construct at the current generation -- the
+    deterministic substitute for racing the real timer against a real
+    invalidation.
 
     `_transient_is_current` ANDs five conditions, so a caller must know which
     one its own invalidation flips, or a passing assertion proves nothing
     about the rest. What each caller below invalidates:
 
-    - `..._beaten_by_a_real_line_is_dropped`: `_note_output` clears
-      `_silence_noted` AND bumps `_silence_generation` -- two at once.
+    - `..._beaten_by_a_real_line_is_dropped`: `_note_output` resets
+      `_silence_heartbeats` AND bumps `_silence_generation` -- two at once.
     - `..._beaten_by_install_tool_finished_is_dropped`: `_clear_in_flight`
-      nulls `_in_flight`, clears `_silence_noted` and bumps the generation.
+      nulls `_in_flight`, resets the heartbeats and bumps the generation.
     - `..._beaten_by_run_finished_is_dropped`: `self.finished` becomes True,
       plus everything `_clear_in_flight` does.
     - `test_stale_generation_alone_drops_the_transient`: the ONLY caller that
       flips exactly one condition, and therefore the only one whose result is
       attributable to the generation token.
     """
-    screen._silence_noted = True  # pyright: ignore[reportPrivateUsage]
+    screen._silence_heartbeats = 1  # pyright: ignore[reportPrivateUsage]
     return InstallLogLine(
         tool_id,
-        _WAITING_OUTPUT,
+        _HEARTBEAT_LINE,
         transient=True,
         generation=screen._silence_generation,  # pyright: ignore[reportPrivateUsage]
     )
@@ -2293,7 +2774,7 @@ async def test_stale_generation_alone_drops_the_transient() -> None:
     four remaining conditions at the same time, so the comparison is never
     what makes the message stale -- deleting it from production leaves them
     all green. This one holds the in-flight tool, the prompt state, the
-    finished flag and `_silence_noted` identical between two messages and
+    finished flag and `_silence_heartbeats` identical between two messages and
     changes nothing but the token.
     """
     started = threading.Event()
@@ -2307,7 +2788,7 @@ async def test_stale_generation_alone_drops_the_transient() -> None:
         assert isinstance(screen, ExecuteScreen)
         await _start_and_wait_for_first_line(screen, pilot, started)
 
-        current = _captured_transient(screen, "rg")  # latches _silence_noted = True
+        current = _captured_transient(screen, "rg")  # counts one heartbeat this silence
         # The writable baseline: with the token matching, this message WOULD
         # be rendered. Without it the negative assertion below could not tell
         # the token apart from any other condition being false.
@@ -2315,7 +2796,7 @@ async def test_stale_generation_alone_drops_the_transient() -> None:
 
         assert current.generation is not None
         stale = InstallLogLine(
-            "rg", _WAITING_OUTPUT, transient=True, generation=current.generation - 1
+            "rg", _HEARTBEAT_LINE, transient=True, generation=current.generation - 1
         )
         assert not screen._transient_is_current(stale)  # pyright: ignore[reportPrivateUsage]
 
@@ -2323,7 +2804,7 @@ async def test_stale_generation_alone_drops_the_transient() -> None:
         screen.on_install_log_line(stale)
         await pilot.pause()
         assert _log_text(screen) == before
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
 
         release.set()
         await _settle_execute(screen, pilot)
@@ -2349,7 +2830,7 @@ async def test_stale_transient_beaten_by_a_real_line_is_dropped() -> None:
         screen.on_install_log_line(captured)
         await pilot.pause()
         assert _log_text(screen) == before
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2373,7 +2854,7 @@ async def test_stale_transient_beaten_by_install_tool_finished_is_dropped() -> N
         await pilot.pause()
         screen.on_install_log_line(captured)
         await pilot.pause()
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2395,7 +2876,7 @@ async def test_stale_transient_beaten_by_run_finished_is_dropped() -> None:
         await pilot.pause()
         screen.on_install_log_line(captured)
         await pilot.pause()
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2420,7 +2901,7 @@ async def test_run_finished_stops_and_drops_the_silence_timer() -> None:
         # which says nothing about a callback already in flight.
         screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
         # And it did not re-arm a timer that outlives the run.
         assert screen._silence_timer is None  # pyright: ignore[reportPrivateUsage]
 
@@ -2468,7 +2949,7 @@ async def test_silence_suppressed_while_prompt_open_and_restarts_after_close() -
         clock.value += 5.0
         screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
 
         await pilot.press("enter")  # retry
         for _ in range(400):
@@ -2485,12 +2966,12 @@ async def test_silence_suppressed_while_prompt_open_and_restarts_after_close() -
         # The window restarted at close, not on the stale pre-prompt timestamp.
         screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
 
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        assert "waiting for output" in _log_text(screen)
+        assert _indicator_shown(screen)
 
         release.set()
         await _settle_execute(screen, pilot)
@@ -2532,7 +3013,7 @@ async def test_install_emitting_nothing_never_shows_an_indicator() -> None:
         clock.value += 5.0
         screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
-        assert "waiting for output" not in _log_text(screen)
+        assert "still running" not in _log_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -2577,11 +3058,10 @@ async def test_install_driven_through_method_started_shows_the_indicator() -> No
         assert "-- trying brew --" in _log_text(screen)
 
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
-        last_line = _log_text(screen).splitlines()[-1]
-        assert "rg" in last_line
-        assert "still running; waiting for output" in last_line
+        assert _indicator_shown(screen)
+        assert "rg running" in _indicator_text(screen)
 
         release.set()
         await _settle_execute(screen, pilot)
@@ -2647,15 +3127,17 @@ async def test_failed_install_with_real_runner_shows_child_tail_and_indicator_on
         assert "boom two" in _log_text(screen)
 
         clock.value += SILENCE_SECONDS
-        screen._check_output_silence()  # pyright: ignore[reportPrivateUsage]
+        _tick(screen)
         await pilot.pause()
+        assert _indicator_shown(screen)
 
         release.set()
         await _settle_execute(screen, pilot)
         log = _log_text(screen)
         assert log.count("boom one") == 2  # once live, once in the report tail
         assert log.count("boom two") == 2
-        assert log.count("still running; waiting for output") == 1
+        # Two seconds of silence writes no heartbeat; the indicator alone is shown.
+        assert "still running" not in log
 
 
 # Prints one line WITHOUT -u and WITHOUT flush=True -- so on a pipe it sits in
@@ -4882,7 +5364,8 @@ async def test_update_marker_establishes_the_silence_indicator(tmp_path: Path) -
         assert started.is_set()
         assert "-- updating --" in _log_text(screen)
         await pilot.pause(SILENCE_SECONDS + 0.25)
-        assert "still running; waiting for output" in _log_text(screen)
+        assert _indicator_shown(screen)
+        assert "rg running" in _indicator_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 
@@ -4925,8 +5408,8 @@ async def test_stale_finished_update_row_does_not_clear_the_next_rows_indicator(
         screen.post_message(RowFinished(RowOutcome(PlanRow("rg", Disposition.UPDATE, ""), "done")))
         await pilot.pause()
         await pilot.pause(SILENCE_SECONDS + 0.25)
-        assert "-- still running; waiting for output --" in _log_text(screen)
-        assert "fd" in _log_text(screen).splitlines()[-1]
+        assert _indicator_shown(screen)
+        assert "fd running" in _indicator_text(screen)
         release.set()
         await _settle_execute(screen, pilot)
 

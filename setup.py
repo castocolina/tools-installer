@@ -42,7 +42,7 @@ from installer.cli import Options, parse_args
 from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import DaemonState
-from installer.execute_screen import ExecuteInputs
+from installer.execute_screen import ExecuteInputs, wants_ascii_spinner
 from installer.guards import rewrite_outdated_ban_aliases, rewrite_outdated_npx
 from installer.install_ownership import run_probe
 from installer.locations import (
@@ -1192,6 +1192,7 @@ def _execute_inputs(
         )
         return buffer.getvalue()
 
+    # Textual draws to sys.__stderr__ (linux_driver.py): its encoding picks the spinner.
     return ExecuteInputs(
         catalog=tools,
         platform=platform,
@@ -1199,6 +1200,9 @@ def _execute_inputs(
         verify=verify,
         version_refresh=version_refresh,
         unattended=unattended,
+        ascii_spinner=wants_ascii_spinner(
+            sys.__stderr__.encoding if sys.__stderr__ is not None else None
+        ),
     )
 
 
