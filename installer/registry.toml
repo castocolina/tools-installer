@@ -1522,6 +1522,7 @@ desc = "Anthropic coding agent for the user; complements Codex and needs clear i
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
 # own README).
 recommends = ["codegraph", "graphify"]
+post_install = ["apply_agent_tuning"]
 [[tool.method]]
 kind = "script"
 url = "https://claude.ai/install.sh"

@@ -6489,3 +6489,67 @@ def test_macos_zsh_removal_leaves_the_desktop_shell_file(
     assert result.removed == ("zsh",)
     assert "desktop-shell" not in result.swept
     assert conf.exists()
+
+
+def test_headless_yes_install_of_claude_writes_its_tuning_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 23.2 tracer: registry, wizard, session, engine, post_install, ledger and report."""
+    import json
+
+    import installer.engine as engine
+    from installer import receipts
+    from installer.agent_settings import setting_keys
+    from installer.model import load_tools
+
+    def not_installed(_tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "is_installed", not_installed)
+    scratch_path = tmp_path / "path-sandbox"
+    scratch_path.mkdir()
+    monkeypatch.setenv("PATH", str(scratch_path))
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    claude = next(tool for tool in load_tools(registry) if tool.id == "claude")
+    prompter = FakePrompter(confirm=True)
+    console, buf = _console()
+    argv: list[list[str]] = []
+
+    outcomes = run_wizard(
+        [claude],
+        prompter,
+        console,
+        Options(all=True, categories=(), yes=True),
+        runner=argv.append,
+        resolve_tag=_resolve_tag,
+        install=engine.install_tool,
+        refresh=presence_service([claude]),
+        updates=ScriptedUpdates({}),
+    )
+
+    assert isinstance(outcomes, list) and outcomes[0].result == "done"
+    assert len(argv) == 1
+    settings = Path.home() / ".claude" / "settings.json"
+    assert json.loads(settings.read_text(encoding="utf-8")) == {
+        "permissions": {"defaultMode": "bypassPermissions"},
+        "skipDangerousModePermissionPrompt": True,
+        "attribution": {"commit": "", "pr": ""},
+    }
+    ledger = receipts.read_ledger("claude")
+    assert ledger is not None
+    assert [(entry.setting, entry.key_path) for entry in ledger.entries] == [
+        ("auto-approve", ("permissions", "defaultMode")),
+        ("auto-approve", ("skipDangerousModePermissionPrompt",)),
+        ("no-attribution", ("attribution", "commit")),
+        ("no-attribution", ("attribution", "pr")),
+    ]
+    output = buf.getvalue()
+    assert "Agent and editor settings" in output
+    assert "claude — ~/.claude/settings.json:" in output
+    expected = [
+        f"  wrote {'.'.join(key.path)}"
+        for group in ("auto-approve", "no-attribution")
+        for key in setting_keys("claude", group, "fedora")
+    ]
+    assert [line for line in output.splitlines() if line.startswith("  wrote ")] == expected
+    assert prompter.questions == []

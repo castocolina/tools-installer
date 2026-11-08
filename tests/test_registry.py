@@ -1248,7 +1248,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     six shell-init tools (D-11: the keyed, default-no source_shell_init).
     """
     declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
-    assert declarers == {"oh-my-zsh", "vscode", *SHELL_INIT_TOOLS}
+    assert declarers == {"oh-my-zsh", "vscode", "claude", *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
     assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
     assert oh_my_zsh.requires == ("zsh", "git")

@@ -17,6 +17,7 @@ from installer.post_install import (
     POST_INSTALL_HOOKS,
     SENSITIVE_PROMPTS,
     ConfirmSensitiveAction,
+    PostInstallOutput,
     SensitivePrompt,
     run_post_install,
     sensitive_prompt,
@@ -96,10 +97,27 @@ def test_run_post_install_returns_chsh_instructions_when_confirmed(
         asked.append((tool_id, action))
         return True
 
-    lines = run_post_install(_tool(post_install=("set_login_shell",)), _mutable(), confirm)
+    lines = run_post_install(_tool(post_install=("set_login_shell",)), _mutable(), confirm).lines
     assert lines
     assert any("chsh -s" in line for line in lines)
     assert asked == [("oh-my-zsh", "set_login_shell")]
+
+
+def test_run_post_install_returns_a_post_install_output() -> None:
+    output = run_post_install(_tool(post_install=("show_lean_tips",)), _mutable())
+    assert isinstance(output, PostInstallOutput)
+    assert output.lines and output.lines[0].startswith("Lean tip")
+    assert output.settings == ()
+
+
+def test_apply_agent_tuning_contributes_a_file_result_per_group_and_no_line() -> None:
+    from installer.agent_settings import TUNING_GROUPS
+
+    claude = replace(_tool(post_install=("apply_agent_tuning",)), id="claude")
+    output = run_post_install(claude, _mutable())
+    assert output.lines == ()
+    assert [result.setting for result in output.settings] == list(TUNING_GROUPS["claude"])
+    assert all(result.agent == "claude" for result in output.settings)
 
 
 def test_run_post_install_skips_when_no_actions_declared() -> None:
@@ -109,7 +127,7 @@ def test_run_post_install_skips_when_no_actions_declared() -> None:
         asked.append((tool_id, action))
         return True
 
-    assert run_post_install(_tool(), _mutable(), confirm) == ()
+    assert run_post_install(_tool(), _mutable(), confirm).lines == ()
     assert asked == []
 
 
@@ -118,7 +136,7 @@ def test_missing_chsh_explains_without_asking_or_offering_a_command(
 ) -> None:
     _stub_chsh(monkeypatch, present=False)
     asked, confirm = _record()
-    lines = run_post_install(_login_shell_tool(), _immutable(), confirm)
+    lines = run_post_install(_login_shell_tool(), _immutable(), confirm).lines
     assert lines
     assert not any("chsh -s" in line for line in lines)
     assert any("removed chsh" in line for line in lines)
@@ -131,7 +149,7 @@ def test_missing_chsh_explains_on_mutable_hosts_too(
 ) -> None:
     _stub_chsh(monkeypatch, present=False)
     asked, confirm = _record()
-    lines = run_post_install(_login_shell_tool(), _mutable(), confirm)
+    lines = run_post_install(_login_shell_tool(), _mutable(), confirm).lines
     assert lines
     assert asked == []
     assert not any("chsh -s" in line for line in lines)
@@ -141,7 +159,7 @@ def test_missing_chsh_explains_without_a_confirm_callback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=False)
-    lines = run_post_install(_login_shell_tool(), _immutable(), None)
+    lines = run_post_install(_login_shell_tool(), _immutable(), None).lines
     assert lines
     assert not any("chsh -s" in line for line in lines)
 
@@ -151,7 +169,7 @@ def test_immutable_host_with_chsh_still_uses_the_confirm_gate(
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
     asked, confirm = _record()
-    lines = run_post_install(_login_shell_tool(), _immutable(), confirm)
+    lines = run_post_install(_login_shell_tool(), _immutable(), confirm).lines
     assert any("chsh -s" in line for line in lines)
     assert asked == [("oh-my-zsh", "set_login_shell")]
 
@@ -161,7 +179,7 @@ def test_missing_chsh_cannot_be_silenced_via_default_enabled(
 ) -> None:
     _stub_chsh(monkeypatch, present=False)
     asked, confirm = _record()
-    lines = run_post_install(_login_shell_tool(default_enabled=True), _immutable(), confirm)
+    lines = run_post_install(_login_shell_tool(default_enabled=True), _immutable(), confirm).lines
     assert lines
     assert asked == []
 
@@ -170,7 +188,7 @@ def test_login_shell_skips_when_confirm_callback_is_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_chsh(monkeypatch, present=True)
-    assert run_post_install(_login_shell_tool(), _mutable(), None) == ()
+    assert run_post_install(_login_shell_tool(), _mutable(), None).lines == ()
 
 
 def test_login_shell_skips_when_confirm_returns_false(
@@ -183,13 +201,16 @@ def test_login_shell_skips_when_confirm_returns_false(
         asked.append((tool_id, action))
         return False
 
-    assert run_post_install(_login_shell_tool(), _mutable(), refuse) == ()
+    assert run_post_install(_login_shell_tool(), _mutable(), refuse).lines == ()
     assert asked == [("oh-my-zsh", "set_login_shell")]
 
 
 def test_unknown_post_install_action_name_is_inert() -> None:
     asked, confirm = _record()
-    assert run_post_install(_tool(post_install=("not-a-real-action",)), _mutable(), confirm) == ()
+    assert (
+        run_post_install(_tool(post_install=("not-a-real-action",)), _mutable(), confirm).lines
+        == ()
+    )
     assert asked == []
 
 
@@ -236,7 +257,7 @@ def test_starship_yes_turns_shell_init_on_and_empties_the_theme() -> None:
         _shell_init_tool("starship"),
         _mutable(),
         lambda tool_id, action: action == "source_shell_init",
-    )
+    ).lines
     assert lines == ("Shell init on: open a new terminal to use it.",)
     assert "# >>> tools-installer tweak:starship >>>" in (home / ".myshellrc").read_text()
     assert "starship init zsh" in (home / ".myshellrc").read_text()
@@ -274,8 +295,10 @@ def test_shell_init_is_never_turned_on_without_a_yes() -> None:
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_ZSHRC)
     before = zshrc.read_bytes()
-    assert run_post_install(_shell_init_tool("starship"), _mutable(), None) == ()
-    assert run_post_install(_shell_init_tool("starship"), _mutable(), lambda _t, _a: False) == ()
+    assert run_post_install(_shell_init_tool("starship"), _mutable(), None).lines == ()
+    assert (
+        run_post_install(_shell_init_tool("starship"), _mutable(), lambda _t, _a: False).lines == ()
+    )
     assert not (home / ".myshellrc").exists()
     assert zshrc.read_bytes() == before
 
@@ -313,10 +336,10 @@ def test_every_sensitive_action_has_a_prompt() -> None:
 def test_each_shell_init_tool_follows_yes_and_no(tool: str) -> None:
     home = Path.home()
     marker = f"# >>> tools-installer tweak:{tool} >>>"
-    no = run_post_install(_shell_init_tool(tool), _mutable(), lambda _t, _a: False)
+    no = run_post_install(_shell_init_tool(tool), _mutable(), lambda _t, _a: False).lines
     assert no == ()
     assert not (home / ".myshellrc").exists()
-    yes = run_post_install(_shell_init_tool(tool), _mutable(), _yes)
+    yes = run_post_install(_shell_init_tool(tool), _mutable(), _yes).lines
     assert yes == ("Shell init on: open a new terminal to use it.",)
     run_post_install(_shell_init_tool(tool), _mutable(), _yes)
     assert (home / ".myshellrc").read_text().count(marker) == 1
@@ -362,7 +385,7 @@ def test_omz_install_adds_robbyrussell_and_names_the_theme_commands() -> None:
     (home / ".oh-my-zsh").mkdir()
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_THEMELESS)
-    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines
     assert lines == (
         "Theme: robbyrussell (added because ~/.zshrc had no ZSH_THEME).",
         *_OMZ_HANDOFF,
@@ -377,7 +400,7 @@ def test_omz_install_keeps_a_user_theme() -> None:
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_THEMELESS.replace("plugins", 'ZSH_THEME="agnoster"\nplugins'))
     before = zshrc.read_bytes()
-    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines
     assert lines[0] == "Theme: agnoster (yours; left as is)."
     assert zshrc.read_bytes() == before
 
@@ -388,7 +411,7 @@ def test_a_user_theme_name_is_sanitized_in_the_handoff() -> None:
     (home / ".zshrc").write_text(
         _OMZ_THEMELESS.replace("plugins", 'ZSH_THEME="ag\x1b[31mnoster"\nplugins')
     )
-    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines
     assert "\x1b" not in lines[0]
     assert lines[0].startswith("Theme: ag")
 
@@ -399,17 +422,19 @@ def test_omz_install_with_starship_on_writes_an_empty_theme() -> None:
     (home / ".myshellrc").write_text(_STARSHIP_BLOCK)
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_THEMELESS)
-    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines
     assert lines[0] == 'Theme: none (ZSH_THEME=""), so starship draws the prompt.'
     assert 'ZSH_THEME=""' in zshrc.read_text()
 
 
 def test_omz_install_without_oh_my_zsh_hands_off_nothing() -> None:
-    assert run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None) == ()
+    assert (
+        run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines == ()
+    )
 
 
 def test_vscode_install_returns_the_lean_tips() -> None:
-    lines = run_post_install(_action_tool("vscode", "show_lean_tips"), _mutable(), None)
+    lines = run_post_install(_action_tool("vscode", "show_lean_tips"), _mutable(), None).lines
     assert lines == (
         "Lean tip: skip resident type-checkers (Pylance held 358 MB here).",
         "Run the project's pre-commit as an on-demand task, not on every save.",
@@ -419,7 +444,7 @@ def test_vscode_install_returns_the_lean_tips() -> None:
 
 def test_the_chsh_absent_text_names_the_sync_that_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_chsh(monkeypatch, present=False)
-    lines = run_post_install(_login_shell_tool(), _immutable(), None)
+    lines = run_post_install(_login_shell_tool(), _immutable(), None).lines
     assert lines[2] == "This installer points Konsole, kitty and WezTerm at zsh when this run ends."
     stale = "A later installer step will apply that terminal-emulator configuration automatically."
     installer_dir = Path(__file__).resolve().parent.parent / "installer"
@@ -454,5 +479,5 @@ def test_reapplying_the_installers_own_theme_is_not_reported_as_yours() -> None:
     (Path.home() / ".oh-my-zsh").mkdir()
     zshrc.write_text(_OMZ_ZSHRC)
     run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
-    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
+    lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines
     assert "yours" not in lines[0]

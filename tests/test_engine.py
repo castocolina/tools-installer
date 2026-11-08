@@ -9,7 +9,7 @@ import pytest
 
 import installer.engine as engine
 import installer.postinstall as postinstall
-from installer import executors, receipts
+from installer import executors, post_install, receipts
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
@@ -1231,6 +1231,60 @@ def test_a_present_tool_whose_installer_refuses_existing_is_not_re_run_on_repair
     assert calls == []
     assert receipt_writes == []
     assert outcome.postinstall_warning is None
+
+
+def _claude_tuning_tool(method: Method) -> Tool:
+    return _tool(method, post_install=("apply_agent_tuning",), tool_id="claude")
+
+
+def test_install_puts_the_tuning_file_results_on_the_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_not_installed(monkeypatch)
+    outcome = install_tool(
+        _claude_tuning_tool(Method(kind="brew", params={"formula": "x"})),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert [result.setting for result in outcome.settings] == ["auto-approve", "no-attribution"]
+    assert outcome.post_install_handoff == ()
+
+
+def test_the_refuses_existing_reinstall_puts_the_tuning_file_results_on_the_outcome() -> None:
+    outcome = install_tool(
+        _claude_tuning_tool(
+            Method(
+                kind="script", params={"url": "https://example.test/i.sh", "refuses_existing": True}
+            )
+        ),
+        _platform(),
+        runner=lambda _cmd: None,
+        repair=True,
+        present=lambda _tool: True,
+    )
+    assert outcome.status is InstallStatus.MANUAL_REQUIRED
+    assert [result.setting for result in outcome.settings] == ["auto-approve", "no-attribution"]
+
+
+def test_a_crashing_post_install_dispatch_leaves_no_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def boom(_tool: Tool, _platform: Platform, _confirm: object) -> tuple[str, ...]:
+        raise RuntimeError("tuning exploded")
+
+    monkeypatch.setitem(post_install.POST_INSTALL_HOOKS, "apply_agent_tuning", boom)
+    outcome = install_tool(
+        _claude_tuning_tool(Method(kind="brew", params={"formula": "x"})),
+        _macos_with_brew(),
+        runner=lambda _cmd: None,
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.settings == ()
+    assert outcome.postinstall_warning is not None
+    assert "tuning exploded" in outcome.postinstall_warning
 
 
 def test_a_refusing_method_still_runs_when_the_tool_is_absent() -> None:

@@ -549,6 +549,17 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
 }
 
 
+# The groups an install writes per tool: explicit because `vscode-lean` is built by
+# `_vscode_lean`, not stored in `_KEYS`.
+TUNING_GROUPS: Final[dict[str, tuple[str, ...]]] = {
+    "claude": ("auto-approve", "no-attribution"),
+    "codex": ("auto-approve",),
+    "opencode": ("auto-approve",),
+    "cursor-agent": ("auto-approve", "no-attribution"),
+    "vscode": ("vscode-lean", "vscode-ai-off", "vscode-ext-updates-off"),
+}
+
+
 def _vscode_lean(platform_os: str) -> tuple[SettingKey, ...]:
     """The lean list plus this OS's terminal profile; update.mode is written on macOS only."""
     macos = platform_os == "macos"
