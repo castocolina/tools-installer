@@ -469,12 +469,12 @@ Plans:
   6. The catalog installs, tunes and removes GitHub Copilot CLI (`copilot`) on macOS and Linux (container e2e), and a hand-installed copy reads present with its owner.
   7. With pnpm installed by an earlier run and absent from the session PATH, installing mmdc in the same terminal succeeds; a truly absent pnpm keeps today's message.
 
-**Plans**: 8 plans
+**Plans**: 2/8 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 23.2-01-PLAN.md — Agent tuning at install: claude tracer end to end, copilot settings surface with COPILOT_HOME, every agent and VS Code written and reverted (wave 1)
-- [ ] 23.2-02-PLAN.md — Silent-step indicator: live spinner under the log and a 10 s timestamped heartbeat (wave 1)
+- [x] 23.2-01-PLAN.md — Agent tuning at install: claude tracer end to end, copilot settings surface with COPILOT_HOME, every agent and VS Code written and reverted (wave 1)
+- [x] 23.2-02-PLAN.md — Silent-step indicator: live spinner under the log and a 10 s timestamped heartbeat (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 23.2-03-PLAN.md — Pending `≈ apply install tuning` step and RECONFIGURE through the one writer (wave 2)
@@ -587,7 +587,7 @@ Plans:
 | 22. Method lifecycle contract | 13/13 | In Progress | - |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
-| 23.2 Install-time tuning | 0/8 | Planned | - |
+| 23.2 Install-time tuning | 2/8 | In Progress | - |
 | 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 24.2 Schedules view | 0/TBD | Not started | - |
