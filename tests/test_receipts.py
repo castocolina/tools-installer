@@ -14,7 +14,7 @@ from typing import Literal
 import pytest
 
 from installer import atomic, model, receipts
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 from installer.receipts import (
     Receipt,
     ReceiptArtifact,
@@ -1728,3 +1728,31 @@ def test_a_vanished_receipt_is_skipped_silently(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(receipts, "read", vanish)
     assert receipts.scan_retired(set()) == receipts.RetiredScan()
+
+
+def test_copilot_self_update_is_directory_drift_not_broken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backstop: copilot self-updates in place; that loses the removal proof, never health."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    copilot = next(tool for tool in load_tools(registry) if tool.id == "copilot")
+    method = next(m for m in copilot.methods if m.kind == "github_release")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    opt = tmp_path / ".local" / "opt" / "copilot"
+    opt.mkdir(parents=True)
+    binary = opt / "copilot"
+    binary.write_bytes(b"1.0.107")
+    (bin_dir / "copilot").symlink_to(binary)
+    receipt = receipts.record(copilot, method, package=None, smoke="ok", default_bin_dir=bin_dir)
+    assert receipt is not None
+    assert [(a.path, a.type) for a in receipt.artifacts] == [
+        (opt, "dir"),
+        (bin_dir / "copilot", "link"),
+    ]
+    assert receipts.drifted(receipt) == ()
+
+    binary.write_bytes(b"1.0.108 after copilot update")
+    assert receipts.broken_drift(receipt, rehash=True) == ()
+    assert [a.path for a in receipts.drifted(receipt)] == [opt]

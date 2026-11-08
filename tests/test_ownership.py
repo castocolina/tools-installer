@@ -41,8 +41,11 @@ from installer.ownership import (
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.run import CommandError
+from installer.session import RUNNABLE, Disposition, build_plan
+from installer.status import is_installed
 from installer.uninstall import plan_uninstall
 from installer.update import UpdateTarget, perform_update
+from tests.state_doubles import offline_service
 
 _MAC = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 _BREW_PREFIX = Path("/opt/homebrew")
@@ -3063,3 +3066,60 @@ def test_manager_listing_asks_only_the_one_manager_a_kind_names() -> None:
     assert manager_listing("node", query=query, pnpm_packages=lambda: ("a",)) == {"a"}
     assert manager_listing("node", query=query, pnpm_packages=lambda: None) is None
     assert manager_listing("dnf", query=query, pnpm_packages=lambda: ("a",)) is None
+
+
+# -- 23.2-04: a hand-installed GitHub Copilot CLI cask reads present with its owner ---
+
+
+def _copilot() -> Tool:
+    return next(tool for tool in load_tools(_REGISTRY) if tool.id == "copilot")
+
+
+def _hand_installed_copilot(tmp_path: Path) -> tuple[Path, Path]:
+    """A cask-shaped `copilot` under a linuxbrew-shaped prefix; returns (prefix, binary)."""
+    prefix = tmp_path / "linuxbrew"
+    binary = prefix / "bin" / "copilot"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    return prefix, binary
+
+
+def test_copilot_hand_installed_cask_reads_present_with_its_owner(tmp_path: Path) -> None:
+    prefix, binary = _hand_installed_copilot(tmp_path)
+    result = _resolve(
+        _copilot(),
+        inventory=_readable(brew_casks={"copilot-cli": "1.0.103"}, brew_prefix=prefix),
+        which=str(binary),
+        platform=_LINUX,
+    )
+    assert is_installed(_copilot(), which=lambda _cmd: str(binary))
+    assert (result.owner, result.package, result.confidence) == ("cask", "copilot-cli", "direct")
+
+
+def test_copilot_present_cask_is_a_skip_naming_the_owner(tmp_path: Path) -> None:
+    prefix, binary = _hand_installed_copilot(tmp_path)
+    copilot = _copilot()
+    inventory = _readable(brew_casks={"copilot-cli": "1.0.103"}, brew_prefix=prefix)
+
+    def read_inventory(**_kwargs: object) -> ManagerInventory:
+        return inventory
+
+    service = offline_service(
+        tmp_path / "cache.json",
+        home=tmp_path,
+        resolve_tag=lambda repo: "v1",
+        probe_output=lambda _argv: None,
+        platform=_LINUX,
+        which=lambda _cmd: str(binary),
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=read_inventory,
+        present=lambda _tool: True,
+    )
+    service.refresh([copilot])
+    rows = build_plan(["copilot"], [copilot], service.state_of, _LINUX, reinstall=frozenset())
+    assert [(row.tool_id, row.disposition) for row in rows] == [("copilot", Disposition.SKIP)]
+    assert rows[0].ownership is not None
+    assert rows[0].ownership.owner == "cask"
+    assert "cask" in rows[0].reason.lower(), rows[0].reason
+    assert rows[0].disposition not in RUNNABLE
