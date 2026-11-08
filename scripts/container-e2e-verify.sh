@@ -813,90 +813,121 @@ hook_probe_after() {
   printf 'TRACER_HOOKS_UNREGISTERED_OK count=%s\n' "$count"
 }
 
-# Before --uninstall --yes: snapshot each auto-approve key's current value (null when absent) for
-# claude and codex into the workspace, then write the keys through the installer's apply_setting.
-# Prints TRACER_SETTINGS_WRITE_OK wrote=N, or TRACER_SETTINGS_WRITE_FAILED per refusal.
-settings_probe_write() {
-  local out line wrote=0 failed=0 agent detail workspace
+# After the full install (rerun step): the install itself wrote each agent's tuning, so this probe
+# writes nothing. For every agent in the installer's TUNING_GROUPS whose registry command is on PATH,
+# each key of each group must hold the installer's value and be recorded in the agent's config-write
+# ledger. claude, codex and copilot must be among those agents, and `copilot --version` must exit 0.
+# The agents it checked go to $TESTER_WORKSPACE/.e2e-tuned-agents.json for settings_probe_revert:
+# after the uninstall their commands are off PATH, so the revert probe never looks them up again.
+# Prints TRACER_SETTINGS_INSTALLED_OK agents=N keys=N and TRACER_COPILOT_VERSION_OK, or one
+# TRACER_SETTINGS_INSTALLED_MISSING / TRACER_SETTINGS_AGENT_MISSING / TRACER_COPILOT_VERSION_FAILED
+# line per finding.
+settings_probe_installed() {
+  local out line failed=0 keys="" checked=" " agents=0 agent workspace
   printf -v workspace '%q' "$TESTER_WORKSPACE"
   out="$(exec_tester "set -euo pipefail
 eval \"\$(${BREW_BIN} shellenv)\"
 cd ${workspace}
 uv run --isolated --no-dev python -c '
-import json
+import json, os, shutil
 from pathlib import Path
 from installer import agent_settings as s
+from installer import model, receipts
 home = Path.home()
-def now(doc, key):
-    value = s.lookup(doc, key.path)
-    return None if value is s.ABSENT else value
-snap = {}
-for agent in (\"claude\", \"codex\"):
-    path = s.settings_file(agent, home=home, platform_os=\"linux\")
+search = os.pathsep.join([str(home / \".local/bin\"), str(home / \".opencode/bin\"), os.environ[\"PATH\"]])
+tools = {t.id: t for t in model.load_tools(Path(model.__file__).with_name(\"registry.toml\"))}
+checked = []
+count = 0
+for agent, groups in s.TUNING_GROUPS.items():
+    if shutil.which(tools[agent].cmd, path=search) is None:
+        continue
+    checked.append(agent)
+    path = s.settings_file(agent, home=home, platform_os=\"linux\", environ=os.environ)
     text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
     doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
-    snap[agent] = {\".\".join(k.path): now(doc, k) for k in s.setting_keys(agent, \"auto-approve\", \"linux\")}
-Path(\".e2e-settings-before.json\").write_text(json.dumps(snap), encoding=\"utf-8\")
-for agent in (\"claude\", \"codex\"):
-    result = s.apply_setting(agent, \"auto-approve\", home=home, platform_os=\"linux\")
-    if result.refused:
-        print(\"E\", agent, result.refused)
-    for key in result.keys:
-        if key.kind in (\"wrote\", \"replaced_default\"):
-            print(\"W\", agent, key.key)
+    ledger = receipts.read_ledger(agent)
+    recorded = {(e.setting, e.key_path) for e in ledger.entries} if ledger else set()
+    for group in groups:
+        for key in s.setting_keys(agent, group, \"linux\"):
+            count += 1
+            holds = s.same_value(s.lookup(doc, key.path), key.value)
+            if not holds or (group, key.path) not in recorded:
+                print(\"M\", agent, \".\".join(key.path))
+Path(\".e2e-tuned-agents.json\").write_text(json.dumps(checked), encoding=\"utf-8\")
+for agent in checked:
+    print(\"A\", agent)
+print(\"K\", count)
 '
-")" || { printf 'TRACER_SETTINGS_WRITE_PROBE_FAILED\n'; return 1; }
+")" || { printf 'TRACER_SETTINGS_INSTALLED_PROBE_FAILED\n'; return 1; }
   while IFS= read -r line; do
     case "$line" in
-      "W "*) wrote=$((wrote + 1)) ;;
-      "E "*)
-        agent="${line#E }"
-        detail="${agent#* }"
-        agent="${agent%% *}"
-        printf 'TRACER_SETTINGS_WRITE_FAILED agent=%s detail=%s\n' "$agent" "$detail"
+      "A "*) checked+="${line#A } "; agents=$((agents + 1)) ;;
+      "M "*)
+        agent="${line#M }"
+        printf 'TRACER_SETTINGS_INSTALLED_MISSING agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
         failed=1
         ;;
+      "K "*) keys="${line#K }" ;;
     esac
   done <<<"$out"
-  [[ "$failed" -eq 0 ]] || return 1
-  printf 'TRACER_SETTINGS_WRITE_OK wrote=%s\n' "$wrote"
+  [[ -n "$keys" ]] || { printf 'TRACER_SETTINGS_INSTALLED_PROBE_FAILED\n'; return 1; }
+  for agent in claude codex copilot; do
+    if [[ "$checked" != *" $agent "* ]]; then
+      printf 'TRACER_SETTINGS_AGENT_MISSING agent=%s\n' "$agent"
+      failed=1
+    fi
+  done
+  [[ "$failed" -ne 0 ]] || printf 'TRACER_SETTINGS_INSTALLED_OK agents=%s keys=%s\n' "$agents" "$keys"
+  if [[ "$checked" == *" copilot "* ]]; then
+    if exec_tester "\"\$HOME/.local/bin/copilot\" --version >/dev/null"; then
+      printf 'TRACER_COPILOT_VERSION_OK\n'
+    else
+      printf 'TRACER_COPILOT_VERSION_FAILED\n'
+      failed=1
+    fi
+  fi
+  [[ "$failed" -eq 0 ]]
 }
 
-# After --uninstall --yes: every key settings_probe_write snapshotted must hold its pre-write
-# value again, and no config ledger may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N, or the
-# per-key TRACER_SETTINGS_REVERT_DIFF and per-agent TRACER_SETTINGS_LEDGER_LEFT lines.
+# After --uninstall --yes: for the agents settings_probe_installed persisted (never a fresh PATH
+# lookup: the uninstall just removed copilot's link), every tuning key must be gone from the agent's
+# settings file (the container starts with none; a key the revert restored to the CLI's own default
+# counts as gone), no config-write ledger may remain, and neither
+# copilot's ~/.local/bin link nor its opt dir may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N,
+# or one TRACER_SETTINGS_REVERT_DIFF / TRACER_SETTINGS_LEDGER_LEFT / TRACER_COPILOT_LEFT line per
+# finding; a missing or unreadable agent list prints TRACER_SETTINGS_REVERT_PROBE_FAILED.
 settings_probe_revert() {
-  local out line failed=0 keys="" workspace
+  local out line failed=0 keys="" workspace agent
   printf -v workspace '%q' "$TESTER_WORKSPACE"
   out="$(exec_tester "set -euo pipefail
 eval \"\$(${BREW_BIN} shellenv)\"
 cd ${workspace}
 uv run --isolated --no-dev python -c '
-import json
+import json, os
 from pathlib import Path
 from installer import agent_settings as s
 from installer import receipts
 home = Path.home()
-snap = json.loads(Path(\".e2e-settings-before.json\").read_text(encoding=\"utf-8\"))
-problems = []
+agents = json.loads(Path(\".e2e-tuned-agents.json\").read_text(encoding=\"utf-8\"))
 count = 0
-for agent in (\"claude\", \"codex\"):
-    path = s.settings_file(agent, home=home, platform_os=\"linux\")
+for agent in agents:
+    path = s.settings_file(agent, home=home, platform_os=\"linux\", environ=os.environ)
     text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
     doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
-    for key in s.setting_keys(agent, \"auto-approve\", \"linux\"):
-        name = \".\".join(key.path)
-        value = s.lookup(doc, key.path)
-        value = None if value is s.ABSENT else value
-        count += 1
-        if not s.same_value(value, snap[agent][name]):
-            problems.append(\"D \" + agent + \" \" + name)
+    for group in s.TUNING_GROUPS[agent]:
+        for key in s.setting_keys(agent, group, \"linux\"):
+            count += 1
+            now = s.lookup(doc, key.path)
+            restored = key.cli_default is not s.ABSENT and s.same_value(now, key.cli_default)
+            if now is not s.ABSENT and not restored:
+                print(\"D\", agent, \".\".join(key.path))
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
-        problems.append(\"L \" + agent)
-for problem in problems:
-    print(problem)
-if not problems:
-    print(\"K\", count)
+        print(\"L\", agent)
+if \"copilot\" in agents:
+    for name in (\".local/bin/copilot\", \".local/opt/copilot\"):
+        if os.path.lexists(home / name):
+            print(\"C\", name)
+print(\"K\", count)
 '
 ")" || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
   while IFS= read -r line; do
@@ -907,6 +938,7 @@ if not problems:
         failed=1
         ;;
       "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
+      "C "*) printf 'TRACER_COPILOT_LEFT path=%s\n' "${line#C }"; failed=1 ;;
       "K "*) keys="${line#K }" ;;
     esac
   done <<<"$out"
@@ -971,7 +1003,7 @@ cmd_pass2() {
   if ! hook_probe_before >> "$log"; then
     return 1
   fi
-  if ! settings_probe_write >> "$log"; then
+  if ! settings_probe_installed >> "$log"; then
     return 1
   fi
 

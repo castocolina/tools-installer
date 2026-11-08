@@ -5,6 +5,7 @@ source it and never start a container. They read the committed text and run
 the extracted functions in bash with fixture transcripts and a scratch HOME.
 """
 
+import json
 import re
 import shlex
 import shutil
@@ -1228,98 +1229,210 @@ def test_hook_probe_before_reads_the_real_codegraph_receipt(
     assert result.stdout.splitlines() == ["TRACER_HOOKS_RECORDED hosts=claude files=1"]
 
 
-def test_settings_probe_write_fails_on_a_refusal(tmp_path: Path) -> None:
-    """One refusal fails the write probe; every written key passes it."""
-    scratch = tmp_path / "home"
-    scratch.mkdir()
+_REQUIRED_TUNED = ("claude", "codex", "copilot")
+_VERSION_LINE = "GitHub Copilot CLI 1.0.107."
 
-    def probe(*lines: str) -> subprocess.CompletedProcess[str]:
-        stub = _assign("STUB_OUTPUT", "\n".join(lines))
-        override = 'exec_tester() { printf "%s\\n" "$STUB_OUTPUT"; }'
-        script = "\n".join(
-            [_harness("settings_probe_write"), stub, override, "settings_probe_write"]
-        )
-        return _run(script, scratch)
 
-    refused = probe("W claude permissions.defaultMode", "E codex not valid TOML (line 2)")
-    assert refused.returncode != 0
-    assert refused.stdout.splitlines() == [
-        "TRACER_SETTINGS_WRITE_FAILED agent=codex detail=not valid TOML (line 2)"
-    ]
-    wrote = probe(
-        "W claude permissions.defaultMode",
-        "W claude skipDangerousModePermissionPrompt",
-        "W codex approval_policy",
+def _tuned_keys(agents: Sequence[str]) -> int:
+    """How many keys the installer writes for these agents, from its own tables."""
+    from installer import agent_settings
+
+    return sum(
+        len(agent_settings.setting_keys(agent, group, "linux"))
+        for agent in agents
+        for group in agent_settings.TUNING_GROUPS[agent]
     )
-    assert wrote.returncode == 0, wrote.stderr
-    assert wrote.stdout.splitlines() == ["TRACER_SETTINGS_WRITE_OK wrote=3"]
 
 
-def test_settings_probe_revert_flags_a_key_or_ledger_left(tmp_path: Path) -> None:
-    """A key that differs from its snapshot, or a ledger left behind, fails the revert probe."""
-    scratch = tmp_path / "home"
-    scratch.mkdir()
+class _TunedHome:
+    """A scratch HOME and workspace whose agent settings the installer's own writer filled."""
 
-    def probe(*lines: str) -> subprocess.CompletedProcess[str]:
-        stub = _assign("STUB_OUTPUT", "\n".join(lines))
-        override = 'exec_tester() { printf "%s\\n" "$STUB_OUTPUT"; }'
-        script = "\n".join(
-            [_harness("settings_probe_revert"), stub, override, "settings_probe_revert"]
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.scratch = tmp_path / "home"
+        self.workspace = tmp_path / "workspace"
+        self.path = tmp_path / "path"
+        for directory in (self.scratch, self.workspace, self.path):
+            directory.mkdir(parents=True)
+        (self.path / "bash").symlink_to(_bash())
+        monkeypatch.setattr(Path, "home", lambda: self.scratch)
+        self.script = "\n".join(
+            [
+                f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+                _harness("settings_probe_installed", "settings_probe_revert"),
+                _assign("TESTER_WORKSPACE", str(self.workspace)),
+                _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+                _uv_stub(),
+            ]
         )
-        return _run(script, scratch)
 
-    diff = probe("D claude skipDangerousModePermissionPrompt")
-    assert diff.returncode != 0
-    assert diff.stdout.splitlines() == [
-        "TRACER_SETTINGS_REVERT_DIFF agent=claude key=skipDangerousModePermissionPrompt"
+    def plant(self, command: str, *, version_exit: int = 0) -> Path:
+        """A fake agent command under ~/.local/bin; copilot's answers --version."""
+        stub = self.scratch / ".local" / "bin" / command
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text(
+            f'#!/bin/sh\necho "{_VERSION_LINE}"\nexit {version_exit}\n', encoding="utf-8"
+        )
+        stub.chmod(0o755)
+        return stub
+
+    def tune(self, agent: str, groups: Sequence[str] | None = None) -> None:
+        from installer import agent_settings
+
+        for group in groups or agent_settings.TUNING_GROUPS[agent]:
+            result = agent_settings.apply_setting(
+                agent, group, home=self.scratch, platform_os="linux"
+            )
+            assert result.refused is None
+
+    def run(self, function: str) -> subprocess.CompletedProcess[str]:
+        return _run(f"{self.script}\n{function}\n", self.scratch, path=str(self.path))
+
+
+def _tuned_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agents: Sequence[str] = _REQUIRED_TUNED,
+    *,
+    version_exit: int = 0,
+) -> _TunedHome:
+    home = _TunedHome(tmp_path, monkeypatch)
+    for agent in agents:
+        home.plant(agent, version_exit=version_exit)
+        home.tune(agent)
+    return home
+
+
+def test_settings_probe_installed_passes_when_install_wrote_every_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _tuned_home(tmp_path, monkeypatch)
+    result = home.run("settings_probe_installed")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == [
+        f"TRACER_SETTINGS_INSTALLED_OK agents=3 keys={_tuned_keys(_REQUIRED_TUNED)}",
+        "TRACER_COPILOT_VERSION_OK",
     ]
-    left = probe("L codex")
+
+
+def test_settings_probe_installed_flags_a_missing_key_agent_or_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing_key = _tuned_home(tmp_path / "key", monkeypatch, ("codex", "copilot"))
+    missing_key.plant("claude")
+    missing_key.tune("claude", ("auto-approve",))
+    keyed = missing_key.run("settings_probe_installed")
+    assert keyed.returncode != 0
+    assert "TRACER_SETTINGS_INSTALLED_MISSING agent=claude key=attribution.commit" in keyed.stdout
+    assert "TRACER_SETTINGS_INSTALLED_OK" not in keyed.stdout
+
+    for absent in _REQUIRED_TUNED:
+        others = tuple(agent for agent in _REQUIRED_TUNED if agent != absent)
+        gone = _tuned_home(tmp_path / f"no-{absent}", monkeypatch, others)
+        result = gone.run("settings_probe_installed")
+        assert result.returncode != 0, absent
+        assert f"TRACER_SETTINGS_AGENT_MISSING agent={absent}" in result.stdout
+        assert "TRACER_SETTINGS_INSTALLED_OK" not in result.stdout
+
+    failing = _tuned_home(tmp_path / "version", monkeypatch, version_exit=3)
+    result = failing.run("settings_probe_installed")
+    assert result.returncode != 0
+    assert "TRACER_COPILOT_VERSION_FAILED" in result.stdout
+    assert "TRACER_COPILOT_VERSION_OK" not in result.stdout
+
+
+def test_settings_probe_installed_persists_the_checked_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review R1-04: the revert probe needs the agents the install probe saw, not a PATH lookup."""
+    home = _tuned_home(tmp_path, monkeypatch)
+    assert home.run("settings_probe_installed").returncode == 0
+    persisted = json.loads((home.workspace / ".e2e-tuned-agents.json").read_text(encoding="utf-8"))
+    assert sorted(persisted) == sorted(_REQUIRED_TUNED)
+
+
+def test_settings_probe_revert_flags_a_key_ledger_or_copilot_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import agent_settings
+
+    home = _tuned_home(tmp_path, monkeypatch)
+    assert home.run("settings_probe_installed").returncode == 0
+    link = home.scratch / ".local" / "bin" / "copilot"
+
+    left = home.run("settings_probe_revert")
     assert left.returncode != 0
-    assert left.stdout.splitlines() == ["TRACER_SETTINGS_LEDGER_LEFT agent=codex"]
-    clean = probe("K 4")
-    assert clean.returncode == 0, clean.stderr
-    assert clean.stdout.splitlines() == ["TRACER_SETTINGS_REVERT_OK keys=4"]
+    assert "TRACER_SETTINGS_REVERT_DIFF agent=claude key=permissions.defaultMode" in left.stdout
+    assert "TRACER_SETTINGS_REVERT_DIFF agent=copilot key=defaultPermissionMode" in left.stdout
+    assert "TRACER_SETTINGS_LEDGER_LEFT agent=codex" in left.stdout
+    assert "TRACER_COPILOT_LEFT path=.local/bin/copilot" in left.stdout
+    assert "TRACER_SETTINGS_REVERT_OK" not in left.stdout
+
+    for agent in _REQUIRED_TUNED:
+        for result in agent_settings.revert_agent(agent, home=home.scratch, platform_os="linux"):
+            assert result.refused is None
+    still_linked = home.run("settings_probe_revert")
+    assert still_linked.returncode != 0
+    assert still_linked.stdout.splitlines() == ["TRACER_COPILOT_LEFT path=.local/bin/copilot"]
+
+    link.unlink()
+    clean = home.run("settings_probe_revert")
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == [
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(_REQUIRED_TUNED)}"
+    ]
+
+
+def test_settings_probe_revert_reads_the_persisted_agents_not_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review R1-04: the uninstall removed copilot's link, yet its leftover key is still found."""
+    home = _tuned_home(tmp_path, monkeypatch, ("copilot",))
+    assert home.run("settings_probe_installed").returncode != 0  # claude and codex are absent
+    (home.scratch / ".local" / "bin" / "copilot").unlink()
+    persisted = home.workspace / ".e2e-tuned-agents.json"
+    assert json.loads(persisted.read_text(encoding="utf-8")) == ["copilot"]
+    left = home.run("settings_probe_revert")
+    assert left.returncode != 0
+    assert "TRACER_SETTINGS_REVERT_DIFF agent=copilot key=defaultPermissionMode" in left.stdout
+
+    persisted.unlink()
+    unreadable = home.run("settings_probe_revert")
+    assert unreadable.returncode != 0
+    assert unreadable.stdout.splitlines() == ["TRACER_SETTINGS_REVERT_PROBE_FAILED"]
+
+
+def test_settings_probe_revert_accepts_a_key_restored_to_the_cli_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cursor-agent's revert restores the CLI's own default instead of removing the key."""
+    from installer import agent_settings
+
+    home = _tuned_home(tmp_path, monkeypatch, ())
+    (home.workspace / ".e2e-tuned-agents.json").write_text('["cursor-agent"]', encoding="utf-8")
+    path = agent_settings.settings_file("cursor-agent", home=home.scratch, platform_os="linux")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"attribution": {"attributeCommitsToAgent": true, "attributePRsToAgent": true}}',
+        encoding="utf-8",
+    )
+    restored = home.run("settings_probe_revert")
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert restored.stdout.splitlines() == [
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['cursor-agent'])}"
+    ]
+    path.write_text('{"attribution": {"attributeCommitsToAgent": false}}', encoding="utf-8")
+    kept = home.run("settings_probe_revert")
+    assert kept.returncode != 0
+    assert kept.stdout.splitlines() == [
+        "TRACER_SETTINGS_REVERT_DIFF agent=cursor-agent key=attribution.attributeCommitsToAgent"
+    ]
 
 
 def test_the_settings_probes_are_wired_around_the_uninstall_step() -> None:
     pass2 = _function("cmd_pass2")
     uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
     reinstall = pass2.rindex('run_pass2_step "--all --yes"')
-    assert pass2.index("hook_probe_before") < pass2.index("settings_probe_write") < uninstall
+    assert pass2.index("hook_probe_before") < pass2.index("settings_probe_installed") < uninstall
     assert pass2.index("hook_probe_after") < pass2.index("settings_probe_revert") < reinstall
-    assert "TESTER_WORKSPACE" in _function("settings_probe_write")
-
-
-def test_the_settings_probes_drive_the_installer_and_check_the_revert(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The probe sees an unreverted write, passes once the installer's own revert runs."""
-    from installer import agent_settings
-
-    scratch = tmp_path / "home"
-    scratch.mkdir()
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    monkeypatch.setattr(Path, "home", lambda: scratch)
-    script = "\n".join(
-        [
-            f"export PYTHONPATH={shlex.quote(str(ROOT))}",
-            _harness("settings_probe_write", "settings_probe_revert"),
-            _assign("TESTER_WORKSPACE", str(workspace)),
-            _assign("BREW_BIN", str(_brew_stub(tmp_path))),
-            _uv_stub(),
-        ]
-    )
-    written = _run(script + "\nsettings_probe_write\n", scratch)
-    assert written.returncode == 0, written.stdout + written.stderr
-    assert written.stdout.splitlines() == ["TRACER_SETTINGS_WRITE_OK wrote=4"]
-    unreverted = _run(script + "\nsettings_probe_revert\n", scratch)
-    assert unreverted.returncode != 0
-    assert (
-        "TRACER_SETTINGS_REVERT_DIFF agent=claude key=permissions.defaultMode" in unreverted.stdout
-    )
-    for agent in ("claude", "codex"):
-        agent_settings.revert_setting(agent, "auto-approve", home=scratch, platform_os="linux")
-    reverted = _run(script + "\nsettings_probe_revert\n", scratch)
-    assert reverted.returncode == 0, reverted.stdout + reverted.stderr
-    assert reverted.stdout.splitlines() == ["TRACER_SETTINGS_REVERT_OK keys=4"]
+    assert "settings_probe_write" not in _script_text()
+    assert "TESTER_WORKSPACE" in _function("settings_probe_installed")
