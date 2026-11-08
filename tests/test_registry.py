@@ -1248,7 +1248,8 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     six shell-init tools (D-11: the keyed, default-no source_shell_init).
     """
     declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
-    assert declarers == {"oh-my-zsh", "vscode", "claude", *SHELL_INIT_TOOLS}
+    tuned = {"claude", "codex", "opencode", "cursor-agent"}
+    assert declarers == {"oh-my-zsh", "vscode", *tuned, *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
     assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
     assert oh_my_zsh.requires == ("zsh", "git")
@@ -2742,7 +2743,17 @@ def test_script_tools_declare_their_documented_config_dirs(
 def test_omz_and_vscode_declare_their_actions() -> None:
     tools = _tools_by_id()
     assert tools["oh-my-zsh"].post_install == ("set_login_shell", "set_omz_theme")
-    assert tools["vscode"].post_install == ("show_lean_tips",)
+    assert tools["vscode"].post_install == ("apply_agent_tuning", "show_lean_tips")
+
+
+def test_tuned_agents_declare_apply_agent_tuning() -> None:
+    tools = _tools_by_id()
+    for tool_id in ("claude", "codex", "opencode", "cursor-agent", "vscode"):
+        assert "apply_agent_tuning" in tools[tool_id].post_install, tool_id
+    assert tools["vscode"].post_install.index("apply_agent_tuning") < tools[
+        "vscode"
+    ].post_install.index("show_lean_tips")
+    assert "apply_agent_tuning" not in tools["pi"].post_install
 
 
 def test_the_six_tools_declare_shell_init() -> None:

@@ -6553,3 +6553,157 @@ def test_headless_yes_install_of_claude_writes_its_tuning_keys(
     ]
     assert [line for line in output.splitlines() if line.startswith("  wrote ")] == expected
     assert prompter.questions == []
+
+
+# ---------------------------------------------------------------------------
+# 23.2-01 Task 3: per-tool removal reverts what the install tuning wrote.
+# ---------------------------------------------------------------------------
+
+_TUNED_AGENT_IDS = ("claude", "codex", "opencode", "cursor-agent", "copilot", "vscode")
+_USER_FILES = {
+    "claude": '{"model": "opus"}\n',
+    "codex": 'model = "gpt-5"\n',
+    "opencode": '{"theme": "dark"}\n',
+    "cursor-agent": '{"version": 1}\n',
+    "copilot": '// mine\n{"theme": "dark"}\n',
+    "vscode": '// mine\n{\n  "editor.fontSize": 14, // size\n}\n',
+}
+
+
+def _tuned_tool(tool_id: str) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=(Method(kind="brew", params={"formula": tool_id}),),
+        post_install=("apply_agent_tuning",),
+    )
+
+
+def _tune(tool_id: str) -> Path:
+    from installer.agent_settings import settings_file
+    from installer.post_install import run_post_install
+
+    run_post_install(_tuned_tool(tool_id), _platform())
+    return settings_file(tool_id, home=Path.home(), platform_os="fedora", environ={})
+
+
+def _remove(tool_id: str, tmp_path: Path) -> SweepResult:
+    from installer import app as app_module
+
+    return app_module._after_removal(  # pyright: ignore[reportPrivateUsage]
+        _tuned_tool(tool_id),
+        bundles=(),
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        extra_policies=(),
+        platform_os="fedora",
+    )
+
+
+@pytest.mark.parametrize("existing", [True, False])
+@pytest.mark.parametrize("tool_id", _TUNED_AGENT_IDS)
+def test_tuning_install_then_removal_is_byte_identical(
+    tool_id: str, existing: bool, tmp_path: Path
+) -> None:
+    from installer.agent_settings import settings_file
+
+    path = settings_file(tool_id, home=Path.home(), platform_os="fedora", environ={})
+    before: bytes | None = None
+    if existing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_USER_FILES[tool_id], encoding="utf-8")
+        before = path.read_bytes()
+
+    _tune(tool_id)
+    assert path.read_bytes() != before
+    result = _remove(tool_id, tmp_path)
+
+    assert result.settings_reverted == (tool_id,)
+    assert result.settings_kept == () and result.warnings == ()
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+def test_tuning_removal_reverts_a_phase_23_policies_ledger_entry(tmp_path: Path) -> None:
+    from installer.agent_settings import apply_setting
+
+    config = Path.home() / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('model = "gpt-5"\n', encoding="utf-8")
+    # The write the Phase 23 `agent:codex:auto-approve` Policies row made.
+    apply_setting("codex", "auto-approve", home=Path.home(), platform_os="fedora")
+
+    result = _remove("codex", tmp_path)
+
+    assert result.settings_reverted == ("codex",)
+    assert config.read_text(encoding="utf-8") == 'model = "gpt-5"\n'
+
+
+def test_tuning_removal_keeps_a_hand_changed_key_and_names_it(tmp_path: Path) -> None:
+    config = _tune("codex")
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("danger-full-access", "read-only"),
+        encoding="utf-8",
+    )
+
+    result = _remove("codex", tmp_path)
+
+    assert result.settings_kept == ("codex",)
+    assert result.settings_reverted == ("codex",)
+    assert config.read_text(encoding="utf-8") == 'sandbox_mode = "read-only"\n'
+
+
+def test_tuning_second_removal_reports_nothing(tmp_path: Path) -> None:
+    _tune("claude")
+    _remove("claude", tmp_path)
+
+    again = _remove("claude", tmp_path)
+
+    assert (again.settings_reverted, again.settings_kept, again.warnings) == ((), (), ())
+
+
+def test_tuning_removal_of_an_untuned_agent_has_no_settings_line(tmp_path: Path) -> None:
+    from installer.app import settings_change_lines
+    from installer.receipts import ConfigLedger, write_ledger
+
+    assert settings_change_lines(("codex",)) == ()
+    assert _remove("codex", tmp_path).settings_reverted == ()
+    write_ledger(ConfigLedger("codex"))
+
+    assert settings_change_lines(("codex",)) == ()
+    cleared = _remove("codex", tmp_path)
+    assert (cleared.settings_reverted, cleared.settings_kept, cleared.warnings) == ((), (), ())
+
+
+def test_tuning_revert_removes_in_reverse_write_order(tmp_path: Path) -> None:
+    import json
+
+    from installer.agent_settings import settings_file
+
+    path = settings_file("claude", home=Path.home(), platform_os="fedora", environ={})
+    path.parent.mkdir(parents=True)
+    path.write_text('{"a": 1}', encoding="utf-8")
+    _tune("claude")
+    assert json.loads(path.read_text(encoding="utf-8"))["a"] == 1
+
+    _remove("claude", tmp_path)
+
+    assert path.read_text(encoding="utf-8") == '{"a": 1}'
+
+
+def test_tuning_removal_rereads_a_file_edited_after_preview(tmp_path: Path) -> None:
+    import json
+
+    from installer.app import settings_change_lines
+
+    path = _tune("claude")
+    assert settings_change_lines(("claude",))[0].startswith("claude: removes ")
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["attribution"]["pr"] = "mine"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    result = _remove("claude", tmp_path)
+
+    assert result.settings_kept == ("claude",)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"attribution": {"pr": "mine"}}

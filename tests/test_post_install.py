@@ -1,9 +1,11 @@
+import os
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from installer import post_install
+from installer import agent_settings, post_install
 from installer.agent_settings import parse_settings
 from installer.model import (
     POST_INSTALL_ACTIONS,
@@ -25,6 +27,7 @@ from installer.post_install import (
     use_shell_init_sourcing,
 )
 from installer.postinstall import POSTINSTALL_HOOKS
+from installer.receipts import read_ledger
 from installer.shellrc import write_myshellrc
 from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
 
@@ -505,3 +508,216 @@ def test_reapplying_the_installers_own_theme_is_not_reported_as_yours() -> None:
     run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None)
     lines = run_post_install(_action_tool("oh-my-zsh", "set_omz_theme"), _mutable(), None).lines
     assert "yours" not in lines[0]
+
+
+# ---------------------------------------------------------------------------
+# 23.2-01 Task 3: the tuning action, per agent and for VS Code.
+# ---------------------------------------------------------------------------
+
+_TUNED_AGENTS = ("claude", "codex", "opencode", "cursor-agent", "copilot", "vscode")
+_TUNED_PLATFORMS = [(agent, "fedora") for agent in _TUNED_AGENTS] + [("vscode", "macos")]
+
+
+def _on(platform_os: str) -> Platform:
+    return Platform(os=platform_os, arch="arm64", immutable=False, has_brew=platform_os == "macos")
+
+
+def _tuned(tool_id: str) -> Tool:
+    return replace(_tool(post_install=("apply_agent_tuning",)), id=tool_id)
+
+
+def _settings_path(tool_id: str, platform_os: str = "fedora") -> Path:
+    return agent_settings.settings_file(
+        tool_id, home=Path.home(), platform_os=platform_os, environ=os.environ
+    )
+
+
+def _tuning_keys(tool_id: str, platform_os: str) -> list[agent_settings.SettingKey]:
+    return [
+        key
+        for group in agent_settings.TUNING_GROUPS[tool_id]
+        for key in agent_settings.setting_keys(tool_id, group, platform_os)
+    ]
+
+
+def _document(tool_id: str, platform_os: str = "fedora") -> dict[str, object]:
+    path = _settings_path(tool_id, platform_os)
+    return parse_settings(path.read_text(encoding="utf-8"), agent_settings.AGENT_FORMATS[tool_id])
+
+
+def _plant(tool_id: str, text: str, platform_os: str = "fedora") -> Path:
+    path = _settings_path(tool_id, platform_os)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _kinds(output: PostInstallOutput) -> dict[str, str]:
+    return {key.key: key.kind for result in output.settings for key in result.keys}
+
+
+@pytest.mark.parametrize(("tool_id", "platform_os"), _TUNED_PLATFORMS)
+def test_install_tuning_writes_exactly_each_agents_keys(tool_id: str, platform_os: str) -> None:
+    output = run_post_install(_tuned(tool_id), _on(platform_os))
+
+    keys = _tuning_keys(tool_id, platform_os)
+    assert [result.refused for result in output.settings] == [None] * len(
+        agent_settings.TUNING_GROUPS[tool_id]
+    )
+    doc = _document(tool_id, platform_os)
+    assert set(doc) == {key.path[0] for key in keys}
+    for key in keys:
+        assert agent_settings.same_value(agent_settings.lookup(doc, key.path), key.value)
+    ledger = read_ledger(tool_id)
+    assert ledger is not None
+    assert [entry.key_path for entry in ledger.entries] == [key.path for key in keys]
+    assert (("update.mode",) in [key.path for key in keys]) is (platform_os == "macos")
+
+
+def test_install_tuning_keeps_a_user_value_as_set_by_you() -> None:
+    claude = _plant(
+        "claude",
+        '{\n  "model": "opus",\n  "permissions": {\n    "defaultMode": "acceptEdits"\n  }\n}\n',
+    )
+    vscode = _plant(
+        "vscode",
+        '// VS Code user settings\n{\n  "editor.fontSize": 14, // size\n'
+        '  "editor.minimap.enabled": true,\n}\n',
+    )
+
+    claude_output = run_post_install(_tuned("claude"), _mutable())
+    vscode_output = run_post_install(_tuned("vscode"), _mutable())
+
+    assert _kinds(claude_output)["permissions.defaultMode"] == "set_by_you"
+    assert _kinds(claude_output)["skipDangerousModePermissionPrompt"] == "wrote"
+    text = claude.read_text(encoding="utf-8")
+    assert '"model": "opus"' in text and '"defaultMode": "acceptEdits"' in text
+    assert _document("claude")["permissions"] == {"defaultMode": "acceptEdits"}
+    assert _kinds(vscode_output)["editor.minimap.enabled"] == "set_by_you"
+    vscode_text = vscode.read_text(encoding="utf-8")
+    assert vscode_text.startswith("// VS Code user settings\n{")
+    assert '"editor.fontSize": 14, // size' in vscode_text
+    assert _document("vscode")["editor.minimap.enabled"] is True
+    ledger = read_ledger("vscode")
+    assert ledger is not None
+    assert ("editor.minimap.enabled",) not in [entry.key_path for entry in ledger.entries]
+
+
+def test_install_tuning_reports_already_for_our_value() -> None:
+    _plant("claude", '{"skipDangerousModePermissionPrompt": true}\n')
+
+    output = run_post_install(_tuned("claude"), _mutable())
+
+    assert _kinds(output)["skipDangerousModePermissionPrompt"] == "already"
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    assert ("skipDangerousModePermissionPrompt",) not in [e.key_path for e in ledger.entries]
+    assert _document("claude")["skipDangerousModePermissionPrompt"] is True
+
+
+@pytest.mark.parametrize("before", [None, "", "  \n", "{}"])
+def test_install_tuning_on_missing_empty_and_bare_files(before: str | None) -> None:
+    if before is not None:
+        _plant("claude", before)
+
+    output = run_post_install(_tuned("claude"), _mutable())
+
+    assert [result.refused for result in output.settings] == [None, None]
+    assert _document("claude") == {
+        "permissions": {"defaultMode": "bypassPermissions"},
+        "skipDangerousModePermissionPrompt": True,
+        "attribution": {"commit": "", "pr": ""},
+    }
+
+
+def test_install_tuning_refuses_an_unparsable_file_and_writes_nothing() -> None:
+    path = _plant("claude", "{not json\n")
+
+    output = run_post_install(_tuned("claude"), _mutable())
+
+    assert [(result.keys, bool(result.refused)) for result in output.settings] == [
+        ((), True),
+        ((), True),
+    ]
+    assert all((result.refused or "").startswith("not valid JSON") for result in output.settings)
+    assert path.read_text(encoding="utf-8") == "{not json\n"
+    assert read_ledger("claude") is None
+
+
+def test_install_tuning_second_install_writes_nothing() -> None:
+    run_post_install(_tuned("claude"), _mutable())
+    path = _settings_path("claude")
+    bytes_before = path.read_bytes()
+    ledger_before = read_ledger("claude")
+
+    again = run_post_install(_tuned("claude"), _mutable())
+
+    assert path.read_bytes() == bytes_before
+    assert read_ledger("claude") == ledger_before
+    assert set(_kinds(again).values()) == {"already"}
+
+
+def test_install_tuning_refusal_of_one_group_keeps_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_apply = post_install.apply_setting
+
+    def failing_first(agent: str, setting: str, **kwargs: Any) -> agent_settings.FileResult:
+        if setting == "auto-approve":
+            raise OSError("disk exploded\nsecond line")
+        return real_apply(agent, setting, **kwargs)
+
+    monkeypatch.setattr(post_install, "apply_setting", failing_first)
+
+    output = run_post_install(_tuned("claude"), _mutable())
+
+    first, second = output.settings
+    assert (first.setting, first.refused) == ("auto-approve", "disk exploded")
+    assert first.path == _settings_path("claude")
+    assert (second.setting, second.refused) == ("no-attribution", None)
+    assert _document("claude") == {"attribution": {"commit": "", "pr": ""}}
+
+
+def test_install_tuning_keeps_utf8_comments_byte_for_byte() -> None:
+    head = "// ñandú — 日本語 ✓\n{\n"
+    tail = '  "editor.fontFamily": "Fíra Código",\n  // «comentario»\n  "editor.rulers": [80]\n}\n'
+    path = _plant("vscode", head + tail)
+
+    run_post_install(_tuned("vscode"), _mutable())
+
+    # New keys are spliced in after the opening brace; every byte around them is untouched.
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith(head) and text.endswith(tail)
+    assert _document("vscode")["editor.fontFamily"] == "Fíra Código"
+
+
+@pytest.mark.parametrize("agent", ["claude", "vscode"])
+def test_install_tuning_refuses_a_file_changed_before_commit(
+    agent: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other_writer = '{"model": "sonnet"}\n'
+    path = _plant(agent, other_writer)
+
+    def always_changed(_path: Path, _before: object, _text: str) -> None:
+        raise agent_settings.SettingsChanged()
+
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", always_changed)
+
+    output = run_post_install(_tuned(agent), _mutable())
+
+    assert {result.refused for result in output.settings} == {agent_settings.CHANGED_WHILE_WRITING}
+    assert path.read_text(encoding="utf-8") == other_writer
+    assert read_ledger(agent) is None
+
+
+def test_tuning_targets_only_user_scope_files() -> None:
+    home = Path.home()
+    user_dirs = (".claude", ".codex", ".config", ".cursor", ".copilot", "Library")
+    for agent in _TUNED_AGENTS:
+        for platform_os in ("fedora", "macos"):
+            path = _settings_path(agent, platform_os)
+            relative = path.relative_to(home)
+            assert relative.parts[0] in user_dirs
+            assert path.name not in {"settings.local.json", "copilot.json"}
+            assert ".github" not in relative.parts
+            assert Path.cwd() not in path.parents
