@@ -3097,10 +3097,19 @@ def test_copilot_hand_installed_cask_reads_present_with_its_owner(tmp_path: Path
     assert (result.owner, result.package, result.confidence) == ("cask", "copilot-cli", "direct")
 
 
-def test_copilot_present_cask_is_a_skip_naming_the_owner(tmp_path: Path) -> None:
+def test_copilot_present_cask_is_a_skip_naming_the_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     prefix, binary = _hand_installed_copilot(tmp_path)
     copilot = _copilot()
     inventory = _readable(brew_casks={"copilot-cli": "1.0.103"}, brew_prefix=prefix)
+    # Its install tuning is already in place, so no pending `apply install tuning` step (23.2-03).
+    settings = tmp_path / ".copilot" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        '{"defaultPermissionMode": "allow-all", "includeCoAuthoredBy": false}\n', encoding="utf-8"
+    )
 
     def read_inventory(**_kwargs: object) -> ManagerInventory:
         return inventory
