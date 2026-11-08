@@ -71,6 +71,7 @@ class PostInstallOutput:
 
     lines: tuple[str, ...] = ()
     settings: tuple[FileResult, ...] = ()
+    warning: str | None = None  # one crashed action's reason per entry, joined; never fatal
 
 
 PostInstallAction = Callable[
@@ -316,14 +317,20 @@ def run_post_install(
     """Dispatch each declared post-install action in order; skip unknown names."""
     lines: list[str] = []
     settings: list[FileResult] = []
+    crashed: list[str] = []
     for name in tool.post_install:
         action = POST_INSTALL_HOOKS.get(name)
         if action is None:
             continue
-        produced = action(tool, platform, confirm)
+        try:
+            produced = action(tool, platform, confirm)
+        except Exception as exc:  # one action's crash is a warning, never the others' loss
+            first = next(iter(str(exc).splitlines()), "") or type(exc).__name__
+            crashed.append(f"{name} crashed: {first}")
+            continue
         if isinstance(produced, PostInstallOutput):
             lines.extend(produced.lines)
             settings.extend(produced.settings)
         else:
             lines.extend(produced)
-    return PostInstallOutput(tuple(lines), tuple(settings))
+    return PostInstallOutput(tuple(lines), tuple(settings), "; ".join(crashed) or None)
