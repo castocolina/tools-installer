@@ -639,30 +639,55 @@ def _merge_facts(*maps: Mapping[str, _ConfigFacts]) -> dict[str, _ConfigFacts]:
     return merged
 
 
-def _settings_facts(platform: Platform) -> dict[str, _ConfigFacts]:
-    """O7 (UI-SPEC section 5): an agent settings file the ledger records keys in, which does not
-    parse, blocks its row with the reason and no step. A file no key was ever written to reads
-    nothing: it is not the installer's business until the user opts in.
+TUNING_PENDING = "install tuning not applied"
+TUNING_STEP = ConfigStep("apply install tuning", "install_tuning")
+
+
+def _tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
+    """Every settings-file fact of one agent (UI-SPEC section 5 O7, 23.2 D-04, D-05).
+
+    An untrusted ledger blocks the row with its reason, present or not. A settings file the
+    ledger records keys in, or that a present agent's install tuning would write to, that does
+    not parse blocks the row with the reason and no step: the step would only be refused.
+    A present agent whose tuning has keys that are absent and were never recorded reads `≈`
+    with the one step; a key the user deleted after the installer wrote it is their choice.
     """
-    facts: dict[str, _ConfigFacts] = {}
-    for agent in receipts.CONFIG_AGENTS:
-        aside = receipts.untrusted_ledger(agent)
-        if aside is not None:
-            facts[agent] = _ConfigFacts((str(agent_settings.LedgerUntrusted(agent, aside)),))
-            continue
+    agent = tool.id
+    if agent not in receipts.CONFIG_AGENTS:
+        return _NO_FACTS
+    aside = receipts.untrusted_ledger(agent)
+    if aside is not None:
+        return _ConfigFacts((str(agent_settings.LedgerUntrusted(agent, aside)),))
+    home = Path.home()
+    tuned = present and "apply_agent_tuning" in tool.post_install
+    try:
+        if tuned:
+            problem = agent_settings.file_problem(
+                agent, home=home, platform_os=platform.os, environ=os.environ
+            )
+            if problem is not None:
+                path = agent_settings.settings_file(
+                    agent, home=home, platform_os=platform.os, environ=os.environ
+                )
+                return _ConfigFacts((str(agent_settings.SettingsUnreadable(path, problem)),))
         ledger = receipts.read_ledger(agent)
-        if ledger is None:
-            continue
-        try:
+        if ledger is not None:
             for setting in dict.fromkeys(entry.setting for entry in ledger.entries):
                 agent_settings.setting_state(
-                    agent, setting, home=Path.home(), platform_os=platform.os
+                    agent, setting, home=home, platform_os=platform.os, environ=os.environ
                 )
-        except agent_settings.SettingsUnreadable as exc:
-            facts[agent] = _ConfigFacts((str(exc),))  # one reason per file: stop this agent
-        except Exception as exc:  # a read-only secondary fact must never fail the pass
-            facts[agent] = _ConfigFacts(unchecked=(f"settings not checked: {exc}",))
-    return facts
+        if tuned and any(
+            agent_settings.setting_facts(
+                agent, group, home=home, platform_os=platform.os, environ=os.environ
+            ).absent
+            for group in agent_settings.TUNING_GROUPS.get(agent, ())
+        ):
+            return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
+    except agent_settings.SettingsUnreadable as exc:
+        return _ConfigFacts((str(exc),))  # one reason per file: stop this agent
+    except Exception as exc:  # a read-only secondary fact must never fail the pass
+        return _ConfigFacts(unchecked=(f"settings not checked: {exc}",))
+    return _NO_FACTS
 
 
 def _hook_fact(
@@ -1556,7 +1581,6 @@ class VersionRefreshService:
         hosts, presence_error = self._present_hosts()
         config = _merge_facts(
             self._terminal_facts(platform),
-            _settings_facts(platform),
             _pnpm_group_facts(tools, inventory.pnpm_globals),
             _pnpm_missing_facts(tools, inventory.pnpm_globals, which),
         )
@@ -1625,8 +1649,10 @@ class VersionRefreshService:
             ):
                 # No receipt, adoption or layout proves it (review C2-M2).
                 receipt_notes += (UNPROVEN_NOTE,)
-            facts = config.get(tool.id, _NO_FACTS).plus(
-                _hook_fact(tool, receipt, hosts, presence_error)
+            facts = (
+                config.get(tool.id, _NO_FACTS)
+                .plus(_hook_fact(tool, receipt, hosts, presence_error))
+                .plus(_tuning_fact(tool, present, platform))
             )
             found_broken, found_notes = evidence.get(tool.id, ((), ()))
             states[tool.id] = tool_state(

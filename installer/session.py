@@ -40,7 +40,7 @@ from installer.ownership import (
     owner_label,
 )
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
+from installer.post_install import ConfirmSensitiveAction, apply_install_tuning
 from installer.postinstall import hook_method, host_labels, register_hooks
 from installer.receipts import CHANGED_SINCE_INSTALL, CONFIG_AGENTS
 from installer.resolve import resolve_methods
@@ -335,11 +335,12 @@ class _StepResult:
     """One step's answer: a refusal detail or a warning.
 
     `failed` means the step did not take and the row stops. `warning` means it
-    ran and has something to report.
+    ran and has something to report. `settings` are the settings-file writes it made.
     """
 
     failed: str | None = None
     warning: str | None = None
+    settings: tuple[FileResult, ...] = ()
 
 
 # The kinds the model declares. The dispatcher below branches on every
@@ -373,6 +374,16 @@ def _register_hook_step(tool: Tool, ctx: RunContext) -> _StepResult:
     return _StepResult(failed="no unregistered host is present any more")
 
 
+def _install_tuning_step(tool: Tool, ctx: RunContext) -> _StepResult:
+    """Apply the install tuning the ledger does not record; a refused file fails the step."""
+    output = apply_install_tuning(tool, ctx.platform, skip_recorded=True)
+    refused = next((file for file in output.settings if file.refused is not None), None)
+    if refused is not None:
+        reason = f"{display_path(refused.path)}: {_first_line_of(refused.refused or 'refused')}"
+        return _StepResult(failed=reason, settings=output.settings)
+    return _StepResult(warning="\n".join(output.lines) or None, settings=output.settings)
+
+
 def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
     """Run one typed `ConfigStep` through the context's single runner seam."""
     if step.kind not in _STEP_KINDS:
@@ -382,6 +393,8 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         return _StepResult(failed="step kind has no branch")
     if step.kind == "hook_register":
         return _register_hook_step(tool, ctx)
+    if step.kind == "install_tuning":
+        return _install_tuning_step(tool, ctx)
     if step.kind in {"terminal_sync", "zshenv_shell"}:
         if ctx.terminal_sync is None:
             return _StepResult(failed="no terminal synchronizer bound")
@@ -422,13 +435,17 @@ def _run_reconfigure(row: PlanRow, tool: Tool, ctx: RunContext) -> RowOutcome:
     the only working copy.
     """
     warnings: list[str] = []
+    settings: tuple[FileResult, ...] = ()
     for step in row.steps:
         result = _run_step(step, tool, ctx)
+        settings += result.settings
         if result.failed is not None:
-            return RowOutcome(row, "failed", detail=f"{step.text}: {result.failed}")
+            return RowOutcome(
+                row, "failed", detail=f"{step.text}: {result.failed}", settings=settings
+            )
         if result.warning:
             warnings.append(result.warning)
-    return RowOutcome(row, "done", detail="\n".join(warnings))
+    return RowOutcome(row, "done", detail="\n".join(warnings), settings=settings)
 
 
 _INSTALL_RESULT: dict[InstallStatus, Result] = {

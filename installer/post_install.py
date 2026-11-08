@@ -205,19 +205,19 @@ def _set_omz_theme(
     return (theme_line, *_OMZ_HANDOFF)
 
 
-def _apply_agent_tuning(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> PostInstallOutput:
-    del confirm
+def _tune_agent(tool: Tool, platform: Platform, *, skip_recorded: bool) -> PostInstallOutput:
     home = Path.home()
     results: list[FileResult] = []
     for group in TUNING_GROUPS.get(tool.id, ()):
         try:
             results.append(
                 apply_setting(
-                    tool.id, group, home=home, platform_os=platform.os, environ=os.environ
+                    tool.id,
+                    group,
+                    home=home,
+                    platform_os=platform.os,
+                    environ=os.environ,
+                    skip_recorded=skip_recorded,
                 )
             )
         except OSError as exc:
@@ -227,6 +227,15 @@ def _apply_agent_tuning(
             reason = lines[0] if lines and lines[0] else f"{type(exc).__name__} failed"
             results.append(FileResult(tool.id, group, path, AGENT_FORMATS[tool.id], refused=reason))
     return PostInstallOutput(settings=tuple(results))
+
+
+def _apply_agent_tuning(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> PostInstallOutput:
+    del confirm
+    return _tune_agent(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
 def _show_lean_tips(
@@ -245,6 +254,25 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "show_lean_tips": _show_lean_tips,
     "apply_agent_tuning": _apply_agent_tuning,
 }
+
+
+# The actions that make up a tool's install tuning, in the order a tool declares them.
+TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning",)
+
+
+def apply_install_tuning(
+    tool: Tool, platform: Platform, *, skip_recorded: bool
+) -> PostInstallOutput:
+    """The tool's install tuning, as RECONFIGURE runs it. `skip_recorded` leaves a key the
+    ledger records alone, so a key the user deleted stays deleted; the install action does not."""
+    lines: list[str] = []
+    settings: list[FileResult] = []
+    for name in tool.post_install:
+        if name in TUNING_ACTIONS:
+            produced = _tune_agent(tool, platform, skip_recorded=skip_recorded)
+            lines.extend(produced.lines)
+            settings.extend(produced.settings)
+    return PostInstallOutput(tuple(lines), tuple(settings))
 
 
 def run_post_install(

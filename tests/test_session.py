@@ -1304,6 +1304,7 @@ _ALL_KIND_STEPS: dict[ConfigStepKind, ConfigStep] = {
     "pnpm_group_install": ConfigStep("install @obra/superpowers with pnpm", "pnpm_group_install"),
     "hook_register": ConfigStep("register codegraph for codex", "hook_register"),
     "zshenv_shell": ConfigStep("export SHELL=/bin/zsh in ~/.zshenv", "zshenv_shell"),
+    "install_tuning": ConfigStep("apply install tuning", "install_tuning"),
 }
 
 # The details a dispatched step reports as a done note; every other kind reports none.
@@ -1311,6 +1312,17 @@ _DISPATCH_DETAIL: dict[ConfigStepKind, str] = {
     "hook_register": "registered for codex",
     "zshenv_shell": "~/.zshenv exports SHELL",
 }
+
+
+def _tuned_claude() -> Tool:
+    return Tool(
+        id="claude",
+        name="Claude Code",
+        category="ai",
+        cmd="claude",
+        methods=(Method(kind="host", params={}),),
+        post_install=("apply_agent_tuning",),
+    )
 
 
 def _execute_nothing(_method: Method, _runner: Runner) -> None:
@@ -1340,6 +1352,8 @@ def test_each_config_step_kind_dispatches(
         tool_id, tool = "codegraph", _codegraph_tool()
         monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
         _codegraph_receipt({})
+    if kind == "install_tuning":
+        tool_id, tool = "claude", _tuned_claude()
     recorder = RunRecorder()
     outcomes = execute_plan(
         [_reconfigure_row(tool_id, _ALL_KIND_STEPS[kind])],
@@ -1349,7 +1363,7 @@ def test_each_config_step_kind_dispatches(
     assert outcomes[0].detail == _DISPATCH_DETAIL.get(kind, ""), kind
     # The built-in kinds act through a bound seam instead of the runner, so nothing is
     # recorded as a command for them; hook_register runs one register argv, the rest one argv.
-    seam_only = {"terminal_sync", "pnpm_group_install", "zshenv_shell"}
+    seam_only = {"terminal_sync", "pnpm_group_install", "zshenv_shell", "install_tuning"}
     assert len(recorder.argv) == (0 if kind in seam_only else 1), kind
 
 

@@ -662,12 +662,20 @@ class _Pass:
 
 
 def _apply_pass(
-    text: str, fmt: SettingsFormat, setting: str, file: str, keys: tuple[SettingKey, ...]
+    text: str,
+    fmt: SettingsFormat,
+    setting: str,
+    file: str,
+    keys: tuple[SettingKey, ...],
+    skip: frozenset[KeyPath] = frozenset(),
 ) -> _Pass:
+    """`skip` keys are left alone: no result, no write and no ledger change for them."""
     results: list[KeyResult] = []
     writes: list[ConfigWrite] = []
     dropped: list[KeyPath] = []
     for key in keys:
+        if key.path in skip:
+            continue
         doc = parse_settings(text, fmt)
         name = ".".join(key.path)
         parent = lookup(doc, key.path[:-1])
@@ -712,7 +720,13 @@ def _kept_entries(
 
 
 def _apply_once(
-    agent: str, setting: str, path: Path, fmt: SettingsFormat, keys: tuple[SettingKey, ...]
+    agent: str,
+    setting: str,
+    path: Path,
+    fmt: SettingsFormat,
+    keys: tuple[SettingKey, ...],
+    *,
+    skip_recorded: bool,
 ) -> FileResult:
     """One read, compute and reserve-then-commit write; SettingsChanged goes to the caller."""
     file = str(path)
@@ -720,7 +734,12 @@ def _apply_once(
         ledger = _ledger(agent)
         snap = read_settings(path)
         text = _text_of(snap, fmt)
-        step = _apply_pass(text, fmt, setting, file, keys)
+        recorded = frozenset(
+            entry.key_path
+            for entry in ledger.entries
+            if skip_recorded and entry.setting == setting and entry.file == file
+        )
+        step = _apply_pass(text, fmt, setting, file, keys, recorded)
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     entries = _kept_entries(ledger.entries, setting, file, step)
@@ -752,8 +771,13 @@ def apply_setting(
     home: Path,
     platform_os: str,
     environ: Mapping[str, str] | None = None,
+    skip_recorded: bool = False,
 ) -> FileResult:
-    """Write each absent key of one setting and record it; a key set differently is left."""
+    """Write each absent key of one setting and record it; a key set differently is left.
+
+    `skip_recorded` also leaves a key the ledger records (RECONFIGURE: a recorded key the
+    user deleted is their choice); an install or reinstall passes False and rewrites it.
+    """
     fmt = _format(agent)
     path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
     conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
@@ -762,7 +786,7 @@ def apply_setting(
     keys = setting_keys(agent, setting, platform_os)
     for _attempt in range(2):
         try:
-            return _apply_once(agent, setting, path, fmt, keys)
+            return _apply_once(agent, setting, path, fmt, keys, skip_recorded=skip_recorded)
         except SettingsChanged:
             continue
     return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
@@ -987,6 +1011,7 @@ class SettingFacts:
     set_by_you: tuple[tuple[str, str], ...]  # (key, JSON value): another value, no record
     already: tuple[str, ...]  # keys holding our value, no record
     drifted: tuple[str, ...]  # recorded keys that no longer hold our value
+    absent: tuple[str, ...] = ()  # keys never recorded and missing from the file
 
 
 def setting_facts(
@@ -1015,7 +1040,7 @@ def setting_facts(
     if doc is None:
         if in_file:
             raise SettingsUnreadable(path, problem or "unreadable")
-        return SettingFacts(path, (), (), (), ())
+        return SettingFacts(path, (), (), (), ())  # absent stays empty: nothing is readable
     holding = tuple(
         ".".join(entry.key_path)
         for entry in in_file
@@ -1029,16 +1054,20 @@ def setting_facts(
     recorded = {entry.key_path for entry in in_file}
     set_by_you: list[tuple[str, str]] = []
     already: list[str] = []
+    absent: list[str] = []
     for key in setting_keys(agent, setting, platform_os):
         current = lookup(doc, key.path)
-        if key.path in recorded or current is ABSENT:
+        if key.path in recorded:
+            continue
+        if current is ABSENT:
+            absent.append(".".join(key.path))
             continue
         if same_value(current, key.value):
             already.append(".".join(key.path))
         elif not (key.cli_default is not ABSENT and same_value(current, key.cli_default)):
             # A CLI default is replaced on apply, so it is not the user's own value.
             set_by_you.append((".".join(key.path), _dump(current)))
-    return SettingFacts(path, holding, tuple(set_by_you), tuple(already), drifted)
+    return SettingFacts(path, holding, tuple(set_by_you), tuple(already), drifted, tuple(absent))
 
 
 def setting_state(

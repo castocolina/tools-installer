@@ -46,7 +46,7 @@ from installer.postinstall import HARNESS_PRESENCE
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError
-from installer.session import Disposition, build_plan
+from installer.session import Disposition, RowOutcome, RunContext, build_plan, execute_plan
 from installer.terminal_shell import TerminalShellResult
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
@@ -4612,6 +4612,73 @@ def test_an_unparsable_unmanaged_settings_file_reads_nothing(tmp_path: Path) -> 
     assert claude.health is not Health.MISCONFIGURED
     assert claude.unconfigured == ()
     assert not any("not valid" in reason or "not checked" in reason for reason in claude.reasons)
+
+
+# -- 23.2-03: a present tool that never got its install tuning reads `≈` (SPEC R2) --
+
+_TUNING_STEP = ConfigStep("apply install tuning", "install_tuning")
+_TUNING_REASON = "install tuning not applied"
+
+
+def _tuned_tool(tool_id: str = "claude") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=(Method(kind="github_release", params={}),),
+        tier="ai",
+        post_install=("apply_agent_tuning",),
+    )
+
+
+def _reconfigure(service: VersionRefreshService, tool: Tool) -> RowOutcome:
+    """Plan and run the one RECONFIGURE row the settled state of `tool` produces."""
+    rows = build_plan([tool.id], [tool], service.state_of, _LINUX, reinstall=frozenset())
+    assert [(row.disposition, row.steps) for row in rows] == [
+        (Disposition.RECONFIGURE, (_TUNING_STEP,))
+    ]
+    context = RunContext(
+        catalog={tool.id: tool},
+        platform=_LINUX,
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=install_tool,
+    )
+    return execute_plan(rows, context)[0]
+
+
+def test_present_untuned_claude_reads_pending_tuning_and_reconfigure_applies_it(
+    tmp_path: Path,
+) -> None:
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}", encoding="utf-8")
+    tool = _tuned_tool()
+    service = _hook_service(tmp_path, frozenset())
+    claude = _settled_states(service, [tool])["claude"]
+    assert claude.health is Health.MISCONFIGURED
+    assert claude.reasons[0] == _TUNING_REASON
+    assert claude.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert {key.kind for file in outcome.settings for key in file.keys} == {"wrote"}
+    assert sorted(key.key for file in outcome.settings for key in file.keys) == [
+        "attribution.commit",
+        "attribution.pr",
+        "permissions.defaultMode",
+        "skipDangerousModePermissionPrompt",
+    ]
+    document = json.loads(settings.read_text(encoding="utf-8"))
+    assert document["permissions"] == {"defaultMode": "bypassPermissions"}
+    assert document["skipDangerousModePermissionPrompt"] is True
+    assert document["attribution"] == {"commit": "", "pr": ""}
+
+    again = _settled_states(service, [tool])["claude"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
 
 
 # -- 19-16 Task 2: incomplete pnpm co-install groups (D-19, review H10/M11, checker I6) --
