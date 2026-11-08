@@ -750,22 +750,43 @@ def test_cursor_attribution_replaces_cli_defaults_and_restores_them() -> None:
     doc = json.loads(cursor.read_text(encoding="utf-8"))
     assert doc["attribution"] == {"attributeCommitsToAgent": False, "attributePRsToAgent": False}
 
-    user = apply_setting("cursor-agent", "auto-approve", home=home, platform_os="linux")
-    assert [(key.key, key.kind, key.value) for key in user.keys] == [
-        ("approvalMode", "set_by_you", '"allowlist"')
+    # The CLI self-repairs a missing approvalMode to "allowlist" (fresh container install and a
+    # host cli-config.json), so it is the CLI default the install tuning replaces (23.2 e2e).
+    approve = apply_setting("cursor-agent", "auto-approve", home=home, platform_os="linux")
+    assert [(key.key, key.kind, key.value) for key in approve.keys] == [
+        ("approvalMode", "replaced_default", '"allowlist"')
     ]
+    doc = json.loads(cursor.read_text(encoding="utf-8"))
+    assert doc["approvalMode"] == "unrestricted"
 
     doc["attribution"]["attributeCommitsToAgent"] = True
     cursor.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    reverted = _reverted("cursor-agent", home=home)
+    results = revert_agent("cursor-agent", home=home, platform_os="linux")
 
-    assert {(key.key, key.kind) for key in reverted.keys} == {
+    assert {(key.key, key.kind) for result in results for key in result.keys} == {
+        ("approvalMode", "removed"),
         ("attribution.attributePRsToAgent", "removed"),
         ("attribution.attributeCommitsToAgent", "kept_changed"),
     }
     restored = json.loads(cursor.read_text(encoding="utf-8"))
+    assert restored["approvalMode"] == "allowlist"
     assert restored["attribution"]["attributeCommitsToAgent"] is True
     assert restored["attribution"]["attributePRsToAgent"] is True
+
+
+def test_cursor_approval_mode_set_to_another_value_is_kept_as_yours() -> None:
+    home = Path.home()
+    cursor = home / ".cursor" / "cli-config.json"
+    cursor.parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps({"approvalMode": "auto-review"}, indent=2) + "\n"
+    cursor.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("cursor-agent", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind, key.value) for key in applied.keys] == [
+        ("approvalMode", "set_by_you", '"auto-review"')
+    ]
+    assert cursor.read_text(encoding="utf-8") == original
 
 
 def test_vscode_lean_adds_only_absent_keys_and_keeps_comments() -> None:

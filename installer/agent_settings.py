@@ -538,7 +538,11 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
         SettingKey(("sandbox_mode",), "danger-full-access"),
     ),
     ("opencode", "auto-approve"): (SettingKey(("permission",), "allow"),),
-    ("cursor-agent", "auto-approve"): (SettingKey(("approvalMode",), "unrestricted"),),
+    # The CLI self-repairs a missing approvalMode to "allowlist" (verified 2026-11-08: fresh
+    # container install and a long-lived host config), so that value is its default, not a choice.
+    ("cursor-agent", "auto-approve"): (
+        SettingKey(("approvalMode",), "unrestricted", cli_default="allowlist"),
+    ),
     ("cursor-agent", "no-attribution"): (
         SettingKey(("attribution", "attributeCommitsToAgent"), False, cli_default=True),
         SettingKey(("attribution", "attributePRsToAgent"), False, cli_default=True),
