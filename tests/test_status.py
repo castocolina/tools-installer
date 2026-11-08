@@ -844,3 +844,21 @@ def test_the_default_stub_probe_never_runs_a_host_program() -> None:
     every host and no launch reaches the allowlist guard."""
     for cmd, shim in (("git", "/usr/bin/git"), ("java", "/usr/bin/java")):
         assert macos_stub_reason(_tool(cmd), darwin=True, which=lambda _cmd, s=shim: s) is None
+
+
+def test_present_bin_dir_finds_the_declared_command_file(tmp_path: Path) -> None:
+    """D-24: the one bin-dir hit rule that `is_installed` and the PATH repair share.
+
+    The command file is the marker: a missing file, a directory with the command's
+    name and this installer's own shim are all not a hit."""
+    import installer.status as status
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "spring").touch()
+    assert status.present_bin_dir(_bin_dir_tool(str(bin_dir))) == bin_dir
+    assert status.present_bin_dir(_bin_dir_tool(str(bin_dir), cmd="absent")) is None
+    (bin_dir / "dir-cmd").mkdir()
+    assert status.present_bin_dir(_bin_dir_tool(str(bin_dir), cmd="dir-cmd")) is None
+    (bin_dir / "npx").write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    assert status.present_bin_dir(_bin_dir_tool(str(bin_dir), cmd="npx")) is None

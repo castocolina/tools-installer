@@ -1,6 +1,7 @@
 import inspect
 import io
 import json
+import os
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -20,6 +21,7 @@ from installer.model import (
     ConfigStepKind,
     Method,
     Tool,
+    load_tools,
 )
 from installer.platform import Platform
 from installer.post_install import ConfirmSensitiveAction
@@ -1750,3 +1752,118 @@ def test_install_tuning_step_refusal_fails_and_carries_the_settings(
     assert {file.refused for file in outcome.settings} == {agent_settings.CHANGED_WHILE_WRITING}
     assert [file.setting for file in outcome.settings] == ["auto-approve", "no-attribution"]
     assert settings.read_text(encoding="utf-8") == "{}\n"
+
+
+REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+
+
+def _shipped_catalog() -> dict[str, Tool]:
+    return {tool.id: tool for tool in load_tools(REGISTRY)}
+
+
+def _plant_command(directory: Path, name: str) -> Path:
+    directory.mkdir(parents=True)
+    command = directory / name
+    command.write_text("#!/bin/sh\n")
+    command.chmod(0o755)
+    return command
+
+
+def _probe_pnpm_and_node(argv: list[str]) -> str | None:
+    """Answers the version floors mmdc's node method checks: pnpm 11.9 and node 24."""
+    return "v24.4.0" if argv[0] == "node" else "11.9.0"
+
+
+def _install_through_node_method(
+    tool: Tool,
+    platform: Platform,
+    runner: Runner,
+    resolve_tag: TagResolver,
+    *,
+    checksum_policy: ChecksumPolicy = "fail",
+    confirm_sensitive_action: ConfirmSensitiveAction | None = None,
+) -> InstallOutcome:
+    """The node rung of a real install, without the presence check or the postinstall sweep."""
+    del platform, resolve_tag, checksum_policy, confirm_sensitive_action
+    for method in tool.methods:
+        if method.kind == "node":
+            executors.execute(method, runner)
+    return InstallOutcome(tool.id, InstallStatus.INSTALLED)
+
+
+def test_pnpm_off_path_skip_row_puts_its_bin_dir_on_path_for_mmdc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R12 (UAT F-1): pnpm present at its declared bin dir but off PATH is
+    SKIPped as present, and mmdc's install in the same run still runs it there."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_pnpm = _plant_command(tmp_path / ".local" / "share" / "pnpm" / "bin", "pnpm")
+    monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+    monkeypatch.setattr(executors, "probe_version", _probe_pnpm_and_node)
+    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    calls: list[list[str]] = []
+    ctx = RunContext(
+        catalog=_shipped_catalog(),
+        platform=_platform(),
+        runner=calls.append,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=_install_through_node_method,
+    )
+
+    outcomes = execute_plan(
+        [
+            PlanRow("pnpm", Disposition.SKIP, "already present"),
+            PlanRow("mmdc", Disposition.INSTALL, "will install"),
+        ],
+        ctx,
+    )
+
+    assert [outcome.result for outcome in outcomes] == ["skipped", "done"]
+    assert calls[0][:3] == [str(fake_pnpm), "add", "-g"]
+
+
+def test_path_repair_never_reorders_a_path_that_already_finds_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-24 guard: when PATH already finds the tool, a SKIP row leaves PATH byte-identical."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _plant_command(tmp_path / ".local" / "share" / "pnpm" / "bin", "pnpm")
+    on_path = tmp_path / "on-path"
+    _plant_command(on_path, "pnpm")
+    monkeypatch.setenv("PATH", str(on_path))
+    before = os.environ["PATH"]
+
+    execute_plan(
+        [PlanRow("pnpm", Disposition.SKIP, "already present")],
+        _run_context(RunRecorder(), catalog=_shipped_catalog()),
+    )
+
+    assert os.environ["PATH"] == before
+
+
+def test_path_repair_also_applies_to_a_row_that_ends_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A RECONFIGURE row ends done without installing; the tool's declared bin dir
+    must still reach PATH so its dependents find it in the same run."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+    bin_dir = tmp_path / "candidates" / "bin"
+    _plant_command(bin_dir, "spring")
+    tool = Tool(
+        id="spring",
+        name="Spring",
+        category="runtime",
+        cmd="spring",
+        methods=(
+            Method(kind="sdkman", params={"candidate": "springboot", "bin_dir": str(bin_dir)}),
+        ),
+    )
+
+    outcome = execute_plan(
+        [PlanRow("spring", Disposition.RECONFIGURE, "apply install tuning")],
+        _run_context(RunRecorder(), catalog={"spring": tool}),
+    )[0]
+
+    assert outcome.result == "done"
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(bin_dir)

@@ -77,6 +77,26 @@ def _is_installer_shim(tool: Tool, path: Path) -> bool:
     return tool.cmd in installer.guards.guarded_names() and installer.guards.is_our_shim(path)
 
 
+def present_bin_dir(tool: Tool) -> Path | None:
+    """The first declared bin_dir holding the tool's command file, or None.
+
+    The COMMAND file is the marker, never the directory: an uninstall that empties
+    a bin_dir must not keep reading as installed. is_file() follows symlinks, so
+    SDKMAN's `current -> <version>` link stops counting once the version it points
+    at is removed; a bare exists() on the lstat would still call a dangling link
+    present. Shared by `is_installed` and execute_plan's PATH repair (D-24), so
+    both answer the same question the same way.
+    """
+    for method in tool.methods:
+        bin_dir = method.params.get("bin_dir")
+        if not isinstance(bin_dir, str) or not bin_dir:
+            continue
+        candidate = Path(bin_dir).expanduser() / tool.cmd
+        if candidate.is_file() and not _is_installer_shim(tool, candidate):
+            return candidate.parent
+    return None
+
+
 def is_installed(
     tool: Tool,
     app_roots: tuple[Path, ...] | None = None,
@@ -148,18 +168,8 @@ def is_installed(
         detect_path = method.params.get("detect_path")
         if isinstance(detect_path, str) and detect_path and Path(detect_path).expanduser().exists():
             return True
-    for method in tool.methods:
-        bin_dir = method.params.get("bin_dir")
-        if not isinstance(bin_dir, str) or not bin_dir:
-            continue
-        # The COMMAND file is the marker, never the directory: an uninstall
-        # that empties a bin_dir must not keep reading as installed. is_file()
-        # follows symlinks, so SDKMAN's `current -> <version>` link stops
-        # counting once the version it points at is removed — a bare exists()
-        # on the lstat would still call a dangling link present.
-        candidate = Path(bin_dir).expanduser() / tool.cmd
-        if candidate.is_file() and not _is_installer_shim(tool, candidate):
-            return True
+    if present_bin_dir(tool) is not None:
+        return True
     for method in tool.methods:
         if method.kind not in DOWNLOAD_KINDS:
             continue

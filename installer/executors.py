@@ -16,7 +16,7 @@ from typing import cast
 
 from installer.guards import real_pnpm, shell_path
 from installer.host_setup import HOST_SETUPS
-from installer.locations import applications_dir
+from installer.locations import applications_dir, display_path
 from installer.model import Method
 from installer.run import CommandError, Runner, run_output, run_output_with_stderr
 from installer.versions import (
@@ -198,6 +198,10 @@ BROWSER_LAUNCH_TIMEOUT = 60.0
 
 # Reading pnpm's own global bin directory is a plain query.
 PNPM_BIN_TIMEOUT = 5.0
+
+# The pnpm registry entry's declared bin dirs: where a run that installed pnpm left it.
+# tests/test_executors.py::test_node_pnpm_homes_match_the_registry pins this to the registry.
+PNPM_BIN_DIRS: tuple[str, ...] = ("~/.local/share/pnpm/bin", "~/Library/pnpm/bin")
 
 # `cmd-shim` writes this trailer into every global bin script it generates, and
 # it is how pnpm's `$PNPM_HOME/bin/<name>` records which file, inside which
@@ -451,6 +455,15 @@ def _brew(method: Method, runner: Runner) -> None:
     runner(["brew", "install", require_str(method, "formula")])
 
 
+def _pnpm_left_behind() -> Path | None:
+    """An executable pnpm in a declared pnpm bin dir, which the process PATH may not reach."""
+    for raw in PNPM_BIN_DIRS:
+        candidate = Path(raw).expanduser() / "pnpm"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def _node(method: Method, runner: Runner) -> None:
     # Method-shape validation runs BEFORE the pnpm-presence probe below: a
     # malformed registry.toml entry is a bug regardless of what's on PATH, and
@@ -468,6 +481,14 @@ def _node(method: Method, runner: Runner) -> None:
     # model still applies.
     pnpm = real_pnpm()
     if pnpm is None:
+        left_behind = _pnpm_left_behind()
+        if left_behind is not None:
+            # Present but unreachable: a fresh install would only repeat the same PATH miss.
+            raise ExecutorError(
+                f"pnpm is installed at {display_path(left_behind.parent)} but is not on this "
+                "shell's PATH; open a new terminal or run `source ~/.myshellrc`, "
+                "then run this again"
+            )
         raise ExecutorError(
             "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
             "is the only pnpm on PATH, re-apply the package-manager policy)"
