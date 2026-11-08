@@ -168,6 +168,23 @@ walk through (examples of the shape, not an exhaustive list):
 Each accepted customization is its own idempotent, reversible step with a
 sandboxed test; each declined one is recorded in `# Verified`.
 
+**Where an accepted customization lives.** It is install-time tuning: a named
+action in the tool's `post_install` list, dispatched from the closed
+`POST_INSTALL_HOOKS` table in `installer/post_install.py` (names in
+`POST_INSTALL_ACTIONS`, `installer/model.py`). It runs at install with
+no runtime question on every route, shows as `≈ apply install tuning` with
+a RECONFIGURE step on a tool already present, and is reverted with the tool:
+settings keys through the config-write ledger, shell blocks and plugin names
+through their ownership records. A key the user already holds with another
+value is kept and shown as `set by you`, so there is no opt-out knob. The
+onboarding author still asks the developer which customizations to build
+(above); the end user is never asked at install. Worked examples:
+`apply_agent_tuning`, `set_omz_plugins`, `source_shell_init`.
+
+A Policies row is only for something outside any install (an installer-wide
+guard, a background job, a host environment redirect), and a new requirement
+never becomes a Policies knob by default.
+
 ### 8. Check the registry's existing classifiers (deep research)
 
 Before writing the block, read how the classifiers disagree in this codebase —
@@ -208,6 +225,9 @@ gates and add tests for any new hook; sandbox every real install.
 - **Skipping the marketplace question for LLM tooling.**
 - **Shipping customizations nobody asked for, or skipping the question
   entirely.** Offer, ask, record.
+- **Turning an accepted customization into a Policies row or an install-time
+  question.** It is install tuning: a Policies row is only for what lies
+  outside any install, and an install-time question is a TUNE-04 miss.
 - **Classifying an agent harness CLI as `ai` tier because it is AI-branded.**
 - **Skipping a dependency edge because "the user probably has it".**
 - **A postinstall hook that writes to every host unconditionally or passes an
