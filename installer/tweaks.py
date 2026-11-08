@@ -278,7 +278,7 @@ def remove_tweak(bundle: TweakBundle, rc_path: Path) -> None:
 
 
 # The retired alias bundles: no longer offered, only stripped from ~/.myshellrc. The value is
-# the agent whose auto-approve Policies row the launch notice points at (None: the cursor wrapper).
+# the agent whose install writes the auto-approve key the launch notice names (None: cursor's).
 LEGACY_ALIAS_BUNDLES: dict[str, str | None] = {
     "claude-skip": "claude",
     "codex-skip": "codex",
@@ -297,6 +297,9 @@ class LegacyStrip:
     unreadable: str | None = None
 
     def launch_lines(self) -> tuple[tuple[str, str], ...]:
+        # Imported here: agent_settings reaches this module through receipts and omz.
+        from installer.agent_settings import setting_keys
+
         lines: list[tuple[str, str]] = []
         for alias_id in self.stripped:
             agent = LEGACY_ALIAS_BUNDLES[alias_id]
@@ -304,7 +307,11 @@ class LegacyStrip:
                 text = f"{alias_id} alias removed: pick the model with /model in cursor-agent."
                 lines.append((text, "warn"))
             else:
-                text = f"Removed the {alias_id} alias; turn on {agent} auto-approve in Policies."
+                key = ".".join(setting_keys(agent, "auto-approve", "linux")[0].path)
+                text = (
+                    f"Removed the {alias_id} alias; installing {agent} writes {key} "
+                    "in its settings instead."
+                )
                 lines.append((text, "ok"))
         lines.extend((text, "warn") for text in self.failure_lines())
         return tuple(lines)

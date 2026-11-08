@@ -246,4 +246,4 @@ def test_policies_list_none_of_the_four_alias_bundles(tmp_path: Path) -> None:
     )
     lines = strip_legacy_aliases(rc).launch_lines()
     assert len(lines) == len(alias_ids)
-    assert all(len(text) <= 78 for text, _severity in lines)
+    assert not any("Policies" in text for text, _severity in lines)

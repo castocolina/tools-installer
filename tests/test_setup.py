@@ -5,6 +5,7 @@ import inspect
 import io
 import os
 import pty
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -121,6 +122,12 @@ def _platform() -> Platform:
 # These pin the two primitives that recover from that (probing /dev/tty, and
 # redirecting fd 0 onto it for a Textual .run() call) without ever opening a
 # real device — os.open/os.isatty/os.dup/os.dup2/os.close are all faked.
+
+
+_CLAUDE_ALIAS_NOTICE = (
+    "Removed the claude-skip alias; installing claude writes permissions.defaultMode "
+    "in its settings instead."
+)
 
 
 def test_has_controlling_tty_true_when_stdin_isatty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4287,7 +4294,7 @@ def test_launch_strips_and_shows_the_notice(
 
     warning = seen["startup_warning"]
     assert isinstance(warning, str)
-    assert "Removed the claude-skip alias; turn on claude auto-approve in Policies." in warning
+    assert _CLAUDE_ALIAS_NOTICE in warning
     assert "tools-installer tweak:claude-skip" not in rc.read_text()
     assert not (tmp_path / ".claude" / "settings.json").exists()
 
@@ -4310,7 +4317,7 @@ def test_headless_launch_strips_and_prints_the_notice_before_the_plan(
     monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
 
     assert setup.main(["--all", "--yes"]) == 0
-    notice = "Removed the claude-skip alias; turn on claude auto-approve in Policies."
+    notice = _CLAUDE_ALIAS_NOTICE
     assert notice in printed_before_plan[0]
     assert "tools-installer tweak:claude-skip" not in rc.read_text()
     assert not (Path.home() / ".claude" / "settings.json").exists()
@@ -4799,3 +4806,43 @@ def test_the_headless_route_injects_split_mode_sourcing(monkeypatch: pytest.Monk
     monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
     assert setup.main(["--all", "--yes", "--link-mode", "split"]) == 0
     assert Path.home() / ".bashrc" in readings[0]
+
+
+# Whole identifiers of the code SPEC R7 / D-10 deleted. vulture at min_confidence = 80 would not
+# flag a leftover, so this test is the only guard (RESEARCH Pitfall 2).
+_DELETED_IDENTIFIERS = (
+    "RUN_OPTIONS",
+    "AGENT_OPTION_IDS",
+    "ATTRIBUTION_IDS",
+    "OPTION_COVERS",
+    "RUN_OPTIONS_LEFT_OFF",
+    "run_options",
+    "review_problems",
+    "run_option_lines",
+    "_apply_run_options",
+    "_apply_option",
+    "_desktop_shell",
+    "settings_skipped",
+    "desktop_shell_error",
+    "_ask_run_options",
+    "settings_policy",
+    "settings_policies",
+    "shell_init_detail",
+    "revert_setting",
+    "_SETTINGS_LAST_LINE",
+    "_settings_result",
+    "action_toggle_option",
+)
+
+
+def test_no_run_option_or_settings_policy_symbols_remain() -> None:
+    root = Path(setup.__file__).parent
+    sources = {path: path.read_text() for path in (root / "setup.py", *root.glob("installer/*.py"))}
+    names = "|".join(re.escape(name) for name in _DELETED_IDENTIFIERS)
+    found = re.compile(rf"\b(?:{names})\b|\b_OPTION_\w*")
+    leftovers = [
+        f"{path.name}: {match.group(0)}"
+        for path, text in sources.items()
+        for match in found.finditer(text)
+    ]
+    assert leftovers == []

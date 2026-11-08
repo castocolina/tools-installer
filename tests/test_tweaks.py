@@ -13,7 +13,9 @@ from installer.omz import plugins_owned
 from installer.platform import Platform
 from installer.tweaks import (
     BUNDLES,
+    LEGACY_ALIAS_BUNDLES,
     SHELL_INIT_TOOLS,
+    LegacyStrip,
     TweakBundle,
     applicable_bundles,
     bundle_marker_present,
@@ -31,6 +33,12 @@ from installer.tweaks import (
 
 def _bundle(bundle_id: str) -> TweakBundle:
     return next(b for b in BUNDLES if b.id == bundle_id)
+
+
+_CLAUDE_ALIAS_NOTICE = (
+    "Removed the claude-skip alias; installing claude writes permissions.defaultMode "
+    "in its settings instead."
+)
 
 
 def test_bundles_have_stable_ids_and_order() -> None:
@@ -386,7 +394,10 @@ def test_an_enabled_claude_skip_alias_is_stripped_and_nothing_written() -> None:
     assert not (Path.home() / ".claude" / "settings.json").exists()
     assert not (Path.home() / ".local" / "state" / "tools-installer" / "config").exists()
     assert report.launch_lines() == (
-        ("Removed the claude-skip alias; turn on claude auto-approve in Policies.", "ok"),
+        (
+            _CLAUDE_ALIAS_NOTICE,
+            "ok",
+        ),
     )
     again = strip_legacy_aliases(rc)
     assert again.stripped == ()
@@ -488,3 +499,18 @@ def test_shell_init_record_round_trip(tmp_path: Path) -> None:
     assert shell_init_record(rc) is None
     clear_shell_init_record(tmp_path / "missing")  # nothing to clear, nothing created
     assert not (tmp_path / "missing").exists()
+
+
+def test_legacy_alias_notice_names_the_settings_key() -> None:
+    lines = LegacyStrip(rc="~/.myshellrc", stripped=tuple(LEGACY_ALIAS_BUNDLES)).launch_lines()
+    texts = [text for text, _severity in lines]
+    assert _CLAUDE_ALIAS_NOTICE in texts
+    assert (
+        "Removed the codex-skip alias; installing codex writes approval_policy in its settings "
+        "instead."
+    ) in texts
+    assert (
+        "Removed the opencode-auto alias; installing opencode writes permission in its settings "
+        "instead."
+    ) in texts
+    assert not any("Policies" in text for text in texts)
