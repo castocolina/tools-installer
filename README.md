@@ -263,7 +263,7 @@ uninstall` removes it along with everything else).
 
 ### Shell tweak bundles
 
-The policies view also surfaces four curated, independently-toggleable shell-tweak
+The policies view also surfaces three curated, independently-toggleable shell-tweak
 bundles. Each writes its own marker block into `~/.myshellrc` (already sourced by
 bash and zsh) and takes effect in a new shell. Enabling or disabling one never
 touches another bundle or your own content.
@@ -272,11 +272,19 @@ touches another bundle or your own content.
 | --- | --- | --- |
 | **Docker shortcuts** | all | `docker-ps` (live container table via `watch`), `docker-stats`, `docker-memory` |
 | **Countdown helper** | all | `wait_time <secs>` — a portable terminal countdown |
-| **claude skip-permissions** | all | `alias claude='claude --dangerously-skip-permissions'` |
 | **apt selective upgrade** | Linux | `apt-upgrade` — upgrades only packages that have available updates |
 
 `docker-ps` requires the `watch` command to be on your PATH. The `apt-upgrade`
 bundle is offered on Linux only (not macOS).
+
+### Install tuning
+
+Installing claude, codex, opencode, cursor-agent, copilot or VS Code writes that
+tool's documented auto-approve, no-attribution and lean keys, only where the key
+is absent. Oh-My-Zsh gets its plugins and default theme, and starship, direnv,
+zoxide, fzf, fnm and volta get their shell init. All of it happens with no
+question, is reverted when the tool is removed, and a tool that is already
+installed shows `≈ apply install tuning`.
 
 ## What's NOT in v1
 

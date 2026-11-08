@@ -2,6 +2,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARCHITECTURE = REPO_ROOT / ".claude" / "architecture.md"
+TOOL_ONBOARDING_SKILL = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
 
 _TRUNCATION_BANNER_FRAGMENTS = (
     "[Showing lines",
@@ -284,3 +285,52 @@ def test_architecture_records_phase_15_8_mechanisms() -> None:
         assert phrase in text, f"missing load-bearing phrase: {phrase}"
     for phrase in _PHASE_18_AUTHORING:
         assert phrase in text, f"missing Phase 18 authoring phrase: {phrase}"
+
+
+_INSTALL_TUNING_RULE_PHRASES = (
+    "install-time tuning",
+    "no runtime question",
+    "reverted with the tool",
+    "outside any install",
+    "never becomes a Policies knob by default",
+)
+
+
+def test_tool_onboarding_skill_states_the_install_tuning_rule() -> None:
+    """TUNE-04: an accepted customization is install tuning, never a Policies knob by default.
+
+    The phrases anchor the section 7 paragraph and the Common Mistakes bullet.
+    skill_pack and skill_lifecycle are the retired 23.1 vocabulary and must
+    not come back. Every line that names Policies stays plain ASCII.
+    """
+    text = TOOL_ONBOARDING_SKILL.read_text(encoding="utf-8")
+    for phrase in _INSTALL_TUNING_RULE_PHRASES:
+        assert phrase in text, f"missing install-tuning rule phrase: {phrase}"
+    assert "skill_pack" not in text, "retired skill_pack vocabulary is back"
+    assert "skill_lifecycle" not in text, "retired skill_lifecycle vocabulary is back"
+    for line in text.splitlines():
+        if "Policies" in line:
+            assert line.isascii(), f"non-ASCII line naming Policies: {line!r}"
+
+
+_INSTALL_TUNING_ARCHITECTURE_PHRASES = (
+    "install tuning",
+    "set_omz_plugins",
+    "apply_agent_tuning",
+    "outside any install",
+    "uninstall._omz_policy",
+)
+
+
+def test_architecture_records_the_install_tuning_rule() -> None:
+    """D-19, D-09, D-12: install tuning is the rule; omz_plugins_policy is no Policies row.
+
+    The phrases anchor the tree branch, the sentence after it and the rewritten
+    Oh-My-Zsh paragraph. The old sentence that called the plugins a Policy row
+    must be gone, so the paragraph cannot quietly keep the retired wiring.
+    """
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _INSTALL_TUNING_ARCHITECTURE_PHRASES:
+        assert phrase in text, f"missing install-tuning phrase: {phrase}"
+    retired = "a `Policy` produced by `installer/policy.py::omz_plugins_policy`"
+    assert retired not in text, "the Oh-My-Zsh paragraph still calls the plugins a Policy row"
