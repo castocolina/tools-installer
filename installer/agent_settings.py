@@ -1038,9 +1038,13 @@ def setting_facts(
     already: list[str] = []
     absent: list[str] = []
     for key in setting_keys(agent, setting, platform_os):
-        current = lookup(doc, key.path)
         if key.path in recorded:
             continue
+        parent = lookup(doc, key.path[:-1])
+        if parent is not ABSENT and not isinstance(parent, dict):
+            set_by_you.append((".".join(key.path), _dump(parent)))  # the writer's rule
+            continue
+        current = lookup(doc, key.path)
         if current is ABSENT:
             absent.append(".".join(key.path))
             continue

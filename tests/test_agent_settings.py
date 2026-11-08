@@ -537,6 +537,25 @@ def test_setting_facts_absent_lists_only_unrecorded_missing_keys_in_order() -> N
     assert absent() == ("permissions.defaultMode",)
 
 
+def test_setting_facts_treat_a_non_object_parent_as_set_by_you_not_absent() -> None:
+    """C-02: the writer refuses a key under a non-object parent as `set_by_you`, so the
+    facts must too, or the `≈` step it raises could never clear."""
+    home = Path.home()
+    settings = _claude_settings_file()
+    settings.write_text('{"permissions": "none"}\n', encoding="utf-8")
+
+    facts = agent_settings.setting_facts("claude", "auto-approve", home=home, platform_os="linux")
+    assert facts.absent == ("skipDangerousModePermissionPrompt",)
+    assert [key for key, _ in facts.set_by_you] == ["permissions.defaultMode"]
+
+    applied = apply_setting(
+        "claude", "auto-approve", home=home, platform_os="linux", skip_recorded=True
+    )
+    assert [key.kind for key in applied.keys] == ["set_by_you", "wrote"]
+    after = agent_settings.setting_facts("claude", "auto-approve", home=home, platform_os="linux")
+    assert after.absent == ()
+
+
 def test_apply_setting_skip_recorded_never_rewrites_a_recorded_key() -> None:
     home = Path.home()
     settings = _claude_settings_file()
