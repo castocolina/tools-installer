@@ -202,7 +202,7 @@ class RowOutcome:
     # The end-of-run sweep's answer for a new agent host: (tool id, harness ids registered).
     resynced: tuple[tuple[str, tuple[str, ...]], ...] = ()
     resync_warnings: tuple[tuple[str, str], ...] = ()
-    # The chosen run options' writes to this row's settings file, and whether an option skipped it.
+    # The tuning writes this row made to its settings file, and whether an option skipped it.
     settings: tuple[FileResult, ...] = ()
     settings_skipped: bool = False
     # The desktop SHELL conf: (display path, zsh path) when written, (display path, error) when not.
@@ -555,9 +555,9 @@ def review_problems(
     for agent in CONFIG_AGENTS:
         if agent not in runnable:
             continue
-        problem = file_problem(agent, home=home, platform_os=platform_os)
+        problem = file_problem(agent, home=home, platform_os=platform_os, environ=os.environ)
         if problem is not None and problem.startswith("not valid "):
-            path = settings_file(agent, home=home, platform_os=platform_os)
+            path = settings_file(agent, home=home, platform_os=platform_os, environ=os.environ)
             problems[agent] = (path.name, FORMAT_NAMES[AGENT_FORMATS[agent]])
     return problems
 
@@ -565,9 +565,9 @@ def review_problems(
 def _apply_option(agent: str, setting: str, home: Path, platform_os: str) -> FileResult:
     """One option's write for one agent; an unexpected OS error is that file's refusal."""
     try:
-        return apply_setting(agent, setting, home=home, platform_os=platform_os)
+        return apply_setting(agent, setting, home=home, platform_os=platform_os, environ=os.environ)
     except OSError as exc:
-        path = settings_file(agent, home=home, platform_os=platform_os)
+        path = settings_file(agent, home=home, platform_os=platform_os, environ=os.environ)
         return FileResult(agent, setting, path, AGENT_FORMATS[agent], refused=first_line(exc))
 
 
@@ -716,7 +716,9 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
                         if result.status is InstallStatus.NO_METHOD
                         else ""
                     )
-                    outcome = RowOutcome(row, mapped, install=result, detail=detail)
+                    outcome = RowOutcome(
+                        row, mapped, install=result, detail=detail, settings=result.settings
+                    )
                 elif row.disposition is Disposition.UPDATE:
                     if ctx.updates is None:
                         outcome = RowOutcome(row, "blocked", detail="no update service")

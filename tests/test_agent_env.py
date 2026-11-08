@@ -14,6 +14,7 @@ def test_adapters_define_supported_agents_with_injected_home_paths(tmp_path: Pat
         "antigravity",
         "cursor-agent",
         "vscode",
+        "copilot",
     }
     assert configured["claude"].config_path == tmp_path / ".claude" / "settings.json"
     assert configured["codex"].config_path == tmp_path / ".codex" / "config.toml"
@@ -57,3 +58,32 @@ def test_adapters_define_native_instruction_paths_when_supported(tmp_path: Path)
     )
     assert configured["pi"].instruction_path == tmp_path / ".pi" / "AGENTS.md"
     assert configured["antigravity"].instruction_path == tmp_path / ".gemini" / "GEMINI.md"
+
+
+def test_copilot_adapter_honours_an_absolute_copilot_home(tmp_path: Path) -> None:
+    ch = tmp_path / "ch"
+    copilot = adapters(tmp_path / "home", "linux", environ={"COPILOT_HOME": str(ch)})["copilot"]
+
+    assert copilot.config_path == ch / "settings.json"
+    assert copilot.label == "GitHub Copilot CLI"
+    assert copilot.instruction_path is None
+    assert copilot.permission_mode == "configurable"
+
+
+def test_copilot_adapter_ignores_an_empty_or_relative_copilot_home(tmp_path: Path) -> None:
+    # A relative value resolves against copilot's own working directory, unknowable here.
+    default = tmp_path / ".copilot" / "settings.json"
+
+    assert adapters(tmp_path)["copilot"].config_path == default
+    assert adapters(tmp_path, environ={})["copilot"].config_path == default
+    assert adapters(tmp_path, environ={"COPILOT_HOME": ""})["copilot"].config_path == default
+    assert adapters(tmp_path, environ={"COPILOT_HOME": "rel/ch"})["copilot"].config_path == default
+
+
+def test_copilot_home_changes_no_other_adapter(tmp_path: Path) -> None:
+    plain = adapters(tmp_path)
+    tweaked = adapters(tmp_path, environ={"COPILOT_HOME": str(tmp_path / "ch")})
+
+    assert {k: v for k, v in tweaked.items() if k != "copilot"} == {
+        k: v for k, v in plain.items() if k != "copilot"
+    }

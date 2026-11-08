@@ -10,7 +10,8 @@ closed name sets (`POST_INSTALL_ACTIONS` versus `POSTINSTALL_HOOK_NAMES`)
 are disjoint by design and must stay that way.
 
 An action in this table returns reviewed instruction lines for the user to
-run themselves and never spawns a child process. This follows
+run themselves (or a `PostInstallOutput` that also carries the settings it wrote)
+and never spawns a child process. This follows
 `installer/host_setup.py`'s documented doctrine: setup that needs a real
 terminal is displayed, never launched from the installer's worker thread.
 
@@ -18,6 +19,10 @@ The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme writes
 keep that rule: they write only the installer-owned `~/.myshellrc` block (and,
 in split mode, the rc `source` line) through the Policies tweak writer, and the
 `.zshrc` theme line through the theme writer. They never spawn a child process.
+
+A tuning action (`apply_agent_tuning`) writes the tool's own user-scope settings
+through `agent_settings` (each key recorded in the agent's config-write ledger),
+never spawns a child, asks nothing and runs on every route.
 
 A tool the installer detects as already present is a SKIP on the review and
 does not reach this table. Pressing `r` marks it REINSTALL and sends it through
@@ -33,6 +38,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from installer.agent_settings import (
+    AGENT_FORMATS,
+    TUNING_GROUPS,
+    FileResult,
+    apply_setting,
+    settings_file,
+)
 from installer.locations import zshrc_path
 from installer.model import Tool
 from installer.omz import apply_theme, default_theme, ensure_zshrc_template, omz_root
@@ -42,7 +54,19 @@ from installer.sanitize import sanitize_log_line
 from installer.tweaks import shell_init_bundle
 
 ConfirmSensitiveAction = Callable[[str, str], bool]
-PostInstallAction = Callable[[Tool, Platform, ConfirmSensitiveAction | None], tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class PostInstallOutput:
+    """What the dispatched actions produced: reviewed lines, and the settings writes they made."""
+
+    lines: tuple[str, ...] = ()
+    settings: tuple[FileResult, ...] = ()
+
+
+PostInstallAction = Callable[
+    [Tool, Platform, ConfirmSensitiveAction | None], tuple[str, ...] | PostInstallOutput
+]
 
 
 @dataclass(frozen=True)
@@ -181,6 +205,30 @@ def _set_omz_theme(
     return (theme_line, *_OMZ_HANDOFF)
 
 
+def _apply_agent_tuning(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> PostInstallOutput:
+    del confirm
+    home = Path.home()
+    results: list[FileResult] = []
+    for group in TUNING_GROUPS.get(tool.id, ()):
+        try:
+            results.append(
+                apply_setting(
+                    tool.id, group, home=home, platform_os=platform.os, environ=os.environ
+                )
+            )
+        except OSError as exc:
+            # One group's OS error is that group's refusal; the agent's other groups still run.
+            path = settings_file(tool.id, home=home, platform_os=platform.os, environ=os.environ)
+            lines = str(exc).splitlines()
+            reason = lines[0] if lines and lines[0] else f"{type(exc).__name__} failed"
+            results.append(FileResult(tool.id, group, path, AGENT_FORMATS[tool.id], refused=reason))
+    return PostInstallOutput(settings=tuple(results))
+
+
 def _show_lean_tips(
     tool: Tool,
     platform: Platform,
@@ -195,6 +243,7 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "source_shell_init": _source_shell_init,
     "set_omz_theme": _set_omz_theme,
     "show_lean_tips": _show_lean_tips,
+    "apply_agent_tuning": _apply_agent_tuning,
 }
 
 
@@ -202,12 +251,18 @@ def run_post_install(
     tool: Tool,
     platform: Platform,
     confirm: ConfirmSensitiveAction | None = None,
-) -> tuple[str, ...]:
-    """Dispatch each declared post-install action; skip unknown names."""
+) -> PostInstallOutput:
+    """Dispatch each declared post-install action in order; skip unknown names."""
     lines: list[str] = []
+    settings: list[FileResult] = []
     for name in tool.post_install:
         action = POST_INSTALL_HOOKS.get(name)
         if action is None:
             continue
-        lines.extend(action(tool, platform, confirm))
-    return tuple(lines)
+        produced = action(tool, platform, confirm)
+        if isinstance(produced, PostInstallOutput):
+            lines.extend(produced.lines)
+            settings.extend(produced.settings)
+        else:
+            lines.extend(produced)
+    return PostInstallOutput(tuple(lines), tuple(settings))

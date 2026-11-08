@@ -254,7 +254,7 @@ def _write_json(path: Path, payload: dict[str, object], label: str) -> None:
 
 # Per-agent config-write ledger (D-08): every key the installer wrote into an agent's
 # settings, kept apart from install receipts, so a revert removes exactly those keys.
-CONFIG_AGENTS = ("claude", "codex", "opencode", "cursor-agent", "vscode")
+CONFIG_AGENTS = ("claude", "codex", "opencode", "cursor-agent", "vscode", "copilot")
 
 
 @dataclass(frozen=True)

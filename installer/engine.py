@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from installer import apps, download, executors, receipts
+from installer.agent_settings import FileResult
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.enums import InstallStatus
@@ -20,7 +21,7 @@ from installer.ownership import (
     method_removal_command,
 )
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction, run_post_install
+from installer.post_install import ConfirmSensitiveAction, PostInstallOutput, run_post_install
 from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
@@ -91,6 +92,8 @@ class InstallOutcome:
     manual_command: str | None = None
     # Harness ids this install registered its postinstall hook for (INSTALLED only).
     hooks: tuple[str, ...] = ()
+    # Tuning writes from post_install actions (INSTALLED or the refuses-existing reinstall only).
+    settings: tuple[FileResult, ...] = ()
 
     def __init__(
         self,
@@ -106,6 +109,7 @@ class InstallOutcome:
         post_install_handoff: tuple[str, ...] = (),
         manual_command: str | None = None,
         hooks: tuple[str, ...] = (),
+        settings: tuple[FileResult, ...] = (),
     ) -> None:
         object.__setattr__(self, "tool_id", tool_id)
         object.__setattr__(self, "status", InstallStatus(status))
@@ -119,6 +123,7 @@ class InstallOutcome:
         object.__setattr__(self, "post_install_handoff", post_install_handoff)
         object.__setattr__(self, "manual_command", manual_command)
         object.__setattr__(self, "hooks", hooks)
+        object.__setattr__(self, "settings", settings)
 
 
 def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[str, ...]]:
@@ -170,9 +175,9 @@ def install_tool(
     immediately, before this function returns; a postinstall problem is
     carried on `postinstall_warning` and it never turns this INSTALLED outcome into a failure.
     Declared `post_install` actions are dispatched next, producing reviewed
-    instruction lines on `post_install_handoff`. `confirm_sensitive_action` is
-    the optional confirmation callback those actions consult; `None` is the
-    unattended case and skips them. The ALREADY_INSTALLED short-circuit never
+    instruction lines on `post_install_handoff` and the tool's tuning writes on `settings`.
+    `confirm_sensitive_action` is the optional confirmation callback those actions consult;
+    `None` is the unattended case and skips them. The ALREADY_INSTALLED short-circuit never
     dispatches postinstall or post_install at all.
 
     `repair` exists for D-18's broken state. It takes the identical ladder a
@@ -225,9 +230,7 @@ def install_tool(
 
     for method in methods:
         if installed and repair and method.params.get("refuses_existing") is True:
-            post_install_handoff, warning = _dispatch_post_install(
-                tool, platform, confirm_sensitive_action
-            )
+            output, warning = _dispatch_post_install(tool, platform, confirm_sensitive_action)
             return InstallOutcome(
                 tool.id,
                 InstallStatus.MANUAL_REQUIRED,
@@ -237,7 +240,8 @@ def install_tool(
                     "so it was not re-run.",
                 ),
                 postinstall_warning=warning,
-                post_install_handoff=post_install_handoff,
+                post_install_handoff=output.lines,
+                settings=output.settings,
             )
         manual = executors.needs_manual(method, writable=executors.prefix_writable)
         if manual is not None:
@@ -326,9 +330,7 @@ def install_tool(
                     registered, warning = register_hooks(tool, method, runner)
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
-            post_install_handoff, crash = _dispatch_post_install(
-                tool, platform, confirm_sensitive_action
-            )
+            output, crash = _dispatch_post_install(tool, platform, confirm_sensitive_action)
             if crash:
                 warning = f"{warning}; {crash}" if warning else crash
             if leftovers:
@@ -341,8 +343,9 @@ def install_tool(
                 verified=verified,
                 unverified_reason=unverified_reason,
                 postinstall_warning=warning,
-                post_install_handoff=post_install_handoff,
+                post_install_handoff=output.lines,
                 hooks=registered,
+                settings=output.settings,
             )
     return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))
 
@@ -384,10 +387,10 @@ def _dispatch_post_install(
     tool: Tool,
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
-) -> tuple[tuple[str, ...], str | None]:
+) -> tuple[PostInstallOutput, str | None]:
     if not tool.post_install:
-        return (), None
+        return PostInstallOutput(), None
     try:
         return run_post_install(tool, platform, confirm), None
     except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
-        return (), f"post-install actions crashed: {exc}"
+        return PostInstallOutput(), f"post-install actions crashed: {exc}"

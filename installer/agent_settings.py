@@ -14,6 +14,7 @@ import json
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -483,6 +484,7 @@ AGENT_FORMATS: Final[dict[str, SettingsFormat]] = {
     "opencode": "jsonc",
     "cursor-agent": "json",
     "vscode": "jsonc",
+    "copilot": "jsonc",
 }
 
 
@@ -541,11 +543,25 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
         SettingKey(("attribution", "attributeCommitsToAgent"), False, cli_default=True),
         SettingKey(("attribution", "attributePRsToAgent"), False, cli_default=True),
     ),
+    ("copilot", "auto-approve"): (SettingKey(("defaultPermissionMode",), "allow-all"),),
+    ("copilot", "no-attribution"): (SettingKey(("includeCoAuthoredBy",), False),),
     ("vscode", "vscode-ai-off"): (SettingKey(("chat.disableAIFeatures",), True),),
     ("vscode", "vscode-ext-updates-off"): (
         SettingKey(("extensions.autoUpdate",), False),
         SettingKey(("extensions.autoCheckUpdates",), False),
     ),
+}
+
+
+# The groups an install writes per tool: explicit because `vscode-lean` is built by
+# `_vscode_lean`, not stored in `_KEYS`.
+TUNING_GROUPS: Final[dict[str, tuple[str, ...]]] = {
+    "claude": ("auto-approve", "no-attribution"),
+    "codex": ("auto-approve",),
+    "opencode": ("auto-approve",),
+    "cursor-agent": ("auto-approve", "no-attribution"),
+    "vscode": ("vscode-lean", "vscode-ai-off", "vscode-ext-updates-off"),
+    "copilot": ("auto-approve", "no-attribution"),
 }
 
 
@@ -573,20 +589,24 @@ def _format(agent: str) -> SettingsFormat:
     return AGENT_FORMATS[agent]
 
 
-def settings_file(agent: str, *, home: Path, platform_os: str) -> Path:
+def settings_file(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> Path:
     """The file an agent's settings live in: its adapter path; opencode prefers .jsonc."""
     _format(agent)
-    path = adapters(home, platform_os=platform_os)[agent].config_path
+    path = adapters(home, platform_os=platform_os, environ=environ)[agent].config_path
     if agent == "opencode" and os.path.lexists(path.with_name("opencode.jsonc")):
         return path.with_name("opencode.jsonc")
     return path
 
 
-def _conflict(agent: str, *, home: Path, platform_os: str) -> str | None:
+def _conflict(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> str | None:
     """The refusal when an agent's settings could live in either of two files (opencode)."""
     if agent != "opencode":
         return None
-    json_path = adapters(home, platform_os=platform_os)[agent].config_path
+    json_path = adapters(home, platform_os=platform_os, environ=environ)[agent].config_path
     if os.path.lexists(json_path) and os.path.lexists(json_path.with_name("opencode.jsonc")):
         return "both opencode.json and opencode.jsonc exist"
     return None
@@ -725,11 +745,18 @@ def _apply_once(
     return FileResult(agent, setting, path, fmt, keys=step.keys)
 
 
-def apply_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+def apply_setting(
+    agent: str,
+    setting: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> FileResult:
     """Write each absent key of one setting and record it; a key set differently is left."""
     fmt = _format(agent)
-    path = settings_file(agent, home=home, platform_os=platform_os)
-    conflict = _conflict(agent, home=home, platform_os=platform_os)
+    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
+    conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
     if conflict is not None:
         return FileResult(agent, setting, path, fmt, refused=conflict)
     keys = setting_keys(agent, setting, platform_os)
@@ -840,19 +867,27 @@ def _revert_once(
     return FileResult(agent, setting, path, fmt, keys=results)
 
 
-def _agent_files(agent: str, *, home: Path, platform_os: str) -> tuple[str, ...]:
+def _agent_files(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> tuple[str, ...]:
     """Every file this agent's settings may live in; a ledger naming another is not followed."""
-    path = adapters(home, platform_os=platform_os)[agent].config_path
+    path = adapters(home, platform_os=platform_os, environ=environ)[agent].config_path
     if agent == "opencode":
         return (str(path), str(path.with_name("opencode.jsonc")))
     return (str(path),)
 
 
 def _revert_file(
-    agent: str, setting: str, file: str, *, home: Path, platform_os: str
+    agent: str,
+    setting: str,
+    file: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
 ) -> FileResult:
     fmt = _format(agent)
-    if file not in _agent_files(agent, home=home, platform_os=platform_os):
+    if file not in _agent_files(agent, home=home, platform_os=platform_os, environ=environ):
         return FileResult(agent, setting, Path(file), fmt, refused=NOT_A_SETTINGS_FILE)
     table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
     for _attempt in range(2):
@@ -864,11 +899,16 @@ def _revert_file(
 
 
 def _revert_results(
-    agent: str, setting: str, *, home: Path, platform_os: str
+    agent: str,
+    setting: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[FileResult, ...]:
     """One result per file the ledger recorded this setting in; each is reverted at the path
     that was written, never at the file the agent's settings resolve to now (CR-02)."""
-    path = settings_file(agent, home=home, platform_os=platform_os)
+    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
     try:
         files = _recorded_files(_ledger(agent), setting)
     except LedgerUntrusted as exc:
@@ -876,14 +916,22 @@ def _revert_results(
     if not files:
         return (FileResult(agent, setting, path, _format(agent)),)
     return tuple(
-        _revert_file(agent, setting, file, home=home, platform_os=platform_os) for file in files
+        _revert_file(agent, setting, file, home=home, platform_os=platform_os, environ=environ)
+        for file in files
     )
 
 
-def revert_setting(agent: str, setting: str, *, home: Path, platform_os: str) -> FileResult:
+def revert_setting(
+    agent: str,
+    setting: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> FileResult:
     """Undo the ledger's keys for this setting that still hold our value; anything else is left.
     Over several recorded files, the first refusal is reported, else every file's keys."""
-    results = _revert_results(agent, setting, home=home, platform_os=platform_os)
+    results = _revert_results(agent, setting, home=home, platform_os=platform_os, environ=environ)
     refused = next((result for result in results if result.refused is not None), None)
     if refused is not None:
         return refused
@@ -902,10 +950,16 @@ class SettingsUnreadable(OSError):
 
 
 def _read_document(
-    agent: str, path: Path, fmt: SettingsFormat, *, home: Path, platform_os: str
+    agent: str,
+    path: Path,
+    fmt: SettingsFormat,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, object] | None, str | None]:
     """The parsed document, or the fragment that says why the file cannot be read."""
-    conflict = _conflict(agent, home=home, platform_os=platform_os)
+    conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
     if conflict is not None:
         return None, conflict
     try:
@@ -914,10 +968,14 @@ def _read_document(
         return None, str(exc)
 
 
-def file_problem(agent: str, *, home: Path, platform_os: str) -> str | None:
+def file_problem(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> str | None:
     """Why the settings file cannot be read (the O7 note), or None when it reads or is missing."""
-    path = settings_file(agent, home=home, platform_os=platform_os)
-    return _read_document(agent, path, _format(agent), home=home, platform_os=platform_os)[1]
+    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
+    return _read_document(
+        agent, path, _format(agent), home=home, platform_os=platform_os, environ=environ
+    )[1]
 
 
 @dataclass(frozen=True)
@@ -931,7 +989,14 @@ class SettingFacts:
     drifted: tuple[str, ...]  # recorded keys that no longer hold our value
 
 
-def setting_facts(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingFacts:
+def setting_facts(
+    agent: str,
+    setting: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> SettingFacts:
     """The one classification of a setting's keys; the only place SettingsUnreadable is raised."""
     ledger = _ledger(agent)  # LedgerUntrusted is an OSError: callers read it as unreadable
     recorded_files = _recorded_files(ledger, setting)
@@ -939,12 +1004,14 @@ def setting_facts(agent: str, setting: str, *, home: Path, platform_os: str) -> 
     path = (
         Path(recorded_files[0])
         if recorded_files
-        else settings_file(agent, home=home, platform_os=platform_os)
+        else settings_file(agent, home=home, platform_os=platform_os, environ=environ)
     )
     in_file = tuple(
         entry for entry in ledger.entries if entry.file == str(path) and entry.setting == setting
     )
-    doc, problem = _read_document(agent, path, _format(agent), home=home, platform_os=platform_os)
+    doc, problem = _read_document(
+        agent, path, _format(agent), home=home, platform_os=platform_os, environ=environ
+    )
     if doc is None:
         if in_file:
             raise SettingsUnreadable(path, problem or "unreadable")
@@ -974,10 +1041,17 @@ def setting_facts(agent: str, setting: str, *, home: Path, platform_os: str) -> 
     return SettingFacts(path, holding, tuple(set_by_you), tuple(already), drifted)
 
 
-def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> SettingState:
+def setting_state(
+    agent: str,
+    setting: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> SettingState:
     """on: a recorded key still holds ours. drift: recorded keys were all changed by someone else.
     yours: every key holds ours and nothing is recorded. off: anything else."""
-    facts = setting_facts(agent, setting, home=home, platform_os=platform_os)
+    facts = setting_facts(agent, setting, home=home, platform_os=platform_os, environ=environ)
     if facts.written:
         return "on"
     if facts.drifted:
@@ -988,23 +1062,28 @@ def setting_state(agent: str, setting: str, *, home: Path, platform_os: str) -> 
     return "off"
 
 
-def revert_agent(agent: str, *, home: Path, platform_os: str) -> tuple[FileResult, ...]:
+def revert_agent(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> tuple[FileResult, ...]:
     """Revert every setting the ledger records for this agent, in ledger order."""
     try:
         ledger = _ledger(agent)
     except LedgerUntrusted as exc:
-        path = settings_file(agent, home=home, platform_os=platform_os)
+        path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
         return (FileResult(agent, "", path, _format(agent), refused=str(exc)),)
     settings = tuple(dict.fromkeys(entry.setting for entry in ledger.entries))
     return tuple(
         result
         for setting in settings
-        for result in _revert_results(agent, setting, home=home, platform_os=platform_os)
+        for result in _revert_results(
+            agent, setting, home=home, platform_os=platform_os, environ=environ
+        )
     )
 
 
 def ledger_summary(agent: str, *, home: Path) -> tuple[tuple[Path, tuple[str, ...]], ...]:
-    """Per settings file under home, the dotted keys the ledger records there (removal previews)."""
+    """Per settings file under home, the dotted keys the ledger records there (removal previews).
+    Accepted limit: a file outside home (an absolute COPILOT_HOME) is reverted but never listed."""
     ledger = read_ledger(agent) or ConfigLedger(agent)
     keys_by_file: dict[str, list[str]] = {}
     for entry in ledger.entries:

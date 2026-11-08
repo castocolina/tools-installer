@@ -1469,6 +1469,7 @@ desc = "OpenAI coding agent for the user; coordinates local coding sessions rath
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
 # own README).
 recommends = ["codegraph", "graphify"]
+post_install = ["apply_agent_tuning"]
 # Verified 2026-10-10: https://chatgpt.com/codex/install.sh places the binary
 # at ${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin/codex. Live
 # host symlink target agrees. ~/.local/bin/codex is only that symlink;
@@ -1522,6 +1523,7 @@ desc = "Anthropic coding agent for the user; complements Codex and needs clear i
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
 # own README).
 recommends = ["codegraph", "graphify"]
+post_install = ["apply_agent_tuning"]
 [[tool.method]]
 kind = "script"
 url = "https://claude.ai/install.sh"
@@ -1554,6 +1556,7 @@ desc = "Open source coding agent for the user, useful when teams want provider-f
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
 # own README).
 recommends = ["codegraph", "graphify"]
+post_install = ["apply_agent_tuning"]
 owner_probes = ["pacman"]
 # Verified 2026-10-10: https://opencode.ai/install hardcodes
 # INSTALL_DIR=$HOME/.opencode/bin and moves the binary there. Live host has
@@ -1616,6 +1619,7 @@ desc = "Cursor's terminal coding agent; installs via its own official curl|bash 
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
 # own README).
 recommends = ["codegraph", "graphify"]
+post_install = ["apply_agent_tuning"]
 [[tool.method]]
 kind = "script"
 url = "https://cursor.com/install"
@@ -2310,7 +2314,7 @@ audience = "human"
 tier = "user"
 verified = 2026-11-03
 desc = "GUI editor with a `code` CLI; on Linux this installs the official tarball to ~/.local/opt (userspace, safe on immutable distros like Bazzite)."
-post_install = ["show_lean_tips"]
+post_install = ["apply_agent_tuning", "show_lean_tips"]
 # Arch-split `latest` aliases (each 302s to the current build's CDN zip); the
 # universal zip is ~120 MB larger per download and ~2x on disk -> not used.
 [[tool.method]]

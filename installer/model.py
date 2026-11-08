@@ -128,6 +128,7 @@ POST_INSTALL_ACTIONS = (
     "source_shell_init",
     "set_omz_theme",
     "show_lean_tips",
+    "apply_agent_tuning",
 )
 SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell", "source_shell_init")
 OWNER_PROBES = (

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import agent_settings
+from installer import agent_settings, receipts
 from installer.agent_settings import (
     CHANGED_WHILE_WRITING,
     SettingsChanged,
@@ -1096,3 +1096,101 @@ def test_the_removal_preview_lists_only_keys_still_holding_our_value() -> None:
         ("attribution.pr", "kept_changed"),
         ("attribution.commit", "removed"),
     ]
+
+
+def test_copilot_keys_format_groups_and_ledger_slot() -> None:
+    assert agent_settings.AGENT_FORMATS["copilot"] == "jsonc"
+    approve = agent_settings.setting_keys("copilot", "auto-approve", "linux")
+    attribution = agent_settings.setting_keys("copilot", "no-attribution", "linux")
+    assert [(key.path, key.value) for key in approve] == [(("defaultPermissionMode",), "allow-all")]
+    assert [(key.path, key.value) for key in attribution] == [(("includeCoAuthoredBy",), False)]
+    assert agent_settings.TUNING_GROUPS["copilot"] == ("auto-approve", "no-attribution")
+    assert "copilot" in receipts.CONFIG_AGENTS
+
+
+def test_copilot_writes_under_an_absolute_copilot_home_and_keeps_a_comment(tmp_path: Path) -> None:
+    home = Path.home()
+    ch = tmp_path / "ch"
+    ch.mkdir()
+    settings = ch / "settings.json"
+    settings.write_text('// mine\n{"theme": "dark"}\n', encoding="utf-8")
+    environ = {"COPILOT_HOME": str(ch)}
+
+    first = apply_setting(
+        "copilot", "auto-approve", home=home, platform_os="linux", environ=environ
+    )
+    second = apply_setting(
+        "copilot", "no-attribution", home=home, platform_os="linux", environ=environ
+    )
+
+    assert first.refused is None and second.refused is None
+    assert first.path == settings
+    text = settings.read_text(encoding="utf-8")
+    assert text.startswith("// mine\n")
+    assert parse_settings(text, "jsonc") == {
+        "theme": "dark",
+        "defaultPermissionMode": "allow-all",
+        "includeCoAuthoredBy": False,
+    }
+    assert not (home / ".copilot" / "settings.json").exists()
+
+
+def test_copilot_revert_under_the_same_home_restores_the_file(tmp_path: Path) -> None:
+    home = Path.home()
+    ch = tmp_path / "ch"
+    ch.mkdir()
+    settings = ch / "settings.json"
+    original = '// mine\n{"theme": "dark"}\n'
+    settings.write_text(original, encoding="utf-8")
+    environ = {"COPILOT_HOME": str(ch)}
+    apply_setting("copilot", "auto-approve", home=home, platform_os="linux", environ=environ)
+
+    results = revert_agent("copilot", home=home, platform_os="linux", environ=environ)
+
+    assert [(r.refused, [k.kind for k in r.keys]) for r in results] == [(None, ["removed"])]
+    assert settings.read_text(encoding="utf-8") == original
+    assert read_ledger("copilot") is None
+
+
+def test_copilot_revert_under_another_home_is_refused_and_keeps_the_record(tmp_path: Path) -> None:
+    home = Path.home()
+    ch = tmp_path / "ch"
+    ch.mkdir()
+    apply_setting(
+        "copilot",
+        "auto-approve",
+        home=home,
+        platform_os="linux",
+        environ={"COPILOT_HOME": str(ch)},
+    )
+    written = (ch / "settings.json").read_bytes()
+
+    results = revert_agent(
+        "copilot",
+        home=home,
+        platform_os="linux",
+        environ={"COPILOT_HOME": str(tmp_path / "other")},
+    )
+
+    assert [r.refused for r in results] == [agent_settings.NOT_A_SETTINGS_FILE]
+    assert (ch / "settings.json").read_bytes() == written
+    ledger = read_ledger("copilot")
+    assert ledger is not None
+    assert [entry.key_path for entry in ledger.entries] == [("defaultPermissionMode",)]
+
+
+def test_copilot_home_outside_home_is_reverted_but_not_previewed(tmp_path: Path) -> None:
+    """Accepted limit (review R1-02): the preview filters on HOME; the revert does not."""
+    home = Path.home()
+    ch = tmp_path / "ch"
+    environ = {"COPILOT_HOME": str(ch)}
+    for group in ("auto-approve", "no-attribution"):
+        apply_setting("copilot", group, home=home, platform_os="linux", environ=environ)
+    assert (ch / "settings.json").is_file()
+
+    assert ledger_summary("copilot", home=home) == ()
+    assert agent_settings.ledger_preview("copilot", home=home) == ()
+    results = revert_agent("copilot", home=home, platform_os="linux", environ=environ)
+
+    assert [key.kind for r in results for key in r.keys] == ["removed", "removed"]
+    assert not (ch / "settings.json").exists()
