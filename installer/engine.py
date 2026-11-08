@@ -391,6 +391,7 @@ def _dispatch_post_install(
     if not tool.post_install:
         return PostInstallOutput(), None
     try:
-        return run_post_install(tool, platform, confirm), None
+        output = run_post_install(tool, platform, confirm)
+        return output, output.warning
     except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
         return PostInstallOutput(), f"post-install actions crashed: {exc}"

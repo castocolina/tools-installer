@@ -71,6 +71,8 @@ class PostInstallOutput:
 
     lines: tuple[str, ...] = ()
     settings: tuple[FileResult, ...] = ()
+    warning: str | None = None  # one crashed action's reason per entry, joined; never fatal
+    refused: str | None = None  # why an install-tuning write was refused (RECONFIGURE fails on it)
 
 
 PostInstallAction = Callable[
@@ -207,21 +209,22 @@ def _set_omz_theme(
     return (theme_line, *_OMZ_HANDOFF)
 
 
-def _tune_omz_plugins(*, skip_recorded: bool) -> tuple[str, ...]:
-    """Enable the bundled plugins in the user's .zshrc. A refusal is one line, never a raise."""
+def _tune_omz_plugins(*, skip_recorded: bool) -> PostInstallOutput:
+    """Enable the bundled plugins in the user's .zshrc. A refusal is one line and `refused`."""
     home = Path.home()
     root = omz_root(home, os.environ)
     myshellrc = home / ".myshellrc"
     if root is None or (skip_recorded and plugins_owned(myshellrc)):
-        return ()
+        return PostInstallOutput()
     try:
         added = write_plugins(zshrc_path(home, os.environ), myshellrc, root=root)
     except OSError as exc:  # OmzPluginsError is one: a refused array, or a file that changed
         lines = str(exc).splitlines()
-        return (f"Plugins not changed: {lines[0] if lines else type(exc).__name__}",)
+        reason = lines[0] if lines else type(exc).__name__
+        return PostInstallOutput((f"Plugins not changed: {reason}",), refused=reason)
     if added:
-        return (f"Plugins: added {' '.join(added)} to ~/.zshrc.",)
-    return (f"Plugins: {' and '.join(MANAGED_PLUGINS)} are on.",)
+        return PostInstallOutput((f"Plugins: added {' '.join(added)} to ~/.zshrc.",))
+    return PostInstallOutput((f"Plugins: {' and '.join(MANAGED_PLUGINS)} are on.",))
 
 
 def _set_omz_plugins(
@@ -230,7 +233,7 @@ def _set_omz_plugins(
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
     del tool, platform, confirm
-    return _tune_omz_plugins(skip_recorded=False)  # install and reinstall rewrite
+    return _tune_omz_plugins(skip_recorded=False).lines  # install and reinstall rewrite
 
 
 def _tune_agent(tool: Tool, platform: Platform, *, skip_recorded: bool) -> PostInstallOutput:
@@ -285,10 +288,6 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
 }
 
 
-# The actions that make up a tool's install tuning, in the order a tool declares them.
-TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning", "set_omz_plugins", "source_shell_init")
-
-
 def apply_install_tuning(
     tool: Tool, platform: Platform, *, skip_recorded: bool
 ) -> PostInstallOutput:
@@ -296,16 +295,19 @@ def apply_install_tuning(
     ledger records alone, so a key the user deleted stays deleted; the install action does not."""
     lines: list[str] = []
     settings: list[FileResult] = []
+    refused: str | None = None
     for name in tool.post_install:
         if name == "apply_agent_tuning":
             produced = _tune_agent(tool, platform, skip_recorded=skip_recorded)
             lines.extend(produced.lines)
             settings.extend(produced.settings)
         elif name == "set_omz_plugins":
-            lines.extend(_tune_omz_plugins(skip_recorded=skip_recorded))
+            produced = _tune_omz_plugins(skip_recorded=skip_recorded)
+            lines.extend(produced.lines)
+            refused = refused or produced.refused
         elif name == "source_shell_init":
             lines.extend(_tune_shell_init(tool, platform, skip_recorded=skip_recorded))
-    return PostInstallOutput(tuple(lines), tuple(settings))
+    return PostInstallOutput(tuple(lines), tuple(settings), refused=refused)
 
 
 def run_post_install(
@@ -316,14 +318,20 @@ def run_post_install(
     """Dispatch each declared post-install action in order; skip unknown names."""
     lines: list[str] = []
     settings: list[FileResult] = []
+    crashed: list[str] = []
     for name in tool.post_install:
         action = POST_INSTALL_HOOKS.get(name)
         if action is None:
             continue
-        produced = action(tool, platform, confirm)
+        try:
+            produced = action(tool, platform, confirm)
+        except Exception as exc:  # one action's crash is a warning, never the others' loss
+            first = next(iter(str(exc).splitlines()), "") or type(exc).__name__
+            crashed.append(f"{name} crashed: {first}")
+            continue
         if isinstance(produced, PostInstallOutput):
             lines.extend(produced.lines)
             settings.extend(produced.settings)
         else:
             lines.extend(produced)
-    return PostInstallOutput(tuple(lines), tuple(settings))
+    return PostInstallOutput(tuple(lines), tuple(settings), "; ".join(crashed) or None)

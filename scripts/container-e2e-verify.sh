@@ -892,9 +892,11 @@ print(\"K\", count)
 # After --uninstall --yes: for the agents settings_probe_installed persisted (never a fresh PATH
 # lookup: the uninstall just removed copilot's link), every tuning key must be gone from the agent's
 # settings file (the container starts with none; a key the revert restored to the CLI's own default
-# counts as gone), no config-write ledger may remain, and neither
+# counts as gone), the file itself must be gone too (unless a CLI default was restored into it),
+# no config-write ledger may remain, and neither
 # copilot's ~/.local/bin link nor its opt dir may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N,
-# or one TRACER_SETTINGS_REVERT_DIFF / TRACER_SETTINGS_LEDGER_LEFT / TRACER_COPILOT_LEFT line per
+# or one TRACER_SETTINGS_REVERT_DIFF / TRACER_SETTINGS_FILE_LEFT / TRACER_SETTINGS_LEDGER_LEFT /
+# TRACER_COPILOT_LEFT line per
 # finding; a missing or unreadable agent list prints TRACER_SETTINGS_REVERT_PROBE_FAILED.
 settings_probe_revert() {
   local out line failed=0 keys="" workspace agent
@@ -914,13 +916,19 @@ for agent in agents:
     path = s.settings_file(agent, home=home, platform_os=\"linux\", environ=os.environ)
     text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
     doc = s.parse_settings(text, s.AGENT_FORMATS[agent])
+    restored_any = False
     for group in s.TUNING_GROUPS[agent]:
         for key in s.setting_keys(agent, group, \"linux\"):
             count += 1
             now = s.lookup(doc, key.path)
             restored = key.cli_default is not s.ABSENT and s.same_value(now, key.cli_default)
+            restored_any = restored_any or restored
             if now is not s.ABSENT and not restored:
                 print(\"D\", agent, \".\".join(key.path))
+    # No settings file existed before the install, so one still here is a leftover unless
+    # the revert restored a CLI default into it (cursor-agent), which keeps the file.
+    if path.exists() and not restored_any:
+        print(\"F\", agent)
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)
 if \"copilot\" in agents:
@@ -937,6 +945,7 @@ print(\"K\", count)
         printf 'TRACER_SETTINGS_REVERT_DIFF agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
         failed=1
         ;;
+      "F "*) printf 'TRACER_SETTINGS_FILE_LEFT agent=%s\n' "${line#F }"; failed=1 ;;
       "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
       "C "*) printf 'TRACER_COPILOT_LEFT path=%s\n' "${line#C }"; failed=1 ;;
       "K "*) keys="${line#K }" ;;

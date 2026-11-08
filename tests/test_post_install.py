@@ -32,6 +32,7 @@ from installer.shellrc import write_myshellrc
 from installer.tweaks import (
     SHELL_INIT_TOOLS,
     TweakBundle,
+    record_shell_init,
     shell_init_bundle,
     shell_init_record,
     strip_tweak_block,
@@ -857,6 +858,35 @@ def test_set_omz_plugins_refusal_is_a_line_not_an_exception() -> None:
     assert len(lines) == 1
     assert lines[0].startswith("Plugins not changed: ")
     assert (home / ".zshrc").read_text() == "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n"
+
+
+def test_one_crashing_action_keeps_the_chsh_handoff_and_the_other_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-04: a non-UTF-8 .zshrc breaks the theme action; the chsh lines (SPEC R8) and the
+    plugins action's line still come out, and the crash is the warning."""
+    _stub_chsh(monkeypatch, present=True)
+    home = _omz_home(None)
+    (home / ".zshrc").write_bytes(b"plugins=(git)\n# caf\xe9\nsource $ZSH/oh-my-zsh.sh\n")
+    tool = replace(
+        _action_tool("oh-my-zsh", "set_login_shell"),
+        post_install=("set_login_shell", "set_omz_theme", "set_omz_plugins"),
+    )
+
+    output = run_post_install(tool, _mutable(), None)
+
+    assert any("chsh -s" in line for line in output.lines)
+    assert output.warning is not None and "set_omz_theme crashed: " in output.warning
+    assert any(line.startswith("Plugins") for line in output.lines)
+
+
+def test_shell_init_record_on_a_non_utf8_rc_is_a_refusal_not_a_decode_crash() -> None:
+    rc_path = Path.home() / ".myshellrc"
+    rc_path.write_bytes(b"# caf\xe9\n")
+
+    with pytest.raises(OSError, match="not valid UTF-8"):
+        record_shell_init(rc_path, "starship")
+    assert rc_path.read_bytes() == b"# caf\xe9\n"
 
 
 def test_omz_install_tuning_on_reconfigure_skips_a_recorded_record() -> None:

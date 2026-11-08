@@ -14,6 +14,7 @@ import installer.session as session_module
 from installer import agent_settings, executors, postinstall, receipts
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
+from installer.guards import REDIRECT_SENTINEL
 from installer.model import (
     ConfigStep,
     ConfigStepKind,
@@ -1159,7 +1160,8 @@ def test_execute_plan_prints_the_login_shell_handoff_whatever_the_confirmation_s
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
+        del path
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
@@ -1226,7 +1228,8 @@ def test_execute_plan_without_a_confirmation_still_prints_the_handoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
+        del path
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
@@ -1637,6 +1640,25 @@ def test_install_tuning_step_refusal_fails_and_carries_the_settings(
     assert settings.read_text(encoding="utf-8") == "{}\n"
 
 
+def test_install_tuning_step_fails_when_the_omz_plugin_write_is_refused() -> None:
+    """C-06: a refused Oh-My-Zsh plugins write is a failed step, not a done row."""
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    zshrc = home / ".zshrc"
+    refused = "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n"
+    zshrc.write_text(refused, encoding="utf-8")
+    catalog = {
+        "oh-my-zsh": replace(_shipped_catalog()["oh-my-zsh"], post_install=("set_omz_plugins",))
+    }
+    row = _reconfigure_row("oh-my-zsh", _ALL_KIND_STEPS["install_tuning"])
+
+    outcome = execute_plan([row], _run_context(RunRecorder(), catalog=catalog))[0]
+
+    assert outcome.result == "failed"
+    assert (outcome.detail or "").startswith("apply install tuning: The last plugins=(...) array")
+    assert zshrc.read_text(encoding="utf-8") == refused
+
+
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
@@ -1702,6 +1724,38 @@ def test_pnpm_off_path_skip_row_puts_its_bin_dir_on_path_for_mmdc(
     )
 
     assert [outcome.result for outcome in outcomes] == ["skipped", "done"]
+    assert calls[0][:3] == [str(fake_pnpm), "add", "-g"]
+
+
+def test_path_repair_ignores_the_installers_own_pnpm_redirect_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-01: the ban's pnpm redirect shim on PATH is not a real pnpm, so the real
+    pnpm's declared bin dir still reaches PATH and mmdc runs the real binary."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_pnpm = _plant_command(tmp_path / ".local" / "share" / "pnpm" / "bin", "pnpm")
+    shim = _plant_command(tmp_path / ".local" / "bin", "pnpm")
+    shim.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 1\n")
+    monkeypatch.setenv("PATH", str(tmp_path / ".local" / "bin"))
+    monkeypatch.setattr(executors, "probe_version", _probe_pnpm_and_node)
+    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    calls: list[list[str]] = []
+    ctx = RunContext(
+        catalog=_shipped_catalog(),
+        platform=_platform(),
+        runner=calls.append,
+        resolve_tag=lambda _repo: "1.0.0",
+        install=_install_through_node_method,
+    )
+
+    execute_plan(
+        [
+            PlanRow("pnpm", Disposition.SKIP, "already present"),
+            PlanRow("mmdc", Disposition.INSTALL, "will install"),
+        ],
+        ctx,
+    )
+
     assert calls[0][:3] == [str(fake_pnpm), "add", "-g"]
 
 

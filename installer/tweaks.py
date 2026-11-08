@@ -393,7 +393,10 @@ def shell_init_record(rc_path: Path) -> tuple[str, ...] | None:
 
 
 def _store_shell_init_record(rc_path: Path, ids: tuple[str, ...]) -> None:
-    existing = rc_path.read_text() if rc_path.exists() else ""
+    try:
+        existing = rc_path.read_text() if rc_path.exists() else ""
+    except UnicodeDecodeError as exc:  # never rewrite bytes that cannot round-trip
+        raise OSError(f"{rc_path} is not valid UTF-8; shell-init record not updated") from exc
     if ids:
         body = (
             "# Shell init this installer wrote once. A block you delete is not written again.",

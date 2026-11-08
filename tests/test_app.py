@@ -3851,7 +3851,8 @@ def test_run_wizard_prints_login_shell_instructions_without_asking(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
+        del path
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
@@ -6663,7 +6664,8 @@ def _headless_omz_install(
     from installer.engine import install_tool
     from installer.model import load_tools
 
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
+        del path
         return "/usr/bin/chsh" if chsh_present and cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)

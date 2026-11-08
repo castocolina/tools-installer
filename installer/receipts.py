@@ -273,6 +273,8 @@ class ConfigLedger:
     agent: str
     created_files: tuple[str, ...] = ()
     entries: tuple[ConfigWrite, ...] = ()
+    # (file, original text) for a settings file that existed but held only whitespace.
+    blank_files: tuple[tuple[str, str], ...] = ()
 
 
 def config_ledger_dir() -> Path:
@@ -315,6 +317,23 @@ def _config_write_from(raw: object) -> ConfigWrite | None:
     )
 
 
+def _blank_files_from(raw: object) -> tuple[tuple[str, str], ...] | None:
+    """The optional blank-file records; None when the field is malformed (fail-closed)."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        return None
+    pairs: list[tuple[str, str]] = []
+    for item in cast(list[object], raw):
+        if not isinstance(item, list) or len(cast(list[object], item)) != 2:
+            return None
+        file, original = cast(list[object], item)
+        if not isinstance(file, str) or not isinstance(original, str) or original.strip():
+            return None
+        pairs.append((file, original))
+    return tuple(pairs)
+
+
 def read_ledger(agent: str) -> ConfigLedger | None:
     """The agent's ledger; None when it is missing or cannot be trusted (fail-closed)."""
     data = _read_json_object(_config_ledger_path(agent))
@@ -335,7 +354,10 @@ def read_ledger(agent: str) -> ConfigLedger | None:
         if entry is None:
             return None
         entries.append(entry)
-    return ConfigLedger(agent, tuple(cast(list[str], files)), tuple(entries))
+    blanks = _blank_files_from(data.get("blank_files"))
+    if blanks is None:
+        return None
+    return ConfigLedger(agent, tuple(cast(list[str], files)), tuple(entries), blanks)
 
 
 def untrusted_ledger(agent: str) -> Path | None:
@@ -357,13 +379,14 @@ def write_ledger(ledger: ConfigLedger) -> None:
     """Atomically write one agent's ledger; a ledger with nothing in it deletes the file."""
     path = _config_ledger_path(ledger.agent)
     with _WRITE_LOCK:
-        if not ledger.entries and not ledger.created_files:
+        if not ledger.entries and not ledger.created_files and not ledger.blank_files:
             path.unlink(missing_ok=True)
             return
         payload: dict[str, object] = {
             "v": 1,
             "agent": ledger.agent,
             "created_files": list(ledger.created_files),
+            "blank_files": [list(pair) for pair in ledger.blank_files],
             "entries": [
                 {
                     "setting": entry.setting,

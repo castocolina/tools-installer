@@ -15,7 +15,7 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Literal, cast
 
@@ -744,13 +744,17 @@ def _apply_once(
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     entries = _kept_entries(ledger.entries, setting, file, step)
     if step.text == text:
-        write_ledger(ConfigLedger(agent, ledger.created_files, entries))
+        write_ledger(replace(ledger, entries=entries))
         return FileResult(agent, setting, path, fmt, keys=step.keys)
     created = ledger.created_files
     if snap is None and file not in created:
         created = (*created, file)
+    blanks = ledger.blank_files
+    if snap is not None and not snap.data.strip() and file not in dict(blanks):
+        blanks = (*blanks, (file, snap.data.decode("ascii")))  # restored byte for byte on revert
     try:
-        write_ledger(ConfigLedger(agent, created, entries))  # reserved before the file write
+        # reserved before the file write
+        write_ledger(replace(ledger, created_files=created, entries=entries, blank_files=blanks))
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     try:
@@ -872,8 +876,11 @@ def _revert_once(
         if text != original:
             # A created file goes only when nothing of the user's is left in it, comments too.
             bare = "".join(text.split()) in ("", "{}")
+            blank = dict(ledger.blank_files).get(file)
             if snap is not None and file in ledger.created_files and bare:
                 delete_if_unchanged(path, snap)
+            elif snap is not None and blank is not None and bare:
+                write_if_unchanged(path, snap, blank)
             else:
                 write_if_unchanged(path, snap, _with_bom(snap, text))
     except SettingsChanged:
@@ -884,8 +891,9 @@ def _revert_once(
     # With no key of ours left in it, a created file is gone or holds only the user's content.
     released = not any(entry.file == file for entry in remaining)
     created = tuple(name for name in ledger.created_files if not (released and name == file))
+    blanks = tuple(pair for pair in ledger.blank_files if not (released and pair[0] == file))
     try:
-        write_ledger(ConfigLedger(agent, created, remaining))
+        write_ledger(replace(ledger, created_files=created, entries=remaining, blank_files=blanks))
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     return FileResult(agent, setting, path, fmt, keys=results)
@@ -945,9 +953,6 @@ def _revert_results(
     )
 
 
-SettingState = Literal["on", "yours", "off", "drift"]
-
-
 class SettingsUnreadable(OSError):
     """A settings file the ledger manages does not parse: its state is unknown until it does."""
 
@@ -986,14 +991,11 @@ def file_problem(
 
 @dataclass(frozen=True)
 class SettingFacts:
-    """Who put each of one setting's keys where it now is; `path` is the file they live in."""
+    """Where one setting stands: `path` is the file its keys live in, `absent` the keys the
+    installer never recorded that the file lacks (the pending install tuning)."""
 
     path: Path
-    written: tuple[str, ...]  # recorded keys still holding our value
-    set_by_you: tuple[tuple[str, str], ...]  # (key, JSON value): another value, no record
-    already: tuple[str, ...]  # keys holding our value, no record
-    drifted: tuple[str, ...]  # recorded keys that no longer hold our value
-    absent: tuple[str, ...] = ()  # keys never recorded and missing from the file
+    absent: tuple[str, ...] = ()
 
 
 def setting_facts(
@@ -1022,55 +1024,18 @@ def setting_facts(
     if doc is None:
         if in_file:
             raise SettingsUnreadable(path, problem or "unreadable")
-        return SettingFacts(path, (), (), (), ())  # absent stays empty: nothing is readable
-    holding = tuple(
-        ".".join(entry.key_path)
-        for entry in in_file
-        if same_value(lookup(doc, entry.key_path), entry.value)
-    )
-    drifted = tuple(
-        ".".join(entry.key_path)
-        for entry in in_file
-        if not same_value(lookup(doc, entry.key_path), entry.value)
-    )
+        return SettingFacts(path)  # absent stays empty: nothing is readable
     recorded = {entry.key_path for entry in in_file}
-    set_by_you: list[tuple[str, str]] = []
-    already: list[str] = []
     absent: list[str] = []
     for key in setting_keys(agent, setting, platform_os):
-        current = lookup(doc, key.path)
         if key.path in recorded:
             continue
-        if current is ABSENT:
+        parent = lookup(doc, key.path[:-1])
+        if parent is not ABSENT and not isinstance(parent, dict):
+            continue  # the writer reports it as set by you: never pending
+        if lookup(doc, key.path) is ABSENT:
             absent.append(".".join(key.path))
-            continue
-        if same_value(current, key.value):
-            already.append(".".join(key.path))
-        elif not (key.cli_default is not ABSENT and same_value(current, key.cli_default)):
-            # A CLI default is replaced on apply, so it is not the user's own value.
-            set_by_you.append((".".join(key.path), _dump(current)))
-    return SettingFacts(path, holding, tuple(set_by_you), tuple(already), drifted, tuple(absent))
-
-
-def setting_state(
-    agent: str,
-    setting: str,
-    *,
-    home: Path,
-    platform_os: str,
-    environ: Mapping[str, str] | None = None,
-) -> SettingState:
-    """on: a recorded key still holds ours. drift: recorded keys were all changed by someone else.
-    yours: every key holds ours and nothing is recorded. off: anything else."""
-    facts = setting_facts(agent, setting, home=home, platform_os=platform_os, environ=environ)
-    if facts.written:
-        return "on"
-    if facts.drifted:
-        return "drift"
-    keys = setting_keys(agent, setting, platform_os)
-    if keys and len(facts.already) == len(keys):
-        return "yours"
-    return "off"
+    return SettingFacts(path, tuple(absent))
 
 
 def revert_agent(
