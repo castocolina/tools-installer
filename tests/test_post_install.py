@@ -742,3 +742,62 @@ def test_reinstall_rewrites_a_deleted_recorded_key() -> None:
     assert _document("claude")["skipDangerousModePermissionPrompt"] is True
     ledger = read_ledger("claude")
     assert ledger is not None and len(ledger.entries) == 4
+
+
+_OMZ_USER_ZSHRC = 'export ZSH="$HOME/.oh-my-zsh"\nplugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n'
+
+
+def _omz_home(zshrc_text: str | None) -> Path:
+    home = Path.home()
+    (home / ".oh-my-zsh").mkdir()
+    if zshrc_text is not None:
+        (home / ".zshrc").write_text(zshrc_text)
+    return home
+
+
+def test_set_omz_plugins_reports_what_it_added_and_what_was_already_on() -> None:
+    home = _omz_home(_OMZ_USER_ZSHRC)
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    assert run_post_install(tool, _mutable(), None).lines == ("Plugins: added docker to ~/.zshrc.",)
+    assert "plugins=(git z docker)" in (home / ".zshrc").read_text()
+    assert run_post_install(tool, _mutable(), None).lines == ("Plugins: git and docker are on.",)
+
+
+def test_set_omz_plugins_without_an_oh_my_zsh_root_does_nothing() -> None:
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    assert run_post_install(tool, _mutable(), None).lines == ()
+    assert not (Path.home() / ".zshrc").exists()
+
+
+def test_set_omz_plugins_honours_zsh_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "relocated-omz"
+    root.mkdir()
+    monkeypatch.setenv("ZSH", str(root))
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    run_post_install(tool, _mutable(), None)
+    zshrc = (Path.home() / ".zshrc").read_text()
+    assert f"export ZSH={root}" in zshrc
+    assert "plugins=(git docker)" in zshrc
+
+
+def test_set_omz_plugins_refusal_is_a_line_not_an_exception() -> None:
+    home = _omz_home("plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n")
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    lines = run_post_install(tool, _mutable(), None).lines
+    assert len(lines) == 1
+    assert lines[0].startswith("Plugins not changed: ")
+    assert (home / ".zshrc").read_text() == "plugins=(\n  git\n)\nsource $ZSH/oh-my-zsh.sh\n"
+
+
+def test_omz_install_tuning_on_reconfigure_skips_a_recorded_record() -> None:
+    _omz_home(_OMZ_USER_ZSHRC)
+    tool = _action_tool("oh-my-zsh", "set_omz_plugins")
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=True).lines != ()
+    zshrc = Path.home() / ".zshrc"
+    zshrc.write_text(_OMZ_USER_ZSHRC)  # the user cut docker again after the record was written
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=True).lines == ()
+    assert zshrc.read_text() == _OMZ_USER_ZSHRC
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=False).lines != ()
+    assert "docker" in zshrc.read_text()

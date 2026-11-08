@@ -604,7 +604,7 @@ audience = "human"
 tier = "system"
 verified = 2026-11-04
 requires = ["zsh", "git"]
-post_install = ["set_login_shell", "set_omz_theme"]
+post_install = ["set_login_shell", "set_omz_theme", "set_omz_plugins"]
 desc = "Zsh configuration framework; installs into ~/.oh-my-zsh and edits .zshrc, preserving it via KEEP_ZSHRC."
 [[tool.method]]
 kind = "script"

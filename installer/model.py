@@ -127,6 +127,7 @@ POST_INSTALL_ACTIONS = (
     "set_login_shell",
     "source_shell_init",
     "set_omz_theme",
+    "set_omz_plugins",
     "show_lean_tips",
     "apply_agent_tuning",
 )

@@ -1903,6 +1903,7 @@ def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> No
         "set_login_shell",
         "source_shell_init",
         "set_omz_theme",
+        "set_omz_plugins",
         "show_lean_tips",
         "apply_agent_tuning",
     )

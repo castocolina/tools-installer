@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import installer.locations
-from installer import agent_settings, receipts
+from installer import agent_settings, omz, receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
@@ -644,6 +644,31 @@ TUNING_STEP = ConfigStep("apply install tuning", "install_tuning")
 
 
 def _tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
+    """The pending-install-tuning fact of one tool: an agent's settings, or Oh-My-Zsh's plugins."""
+    if present and "set_omz_plugins" in tool.post_install:
+        return _omz_tuning_fact()
+    return _agent_tuning_fact(tool, present, platform)
+
+
+def _omz_tuning_fact() -> _ConfigFacts:
+    """A present Oh-My-Zsh the installer never wrote plugins for reads `≈` with the one step.
+
+    A record (even an empty one) means the install tuning ran, or the Policies row did (D-18):
+    nothing to say. A .zshrc `write_plugins` would refuse is a reason with no step.
+    """
+    home = Path.home()
+    try:
+        if omz.omz_root(home, os.environ) is None or omz.plugins_owned(home / ".myshellrc"):
+            return _NO_FACTS
+        refusal = omz.plugins_refusal(installer.locations.zshrc_path(home, os.environ))
+    except Exception as exc:  # a read-only secondary fact must never fail the pass
+        return _ConfigFacts(unchecked=(f"plugins not checked: {exc}",))
+    if refusal is not None:
+        return _ConfigFacts((refusal,))
+    return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
+
+
+def _agent_tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
     """Every settings-file fact of one agent (UI-SPEC section 5 O7, 23.2 D-04, D-05).
 
     An untrusted ledger blocks the row with its reason, present or not. A settings file the

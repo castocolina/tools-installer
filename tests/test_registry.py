@@ -1252,7 +1252,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     tuned = {"claude", "codex", "opencode", "cursor-agent", "copilot"}
     assert declarers == {"oh-my-zsh", "vscode", *tuned, *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
-    assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
+    assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme", "set_omz_plugins")
     assert oh_my_zsh.requires == ("zsh", "git")
     method = oh_my_zsh.methods[0]
     assert method.kind == "script"
@@ -2743,7 +2743,11 @@ def test_script_tools_declare_their_documented_config_dirs(
 
 def test_omz_and_vscode_declare_their_actions() -> None:
     tools = _tools_by_id()
-    assert tools["oh-my-zsh"].post_install == ("set_login_shell", "set_omz_theme")
+    assert tools["oh-my-zsh"].post_install == (
+        "set_login_shell",
+        "set_omz_theme",
+        "set_omz_plugins",
+    )
     assert tools["vscode"].post_install == ("apply_agent_tuning", "show_lean_tips")
 
 

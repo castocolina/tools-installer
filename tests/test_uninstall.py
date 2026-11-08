@@ -11,6 +11,7 @@ from installer import receipts
 from installer.download import artifact_paths, link_name
 from installer.enums import UninstallState
 from installer.model import Method, Tool
+from installer.omz import plugins_owned, write_plugins
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError
@@ -18,6 +19,7 @@ from installer.tweaks import BUNDLES, TweakBundle
 from installer.uninstall import (
     RemovalPlan,
     SweepResult,
+    active_policies,
     active_tweak_ids,
     manager_name,
     plan_removal,
@@ -25,6 +27,7 @@ from installer.uninstall import (
     removal_plan,
     remove_paths,
     remove_proven,
+    sweep_policies,
     sweep_tweaks,
 )
 from installer.version_status import (
@@ -3227,3 +3230,20 @@ def test_a_lone_manager_receipt_is_not_nothing_to_uninstall(
     assert "Nothing to uninstall" not in buf.getvalue()
     assert len(asked) == 1
     assert not receipts.receipt_exists("charlie")
+
+
+def test_omz_plugins_full_uninstall_restores_the_users_list(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("plugins=(git z)\nsource $ZSH/oh-my-zsh.sh\n")
+    rc_path = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    assert write_plugins(zshrc, rc_path) == ("docker",)
+    assert "plugins=(git z docker)" in zshrc.read_text()
+
+    policies = active_policies((), rc_path=rc_path, bin_dir=bin_dir, zshrc_path=zshrc)
+    assert [policy.id for policy in policies] == ["omz-plugins"]
+    assert sweep_policies(policies).swept == ("omz-plugins",)
+
+    assert "plugins=(git z)\n" in zshrc.read_text()
+    assert not plugins_owned(rc_path)

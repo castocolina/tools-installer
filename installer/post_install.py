@@ -47,7 +47,15 @@ from installer.agent_settings import (
 )
 from installer.locations import zshrc_path
 from installer.model import Tool
-from installer.omz import apply_theme, default_theme, ensure_zshrc_template, omz_root
+from installer.omz import (
+    MANAGED_PLUGINS,
+    apply_theme,
+    default_theme,
+    ensure_zshrc_template,
+    omz_root,
+    plugins_owned,
+    write_plugins,
+)
 from installer.platform import Platform
 from installer.policy import tweak_policy
 from installer.sanitize import sanitize_log_line
@@ -205,6 +213,32 @@ def _set_omz_theme(
     return (theme_line, *_OMZ_HANDOFF)
 
 
+def _tune_omz_plugins(*, skip_recorded: bool) -> tuple[str, ...]:
+    """Enable the bundled plugins in the user's .zshrc. A refusal is one line, never a raise."""
+    home = Path.home()
+    root = omz_root(home, os.environ)
+    myshellrc = home / ".myshellrc"
+    if root is None or (skip_recorded and plugins_owned(myshellrc)):
+        return ()
+    try:
+        added = write_plugins(zshrc_path(home, os.environ), myshellrc, root=root)
+    except OSError as exc:  # OmzPluginsError is one: a refused array, or a file that changed
+        lines = str(exc).splitlines()
+        return (f"Plugins not changed: {lines[0] if lines else type(exc).__name__}",)
+    if added:
+        return (f"Plugins: added {' '.join(added)} to ~/.zshrc.",)
+    return (f"Plugins: {' and '.join(MANAGED_PLUGINS)} are on.",)
+
+
+def _set_omz_plugins(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del tool, platform, confirm
+    return _tune_omz_plugins(skip_recorded=False)  # install and reinstall rewrite
+
+
 def _tune_agent(tool: Tool, platform: Platform, *, skip_recorded: bool) -> PostInstallOutput:
     home = Path.home()
     results: list[FileResult] = []
@@ -251,13 +285,14 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "set_login_shell": _set_login_shell,
     "source_shell_init": _source_shell_init,
     "set_omz_theme": _set_omz_theme,
+    "set_omz_plugins": _set_omz_plugins,
     "show_lean_tips": _show_lean_tips,
     "apply_agent_tuning": _apply_agent_tuning,
 }
 
 
 # The actions that make up a tool's install tuning, in the order a tool declares them.
-TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning",)
+TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning", "set_omz_plugins")
 
 
 def apply_install_tuning(
@@ -268,10 +303,12 @@ def apply_install_tuning(
     lines: list[str] = []
     settings: list[FileResult] = []
     for name in tool.post_install:
-        if name in TUNING_ACTIONS:
+        if name == "apply_agent_tuning":
             produced = _tune_agent(tool, platform, skip_recorded=skip_recorded)
             lines.extend(produced.lines)
             settings.extend(produced.settings)
+        elif name == "set_omz_plugins":
+            lines.extend(_tune_omz_plugins(skip_recorded=skip_recorded))
     return PostInstallOutput(tuple(lines), tuple(settings))
 
 
