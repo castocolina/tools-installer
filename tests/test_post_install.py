@@ -30,7 +30,14 @@ from installer.post_install import (
 from installer.postinstall import POSTINSTALL_HOOKS
 from installer.receipts import read_ledger
 from installer.shellrc import write_myshellrc
-from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
+from installer.tweaks import (
+    SHELL_INIT_TOOLS,
+    TweakBundle,
+    shell_init_bundle,
+    shell_init_record,
+    strip_tweak_block,
+    write_tweak,
+)
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -318,31 +325,103 @@ def test_the_default_reader_wires_no_rc_file() -> None:
     assert not (home / ".bashrc").exists()
 
 
-def test_shell_init_is_never_turned_on_without_a_yes() -> None:
+def test_headless_zoxide_install_writes_its_shell_init_with_no_prompt() -> None:
+    home = Path.home()
+    lines = run_post_install(_shell_init_tool("zoxide"), _mutable(), None).lines
+    assert lines == ("Shell init on: open a new terminal to use it.",)
+    assert "# >>> tools-installer tweak:zoxide >>>" in (home / ".myshellrc").read_text()
+    assert shell_init_record(home / ".myshellrc") == ("zoxide",)
+
+
+def test_headless_starship_install_writes_its_block_and_the_empty_theme() -> None:
     home = Path.home()
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_ZSHRC)
-    before = zshrc.read_bytes()
-    assert run_post_install(_shell_init_tool("starship"), _mutable(), None).lines == ()
-    assert (
-        run_post_install(_shell_init_tool("starship"), _mutable(), lambda _t, _a: False).lines == ()
-    )
-    assert not (home / ".myshellrc").exists()
-    assert zshrc.read_bytes() == before
+    run_post_install(_shell_init_tool("starship"), _mutable(), None)
+    assert "starship init zsh" in (home / ".myshellrc").read_text()
+    assert 'ZSH_THEME=""' in zshrc.read_text()
+    assert shell_init_record(home / ".myshellrc") == ("starship",)
 
 
-def test_the_shell_init_prompt_is_keyed_by_action() -> None:
+def test_shell_init_reinstall_leaves_one_block() -> None:
+    home = Path.home()
+    for _ in range(2):
+        run_post_install(_shell_init_tool("zoxide"), _mutable(), None)
+    text = (home / ".myshellrc").read_text()
+    assert text.count("# >>> tools-installer tweak:zoxide >>>") == 1
+    assert shell_init_record(home / ".myshellrc") == ("zoxide",)
+
+
+def test_shell_init_missing_myshellrc_is_created() -> None:
+    rc = Path.home() / ".myshellrc"
+    assert not rc.exists()
+    run_post_install(_shell_init_tool("fzf"), _mutable(), None)
+    assert "# >>> tools-installer tweak:fzf >>>" in rc.read_text()
+
+
+def test_shell_init_bundle_absent_on_this_os_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bundle = shell_init_bundle("zoxide")
     assert bundle is not None
-    assert bundle.description == "adds z, a cd that learns the directories you use"
-    assert sensitive_prompt("zoxide", "source_shell_init") == SensitivePrompt(
-        "Turn on zoxide shell init? It adds one guarded block to ~/.myshellrc that adds z, "
-        "a cd that learns the directories you use. It stays off unless you choose yes; "
-        "Policies can change it later.",
-        "Yes, turn it on",
-        "No, leave it off",
-        False,
-    )
+
+    def macos_only(_tool_id: str) -> TweakBundle:
+        return replace(bundle, platforms=("macos",))
+
+    monkeypatch.setattr(post_install, "shell_init_bundle", macos_only)
+    assert run_post_install(_shell_init_tool("zoxide"), _mutable(), None).lines == ()
+    assert not (Path.home() / ".myshellrc").exists()
+
+
+def test_shell_init_policies_era_block_is_the_same_block() -> None:
+    home = Path.home()
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+    write_tweak(bundle, home / ".myshellrc")  # what the Policies row wrote before this phase
+    before = (home / ".myshellrc").read_text()
+    assert shell_init_record(home / ".myshellrc") is None
+    run_post_install(_shell_init_tool("zoxide"), _mutable(), None)
+    after = (home / ".myshellrc").read_text()
+    assert after.count("# >>> tools-installer tweak:zoxide >>>") == 1
+    assert after.startswith(before.rstrip("\n"))  # the block is untouched; the record is appended
+    assert shell_init_record(home / ".myshellrc") == ("zoxide",)  # backfilled
+    strip_tweak_block("zoxide", home / ".myshellrc")
+    assert "tweak:zoxide" not in (home / ".myshellrc").read_text()
+
+
+def test_shell_init_blocks_of_several_tools_keep_plan_order() -> None:
+    home = Path.home()
+    for tool in ("zoxide", "fzf", "direnv"):
+        run_post_install(_shell_init_tool(tool), _mutable(), None)
+    text = (home / ".myshellrc").read_text()
+    order = [
+        text.index(f"# >>> tools-installer tweak:{tool} >>>")
+        for tool in ("zoxide", "fzf", "direnv")
+    ]
+    assert order == sorted(order)
+    assert shell_init_record(home / ".myshellrc") == ("zoxide", "fzf", "direnv")
+    strip_tweak_block("fzf", home / ".myshellrc")
+    after = (home / ".myshellrc").read_text()
+    assert "tweak:fzf" not in after
+    assert "tweak:zoxide" in after
+    assert "tweak:direnv" in after
+
+
+def test_shell_init_two_blocks_never_interleave() -> None:
+    home = Path.home()
+    run_post_install(_shell_init_tool("zoxide"), _mutable(), None)
+    run_post_install(_shell_init_tool("fnm"), _mutable(), None)
+    lines = (home / ".myshellrc").read_text().split("\n")
+    for tool in ("zoxide", "fnm"):
+        begin = lines.index(f"# >>> tools-installer tweak:{tool} >>>")
+        end = lines.index(f"# <<< tools-installer tweak:{tool} <<<")
+        inner = lines[begin + 1 : end]
+        assert not any("tools-installer" in line for line in inner)
+
+
+def test_the_login_shell_prompt_is_keyed_by_action() -> None:
+    with pytest.raises(KeyError):
+        sensitive_prompt("zoxide", "source_shell_init")  # shell init asks nothing any more
     assert sensitive_prompt("oh-my-zsh", "set_login_shell") == SensitivePrompt(
         "Show a reviewed command to change the login shell to zsh for oh-my-zsh, which you "
         "run in your own terminal after the installer exits?",
@@ -361,16 +440,14 @@ def test_every_sensitive_action_has_a_prompt() -> None:
 
 
 @pytest.mark.parametrize("tool", SHELL_INIT_TOOLS)
-def test_each_shell_init_tool_follows_yes_and_no(tool: str) -> None:
+def test_each_shell_init_tool_writes_one_block_and_asks_nothing(tool: str) -> None:
     home = Path.home()
     marker = f"# >>> tools-installer tweak:{tool} >>>"
-    no = run_post_install(_shell_init_tool(tool), _mutable(), lambda _t, _a: False).lines
-    assert no == ()
-    assert not (home / ".myshellrc").exists()
-    yes = run_post_install(_shell_init_tool(tool), _mutable(), _yes).lines
-    assert yes == ("Shell init on: open a new terminal to use it.",)
-    run_post_install(_shell_init_tool(tool), _mutable(), _yes)
+    first = run_post_install(_shell_init_tool(tool), _mutable(), None).lines
+    assert first == ("Shell init on: open a new terminal to use it.",)
+    run_post_install(_shell_init_tool(tool), _mutable(), None)
     assert (home / ".myshellrc").read_text().count(marker) == 1
+    assert shell_init_record(home / ".myshellrc") == (tool,)
 
 
 def test_only_starship_touches_the_theme() -> None:

@@ -1907,7 +1907,7 @@ def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> No
         "show_lean_tips",
         "apply_agent_tuning",
     )
-    assert SENSITIVE_POST_INSTALL_ACTIONS == ("set_login_shell", "source_shell_init")
+    assert SENSITIVE_POST_INSTALL_ACTIONS == ("set_login_shell",)
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["source_shell_init"]'))
     assert load_tools(manifest)[0].post_install == ("source_shell_init",)
 

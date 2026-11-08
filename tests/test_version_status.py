@@ -56,6 +56,13 @@ from installer.session import (
     execute_plan,
 )
 from installer.terminal_shell import TerminalShellResult
+from installer.tweaks import (
+    TweakBundle,
+    shell_init_bundle,
+    shell_init_record,
+    strip_tweak_block,
+    write_tweak,
+)
 from installer.uninstall import RemovalPlan, plan_removal
 from installer.version_cache import (
     MANAGER_RETRY_BACKOFF,
@@ -6226,3 +6233,65 @@ def test_omz_policies_era_record_is_honoured(tmp_path: Path) -> None:
     state = _tuning_state(tmp_path, _omz_tool())
     assert state.health is Health.OK
     assert (zshrc.read_bytes(), myshellrc.read_bytes()) == before
+
+
+def _shell_tool(tool_id: str = "zoxide") -> Tool:
+    return next(t for t in load_tools(REGISTRY) if t.id == tool_id)
+
+
+def _myshellrc() -> Path:
+    return Path.home() / ".myshellrc"
+
+
+def test_pending_tuning_shell_init(tmp_path: Path) -> None:
+    tool = _shell_tool()
+    service = _hook_service(tmp_path, frozenset())
+    state = _settled_states(service, [tool])["zoxide"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert "# >>> tools-installer tweak:zoxide >>>" in _myshellrc().read_text()
+    assert shell_init_record(_myshellrc()) == ("zoxide",)
+    again = _settled_states(service, [tool])["zoxide"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
+
+
+def test_pending_tuning_shell_init_block_without_a_record_is_not_pending(tmp_path: Path) -> None:
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+    write_tweak(bundle, _myshellrc())  # a Policies-era block
+    state = _tuning_state(tmp_path, _shell_tool())
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+
+def test_shell_init_deleted_block_is_the_users_choice(tmp_path: Path) -> None:
+    tool = _shell_tool()
+    assert _reconfigure(_hook_service(tmp_path, frozenset()), tool).result == "done"
+    strip_tweak_block("zoxide", _myshellrc())  # the user cut the block; the record stays
+    state = _tuning_state(tmp_path, tool)
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+    before = _myshellrc().read_bytes()
+    forced = _forced_reconfigure(tool)
+    assert forced.result == "done"
+    assert _myshellrc().read_bytes() == before
+
+
+def test_pending_tuning_shell_init_bundle_absent_on_this_os_reads_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = shell_init_bundle("zoxide")
+    assert bundle is not None
+
+    def macos_only(_tool_id: str) -> TweakBundle:
+        return replace(bundle, platforms=("macos",))
+
+    monkeypatch.setattr(version_status, "shell_init_bundle", macos_only)
+    assert _tuning_state(tmp_path, _shell_tool()).health is Health.OK

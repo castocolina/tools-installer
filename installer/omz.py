@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Literal
 
 from installer.atomic import FileSnapshot, atomic_write_text, read_snapshot, snapshot_matches
-from installer.shellrc import apply_block, strip_block
+from installer.shellrc import apply_block, read_record, strip_block
 from installer.tweaks import bundle_marker_present
 
 # `import os` is the monkeypatch surface tests/test_omz.py uses (`omz.os.replace`).
@@ -299,30 +299,10 @@ def _record(
 
     None and () are different answers: () means "we enabled the policy and the
     array already had every name", which is still ours to switch off, while
-    None means "we never touched this machine".
-
-    Only a CLOSED begin..end block counts. An orphan begin marker — which a
-    truncated write could once leave behind — must read as "no record": treating
-    it as "owns nothing" would report the policy ON while `_clear_owned`'s
-    `strip_block` deliberately refuses to strip an unpaired marker, leaving no
-    way to ever switch it off. Last closed block wins, mirroring the same
-    last-begin pairing rule apply_block/strip_block use.
+    None means "we never touched this machine". The closed-block rule is
+    `shellrc.read_record`'s: an orphan begin marker reads as "no record".
     """
-    try:  # a read-only probe at launch: an undecodable byte or a directory never raises
-        text = state_path.read_bytes().decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    record: tuple[str, ...] | None = None
-    names: tuple[str, ...] = ()
-    inside = False
-    for line in text.split("\n"):
-        if line == begin:
-            inside, names = True, ()
-        elif line == end and inside:
-            inside, record = False, names
-        elif inside and line.startswith(prefix):
-            names = tuple(line[len(prefix) :].split())
-    return record
+    return read_record(state_path, begin, end, prefix)
 
 
 def owned_plugins(state_path: Path) -> tuple[str, ...]:

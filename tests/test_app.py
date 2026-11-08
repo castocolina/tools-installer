@@ -192,11 +192,6 @@ _ATTRIBUTION_QUESTION = "attribution off — claude: no agent credit in commits/
 _PI_NOTE = "pi: nothing written; its approvals come only from extensions"
 _NO_KEY_NOTE = "no documented key: codex, pi (nothing written for them)"
 _LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
-_ZOXIDE_QUESTION = (
-    "Turn on zoxide shell init? It adds one guarded block to ~/.myshellrc that adds z, "
-    "a cd that learns the directories you use. It stays off unless you choose yes; "
-    "Policies can change it later."
-)
 _LOGIN_SHELL_QUESTION = (
     "Show a reviewed command to change the login shell to zsh for oh-my-zsh, "
     "which you run in your own terminal after the installer exits?"
@@ -298,11 +293,11 @@ def test_headless_yes_asks_nothing_and_says_so():
     assert prompter.asked == []
     assert not (Path.home() / ".claude" / "settings.json").exists()
     assert output.index(_LEFT_OFF) < output.index("Summary —")
-    assert "Shell init left off (--yes): starship. Turn it on in Policies." in output
+    assert "Shell init left off" not in output
 
 
-def test_the_headless_shell_init_question_is_keyed_and_default_no():
-    """D-11 / R1-54: shell init asks its own sentence with default no; the login shell keeps yes."""
+def test_the_headless_login_shell_question_is_keyed_and_default_yes():
+    """D-11 / R1-54: the login shell keeps its sentence with default yes; shell init asks none."""
     tools = [_tool("zoxide", "shell"), _tool("oh-my-zsh", "shell")]
     console, buf = _console()
     prompter = _ScriptedPrompter({_BATCH_QUESTION: True}, buf)
@@ -314,17 +309,14 @@ def test_the_headless_shell_init_question_is_keyed_and_default_no():
         Options(all=True, categories=(), yes=False),
         runner=_runner,
         resolve_tag=_resolve_tag,
-        install=_asking_install(
-            [("zoxide", "source_shell_init"), ("oh-my-zsh", "set_login_shell")]
-        ),
+        install=_asking_install([("oh-my-zsh", "set_login_shell")]),
         refresh=presence_service(tools),
         updates=ScriptedUpdates({}),
     )
 
-    assert len(prompter.asked) == 3
+    assert len(prompter.asked) == 2
     assert {(message, default) for message, default, _ in prompter.asked} == {
         (_BATCH_QUESTION, True),
-        (_ZOXIDE_QUESTION, False),
         (_LOGIN_SHELL_QUESTION, True),
     }
 
@@ -6707,3 +6699,75 @@ def test_tuning_removal_rereads_a_file_edited_after_preview(tmp_path: Path) -> N
 
     assert result.settings_kept == ("claude",)
     assert json.loads(path.read_text(encoding="utf-8")) == {"attribution": {"pr": "mine"}}
+
+
+def test_shell_init_removal_removes_only_that_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-08: removing zoxide strips its block and forgets only `zoxide`; starship stays."""
+    from installer.app import perform_uninstall
+    from installer.tweaks import (
+        BUNDLES,
+        record_shell_init,
+        shell_init_bundle,
+        shell_init_record,
+        tweak_present,
+        write_tweak,
+    )
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    myshellrc = tmp_path / ".myshellrc"
+    zoxide = shell_init_bundle("zoxide")
+    starship = shell_init_bundle("starship")
+    assert zoxide is not None
+    assert starship is not None
+    for bundle in (zoxide, starship):
+        write_tweak(bundle, myshellrc)
+        record_shell_init(myshellrc, bundle.id)
+    tool = plant_receipted_tool(tmp_path, "zoxide")
+    result = perform_uninstall(
+        _removal_decision(tool),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+    )
+    assert result.shell_init_off == ("zoxide",)
+    assert tweak_present(zoxide, myshellrc) is False
+    assert tweak_present(starship, myshellrc) is True
+    assert shell_init_record(myshellrc) == ("starship",)
+
+
+def test_a_full_uninstall_clears_the_shell_init_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import run_uninstall
+    from installer.tweaks import BUNDLES, record_shell_init, shell_init_record
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    myshellrc = tmp_path / ".myshellrc"
+    record_shell_init(myshellrc, "fzf")  # a tool this run does not remove
+    tool = plant_receipted_tool(tmp_path, "rg")
+    console, _buf = _console()
+    run_uninstall(
+        [tool],
+        console,
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        confirm=lambda _message: True,
+        bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        platform_os="linux",
+    )
+    assert shell_init_record(myshellrc) is None

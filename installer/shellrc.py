@@ -188,6 +188,35 @@ def strip_block(content: str, begin: str, end: str) -> str:
     return content
 
 
+def read_record(path: Path, begin: str, end: str, prefix: str) -> tuple[str, ...] | None:
+    """The names a closed begin..end record block lists, or None when there is no record.
+
+    None and () are different answers: () means "the installer wrote the record and it lists
+    nothing", which is still the installer's to clear, while None means "never recorded".
+
+    Only a CLOSED begin..end block counts. An orphan begin marker, which a truncated write
+    could once leave behind, must read as "no record": `strip_block` deliberately refuses to
+    strip an unpaired marker, so treating it as "owns nothing" would leave no way to ever
+    clear it. Last closed block wins, mirroring the last-begin pairing `apply_block` and
+    `strip_block` use. The body line starting with `prefix` carries the names.
+    """
+    try:  # a read-only probe at launch: an undecodable byte or a directory never raises
+        text = path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    record: tuple[str, ...] | None = None
+    names: tuple[str, ...] = ()
+    inside = False
+    for line in text.split("\n"):
+        if line == begin:
+            inside, names = True, ()
+        elif line == end and inside:
+            inside, record = False, names
+        elif inside and line.startswith(prefix):
+            names = tuple(line[len(prefix) :].split())
+    return record
+
+
 def remove_managed_block(path: Path) -> None:
     """Strip the managed PATH block from `path`, preserving the rest. Idempotent.
 

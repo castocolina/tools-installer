@@ -467,21 +467,6 @@ def run_option_lines(
 RUN_OPTIONS_LEFT_OFF = "Run options left off (--yes never turns them on); change them in Policies."
 
 
-def shell_init_left_off_line(outcomes: Sequence[RowOutcome], tools: Sequence[str]) -> str | None:
-    """The headless note for shell-init questions `--yes` skipped, naming the installed tools."""
-    installed = {
-        outcome.row.tool_id
-        for outcome in outcomes
-        if outcome.row.disposition
-        in {Disposition.INSTALL, Disposition.REPAIR, Disposition.REINSTALL}
-        and outcome.result == "done"
-    }
-    ids = [tool for tool in tools if tool in installed]
-    if not ids:
-        return None
-    return f"Shell init left off (--yes): {', '.join(ids)}. Turn it on in Policies."
-
-
 def render_resync_warnings(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print each end-of-run sweep warning in the postinstall warning form (UI-SPEC 4, A22)."""
     for outcome in outcomes:

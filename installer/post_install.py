@@ -59,7 +59,7 @@ from installer.omz import (
 from installer.platform import Platform
 from installer.policy import tweak_policy
 from installer.sanitize import sanitize_log_line
-from installer.tweaks import shell_init_bundle
+from installer.tweaks import record_shell_init, shell_init_bundle, shell_init_record
 
 ConfirmSensitiveAction = Callable[[str, str], bool]
 
@@ -95,13 +95,6 @@ SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {
         "Yes, show the reviewed command",
         "No, skip this",
         True,
-    ),
-    "source_shell_init": SensitivePrompt(
-        "Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. "
-        "It stays off unless you choose yes; Policies can change it later.",
-        "Yes, turn it on",
-        "No, leave it off",
-        False,
     ),
 }
 
@@ -168,22 +161,31 @@ def _set_login_shell(
     return _SET_LOGIN_SHELL_INSTRUCTIONS
 
 
+def _tune_shell_init(tool: Tool, platform: Platform, *, skip_recorded: bool) -> tuple[str, ...]:
+    """Write the tool's guarded shell-init block and record it once. Nothing when the tool has
+    no bundle on this OS, or (reconfigure) when the record says the installer wrote it before."""
+    bundle = shell_init_bundle(tool.id)
+    if bundle is None or (bundle.platforms and platform.os not in bundle.platforms):
+        return ()
+    rc_path = Path.home() / ".myshellrc"
+    if skip_recorded and tool.id in (shell_init_record(rc_path) or ()):
+        return ()
+    tweak_policy(
+        bundle,
+        rc_path=rc_path,
+        ensure_sourced_from=lambda: _shell_init_sourced_from(),
+    ).apply()  # starship's theme rides the policy's own apply (CR-08)
+    record_shell_init(rc_path, tool.id)
+    return ("Shell init on: open a new terminal to use it.",)
+
+
 def _source_shell_init(
     tool: Tool,
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    del platform
-    bundle = shell_init_bundle(tool.id)
-    if bundle is None or confirm is None or not confirm(tool.id, "source_shell_init"):
-        return ()
-    home = Path.home()
-    tweak_policy(
-        bundle,
-        rc_path=home / ".myshellrc",
-        ensure_sourced_from=lambda: _shell_init_sourced_from(),
-    ).apply()  # starship's theme rides the policy's own apply (CR-08)
-    return ("Shell init on: open a new terminal to use it.",)
+    del confirm
+    return _tune_shell_init(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
 def _set_omz_theme(
@@ -292,7 +294,7 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
 
 
 # The actions that make up a tool's install tuning, in the order a tool declares them.
-TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning", "set_omz_plugins")
+TUNING_ACTIONS: tuple[str, ...] = ("apply_agent_tuning", "set_omz_plugins", "source_shell_init")
 
 
 def apply_install_tuning(
@@ -309,6 +311,8 @@ def apply_install_tuning(
             settings.extend(produced.settings)
         elif name == "set_omz_plugins":
             lines.extend(_tune_omz_plugins(skip_recorded=skip_recorded))
+        elif name == "source_shell_init":
+            lines.extend(_tune_shell_init(tool, platform, skip_recorded=skip_recorded))
     return PostInstallOutput(tuple(lines), tuple(settings))
 
 

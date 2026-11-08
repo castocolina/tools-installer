@@ -2807,3 +2807,23 @@ def test_copilot_entry_records_the_onboarding_findings() -> None:
         "config_paths",
     ):
         assert finding in block
+
+
+def test_fnm_installer_skips_its_shell_block() -> None:
+    import installer.executors as executors
+
+    fnm = _tools_by_id()["fnm"]
+    script = next(m for m in fnm.methods if m.kind == "script")
+    assert script.params["args"] == ["--skip-shell"]
+    assert script.params["bin_dir"] == "~/.local/share/fnm"
+    assert fnm.post_install == ("source_shell_init",)
+
+    calls: list[list[str]] = []
+    executors.execute(script, calls.append)
+    assert len(calls) == 1
+    assert calls[0][:2] == ["sh", "-c"]
+    assert calls[0][2].endswith("bash -s -- --skip-shell")
+
+    block = REGISTRY.read_text(encoding="utf-8").split('id = "fnm"', 1)[1].split("[[tool]]", 1)[0]
+    assert "--skip-shell" in block
+    assert "Verified 2026-11-08" in block

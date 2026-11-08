@@ -46,7 +46,7 @@ from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
+from installer.post_install import SENSITIVE_PROMPTS, ConfirmSensitiveAction, SensitivePrompt
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
@@ -353,6 +353,34 @@ def _indicator_text(screen: ExecuteScreen) -> str:
 
 def _heartbeat_lines(screen: ExecuteScreen) -> list[str]:
     return [line for line in _log_text(screen).splitlines() if _HEARTBEAT_TAIL in line]
+
+
+@pytest.fixture(autouse=True)
+def legacy_sensitive_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`SENSITIVE_PROMPTS` has been empty since 23.2-06 (D-13), but SensitiveActionScreen stays
+    wired for Phase 24.1; these tests keep driving it with the prompts it used to show."""
+    monkeypatch.setitem(
+        SENSITIVE_PROMPTS,
+        "set_login_shell",
+        SensitivePrompt(
+            "Show a reviewed command to change the login shell to zsh for {tool}, "
+            "which you run in your own terminal after the installer exits?",
+            "Yes, show the reviewed command",
+            "No, skip this",
+            True,
+        ),
+    )
+    monkeypatch.setitem(
+        SENSITIVE_PROMPTS,
+        "source_shell_init",
+        SensitivePrompt(
+            "Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. "
+            "It stays off unless you choose yes; Policies can change it later.",
+            "Yes, turn it on",
+            "No, leave it off",
+            False,
+        ),
+    )
 
 
 def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
@@ -5745,7 +5773,7 @@ async def test_unattended_runs_leave_every_option_off(monkeypatch: pytest.Monkey
         assert not any("[x]" in prompt for prompt in prompts)
         log = _log_text(screen)
         assert _UNATTENDED_OFF in log
-        assert "Shell init left off (--yes): starship. Turn it on in Policies." in log
+        assert "Shell init left off" not in log
     assert handed == [frozenset()]
 
 

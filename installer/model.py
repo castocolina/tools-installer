@@ -131,7 +131,7 @@ POST_INSTALL_ACTIONS = (
     "show_lean_tips",
     "apply_agent_tuning",
 )
-SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell", "source_shell_init")
+SENSITIVE_POST_INSTALL_ACTIONS = ("set_login_shell",)
 OWNER_PROBES = (
     "host-setup",
     "brew",
