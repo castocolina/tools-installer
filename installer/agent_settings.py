@@ -477,6 +477,36 @@ def delete_if_unchanged(path: Path, before: FileSnapshot) -> None:
     target.unlink()
 
 
+def _below_home(directory: str | Path, home: Path) -> bool:
+    return Path(os.path.realpath(home)) in Path(directory).parents
+
+
+def _missing_dirs(path: Path, home: Path) -> tuple[str, ...]:
+    """The directories `write_if_unchanged` will create above `path`, under home, topmost first."""
+    missing: list[Path] = []
+    for directory in Path(os.path.realpath(path)).parents:
+        if os.path.lexists(directory):
+            break
+        missing.append(directory)
+    return tuple(str(d) for d in reversed(missing) if _below_home(d, home))
+
+
+def _remove_created_dirs(dirs: tuple[str, ...], home: Path) -> tuple[str, ...]:
+    """rmdir the recorded directories deepest first; the ones still holding anything stay recorded.
+    Never rmtree, never a directory outside home or one the ledger does not name."""
+    left: list[str] = []
+    for directory in reversed(dirs):
+        if not _below_home(directory, home):
+            continue
+        try:
+            os.rmdir(directory)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            left.append(directory)
+    return tuple(reversed(left))
+
+
 KeyKind = Literal["wrote", "set_by_you", "already", "replaced_default", "removed", "kept_changed"]
 AGENT_FORMATS: Final[dict[str, SettingsFormat]] = {
     "claude": "json",
@@ -730,6 +760,7 @@ def _apply_once(
     fmt: SettingsFormat,
     keys: tuple[SettingKey, ...],
     *,
+    home: Path,
     skip_recorded: bool,
 ) -> FileResult:
     """One read, compute and reserve-then-commit write; SettingsChanged goes to the caller."""
@@ -753,12 +784,23 @@ def _apply_once(
     created = ledger.created_files
     if snap is None and file not in created:
         created = (*created, file)
+    dirs = ledger.created_dirs
+    if snap is None:
+        dirs = (*dirs, *(d for d in _missing_dirs(path, home) if d not in dirs))
     blanks = ledger.blank_files
     if snap is not None and not snap.data.strip() and file not in dict(blanks):
         blanks = (*blanks, (file, snap.data.decode("ascii")))  # restored byte for byte on revert
     try:
         # reserved before the file write
-        write_ledger(replace(ledger, created_files=created, entries=entries, blank_files=blanks))
+        write_ledger(
+            replace(
+                ledger,
+                created_files=created,
+                entries=entries,
+                blank_files=blanks,
+                created_dirs=dirs,
+            )
+        )
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     try:
@@ -794,7 +836,9 @@ def apply_setting(
     keys = setting_keys(agent, setting, platform_os)
     for _attempt in range(2):
         try:
-            return _apply_once(agent, setting, path, fmt, keys, skip_recorded=skip_recorded)
+            return _apply_once(
+                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded
+            )
         except SettingsChanged:
             continue
     return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
@@ -853,6 +897,7 @@ def _revert_once(
     path: Path,
     fmt: SettingsFormat,
     table: dict[KeyPath, SettingKey],
+    home: Path,
 ) -> FileResult:
     """One read, compute and write. SettingsChanged is for the caller to retry."""
     file = str(path)
@@ -870,6 +915,7 @@ def _revert_once(
     )
     if not mine:
         return FileResult(agent, setting, path, fmt)
+    dirs = ledger.created_dirs
     try:
         snap = read_settings(path)
         if snap is None and file not in ledger.created_files:
@@ -883,6 +929,7 @@ def _revert_once(
             blank = dict(ledger.blank_files).get(file)
             if snap is not None and file in ledger.created_files and bare:
                 delete_if_unchanged(path, snap)
+                dirs = _remove_created_dirs(dirs, home)
             elif snap is not None and blank is not None and bare:
                 write_if_unchanged(path, snap, blank)
             else:
@@ -896,8 +943,17 @@ def _revert_once(
     released = not any(entry.file == file for entry in remaining)
     created = tuple(name for name in ledger.created_files if not (released and name == file))
     blanks = tuple(pair for pair in ledger.blank_files if not (released and pair[0] == file))
+    # Directories that still hold something are only kept while another created file may use them.
     try:
-        write_ledger(replace(ledger, created_files=created, entries=remaining, blank_files=blanks))
+        write_ledger(
+            replace(
+                ledger,
+                created_files=created,
+                entries=remaining,
+                blank_files=blanks,
+                created_dirs=dirs if created else (),
+            )
+        )
     except OSError as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     return FileResult(agent, setting, path, fmt, keys=results)
@@ -928,7 +984,7 @@ def _revert_file(
     table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
     for _attempt in range(2):
         try:
-            return _revert_once(agent, setting, Path(file), fmt, table)
+            return _revert_once(agent, setting, Path(file), fmt, table, home)
         except SettingsChanged:
             continue
     return FileResult(agent, setting, Path(file), fmt, refused=CHANGED_WHILE_WRITING)

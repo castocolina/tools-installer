@@ -1395,7 +1395,8 @@ def test_settings_probe_revert_flags_a_settings_file_that_outlived_the_uninstall
         agent_settings.revert_agent(agent, home=home.scratch, platform_os="linux")
     (home.scratch / ".local" / "bin" / "copilot").unlink()
     leftover = agent_settings.settings_file("claude", home=home.scratch, platform_os="linux")
-    assert not leftover.exists()
+    assert not leftover.parent.exists()  # the revert removed the directory it created
+    leftover.parent.mkdir()
     leftover.write_text("{\n}\n", encoding="utf-8")
 
     result = home.run("settings_probe_revert")

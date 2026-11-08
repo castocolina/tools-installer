@@ -1279,3 +1279,94 @@ def test_pending_tuning_race_never_publishes_ok_before_the_ledger(
 
     assert seen == {"before_reservation": keys, "between_reservation_and_commit": ()}
     assert absent() == ()
+
+
+def _vscode_tuning(home: Path) -> Path:
+    path = home / ".config" / "Code" / "User" / "settings.json"
+    for group in agent_settings.TUNING_GROUPS["vscode"]:
+        assert apply_setting("vscode", group, home=home, platform_os="linux").refused is None
+    return path
+
+
+def test_reverting_removes_the_settings_directories_the_install_created() -> None:
+    home = Path.home()
+    (home / ".config").mkdir()
+    path = _vscode_tuning(home)
+    assert path.is_file()
+    ledger = read_ledger("vscode")
+    assert ledger is not None
+    assert ledger.created_dirs == (str(home / ".config" / "Code"), str(path.parent))
+
+    results = revert_agent("vscode", home=home, platform_os="linux")
+
+    assert all(result.refused is None for result in results)
+    assert not (home / ".config" / "Code").exists()
+    assert (home / ".config").is_dir()
+    assert read_ledger("vscode") is None
+
+
+def test_reverting_keeps_a_settings_directory_that_holds_something_else() -> None:
+    home = Path.home()
+    path = _vscode_tuning(home)
+    mine = path.parent / "keybindings.json"
+    mine.write_text("[]\n", encoding="utf-8")
+
+    results = revert_agent("vscode", home=home, platform_os="linux")
+
+    assert all(result.refused is None for result in results)
+    assert not path.exists()
+    assert mine.read_text(encoding="utf-8") == "[]\n"
+    assert read_ledger("vscode") is None
+
+
+def test_reverting_leaves_a_settings_directory_that_existed_before() -> None:
+    home = Path.home()
+    (home / ".config" / "Code").mkdir(parents=True)
+    path = _vscode_tuning(home)
+    ledger = read_ledger("vscode")
+    assert ledger is not None
+    assert ledger.created_dirs == (str(path.parent),)
+
+    revert_agent("vscode", home=home, platform_os="linux")
+
+    assert not path.exists()
+    assert not path.parent.exists()
+    assert (home / ".config" / "Code").is_dir()
+
+
+def test_a_ledger_without_created_dirs_still_reads_and_the_field_round_trips() -> None:
+    home = Path.home()
+    (home / ".config").mkdir()
+    path = _vscode_tuning(home)
+    ledger_path = receipts.config_ledger_dir() / "vscode.json"
+    data = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert data["created_dirs"] == [str(home / ".config" / "Code"), str(path.parent)]
+    del data["created_dirs"]
+    ledger_path.write_text(json.dumps(data), encoding="utf-8")
+
+    old = read_ledger("vscode")
+    assert old is not None
+    assert old.created_dirs == ()
+    write_ledger(ConfigLedger("vscode", created_dirs=("a", "b")))
+    again = read_ledger("vscode")
+    assert again is not None
+    assert again.created_dirs == ("a", "b")
+
+    write_ledger(old)
+    results = revert_agent("vscode", home=home, platform_os="linux")
+
+    assert all(result.refused is None for result in results)
+    assert not path.exists()
+    assert path.parent.is_dir()  # an old ledger never recorded the directories
+    assert read_ledger("vscode") is None
+
+
+@pytest.mark.parametrize("bad", ["x", [1], [["a"]]])
+def test_a_malformed_created_dirs_field_makes_the_ledger_untrusted(bad: object) -> None:
+    write_ledger(ConfigLedger("claude", created_files=("f",)))
+    path = receipts.config_ledger_dir() / "claude.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["created_dirs"] = bad
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert read_ledger("claude") is None
