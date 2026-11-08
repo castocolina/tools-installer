@@ -1638,6 +1638,58 @@ paths = [
 ]
 update = ["cursor-agent", "update"]
 
+# Verified 2026-11-07 (tool-onboarding run, Phase 23.2 D-20 as amended, D-22, D-23):
+# GitHub Copilot CLI is a harness CLI the human types into, so tier user, category ai,
+# audience human, priority P0 like claude, codex, opencode and cursor-agent.
+# Artifacts (api.github.com/repos/github/copilot-cli/releases/latest, v1.0.107): per-platform
+# tarballs copilot-{darwin,linux,linuxmusl}-{x64,arm64}.tar.gz, npm-style github-copilot-*.tgz,
+# Windows zips/msi and one SHA256SUMS.txt. The Linux method downloads copilot-linux-{x64,arm64}.tar.gz
+# (ArchTokens.x64 renders x64 or arm64), verifies it against SHA256SUMS.txt and extracts the single
+# root member `copilot` (the binary), so removal is exactly the install's computed opt dir plus link.
+# macOS uses the brew cask copilot-cli (auto-updating; formulae.brew.sh). There is no node method:
+# a tool-level `requires = ["pnpm"]` would drag pnpm into the macOS plan (deps.py walks tool.requires
+# for every method) and the npm package states no `engines` floor, so Node is not a prerequisite
+# anywhere; the legitimacy flag on @github/copilot does not apply because nothing installs it.
+# The Linux cask below is OWNERSHIP EVIDENCE ONLY: a hand-installed linuxbrew cask named
+# copilot-cli (Caskroom/copilot-cli/<ver>) reads present with owner `cask`; installer/resolve.py
+# resolves a cask only on macOS with brew, so it can never install on Linux (same shape as vscode).
+# Settings: ~/.copilot is a harness marker dir (HARNESS_MARKER_DIRS), so the entry declares no
+# `config_paths` (the overlap is rejected, and per-tool removal must keep the CONFIG_AGENTS
+# shortcut in app._after_removal). Customizations accepted at install: defaultPermissionMode =
+# "allow-all" and includeCoAuthoredBy = false (apply_agent_tuning, TUNING_GROUPS["copilot"]).
+# Declined: copilot as a codegraph/graphify hook target (Phase 24.3, D-22: recommends only);
+# authentication (/login) and model choice stay the user's step. Smoke is the default
+# `copilot --version`; `copilot update` exists but is left undeclared (the tarball self-updates in
+# place, which reads as directory drift, never BROKEN).
+[[tool]]
+id = "copilot"
+name = "GitHub Copilot CLI"
+category = "ai"
+cmd = "copilot"
+priority = "P0"
+audience = "human"
+tier = "user"
+verified = 2026-11-07
+desc = "GitHub's terminal coding agent for the user; a standalone binary, no Node needed."
+recommends = ["codegraph", "graphify"]
+post_install = ["apply_agent_tuning"]
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "copilot-cli"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "github/copilot-cli"
+asset = "copilot-linux-{arch.x64}.tar.gz"
+checksum = "SHA256SUMS.txt"
+member = "copilot"
+# Ownership evidence only (see the Verified comment above): never resolved on Linux.
+[[tool.method]]
+kind = "cask"
+os = ["debian", "arch", "fedora"]
+cask = "copilot-cli"
+
 # Verified 2026-09-06: the install script was fetched live (curl -fsSL
 # https://antigravity.google/cli/install.sh) and read verbatim this session;
 # it installs a single binary agy into ~/.local/bin, fetches a per-platform

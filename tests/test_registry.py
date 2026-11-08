@@ -229,6 +229,7 @@ _PRE_15_3_HUMAN_TOOLS = {
 # would make that set's own comment false.
 _POST_15_3_HUMAN_TOOLS = {
     "alacritty",
+    "copilot",
 }
 
 
@@ -250,7 +251,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 47,
         "ai": 8,
-        "human": 26,
+        "human": 27,
     }
 
 
@@ -1101,7 +1102,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 81
+    assert len(tools) == 82
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1156,7 +1157,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
         "ai": 9,
-        "user": 46,
+        "user": 47,
     }
 
 
@@ -1248,7 +1249,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     six shell-init tools (D-11: the keyed, default-no source_shell_init).
     """
     declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
-    tuned = {"claude", "codex", "opencode", "cursor-agent"}
+    tuned = {"claude", "codex", "opencode", "cursor-agent", "copilot"}
     assert declarers == {"oh-my-zsh", "vscode", *tuned, *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
     assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme")
@@ -2760,3 +2761,45 @@ def test_the_six_tools_declare_shell_init() -> None:
     tools = {tool.id: tool for tool in load_tools(REGISTRY)}
     for tool_id in SHELL_INIT_TOOLS:
         assert tools[tool_id].post_install.count("source_shell_init") == 1, tool_id
+
+
+def test_copilot_entry_methods_and_tuning() -> None:
+    copilot = _tools_by_id()["copilot"]
+    assert copilot.name == "GitHub Copilot CLI"
+    assert copilot.cmd == "copilot"
+    assert copilot.tier == "user"
+    assert copilot.category == "ai"
+    assert copilot.audience == "human"
+    assert copilot.priority == "P0"
+    assert copilot.recommends == ("codegraph", "graphify")
+    assert copilot.post_install == ("apply_agent_tuning",)
+    assert copilot.requires == ()
+    assert copilot.config_paths == ()
+    assert [(m.kind, m.os) for m in copilot.methods] == [
+        ("cask", ("macos",)),
+        ("github_release", ("debian", "arch", "fedora")),
+        ("cask", ("debian", "arch", "fedora")),
+    ]
+    mac_cask, release, linux_cask = copilot.methods
+    assert mac_cask.params == {"cask": "copilot-cli"}
+    assert linux_cask.params == {"cask": "copilot-cli"}
+    assert release.params == {
+        "repo": "github/copilot-cli",
+        "asset": "copilot-linux-{arch.x64}.tar.gz",
+        "checksum": "SHA256SUMS.txt",
+        "member": "copilot",
+    }
+
+
+def test_copilot_entry_records_the_onboarding_findings() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    start = text.index('id = "copilot"')
+    block = text[text.rindex("\n\n", 0, start) : start]
+    for finding in (
+        "Verified 2026-11-07",
+        "SHA256SUMS.txt",
+        "no node method",
+        "OWNERSHIP EVIDENCE ONLY",
+        "config_paths",
+    ):
+        assert finding in block

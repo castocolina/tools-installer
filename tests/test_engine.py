@@ -2359,3 +2359,37 @@ def test_a_tap_formula_brew_already_listed_writes_no_receipt(
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert receipts.read("rg") is None
+
+
+def test_copilot_install_writes_its_tuning_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The 23.2-04 tracer: the shipped copilot entry installs on Linux and tunes itself."""
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    copilot = next(tool for tool in load_tools(registry) if tool.id == "copilot")
+
+    def fake_install_download(method: Method, ctx: ExecContext) -> str | None:
+        return None
+
+    monkeypatch.setattr(engine.download, "install_download", fake_install_download)
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    outcome = install_tool(
+        copilot, _platform(), runner=lambda _cmd: None, present=lambda _tool: False
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.method_kind == "github_release"
+    settings_path = Path.home() / ".copilot" / "settings.json"
+    assert [(r.setting, r.path, r.refused) for r in outcome.settings] == [
+        ("auto-approve", settings_path, None),
+        ("no-attribution", settings_path, None),
+    ]
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "defaultPermissionMode": "allow-all",
+        "includeCoAuthoredBy": False,
+    }
+    ledger = receipts.read_ledger("copilot")
+    assert ledger is not None
+    assert [(e.setting, e.key_path) for e in ledger.entries] == [
+        ("auto-approve", ("defaultPermissionMode",)),
+        ("no-attribution", ("includeCoAuthoredBy",)),
+    ]
