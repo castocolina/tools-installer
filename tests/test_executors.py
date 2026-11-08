@@ -10,6 +10,7 @@ import pytest
 import installer.executors as executors
 from installer.executors import EXECUTORS, SMOKE_CHECKS, ExecutorError, execute
 from installer.guards import REDIRECT_SENTINEL
+from installer.locations import prepend_path
 from installer.model import SMOKE_CHECK_NAMES, Method, load_tools
 from installer.run import TIMEOUT_CODE, CommandError, Runner
 
@@ -1229,3 +1230,69 @@ def test_smoke_reason_prefers_the_loader_line(tmp_path: Path) -> None:
 def test_method_smoke_argv_defaults_to_version() -> None:
     assert executors.method_smoke_argv(Method("github_release", {})) == ("--version",)
     assert executors.method_smoke_argv(Method("github_release", {"smoke_argv": ["-V"]})) == ("-V",)
+
+
+_NODE_METHOD = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
+
+
+def test_node_reports_an_absent_pnpm_with_todays_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    calls, runner = _record()
+    with pytest.raises(ExecutorError) as exc_info:
+        execute(_NODE_METHOD, runner)
+    assert str(exc_info.value) == (
+        "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
+        "is the only pnpm on PATH, re-apply the package-manager policy)"
+    )
+    assert calls == []
+
+
+def test_node_reports_a_present_pnpm_off_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R12: pnpm present at its declared dir but off PATH is not absent. The
+    advice is to open a new terminal, never to install pnpm again."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _plant_executable(tmp_path / ".local" / "share" / "pnpm" / "bin", "pnpm")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    calls, runner = _record()
+    with pytest.raises(ExecutorError) as exc_info:
+        execute(_NODE_METHOD, runner)
+    message = str(exc_info.value)
+    assert "~/.local/share/pnpm/bin" in message
+    assert "source ~/.myshellrc" in message
+    assert "install pnpm" not in message
+    assert calls == []
+
+
+def test_node_pnpm_homes_match_the_registry() -> None:
+    """The dirs `_node` probes are the shipped pnpm entry's bin_dir values, pinned here
+    so a registry edit cannot drift away from the probe."""
+    registry = Path(__file__).resolve().parents[1] / "installer" / "registry.toml"
+    declared = {
+        str(method.params["bin_dir"])
+        for tool in load_tools(registry)
+        if tool.id == "pnpm"
+        for method in tool.methods
+        if "bin_dir" in method.params
+    }
+    assert set(executors.PNPM_BIN_DIRS) == declared
+
+
+def test_node_runs_pnpm_from_a_bin_dir_with_spaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Held-out edge: a bin dir whose path contains spaces joins PATH as one entry,
+    and pnpm runs by its absolute path."""
+    home = tmp_path / "home with spaces"
+    monkeypatch.setenv("HOME", str(home))
+    pnpm = _plant_executable(home / ".local" / "share" / "pnpm" / "bin", "pnpm")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    prepend_path(pnpm.parent)
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(pnpm.parent)
+    calls, runner = _record()
+    execute(_NODE_METHOD, runner)
+    assert calls == [[str(pnpm), "add", "-g", "@mermaid-js/mermaid-cli"]]
