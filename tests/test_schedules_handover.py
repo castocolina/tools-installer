@@ -43,7 +43,7 @@ from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult
 from installer.wizard_app import SchedulesScreen, UnifiedApp
 from tests import test_setup
-from tests.screen_family import settle
+from tests.screen_family import settle, wait_until
 from tests.state_doubles import FrozenStateService
 from tests.test_schedules_engine import (
     CLAUDE_BASENAME,
@@ -295,8 +295,9 @@ async def test_install_run_then_reconcile(tmp_path: Path, monkeypatch: pytest.Mo
         present.add("opencode")  # the fake run put it on PATH
         done = RowOutcome(PlanRow("opencode", Disposition.INSTALL, ""), "done")
         app.post_message(InstallRunFinished([done], None, "", ""))
+        # settle alone can return before the message's worker exists; wait for its result.
+        await wait_until(pilot, lambda: len(unit_files(env.ctx, opencode)) == 3)
         await settle(app, pilot)
-        assert len(unit_files(env.ctx, opencode)) == 3
         assert not app.mutation_in_flight
 
 
