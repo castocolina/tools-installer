@@ -734,7 +734,7 @@ class CatalogScreen(AppScreen):
 
     def on_tool_browser_accepted(self, event: ToolBrowser.Accepted) -> None:
         event.stop()
-        if self.app.refuse_if_mutating(self):
+        if self.app.refuse_if_mutating(self, cross_process=True):
             return
         ids = [
             tool.id

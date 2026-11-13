@@ -825,7 +825,7 @@ class DoctorScreen(AppScreen):
         # line, so a repeat press is answered by what is on screen.
         if self.globals_done:
             return
-        if self.app.refuse_if_mutating(self):
+        if self.app.refuse_if_mutating(self, cross_process=True):
             return
         if self.globals_running:
             return
@@ -867,8 +867,9 @@ class DoctorScreen(AppScreen):
             return
         self.globals_note = None
         self.globals_invalidate_error = None
+        if not self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL, screen=self):
+            return
         self.globals_running = True
-        self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
         self._refresh_body()
         # The package list is passed in rather than re-derived inside the
         # worker: re-deriving would put `pnpm list -g --json` on a second
@@ -1863,9 +1864,10 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, decision: UninstallDecision) -> None:
-        if self.app.refuse_if_mutating(self):
+        if self.app.refuse_if_mutating(self, cross_process=True):
             return
-        self.app.begin_mutation(MutationHolder.REMOVAL)
+        if not self.app.begin_mutation(MutationHolder.REMOVAL, screen=self):
+            return
         for tool in decision.tools:
             self._failed_lines.pop(tool.id, None)
         if self._version_refresh is not None and decision.tools:
@@ -3844,9 +3846,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def on_install_run_started(self, message: InstallRunStarted) -> None:
         del message  # its arrival is its whole meaning
-        # run_in_flight stays the exit-code witness; the lock is the mutation guard.
+        # run_in_flight stays the exit-code witness; the lock is the mutation guard,
+        # taken by ExecuteScreen._begin_run before the run starts.
         self.run_in_flight = True
-        self.begin_mutation(MutationHolder.INSTALL_RUN)
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         self.end_mutation()

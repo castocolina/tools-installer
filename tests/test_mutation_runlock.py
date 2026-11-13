@@ -6,16 +6,23 @@ A test "scheduled run" is a `runlock.try_acquire` the test itself holds under th
 import fcntl
 import importlib
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from installer import runlock
-from installer.enums import MutationHolder, Severity
+from installer.engine import InstallOutcome
+from installer.enums import InstallStatus, MutationHolder, Severity
+from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.locations import ensure_dir
+from installer.model import Tool
+from installer.platform import Platform
+from installer.uninstall import SweepResult
 from installer.wizard_app import SCHEDULED_RUN_REFUSAL, MutationLock
 from tests.screen_family import HeldRemover, settle, wait_until
+from tests.state_doubles import presence_service
 
 # The family helpers are private to their module; read them by name.
 _FAMILY = vars(importlib.import_module("tests.test_screen_family"))
@@ -111,3 +118,145 @@ def test_holder_nouns() -> None:
     assert MutationHolder.SCHEDULE_CHANGE == "A schedule change"
     assert "A scheduled run" not in {holder.value for holder in MutationHolder}
     assert SCHEDULED_RUN_REFUSAL == _SENTENCE
+
+
+async def test_removal_refused_during_a_scheduled_run(tmp_path: Path) -> None:
+    remover = HeldRemover(SweepResult(removed=("yq",)))
+    app, _service = _FAMILY["_removal_app"](tmp_path, remover)
+    scheduled = _scheduled_run()
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await app.show_view("uninstall")
+            await _FAMILY["_confirm_removal"](app, pilot, "yq")
+            assert remover.calls == []
+            assert app.view("uninstall").status.text == _SENTENCE
+            assert not app.mutation_in_flight
+            scheduled.release()
+            await pilot.press("enter")
+            await pilot.press("enter")
+            await wait_until(pilot, remover.started.is_set)
+            assert _installer_holds()
+        finally:
+            scheduled.release()
+            remover.release.set()
+        await settle(app, pilot)
+        assert not app.mutation_in_flight
+
+
+async def test_globals_reinstall_refused_during_a_scheduled_run(tmp_path: Path) -> None:
+    started, release = threading.Event(), threading.Event()
+    app, _service = _FAMILY["_reinstall_app"](
+        tmp_path, HeldRemover(), _FAMILY["_held_reinstall"](started, release)
+    )
+    scheduled = _scheduled_run()
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await _FAMILY["_open_view"](app, pilot, "doctor")
+            await pilot.press("r")
+            assert app.view("doctor").status.text == _SENTENCE
+            assert not started.is_set()
+            assert not app.mutation_in_flight
+        finally:
+            scheduled.release()
+            release.set()
+
+
+def _install_app(
+    installs: list[str], outcome: InstallStatus, started: threading.Event, release: threading.Event
+) -> Any:
+    rg: Tool = _FAMILY["_tool"]("rg")
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    def install(tool: Tool, *_args: Any, **_kwargs: Any) -> InstallOutcome:
+        installs.append(tool.id)
+        started.set()
+        assert release.wait(timeout=10)
+        return InstallOutcome(tool.id, outcome)
+
+    service = presence_service([rg], platform=platform)
+    inputs = ExecuteInputs(
+        catalog=[rg],
+        platform=platform,
+        wire_path=lambda: "PATH wired",
+        verify=lambda: "PATH verified",
+        install=install,
+        version_refresh=service,
+    )
+    return _FAMILY["_family_app"](tools=[rg], version_refresh=service, execute=inputs)
+
+
+async def _accept_rg(app: Any, pilot: Any) -> None:
+    _FAMILY["_catalog_cursor"](app, "rg")
+    await pilot.press("space", "enter")
+
+
+@pytest.mark.parametrize("outcome", [InstallStatus.INSTALLED, InstallStatus.FAILED])
+async def test_install_run_never_starts_when_refused(
+    tmp_path: Path, outcome: InstallStatus
+) -> None:
+    installs: list[str] = []
+    started, release = threading.Event(), threading.Event()
+    app = _install_app(installs, outcome, started, release)
+    scheduled = _scheduled_run()
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            # Refused at the accept point.
+            await _accept_rg(app, pilot)
+            assert app.catalog.status.text == _SENTENCE
+            assert not isinstance(app.screen, ExecuteScreen)
+            scheduled.release()
+            # The runner wins the race between the accept and the start.
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: isinstance(app.screen, ExecuteScreen))
+            scheduled = _scheduled_run()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await pilot.press("enter")
+            assert not screen.started
+            assert installs == []
+            assert not app.mutation_in_flight
+            assert not app.run_in_flight
+            assert screen.status.text == _SENTENCE
+            # With the lock free the same screen starts the run.
+            scheduled.release()
+            await pilot.press("enter")
+            await wait_until(pilot, started.is_set)
+            assert screen.started
+            assert _installer_holds()
+            release.set()
+            await wait_until(pilot, lambda: not app.mutation_in_flight)
+            probe = runlock.try_acquire(runlock.run_lock_path(), "update-claude")
+            assert probe is not None
+            probe.release()
+        finally:
+            scheduled.release()
+            release.set()
+
+
+async def test_toggles_never_take_the_run_lock(tmp_path: Path) -> None:
+    applied: list[str] = []
+
+    def apply() -> Any:
+        applied.append("job")
+        return _FAMILY["_policy_result"]()
+
+    app, _service = _FAMILY["_policy_app"](
+        tmp_path,
+        [_FAMILY["_policy"](tmp_path, "job", apply=apply)],
+        HeldRemover(),
+    )
+    scheduled = _scheduled_run()
+    async with app.run_test(size=(120, 30)) as pilot:
+        try:
+            await settle(app, pilot)
+            await _FAMILY["_open_view"](app, pilot, "policies")
+            _FAMILY["_policy_cursor"](app, "job")
+            await pilot.press("space")
+            await settle(app, pilot)
+            assert applied == ["job"]
+            assert app.begin_mutation(MutationHolder.SCHEDULE_CHANGE) is True
+            app.end_mutation()
+        finally:
+            scheduled.release()
