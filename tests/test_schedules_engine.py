@@ -1678,3 +1678,20 @@ def test_a_macos_retime_on_an_off_row_only_saves_and_writes_no_plist(
     assert env.run.calls == []
     assert not mac_plist_path(env).exists()
     assert load_state(env.ctx.state_path).state.records["tmp-cleanup"].start == "04:15"
+
+
+def test_retiming_a_drift_row_never_records_a_modified_service_as_ours(env: Env) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    service = ctx.unit_dir / f"{CLAUDE_BASENAME}.service"
+    service.write_bytes(service.read_bytes() + b"# edited by hand\n")
+
+    retime(ctx, "update-claude", 8, "01:30")
+
+    state = load_state(ctx.state_path).state
+    by_path = {Path(a.path): a for a in state.records["update-claude"].files}
+    assert not receipts.matches(by_path[service], rehash=True)  # still not recorded as ours
+    timer = ctx.unit_dir / f"{CLAUDE_BASENAME}.timer"
+    assert receipts.matches(by_path[timer], rehash=True)
+    claude = schedule_by_id("update-claude")
+    assert row_state(ctx, state, claude, manager=True, present=ctx.present) == RowState("drift")

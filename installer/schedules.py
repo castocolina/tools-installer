@@ -1271,6 +1271,25 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     return ApplyReport(True, None, None, tuple(warnings))
 
 
+def _retimed_files(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord
+) -> tuple[ReceiptArtifact, ...]:
+    """Fingerprints after a re-time: only the timer Linux rewrote is re-recorded (F15).
+
+    A `.service` or wants link that drifted keeps its recorded fingerprint, so it never reads
+    as ours. macOS rewrites the whole plist, so everything on disk is re-recorded.
+    """
+    fresh = _fingerprint_unit(ctx, schedule)
+    if ctx.platform_os == "macos":
+        return fresh
+    timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename_for(schedule.id))[1]
+    recorded = {Path(artifact.path): artifact for artifact in record.files}
+    return tuple(
+        artifact if Path(artifact.path) == timer else recorded.get(Path(artifact.path), artifact)
+        for artifact in fresh
+    )
+
+
 def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
     """Validate, then change the grid; an off row only saves it, an on row rewrites its timer."""
     schedule = schedule_by_id(schedule_id)
@@ -1291,7 +1310,7 @@ def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) ->
         # Linux rewrites only the timer: a running job is never touched and the new grid applies
         # from the next slot. macOS re-registers the plist, which stops a loaded run (R1-11).
         _register(ctx, schedule, fresh, _resolve_uv(ctx), timer_only=True, clean_stamp=True)
-        files = _fingerprint_unit(ctx, schedule)
+        files = _retimed_files(ctx, schedule, record)
 
     def change(current: ScheduleState) -> ScheduleState:
         updated = replace(
@@ -1426,8 +1445,11 @@ def _seed_legacy_start(ctx: ScheduleContext, schedule: Schedule) -> None:
     """Adopting macOS's old plist keeps its daily time: seed the record's start from it (D-08)."""
     if ctx.platform_os != "macos" or schedule.kind is not JobKind.TMP_CLEANUP:
         return
-    record = record_for(load_state(ctx.state_path).state, schedule.id)
-    slot = daemon.read_schedule(_plist_path(ctx, schedule.id)) if not record.files else None
+    state = load_state(ctx.state_path).state
+    record = record_for(state, schedule.id)
+    # A record is the user's own saved time (F14): only a row never saved adopts the old plist's.
+    adoptable = not record.files and schedule.id not in state.records
+    slot = daemon.read_schedule(_plist_path(ctx, schedule.id)) if adoptable else None
     if slot is None or f"{slot[0]:02d}:{slot[1]:02d}" == record.start:
         return
     start = f"{slot[0]:02d}:{slot[1]:02d}"

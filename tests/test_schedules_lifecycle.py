@@ -821,3 +821,31 @@ def test_an_unreadable_state_refuses_the_write_instead_of_saving_defaults(
     assert lab.ctx.state_path.read_bytes() == before
     assert not schedules.damaged_path(lab.ctx.state_path).exists()
     assert load_state(lab.ctx.state_path).state.records["update-opencode"].decided is False
+
+
+def test_macos_reconcile_honours_a_time_recorded_before_the_first_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=(), os_key="macos")
+    ctx = lab.ctx
+    plist_path = ctx.launch_agents_dir / "com.tools-installer.prune-tmpdir.plist"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_bytes(  # the previous installer's plist, at its own daily time
+        plistlib.dumps(
+            {
+                "Label": "com.tools-installer.prune-tmpdir",
+                "ProgramArguments": ["/bin/true"],
+                "StartCalendarInterval": {"Hour": 5, "Minute": 15},
+            }
+        )
+    )
+    daemon.record_decided(ctx.myshellrc_path)
+    decide_off(ctx, "cache-cleanup")
+    schedules.retime(ctx, "tmp-cleanup", 24, "04:30")  # saved while the row is not on yet
+
+    ensure_schedule_defaults(ctx)
+
+    assert plistlib.loads(plist_path.read_bytes())["StartCalendarInterval"] == [
+        {"Hour": 4, "Minute": 30}
+    ]
+    assert load_state(ctx.state_path).state.records["tmp-cleanup"].start == "04:30"
