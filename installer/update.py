@@ -33,7 +33,9 @@ pnpm-owned tools do not get a `pnpm update -g` argv, and they do not get
 
 A pnpm-owned update therefore dispatches `executors.execute` with the owning
 `node` method — the same entry point an install takes — so those invariants
-cannot drift apart.
+cannot drift apart. A pnpm-owned host-setup tool (Pi) has no node method; it replays the
+reviewed `HOST_SETUPS` command through the real pnpm (`host_setup_update_argv`), and a
+host-setup tool without such a command is refused.
 
 An installer-owned `script` method is also the vendor's own documented update
 path, and it is the only update mechanism such a tool has, so it reuses
@@ -75,6 +77,7 @@ pays per tool.
 
 from __future__ import annotations
 
+import shlex
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -85,6 +88,7 @@ from installer import ownership as ownership_mod
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
+from installer.guards import real_pnpm
 from installer.host_setup import pnpm_add_command
 from installer.locations import applications_dir, bin_dir
 from installer.model import Method, Tool
@@ -250,6 +254,20 @@ def perform_update(
         )
 
 
+def host_setup_update_argv(tool: Tool) -> list[str] | None:
+    """The reviewed `pnpm add` argv of the tool's first host setup that has one, else None.
+
+    The text comes only from the code-owned `HOST_SETUPS` table, never from the registry.
+    """
+    for method in tool.methods:
+        if method.kind != "host_setup":
+            continue
+        command = pnpm_add_command(str(method.params.get("setup_id")))
+        if command is not None:
+            return shlex.split(command)
+    return None
+
+
 def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | None:
     """The pre-flight refusal `_perform` answers with, or None when an update can run.
 
@@ -310,19 +328,10 @@ def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | N
                 f"managed by Volta — update it with `volta install {ownership.package or tool.cmd}`"
             ),
         )
-    if ownership.owner == "pnpm" and method is None:
-        # A host-setup tool (pi): pnpm owns it but no node method installs it.
-        # The hint quotes the reviewed handoff (G14); a tool without one gets
+    if ownership.owner == "pnpm" and method is None and host_setup_update_argv(tool) is None:
+        # A host-setup tool (pi) whose setup has no reviewed `pnpm add` command: the hint is
         # the fallback, which still carries --ignore-scripts.
-        setup_ids = (str(m.params.get("setup_id")) for m in tool.methods if m.kind == "host_setup")
-        command = next(
-            (
-                quoted
-                for setup_id in setup_ids
-                if (quoted := pnpm_add_command(setup_id)) is not None
-            ),
-            f"pnpm add --global --ignore-scripts {ownership.package or tool.cmd}",
-        )
+        command = f"pnpm add --global --ignore-scripts {ownership.package or tool.cmd}"
         return UpdateOutcome(
             tool_id=tool.id,
             status="unsupported",
@@ -369,10 +378,15 @@ def _perform(
                     f"{declared}, so it was updated through {real}"
                 )
     elif owner == "pnpm":
-        # update_refusal answered the host-setup case (no node method) above.
         if method is None:
-            raise UpdateError("pnpm update reached the engine without a node method")
-        executors.execute(method, runner)
+            # update_refusal let a host-setup tool through: replay its reviewed command (D-16).
+            argv = host_setup_update_argv(target.tool)
+            pnpm = real_pnpm()
+            if argv is None or pnpm is None:
+                raise UpdateError(f"pnpm was not found, so {target.tool.id} cannot be updated")
+            runner([pnpm, *argv[1:]])
+        else:
+            executors.execute(method, runner)
     elif owner == "installer":
         cleanup_warnings = _update_installer_owned(
             method,

@@ -4,18 +4,20 @@ Everything runs in-process with fake ownership, a recording runner and fake vers
 no real package manager, vendor CLI or timer is ever started.
 """
 
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
 import setup
+from installer.guards import REDIRECT_SENTINEL
 from installer.model import Tool, load_tools
 from installer.ownership import Confidence, ManagerOwnership, Owner
 from installer.platform import Platform
-from installer.run import run_captured_in_group
+from installer.run import CommandError, run_captured_in_group
 from installer.schedule_run import RunDeps, run_schedule
-from installer.update import UpdateService
+from installer.update import UpdateService, UpdateTarget, resolve_update_argv
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 _FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
@@ -71,13 +73,8 @@ def _versions(*values: str | None) -> Callable[[Tool, ManagerOwnership], str | N
     return probe
 
 
-def _deps(
-    tool: Tool,
-    ownership: ManagerOwnership,
-    runner: Recorder,
-    versions: Callable[[Tool, ManagerOwnership], str | None],
-) -> RunDeps:
-    updates = UpdateService(
+def _service(ownership: ManagerOwnership, runner: Recorder) -> UpdateService:
+    return UpdateService(
         platform=_FEDORA,
         runner=runner,
         resolve_tag=lambda _repo: "v1.0.0",
@@ -85,9 +82,17 @@ def _deps(
         replay_globals=lambda _packages: (),
         reresolve_ownership=lambda _tool: ownership,
     )
+
+
+def _deps(
+    tool: Tool,
+    ownership: ManagerOwnership,
+    runner: Recorder,
+    versions: Callable[[Tool, ManagerOwnership], str | None],
+) -> RunDeps:
     return RunDeps(
         tools=[tool],
-        updates=updates,
+        updates=_service(ownership, runner),
         resolve_owner=lambda _tool: ownership,
         probe_version=versions,
         context=None,
@@ -198,3 +203,91 @@ def test_run_schedule_uses_the_in_group_runner(monkeypatch: pytest.MonkeyPatch) 
     deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
     assert isinstance(deps, RunDeps)
     assert seen == {"runner": run_captured_in_group}
+
+
+# --- skipped owners, failures, copilot's cask path and Pi's reviewed update -------------------
+
+
+def _no_runner_call(
+    tool_id: str, owner: Owner, *, reason: str | None = None, confidence: Confidence = "direct"
+) -> tuple[tuple[str, int], Recorder]:
+    tool = _tool(tool_id)
+    ownership = _ownership(tool, owner, with_method=False, reason=reason, confidence=confidence)
+    recorder = Recorder()
+    deps = _deps(tool, ownership, recorder, _versions("1.0"))
+    return run_schedule(f"update-{tool_id}", deps, parent_holds_lock=True), recorder
+
+
+def test_pacman_owned_opencode_is_skipped() -> None:
+    result, recorder = _no_runner_call("opencode", "pacman")
+    assert result == ("skipped: pacman owns opencode", 0)
+    assert recorder.calls == []
+
+
+def test_unknown_owner_is_skipped() -> None:
+    reason = "Pi was installed with bun; no manager claims it"
+    result, recorder = _no_runner_call("pi", "unknown", reason=reason, confidence="none")
+    assert result == (f"skipped: {reason}", 0)
+    assert recorder.calls == []
+
+
+def test_update_failure_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    deps, _recorder, leaf = _claude(tmp_path, monkeypatch, "1.0")
+    failing = Recorder(CommandError([str(leaf), "update"], 1, detail="boom"))
+    broken = RunDeps(
+        deps.tools,
+        _service(_ownership(deps.tools[0], "installer"), failing),
+        deps.resolve_owner,
+        deps.probe_version,
+        None,
+    )
+    assert run_schedule("update-claude", broken, parent_holds_lock=True) == (
+        f"failed: command failed (1): {leaf} update",
+        1,
+    )
+    assert len(failing.calls) == 1
+
+
+def test_copilot_cask_updates_through_brew() -> None:
+    tool = _tool("copilot")
+    ownership = _ownership(tool, "cask", package="copilot-cli")
+    recorder = Recorder()
+    deps = _deps(tool, ownership, recorder, _versions("1.0", "1.1"))
+    assert run_schedule("update-copilot", deps, parent_holds_lock=True) == (
+        "ok: updated 1.0 → 1.1",
+        0,
+    )
+    assert recorder.calls == [resolve_update_argv(UpdateTarget(tool, ownership))]
+    assert recorder.calls[0][:3] == ["brew", "upgrade", "--cask"]
+
+
+def _pnpm_behind_a_ban_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """HOME is scratch, the ban shim comes first on PATH, the real pnpm second; returns the real."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    shim = tmp_path / ".local" / "bin" / "pnpm"
+    real = tmp_path / "real" / "pnpm"
+    for path, text in ((shim, f"#!/bin/sh\n{REDIRECT_SENTINEL}\n"), (real, "#!/bin/sh\n")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim.parent}{os.pathsep}{real.parent}")
+    return real
+
+
+def test_pi_updates_through_its_reviewed_host_setup_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = _pnpm_behind_a_ban_shim(tmp_path, monkeypatch)
+    tool = _tool("pi")
+    ownership = _ownership(
+        tool, "pnpm", with_method=False, package="@earendil-works/pi-coding-agent"
+    )
+    recorder = Recorder()
+    deps = _deps(tool, ownership, recorder, _versions("1.4.0", "1.5.0"))
+    assert run_schedule("update-pi", deps, parent_holds_lock=True) == (
+        "ok: updated 1.4.0 → 1.5.0",
+        0,
+    )
+    assert recorder.calls == [
+        [str(real), "add", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"]
+    ]
