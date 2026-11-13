@@ -1530,3 +1530,27 @@ def test_e2e_script_names_the_same_pin_and_patch() -> None:
     relative = _kickstart_patch().relative_to(REGISTRY.parent.parent).as_posix()
     assert relative == "installer/patches/kickstart-no-lsp.patch"
     assert f"NVIM_STARTER_PATCH={relative}" in script
+
+
+def test_neovim_hints_survive_a_crashed_starter(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: object) -> tuple[str, ...]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(POST_INSTALL_HOOKS, "clone_nvim_starter", boom)
+
+    output = run_post_install(_shipped_neovim(), _mutable())
+
+    assert output.warning == "clone_nvim_starter crashed: boom"
+    assert output.lines == (_SHELL_INIT_LINE, *_HINT_LINES)
+
+
+def test_neovim_hints_print_with_your_own_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch)
+    mine = Path.home() / ".config" / "nvim"
+    mine.mkdir(parents=True)
+    (mine / "init.lua").write_bytes(b"mine")
+
+    output = run_post_install(_shipped_neovim(), _mutable())
+
+    assert output.lines == (_SHELL_INIT_LINE, _YOURS_LINE, *_HINT_LINES)
+    assert fake.calls == []

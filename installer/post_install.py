@@ -102,8 +102,8 @@ class SensitivePrompt:
     default: bool
 
 
-# No action asks (23.2 D-13); the prompt machinery stays wired for Phase 24.1. `{tool}` is the
-# tool id and `{effect}` the shell-init bundle's description in a prompt added here.
+# No action asks (23.2 D-13), so this machinery has no user and Phase 25 sweeps it (24.1 D-21).
+# `{tool}` is the tool id and `{effect}` the shell-init bundle's description in a prompt.
 SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {}
 
 

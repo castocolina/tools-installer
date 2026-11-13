@@ -368,6 +368,14 @@ the singular hook table. The install-tuning actions (`apply_agent_tuning`,
 `set_omz_plugins`, `source_shell_init`) are plural actions, dispatched from the
 same table as the other post-install actions.
 
+`clone_nvim_starter` (added for Neovim, 24.1 D-15) is the one plural action that
+spawns a child. It runs non-interactive git through a runner the composition root
+injects (`post_install.use_git_runner`), with `GIT_TERMINAL_PROMPT=0` and a timeout.
+It places a pinned, patched editor starter only into an absent or empty config dir.
+It has no pending `≈` step and no record, RECONFIGURE never runs it, and removal keeps
+the tree as config unless "delete config too" is chosen. Unit tests fake the runner;
+the real clone runs in a disposable container.
+
 The invocable skill at `.claude/skills/tool-onboarding/SKILL.md` walks this
 same three-question checklist interactively for a human or agent adding a
 new tool — it references this subsection rather than duplicating it, so

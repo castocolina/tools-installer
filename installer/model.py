@@ -139,7 +139,7 @@ POST_INSTALL_ACTIONS = (
     "show_nvim_hints",
 )
 # Empty since 23.2 D-13: no action asks. The loader field `default_enabled_sensitive_actions`
-# stays (D-14) and now rejects any value; Phase 24.1 decides its fate.
+# stays (D-14) and now rejects any value; it has no user and Phase 25 sweeps it (24.1 D-21).
 SENSITIVE_POST_INSTALL_ACTIONS: tuple[str, ...] = ()
 OWNER_PROBES = (
     "host-setup",

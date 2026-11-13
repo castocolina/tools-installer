@@ -358,7 +358,8 @@ def _heartbeat_lines(screen: ExecuteScreen) -> list[str]:
 @pytest.fixture(autouse=True)
 def legacy_sensitive_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
     """`SENSITIVE_PROMPTS` has been empty since 23.2-06 (D-13), but SensitiveActionScreen stays
-    wired for Phase 24.1; these tests keep driving it with the prompts it used to show."""
+    wired until Phase 25 sweeps it (24.1 D-21); these tests keep driving it with the prompts
+    it used to show."""
     monkeypatch.setitem(
         SENSITIVE_PROMPTS,
         "set_login_shell",
