@@ -497,19 +497,19 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. In a container, herdr installs, its integrations register for the present agent hosts, and uninstall leaves `herdr integration status` clean; no herdr skill pack is installed (skill packs dropped 2026-11-02).
-  2. On immutable Bazzite, Alacritty installs without a reboot: cargo builds it in a throwaway Distrobox, the native binary lands in `~/.local/bin` with its desktop entry, icon and terminfo under `~/.local/share`, all recorded in the receipt, and the container and image are gone afterwards; uninstall removes every recorded path. *(amended 2026-11-07, 24 D-19, needs confirmation: the image is removed when this run pulled it; an image the user already had is kept and named, never force-removed)*
+  2. On immutable Bazzite, Alacritty installs without a reboot: cargo builds it in a throwaway Distrobox, the native binary lands in `~/.local/bin` with its desktop entry and icon under `~/.local/share` and its terminfo under `~/.terminfo`, all recorded in the receipt, and the container and image are gone afterwards; uninstall removes every recorded path. *(amended 2026-11-07, 24 D-19, needs confirmation: the image is removed when this run pulled it; an image the user already had is kept and named, never force-removed)* *(amended 2026-11-08, 24 D-07: the terminfo goes to `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME)*
   3. A newer Alacritty GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched; Alacritty gets the zsh/`SHELL` sync and the asked keybindings (word navigation, clear scrollback). *(amended 2026-11-07, 24 D-22/D-23, TUNE-04: the keybindings are applied at install with no question and reverted with the tool, not asked and not a Policies row)*
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
   5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
 
-**Plans**: 9 plans
+**Plans**: 4/9 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 24-01-PLAN.md — `cargo_distrobox` kind: Alacritty tracer install/removal, executor cleanup guarantees, closed params, precedence and the Node floor from per-pass host facts, newer tag reads `↑` (wave 1)
-- [ ] 24-02-PLAN.md — Guarded nested-TOML writer and herdr as a ledger settings agent: sidebar keys, dynamic `default_shell`, group revert (wave 1)
-- [ ] 24-03-PLAN.md — Tool-onboarding skill: lifecycle params and `cargo_distrobox`, TUNE-04 rule kept, skill-judge before/after; stale Alacritty and terminfo text (wave 1)
-- [ ] 24-04-PLAN.md — Container harness: `--distro` table, rerun gate, exclusion listing, herdr probes, nested-podman target (host-tested only) (wave 1)
+- [x] 24-01-PLAN.md — `cargo_distrobox` kind: Alacritty tracer install/removal, executor cleanup guarantees, closed params, precedence and the Node floor from per-pass host facts, newer tag reads `↑` (wave 1)
+- [x] 24-02-PLAN.md — Guarded nested-TOML writer and herdr as a ledger settings agent: sidebar keys, dynamic `default_shell`, group revert (wave 1)
+- [x] 24-03-PLAN.md — Tool-onboarding skill: lifecycle params and `cargo_distrobox`, TUNE-04 rule kept, skill-judge before/after; stale Alacritty and terminfo text (wave 1)
+- [x] 24-04-PLAN.md — Container harness: `--distro` table, rerun gate, exclusion listing, herdr probes, nested-podman target (host-tested only) (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 24-05-PLAN.md — Alacritty update by rebuild; config dir untouched (wave 2)
@@ -608,7 +608,7 @@ Plans:
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
-| 24. Onboarding through the skill and e2e | 0/TBD | Not started | - |
+| 24. Onboarding through the skill and e2e | 4/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 24.2 Schedules view | 0/TBD | Not started | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
