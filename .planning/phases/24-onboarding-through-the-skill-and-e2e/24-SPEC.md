@@ -57,13 +57,13 @@ Scouted 2026-10-13:
    - `~/.local/bin/alacritty`;
    - `~/.local/share/applications/Alacritty.desktop` (with `Exec`/`TryExec` pointing at the installed binary);
    - the icon under `~/.local/share/icons`;
-   - the compiled terminfo under `~/.local/share/terminfo`.
+   - the compiled terminfo under `~/.local/share/terminfo`. *(amended 2026-11-08, 24 D-07: `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME; the desktop entry and icon stay under `~/.local/share`)*
 
    All of them are recorded in the receipt.
    - Current: Not installed on immutable hosts.
    - Target: The tool appears in the system menu and search. Uninstall removes every recorded path.
    - Acceptance:
-     - After install, each path exists, `desktop-file-validate` passes on the entry, and `infocmp alacritty` resolves through `~/.local/share/terminfo`.
+     - After install, each path exists, `desktop-file-validate` passes on the entry, and `infocmp alacritty` resolves through `~/.local/share/terminfo`. *(amended 2026-11-08, 24 D-07: `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME; the desktop entry and icon stay under `~/.local/share`)*
      - After uninstall, none of the paths exist.
 
 4. **Update by rebuild (ONB-02)**: A newer Alacritty GitHub release shows `↑`, and `u` rebuilds that tag.
@@ -106,7 +106,7 @@ Scouted 2026-10-13:
      - Three recorded runs pass.
      - The rerun pass has zero non-skipped rows.
      - A planted leftover makes the run fail.
-   - *Amended 2026-11-07 (24 D-25):* the installer never runs root commands, so native-kind tools (Alacritty in containers without distrobox) are handed off as `manual` on every pass. The rerun may hold only skipped or blocked rows plus `manual` rows whose tool set equals pass 1's manual set; any installed, updated, reconfigured or repaired row fails. A tool the resolver offers but that cannot run on one distro (copilot's Node floor on Debian, if its packaged nodejs is too old) is excluded through that distro's table entry and listed with its reason (24 D-26).
+   - *Amended 2026-11-07 (24 D-25):* the installer never runs root commands, so native-kind tools (Alacritty in containers without distrobox) are handed off as `manual` on every pass. The rerun may hold only skipped or blocked rows plus `manual` rows whose tool set equals pass 1's manual set; any installed, updated, reconfigured or repaired row fails. A tool the resolver offers but that cannot run on one distro (copilot's Node floor on Debian, if its packaged nodejs is too old) is excluded through that distro's table entry and listed with its reason (24 D-26). *(amended 2026-11-08, 24 D-26: the excluded case is mmdc/puppeteer on Debian, whose packaged Node 20.19.2 is below `min_node` 22.12.0; plan time shows it as BLOCKED with that reason. copilot has been a standalone binary since 23.2)*
 
 9. **Real-host UAT (ONB-05, manual)**: On this Bazzite host, the user confirms:
    - after install, the Owner column is filled on every tier (system, user, ai);
@@ -144,7 +144,7 @@ Scouted 2026-10-13:
 - [ ] herdr: integrations registered for present hosts and recorded; after uninstall `herdr integration status` is clean; no skill files are written
 - [ ] `cargo_distrobox` with a fake runner: create → build → copy → rm → image rm; an injected build failure still removes both and ends failed *(amended 2026-11-07, 24 D-19/D-20: image rm only when the run pulled it; `--home`/`--no-entry`/`--rm-home` asserted)*
 - [ ] One real Alacritty podman build recorded; no container or image left
-- [ ] The binary, desktop entry (valid), icon and terminfo are installed and recorded; `infocmp alacritty` resolves; uninstall removes all of them
+- [ ] The binary, desktop entry (valid), icon and terminfo are installed and recorded; `infocmp alacritty` resolves; uninstall removes all of them *(amended 2026-11-08, 24 D-07: `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME; the desktop entry and icon stay under `~/.local/share`)*
 - [ ] A newer release tag shows `↑`; `u` rebuilds and rewrites the receipt; the `~/.config/alacritty` checksum is unchanged
 - [ ] Precedence fixtures: immutable+distrobox → build; immutable without → unavailable with the reason; mutable without → dnf handoff; mutable+distrobox → build
 - [ ] The Alacritty region holds the zsh shell and the keybindings; user keys survive; Policies off removes the region; drift shows `≈` *(amended 2026-11-07, 24 D-22/D-23: two owned regions; keybindings written without zsh; removing Alacritty removes both regions; a hand-removed shell region shows `≈`, a hand-removed keybindings region does not)*
@@ -165,7 +165,7 @@ Scouted 2026-10-13:
 | ordering | R2 | ✅ covered | (added 2026-11-07, engine floor) Fixed argv order create → build → copy → rm → image rm (AC 2) |
 | idempotency | R2 | ✅ covered | (added 2026-11-07, engine floor) A second install of the same tag is skipped by the receipt; each run uses a fresh collision-proof box name (AC 2, D-02, AC 9 rerun) |
 | concurrency | R2 | 🧪 backstop | (added 2026-11-07, engine floor) Held-out test: an exception at any step, including an interrupt, still runs the `finally` deletions (D-02) |
-| adjacency | R3 | ✅ covered | An existing `~/.local/share/terminfo/a/alacritty` from a native install is not overwritten unless the receipt records it; it is listed instead (AC 4) |
+| adjacency | R3 | ✅ covered | An existing `~/.local/share/terminfo/a/alacritty` from a native install is not overwritten unless the receipt records it; it is listed instead (AC 4) | *(amended 2026-11-08, 24 D-07: `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME; the desktop entry and icon stay under `~/.local/share`)*
 | empty | R3 | ✅ covered | No `~/.local/share/applications` dir: it is created; only files are recorded, never the dirs (AC 4) |
 | ordering | R3 | ✅ covered | Artifacts are copied before the box is removed; the receipt is written after the last copy (AC 2, AC 4) |
 | concurrency | R3 | ✅ covered | (added 2026-11-07, engine floor) Files are staged and placed by atomic moves; an interrupted copy leaves the old receipt and the old files (D-03, AC 4) |
