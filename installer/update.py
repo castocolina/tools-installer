@@ -380,9 +380,10 @@ def _perform(
     elif owner == "pnpm":
         if method is None:
             # update_refusal let a host-setup tool through: replay its reviewed command (D-16).
-            argv = host_setup_update_argv(target.tool)
+            # update_refusal already refused a tool with no reviewed command, so argv is set.
+            argv = host_setup_update_argv(target.tool) or []
             pnpm = real_pnpm()
-            if argv is None or pnpm is None:
+            if pnpm is None:
                 raise UpdateError(f"pnpm was not found, so {target.tool.id} cannot be updated")
             runner([pnpm, *argv[1:]])
         else:
