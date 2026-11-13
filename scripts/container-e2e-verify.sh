@@ -77,6 +77,11 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           TRACER_REINSTALL_OK, TRACER_GSD_ABSENT_OK, TRACER_HOOKS_*, TRACER_SETTINGS_*
                           per step into pass2-transcript.log (appended, in order).
                           Tears the container down (rm -f) once all three succeed.
+  nvim-lsp                Orchestrator only, after pass1 on an already-bootstrapped
+                          container: open a Python, Lua, TypeScript, Go and Java file in
+                          the installer's own neovim starter and measure zero language
+                          servers (no client, no server process, an empty Mason). Prints
+                          TRACER_NVIM_LSP_OK. `all` runs it on fedora between pass1 and pass2.
   all                     bootstrap --replace, pass1, pass2, then remove the
                           container whatever the outcome (what `make e2e` runs).
   nested                  Orchestrator only, a time-boxed spike: start a disposable
@@ -1585,6 +1590,127 @@ EOF
   printf '%s\n' "$out" | nvim_removed_verdict
 }
 
+# neovim's zero-LSP check (ONB-10, D-12/D-13), run by the orchestrator on Fedora. Lines on stdin from
+# cmd_nvim_lsp: the marker `NVIM_LSP clients=.. mason_entries=.. filetypes=.. lspconfig=.. mason=..`
+# (printed by scripts/nvim-lsp-check.lua), `PROC <cmdline>`, `NVIM_LSP_NO_NVIM`, `NVIM_LSP_NO_STARTER`
+# and `NVIM_LSP_DONE` (both launches exited 0). Every other line is ignored, stderr noise and the
+# `NVIM_LSP_STDERR` evidence lines included: the marker counts only on a line that starts with it.
+nvim_lsp_verdict() {
+  local line part marker=0 clients="" entries="" filetypes="" lspconfig="" mason="" procs="" cmd
+  local no_nvim=0 no_starter=0 done=0 failed=0
+  local -a parts
+  while IFS= read -r line; do
+    case "$line" in
+      "NVIM_LSP clients="*)
+        marker=1
+        read -ra parts <<<"${line#NVIM_LSP }"
+        for part in ${parts[@]+"${parts[@]}"}; do
+          case "$part" in
+            clients=*) clients="${part#clients=}" ;;
+            mason_entries=*) entries="${part#mason_entries=}" ;;
+            filetypes=*) filetypes="${part#filetypes=}" ;;
+            lspconfig=*) lspconfig="${part#lspconfig=}" ;;
+            mason=*) mason="${part#mason=}" ;;
+          esac
+        done
+        ;;
+      "PROC "*) procs+="${line#PROC }"$'\n' ;;
+      NVIM_LSP_NO_NVIM) no_nvim=1 ;;
+      NVIM_LSP_NO_STARTER) no_starter=1 ;;
+      NVIM_LSP_DONE) done=1 ;;
+    esac
+  done
+  if [[ "$no_nvim" -eq 1 ]]; then
+    printf 'TRACER_NVIM_LSP_NO_NVIM\n'
+    return 1
+  fi
+  if [[ "$no_starter" -eq 1 ]]; then
+    printf 'TRACER_NVIM_LSP_NO_STARTER\n'
+    return 1
+  fi
+  if [[ "$marker" -eq 0 || "$done" -eq 0 ]]; then
+    printf 'TRACER_NVIM_LSP_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ "$clients" != 0 ]]; then
+    printf 'TRACER_NVIM_LSP_CLIENTS count=%s\n' "$clients"
+    failed=1
+  fi
+  while IFS= read -r cmd; do
+    [[ -n "$cmd" ]] || continue
+    printf 'TRACER_NVIM_LSP_SERVER_PROCESS cmd=%s\n' "$cmd"
+    failed=1
+  done <<<"$procs"
+  if [[ "$entries" != 0 ]]; then
+    printf 'TRACER_NVIM_MASON_NOT_EMPTY entries=%s\n' "$entries"
+    failed=1
+  fi
+  if [[ "$filetypes" != python,lua,typescript,go,java ]]; then
+    printf 'TRACER_NVIM_LSP_FILETYPES found=%s\n' "$filetypes"
+    failed=1
+  fi
+  if [[ "$lspconfig" != 1 || "$mason" != 1 ]]; then
+    printf 'TRACER_NVIM_LSP_PLUGINS_MISSING lspconfig=%s mason=%s\n' "$lspconfig" "$mason"
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NVIM_LSP_OK clients=%s mason_entries=%s\n' "$clients" "$entries"
+}
+
+# Orchestrator only, on an already-bootstrapped container after pass 1: act on the tree the
+# installer produced. Both nvim launches run with XDG data, state and cache in a mktemp dir outside
+# HOME (so the leftover check never sees them), and each is bounded by `timeout` with stdin from
+# /dev/null. An EXIT trap in the gather prints each launch's exit status and stderr tail as
+# `NVIM_LSP_STDERR <launch>: ...` evidence and removes the dir, however the gather ends (R2-03).
+# The evidence is forwarded to this command's own stdout, which `all` tees into the transcript
+# (R2-02); stderr never decides the verdict (treesitter's noise is expected, Pitfall 7).
+cmd_nvim_lsp() {
+  container_running || die "container $CONTAINER_NAME is not running"
+  local body pre out status=0
+  IFS= read -r -d '' body <<'EOF' || true
+set -euo pipefail
+nvim="$HOME/.local/bin/nvim"
+if [ ! -x "$nvim" ]; then echo NVIM_LSP_NO_NVIM; exit 0; fi
+if [ ! -f "$HOME/.config/nvim/init.lua" ]; then echo NVIM_LSP_NO_STARTER; exit 0; fi
+t="$(mktemp -d)"
+fl='not run'
+ck='not run'
+evidence() {
+  local launch status
+  for launch in first-launch check; do
+    if [ "$launch" = first-launch ]; then status="$fl"; else status="$ck"; fi
+    printf 'NVIM_LSP_STDERR %s: exit status %s\n' "$launch" "$status"
+    if [ -f "$t/$launch.err" ]; then
+      tail -n 20 "$t/$launch.err" | sed "s/^/NVIM_LSP_STDERR $launch: /"
+    fi
+  done
+  rm -rf "$t"
+  }
+trap evidence EXIT
+export XDG_DATA_HOME="$t/data" XDG_STATE_HOME="$t/state" XDG_CACHE_HOME="$t/cache"
+mkdir "$t/files"
+cd "$t/files"
+printf 'x = 1\n' > a.py
+printf 'local x = 1\n' > a.lua
+printf 'const x = 1\n' > a.ts
+printf 'package main\n' > a.go
+printf 'class A {}\n' > A.java
+fl=0
+timeout 300 "$nvim" --headless +qa 2>"$t/first-launch.err" </dev/null || fl=$?
+ck=0
+timeout 180 "$nvim" --headless -c "luafile $workspace/scripts/nvim-lsp-check.lua" 2>"$t/check.err" </dev/null || ck=$?
+if [ "$fl" -eq 0 ] && [ "$ck" -eq 0 ]; then echo NVIM_LSP_DONE; fi
+EOF
+  printf -v pre 'workspace=%q\n' "$TESTER_WORKSPACE"
+  out="$(exec_tester "$pre$body")" || status=$?
+  printf '%s\n' "$out" | sed -n '/^NVIM_LSP_STDERR /p'
+  if [[ "$status" -ne 0 ]]; then
+    printf 'TRACER_NVIM_LSP_PROBE_FAILED\n'
+    return 1
+  fi
+  printf '%s\n' "$out" | nvim_lsp_verdict
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -1731,9 +1857,19 @@ cmd_all() {
   trap 'rc=$?; if [[ "$rc" -ne 0 && "$PASS2_STARTED" -eq 1 ]]; then cat "$PHASE_DIR/pass2-transcript.log" || true; fi; ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
   cmd_bootstrap --replace
   cmd_pass1 | tee "$PHASE_DIR/pass1-transcript.log"
+  # A failed zero-LSP check still lets pass 2 run, so one run gives both pieces of evidence.
+  local lsp_failed=0
+  if [[ "$DISTRO" == fedora ]]; then
+    cmd_nvim_lsp | tee "$PHASE_DIR/nvim-lsp-transcript.log" || lsp_failed=1
+  fi
   PASS2_STARTED=1
   cmd_pass2
   cat "$PHASE_DIR/pass2-transcript.log"
+  PASS2_STARTED=0
+  if [[ "$lsp_failed" -ne 0 ]]; then
+    printf 'TRACER_NVIM_LSP_FAILED_EARLIER\n'
+    return 1
+  fi
 }
 
 # --- nested target (D-18, D-29): orchestrator only, a time-boxed spike --------------------------
@@ -2078,6 +2214,7 @@ main() {
     bootstrap) cmd_bootstrap "$@" ;;
     pass1) cmd_pass1 "$@" ;;
     pass2) cmd_pass2 "$@" ;;
+    nvim-lsp) cmd_nvim_lsp "$@" ;;
     resync) cmd_resync "$@" ;;
     all) cmd_all "$@" ;;
     nested) cmd_nested "$@" ;;
