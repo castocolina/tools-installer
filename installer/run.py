@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ import sys
 from collections import deque
 from collections.abc import Callable, Collection, Mapping, MutableMapping
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 from installer.sanitize import sanitize_log_line
 
@@ -162,14 +163,28 @@ def run_output(
     return run_output_with_stderr(cmd, timeout=timeout, env=env)[0]
 
 
-def run_captured(cmd: list[str]) -> None:
+def run_captured(cmd: list[str], *, timeout: float | None = None) -> None:
     """Runner that keeps the child's stdio out of the caller's terminal.
 
     For side effects started while Textual owns the terminal: a child that
     inherits stdout/stderr writes its progress bars and postinstall output
-    straight into the rendered frame.
+    straight into the rendered frame. `timeout` bounds a short command (see `run_bounded`).
     """
-    run_output(cmd)
+    run_output(cmd, timeout=timeout)
+
+
+def run_bounded(runner: Runner, cmd: list[str], seconds: float | None = None) -> None:
+    """Run a short command through `runner`, bounded when the runner takes a `timeout` keyword
+    (`run_captured` does). Other runners (the streaming TUI runner, test doubles) run it as is.
+    A timeout is a CommandError like any failure. Default: `QUERY_TIMEOUT`."""
+    try:
+        takes_timeout = "timeout" in inspect.signature(runner).parameters
+    except (ValueError, TypeError):  # a builtin such as list.append has no signature
+        takes_timeout = False
+    if takes_timeout:
+        cast("Callable[..., None]", runner)(cmd, timeout=seconds or QUERY_TIMEOUT)
+    else:
+        runner(cmd)
 
 
 STREAM_DETAIL_LINES = 20

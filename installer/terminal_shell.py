@@ -31,7 +31,7 @@ from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
 from installer.receipts import read_ledger
-from installer.run import CommandError, Runner
+from installer.run import CommandError, Runner, run_bounded
 from installer.shellrc import apply_block, strip_block
 
 Lookup = Callable[[str], str | None]
@@ -750,7 +750,7 @@ def _herdr_reload(herdr_path: str, runner: Runner | None) -> tuple[str, ...]:
     if runner is None:
         return ()
     try:
-        runner([herdr_path, "server", "reload-config"])
+        run_bounded(runner, [herdr_path, "server", "reload-config"])
     except (CommandError, OSError) as exc:
         return (f"herdr: reload-config failed ({_first_line(exc)}); new panes read it on restart",)
     return ()

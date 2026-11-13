@@ -24,7 +24,14 @@ from types import MappingProxyType
 from installer import agent_settings, receipts
 from installer.locations import bin_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool
-from installer.run import CommandError, NotingRunner, Runner, command_error_line, run_query
+from installer.run import (
+    CommandError,
+    NotingRunner,
+    Runner,
+    command_error_line,
+    run_bounded,
+    run_query,
+)
 
 # (harness ids registered, warning). A warning never fails the install.
 HookOutcome = tuple[tuple[str, ...], str | None]
@@ -323,7 +330,7 @@ def _herdr_sidebar(binary: str, runner: Runner) -> tuple[bool, str | None]:
             notes.append(f"your sidebar rows are kept; add {_ROW_TOKENS} to them by hand")
         if any(key.kind == "wrote" for key in written.keys):
             try:
-                runner([binary, "server", "reload-config"])
+                run_bounded(runner, [binary, "server", "reload-config"])
             except CommandError as exc:
                 notes.append(f"reload-config failed ({command_error_line(exc)}); restart herdr")
     return True, "; ".join(notes) or None

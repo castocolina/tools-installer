@@ -1600,3 +1600,17 @@ def test_alacritty_shell_path_with_a_non_bmp_character_is_valid_toml() -> None:
     assert result.warnings == ()
     document = tomllib.loads(_alacritty_toml().read_text(encoding="utf-8"))
     assert document["terminal"]["shell"]["program"] == zsh
+
+
+def test_herdr_reload_is_bounded_for_a_runner_that_takes_a_timeout() -> None:
+    seen: list[float | None] = []
+
+    def runner(_cmd: list[str], *, timeout: float | None = None) -> None:
+        seen.append(timeout)
+
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("")
+    _sync_herdr(runner=runner)
+
+    assert seen == [20.0]
