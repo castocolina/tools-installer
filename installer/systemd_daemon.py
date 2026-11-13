@@ -26,6 +26,7 @@ from typing import Generic, TypeVar
 from installer.atomic import atomic_write_bytes
 from installer.daemon import (
     DEFAULT_CAP_BYTES,
+    ENVIRONMENT_KEYS,
     WRAPPER_COMMAND,
     DaemonScheduleError,
     ensure_log_path,
@@ -184,7 +185,6 @@ def _quote(value: str) -> str:
     return f'"{value}"'
 
 
-_ENVIRONMENT_KEYS = ("PATH", "HOME", "TMPDIR")
 _CALENDAR_RE = re.compile(r"\*-\*-\* \d{2}(,\d{2})*:\d{2}:00")
 
 
@@ -201,9 +201,9 @@ def render_exec_service(
     """
     if not argv or not Path(argv[0]).is_absolute():
         raise DaemonScheduleError(f"argv[0] must be an absolute path: {list(argv)[:1]!r}")
-    unknown = sorted(set(environment) - set(_ENVIRONMENT_KEYS))
+    unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
     if unknown:
-        raise DaemonScheduleError(f"environment keys must be within {_ENVIRONMENT_KEYS}: {unknown}")
+        raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
     if "PATH" in environment and not environment["PATH"]:
         raise DaemonScheduleError("PATH must not be empty")
     for key in ("HOME", "TMPDIR"):
@@ -219,7 +219,7 @@ def render_exec_service(
         f"ExecStart={exec_start}",
         *(
             f"Environment={_quote(f'{key}={environment[key]}')}"
-            for key in _ENVIRONMENT_KEYS
+            for key in ENVIRONMENT_KEYS
             if key in environment
         ),
     ]

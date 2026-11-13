@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import daemon
+from installer import daemon, schedules
 from installer.helper_assets import prune_daemon_runner
 from installer.run import CommandError
 
@@ -187,6 +187,148 @@ def test_read_schedule_returns_none_when_hour_or_minute_is_not_an_integer(tmp_pa
         plistlib.dumps({"Label": "x", "StartCalendarInterval": {"Hour": "3", "Minute": 30}})
     )
     assert daemon.read_schedule(plist_path) is None
+
+
+# --- generic agent plist and calendar reader (24.2-04) -----------------------
+
+_AGENT_ARGV = ["/abs/uv", "run", "--no-project", "--script", "/abs/runner.py", "update", "claude"]
+_AGENT_ENV = {"PATH": "/a", "HOME": "/h", "TMPDIR": "/t"}
+
+
+def _agent_kwargs(**overrides: object) -> dict[str, object]:
+    merged: dict[str, object] = {
+        "label": "com.tools-installer.schedule.update-claude",
+        "program_arguments": _AGENT_ARGV,
+        "environment": _AGENT_ENV,
+        "calendar": schedules.calendar_dicts(schedules.slots(8, "01:30")),
+        "stdout_path": Path("/abs/schedules-launchd.log"),
+        "stderr_path": Path("/abs/schedules-launchd.log"),
+    }
+    merged.update(overrides)
+    return merged
+
+
+def test_agent_plist_with_a_calendar_array() -> None:
+    plist_dict = daemon.render_agent_plist(**_agent_kwargs())  # type: ignore[arg-type]
+    assert plist_dict == {
+        "Label": "com.tools-installer.schedule.update-claude",
+        "ProgramArguments": _AGENT_ARGV,
+        "StartCalendarInterval": [
+            {"Hour": 1, "Minute": 30},
+            {"Hour": 9, "Minute": 30},
+            {"Hour": 17, "Minute": 30},
+        ],
+        "StandardOutPath": "/abs/schedules-launchd.log",
+        "StandardErrorPath": "/abs/schedules-launchd.log",
+        "RunAtLoad": False,
+        "EnvironmentVariables": _AGENT_ENV,
+    }
+    assert plistlib.loads(plistlib.dumps(plist_dict)) == plist_dict
+
+
+def test_render_plist_is_unchanged() -> None:
+    assert daemon.render_plist(
+        uv_path=Path("/home/tester/.local/bin/uv"),
+        wrapper_path=Path("/home/tester/.local/bin/tools-installer-prune-daemon"),
+        script_path=Path("/home/tester/tools-installer/scripts/prune-user-tmpdir.sh"),
+        log_path=Path("/home/tester/.local/state/tools-installer/prune-daemon.log"),
+        hour=3,
+        minute=0,
+        days=3,
+        tmpdir="/tmp",
+        home="/home/tester",
+        path_value="/usr/bin:/bin",
+    ) == {
+        "Label": "com.tools-installer.prune-tmpdir",
+        "ProgramArguments": [
+            "/home/tester/.local/bin/uv",
+            "run",
+            "--no-project",
+            "--script",
+            "/home/tester/.local/bin/tools-installer-prune-daemon",
+            "--script",
+            "/home/tester/tools-installer/scripts/prune-user-tmpdir.sh",
+            "--log",
+            "/home/tester/.local/state/tools-installer/prune-daemon.log",
+            "--cap-bytes",
+            "262144",
+            "--",
+            "--apply",
+            "--days",
+            "3",
+        ],
+        "StartCalendarInterval": {"Hour": 3, "Minute": 0},
+        "StandardOutPath": "/home/tester/.local/state/tools-installer/prune-daemon.log",
+        "StandardErrorPath": "/home/tester/.local/state/tools-installer/prune-daemon.log",
+        "RunAtLoad": False,
+        "EnvironmentVariables": {"PATH": "/usr/bin:/bin", "TMPDIR": "/tmp", "HOME": "/home/tester"},
+    }
+
+
+def test_read_calendar_reads_both_forms(tmp_path: Path) -> None:
+    single = tmp_path / "single.plist"
+    single.write_bytes(plistlib.dumps({"StartCalendarInterval": {"Hour": 3, "Minute": 0}}))
+    assert daemon.read_calendar(single) == ((3, 0),)
+    assert daemon.read_schedule(single) == (3, 0)
+
+    many = tmp_path / "many.plist"
+    many.write_bytes(
+        plistlib.dumps(
+            {"StartCalendarInterval": [{"Hour": 17, "Minute": 30}, {"Hour": 1, "Minute": 30}]}
+        )
+    )
+    assert daemon.read_calendar(many) == ((1, 30), (17, 30))
+    assert daemon.read_schedule(many) is None
+
+    assert daemon.read_calendar(tmp_path / "missing.plist") is None
+    bad = tmp_path / "bad.plist"
+    bad.write_bytes(b"not a plist \xff\xfe")
+    assert daemon.read_calendar(bad) is None
+
+
+@pytest.mark.parametrize(
+    "interval",
+    [
+        {"Hour": "3", "Minute": 0},
+        {"Hour": 24, "Minute": 0},
+        {"Hour": 3, "Minute": 60},
+        {"Hour": 3},
+        [],
+        ["x"],
+        [{"Hour": 3, "Minute": 0}, {"Hour": 3.5, "Minute": 0}],
+        "daily",
+    ],
+)
+def test_read_calendar_is_none_for_a_malformed_interval(tmp_path: Path, interval: object) -> None:
+    plist_path = tmp_path / "bad.plist"
+    plist_path.write_bytes(plistlib.dumps({"StartCalendarInterval": interval}))
+    assert daemon.read_calendar(plist_path) is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"program_arguments": ["relative/uv", "run"]},
+        {"program_arguments": []},
+        {"calendar": {"Hour": 24, "Minute": 0}},
+        {"calendar": {"Hour": 3, "Minute": 60}},
+        {"calendar": {"Hour": -1, "Minute": 0}},
+        {"calendar": []},
+        {"calendar": [{"Hour": 3, "Minute": 0}, {"Hour": 3, "Minute": 61}]},
+        {"environment": {**_AGENT_ENV, "LD_PRELOAD": "/x.so"}},
+    ],
+)
+def test_agent_plist_rejects_bad_input(overrides: dict[str, object]) -> None:
+    with pytest.raises(daemon.DaemonScheduleError):
+        daemon.render_agent_plist(**_agent_kwargs(**overrides))  # type: ignore[arg-type]
+
+
+def test_write_agent_plist_writes_a_rendered_dict_at_0o644(tmp_path: Path) -> None:
+    plist_dict = daemon.render_agent_plist(**_agent_kwargs())  # type: ignore[arg-type]
+    plist_path = tmp_path / "LaunchAgents" / "agent.plist"
+    daemon.write_agent_plist(plist_path, plist_dict)
+    assert plistlib.loads(plist_path.read_bytes()) == plist_dict
+    assert oct(plist_path.stat().st_mode)[-3:] == "644"
 
 
 # --- _atomic_write: crash-mid-write safety ----------------------------------
