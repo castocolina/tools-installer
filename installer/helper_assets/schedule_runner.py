@@ -42,6 +42,8 @@ from typing import NamedTuple
 
 _TMP_TIMEOUT = 600
 _MANAGER_TIMEOUT = 1200
+_UPDATE_TIMEOUT = 1800
+_RESULT_PREFIXES = ("ok:", "skipped:", "failed:")
 # Source: installer/guards.py SHIM_SENTINEL (this file cannot import it).
 _SHIM_SENTINEL = b"# tools-installer-ban-shim"
 # Each manager's own prune command, in the UI's target order.
@@ -86,10 +88,40 @@ def _sanitize(text: bytes | str) -> str:
     return " ".join(text.split())[:_MAX_REASON]
 
 
+def _fit(existing: bytes, new: bytes, cap: int) -> bytes:
+    """The newest whole lines of `existing` plus `new`, never more than `cap` bytes."""
+    if len(new) > cap:  # one line over the cap: its newest bytes, still ending in a newline
+        body = new.rstrip(b"\n")[-(cap - 1) :] if cap > 1 else b""
+        return body.decode("utf-8", errors="ignore").encode("utf-8") + b"\n"
+    kept: list[bytes] = []
+    size = len(new)
+    # Decode once, so a cut never lands inside a character; measure what is written back.
+    for text in reversed(existing.decode("utf-8", errors="replace").split("\n")[:-1]):
+        line = f"{text}\n".encode()
+        if size + len(line) > cap:
+            break
+        kept.append(line)
+        size += len(line)
+    return b"".join(reversed(kept)) + new
+
+
 def _append(log_path: Path, line: str, cap: int) -> None:
+    """Append one line under the log lock; trim through a temp file when it would pass `cap`."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab") as handle:
-        handle.write(line.encode("utf-8"))
+    fd = os.open(f"{log_path}.lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # blocking: held only for one short read-and-write
+        new = line.encode("utf-8")
+        existing = log_path.read_bytes() if log_path.exists() else b""
+        if len(existing) + len(new) <= cap:
+            with log_path.open("ab") as handle:
+                handle.write(new)
+            return
+        temp = log_path.with_name(f"{log_path.name}.{os.getpid()}.tmp")
+        temp.write_bytes(_fit(existing, new, cap))
+        os.replace(temp, log_path)
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
 
 
 def _child_env() -> dict[str, str]:
@@ -168,6 +200,47 @@ def _tmp_cleanup(script: str, forwarded: list[str]) -> str:
         return f"failed: {name} exited {child.code}"
     counts = _DELETED.findall(child.out.decode("utf-8", errors="replace"))
     return f"ok: deleted {counts[-1]}" if counts else "ok: done"
+
+
+def _update(run_id: str, installer: str, uv: str) -> str:
+    """Run the installer's own `--run-schedule` for one tool; its last result line is ours."""
+    setup = Path(installer) / "setup.py"
+    if not setup.is_file():
+        return f"failed: installer not found at {setup}"
+    if not (Path(uv).is_file() and os.access(uv, os.X_OK)):
+        return f"failed: uv not found at {uv}"
+    child = _run_child(
+        [
+            uv,
+            "run",
+            "--isolated",
+            "--no-dev",
+            "setup.py",
+            "--run-schedule",
+            run_id,
+            "--parent-holds-run-lock",
+        ],
+        timeout=_UPDATE_TIMEOUT,
+        cwd=Path(installer),
+    )
+    if child.problem == "timed out":
+        return "failed: the update timed out"
+    if child.problem is not None:
+        return f"failed: installer {child.problem}"
+    results = [
+        line.strip()
+        for line in child.out.decode("utf-8", errors="replace").splitlines()
+        if line.strip().startswith(_RESULT_PREFIXES)
+    ]
+    if results and results[-1].startswith("failed:"):
+        return _sanitize(results[-1])
+    if child.code != 0:
+        if results:
+            return f'failed: installer exited {child.code} after "{_sanitize(results[-1])}"'
+        stderr = child.err.decode("utf-8", errors="replace").strip().splitlines()
+        reason = f": {_sanitize(stderr[-1])}" if stderr else ""
+        return f"failed: installer exited {child.code}{reason}"
+    return _sanitize(results[-1]) if results else "failed: no result line from the installer"
 
 
 def _resolve(name: str, path_value: str) -> str | None:
@@ -281,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         runners: dict[str, Callable[[], str]] = {
             "tmp-cleanup": lambda: _tmp_cleanup(options["--script"], forwarded),
             "cache-cleanup": lambda: _cache_cleanup(emit),
+            "update": lambda: _update(run_id, options["--installer"], options["--uv"]),
         }
         try:
             result = runners[job]()

@@ -6,10 +6,12 @@ through `vars(schedule_runner)`.
 """
 
 import contextlib
+import fcntl
 import os
 import re
 import shutil
 import signal
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -391,3 +393,215 @@ def test_manager_timeout_is_a_failure(tmp_path: Path, monkeypatch: pytest.Monkey
         "ran: brew cleanup (exit 0)",
         "failed: pnpm store prune timed out (brew ok)",
     ]
+
+
+# --- update, busy skip, capped log ------------------------------------------
+
+
+def _checkout(tmp_path: Path) -> Path:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "setup.py").write_text("")
+    return checkout
+
+
+def _update(tmp_path: Path, uv: Path | str, checkout: Path | None = None) -> tuple[int, list[str]]:
+    return _run(
+        tmp_path,
+        "update",
+        "claude",
+        "--installer",
+        str(checkout or _checkout(tmp_path)),
+        "--uv",
+        str(uv),
+    )
+
+
+def test_update_runs_the_installer_child(tmp_path: Path) -> None:
+    checkout = _checkout(tmp_path)
+    bin_dir = tmp_path / "bin"
+    uv = _script(
+        bin_dir, "uv", f'echo "$@" > "{bin_dir}/argv"\npwd > "{bin_dir}/cwd"\necho "ok: up to date"'
+    )
+    code, lines = _update(tmp_path, uv, checkout)
+    assert code == 0
+    assert (bin_dir / "argv").read_text().split() == [
+        *["run", "--isolated", "--no-dev", "setup.py", "--run-schedule", "update-claude"],
+        "--parent-holds-run-lock",
+    ]
+    assert Path((bin_dir / "cwd").read_text().strip()).resolve() == checkout.resolve()
+    assert _texts(lines, "update-claude") == ["start", "ok: up to date"]
+
+
+@pytest.mark.parametrize(
+    ("body", "code", "result"),
+    [
+        ('echo "failed: boom"\nexit 1', 1, "failed: boom"),
+        ("exit 3", 1, "failed: installer exited 3"),
+        ('echo "oops" >&2\necho "more" >&2\nexit 3', 1, "failed: installer exited 3: more"),
+        ("echo hello", 1, "failed: no result line from the installer"),
+        ('echo "ok: fine"\nexit 3', 1, 'failed: installer exited 3 after "ok: fine"'),
+        ('echo "ok: first"\necho noise\necho "skipped: last"\necho tail', 0, "skipped: last"),
+        ('echo "failed: odd"', 1, "failed: odd"),
+    ],
+)
+def test_update_child_failure_and_odd_output(
+    tmp_path: Path, body: str, code: int, result: str
+) -> None:
+    uv = _script(tmp_path / "bin", "uv", body)
+    got, lines = _update(tmp_path, uv)
+    assert got == code
+    assert _texts(lines, "update-claude")[-1] == result
+
+
+def test_missing_installer_fails_loudly(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    uv = _recorder(bin_dir, "uv")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    code, lines = _update(tmp_path, uv, empty)
+    assert code == 1
+    assert _texts(lines, "update-claude")[-1] == f"failed: installer not found at {empty}/setup.py"
+    assert not (bin_dir / "uv.argv").exists()
+    code, lines = _update(tmp_path, tmp_path / "no-uv")
+    assert code == 1
+    assert _texts(lines, "update-claude")[-1] == f"failed: uv not found at {tmp_path}/no-uv"
+
+
+def _hanging_uv(tmp_path: Path, body: str) -> Path:
+    sleep = shutil.which("sleep")
+    assert sleep is not None
+    return _script(tmp_path / "bin", "uv", body.replace("sleep", sleep))
+
+
+def _assert_lock_released(tmp_path: Path) -> None:
+    lock = tmp_path / "state" / "run.lock"
+    assert lock.read_bytes() == b""
+    fd = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(fd)
+
+
+def test_update_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pidfile = tmp_path / "uv.pid"
+    uv = _hanging_uv(tmp_path, f'echo $$ > "{pidfile}"\nsleep 60')
+    monkeypatch.setitem(vars(schedule_runner), "_UPDATE_TIMEOUT", 1)
+    code, lines = _update(tmp_path, uv)
+    pid = int(pidfile.read_text())
+    try:
+        assert code == 1
+        assert _texts(lines, "update-claude")[-1] == "failed: the update timed out"
+        assert _gone(pid)
+    finally:
+        _reap(pid)
+    _assert_lock_released(tmp_path)
+
+
+def test_update_timeout_kills_the_installer_grandchild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pidfile = tmp_path / "grandchild.pid"
+    uv = _hanging_uv(tmp_path, f'sleep 60 &\necho $! > "{pidfile}"\nsleep 60')
+    monkeypatch.setitem(vars(schedule_runner), "_UPDATE_TIMEOUT", 1)
+    code, lines = _update(tmp_path, uv)
+    grandchild = int(pidfile.read_text())
+    try:
+        assert code == 1
+        assert _texts(lines, "update-claude")[-1] == "failed: the update timed out"
+        assert _gone(grandchild)
+    finally:
+        _reap(grandchild)
+
+
+def test_busy_lock_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    lock = state / "run.lock"
+    lock.write_text("update-claude 1 2026-11-13T00:00:00+00:00\n")
+    bin_dir = tmp_path / "bin"
+    _recorder(bin_dir, "uv")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    holder = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code, lines = _run(tmp_path, "cache-cleanup")
+    finally:
+        os.close(holder)
+    assert code == 0
+    assert _texts(lines) == ["skipped: busy"]
+    assert not (bin_dir / "uv.argv").exists()
+    assert lock.read_text() == "update-claude 1 2026-11-13T00:00:00+00:00\n"
+
+
+def test_a_running_run_writes_its_id_pid_and_time_into_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    cat = shutil.which("cat")
+    assert cat is not None
+    _script(bin_dir, "uv", f'{cat} "{tmp_path}/state/run.lock" > "{bin_dir}/seen"')
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert _run(tmp_path, "cache-cleanup")[0] == 0
+    assert re.fullmatch(rf"cache-cleanup {os.getpid()} {_TS}\n", (bin_dir / "seen").read_text())
+
+
+def test_log_is_trimmed_before_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    log = tmp_path / "state" / "run.log"
+    log.parent.mkdir()
+    old = ("x" * 49 + "\n") * 20
+    log.write_text(old)
+    cap = len(old.encode())
+    replaced: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def record(src: str | Path, dst: str | Path) -> None:
+        replaced.append((Path(src).name, Path(dst).name))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(vars(schedule_runner)["os"], "replace", record)
+    code, lines = _run(tmp_path, "cache-cleanup", cap=cap)
+    assert code == 0
+    assert len(log.read_bytes()) <= cap
+    assert log.read_text().endswith("\n")
+    assert _texts(lines)[-2:] == ["start", "ok: nothing to clean"]
+    assert all(line == "x" * 49 or re.match(_TS, line) for line in lines)
+    assert replaced
+    assert all(dst == "run.log" and src.endswith(".tmp") for src, dst in replaced)
+    assert not list(log.parent.glob("*.tmp"))
+
+
+def test_a_line_longer_than_the_cap_is_cut_to_its_newest_bytes(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    vars(schedule_runner)["_append"](log, "a" * 400 + "b" * 100 + "\n", 100)
+    data = log.read_bytes()
+    assert len(data) <= 100
+    assert data.endswith(b"b" * 99 + b"\n")
+    assert data.count(b"\n") == 1
+
+
+def test_two_writers_share_the_log_lock(tmp_path: Path) -> None:
+    append = vars(schedule_runner)["_append"]
+    log = tmp_path / "state" / "run.log"
+    cap = 1000
+    seen_sizes: list[int] = []
+
+    def writer(name: str) -> None:
+        for index in range(200):
+            append(log, f"2026-11-13T10:00:00+00:00 {name} ok: {index}\n", cap)
+            seen_sizes.append(log.stat().st_size)
+
+    threads = [threading.Thread(target=writer, args=(name,)) for name in ("w1", "w2")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert max(seen_sizes) <= cap
+    lines = log.read_text().splitlines()
+    assert lines
+    assert all(re.fullmatch(rf"{_TS} w[12] ok: \d+", line) for line in lines)
+    assert log.read_text().endswith("\n")
