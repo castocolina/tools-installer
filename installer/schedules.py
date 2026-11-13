@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import plistlib
 import re
 import shutil
 import tempfile
@@ -1362,29 +1363,128 @@ def _turn_on_default(
 
 def _row_action(
     ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord
-) -> Literal["turn-on", "none"]:
+) -> Literal["turn-on", "refresh", "none"]:
     """The truth table of a row whose target is here (D-09); a decided off is never touched."""
     if schedule.kind is JobKind.TMP_CLEANUP:
         # The marker is tmp cleanup's decision; a marker with no units is the user's off.
-        undecided = not _tmp_decided(ctx) and record.decided is None
-        return "turn-on" if undecided else "none"
-    return "turn-on" if record.decided is None else "none"
+        if not _tmp_decided(ctx) and record.decided is None:
+            return "turn-on"
+        on = bool(record.files) or _tmp_unit_present(ctx)
+        return "refresh" if on and record.decided is not False else "none"
+    if record.decided is None:
+        return "turn-on"
+    if record.decided is False:
+        return "none"
+    return "refresh" if record.files else "turn-on"  # no files: a reinstall
+
+
+def _seed_legacy_start(ctx: ScheduleContext, schedule: Schedule) -> None:
+    """Adopting macOS's old plist keeps its daily time: seed the record's start from it (D-08)."""
+    if ctx.platform_os != "macos" or schedule.kind is not JobKind.TMP_CLEANUP:
+        return
+    record = record_for(load_state(ctx.state_path).state, schedule.id)
+    slot = daemon.read_schedule(_plist_path(ctx, schedule.id)) if not record.files else None
+    if slot is None or f"{slot[0]:02d}:{slot[1]:02d}" == record.start:
+        return
+    start = f"{slot[0]:02d}:{slot[1]:02d}"
+
+    def change(current: ScheduleState) -> ScheduleState:
+        seeded = replace(record_for(current, schedule.id), start=start)
+        return replace(current, records={**current.records, schedule.id: seeded})
+
+    update_state(ctx.state_path, change)
+
+
+def _is_stale(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -> bool:
+    """Ours but not what this checkout would write now; a drifted or foreign file is not stale."""
+    record = record_for(state, schedule.id)
+    if record.files:
+        if not all(receipts.matches(artifact) for artifact in record.files):
+            return False
+    elif not (schedule.kind is JobKind.TMP_CLEANUP and _tmp_unit_present(ctx)):
+        return False
+    try:
+        uv = _resolve_uv(ctx)
+        if ctx.platform_os == "macos":
+            wanted = {
+                _plist_path(ctx, schedule.id): plistlib.dumps(
+                    _macos_plist(ctx, schedule, record, uv)
+                )
+            }
+        else:
+            service_text, timer_text = _linux_texts(ctx, schedule, record, uv)
+            service_path, timer_path = systemd_daemon.unit_paths(
+                ctx.unit_dir, basename=basename_for(schedule.id)
+            )
+            wanted = {
+                service_path: service_text.encode("utf-8"),
+                timer_path: timer_text.encode("utf-8"),
+            }
+        return any(path.read_bytes() != text for path, text in wanted.items())
+    except OSError:  # no uv, or an unreadable unit: nothing to refresh from here
+        return False
+
+
+def _refresh_in_place(ctx: ScheduleContext, schedule: Schedule, warnings: list[str]) -> None:
+    """Rewrite stale units and restart once, never off and on; adopts the old tmp units too."""
+    _seed_legacy_start(ctx, schedule)
+    if not _is_stale(ctx, load_state(ctx.state_path).state, schedule):
+        return
+    try:
+        applied = turn_on(ctx, schedule.id)
+    except (OSError, CommandError) as exc:
+        warnings.append(f"Could not refresh {schedule.label}: {_error_line(exc)}.")
+        return
+    warnings.extend(applied.warnings)
+
+
+def _drop_gone_target(
+    ctx: ScheduleContext, schedule: Schedule, warnings: list[str], *, always_shim: bool = False
+) -> bool:
+    """Remove a gone target's timer files and keep its decision; True when files went."""
+    record = record_for(load_state(ctx.state_path).state, schedule.id)
+    if schedule.id == _CURSOR_ID and (record.files or always_shim):
+        link, _agent = cursor_shim.shim_paths(ctx.home)
+        try:
+            cursor_shim.remove_shim(link)
+        except OSError as exc:
+            warnings.append(f"Could not remove the cursor-agent shim: {_error_line(exc)}.")
+    if not record.files:
+        return False
+    try:
+        removal = _remove_timer(ctx, schedule.id, keep_decision=True, restore_cursor_link=False)
+    except (OSError, CommandError) as exc:
+        warnings.append(f"Could not remove the {schedule.label} timer: {_error_line(exc)}.")
+        return False
+    warnings.extend(removal.warnings)
+    if removal.kept:
+        warnings.append(
+            f"Could not remove the {schedule.label} timer; {_kept_message(removal.kept)}."
+        )
+        return False
+    return True
 
 
 def _reconcile_pass(ctx: ScheduleContext) -> ReconcileReport:
     loaded = load_state(ctx.state_path)
     damaged = loaded.damaged or loaded.warning is not None
     turned: list[str] = []
+    removed: list[str] = []
     warnings: list[str] = [loaded.warning or STICKY_DAMAGE_WARNING] if damaged else []
     for schedule in SCHEDULES:
-        if damaged:  # R1-09: a state that cannot be trusted never turns a row on
-            continue
         record = record_for(load_state(ctx.state_path).state, schedule.id)
         if schedule.kind is JobKind.UPDATE and not ctx.present(schedule.target or ""):
+            if _drop_gone_target(ctx, schedule, warnings):
+                removed.append(schedule.id)
             continue
-        if _row_action(ctx, schedule, record) == "turn-on":
+        if damaged:  # R1-09: a state that cannot be trusted never turns a row on
+            continue
+        action = _row_action(ctx, schedule, record)
+        if action == "turn-on":
             _turn_on_default(ctx, schedule, record, turned, warnings)
-    return ReconcileReport(tuple(turned), (), tuple(warnings))
+        elif action == "refresh":
+            _refresh_in_place(ctx, schedule, warnings)
+    return ReconcileReport(tuple(turned), tuple(removed), tuple(warnings))
 
 
 def ensure_schedule_defaults(ctx: ScheduleContext) -> ReconcileReport:
@@ -1394,6 +1494,22 @@ def ensure_schedule_defaults(ctx: ScheduleContext) -> ReconcileReport:
     # Held for the whole pass (R1-13), never around a `turn_on`'s own state-lock writes.
     with runlock.hold(reconcile_lock_path(ctx.state_path)):
         return _reconcile_pass(ctx)
+
+
+def after_target_removed(ctx: ScheduleContext, tool_id: str) -> ReconcileReport:
+    """A removed tool takes its timer files with it and leaves its decision for a reinstall.
+
+    It needs no reachable manager: the files of a removed tool must go (D-09 amended by F3).
+    """
+    removed: list[str] = []
+    warnings: list[str] = []
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        for schedule in SCHEDULES:
+            if schedule.target == tool_id and _drop_gone_target(
+                ctx, schedule, warnings, always_shim=True
+            ):
+                removed.append(schedule.id)
+    return ReconcileReport((), tuple(removed), tuple(warnings))
 
 
 def reconcile_lines(report: ReconcileReport) -> tuple[tuple[str, Literal["ok", "warn"]], ...]:
