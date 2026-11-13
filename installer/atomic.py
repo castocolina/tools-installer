@@ -55,6 +55,24 @@ def atomic_write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> N
         raise
 
 
+def atomic_replace_entry(path: Path, data: bytes, *, mode: int) -> None:
+    """Replace the directory entry at `path` with a regular file holding `data`.
+
+    `atomic_write_bytes` resolves a symlink and replaces its TARGET; for
+    `~/.local/bin/cursor-agent` that target is the vendor's release launcher.
+    This writes the sibling temp and `os.replace`s it onto `path` itself, so a
+    symlink there is swapped for the file and what it pointed at is untouched.
+    """
+    tmp = _temp_path(path)
+    try:
+        tmp.write_bytes(data)
+        tmp.chmod(mode)
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None:
     """UTF-8 text entry point over atomic_write_bytes."""
     atomic_write_bytes(path, text.encode("utf-8"), mode=mode)

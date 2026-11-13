@@ -9,6 +9,7 @@ import pytest
 from installer.atomic import (
     NEW_SUFFIX,
     OLD_SUFFIX,
+    atomic_replace_entry,
     atomic_write_bytes,
     atomic_write_text,
     read_capped,
@@ -255,3 +256,29 @@ def test_read_capped_refuses_a_symlink_unless_following(tmp_path: Path) -> None:
         read_capped(link, 64, follow_symlinks=False)
     assert read_capped(link, 64, follow_symlinks=True) == b"payload"
     assert read_capped(directory, 64, follow_symlinks=False) is None
+
+
+def test_atomic_replace_entry_keeps_the_symlink_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "launcher"
+    target.write_bytes(b"launcher bytes")
+    link = tmp_path / "cursor-agent"
+    link.symlink_to(target)
+
+    atomic_replace_entry(link, b"new", mode=0o755)
+
+    assert target.read_bytes() == b"launcher bytes"
+    assert not link.is_symlink()
+    assert link.read_bytes() == b"new"
+    assert link.stat().st_mode & 0o777 == 0o755
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["cursor-agent", "launcher"]
+
+    def fail(src: object, dst: object) -> None:
+        raise OSError("replace refused")
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.raises(OSError, match="replace refused"):
+        atomic_replace_entry(link, b"newer", mode=0o755)
+    assert link.read_bytes() == b"new"
+    assert list(tmp_path.glob("*.tools-installer.tmp")) == []

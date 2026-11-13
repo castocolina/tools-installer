@@ -1,0 +1,101 @@
+"""The cursor-agent model shim (SPEC R7).
+
+`~/.local/bin/cursor-agent` is a vendor symlink to the release launcher. The shim replaces
+that link with a small bash script that runs the launcher, put in front of a default `--model`
+when the caller gave none. The script resolves `~/.local/bin/agent` on every call, so a vendor
+update that relinks `agent` is followed without a rewrite. `agent` and the launcher are never
+opened for writing, and a `cursor-agent` that is a regular file without our sentinel is the
+user's own and is never touched.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final, Literal
+
+from installer import atomic, daemon, schedules
+from installer.atomic import read_capped
+
+SHIM_SENTINEL: Final = "# tools-installer-helper: cursor-agent-shim"
+_SENTINEL_WINDOW: Final = 4096
+
+ShimWrite = Literal["written", "unchanged", "kept-foreign"]
+ModelCheck = Literal["listed", "not-listed", "unverified"]
+
+
+@dataclass(frozen=True)
+class ShimReport:
+    write: ShimWrite
+    check: ModelCheck
+    model: str
+
+
+def shim_paths(home: Path) -> tuple[Path, Path]:
+    """`(cursor-agent, agent)` under `home`, computed at call time."""
+    bin_dir = home / ".local" / "bin"
+    return bin_dir / "cursor-agent", bin_dir / "agent"
+
+
+def render_shim(agent: Path, model: str | None) -> str:
+    """The shim text; `model=None` renders the pass-through shim (no `--model` injected)."""
+    if model is not None:
+        schedules.validate_model_id(model)
+    if "'" in str(agent):
+        raise daemon.DaemonScheduleError("the agent path cannot contain a single quote")
+    # Bash 3.2 with `set -u`: no arrays. Never re-exec under another argv[0]: the launcher
+    # resolves its own directory from `realpath "$0"`.
+    flag = "" if model is None else f"--model '{model}' "
+    return (
+        "#!/usr/bin/env bash\n"
+        f"{SHIM_SENTINEL}\n"
+        "set -euo pipefail\n"
+        f"agent='{agent}'\n"
+        "if command -v realpath >/dev/null 2>&1; "
+        'then target="$(realpath "$agent" 2>/dev/null || true)"; '
+        'else target="$(readlink -f "$agent" 2>/dev/null || true)"; fi\n'
+        'if [ -z "${target:-}" ] || [ ! -x "$target" ]; then '
+        'echo "cursor-agent shim: $agent is missing or dangling" >&2; exit 127; fi\n'
+        'for a in "$@"; do case "$a" in --model|--model=*) exec "$target" "$@";; esac; done\n'
+        f'exec "$target" {flag}"$@"\n'
+    )
+
+
+def is_our_shim(path: Path) -> bool:
+    """True for a regular file carrying the sentinel as a whole line in its first 4 KiB.
+
+    A symlink is never ours, whatever it points at: the check never reads through a link."""
+    if path.is_symlink():
+        return False
+    try:
+        data = read_capped(path, _SENTINEL_WINDOW, follow_symlinks=False)
+    except OSError:
+        return False
+    if data is None:
+        data = b""
+    return SHIM_SENTINEL in data.decode("utf-8", errors="replace").splitlines()
+
+
+def check_model(model: str, models: tuple[str, ...] | None) -> ModelCheck:
+    """`--list-models` never lists a bracket override verbatim, so compare the base id (D-18)."""
+    if models is None:
+        return "unverified"
+    return "listed" if model.split("[", 1)[0] in models else "not-listed"
+
+
+def refresh_shim(
+    *, link: Path, agent: Path, model: str, models: tuple[str, ...] | None
+) -> ShimReport:
+    """Make `link` the shim for `model`, or the pass-through shim when the list lacks it."""
+    check = check_model(model, models)
+    if link.exists() and not link.is_symlink() and not is_our_shim(link):
+        return ShimReport("kept-foreign", check, model)
+    try:
+        agent.resolve(strict=True)
+    except OSError as exc:
+        raise OSError(f"~/.local/bin/agent is missing or dangling: {agent}") from exc
+    text = render_shim(agent, None if check == "not-listed" else model).encode()
+    if is_our_shim(link) and link.read_bytes() == text:
+        return ShimReport("unchanged", check, model)
+    atomic.atomic_replace_entry(link, text, mode=0o755)
+    return ShimReport("written", check, model)
