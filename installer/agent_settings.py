@@ -1072,7 +1072,12 @@ def _revert_pass(
                     lookup(parse_settings(text, fmt), parent), {entry.key_path[-1]: key.value}
                 )
             ):
-                text = remove_key(text, fmt, parent, fragment=entry.fragment)
+                try:
+                    text = remove_key(text, fmt, parent, fragment=entry.fragment)
+                except SettingsEditRefused:
+                    # the user edited inside our table: remove only the owned leaf key and
+                    # keep the header and their lines (still guarded by the re-parse)
+                    text = remove_key(text, fmt, entry.key_path)
             else:
                 text = remove_key(text, fmt, entry.key_path, fragment=entry.fragment)
             results.append(KeyResult(name, "removed", _dump(key.value)))

@@ -1865,3 +1865,20 @@ def test_default_shell_not_in_the_ledger_stays_the_users_when_zsh_moves() -> Non
 
     assert [(k.key, k.kind) for k in result.keys] == [("terminal.default_shell", "set_by_you")]
     assert _default_shell(config.read_text(encoding="utf-8")) == "/bin/fish"
+
+
+def test_revert_removes_the_owned_key_when_a_user_comment_sits_under_the_created_table() -> None:
+    config = _herdr_file()
+    assert not config.exists()
+    assert _apply_shell().refused is None
+    written = config.read_text(encoding="utf-8")
+    config.write_text(written.replace("[terminal]\n", "[terminal]\n# my note\n"), encoding="utf-8")
+
+    (result,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert result.refused is None
+    assert [(k.key, k.kind) for k in result.keys] == [("terminal.default_shell", "removed")]
+    assert "default_shell" not in config.read_text(encoding="utf-8")
+    assert "# my note" in config.read_text(encoding="utf-8")
