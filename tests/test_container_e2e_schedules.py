@@ -31,6 +31,7 @@ _CONSTANTS = (
     "SCHEDULES_CONTAINER_NAME",
     "SCHEDULES_LOG_REL",
     "SCHEDULES_LOCK_REL",
+    "IMAGE_FEDORA",
     "TESTER_USER",
     "TESTER_HOME",
     "TESTER_WORKSPACE",
@@ -91,7 +92,7 @@ def _script(*names: str, variables: dict[str, str] | None = None, stubs: str = "
     parts = ["set -uo pipefail"]
     parts.extend(f"{name}={_constant(name)}" for name in _CONSTANTS)
     parts.append("SCHEDULES_POLL_STEP=0 SCHEDULES_BOOT_ATTEMPTS=2 SCHEDULES_BUS_ATTEMPTS=2")
-    parts.append("SCHEDULES_UID=1000 BOOT_STATE=degraded")
+    parts.append("SCHEDULES_UID=1000 BOOT_STATE=degraded SCHEDULES_KEEP_IMAGE=0")
     parts.extend(_function(name) for name in names)
     parts.extend(f"{key}={shlex.quote(value)}" for key, value in (variables or {}).items())
     parts.append(stubs)
@@ -328,6 +329,7 @@ def test_schedules_start_sequence(tmp_path: Path) -> None:
         "schedules_wait",
         "schedules_booted",
         "schedules_bus_ready",
+        "schedules_create_tester",
         "schedules_start",
         stubs=_STUBS,
     )
@@ -376,6 +378,7 @@ def test_every_start_failure_is_infeasible(
         "schedules_wait",
         "schedules_booted",
         "schedules_bus_ready",
+        "schedules_create_tester",
         "schedules_start",
         variables={"FAIL_CT": "", "FAIL_CT_MESSAGE": "", "FAIL_ROOT": "", **variables},
         stubs=_STUBS,
@@ -503,6 +506,7 @@ def test_each_builtin_runs_once(tmp_path: Path, claude_result: str) -> None:
         "schedules_run_verdict",
         "schedules_cell_verdict",
         "schedules_run_one",
+        "schedules_plant_claude",
         "schedules_run_all",
         stubs=_TESTER_STUBS,
     )
@@ -669,3 +673,151 @@ def test_stamp_observation(tmp_path: Path, mtimes: str, kept: str) -> None:
     assert any(
         "daemon-reload" in call and f"restart {_TIMER_BASENAME}.timer" in call for call in calls
     )
+
+
+# --- Task 3: off, teardown on every outcome and the direct-runner fallback --------------------
+
+_IDS = ("tmp-cleanup", "cache-cleanup", "update-claude")
+
+
+@pytest.mark.parametrize(
+    ("listing", "expected", "code"),
+    [
+        ("D", ["TRACER_SCHEDULE_OFF_OK"], 0),
+        (
+            "F .config/systemd/user/tools-installer-schedule-cache-cleanup.timer\nD",
+            ["TRACER_SCHEDULE_OFF_LEFT path=.config/systemd/user/tools-installer-schedule-cache"],
+            1,
+        ),
+        (
+            "F .local/share/systemd/timers/stamp-tools-installer-schedule-cache-cleanup.timer\nD",
+            ["TRACER_SCHEDULE_OFF_LEFT path=.local/share/systemd/timers/stamp-tools-installer"],
+            1,
+        ),
+        (
+            "T tools-installer-schedule-cache-cleanup.timer n/a\nD",
+            ["TRACER_SCHEDULE_OFF_LEFT timer=tools-installer-schedule-cache-cleanup.timer"],
+            1,
+        ),
+        ("", ["TRACER_SCHEDULE_OFF_PROBE_FAILED"], 1),
+    ],
+)
+def test_off_removes_units_and_stamps(
+    tmp_path: Path, listing: str, expected: list[str], code: int
+) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    (scratch / "listing").write_text(listing + "\n", encoding="utf-8")
+    stubs = r"""
+schedules_driver() { printf 'driver %s\n' "$*" >> "$CALLS"; }
+schedules_tester() {
+  printf 'tester %s\n' "${1//$'\n'/ ; }" >> "$CALLS"
+  case "$1" in *"echo D"*) cat "$SCRATCH/listing" ;; esac
+}
+"""
+    result = _run(_script("schedules_off_check", stubs=stubs) + "\nschedules_off_check\n", scratch)
+    assert result.returncode == code, result.stdout + result.stderr
+    for line in expected:
+        assert line in result.stdout
+    calls = _calls(scratch)
+    offs = [call for call in calls if call.startswith("driver off")]
+    assert offs == [f"driver off {schedule_id}" for schedule_id in _IDS]
+    # The accuracy drop-in the calendar check wrote goes first, then every unit and stamp is listed.
+    dropin = next(i for i, call in enumerate(calls) if "timer.d" in call and "rm -rf" in call)
+    listing_call = next(i for i, call in enumerate(calls) if "list-timers --all" in call)
+    assert dropin < calls.index(offs[0]) < listing_call
+    for pattern in (
+        "tools-installer-schedule-",
+        "tools-installer-prune-tmp",
+        "stamp-tools-installer",
+    ):
+        assert pattern in calls[listing_call]
+
+
+def _cmd_script(arguments: str, *, start: str) -> str:
+    """cmd_schedules with the container seams stubbed and `schedules_start` replaced by `start`."""
+    return (
+        _script(
+            "schedules_teardown",
+            "cmd_schedules",
+            variables={"REPO_ROOT": "/repo"},
+            stubs=_STUBS
+            + "ensure_phase_dir() { :; }\n"
+            + 'die() { echo "die: $1" >&2; exit 1; }\n'
+            + start,
+        )
+        + f"\ncmd_schedules {arguments}\n"
+    )
+
+
+@pytest.mark.parametrize(("arguments", "removes_image"), [("", True), ("--keep-image", False)])
+def test_teardown_always_runs(tmp_path: Path, arguments: str, removes_image: bool) -> None:
+    scratch = tmp_path / "home"
+    start = (
+        'schedules_start() { echo "TRACER_SCHEDULES_INFEASIBLE step=run detail=boom"; exit 2; }\n'
+    )
+    result = _run(_cmd_script(arguments, start=start), scratch)
+    assert result.returncode == 2, result.stdout + result.stderr
+    calls = _calls(scratch)
+    assert calls[0] == "ct rm -f tools-installer-e2e-schedules"
+    image = "ct rmi localhost/tools-installer-e2e-schedules:44"
+    assert (image in calls) is removes_image
+    assert result.stdout.splitlines()[-1] == "TRACER_SCHEDULES_TEARDOWN_OK"
+
+
+def test_an_unknown_option_dies_before_anything_starts(tmp_path: Path) -> None:
+    result = _run(_cmd_script("--bogus", start="schedules_start() { :; }\n"), tmp_path / "home")
+    assert result.returncode == 1
+    assert "unknown schedules option: --bogus" in result.stderr
+    assert _calls(tmp_path / "home") == []
+
+
+_DIRECT_STUBS = r"""
+for name in ensure_phase_dir copy_workspace bootstrap_uv write_tester_path sync_workspace; do
+  eval "$name() { echo $name >> \"\$CALLS\"; }"
+done
+schedules_tester() { printf 'tester %s\n' "${1//$'\n'/ ; }" >> "$CALLS"; }
+schedules_driver() {
+  printf 'driver %s\n' "$*" >> "$CALLS"
+  if [ "$1" = argv ]; then printf '/u/uv\nrun\n--script\nrunner.py\n%s\n' "$2"; fi
+}
+schedules_verdicts() { printf 'verdicts %s\n' "$1"; return "${VERDICT_RC:-0}"; }
+"""
+
+
+@pytest.mark.parametrize("verdict_rc", ["0", "1"])
+def test_direct_fallback(tmp_path: Path, verdict_rc: str) -> None:
+    scratch = tmp_path / "home"
+    script = _script(
+        "schedules_infeasible",
+        "schedules_create_tester",
+        "schedules_plant_claude",
+        "schedules_install_assets",
+        "schedules_direct",
+        "schedules_teardown",
+        "cmd_schedules",
+        variables={"REPO_ROOT": "/repo", "VERDICT_RC": verdict_rc},
+        stubs=_STUBS + _DIRECT_STUBS,
+    )
+    result = _run(script + "\ncmd_schedules --direct\n", scratch)
+    assert result.returncode == int(verdict_rc), result.stdout + result.stderr
+    calls = _calls(scratch)
+    name = "tools-installer-e2e-schedules"
+    assert f"ct run -d --name {name} fedora:latest sleep infinity" in calls
+    assert not any("--systemd" in call for call in calls)
+    assert any(call.startswith("root dnf install -y") for call in calls)
+    assert "root useradd -m -s /bin/bash tester" in calls
+    assert calls.count("sync_workspace") == 1
+    assets = next(call for call in calls if "schedule_runner.py" in call)
+    for fragment in ("runner.py", "prune-tmp-linux.sh", "prune-user-tmpdir.sh", "lib"):
+        assert fragment in assets
+    assert [call for call in calls if call.startswith("driver argv")] == [
+        f"driver argv {schedule_id}" for schedule_id in _IDS
+    ]
+    # Each row runs the command the driver printed, as the tester, one argument per word.
+    ran = [call for call in calls if call.startswith("tester /u/uv run --script runner.py")]
+    assert ran == [f"tester /u/uv run --script runner.py {schedule_id}" for schedule_id in _IDS]
+    gap = "SCHEDULES_GAP=no-systemd units,calendar,catch-up not exercised"
+    assert gap in result.stdout
+    assert ("TRACER_SCHEDULES_DIRECT_OK" in result.stdout) is (verdict_rc == "0")
+    assert result.stdout.splitlines()[-1] == "TRACER_SCHEDULES_TEARDOWN_OK"
