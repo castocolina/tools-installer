@@ -851,11 +851,11 @@ def _restore(snapshot: dict[Path, bytes | None]) -> None:
             atomic_write_bytes(path, previous, mode=0o644)
 
 
-def _refuse_symlinks(paths: tuple[Path, ...], record: ScheduleRecord) -> None:
-    """`atomic_write_bytes` writes through a symlink, so one not recorded as ours is refused."""
-    recorded = {Path(artifact.path) for artifact in record.files}
+def _refuse_symlinks(paths: tuple[Path, ...]) -> None:
+    """`atomic_write_bytes` writes through a symlink, and this installer writes only regular
+    unit files, so a link at a written path is refused even where a file was recorded (F18)."""
     for path in paths:
-        if path.is_symlink() and path not in recorded:
+        if path.is_symlink():
             raise OSError(f"{path} is a symlink that tools-installer did not create")
 
 
@@ -909,7 +909,7 @@ def _apply_linux(
     service_text, timer_text = _linux_texts(ctx, schedule, record, uv)
     service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
     written = (timer_path,) if timer_only else (service_path, timer_path)
-    _refuse_symlinks(written, record)
+    _refuse_symlinks(written)
     link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
     prior_registration = systemd_daemon.units_present(ctx.unit_dir, basename=basename)
     snapshot = _snapshot(written)
@@ -955,7 +955,7 @@ def _apply_macos(
     label = label_for(schedule.id)
     plist_path = _plist_path(ctx, schedule.id)
     plist = _macos_plist(ctx, schedule, record, uv)
-    _refuse_symlinks((plist_path,), record)
+    _refuse_symlinks((plist_path,))
     # launchd needs StandardOutPath to resolve at registration (R1-06). A rollback leaves the
     # empty file; the last sweep deletes it.
     daemon.ensure_log_path(ctx.launchd_log_path)

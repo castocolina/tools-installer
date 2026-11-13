@@ -310,6 +310,18 @@ def test_existing_symlink_at_a_unit_path_is_refused(env: Env, tmp_path: Path) ->
     assert files_left(env.home) == [str(service.relative_to(env.home))]
 
 
+def test_a_symlink_replacing_a_recorded_unit_is_refused_on_repair(env: Env, tmp_path: Path) -> None:
+    turn_on(env.ctx, "update-claude")
+    victim = tmp_path / "victim.service"
+    victim.write_text("[Service]\nExecStart=/bin/true\n")
+    service = env.ctx.unit_dir / f"{CLAUDE_BASENAME}.service"
+    service.unlink()
+    service.symlink_to(victim)  # a recorded file, replaced by a link
+    with pytest.raises(OSError, match=f"{CLAUDE_BASENAME}.service"):
+        turn_on(env.ctx, "update-claude")
+    assert victim.read_text() == "[Service]\nExecStart=/bin/true\n"
+
+
 UNAVAILABLE = {
     "no-bus": "unavailable: no user timer manager",
     "no-systemctl": "unavailable: no user timer manager",
