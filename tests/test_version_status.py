@@ -69,6 +69,7 @@ from installer.session import (
 from installer.terminal_shell import TerminalShellResult, sync_terminal_shells
 from installer.tweaks import (
     TweakBundle,
+    record_shell_init,
     shell_init_bundle,
     shell_init_record,
     strip_tweak_block,
@@ -3759,6 +3760,11 @@ def test_neovim_reads_ok_when_its_receipt_proves_the_release(
     assert receipts.record(
         neovim, method, package=None, smoke=None, default_bin_dir=bin_dir, release="v0.12.6"
     )
+    # What a real install leaves: the EDITOR block and its written-once record.
+    bundle = shell_init_bundle("neovim")
+    assert bundle is not None
+    write_tweak(bundle, _myshellrc())
+    record_shell_init(_myshellrc(), "neovim")
     service = _receipt_service(
         tmp_path, bin_dir, resolve_tag=lambda _repo: "v0.12.6", probe="0.12.6"
     )
@@ -6451,6 +6457,31 @@ def test_pending_tuning_shell_init(tmp_path: Path) -> None:
     assert "# >>> tools-installer tweak:zoxide >>>" in _myshellrc().read_text()
     assert shell_init_record(_myshellrc()) == ("zoxide",)
     again = _settled_states(service, [tool])["zoxide"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
+
+
+def test_neovim_with_your_editor_reads_no_pending_tuning(tmp_path: Path) -> None:
+    (Path.home() / ".bashrc").write_text("export EDITOR=vim\n")
+    state = _tuning_state(tmp_path, _shell_tool("neovim"))
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+
+def test_neovim_pending_tuning_when_you_set_none(tmp_path: Path) -> None:
+    tool = _shell_tool("neovim")
+    service = _hook_service(tmp_path, frozenset())
+    state = _settled_states(service, [tool])["neovim"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert "# >>> tools-installer tweak:neovim >>>" in _myshellrc().read_text()
+    assert shell_init_record(_myshellrc()) == ("neovim",)
+    again = _settled_states(service, [tool])["neovim"]
     assert again.health is Health.OK
     assert again.unconfigured == ()
 

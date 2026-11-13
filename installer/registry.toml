@@ -2641,6 +2641,7 @@ verified = 2026-11-13
 desc = "Vim-based modal text editor for the terminal"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 config_paths = ["~/.config/nvim"]
+post_install = ["source_shell_init"]
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]

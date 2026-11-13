@@ -9,6 +9,7 @@ import pytest
 
 from installer import tweaks as tweaks_module
 from installer.helper_assets import wait_time
+from installer.model import load_tools
 from installer.omz import plugins_owned
 from installer.platform import Platform
 from installer.tweaks import (
@@ -29,6 +30,8 @@ from installer.tweaks import (
     tweak_present,
     write_tweak,
 )
+
+REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 def _bundle(bundle_id: str) -> TweakBundle:
@@ -52,6 +55,7 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "fzf",
         "fnm",
         "volta",
+        "neovim",
     ]
 
 
@@ -358,7 +362,8 @@ def test_each_shell_init_body_is_guarded_and_parses(tool: str) -> None:
     assert bundle is not None
     assert bundle.id == tool
     assert bundle.requires == (tool,)
-    assert bundle.body.split("\n")[0] == f"if command -v {tool} >/dev/null; then"
+    command = next(t for t in load_tools(REGISTRY) if t.id == tool).cmd
+    assert bundle.body.split("\n")[0] == f"if command -v {command} >/dev/null; then"
     result = subprocess.run(
         ["bash", "-n", "-c", bundle.body], capture_output=True, text=True, check=False
     )

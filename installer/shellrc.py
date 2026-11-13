@@ -9,7 +9,7 @@ these files are edited read-modify-write.
 import os
 import re
 import stat
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -1226,3 +1226,84 @@ def guard_path_writers(rc_path: Path, lines: Sequence[PathWriterLine]) -> PathGu
 
     atomic_write_text(rc_path, "\n".join(rewritten), mode=snapshot.mode)
     return PathGuardOutcome(status="guarded")
+
+
+_INSTALLER_BEGIN = re.compile(r"# >>> tools-installer (.+) >>>")
+# A word is a run of double-quoted spans, single-quoted spans and plain characters; the
+# separators are words of their own. A stray quote stays data, quotes are kept verbatim.
+_SHELL_WORD = re.compile(r"""(?:"[^"]*"|'[^']*'|[^\s"';&|]|["'])+|&&|\|\||[;&|]""")
+_STATEMENT_ENDS = frozenset({";", "&&", "||", "|", "&"})
+_LEADING_RESERVED = frozenset({"then", "else", "do", "{", "(", "!"})
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _statement_assignments(words: list[str]) -> list[str]:
+    """The `NAME=value` words one statement assigns in the current shell."""
+    while words and words[0] in _LEADING_RESERVED:
+        words = words[1:]
+    if not words:
+        return []
+    head = words[0]
+    exports = head == "export" or (
+        head in ("typeset", "declare")
+        and len(words) > 1
+        and re.fullmatch(r"-\w*x\w*", words[1]) is not None
+    )
+    if exports:
+        return [word for word in words[1:] if _ASSIGNMENT.match(word)]
+    # A command with prefix assignments (`EDITOR=vim git commit`) sets them for that command only.
+    return words if all(_ASSIGNMENT.match(word) for word in words) else []
+
+
+def _line_assignments(line: str) -> list[str]:
+    words = _SHELL_WORD.findall(line)
+    # An unquoted word that starts with `#` ends the line, as in the shell.
+    live = words[: next((i for i, word in enumerate(words) if word.startswith("#")), len(words))]
+    assigned: list[str] = []
+    statement: list[str] = []
+    for word in (*live, ";"):
+        if word in _STATEMENT_ENDS:
+            assigned += _statement_assignments(statement)
+            statement = []
+        else:
+            statement.append(word)
+    return assigned
+
+
+def find_export(content: str, names: Collection[str]) -> tuple[str, str] | None:
+    """The `(name, value)` of the live assignment to one of `names` that comes last, or None.
+
+    Understood forms: `export A=1 NAME=v`, `typeset -x` and `declare -x` the same way, a statement
+    made only of assignments (`A=1 NAME=v`), and any of these after `;`, `&&`, `||` or a leading
+    `then`/`else`/`do`/`{`/`(`. A command-prefix assignment (`NAME=v cmd`) is not an export. Names
+    match exactly; comment lines and words, and every terminated installer block except the
+    consolidated shellrc block (user content the installer moved), are skipped. An empty value
+    counts as unset and the last assignment wins; the value keeps its quotes verbatim.
+
+    shortcut: a file the rc sources and an `eval` string are not followed (the caller scans the
+    startup files itself); upgrade by following `source`/`.` lines.
+    """
+    lines = content.split("\n")
+    last: dict[str, tuple[int, str]] = {}
+    order = 0
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        begin = _INSTALLER_BEGIN.fullmatch(stripped)
+        if begin and stripped != _SHELLRC_BEGIN:
+            end = f"# <<< tools-installer {begin[1]} <<<"
+            close = next((i for i in range(index + 1, len(lines)) if lines[i].strip() == end), None)
+            if close is not None:  # an unterminated begin skips nothing (the rcclean rule)
+                index = close + 1
+                continue
+        for word in _line_assignments(lines[index]):
+            name, _, value = word.partition("=")
+            if name in names:
+                order += 1
+                last[name] = (order, value)
+        index += 1
+    live = {name: found for name, found in last.items() if found[1] not in ("", '""', "''")}
+    if not live:
+        return None
+    name = max(live, key=lambda key: live[key][0])
+    return name, live[name][1]

@@ -14,9 +14,10 @@ from importlib import resources
 from pathlib import Path
 
 from installer.atomic import atomic_write_text, read_capped
-from installer.locations import display_path
+from installer.locations import display_path, path_scan_rc_paths
 from installer.platform import Platform
-from installer.shellrc import apply_block, read_record, strip_block
+from installer.sanitize import sanitize_log_line
+from installer.shellrc import apply_block, find_export, read_record, strip_block
 
 _BIN_DIR_PLACEHOLDER = "__TOOLS_INSTALLER_BIN_DIR__"
 
@@ -43,6 +44,8 @@ class TweakBundle:
     body: str
     requires: tuple[str, ...] = ()
     executables: tuple[ManagedExecutable, ...] = ()
+    # Variables the user's own shell files may already export; the bundle is not written then.
+    yields_to: tuple[str, ...] = ()
 
 
 # Raw strings so backslash escapes survive verbatim into the shell file:
@@ -84,7 +87,7 @@ _LINUX = ("debian", "arch", "fedora")
 # Shell init (D-11): one bundle per tool, id = tool id, offered at install and
 # default off. The `if command -v` guard picks the zsh or the bash line, which a
 # bare one-line eval cannot do. No registry string reaches these bodies.
-SHELL_INIT_TOOLS = ("starship", "direnv", "zoxide", "fzf", "fnm", "volta")
+SHELL_INIT_TOOLS = ("starship", "direnv", "zoxide", "fzf", "fnm", "volta", "neovim")
 
 
 def _guarded_init(tool: str, zsh_line: str, bash_line: str) -> str:
@@ -105,8 +108,17 @@ _VOLTA_BODY = (
 )
 
 
-def _shell_init(tool: str, description: str, body: str) -> TweakBundle:
-    return TweakBundle(tool, f"{tool} shell init", description, (), body, requires=(tool,))
+# The `if` form, not `command -v nvim && export ...`, whose non-zero status would be the last
+# command of the sourced block when nvim is absent.
+_NVIM_EDITOR_BODY = "if command -v nvim >/dev/null; then\n  export EDITOR=nvim VISUAL=nvim\nfi"
+
+
+def _shell_init(
+    tool: str, description: str, body: str, *, yields_to: tuple[str, ...] = ()
+) -> TweakBundle:
+    return TweakBundle(
+        tool, f"{tool} shell init", description, (), body, requires=(tool,), yields_to=yields_to
+    )
 
 
 BUNDLES: tuple[TweakBundle, ...] = (
@@ -174,6 +186,12 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "volta",
         "exports VOLTA_HOME; its bin directory is on PATH via the PATH block",
         _VOLTA_BODY,
+    ),
+    _shell_init(
+        "neovim",
+        "sets EDITOR and VISUAL to nvim when your shell files set neither",
+        _NVIM_EDITOR_BODY,
+        yields_to=("EDITOR", "VISUAL"),
     ),
 )
 
@@ -438,6 +456,40 @@ def tweak_present(bundle: TweakBundle, rc_path: Path) -> bool:
 def applicable_bundles(platform: Platform) -> tuple[TweakBundle, ...]:
     """Bundles offered on this platform (empty `platforms` = every platform)."""
     return tuple(b for b in BUNDLES if not b.platforms or platform.os in b.platforms)
+
+
+def user_export(names: tuple[str, ...], tool_id: str) -> str | None:
+    """Read-only: why `tool_id`'s bundle is not written (the user exports one of `names`, or a
+    startup file cannot be read), or None when it may be written. Never reads the environment."""
+    if not names:
+        return None
+    # zsh reads ~/.zshenv first even when ZDOTDIR points elsewhere.
+    paths = [*path_scan_rc_paths(), Path.home() / ".zshenv"]
+    # shortcut: ~/.config/environment.d and launchd exports are not scanned (shell files only);
+    # upgrade by adding them to the scan set.
+    for path in dict.fromkeys(paths):
+        try:
+            data = read_capped(path, _RC_MAX_BYTES, follow_symlinks=True)
+            reason = "larger than 1 MiB" if data is None and path.is_file() else ""
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            data, reason = None, exc.strerror or str(exc)
+        if data is None:
+            if not reason:  # a directory or a FIFO is not a startup file
+                continue
+            return sanitize_log_line(
+                f"Could not read {display_path(path)} ({reason}), "
+                f"so the {tool_id} shell init was not written."
+            )
+        found = find_export(data.decode("utf-8", errors="replace"), names)
+        if found is not None:
+            name, value = found
+            return (
+                f"Kept your {name}={sanitize_log_line(value)} "
+                f"(the {tool_id} shell init was not written)."
+            )
+    return None
 
 
 def shell_init_bundle(tool_id: str) -> TweakBundle | None:

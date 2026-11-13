@@ -366,6 +366,25 @@ def test_shell_init_reinstall_leaves_one_block() -> None:
     assert shell_init_record(home / ".myshellrc") == ("zoxide",)
 
 
+def test_neovim_writes_the_editor_block_when_you_set_none() -> None:
+    home = Path.home()
+    lines = run_post_install(_shell_init_tool("neovim"), _mutable(), None).lines
+    assert lines == ("Shell init on: open a new terminal to use it.",)
+    text = (home / ".myshellrc").read_text()
+    assert text.count("# >>> tools-installer tweak:neovim >>>") == 1
+    assert "export EDITOR=nvim VISUAL=nvim" in text
+    assert shell_init_record(home / ".myshellrc") == ("neovim",)
+
+
+def test_neovim_keeps_your_editor() -> None:
+    home = Path.home()
+    (home / ".zshrc").write_text("export EDITOR=vim\n")
+    lines = run_post_install(_shell_init_tool("neovim"), _mutable(), None).lines
+    assert lines == ("Kept your EDITOR=vim (the neovim shell init was not written).",)
+    assert not (home / ".myshellrc").exists()
+    assert shell_init_record(home / ".myshellrc") is None
+
+
 def test_shell_init_missing_myshellrc_is_created() -> None:
     rc = Path.home() / ".myshellrc"
     assert not rc.exists()

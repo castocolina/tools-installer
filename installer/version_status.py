@@ -96,7 +96,12 @@ from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
 from installer.status import is_installed
 from installer.terminal_shell import KEYS_PENDING, TerminalShellResult, alacritty_keys_pending
-from installer.tweaks import bundle_marker_present, shell_init_bundle, shell_init_record
+from installer.tweaks import (
+    bundle_marker_present,
+    shell_init_bundle,
+    shell_init_record,
+    user_export,
+)
 from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
 from installer.update import update_refusal
 from installer.version_cache import (
@@ -664,6 +669,8 @@ def _shell_init_tuning_fact(tool: Tool, platform: Platform) -> _ConfigFacts:
     bundle = shell_init_bundle(tool.id)
     if bundle is None or (bundle.platforms and platform.os not in bundle.platforms):
         return _NO_FACTS
+    if bundle.yields_to and user_export(bundle.yields_to, tool.id) is not None:
+        return _NO_FACTS  # the same gate as the writer: a yielded bundle is never pending
     rc_path = Path.home() / ".myshellrc"
     if bundle_marker_present(tool.id, rc_path) or tool.id in (shell_init_record(rc_path) or ()):
         return _NO_FACTS
