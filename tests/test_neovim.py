@@ -5,6 +5,7 @@ curl, tar or git, and the release digest is pinned through `engine.release_resol
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -84,7 +85,7 @@ def _seed_config() -> Path:
     return init
 
 
-def _remove(tool: Tool) -> SweepResult:
+def _remove(tool: Tool, config: dict[str, tuple[Path, ...]] | None = None) -> SweepResult:
     bin_dir = Path.home() / ".local/bin"
     plan = removal_plan(tool, bin_dir)
     decision = UninstallDecision(
@@ -93,7 +94,7 @@ def _remove(tool: Tool) -> SweepResult:
         argv={tool.id: plan.argv},
         remove_ban=False,
         remove_path_block=False,
-        config={},
+        config=dict(config or {}),
     )
     return perform_uninstall(
         decision,
@@ -236,3 +237,107 @@ def test_neovim_asset_resolves_for_every_os_arch(os_name: str, arch: str, asset:
     assert target.member == "bin/nvim"
     assert target.sha256 == DIGEST
     assert target.unverified_reason is None
+
+
+def test_neovim_config_goes_only_with_the_toggle(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = neovim_tool()
+    init = _seed_config()
+    _install(FakeTarball(), monkeypatch)
+
+    result = _remove(tool, config={"neovim": (init.parent,)})
+
+    assert result.removed == ("neovim",)
+    assert result.config_deleted == ("neovim",)
+    assert not init.parent.exists()
+
+
+def test_neovim_second_removal_plans_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = neovim_tool()
+    _install(FakeTarball(), monkeypatch)
+    _remove(tool)
+    opt = Path.home() / ".local/opt/nvim"
+
+    # A `none` plan is never sent to the sweep: the UI offers no row, and remove_tool refuses an
+    # empty preview. The idempotency claim is the plan itself plus nothing left to delete.
+    plan = removal_plan(tool, Path.home() / ".local/bin")
+
+    assert plan.level == "none"
+    assert plan.removable == ()
+    assert not opt.exists()
+
+
+def test_neovim_opt_tree_goes_whole_with_a_dropped_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the provisional D-03 refinement (24.1, 2026-11-13, needs confirmation).
+
+    A file dropped into the installer's own opt tree goes with the tree, as an update replaces
+    it. Keeping SPEC R3's original clause (only the receipt's own paths) would need a generic
+    per-member manifest instead, which is a new plan; reversing this test is the switch.
+    """
+    tool = neovim_tool()
+    _install(FakeTarball(), monkeypatch)
+    opt = Path.home() / ".local/opt/nvim"
+    dropped = opt / "notes.txt"
+    dropped.write_text("dropped by the user\n", encoding="utf-8")
+
+    plan = removal_plan(tool, Path.home() / ".local/bin")
+
+    assert opt in plan.removable
+    assert plan.artifacts[opt].type == "dir"
+    assert _remove(tool).removed == ("neovim",)
+    assert not opt.exists()
+    assert not dropped.exists()
+
+
+def test_neovim_removal_while_nvim_runs_keeps_open_inodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SPEC R3 concurrency backstop: a running nvim holds its runtime files open."""
+    tool = neovim_tool()
+    _install(FakeTarball(), monkeypatch)
+    runtime_file = Path.home() / ".local/opt/nvim/share/nvim/runtime/syntax/vim.vim"
+
+    with runtime_file.open("rb") as handle:
+        result = _remove(tool)
+        assert result.removed == ("neovim",)
+        assert result.remove_failed == ()
+        assert not runtime_file.exists()
+        assert handle.read() == b'" vim syntax\n'
+
+
+@pytest.mark.parametrize("payload", [b"", PAYLOAD[:-1]], ids=["empty", "one-byte-short"])
+def test_truncated_neovim_archive_leaves_nothing(
+    payload: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R2 empty-archive backstop: the full payload's digest rejects a bad download."""
+    runner = FakeTarball(payload=payload)
+
+    outcome = _install(runner, monkeypatch)
+
+    home = Path.home()
+    assert outcome.status is InstallStatus.CHECKSUM_MISMATCH
+    assert not any(call[0] == "tar" for call in runner.calls)
+    assert not (home / ".local/opt").exists() or not any((home / ".local/opt").iterdir())
+    assert not (home / ".local/bin/nvim").exists()
+    assert not (home / ".local/bin/nvim").is_symlink()
+    assert receipts.read("neovim") is None
+
+
+def test_an_unowned_nvim_on_path_is_never_overwritten(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SPEC R2 adjacency backstop: a foreign nvim on PATH is left alone, byte for byte."""
+    bin_dir = Path.home() / ".local/bin"
+    bin_dir.mkdir(parents=True)
+    foreign = bin_dir / "nvim"
+    foreign.write_bytes(b"#!/bin/sh\necho foreign\n")
+    foreign.chmod(0o755)
+    before = foreign.read_bytes()
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    runner = FakeTarball()
+
+    outcome = engine.install_tool(
+        neovim_tool(), BAZZITE, runner=runner, resolve_tag=lambda _repo: TAG
+    )
+
+    assert outcome.status is InstallStatus.ALREADY_INSTALLED
+    assert runner.calls == []
+    assert foreign.read_bytes() == before
+    assert receipts.read("neovim") is None
