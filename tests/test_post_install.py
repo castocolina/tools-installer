@@ -385,6 +385,121 @@ def test_neovim_keeps_your_editor() -> None:
     assert shell_init_record(home / ".myshellrc") is None
 
 
+def _neovim_lines() -> tuple[str, ...]:
+    return run_post_install(_shell_init_tool("neovim"), _mutable(), None).lines
+
+
+def _no_neovim_block() -> bool:
+    rc = Path.home() / ".myshellrc"
+    return (not rc.exists() or "tweak:neovim" not in rc.read_text()) and shell_init_record(
+        rc
+    ) is None
+
+
+_KEPT_VIM = ("Kept your EDITOR=vim (the neovim shell init was not written).",)
+
+
+def _zdotdir_in(monkeypatch: pytest.MonkeyPatch) -> Path:
+    zdir = Path.home() / "zdot"
+    zdir.mkdir()
+    monkeypatch.setenv("ZDOTDIR", str(zdir))
+    return zdir
+
+
+@pytest.mark.parametrize(
+    "where", ["bashrc.d", "zdot.zshrc", "zdot.zshenv", "home.zshenv", "profile", "shellrc"]
+)
+def test_user_export_reads_every_startup_file(where: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = Path.home()
+    zdir = _zdotdir_in(monkeypatch)
+    target = {
+        "bashrc.d": home / ".bashrc.d" / "editor.sh",
+        "zdot.zshrc": zdir / ".zshrc",
+        "zdot.zshenv": zdir / ".zshenv",
+        "home.zshenv": home / ".zshenv",
+        "profile": home / ".profile",
+        "shellrc": home / ".shellrc",
+    }[where]
+    target.parent.mkdir(exist_ok=True)
+    target.write_text("export EDITOR=vim\n")
+    assert _neovim_lines() == _KEPT_VIM
+    assert _no_neovim_block()
+
+
+def test_user_export_survives_non_utf8_bytes() -> None:
+    (Path.home() / ".zshrc").write_bytes(b"# \xff\nexport EDITOR=vim\n")
+    assert _neovim_lines() == _KEPT_VIM
+
+
+def test_user_export_skips_missing_and_non_regular_files() -> None:
+    home = Path.home()
+    (home / ".zshrc").mkdir()
+    os.mkfifo(home / ".bashrc")
+    assert _neovim_lines() == ("Shell init on: open a new terminal to use it.",)
+    assert "tweak:neovim" in (home / ".myshellrc").read_text()
+
+
+def test_user_export_fails_closed_on_an_oversized_file() -> None:
+    (Path.home() / ".zshrc").write_bytes(b"#" * ((1 << 20) + 1))
+    assert _neovim_lines() == (
+        "Could not read ~/.zshrc (larger than 1 MiB), so the neovim shell init was not written.",
+    )
+    assert _no_neovim_block()
+
+
+def test_user_export_sanitizes_an_unreadable_file_name() -> None:
+    snippets = Path.home() / ".bashrc.d"
+    snippets.mkdir()
+    (snippets / "ed\x1bitor.sh").write_bytes(b"#" * ((1 << 20) + 1))
+    lines = _neovim_lines()
+    assert lines == (
+        "Could not read ~/.bashrc.d/editor.sh (larger than 1 MiB), "
+        "so the neovim shell init was not written.",
+    )
+    assert "\x1b" not in lines[0]
+    assert _no_neovim_block()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+def test_user_export_fails_closed_on_an_unreadable_file() -> None:
+    bashrc = Path.home() / ".bashrc"
+    bashrc.write_text("export EDITOR=vim\n")
+    bashrc.chmod(0)
+    try:
+        assert _neovim_lines() == (
+            "Could not read ~/.bashrc (Permission denied), "
+            "so the neovim shell init was not written.",
+        )
+    finally:
+        bashrc.chmod(0o600)
+    assert _no_neovim_block()
+
+
+def test_neovim_keeps_an_editor_set_in_a_multi_assignment_export() -> None:
+    (Path.home() / ".bashrc").write_text("export LANG=C.UTF-8 EDITOR=vim\n")
+    assert _neovim_lines() == _KEPT_VIM
+    assert _no_neovim_block()
+
+
+def test_neovim_keeps_your_visual() -> None:
+    (Path.home() / ".zshrc").write_text("export VISUAL=code\n")
+    assert _neovim_lines() == ("Kept your VISUAL=code (the neovim shell init was not written).",)
+    assert _no_neovim_block()
+
+
+def test_neovim_kept_value_is_sanitized() -> None:
+    (Path.home() / ".zshrc").write_text("export EDITOR=v\x1bim\n")
+    lines = _neovim_lines()
+    assert lines == _KEPT_VIM
+    assert "\x1b" not in lines[0]
+
+
+def test_neovim_ignores_an_environment_editor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EDITOR", "vim")
+    assert _neovim_lines() == ("Shell init on: open a new terminal to use it.",)
+    assert "tweak:neovim" in (Path.home() / ".myshellrc").read_text()
+
+
 def test_shell_init_missing_myshellrc_is_created() -> None:
     rc = Path.home() / ".myshellrc"
     assert not rc.exists()
