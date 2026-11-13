@@ -746,6 +746,7 @@ CLEARED_ENV_NAMES: frozenset[str] = frozenset(
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
         "COPILOT_HOME",
+        "HERDR_CONFIG_PATH",
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
         "GH_TOKEN",

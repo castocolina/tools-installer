@@ -269,7 +269,7 @@ def test_codex_toml_round_trip_inserts_before_the_first_table() -> None:
     with pytest.raises(SettingsEditRefused):
         insert_key(CODEX_CONFIG, "toml", ("a b",), "x")
     with pytest.raises(SettingsEditRefused):
-        insert_key(CODEX_CONFIG, "toml", ("count",), 3)
+        insert_key(CODEX_CONFIG, "toml", ("count",), 3.5)
     with pytest.raises(SettingsEditRefused):
         replace_value(CODEX_CONFIG, "toml", ("model",), "o3")
 
@@ -1402,3 +1402,432 @@ def test_a_malformed_created_dirs_field_makes_the_ledger_untrusted(bad: object) 
     path.write_text(json.dumps(data), encoding="utf-8")
 
     assert read_ledger("claude") is None
+
+
+HERDR_CONFIG = (
+    "# herdr settings\n"
+    "onboarding = false\n"
+    "\n"
+    "[terminal]\n"
+    'shell_mode = "auto"\n'
+    "\n"
+    "[ui]\n"
+    'agent_panel_sort = "spaces"\n'
+)
+HERDR_AGENT_ROWS: list[object] = [
+    [{"token": "$rule", "dim": True}],
+    ["state_icon", "workspace", "tab", {"token": "$here", "bold": True}],
+    ["agent"],
+]
+HERDR_SPACES_ROWS: list[object] = [["state_icon", "workspace", {"token": "$here", "bold": True}]]
+
+
+def _herdr_file() -> Path:
+    path = Path.home() / ".config" / "herdr" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_herdr_sidebar_keys_round_trip_byte_identical() -> None:
+    home = Path.home()
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=home, platform_os="linux", environ={})
+
+    assert applied.refused is None
+    assert [(k.key, k.kind) for k in applied.keys] == [
+        ("ui.sidebar.agents.rows", "wrote"),
+        ("ui.sidebar.agents.row_gap", "wrote"),
+        ("ui.sidebar.spaces.rows", "wrote"),
+    ]
+    text = config.read_text(encoding="utf-8")
+    sidebar = tomllib.loads(text)["ui"]["sidebar"]
+    assert sidebar["agents"] == {"rows": HERDR_AGENT_ROWS, "row_gap": 1}
+    assert sidebar["spaces"] == {"rows": HERDR_SPACES_ROWS}
+    assert all(line in text for line in HERDR_CONFIG.splitlines())
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert [(e.setting, e.key_path) for e in ledger.entries] == [
+        ("sidebar", ("ui", "sidebar", "agents", "rows")),
+        ("sidebar", ("ui", "sidebar", "agents", "row_gap")),
+        ("sidebar", ("ui", "sidebar", "spaces", "rows")),
+    ]
+
+    results = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert [r.refused for r in results] == [None]
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+
+ZSH = "/home/linuxbrew/.linuxbrew/bin/zsh"
+DEFAULT_SHELL: tuple[str, ...] = ("terminal", "default_shell")
+
+
+def _default_shell(text: str) -> object:
+    terminal = tomllib.loads(text).get("terminal", {})
+    return terminal.get("default_shell")
+
+
+def _apply_shell(value: str = ZSH) -> FileResult:
+    return agent_settings.apply_value(
+        "herdr", "default-shell", value, home=Path.home(), platform_os="linux", environ={}
+    )
+
+
+def test_default_shell_written_under_existing_terminal_table() -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+
+    applied = _apply_shell()
+
+    assert applied.refused is None
+    assert [(k.key, k.kind) for k in applied.keys] == [("terminal.default_shell", "wrote")]
+    text = config.read_text(encoding="utf-8")
+    assert text.count("[terminal]") == 1
+    assert f'default_shell = "{ZSH}"\n' in text
+    assert _default_shell(text) == ZSH
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert [(e.setting, e.key_path, e.value) for e in ledger.entries] == [
+        ("default-shell", DEFAULT_SHELL, ZSH)
+    ]
+
+
+def test_default_shell_creates_the_terminal_table() -> None:
+    config = _herdr_file()
+    original = '[ui]\nagent_panel_sort = "spaces"\n'
+    config.write_text(original, encoding="utf-8")
+
+    assert _apply_shell().refused is None
+
+    text = config.read_text(encoding="utf-8")
+    assert text.count("[terminal]") == 1
+    assert _default_shell(text) == ZSH
+
+    results = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert [r.refused for r in results] == [None]
+    assert config.read_text(encoding="utf-8") == original
+    assert read_ledger("herdr") is None
+
+
+def test_default_shell_user_value_is_kept() -> None:
+    config = _herdr_file()
+    mine = '[terminal]\ndefault_shell = "/bin/fish"\n'
+    config.write_text(mine, encoding="utf-8")
+
+    other = _apply_shell()
+
+    assert [(k.key, k.kind) for k in other.keys] == [("terminal.default_shell", "set_by_you")]
+    assert config.read_text(encoding="utf-8") == mine
+    assert read_ledger("herdr") is None
+
+    config.write_text(f'[terminal]\ndefault_shell = "{ZSH}"\n', encoding="utf-8")
+    same = _apply_shell()
+
+    assert [(k.key, k.kind) for k in same.keys] == [("terminal.default_shell", "already")]
+    assert read_ledger("herdr") is None
+
+
+def test_dynamic_key_revert_keeps_a_changed_value() -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    assert _apply_shell().refused is None
+    written = config.read_text(encoding="utf-8")
+    edited = written.replace(ZSH, "/bin/fish")
+    config.write_text(edited, encoding="utf-8")
+
+    (changed,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert [(k.key, k.kind) for k in changed.keys] == [("terminal.default_shell", "kept_changed")]
+    assert config.read_text(encoding="utf-8") == edited
+
+    config.write_text(HERDR_CONFIG, encoding="utf-8")  # the kept key left the ledger
+    assert _apply_shell().refused is None
+    (removed,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert [(k.key, k.kind) for k in removed.keys] == [("terminal.default_shell", "removed")]
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+
+def test_revert_group_touches_only_its_group() -> None:
+    home = Path.home()
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    assert apply_setting("herdr", "sidebar", home=home, platform_os="linux", environ={}).keys
+    assert _apply_shell().refused is None
+
+    (result,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=home, platform_os="linux", environ={}
+    )
+
+    assert result.refused is None
+    text = config.read_text(encoding="utf-8")
+    assert _default_shell(text) is None
+    assert tomllib.loads(text)["ui"]["sidebar"]["agents"]["row_gap"] == 1
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert {e.setting for e in ledger.entries} == {"sidebar"}
+
+
+def test_tampered_dynamic_ledger_removes_nothing() -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    entry = ConfigWrite(
+        "default-shell", str(config), ("terminal", "shell_mode"), "auto", 'shell_mode = "auto"\n'
+    )
+    write_ledger(ConfigLedger("herdr", entries=(entry,)))
+
+    (result,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert result.refused is None and result.keys == ()
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert ledger.entries == (entry,)
+
+
+def test_revert_agent_removes_the_dynamic_default_shell() -> None:
+    home = Path.home()
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    assert _apply_shell().refused is None
+
+    (removed,) = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert [(k.key, k.kind) for k in removed.keys] == [("terminal.default_shell", "removed")]
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+    assert _apply_shell().refused is None
+    edited = config.read_text(encoding="utf-8").replace(ZSH, "/bin/fish")
+    config.write_text(edited, encoding="utf-8")
+
+    (kept,) = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert [(k.key, k.kind) for k in kept.keys] == [("terminal.default_shell", "kept_changed")]
+    assert config.read_text(encoding="utf-8") == edited
+
+
+def test_setting_keys_of_a_dynamic_group_is_empty() -> None:
+    home = Path.home()
+    _herdr_file().write_text(HERDR_CONFIG, encoding="utf-8")
+
+    assert agent_settings.DYNAMIC_KEYS == {("herdr", "default-shell"): (DEFAULT_SHELL,)}
+    assert agent_settings.setting_keys("herdr", "default-shell", "linux") == ()
+    facts = agent_settings.setting_facts(
+        "herdr", "default-shell", home=home, platform_os="linux", environ={}
+    )
+    assert facts.absent == ()
+    with pytest.raises(ValueError, match="not a dynamic setting"):
+        agent_settings.apply_value(
+            "herdr", "sidebar", "x", home=home, platform_os="linux", environ={}
+        )
+
+
+def test_toml_never_adds_a_second_header() -> None:
+    config = _herdr_file()
+    # The only `[terminal]` line sits in a string; the real table is an inline one.
+    original = "note = '''\n[terminal]\n'''\nterminal = { shell_mode = \"auto\" }\n"
+    config.write_text(original, encoding="utf-8")
+
+    refused = _apply_shell()
+
+    assert refused.refused is not None
+    assert config.read_text(encoding="utf-8") == original
+    assert read_ledger("herdr") is None
+
+
+def test_toml_header_inside_a_multiline_string_is_skipped() -> None:
+    config = _herdr_file()
+    original = "note = '''\n[terminal]\n'''\n\n[terminal]\nshell_mode = \"auto\"\n"
+    config.write_text(original, encoding="utf-8")
+
+    assert _apply_shell().refused is None
+
+    doc = tomllib.loads(config.read_text(encoding="utf-8"))
+    assert doc["note"] == "[terminal]\n"
+    assert doc["terminal"] == {"shell_mode": "auto", "default_shell": ZSH}
+
+    (result,) = revert_agent("herdr", home=Path.home(), platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert config.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "value",
+    [7, True, 'say "hi" éü', [[1, 2], [3]], {"a": 1, "b-c": "x", "d": [True]}, {}],
+)
+def test_toml_values_round_trip(value: object) -> None:
+    original = "a = 1\n"
+
+    inserted = insert_key(original, "toml", ("x", "k"), value)
+
+    assert tomllib.loads(inserted.text)["x"]["k"] == value
+    assert type(tomllib.loads(inserted.text)["x"]["k"]) is type(value)
+    assert remove_key(inserted.text, "toml", ("x",), fragment=inserted.fragment) == original
+
+
+@pytest.mark.parametrize("value", [1.5, None, {"a b": 1}, [{"a.b": 1}], (1, 2)])
+def test_toml_values_outside_the_supported_set_are_refused(value: object) -> None:
+    with pytest.raises(SettingsEditRefused):
+        insert_key("a = 1\n", "toml", ("x", "k"), value)
+
+
+def test_toml_inline_ui_table_refuses() -> None:
+    config = _herdr_file()
+    original = "ui = { sidebar = {} }\n"
+    config.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=Path.home(), platform_os="linux", environ={})
+
+    assert applied.refused is not None
+    assert config.read_text(encoding="utf-8") == original
+    assert read_ledger("herdr") is None
+
+
+def test_toml_created_table_goes_with_its_last_key() -> None:
+    original = "a = 1\n"
+    first = insert_key(original, "toml", ("x", "k1"), 1)
+    second = insert_key(first.text, "toml", ("x", "k2"), 2)
+
+    assert (first.created_parent, second.created_parent) == (True, False)
+    assert second.text.count("[x]") == 1
+    without_second = remove_key(second.text, "toml", ("x", "k2"), fragment=second.fragment)
+    assert without_second == first.text
+    assert remove_key(without_second, "toml", ("x",), fragment=first.fragment) == original
+
+
+def test_toml_existing_table_keeps_its_header() -> None:
+    original = "[x]\nk0 = 0\n"
+
+    inserted = insert_key(original, "toml", ("x", "k1"), 1)
+
+    assert inserted.created_parent is False
+    assert inserted.text == "[x]\nk1 = 1\nk0 = 0\n"
+    with_fragment = remove_key(inserted.text, "toml", ("x", "k1"), fragment=inserted.fragment)
+    located = remove_key(inserted.text, "toml", ("x", "k1"))  # no fragment: found in its table
+    assert with_fragment == located == original
+
+
+def test_toml_a_header_without_a_final_newline_takes_the_key() -> None:
+    inserted = insert_key("[x]", "toml", ("x", "k"), 1)
+
+    assert tomllib.loads(inserted.text) == {"x": {"k": 1}}
+    assert remove_key(inserted.text, "toml", ("x", "k"), fragment=inserted.fragment) == "[x]"
+
+
+def test_herdr_config_changed_before_commit_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    seen: list[str] = []
+
+    def other_writer_wins(path: Path, before: FileSnapshot | None, text: str) -> None:
+        seen.append(text)
+        config.write_text(f"# the other writer, round {len(seen)}\n", encoding="utf-8")
+        agent_settings_write(path, before, text)
+
+    agent_settings_write = agent_settings.write_if_unchanged
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", other_writer_wins)
+
+    applied = _apply_shell()
+
+    assert applied.refused == CHANGED_WHILE_WRITING
+    assert len(seen) == 2
+    assert config.read_text(encoding="utf-8") == "# the other writer, round 2\n"
+    assert read_ledger("herdr") is None
+
+
+def test_herdr_write_failing_reparse_rolls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+
+    def broken_value(value: object) -> str:
+        return "[["
+
+    monkeypatch.setattr(agent_settings, "_toml_value", broken_value)
+
+    applied = _apply_shell()
+
+    assert applied.refused is not None  # every candidate fails the tomllib re-parse
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+
+def test_herdr_config_created_and_removed() -> None:
+    home = Path.home()
+    config = home / ".config" / "herdr" / "config.toml"
+    assert not config.parent.exists()
+
+    applied = apply_setting("herdr", "sidebar", home=home, platform_os="linux", environ={})
+
+    assert applied.refused is None
+    assert tomllib.loads(config.read_text(encoding="utf-8")) == {
+        "ui": {
+            "sidebar": {
+                "agents": {"rows": HERDR_AGENT_ROWS, "row_gap": 1},
+                "spaces": {"rows": HERDR_SPACES_ROWS},
+            }
+        }
+    }
+
+    (result,) = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert not config.exists()
+    assert not config.parent.exists()
+    assert read_ledger("herdr") is None
+
+
+def test_toml_revert_keeps_user_sidebar_keys() -> None:
+    config = _herdr_file()
+    original = '[ui]\nagent_panel_sort = "spaces"\n\n[ui.sidebar]\nwidth = 30\n'
+    config.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=Path.home(), platform_os="linux", environ={})
+
+    assert applied.refused is None
+    assert tomllib.loads(config.read_text(encoding="utf-8"))["ui"]["sidebar"]["width"] == 30
+    (result,) = revert_agent("herdr", home=Path.home(), platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_toml_revert_keeps_an_explicit_empty_ancestor() -> None:
+    config = _herdr_file()
+    original = "[ui]\nx = 1\n\n[ui.sidebar]\n"
+    config.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=Path.home(), platform_os="linux", environ={})
+
+    assert applied.refused is None
+    (result,) = revert_agent("herdr", home=Path.home(), platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert config.read_text(encoding="utf-8") == original
+    assert tomllib.loads(original)["ui"]["sidebar"] == {}
+
+
+def test_herdr_is_a_config_agent_without_tuning() -> None:
+    assert "herdr" in receipts.CONFIG_AGENTS
+    assert agent_settings.AGENT_FORMATS["herdr"] == "toml"
+    assert "herdr" not in agent_settings.TUNING_GROUPS
+    keys = agent_settings.setting_keys("herdr", "sidebar", "linux")
+    assert [(k.path, k.value) for k in keys] == [
+        (("ui", "sidebar", "agents", "rows"), HERDR_AGENT_ROWS),
+        (("ui", "sidebar", "agents", "row_gap"), 1),
+        (("ui", "sidebar", "spaces", "rows"), HERDR_SPACES_ROWS),
+    ]

@@ -27,7 +27,8 @@ def adapters(
     Only macOS differs: VS Code keeps its user settings under Library there.
     Every other OS value (linux, fedora, ...) takes the ~/.config path.
     `environ` is the caller's environment (None reads as empty): only an absolute
-    COPILOT_HOME moves copilot's settings file. Nothing here reads the process environment.
+    COPILOT_HOME moves copilot's settings file, and only an absolute HERDR_CONFIG_PATH or
+    XDG_CONFIG_HOME moves herdr's. Nothing here reads the process environment.
 
     This function does not inspect or modify the filesystem; callers can use
     the returned paths for detection, audit, and later policy application.
@@ -41,7 +42,25 @@ def adapters(
     # unknowable here, so only an absolute value is honoured.
     copilot_home = (environ or {}).get("COPILOT_HOME", "")
     copilot_root = Path(copilot_home) if Path(copilot_home).is_absolute() else home / ".copilot"
+    env = environ or {}
+    # herdr's own config_path() order (v0.9.5 src/config/io.rs): HERDR_CONFIG_PATH, then
+    # XDG_CONFIG_HOME/herdr/config.toml, then ~/.config/herdr/config.toml; absolute values only.
+    herdr_file = Path(env.get("HERDR_CONFIG_PATH", ""))
+    xdg_config = Path(env.get("XDG_CONFIG_HOME", ""))
+    if herdr_file.is_absolute():
+        herdr_path = herdr_file
+    elif xdg_config.is_absolute():
+        herdr_path = xdg_config / "herdr" / "config.toml"
+    else:
+        herdr_path = home / ".config" / "herdr" / "config.toml"
     return {
+        "herdr": AgentAdapter(
+            id="herdr",
+            label="herdr",
+            config_path=herdr_path,
+            instruction_path=None,
+            permission_mode="unknown",
+        ),
         "copilot": AgentAdapter(
             id="copilot",
             label="GitHub Copilot CLI",

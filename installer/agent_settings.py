@@ -325,35 +325,76 @@ def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object)
     return Inserted(_guarded(new_text, fmt, expected), fragment, created_parent)
 
 
-def _toml_key(key_path: KeyPath) -> str:
-    if len(key_path) != 1 or not re.fullmatch(r"[A-Za-z0-9_-]+", key_path[0]):
-        raise SettingsEditRefused("TOML keys are top-level bare keys")
-    return key_path[0]
+_BARE_KEY: Final = re.compile(r"[A-Za-z0-9_-]+")
+# A plain `[a.b]` table header line (no quoted or spaced parts, never `[[array]]`), comment allowed.
+_TOML_HEADER: Final = re.compile(r"\s*\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?")
+_TOML_BLOCK: Final = re.compile(r"^\s*\[[A-Za-z0-9_.-]+\]", re.MULTILINE)
+
+
+def _toml_key(key_path: KeyPath) -> tuple[KeyPath, str]:
+    """The table path and the leaf key; every part must be a bare key."""
+    if not key_path or not all(_BARE_KEY.fullmatch(part) for part in key_path):
+        raise SettingsEditRefused("TOML keys are bare keys")
+    return key_path[:-1], key_path[-1]
 
 
 def _toml_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
     if isinstance(value, str):
         return _dump(value)
+    if isinstance(value, list):
+        return f"[{', '.join(_toml_value(item) for item in cast(list[object], value))}]"
+    if isinstance(value, dict):
+        members = cast(dict[str, object], value)
+        if not all(_BARE_KEY.fullmatch(name) for name in members):
+            raise SettingsEditRefused("TOML inline-table keys here are bare keys")
+        if not members:
+            return "{}"
+        return f"{{ {', '.join(f'{k} = {_toml_value(v)}' for k, v in members.items())} }}"
     raise SettingsEditRefused(
-        f"TOML values here are strings or booleans, not {type(value).__name__}"
+        f"TOML values here are strings, booleans, integers, arrays or inline tables, "
+        f"not {type(value).__name__}"
     )
 
 
 def _insert_toml(text: str, doc: dict[str, object], key_path: KeyPath, value: object) -> Inserted:
     """A top-level key goes on its own line before the first table header, or at the end. A
     line starting with `[` may also sit inside an array or a multi-line string, so each
-    candidate is tried in order and the first one the guard accepts is the header."""
-    key = _toml_key(key_path)
+    candidate is tried in order and the first one the guard accepts is the header.
+
+    A nested key goes right after its `[table]` header (candidates tried the same way); a table
+    that does not exist yet is appended at the end as one block. A table that exists but takes
+    no candidate refuses: a second header for it would be invalid TOML."""
+    table, key = _toml_key(key_path)
     lines = text.splitlines(keepends=True)
-    candidates = [i for i, line in enumerate(lines) if line.lstrip().startswith("[")]
     expected = _edited(doc, key_path, value)
-    for table in (*candidates, len(lines)):
-        fragment = f"{key} = {_toml_value(value)}\n"
-        if table == len(lines) and text and not text.endswith("\n"):
+    entry = f"{key} = {_toml_value(value)}\n"
+    if table:
+        dotted = ".".join(table)
+        for i, line in enumerate(lines):
+            header = _TOML_HEADER.fullmatch(line.rstrip("\r\n"))
+            if header is None or header[1] != dotted:
+                continue
+            fragment = entry if line.endswith("\n") else "\n" + entry
+            new_text = "".join(lines[: i + 1]) + fragment + "".join(lines[i + 1 :])
+            try:
+                return Inserted(_guarded(new_text, "toml", expected), fragment, False)
+            except SettingsEditRefused:
+                continue
+        if lookup(doc, table) is not ABSENT:
+            raise SettingsEditRefused(f"[{dotted}] exists but takes no new key here")
+        gap = "" if not text or text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
+        fragment = f"{gap}[{dotted}]\n{entry}"
+        return Inserted(_guarded(text + fragment, "toml", expected), fragment, True)
+    candidates = [i for i, line in enumerate(lines) if line.lstrip().startswith("[")]
+    for at in (*candidates, len(lines)):
+        fragment = entry
+        if at == len(lines) and text and not text.endswith("\n"):
             fragment = "\n" + fragment
-        new_text = "".join(lines[:table]) + fragment + "".join(lines[table:])
+        new_text = "".join(lines[:at]) + fragment + "".join(lines[at:])
         try:
             return Inserted(_guarded(new_text, "toml", expected), fragment, created_parent=False)
         except SettingsEditRefused:
@@ -361,17 +402,48 @@ def _insert_toml(text: str, doc: dict[str, object], key_path: KeyPath, value: ob
     raise SettingsEditRefused("no place for a top-level key")
 
 
-def _toml_remove(text: str, key: str, fragment: str | None) -> str:
-    """The recorded fragment when it occurs once, else the key's own top-level line."""
+def _toml_remove(text: str, key_path: KeyPath, fragment: str | None) -> str:
+    """The recorded fragment when it occurs once, else the key's own line inside its table."""
+    table, key = _toml_key(key_path)
     if fragment is not None and text.count(fragment) == 1:
         return text.replace(fragment, "", 1)
+    dotted = ".".join(table)
+    in_table = not table
     lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines):
         if line.lstrip().startswith("["):
-            break
-        if re.match(rf"\s*{re.escape(key)}\s*=", line):
+            header = _TOML_HEADER.fullmatch(line.rstrip("\r\n"))
+            in_table = bool(table) and header is not None and header[1] == dotted
+        elif in_table and re.match(rf"\s*{re.escape(key)}\s*=", line):
             return "".join(lines[:index] + lines[index + 1 :])
-    raise SettingsEditRefused(f"{key} has no top-level line to remove")
+    raise SettingsEditRefused(f"{'.'.join(key_path)} has no line to remove")
+
+
+def _toml_removal(
+    doc: dict[str, object], text: str, key_path: KeyPath, fragment: str | None
+) -> str:
+    """`text` without the key (or table), guarded. Removing our own `[a.b.c]` header also removes
+    the `a.b` that header implied; the expected document drops each such ancestor, deepest first,
+    only while it is empty there and absent from the edited text, so a table the user defined
+    (an explicit header, or any key of theirs) stays."""
+    expected = _edited(doc, key_path, ABSENT)
+    if (
+        fragment is not None
+        and _TOML_BLOCK.search(fragment)
+        and not isinstance(lookup(doc, key_path), dict)
+    ):
+        fragment = None  # a created table's block: only this one key goes
+    candidate = _toml_remove(text, key_path, fragment)
+    try:
+        after = parse_settings(candidate, "toml")
+    except SettingsParseError as exc:
+        raise SettingsEditRefused("the edit broke the file") from exc
+    for depth in range(len(key_path) - 1, 0, -1):
+        prefix = key_path[:depth]
+        if not same_value(lookup(expected, prefix), {}) or lookup(after, prefix) is not ABSENT:
+            break
+        del cast(dict[str, object], lookup(expected, prefix[:-1]))[prefix[-1]]
+    return _guarded(candidate, "toml", expected)
 
 
 def _cut_member(text: str, clean: str, members: list[_Member], member: _Member) -> str:
@@ -414,9 +486,9 @@ def remove_key(
     doc = parse_settings(text, fmt)
     if lookup(doc, key_path) is ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is not set")
-    expected = _edited(doc, key_path, ABSENT)
     if fmt == "toml":
-        return _guarded(_toml_remove(text, _toml_key(key_path), fragment), fmt, expected)
+        return _toml_removal(doc, text, key_path, fragment)
+    expected = _edited(doc, key_path, ABSENT)
     clean = _clean(text, fmt)
     members, member = _member_at(clean, key_path)
     located = text[member.key_start : member.value_end]
@@ -515,6 +587,7 @@ AGENT_FORMATS: Final[dict[str, SettingsFormat]] = {
     "cursor-agent": "json",
     "vscode": "jsonc",
     "copilot": "jsonc",
+    "herdr": "toml",
 }
 
 
@@ -554,6 +627,12 @@ _VSCODE_LEAN: Final[tuple[tuple[str, object], ...]] = (
     ("git.autoRepositoryDetection", "openEditors"),
 )
 
+
+def _row_token(name: str, style: str) -> dict[str, object]:
+    """A herdr sidebar row token with one style flag on."""
+    return {"token": name, style: True}
+
+
 _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
     ("claude", "auto-approve"): (
         SettingKey(("permissions", "defaultMode"), "bypassPermissions"),
@@ -579,6 +658,22 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
     ),
     ("copilot", "auto-approve"): (SettingKey(("defaultPermissionMode",), "allow-all"),),
     ("copilot", "no-attribution"): (SettingKey(("includeCoAuthoredBy",), False),),
+    # castocolina/herdr-setup@2b5ca2a config/config.toml, KEEP rows only (24 D-12).
+    ("herdr", "sidebar"): (
+        SettingKey(
+            ("ui", "sidebar", "agents", "rows"),
+            [
+                [_row_token("$rule", "dim")],
+                ["state_icon", "workspace", "tab", _row_token("$here", "bold")],
+                ["agent"],
+            ],
+        ),
+        SettingKey(("ui", "sidebar", "agents", "row_gap"), 1),
+        SettingKey(
+            ("ui", "sidebar", "spaces", "rows"),
+            [["state_icon", "workspace", _row_token("$here", "bold")]],
+        ),
+    ),
     ("vscode", "vscode-ai-off"): (SettingKey(("chat.disableAIFeatures",), True),),
     ("vscode", "vscode-ext-updates-off"): (
         SettingKey(("extensions.autoUpdate",), False),
@@ -586,6 +681,12 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
     ),
 }
 
+
+# Keys whose value only the caller knows at run time (24 D-08b): `apply_value` writes it, the
+# ledger entry records it, and a revert takes the recorded value as the one to match.
+DYNAMIC_KEYS: Final[dict[tuple[str, str], tuple[KeyPath, ...]]] = {
+    ("herdr", "default-shell"): (("terminal", "default_shell"),),
+}
 
 # The groups an install writes per tool: explicit because `vscode-lean` is built by
 # `_vscode_lean`, not stored in `_KEYS`.
@@ -814,6 +915,31 @@ def _apply_once(
     return FileResult(agent, setting, path, fmt, keys=step.keys)
 
 
+def _apply_keys(
+    agent: str,
+    setting: str,
+    keys: tuple[SettingKey, ...],
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None,
+    skip_recorded: bool,
+) -> FileResult:
+    fmt = _format(agent)
+    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
+    conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
+    if conflict is not None:
+        return FileResult(agent, setting, path, fmt, refused=conflict)
+    for _attempt in range(2):
+        try:
+            return _apply_once(
+                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded
+            )
+        except SettingsChanged:
+            continue
+    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
+
+
 def apply_setting(
     agent: str,
     setting: str,
@@ -828,20 +954,41 @@ def apply_setting(
     `skip_recorded` also leaves a key the ledger records (RECONFIGURE: a recorded key the
     user deleted is their choice); an install or reinstall passes False and rewrites it.
     """
-    fmt = _format(agent)
-    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
-    conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
-    if conflict is not None:
-        return FileResult(agent, setting, path, fmt, refused=conflict)
-    keys = setting_keys(agent, setting, platform_os)
-    for _attempt in range(2):
-        try:
-            return _apply_once(
-                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded
-            )
-        except SettingsChanged:
-            continue
-    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
+    return _apply_keys(
+        agent,
+        setting,
+        setting_keys(agent, setting, platform_os),
+        home=home,
+        platform_os=platform_os,
+        environ=environ,
+        skip_recorded=skip_recorded,
+    )
+
+
+def apply_value(
+    agent: str,
+    setting: str,
+    value: object,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> FileResult:
+    """Write a dynamic setting's one key with the caller's value, absent-only like
+    `apply_setting`; the ledger entry records that value, and a revert removes the key
+    only while it still holds it."""
+    if (agent, setting) not in DYNAMIC_KEYS:
+        raise ValueError(f"{agent} {setting} is not a dynamic setting")
+    (path,) = DYNAMIC_KEYS[(agent, setting)]
+    return _apply_keys(
+        agent,
+        setting,
+        (SettingKey(path, value),),
+        home=home,
+        platform_os=platform_os,
+        environ=environ,
+        skip_recorded=False,
+    )
 
 
 def _revert_pass(
@@ -927,6 +1074,15 @@ def _revert_once(
         ledger = _ledger(agent)
     except LedgerUntrusted as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
+    if (agent, setting) in DYNAMIC_KEYS:
+        # The ledger is user-writable JSON: only the allow-listed key paths enter the table.
+        table = {
+            entry.key_path: SettingKey(entry.key_path, entry.value)
+            for entry in ledger.entries
+            if entry.setting == setting
+            and entry.file == file
+            and entry.key_path in DYNAMIC_KEYS[(agent, setting)]
+        }
     mine = tuple(
         entry
         for entry in ledger.entries
@@ -1012,7 +1168,7 @@ def _revert_file(
     return FileResult(agent, setting, Path(file), fmt, refused=CHANGED_WHILE_WRITING)
 
 
-def _revert_results(
+def revert_group(
     agent: str,
     setting: str,
     *,
@@ -1133,7 +1289,7 @@ def revert_agent(
     return tuple(
         result
         for setting in settings
-        for result in _revert_results(
+        for result in revert_group(
             agent, setting, home=home, platform_os=platform_os, environ=environ
         )
     )
