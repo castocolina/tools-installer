@@ -1003,30 +1003,21 @@ def test_a_host_without_systemctl_gets_an_unavailable_schedule_context(
     assert schedules.manager_reachable(ctx) is False
 
 
-def test_a_bad_environment_fails_closed_through_the_schedule_context(
+def test_the_shells_tmpdir_never_reaches_the_schedule_context(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Construction never raises on a bad TMPDIR; the render that precedes every write does."""
-    from dataclasses import replace
-
-    from installer.daemon import DaemonScheduleError
-
+    """F17: units carry the platform's own TMPDIR, so a relative or changed shell TMPDIR can
+    neither fail the render nor make the units read as stale."""
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup.shutil, "which", _launchctl_and_uv)
     monkeypatch.delenv("TMPDIR", raising=False)
-    ctx = _schedule_context(_platform(), lambda _tool: True)
-    assert Path(ctx.tmpdir).is_absolute()  # an unset TMPDIR falls back to the system temp dir
+    unset = _schedule_context(_platform(), lambda _tool: True).tmpdir
+    assert Path(unset).is_absolute()
 
     monkeypatch.setenv("TMPDIR", "relative/not/absolute")
-    calls: list[list[str]] = []
-    ctx = replace(
-        _schedule_context(_platform(), lambda _tool: True),
-        run=calls.append,
-    )
-    with pytest.raises(DaemonScheduleError):
-        schedules.turn_on(ctx, "tmp-cleanup")
-    assert calls == []
-    assert not (tmp_path / "Library" / "LaunchAgents").exists()
+    ctx = _schedule_context(_platform(), lambda _tool: True)
+    assert ctx.tmpdir == unset
+    assert vars(schedules)["_unit_environment"](ctx)["TMPDIR"] == unset
 
 
 def test_a_timer_change_invalidates_the_doctors_shared_cache_on_success_and_on_failure(
