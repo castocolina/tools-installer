@@ -41,6 +41,16 @@ from pathlib import Path
 from typing import NamedTuple
 
 _TMP_TIMEOUT = 600
+_MANAGER_TIMEOUT = 1200
+# Source: installer/guards.py SHIM_SENTINEL (this file cannot import it).
+_SHIM_SENTINEL = b"# tools-installer-ban-shim"
+# Each manager's own prune command, in the UI's target order.
+_MANAGERS = (
+    ("uv", ("cache", "prune")),
+    ("pnpm", ("store", "prune")),
+    ("brew", ("cleanup",)),
+    ("npm", ("cache", "verify")),
+)
 _KILL_GRACE = 10  # seconds a group gets between SIGTERM and SIGKILL, and for the last collect
 # The house child policy; source: installer/run.py CHILD_ENV (this file cannot import it).
 _CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
@@ -160,6 +170,51 @@ def _tmp_cleanup(script: str, forwarded: list[str]) -> str:
     return f"ok: deleted {counts[-1]}" if counts else "ok: done"
 
 
+def _resolve(name: str, path_value: str) -> str | None:
+    """The first real `name` on PATH: absolute entries only, never the ban shim."""
+    for entry in path_value.split(os.pathsep):
+        candidate = Path(entry) / name
+        if not (candidate.is_absolute() and candidate.is_file() and os.access(candidate, os.X_OK)):
+            continue
+        try:
+            with candidate.open("rb") as handle:
+                head = handle.read(4096)
+        except OSError:
+            continue
+        if _SHIM_SENTINEL not in head:
+            return str(candidate)
+    return None
+
+
+def _cache_cleanup(emit: Emit) -> str:
+    """Run each installed manager's own prune command; one failure never stops the others."""
+    path_value = os.environ.get("PATH", "")
+    passed: list[str] = []
+    failure = ""
+    for name, args in _MANAGERS:
+        found = _resolve(name, path_value)
+        if found is None:
+            continue
+        command = " ".join((name, *args))
+        child = _run_child([found, *args], timeout=_MANAGER_TIMEOUT)
+        if child.problem is None:
+            emit(f"ran: {command} (exit {child.code})")
+            reason = f"exited {child.code}"
+        elif child.problem == "timed out":
+            emit(f"ran: {command} (timed out)")
+            reason = "timed out"
+        else:
+            emit(f"ran: {command} (could not start)")
+            reason = "could not start"
+        if child.problem is None and child.code == 0:
+            passed.append(name)
+        elif not failure:
+            failure = f"{command} {reason}"
+    if failure:
+        return f"failed: {failure} ({', '.join(passed)} ok)" if passed else f"failed: {failure}"
+    return f"ok: pruned {', '.join(passed)}" if passed else "ok: nothing to clean"
+
+
 def _parse(argv: list[str]) -> tuple[str, str, dict[str, str], list[str]]:
     """The job, its log id, its options and the forwarded tail; _UsageError otherwise."""
     options: dict[str, str] = {}
@@ -225,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         emit("start")
         runners: dict[str, Callable[[], str]] = {
             "tmp-cleanup": lambda: _tmp_cleanup(options["--script"], forwarded),
+            "cache-cleanup": lambda: _cache_cleanup(emit),
         }
         try:
             result = runners[job]()

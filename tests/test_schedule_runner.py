@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from installer.helper_assets import schedule_runner
+from installer.run import CHILD_ENV
 
 _TS = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d"
 _CAP = 262144
@@ -206,3 +207,187 @@ def test_runner_never_imports_the_installer_package() -> None:
     assert "# /// script" in lines
     for line in lines:
         assert not re.match(r"\s*(import installer|from installer)", line)
+
+
+# --- cache-cleanup ----------------------------------------------------------
+
+_SHIM_LINE = "# tools-installer-ban-shim"
+
+
+def _texts(lines: list[str], run_id: str = "cache-cleanup") -> list[str]:
+    """Each log line without its timestamp and id."""
+    return [re.sub(rf"^{_TS} {run_id} ", "", line) for line in lines]
+
+
+def _recorder(bin_dir: Path, name: str, exit_code: int = 0) -> Path:
+    """A fake manager that writes its argv to `<bin>/<name>.argv`."""
+    return _script(bin_dir, name, f'echo "$@" > "{bin_dir / name}.argv"\nexit {exit_code}')
+
+
+def test_cache_cleanup_runs_only_installed_managers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _recorder(bin_dir, "uv")
+    _recorder(bin_dir, "pnpm")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert _texts(lines) == [
+        "start",
+        "ran: uv cache prune (exit 0)",
+        "ran: pnpm store prune (exit 0)",
+        "ok: pruned uv, pnpm",
+    ]
+    assert (bin_dir / "uv.argv").read_text().split() == ["cache", "prune"]
+    assert (bin_dir / "pnpm.argv").read_text().split() == ["store", "prune"]
+
+
+def test_cache_cleanup_with_nothing_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert _texts(lines) == ["start", "ok: nothing to clean"]
+
+
+def test_one_failing_manager_does_not_stop_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _recorder(bin_dir, "uv")
+    _recorder(bin_dir, "pnpm")
+    _recorder(bin_dir, "brew", exit_code=1)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 1
+    assert _texts(lines)[1:] == [
+        "ran: uv cache prune (exit 0)",
+        "ran: pnpm store prune (exit 0)",
+        "ran: brew cleanup (exit 1)",
+        "failed: brew cleanup exited 1 (uv, pnpm ok)",
+    ]
+
+
+def test_a_manager_after_a_failure_still_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _recorder(bin_dir, "uv", exit_code=3)
+    _recorder(bin_dir, "pnpm")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 1
+    assert (bin_dir / "pnpm.argv").exists()
+    assert _texts(lines)[-1] == "failed: uv cache prune exited 3 (pnpm ok)"
+
+
+def test_npm_skips_the_ban_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shim_dir = tmp_path / "shim"
+    real_dir = tmp_path / "real"
+    _script(shim_dir, "npm", f"{_SHIM_LINE}\nexit 9")
+    _recorder(real_dir, "npm")
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{real_dir}")
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert (real_dir / "npm.argv").read_text().split() == ["cache", "verify"]
+    assert _texts(lines)[1:] == ["ran: npm cache verify (exit 0)", "ok: pruned npm"]
+    monkeypatch.setenv("PATH", str(shim_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert _texts(lines)[-1] == "ok: nothing to clean"
+
+
+def test_cache_cleanup_ignores_a_relative_path_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _recorder(tmp_path / "rel", "uv")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "rel")
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert _texts(lines)[-1] == "ok: nothing to clean"
+
+
+def _snapshot(*roots: Path) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for root in roots for path in root.rglob("*") if path.is_file()}
+
+
+def test_cache_cleanup_touches_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    trees = [
+        home / ".cache" / "uv",
+        home / ".local" / "share" / "pnpm" / "store",
+        home / ".npm" / "_cacache",
+        home / ".cache" / "other",
+    ]
+    for tree in trees:
+        (tree / "deep").mkdir(parents=True)
+        (tree / "deep" / "blob").write_bytes(tree.name.encode())
+        (tree / "top").write_bytes(b"top")
+    bin_dir = tmp_path / "bin"
+    for name in ("uv", "pnpm", "brew", "npm"):
+        _recorder(bin_dir, name)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("HOME", str(home))
+    before = _snapshot(*trees)
+    assert _run(tmp_path, "cache-cleanup")[0] == 0
+    assert _snapshot(*trees) == before
+
+
+def test_manager_output_is_sanitized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = tmp_path / "bin"
+    _script(bin_dir, "uv", r"printf '\033[31mred\033[0m \377\nsecond line\n' >&2; exit 2")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 1
+    assert len(lines) == 3
+    for line in lines:
+        assert "\x1b" not in line
+    assert _texts(lines)[1:] == ["ran: uv cache prune (exit 2)", "failed: uv cache prune exited 2"]
+
+
+def test_sanitize_strips_ansi_controls_and_bounds_the_length() -> None:
+    sanitize = vars(schedule_runner)["_sanitize"]
+    assert sanitize(b"\x1b[1;31mred\x1b[0m\x00 a\r\nb\t\xff") == "red a b �"
+    assert sanitize("\x1b]0;title\x07x") == "x"
+    assert len(sanitize("y" * 1000)) == 300
+
+
+def test_manager_env_carries_the_brew_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    seen = tmp_path / "env.txt"
+    _script(bin_dir, "brew", f'set > "{seen}"')
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("SUDO_ASKPASS", "/tmp/askpass")
+    monkeypatch.setenv("HOMEBREW_NO_SUDO", "0")
+    assert _run(tmp_path, "cache-cleanup")[0] == 0
+    values = dict(line.split("=", 1) for line in seen.read_text().splitlines() if "=" in line)
+    assert values["HOMEBREW_NO_SUDO"] == "1"
+    assert values["HOMEBREW_NO_AUTOREMOVE"] == "1"
+    assert "SUDO_ASKPASS" not in values
+    assert vars(schedule_runner)["_CHILD_ENV"] == CHILD_ENV
+
+
+def test_manager_timeout_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sleep = shutil.which("sleep")
+    assert sleep is not None
+    bin_dir = tmp_path / "bin"
+    _script(bin_dir, "pnpm", f"{sleep} 5")
+    _recorder(bin_dir, "brew")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setitem(vars(schedule_runner), "_MANAGER_TIMEOUT", 1)
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 1
+    assert _texts(lines)[1:] == [
+        "ran: pnpm store prune (timed out)",
+        "ran: brew cleanup (exit 0)",
+        "failed: pnpm store prune timed out (brew ok)",
+    ]
