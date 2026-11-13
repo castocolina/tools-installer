@@ -7,6 +7,7 @@ Imported only by `engine`, never by `executors`, so there is no import cycle.
 """
 
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -14,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from installer import locations
+from installer import locations, receipts
 from installer.atomic import NEW_SUFFIX, OLD_SUFFIX, atomic_write_text, staged_sibling
 from installer.desktop_entry import DesktopEntryError, render
 from installer.download import ExecContext, artifact_paths
@@ -35,8 +36,12 @@ TIC_TIMEOUT = 60
 REMOVE_TIMEOUT = 120
 _IMAGE_QUERY_TIMEOUT = 20.0
 
+# The release tag becomes a git argument inside the box: letters, digits, dot, underscore, dash,
+# never a leading dash. It is also passed after `--`.
+_TAG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
-def _image_exists(ref: str) -> bool | None:
+
+def podman_image_exists(ref: str) -> bool | None:
     """True when podman has the image, False on its exit 1, None when it could not tell."""
     try:
         run_query(["podman", "image", "exists", ref], timeout=_IMAGE_QUERY_TIMEOUT)
@@ -46,7 +51,7 @@ def _image_exists(ref: str) -> bool | None:
 
 
 # Module-level so a test replaces it, the `executors.launch_puppeteer` precedent.
-image_exists: Callable[[str], bool | None] = _image_exists
+image_exists: Callable[[str], bool | None] = podman_image_exists
 
 
 def box_name(tool_id: str) -> str:
@@ -132,17 +137,24 @@ def _build(run: _Run, method: Method, name: str, tag: str) -> None:
         )
 
 
-def _stage(method: Method, tmp: Path) -> list[tuple[Path, Path]]:
-    """Copy every box output to a `.new` sibling of its live path; return (new, live) pairs."""
+def _stage(method: Method, tmp: Path, staged: list[tuple[Path, Path]], notes: list[str]) -> None:
+    """Copy every box output to a `.new` sibling of its live path, appending (new, live) pairs.
+
+    The caller owns `staged`, so a failure part-way still lets it delete every `.new`. A
+    non-binary path that already exists and that no receipt records is the user's own: it is
+    kept as it is and named in `notes`."""
     hosts = [artifact.path for artifact in artifact_paths(method, locations.bin_dir(None))]
     boxes = _artifact_boxes(method)
     if not hosts or len(hosts) != len(boxes):
         raise ExecutorError("method 'cargo_distrobox' declares no usable artifacts")
     binary = hosts[0]
     icon = next((host for host in hosts if "/share/icons/" in host.as_posix()), None)
-    staged: list[tuple[Path, Path]] = []
+    proven = receipts.recorded_elsewhere("")
     for box, host in zip(boxes, hosts, strict=True):
         source = staged_member(tmp, box)
+        if host != binary and os.path.lexists(host) and host not in proven:
+            notes.append(f"kept your existing {locations.display_path(host)}")
+            continue
         new = staged_sibling(host, NEW_SUFFIX)
         staged.append((new, host))
         host.parent.mkdir(parents=True, exist_ok=True)
@@ -154,7 +166,6 @@ def _stage(method: Method, tmp: Path) -> list[tuple[Path, Path]]:
             new.chmod(0o755 if host == binary else 0o644)
         if host == binary:
             smoke_binary(new, method_smoke_argv(method))
-    return staged
 
 
 def _swap(staged: list[tuple[Path, Path]]) -> None:
@@ -187,13 +198,28 @@ def _swap(staged: list[tuple[Path, Path]]) -> None:
             old.unlink(missing_ok=True)
 
 
-def _cleanup(run: _Run, name: str, image: str, *, pulled: bool) -> None:
+def _cleanup(run: _Run, name: str, image: str, *, pulled: bool) -> list[str]:
+    """Remove the box, then the image this run pulled, then the temp dir; failures are notes."""
+    notes: list[str] = []
     try:
-        run.step(REMOVE_TIMEOUT, ["distrobox", "rm", "--force", "--rm-home", name])
+        try:
+            run.step(REMOVE_TIMEOUT, ["distrobox", "rm", "--force", "--rm-home", name])
+        except CommandError:
+            notes.append(
+                f"could not remove the Distrobox {name}; "
+                f"remove it with `distrobox rm --force --rm-home {name}`"
+            )
         if pulled:
-            run.step(REMOVE_TIMEOUT, ["podman", "rmi", image])
+            try:
+                run.step(REMOVE_TIMEOUT, ["podman", "rmi", image])
+            except CommandError as exc:
+                notes.append(
+                    f"kept the image {image}: podman could not remove it "
+                    f"({command_error_line(exc)})"
+                )
     finally:
         shutil.rmtree(run.tmp, ignore_errors=True)
+    return notes
 
 
 def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
@@ -203,6 +229,8 @@ def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
     repo = _param(method, "repo")
     image = _param(method, "image")
     tag = ctx.resolve_release(repo).tag
+    if _TAG_RE.fullmatch(tag) is None:
+        raise ExecutorError(f"refusing release tag {tag!r} of {repo}: not a safe git ref")
     name = box_name(repo.split("/")[-1].lower())
     state = image_exists(image)
     pulled = state is False
@@ -213,26 +241,26 @@ def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
         notes.append(f"kept the image {image}: could not tell whether it was already there")
     tmp = Path(tempfile.mkdtemp(prefix="tools-installer-cargo-", dir=RUN_ROOT))
     run = _Run(ctx, name, tmp)
+    staged: list[tuple[Path, Path]] = []
     failure: CommandError | OSError | DesktopEntryError | None = None
+    cleanup_notes: list[str] = []
     try:
         (tmp / "terminfo").mkdir()
         (tmp / "cache").mkdir()
         _build(run, method, name, tag)
-        staged = _stage(method, tmp)
-        try:
-            _swap(staged)
-        finally:
-            for new, _host in staged:
-                new.unlink(missing_ok=True)
+        _stage(method, tmp, staged, notes)
+        _swap(staged)
     except (CommandError, OSError, DesktopEntryError) as exc:
         failure = exc
     finally:
-        _cleanup(run, name, image, pulled=pulled)
+        for new, _host in staged:
+            new.unlink(missing_ok=True)
+        cleanup_notes = _cleanup(run, name, image, pulled=pulled)
     if failure is not None:
         line = (
             command_error_line(failure)
             if isinstance(failure, CommandError)
-            else str(failure).splitlines()[0]
+            else (str(failure).splitlines() or [repr(failure)])[0]
         )
-        raise ExecutorError(line) from failure
-    return tuple(notes)
+        raise ExecutorError("; ".join([line, *cleanup_notes])) from failure
+    return (*notes, *cleanup_notes)

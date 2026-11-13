@@ -9,7 +9,7 @@ import pytest
 
 import installer.engine as engine
 import installer.postinstall as postinstall
-from installer import executors, post_install, receipts
+from installer import cargo_distrobox, executors, post_install, receipts
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
@@ -21,6 +21,7 @@ from installer.platform import Platform
 from installer.run import CommandError
 from installer.versions import Release, VersionError
 from tests.test_apps import SHELLED_LINKERS
+from tests.test_cargo_distrobox import FakeBox, alacritty_tool, image_is, immutable_with_tools
 from tests.test_download import fixture_runner
 
 
@@ -2450,3 +2451,45 @@ def test_omz_refuses_existing_reinstall_dispatches_set_omz_plugins() -> None:
     assert calls == []
     assert "plugins=(git z docker)" in (home / ".zshrc").read_text()
     assert any(line.startswith("Plugins: added docker") for line in outcome.post_install_handoff)
+
+
+def _cargo_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, box: FakeBox, *, image: bool | None
+) -> engine.InstallOutcome:
+    run_root = tmp_path / "run-root"
+    run_root.mkdir()
+    monkeypatch.setattr(cargo_distrobox, "RUN_ROOT", run_root)
+    monkeypatch.setattr(cargo_distrobox, "image_exists", image_is(image))
+    return install_tool(
+        alacritty_tool(),
+        immutable_with_tools(),
+        runner=box,
+        resolve_tag=lambda _repo: "v0.17.0",
+        present=lambda _tool: False,
+    )
+
+
+def test_cargo_distrobox_build_failure_is_failed_with_no_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    error = CommandError(["cargo", "build"], 101, detail="error: could not compile `alacritty`")
+    outcome = _cargo_install(monkeypatch, tmp_path, FakeBox({"build": error}), image=False)
+
+    assert outcome.status is InstallStatus.FAILED
+    assert [str(e) for e in outcome.errors] == ["error: could not compile `alacritty`"]
+    assert receipts.read("alacritty") is None
+
+
+def test_cargo_distrobox_kept_image_note_reaches_the_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcome = _cargo_install(monkeypatch, tmp_path, FakeBox(), image=True)
+
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.verified is False
+    assert outcome.handoff == ()
+    assert outcome.postinstall_warning is not None
+    assert (
+        "kept the existing image registry.fedoraproject.org/fedora-toolbox:44"
+        in outcome.postinstall_warning
+    )

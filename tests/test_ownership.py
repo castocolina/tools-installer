@@ -3132,3 +3132,47 @@ def test_copilot_present_cask_is_a_skip_naming_the_owner(
     assert rows[0].ownership.owner == "cask"
     assert "cask" in rows[0].reason.lower(), rows[0].reason
     assert rows[0].disposition not in RUNNABLE
+
+
+def test_only_the_binary_is_ownership_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-09: the user's own entry and terminfo file without the binary never make the installer
+    the owner; the binary alone does."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    alacritty = next(tool for tool in load_tools(_REGISTRY) if tool.id == "alacritty")
+    bazzite = Platform(
+        os="fedora",
+        arch="amd64",
+        immutable=True,
+        has_brew=False,
+        has_distrobox=True,
+        has_podman=True,
+    )
+    for relative in (".local/share/applications/Alacritty.desktop", ".terminfo/a/alacritty"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True)
+        path.write_text("the user's own file\n")
+    managed = tmp_path / ".local" / "bin"
+    managed.mkdir(parents=True)
+
+    without = _resolve(
+        alacritty,
+        inventory=_empty_readable(),
+        artifacts=plan_uninstall([alacritty], managed),
+        platform=bazzite,
+        managed_bin_dir=managed,
+    )
+    assert without.owner != "installer"
+
+    (managed / "alacritty").write_text("alacritty binary")
+    with_binary = plan_uninstall([alacritty], managed)
+    assert with_binary == [managed / "alacritty"]
+    owned = _resolve(
+        alacritty,
+        inventory=_empty_readable(),
+        artifacts=with_binary,
+        platform=bazzite,
+        managed_bin_dir=managed,
+    )
+    assert owned.owner == "installer"

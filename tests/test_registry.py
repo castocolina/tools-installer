@@ -1574,6 +1574,16 @@ def test_alacritty_builds_in_distrobox_or_uses_distro_packages() -> None:
     assert {m.kind for m in alacritty.methods} == {"cargo_distrobox", "dnf", "apt", "pacman"}
 
 
+def test_alacritty_cargo_method_is_well_formed() -> None:
+    alacritty = _tools_by_id()["alacritty"]
+    assert [m.kind for m in alacritty.methods] == ["cargo_distrobox", "dnf", "apt", "pacman"]
+    artifacts = cast(list[dict[str, str]], alacritty.methods[0].params["artifacts"])
+    hosts = [entry["host"] for entry in artifacts]
+    assert hosts[0] == "~/.local/bin/alacritty"
+    assert hosts[3:] == ["~/.terminfo/a/alacritty", "~/.terminfo/a/alacritty-direct"]
+    assert alacritty.config_paths == ("~/.config/alacritty",)
+
+
 def test_alacritty_entry_records_the_missing_linux_release_and_disabled_cask() -> None:
     lines = REGISTRY.read_text(encoding="utf-8").splitlines()
     idx = next(i for i, line in enumerate(lines) if line == 'id = "alacritty"')

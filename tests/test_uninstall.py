@@ -10,7 +10,7 @@ from rich.console import Console
 from installer import receipts
 from installer.download import artifact_paths, link_name
 from installer.enums import UninstallState
-from installer.model import Method, Tool
+from installer.model import Method, Tool, load_tools
 from installer.omz import plugins_owned, write_plugins
 from installer.policy import Policy, daemon_policy, omz_plugins_policy, tweak_policy
 from installer.receipts import Receipt, ReceiptMethod
@@ -38,6 +38,7 @@ from installer.version_status import (
     uninstall_group,
 )
 from tests.state_doubles import pass_state
+from tests.test_registry import REGISTRY
 
 
 def _no_removal_runner(cmd: list[str]) -> None:
@@ -3263,3 +3264,29 @@ def test_script_leaf_removal_keeps_its_empty_parent(
 
     assert not leaf.exists()
     assert leaf.parent.is_dir()
+
+
+def _alacritty_with_files(home: Path, *, binary: bool) -> tuple[Tool, Path]:
+    alacritty = next(tool for tool in load_tools(REGISTRY) if tool.id == "alacritty")
+    desktop = home / ".local" / "share" / "applications" / "Alacritty.desktop"
+    terminfo = home / ".terminfo" / "a" / "alacritty"
+    for path in (desktop, terminfo):
+        path.parent.mkdir(parents=True)
+        path.write_text("the user's own file\n")
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    if binary:
+        (bin_dir / "alacritty").write_text("alacritty binary")
+    return alacritty, bin_dir
+
+
+def test_only_the_binary_is_ownership_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-09: a user's own desktop entry or terminfo file never reads as the installer's."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool, bin_dir = _alacritty_with_files(tmp_path, binary=False)
+    assert plan_uninstall([tool], bin_dir) == []
+
+    (bin_dir / "alacritty").write_text("alacritty binary")
+    assert plan_uninstall([tool], bin_dir) == [bin_dir / "alacritty"]
