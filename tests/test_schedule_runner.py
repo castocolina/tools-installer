@@ -394,6 +394,34 @@ def test_manager_env_carries_the_brew_policy(
     assert vars(schedule_runner)["_CHILD_ENV"] == CHILD_ENV
 
 
+def test_child_env_passes_the_proxy_certificate_and_pnpm_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    seen = tmp_path / "env.txt"
+    _script(bin_dir, "brew", f'/usr/bin/env > "{seen}"')
+    monkeypatch.setenv("PATH", str(bin_dir))
+    wanted = {
+        "PNPM_HOME": "/p",
+        "HTTP_PROXY": "http://a",
+        "HTTPS_PROXY": "http://b",
+        "NO_PROXY": "x",
+        "http_proxy": "http://a",
+        "https_proxy": "http://b",
+        "no_proxy": "x",
+        "SSL_CERT_FILE": "/c.pem",
+        "REQUESTS_CA_BUNDLE": "/r.pem",
+        "NODE_EXTRA_CA_CERTS": "/n.pem",
+    }
+    for key, value in wanted.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("SUDO_ASKPASS", "/tmp/askpass")
+    assert _run(tmp_path, "cache-cleanup")[0] == 0
+    values = dict(line.split("=", 1) for line in seen.read_text().splitlines() if "=" in line)
+    assert {key: values.get(key) for key in wanted} == wanted
+    assert "SUDO_ASKPASS" not in values
+
+
 def test_manager_timeout_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleep = shutil.which("sleep")
     assert sleep is not None

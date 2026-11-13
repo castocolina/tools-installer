@@ -56,6 +56,24 @@ _MANAGERS = (
 _KILL_GRACE = 10  # seconds a group gets between SIGTERM and SIGKILL, and for the last collect
 # The house child policy; source: installer/run.py CHILD_ENV (this file cannot import it).
 _CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
+# Passed through when present: the unit Environment carries the installing shell's proxy,
+# certificate and PNPM_HOME values (24.2 F8); everything else stays closed.
+_PASSED_ENV = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "PNPM_HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+)
 _TOOL_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 _DELETED = re.compile(r"^deleted: (\d+)\s*$", re.MULTILINE)
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -125,7 +143,7 @@ def _append(log_path: Path, line: str, cap: int) -> None:
 
 
 def _child_env() -> dict[str, str]:
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "LANG") if key in os.environ}
+    env = {key: os.environ[key] for key in _PASSED_ENV if key in os.environ}
     env.update(_CHILD_ENV)
     return env
 
