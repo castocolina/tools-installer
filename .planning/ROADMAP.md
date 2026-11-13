@@ -563,7 +563,7 @@ Plans:
   3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
-**Plans**: 4/13 plans executed
+**Plans**: 7/13 plans executed
 
 Plans:
 **Wave 1**
@@ -575,9 +575,9 @@ Plans:
 - [x] 24.2-04-PLAN.md — Unit and plist writers: names, `OnCalendar` + `Persistent`, calendar arrays, stamp clean, user-manager probe (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 24.2-05-PLAN.md — Toggle engine: on, off, re-time, model, shared assets by refcount (F2), tmp units adopted by name, rollback, row state (wave 3)
-- [ ] 24.2-06-PLAN.md — `--run-schedule` headless update, Pi host-setup replay (D-16), copilot cask path (F9), runner contract tests (wave 3)
-- [ ] 24.2-07-PLAN.md — The run lock in the TUI: install, update, removal and pnpm reinstall refuse during a scheduled run (wave 3)
+- [x] 24.2-05-PLAN.md — Toggle engine: on, off, re-time, model, shared assets by refcount (F2), tmp units adopted by name, rollback, row state (wave 3)
+- [x] 24.2-06-PLAN.md — `--run-schedule` headless update, Pi host-setup replay (D-16), copilot cask path (F9), runner contract tests (wave 3)
+- [x] 24.2-07-PLAN.md — The run lock in the TUI: install, update, removal and pnpm reinstall refuse during a scheduled run (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 24.2-08-PLAN.md — Lifecycle: default-on reconcile, in-place refresh and adoption, after-removal hook (F3), uninstall-sweep adapters (wave 4)
@@ -652,7 +652,7 @@ Plans:
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
-| 24.2 Schedules view | 4/13 | In Progress | - |
+| 24.2 Schedules view | 7/13 | In Progress | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
