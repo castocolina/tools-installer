@@ -1,7 +1,9 @@
+import errno
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 from dataclasses import replace
@@ -1236,7 +1238,9 @@ class FakeGit:
         return ""
 
 
-def _use_git(monkeypatch: pytest.MonkeyPatch, *, present: bool = True, **kwargs: Any) -> FakeGit:
+def use_fake_git(
+    monkeypatch: pytest.MonkeyPatch, *, present: bool = True, **kwargs: Any
+) -> FakeGit:
     """Install a fake git runner for this test (restored after it) and answer `which git`."""
     fake = FakeGit(**kwargs)
     monkeypatch.setattr(post_install, "_git", fake)
@@ -1255,7 +1259,7 @@ def _use_git(monkeypatch: pytest.MonkeyPatch, *, present: bool = True, **kwargs:
 def test_starter_clones_the_pin_patches_and_moves_into_place(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = _use_git(monkeypatch)
+    fake = use_fake_git(monkeypatch)
     config = Path.home() / ".config"
 
     output = run_post_install(_shipped_neovim(), _mutable())
@@ -1294,3 +1298,235 @@ def test_the_default_git_runner_refuses() -> None:
 
     post_install.use_git_runner(fake)
     assert vars(post_install)["_git"] is fake  # the autouse no_git_runner fixture resets it
+
+
+_BY_HAND_HEAD = "To add it by hand:"
+_CHANGED_LINE = (
+    "Starter not added: ~/.config/nvim changed while the starter was prepared (left as is)."
+)
+_YOURS_LINE = "Starter not added: ~/.config/nvim is yours (left as is)."
+
+
+def _by_hand_lines() -> tuple[str, ...]:
+    return (
+        _BY_HAND_HEAD,
+        f"git clone {_STARTER_URL} ~/.config/nvim",
+        f"git -C ~/.config/nvim checkout -B master {_kickstart_pin()}",
+        f"git -C ~/.config/nvim apply {_kickstart_patch()}",
+    )
+
+
+def _starter() -> tuple[str, ...]:
+    """Only the starter action's lines, through the dispatcher (never `_clone_nvim_starter`)."""
+    return run_post_install(_tool(post_install=("clone_nvim_starter",)), _mutable()).lines
+
+
+def _no_temp_dir() -> bool:
+    return not list((Path.home() / ".config").glob(".nvim-starter.*"))
+
+
+def _snapshot(path: Path) -> object:
+    """Everything the user could notice about `path`: bytes, entry names and a link's target."""
+    raw = os.fsencode(path)
+    if path.is_symlink():
+        return ("link", os.readlink(raw))
+    if path.is_dir():
+        return ("dir", {name: _snapshot(path / os.fsdecode(name)) for name in os.listdir(raw)})
+    return ("file", path.read_bytes())
+
+
+def _dotfile_only(target: Path) -> None:
+    target.mkdir(parents=True)
+    (target / ".keep").write_bytes(b"")
+
+
+def _non_utf8_entry(target: Path) -> None:
+    target.mkdir(parents=True)
+    with open(os.path.join(os.fsencode(target), b"\xff"), "wb") as handle:
+        handle.write(b"mine")
+
+
+def _regular_file(target: Path) -> None:
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"not a dir")
+
+
+def _link_to_empty_dir(target: Path) -> None:
+    target.parent.mkdir(parents=True)
+    elsewhere = target.parent / "elsewhere"
+    elsewhere.mkdir()
+    target.symlink_to(elsewhere)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(_dotfile_only, id="dotfile"),
+        pytest.param(
+            _non_utf8_entry,
+            id="non-utf8-name",
+            marks=pytest.mark.skipif(
+                sys.platform == "darwin", reason="APFS rejects a file name that is not UTF-8"
+            ),
+        ),
+        pytest.param(_regular_file, id="regular-file"),
+        pytest.param(_link_to_empty_dir, id="symlink"),
+    ],
+)
+def test_starter_leaves_a_non_empty_config_byte_identical(
+    build: Callable[[Path], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = use_fake_git(monkeypatch)
+    target = Path.home() / ".config" / "nvim"
+    build(target)
+    before = _snapshot(target)
+
+    assert _starter() == (_YOURS_LINE,)
+
+    assert fake.calls == []
+    assert _snapshot(target) == before
+    assert _no_temp_dir()
+
+
+def test_starter_skips_when_xdg_config_home_points_elsewhere(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = use_fake_git(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    lines = _starter()
+
+    assert lines == (
+        "Starter not added: XDG_CONFIG_HOME points elsewhere than ~/.config (left as is).",
+    )
+    assert fake.calls == []
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/config")  # ignored: not absolute
+    assert _starter()[0].startswith("Starter: kickstart.nvim")
+    assert len(fake.calls) == 5
+
+
+def test_starter_without_git_says_how(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch, present=False)
+
+    assert _starter() == ("Starter not added: git is not installed.", *_by_hand_lines())
+
+    assert fake.calls == []
+    assert not (Path.home() / ".config" / "nvim").exists()
+
+
+@pytest.mark.parametrize("step", ["clone", "checkout", "rev-parse", "apply-check", "apply"])
+def test_a_failing_git_step_leaves_nothing(step: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch, fail_at=step)
+
+    lines = _starter()
+
+    assert lines == ("Starter not added: fatal: boom.", *_by_hand_lines())
+    assert [FakeGit.step(argv) for argv in fake.calls][-1] == step
+    assert not (Path.home() / ".config" / "nvim").exists()
+    assert _no_temp_dir()
+
+
+def test_a_moved_branch_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch, head="0" * 40)
+
+    lines = _starter()
+
+    pinned = _kickstart_pin()[:12]
+    assert lines == (
+        f"Starter not added: the checkout is at {'0' * 12}, not the pinned {pinned}.",
+        *_by_hand_lines(),
+    )
+    assert [FakeGit.step(argv) for argv in fake.calls] == ["clone", "checkout", "rev-parse"]
+    assert not (Path.home() / ".config" / "nvim").exists()
+    assert _no_temp_dir()
+
+
+def test_starter_refuses_a_config_created_while_it_prepared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = Path.home() / ".config" / "nvim"
+
+    def user_creates_a_config() -> None:
+        target.mkdir()
+        (target / "mine.lua").write_bytes(b"mine")
+
+    use_fake_git(monkeypatch, hooks={"apply": user_creates_a_config})
+
+    assert _starter() == (_CHANGED_LINE,)
+
+    assert [entry.name for entry in target.iterdir()] == ["mine.lua"]
+    assert (target / "mine.lua").read_bytes() == b"mine"
+    assert _no_temp_dir()
+
+
+def test_a_refused_rename_leaves_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch)
+
+    def refuse(src: object, dst: object) -> None:
+        raise OSError(errno.ENOTEMPTY, "Directory not empty")
+
+    monkeypatch.setattr(os, "rename", refuse)
+
+    assert _starter() == (_CHANGED_LINE,)
+
+    assert not (Path.home() / ".config" / "nvim").exists()
+    assert _no_temp_dir()
+
+
+def test_an_interrupted_starter_removes_its_temp_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch, fail_at="checkout", error=KeyboardInterrupt())
+
+    with pytest.raises(KeyboardInterrupt):
+        _starter()
+
+    assert not (Path.home() / ".config" / "nvim").exists()
+    assert _no_temp_dir()
+
+
+def test_starter_replaces_an_empty_config_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch)
+    target = Path.home() / ".config" / "nvim"
+    target.mkdir(parents=True)
+
+    assert _starter() == _STARTER_LINES
+
+    assert (target / "init.lua").read_text().splitlines()[-1] == _PATCHED_LINE
+    assert _no_temp_dir()
+
+
+def test_reconfigure_never_runs_the_starter(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch)
+
+    apply_install_tuning(_shipped_neovim(), _mutable(), skip_recorded=True)
+
+    assert fake.calls == []
+    assert not (Path.home() / ".config" / "nvim").exists()
+
+
+def test_kickstart_patch_is_one_reviewed_hunk() -> None:
+    patch = _kickstart_patch()
+    assert patch.is_relative_to(Path(post_install.__file__).parent)
+    raw = patch.read_bytes()
+    assert raw.endswith(b"\n")
+    lines = raw.decode("utf-8").splitlines()
+    assert lines[0] == "diff --git a/init.lua b/init.lua"
+    headers = [line for line in lines if line.startswith("@@")]
+    assert headers == ["@@ -778,6 +778,7 @@ do"]
+    body = lines[lines.index(headers[0]) + 1 :]
+    added = [line for line in body if line.startswith("+")]
+    assert added == ["+" + _PATCHED_LINE]
+    assert [line for line in body if line.startswith("-")] == []
+    assert len(body) - len(added) == 6  # old side: the context lines
+    assert len(body) == 7  # new side
+    assert " " in body and body.count(" ") == 1  # the one-space context line
+
+
+def test_e2e_script_names_the_same_pin_and_patch() -> None:
+    script = (REGISTRY.parent.parent / "scripts" / "container-e2e-verify.sh").read_text()
+    match = re.search(r"^NVIM_STARTER_PIN=(\S+)$", script, flags=re.MULTILINE)
+    assert match is not None
+    assert match.group(1) == _kickstart_pin()
+    relative = _kickstart_patch().relative_to(REGISTRY.parent.parent).as_posix()
+    assert relative == "installer/patches/kickstart-no-lsp.patch"
+    assert f"NVIM_STARTER_PATCH={relative}" in script

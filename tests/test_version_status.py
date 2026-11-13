@@ -6486,6 +6486,20 @@ def test_neovim_pending_tuning_when_you_set_none(tmp_path: Path) -> None:
     assert again.unconfigured == ()
 
 
+def test_no_pending_step_for_a_missing_starter(tmp_path: Path) -> None:
+    """D-16: the starter is placed once at install; its absence is never a pending step."""
+    bundle = shell_init_bundle("neovim")
+    assert bundle is not None
+    write_tweak(bundle, _myshellrc())
+    record_shell_init(_myshellrc(), "neovim")
+    assert not (Path.home() / ".config" / "nvim").exists()
+
+    state = _tuning_state(tmp_path, _shell_tool("neovim"))
+
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+
 def test_forced_reconfigure_with_your_editor_writes_nothing(tmp_path: Path) -> None:
     (Path.home() / ".bashrc").write_text("export EDITOR=vim\n")
     _myshellrc().write_text("export KEEP=1\n")

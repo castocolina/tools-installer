@@ -20,6 +20,7 @@ from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.uninstall import SweepResult, removal_plan
 from installer.versions import Release, ReleaseResolver, TagResolver
+from tests.test_post_install import use_fake_git
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 TAG = "v0.12.6"
@@ -341,3 +342,48 @@ def test_an_unowned_nvim_on_path_is_never_overwritten(monkeypatch: pytest.Monkey
     assert runner.calls == []
     assert foreign.read_bytes() == before
     assert receipts.read("neovim") is None
+
+
+def _receipt_artifacts() -> list[tuple[Path, str]]:
+    receipt = receipts.read("neovim")
+    assert receipt is not None
+    return [(artifact.path, artifact.type) for artifact in receipt.artifacts]
+
+
+def test_a_failed_starter_clone_keeps_the_neovim_row_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use_fake_git(monkeypatch, fail_at="clone")
+
+    outcome = _install(FakeTarball(), monkeypatch)
+
+    home = Path.home()
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is None
+    assert "Starter not added: fatal: boom." in outcome.post_install_handoff
+    assert any(":lsp enable <name>" in line for line in outcome.post_install_handoff)
+    assert _receipt_artifacts() == [
+        (home / ".local/opt/nvim", "dir"),
+        (home / ".local/bin/nvim", "link"),
+    ]
+    assert not (home / ".config/nvim").exists()
+
+
+def test_the_starter_tree_is_not_in_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch)
+
+    outcome = _install(FakeTarball(), monkeypatch)
+
+    home = Path.home()
+    assert outcome.status is InstallStatus.INSTALLED
+    assert len(fake.calls) == 5
+    assert (home / ".config/nvim/init.lua").is_file()
+    assert _receipt_artifacts() == [
+        (home / ".local/opt/nvim", "dir"),
+        (home / ".local/bin/nvim", "link"),
+    ]
+
+    result = _remove(neovim_tool())
+
+    assert result.removed == ("neovim",)
+    assert (home / ".config/nvim/init.lua").is_file()  # config stays unless "delete config too"

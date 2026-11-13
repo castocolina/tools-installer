@@ -7,6 +7,6 @@ index 560c183..1c1f933 100644
      },
    }
 +  servers = {} -- tools-installer: no language servers; enable one with :lsp enable <name>
-
+ 
    vim.pack.add {
      gh 'neovim/nvim-lspconfig',
