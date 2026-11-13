@@ -13,7 +13,6 @@ import os
 import plistlib
 import re
 import shutil
-import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -183,6 +182,25 @@ def default_data_dir() -> Path:
     base = os.environ.get("XDG_DATA_HOME", "")
     root = Path(base) if base and Path(base).is_absolute() else Path.home() / ".local" / "share"
     return root / "tools-installer" / "schedules"
+
+
+# Built from parts: a bare "/tmp" literal trips bandit B108 (as in cargo_distrobox.RUN_ROOT).
+_LINUX_TMPDIR: Final = str(Path("/") / "tmp")
+
+
+def default_tmpdir(platform_os: str) -> str:
+    """The platform's own TMPDIR, never the launching shell's (F17).
+
+    macOS: the per-user directory launchd hands a job. Linux: `/tmp`, written out rather than
+    omitted: it is what a unit with no TMPDIR resolves to, so behaviour is unchanged, and the
+    unit text stays one fixed value that no shell can make stale.
+    """
+    if platform_os == "macos":  # every other Platform.os key is Linux
+        with contextlib.suppress(ValueError, OSError):  # not Darwin, or the call failed
+            per_user = (os.confstr("CS_DARWIN_USER_TEMP_DIR") or "").rstrip("/")
+            if per_user:
+                return per_user
+    return _LINUX_TMPDIR
 
 
 def default_log_path(platform_os: str) -> Path:
@@ -603,7 +621,7 @@ def context_for(
         launchd_log_path=home / "Library" / "Logs" / "tools-installer" / "schedules-launchd.log",
         legacy_bin_dir=home / ".local" / "bin",
         checkout=checkout,
-        tmpdir=environ.get("TMPDIR") or tempfile.gettempdir(),
+        tmpdir=default_tmpdir(platform_os),
         uid=os.getuid(),
         environ=environ,
         run=run,

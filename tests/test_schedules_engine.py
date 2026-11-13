@@ -243,7 +243,7 @@ def test_turn_on_then_off_leaves_nothing_behind(env: Env) -> None:
     path = clean_unit_path(env.home, platform_os="fedora", environ=ctx.environ)
     assert f'Environment="PATH={path}"' in lines
     assert f'Environment="HOME={env.home}"' in lines
-    assert f'Environment="TMPDIR={ctx.tmpdir}"' in lines
+    assert 'Environment="TMPDIR=/tmp"' in lines
     timer_lines = timer.read_text().splitlines()
     assert "OnCalendar=*-*-* 00,06,12,18:00:00" in timer_lines
     assert "Persistent=true" in timer_lines
@@ -320,6 +320,51 @@ def test_a_symlink_replacing_a_recorded_unit_is_refused_on_repair(env: Env, tmp_
     with pytest.raises(OSError, match=f"{CLAUDE_BASENAME}.service"):
         turn_on(env.ctx, "update-claude")
     assert victim.read_text() == "[Service]\nExecStart=/bin/true\n"
+
+
+def test_units_carry_the_platform_tmpdir_never_the_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = make_env(tmp_path, monkeypatch).ctx
+
+    def context(tmpdir: str) -> ScheduleContext:
+        return context_for(
+            "fedora",
+            checkout=CHECKOUT,
+            read_models=base.read_models,
+            run=base.run,
+            read_output=base.read_output,
+            which=base.which,
+            present=base.present,
+            environ={"TMPDIR": tmpdir},
+        )
+
+    ctx = context("/somewhere/else")
+    assert ctx.tmpdir == "/tmp"
+    turn_on(ctx, "update-claude")
+    service = (ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text()
+    assert 'Environment="TMPDIR=/tmp"' in service.splitlines()
+    assert "/somewhere/else" not in service
+    # a different TMPDIR in the writing shell does not make the unit read as stale
+    again = context("/another/shell")
+    stale = vars(schedules)["_is_stale"]
+    assert (
+        stale(again, load_state(again.state_path).state, schedule_by_id("update-claude")) is False
+    )
+
+
+def test_the_macos_tmpdir_is_the_per_user_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    def per_user(_name: str) -> str:
+        return "/var/folders/ab/cd/T/"
+
+    def empty(_name: str) -> str:
+        return ""
+
+    monkeypatch.setattr(os, "confstr", per_user, raising=False)
+    assert schedules.default_tmpdir("macos") == "/var/folders/ab/cd/T"
+    monkeypatch.setattr(os, "confstr", empty, raising=False)
+    assert schedules.default_tmpdir("macos") == "/tmp"
+    assert schedules.default_tmpdir("fedora") == "/tmp"
 
 
 UNAVAILABLE = {

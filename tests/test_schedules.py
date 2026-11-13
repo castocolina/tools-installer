@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 import time
 from collections.abc import Iterator
 from datetime import datetime
@@ -697,7 +696,7 @@ def test_context_for_follows_xdg_and_stores_its_seams(
     assert context.data_dir == tmp_path / "data/tools-installer/schedules"
     assert context.unit_dir == tmp_path / "config/systemd/user"
     assert context.log_path == tmp_path / "home/Library/Logs/tools-installer/schedules.log"
-    assert context.tmpdir == str(tmp_path / "tmp")
+    assert context.tmpdir == "/tmp"  # the platform default, never the caller's TMPDIR (F17)
     assert context.run is run
     assert context.read_output is read_output
     assert context.present("claude") and not context.present("pi")
@@ -705,10 +704,10 @@ def test_context_for_follows_xdg_and_stores_its_seams(
     assert calls == []  # building a context starts nothing
 
 
-def test_context_for_tmpdir_falls_back_to_the_temp_dir(
+def test_context_for_tmpdir_is_the_platform_default_whatever_the_shell_says(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "shell"))
     context = context_for("debian", checkout=tmp_path, read_models=_fake_models)
-    assert context.tmpdir == tempfile.gettempdir()
+    assert context.tmpdir == "/tmp"
     assert context.present("claude") is False
