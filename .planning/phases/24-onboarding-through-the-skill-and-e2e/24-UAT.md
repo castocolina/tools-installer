@@ -95,7 +95,7 @@ The write of `default_shell` itself is proven in the container runs (D-29), not 
 
 ### 6. Alacritty built on this host
 
-**Marker:** `CONFIRM` unless the nested run recorded `TRACER_NESTED_INFEASIBLE` (24-08-SUMMARY.md), then `REQUIRED`. The orchestrator sets this marker after the nested run.
+**Marker:** `REQUIRED` (set by the orchestrator 2026-11-13: the nested run recorded `TRACER_NESTED_INFEASIBLE`; the rootless inner podman of an unprivileged outer container cannot create the distrobox box, so this host test is the only real Alacritty build; see 24-08-SUMMARY.md).
 
 **Before you start:** check whether the image is already in your podman store: `podman image exists registry.fedoraproject.org/fedora-toolbox:44` (exit 0 means present). If it is absent, this test pulls it (a large download), and the build removes it afterwards because this run pulled it. If you already had it, it stays and the row detail names it.
 

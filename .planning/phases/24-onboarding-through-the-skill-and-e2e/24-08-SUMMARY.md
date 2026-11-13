@@ -97,6 +97,33 @@ The UAT's facts were taken from the nine SUMMARY files: terminfo under `~/.termi
 - The herdr sidebar workspace marker (24-07 standalone target) is not checked by the UAT; only `default_shell` is (per the plan).
 - The Alt+arrow byte sequences (24-06, RESEARCH A3) are assumptions the UAT test 7 checks.
 
+## Task 2 (orchestrator): nested-podman run — INFEASIBLE, UAT test 6 REQUIRED
+
+Two runs inside the 90-minute box (2026-11-13), outer container `quay.io/podman/stable` with
+`--device /dev/fuse --security-opt label=disable`, never `--privileged`:
+
+- Run 1 (4a10274's parent, 65 s, exit 1): harness defect, `crun: executable file 'su' not found`
+  (the image ships without util-linux). Fixed forward in 24-04: `4a10274 fix(24-04): install
+  util-linux in the nested box so the tester helpers can su`. Only `TRACER_NESTED_TEARDOWN_OK`.
+- Run 2 (4a10274, 55 s, exit 1):
+  - `TRACER_NESTED_INFEASIBLE step=podman-run detail=Trying to pull quay.io/podman/hello:latest...`
+  - the installer step ran: herdr, kitty and wezterm installed; Alacritty's `distrobox create` failed
+    with `Error: invalid config provided: cannot set hostname when running in the host UTS namespace`
+    (the image's containers.conf runs inner containers in the host UTS namespace, which an
+    unprivileged outer container cannot replace). The harness printed
+    `TRACER_NESTED_BUILD_FAILED` because the Summary row wraps the reason; fixed forward in 24-04:
+    `53c00ee fix(24-04): read the unwrapped failure line when classifying the nested Alacritty row`,
+    so this outcome now reads `TRACER_NESTED_INFEASIBLE step=distrobox-create`.
+    The pulled `fedora-toolbox:44` image was untagged and deleted on the failure path (D-19 held).
+  - `TRACER_NESTED_HERDR_SHELL_OK`, `TRACER_NESTED_UNINSTALL_OK`, `TRACER_NESTED_HERDR_REVERT_OK`,
+    `TRACER_NESTED_TEARDOWN_OK`
+  - post-run `podman ps -a --format '{{.Names}}'`: no `tools-installer-e2e-*` container.
+
+Outcome: infeasible environment, not a product failure, so no third run (the plan allows one
+network retry only). UAT test 6 is REQUIRED. D-29's container proof of herdr's `default_shell`
+write and revert IS present (the installer step ran). herdr's reload-config failed as a note
+(no herdr server in the container), as 24-07 designed.
+
 ## Orchestrator: what remains (Tasks 2 and 3)
 
 These are not executed by this executor. Per the plan, the orchestrator records in this SUMMARY:
