@@ -19,6 +19,7 @@ from installer.download import UpdateExecResult as DownloadUpdateExecResult
 from installer.engine import install_tool
 from installer.enums import InstallStatus
 from installer.executors import ExecutorError
+from installer.guards import REDIRECT_SENTINEL
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import (
@@ -46,6 +47,7 @@ from installer.update import (
     UpdateOutcome,
     UpdateService,
     UpdateTarget,
+    host_setup_update_argv,
     perform_update,
     resolve_update_argv,
     should_replay_node_globals,
@@ -1727,21 +1729,58 @@ def test_unknown_and_refused_updates_write_nothing(owner: Owner) -> None:
     assert [p.name for p in receipts.receipts_dir().iterdir()] == ["java.json"]
 
 
-def test_host_setup_update_hint_is_the_reviewed_handoff() -> None:
-    """G14: a host-setup tool's update hint quotes the reviewed handoff command."""
-    from installer.host_setup import HOST_SETUPS
-
-    tool = _tool("pi", Method(kind="host_setup", params={"setup_id": "pi"}))
+def _pi_target(setup_id: str = "pi") -> UpdateTarget:
+    """Pi as the catalog sees it: pnpm owns it, no node method installed it."""
+    tool = _tool("pi", Method(kind="host_setup", params={"setup_id": setup_id}))
     ownership = replace(
-        _ownership(tool, "pnpm", package="@earendil-works/pi-coding-agent"),
-        method=None,
+        _ownership(tool, "pnpm", package="@earendil-works/pi-coding-agent"), method=None
     )
-    target = UpdateTarget(tool=tool, ownership=ownership)
-    assert target.ownership.method is None
+    return UpdateTarget(tool=tool, ownership=ownership)
+
+
+def test_pi_host_setup_update_runs_the_reviewed_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-16: the reviewed HOST_SETUPS command runs through the real pnpm, never our ban shim."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    shim = tmp_path / ".local" / "bin" / "pnpm"
+    real = tmp_path / "real" / "pnpm"
+    for path, text in ((shim, f"#!/bin/sh\n{REDIRECT_SENTINEL}\n"), (real, "#!/bin/sh\n")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim.parent}{os.pathsep}{real.parent}")
+    target = _pi_target()
+    assert update_refusal(target.tool, target.ownership) is None
+    calls: list[list[str]] = []
+    outcome = _perform(target, calls.append)
+    assert outcome.status == "updated"
+    assert calls == [
+        [str(real), "add", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"]
+    ]
+
+
+def test_pi_host_setup_update_without_pnpm_fails_naming_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    calls: list[list[str]] = []
+    outcome = _perform(_pi_target(), calls.append)
+    assert outcome.status == "failed"
+    assert "pnpm was not found" in outcome.detail
+    assert calls == []
+
+
+def test_host_setup_without_a_reviewed_command_is_still_refused() -> None:
+    """A host-setup tool whose setup id has no `pnpm add` line keeps the refusal and its hint."""
+    target = _pi_target("no-such-setup")
+    assert host_setup_update_argv(target.tool) is None
     calls: list[list[str]] = []
     outcome = _perform(target, calls.append)
     assert outcome.status == "unsupported"
-    assert f"`{HOST_SETUPS['pi'].handoff[1]}`" in outcome.detail
+    assert outcome.owner == "pnpm"
+    assert "pnpm add --global --ignore-scripts @earendil-works/pi-coding-agent" in outcome.detail
     assert calls == []
 
 

@@ -100,7 +100,7 @@ def test_guard_defaults_false():
 
 
 def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
-    """A33 / O1: Phase 23 adds no flag; the accepted flags are the ones --help lists."""
+    """The accepted flags are the ones --help lists; 24.2 added the two schedule-run flags."""
     with pytest.raises(SystemExit):
         parse_args(["--help"])
     flags = set(re.findall(r"--[a-z][a-z-]*", capsys.readouterr().out))
@@ -115,4 +115,20 @@ def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
         "--guard",
         "--unguard",
         "--link-mode",
+        "--run-schedule",
+        "--parent-holds-run-lock",
     }
+
+
+def test_cli_run_schedule_flags() -> None:
+    plain = parse_args(["--run-schedule", "update-pi"])
+    assert plain.run_schedule == "update-pi"
+    assert plain.parent_holds_run_lock is False
+    held = parse_args(["--run-schedule", "update-pi", "--parent-holds-run-lock"])
+    assert held.parent_holds_run_lock is True
+    assert parse_args([]).run_schedule is None
+    for bad in ("tmp-cleanup", "bogus"):
+        with pytest.raises(SystemExit) as exit_info:
+            parse_args(["--run-schedule", bad])
+        assert exit_info.value.code == 2
+    assert Options(all=False, categories=(), yes=False).run_schedule is None

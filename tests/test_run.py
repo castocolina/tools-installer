@@ -20,6 +20,7 @@ from installer.run import (
     StreamingRunner,
     run_bounded,
     run_captured,
+    run_captured_in_group,
     run_command,
     run_git_isolated,
     run_output,
@@ -875,3 +876,21 @@ def test_run_git_isolated_scrubs_the_user_git_state(monkeypatch: pytest.MonkeyPa
     assert env["SSH_ASKPASS_REQUIRE"] == "never"
     assert env["KEEP_ME"] == "1"
     assert seen["timeout"] == 600
+
+
+def test_in_group_runner_keeps_the_process_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R2-04: only the headless --run-schedule route keeps the child in the caller's group."""
+    seen: list[dict[str, object]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_captured_in_group(["x"])
+    run_captured(["x"])
+    in_group, own_session = seen
+    assert in_group["start_new_session"] is False
+    assert in_group["stdin"] is subprocess.DEVNULL
+    assert in_group["capture_output"] is True
+    assert own_session["start_new_session"] is True

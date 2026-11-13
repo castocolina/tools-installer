@@ -24,7 +24,16 @@ from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 
-from installer import daemon, diskusage, env_redirect, pnpm_globals, post_install, systemd_daemon
+from installer import (
+    cursor_shim,
+    daemon,
+    diskusage,
+    env_redirect,
+    pnpm_globals,
+    post_install,
+    schedules,
+    systemd_daemon,
+)
 from installer.app import (
     UninstallDecision,
     clean_rc_duplicates,
@@ -72,7 +81,15 @@ from installer.prompt import CallbackPrompter
 from installer.receipts import scan_retired
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
-from installer.run import OutputRunner, Runner, apply_child_env, run_captured, run_git_isolated
+from installer.run import (
+    OutputRunner,
+    Runner,
+    apply_child_env,
+    run_captured,
+    run_captured_in_group,
+    run_git_isolated,
+)
+from installer.schedule_run import RunDeps, run_schedule
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -95,7 +112,7 @@ from installer.ui_common import BASE_VIEW, run_live
 from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
 from installer.version_cache import default_cache_path
-from installer.version_status import VersionRefreshService
+from installer.version_status import VersionRefreshService, probed_version
 from installer.versions import TagResolver, probe_version_output, resolve_github_tag
 from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
 
@@ -690,7 +707,7 @@ def _sync_terminals_and_report(
 
 
 def _build_services(
-    tools: list[Tool], platform: Platform
+    tools: list[Tool], platform: Platform, *, runner: Runner = run_captured
 ) -> tuple[VersionRefreshService, UpdateService, pnpm_globals.NodeInstallPolicy, Install]:
     """The one refresh service, the one update service and the one node-globals
     policy that every route shares (Phase 20 D-12, RESEARCH Pitfall 7): the TUI
@@ -735,7 +752,7 @@ def _build_services(
         platform=platform,
         # D-14, checker W2: the platform the last pass saw, read at update time.
         live_platform=lambda: version_refresh.platform,
-        runner=run_captured,
+        runner=runner,
         resolve_tag=resolve_github_tag,
         managed_packages=pnpm_globals.pnpm_global_packages,
         replay_globals=_reinstall_globals,
@@ -1441,8 +1458,45 @@ def _verify_and_clean(
     clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
 
 
+def _schedule_run_deps(tools: list[Tool], platform: Platform) -> RunDeps:
+    # R2-04: the in-group runner keeps the vendor update in the group the schedule runner kills.
+    version_refresh, updates, _policy, _install = _build_services(
+        tools, platform, runner=run_captured_in_group
+    )
+    return RunDeps(
+        tools=tools,
+        updates=updates,
+        resolve_owner=version_refresh.resolve_owner,
+        probe_version=lambda tool, own: probed_version(tool, own, probe_version_output),
+        context=schedules.context_for(
+            platform.os,
+            checkout=Path(__file__).resolve().parent,
+            read_models=cursor_shim.read_models,
+        ),
+    )
+
+
+def _run_schedule(options: Options) -> int:
+    """The headless timer route: no TTY, no repairs, exactly one plain result line."""
+    tools = load_tools(_REGISTRY)
+    platform = detect()
+    store, _needs_choice = _settings_store(options.link_mode)
+    # Post-install steps run as after a manual update (SPEC R6).
+    post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
+    post_install.use_git_runner(run_git_isolated)
+    line, code = run_schedule(
+        options.run_schedule or "",
+        _schedule_run_deps(tools, platform),
+        parent_holds_lock=options.parent_holds_run_lock,
+    )
+    print(line)
+    return code
+
+
 def main(argv: list[str]) -> int:
     options = parse_args(argv)
+    if options.run_schedule:
+        return _run_schedule(options)
     console = Console()
     if options.doctor:
         return _run_doctor(console)
