@@ -798,3 +798,26 @@ def test_an_unreachable_manager_removes_the_files_and_discloses_the_missing_relo
     assert unit_files(ctx, TMP_BASENAME) == []
     assert any("could not be reached" in warning for warning in report.warnings)
     assert "daemon-reload" not in lab.env.run.text()
+
+
+def test_an_unreadable_state_refuses_the_write_instead_of_saving_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=("claude", "opencode"))
+    ensure_schedule_defaults(lab.ctx)
+    turn_off(lab.ctx, "update-opencode")
+    before = lab.ctx.state_path.read_bytes()
+    real_read = schedules.read_capped
+
+    def unreadable(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+        if path == lab.ctx.state_path:
+            raise PermissionError("transient")
+        return real_read(path, cap, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(schedules, "read_capped", unreadable)
+    with pytest.raises(OSError, match="transient"):
+        update_state(lab.ctx.state_path, lambda state: state)
+    monkeypatch.undo()
+    assert lab.ctx.state_path.read_bytes() == before
+    assert not schedules.damaged_path(lab.ctx.state_path).exists()
+    assert load_state(lab.ctx.state_path).state.records["update-opencode"].decided is False

@@ -245,6 +245,8 @@ class LoadedState:
     warning: str | None = None
     # True while the `.damaged` copy exists, so the guard outlives the load that saw the damage.
     damaged: bool = False
+    # True when the file could not be read at all (no `.damaged` copy is kept): never saved over.
+    unreadable: bool = False
 
 
 _STATE_VERSION = 1
@@ -368,13 +370,17 @@ def load_state(path: Path) -> LoadedState:
         return LoadedState(ScheduleState(), damaged=damaged_path(path).exists())
     except OSError as exc:
         return LoadedState(
-            ScheduleState(), _warning(str(exc) or "unreadable"), damaged_path(path).exists()
+            ScheduleState(),
+            _warning(str(exc) or "unreadable"),
+            damaged_path(path).exists(),
+            unreadable=True,
         )
     if raw is None:
         return LoadedState(
             ScheduleState(),
             _warning("not a regular file, or too large"),
             damaged_path(path).exists(),
+            unreadable=True,
         )
     try:
         state = _decode_state(json.loads(raw.decode("utf-8")))
@@ -408,9 +414,15 @@ def save_state(path: Path, state: ScheduleState) -> None:
 
 
 def update_state(path: Path, change: Callable[[ScheduleState], ScheduleState]) -> ScheduleState:
-    """Apply `change` to the stored state under the writer lock, so no decision is lost."""
+    """Apply `change` to the stored state under the writer lock, so no decision is lost.
+
+    A state that cannot be read raises OSError: saving defaults over it would lose every
+    decision, and no `.damaged` copy is kept for a read failure (F11)."""
     with runlock.hold(state_lock_path(path)):
-        state = change(load_state(path).state)
+        loaded = load_state(path)
+        if loaded.unreadable:
+            raise OSError(loaded.warning or "schedules.json could not be read")
+        state = change(loaded.state)
         save_state(path, state)
     return state
 
