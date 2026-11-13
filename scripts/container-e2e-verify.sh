@@ -1000,7 +1000,9 @@ for agent, groups in s.TUNING_GROUPS.items():
             holds = s.same_value(s.lookup(doc, key.path), key.value)
             if not holds or (group, key.path) not in recorded:
                 print(\"M\", agent, \".\".join(key.path))
-Path(\".e2e-tuned-agents.json\").write_text(json.dumps({\"agents\": checked, \"created\": created}), encoding=\"utf-8\")
+herdr = receipts.read(\"herdr\")
+herdr_hosts = list(herdr.hooks.get(\"herdr-integration\", ())) if herdr else []
+Path(\".e2e-tuned-agents.json\").write_text(json.dumps({\"agents\": checked, \"created\": created, \"herdr_hosts\": herdr_hosts}), encoding=\"utf-8\")
 for agent in checked:
     print(\"A\", agent)
 print(\"K\", count)
@@ -1086,9 +1088,12 @@ for agent in agents:
         residue = json.dumps(doc, sort_keys=True, separators=(\",\", \":\"), default=str)
         # herdr integration uninstall leaves empty containers (and codex a hooks feature flag) in a
         # file we created: that is its residue, not ours, unless a herdr marker is still in the text.
+        # Only an agent herdr recorded as a host may carry it, and every use prints an R line.
         if agent == \"codex\" and doc == {\"features\": {\"hooks\": True}}:
             print(\"R\", agent, \"features.hooks\")
-        elif not (doc and not pruned(doc) and \"herdr-agent-state\" not in text):
+        elif doc and not pruned(doc) and \"herdr-agent-state\" not in text and agent in tuned.get(\"herdr_hosts\", []):
+            print(\"R\", agent, \"empty-containers\")
+        else:
             print(\"F\", agent, residue[:200])
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)

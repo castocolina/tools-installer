@@ -1360,6 +1360,7 @@ def test_settings_probe_installed_persists_the_checked_agents(
     assert home.run("settings_probe_installed").returncode == 0
     persisted = json.loads((home.workspace / ".e2e-tuned-agents.json").read_text(encoding="utf-8"))
     assert sorted(persisted["agents"]) == sorted(_REQUIRED_TUNED)
+    assert persisted["herdr_hosts"] == []  # no herdr receipt in this scratch home
     # Each tuned file was absent before the tuning, so the ledger lists it as installer-created.
     assert persisted["created"] == {
         agent: [str(agent_settings.settings_file(agent, home=home.scratch, platform_os="linux"))]
@@ -2139,6 +2140,7 @@ def _revert_with_file(
     text: str,
     *,
     created: bool,
+    herdr_hosts: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     from installer import agent_settings
 
@@ -2147,7 +2149,13 @@ def _revert_with_file(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     (home.workspace / ".e2e-tuned-agents.json").write_text(
-        json.dumps({"agents": [agent], "created": {agent: [str(path)] if created else []}}),
+        json.dumps(
+            {
+                "agents": [agent],
+                "created": {agent: [str(path)] if created else []},
+                "herdr_hosts": list(herdr_hosts),
+            }
+        ),
         encoding="utf-8",
     )
     return home.run("settings_probe_revert")
@@ -2158,12 +2166,25 @@ def test_settings_revert_tolerates_herdr_residue_only_in_created_files(
 ) -> None:
     """R1-22: empty containers and codex's `features.hooks` are herdr's residue, if we made it."""
     empty = _revert_with_file(
-        tmp_path / "empty", monkeypatch, "claude", '{"hooks": {}}', created=True
+        tmp_path / "empty",
+        monkeypatch,
+        "claude",
+        '{"hooks": {}}',
+        created=True,
+        herdr_hosts=("claude",),
     )
     assert empty.returncode == 0, empty.stdout + empty.stderr
     assert empty.stdout.splitlines() == [
-        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['claude'])}"
+        "TRACER_HERDR_RESIDUE agent=claude key=empty-containers",
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['claude'])}",
     ]
+
+    # E4: an agent herdr never recorded as a host gets no exemption for empty containers.
+    not_herdr = _revert_with_file(
+        tmp_path / "not-herdr", monkeypatch, "claude", '{"hooks": {}}', created=True
+    )
+    assert not_herdr.returncode != 0
+    assert not_herdr.stdout.startswith("TRACER_SETTINGS_FILE_LEFT agent=claude")
 
     marked = _revert_with_file(
         tmp_path / "marked", monkeypatch, "claude", '{"herdr-agent-state": {}}', created=True
