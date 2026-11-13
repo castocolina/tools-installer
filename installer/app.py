@@ -692,8 +692,8 @@ def _after_removal(
     desktop SHELL row when zsh goes (T-23-62). Nothing else of the tweak sweep is touched."""
     parts: list[SweepResult] = []
     if tool.id in receipts.CONFIG_AGENTS:
-        # shortcut: no CONFIG_AGENTS tool declares config_paths, so a removal never deletes a
-        # settings file; when one does, revert first, then delete it and drop its ledger entries.
+        # herdr declares config_paths: its keys revert here, before `_config_step` can delete the
+        # file, and the TUI route then drops the ledger that remains (`_drop_deleted_ledgers`).
         reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
         parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
     if tool.id == "alacritty":  # both owned regions and the record go with the tool (24 D-23)
@@ -1061,11 +1061,8 @@ def run_uninstall(
                     platform_os=platform_os,
                 )
             )
-            if outcome.unregistered:
-                console.print(
-                    f"Unregistered from agent hosts: {host_labels(outcome.unregistered)}.",
-                    markup=False,
-                )
+            if labels := host_labels(outcome.unregistered):
+                console.print(f"Unregistered from agent hosts: {labels}.", markup=False)
             if outcome.detail:
                 console.print(f"{tool.id}: {outcome.detail}", markup=False, soft_wrap=True)
             else:
@@ -1188,6 +1185,20 @@ def _config_step(
     return tuple(dict.fromkeys(deleted)), tuple(warnings)
 
 
+def _drop_deleted_ledgers(config_deleted: Iterable[str]) -> None:
+    """Drop the ledger of a settings agent whose config `_config_step` deleted, once every file
+    the ledger records is gone (R1-16): nothing is left to revert, and the final revert would
+    only refuse a missing file. `_config_step` lists a tool once any one of its paths is deleted,
+    so a ledger with a file still on disk is kept (R2-14)."""
+    for agent in receipts.CONFIG_AGENTS:
+        ledger = receipts.read_ledger(agent) if agent in config_deleted else None
+        if ledger is None:
+            continue
+        files = (*ledger.created_files, *(entry.file for entry in ledger.entries))
+        if not any(os.path.lexists(file) for file in files):
+            receipts.write_ledger(receipts.ConfigLedger(agent))  # an empty ledger deletes its file
+
+
 def perform_uninstall(
     decision: UninstallDecision,
     *,
@@ -1279,6 +1290,7 @@ def perform_uninstall(
     # Step 4 runs once, after every tool's removal (D-07). A tool whose removal failed or was
     # refused keeps its config, and a failed delete is a warning that never restores a receipt.
     config_deleted, config_warnings = _config_step(decision, catalog, removed)
+    _drop_deleted_ledgers(config_deleted)
     config_not_deleted = tuple(
         tool.id
         for tool in decision.tools

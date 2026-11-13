@@ -12,15 +12,19 @@ registers for the present, supported hosts its receipt does not record yet, and
 records what it registered in `receipt.hooks`, so removal can undo exactly that.
 """
 
+import json
+import os
+import re
 import shutil
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
-from installer import receipts
+from installer import agent_settings, receipts
 from installer.locations import bin_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool
-from installer.run import CommandError, NotingRunner, Runner, command_error_line
+from installer.run import CommandError, NotingRunner, Runner, command_error_line, run_query
 
 # (harness ids registered, warning). A warning never fails the install.
 HookOutcome = tuple[tuple[str, ...], str | None]
@@ -31,6 +35,8 @@ HOST_CATALOG_IDS: dict[str, str] = {
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor-agent",
+    "pi": "pi",
+    "copilot": "copilot",
 }
 
 
@@ -192,32 +198,186 @@ def _codegraph_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tupl
     return ((binary, "uninstall", "--target", csv, "--location", "global", "--yes", "--keep-cli"),)
 
 
-# herdr's own target ids (herdr 0.9.3: `herdr integration install <TARGET>`).
+# herdr's own target ids, keyed by harness id: every host that is both in HARNESS_MARKER_DIRS and
+# in herdr v0.9.5's `parse_integration_target` list (src/cli/integration.rs, read 2026-11-12: pi,
+# omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta,
+# cursor, mastracode, antigravity-cli, grok). antigravity and gemini-cli are left out: both would
+# have to map to the ambiguous `antigravity-cli`. The order is the order hosts register in.
 _HERDR_TARGETS: Mapping[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor",
+    "pi": "pi",
+    "copilot": "copilot",
+    "kilo": "kilo",
+    "kimi": "kimi",
+    "qwen": "qwen",
+    "devin": "devin",
+    "grok": "grok",
+    "hermes": "hermes",
+    "factory-droid": "droid",
 }
+
+# herdr's workspace separator and current indicator (24 D-12): the user's own plugin, pinned to a
+# full commit that `herdr plugin install --ref` fetches exactly. Not an agent host: it is a
+# standalone target of the herdr hook, recorded as "sidebar-markers" and undone like a host.
+_SIDEBAR_ID = "sidebar-markers"
+_SIDEBAR_SOURCE = "castocolina/herdr-setup/plugins/workspace-here"
+_SIDEBAR_REF = "2b5ca2aedf06a5a988a5087da22e65b469ffc84d"
+_SIDEBAR_PLUGIN = "herdr-setup.markers"
+_ROW_TOKENS = '{ token = "$rule", dim = true } and { token = "$here", bold = true }'
+
+
+def _run_herdr_query(argv: list[str]) -> str | None:
+    """Stdout of a read-only herdr command: its output on exit 0, the captured output of a
+    non-zero exit when it holds any, None when nothing came back (launch failure, timeout)."""
+    try:
+        return run_query(argv)
+    except CommandError as exc:
+        return exc.stdout or None
+
+
+# Replaceable like executors.launch_puppeteer: tests never launch the real herdr.
+herdr_query: Callable[[list[str]], str | None] = _run_herdr_query
+
+
+# `herdr integration status` prints one line per target, e.g. `claude: current (v10) (<path>)`,
+# `opencode: needs repair (v13) (...)`, `letta (experimental): not installed (...)`.
+_STATUS_LINE = re.compile(
+    r"^(?P<target>\S+?)(?: \(experimental\))?: (?P<state>not installed|current|needs repair)\b",
+    re.MULTILINE,
+)
+
+
+def has_python3() -> bool:
+    """Whether python3 resolves: every command of the sidebar plugin is `python3 mark.py`.
+    Module-level so tests replace it."""
+    return shutil.which("python3") is not None
+
+
+def _herdr_status(
+    binary: str, probe: Callable[[list[str]], str | None]
+) -> Mapping[str, str] | None:
+    """Target -> state from the read-only `herdr integration status`, None when unreadable."""
+    output = probe([binary, "integration", "status"])
+    if output is None:
+        return None
+    states = {match["target"]: match["state"] for match in _STATUS_LINE.finditer(output)}
+    return states or None
+
+
+def _plugin_listed(binary: str, probe: Callable[[list[str]], str | None]) -> bool | None:
+    """Whether the sidebar plugin is installed, from `herdr plugin list --json` (shape read from
+    herdr v0.9.5 src/api/schema: result.plugins[].plugin_id); None when unreadable."""
+    output = probe([binary, "plugin", "list", "--json", "--plugin", _SIDEBAR_PLUGIN])
+    if output is None:
+        return None
+    try:
+        plugins = json.loads(output)["result"]["plugins"]
+        return any(plugin["plugin_id"] == _SIDEBAR_PLUGIN for plugin in plugins)
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _herdr_settled(binary: str, probe: Callable[[list[str]], str | None]) -> frozenset[str]:
+    """The ids herdr's own status reports settled: a `current` integration, and the sidebar when
+    its plugin is already listed or python3 is absent. An unreadable probe settles nothing."""
+    status = _herdr_status(binary, probe)
+    settled = {
+        harness
+        for harness, target in _HERDR_TARGETS.items()
+        if status is not None and status.get(target) == "current"
+    }
+    if not has_python3() or _plugin_listed(binary, probe):
+        settled.add(_SIDEBAR_ID)
+    return frozenset(settled)
+
+
+def _herdr_sidebar(binary: str, runner: Runner) -> tuple[bool, str | None]:
+    """Install the pinned sidebar plugin, write its rows, reload. (recorded, warning).
+
+    Nothing is written or recorded without python3, when the plugin is already the user's, when
+    its list cannot be read, or when its install fails."""
+    if not has_python3():
+        return False, "sidebar markers: the plugin needs python3 (python3 mark.py); not set up"
+    listed = _plugin_listed(binary, herdr_query)
+    if listed is None:
+        return False, "sidebar markers: could not read herdr's plugin list; not set up"
+    if listed:
+        return False, f"sidebar markers: you already have {_SIDEBAR_PLUGIN}; left yours"
+    try:
+        runner([binary, "plugin", "install", "--ref", _SIDEBAR_REF, "--yes", _SIDEBAR_SOURCE])
+    except CommandError as exc:
+        return False, f"sidebar markers: {command_error_line(exc)}"
+    notes: list[str] = []
+    # herdr's settings path does not depend on the OS: it resolves ~/.config/herdr on macOS too
+    # (src/config/io.rs), so a hook, which gets no Platform, passes "linux".
+    written = agent_settings.apply_setting(
+        "herdr", "sidebar", home=Path.home(), platform_os="linux", environ=os.environ
+    )
+    if written.refused is not None:
+        notes.append(f"sidebar rows not written: {written.refused.splitlines()[0]}")
+    else:
+        if any(key.kind == "set_by_you" and key.key.endswith(".rows") for key in written.keys):
+            notes.append(f"your sidebar rows are kept; add {_ROW_TOKENS} to them by hand")
+        if any(key.kind == "wrote" for key in written.keys):
+            try:
+                runner([binary, "server", "reload-config"])
+            except CommandError as exc:
+                notes.append(f"reload-config failed ({command_error_line(exc)}); restart herdr")
+    return True, "; ".join(notes) or None
 
 
 def _herdr_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) -> HookOutcome:
-    """Register herdr's integration per host; one host's failure does not stop the others."""
+    """Register herdr's integration per host, then the sidebar; a failure never stops the rest."""
     binary = _resolve_binary(method, "herdr")
     done: list[str] = []
     failures: list[str] = []
-    for harness in harnesses:
+    hosts = [harness for harness in harnesses if harness != _SIDEBAR_ID]
+    # A status that returns nothing registers nothing: running install over a possibly current
+    # host would make this installer claim the user's own setup (24 D-27).
+    status: Mapping[str, str] = {}
+    if hosts:
+        read = _herdr_status(binary, herdr_query)
+        if read is None:
+            failures.append("herdr integration status was unreadable; no integration registered")
+            hosts = []
+        else:
+            status = read
+    for harness in hosts:
+        state = status.get(_HERDR_TARGETS[harness])
+        if state == "current":
+            failures.append(f"{harness}: already set up by you; left yours")
+            continue
+        if state is None:
+            failures.append(f"{harness}: not listed by herdr's status; not registered")
+            continue
         try:
             runner([binary, "integration", "install", _HERDR_TARGETS[harness]])
         except CommandError as exc:
             failures.append(f"{harness}: {command_error_line(exc)}")
         else:
             done.append(harness)
+    if _SIDEBAR_ID in harnesses:
+        recorded, warning = _herdr_sidebar(binary, runner)
+        if recorded:
+            done.append(_SIDEBAR_ID)
+        if warning:
+            failures.append(warning)
     return tuple(done), "; ".join(failures) or None
 
 
 def _herdr_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
-    return tuple((binary, "integration", "uninstall", _HERDR_TARGETS[h]) for h in harnesses)
+    """Integration undos first, the plugin last."""
+    undo = [
+        (binary, "integration", "uninstall", _HERDR_TARGETS[h])
+        for h in harnesses
+        if h in _HERDR_TARGETS
+    ]
+    if _SIDEBAR_ID in harnesses:
+        undo.append((binary, "plugin", "uninstall", _SIDEBAR_PLUGIN))
+    return tuple(undo)
 
 
 def _tealdeer_cache(method: Method, runner: Runner, _harnesses: tuple[str, ...]) -> HookOutcome:
@@ -236,11 +396,16 @@ def _tealdeer_cache(method: Method, runner: Runner, _harnesses: tuple[str, ...])
 class HookPair:
     """One hook. `targets` maps a harness id to the vendor's own target id; `None`
     marks a host-independent hook. `unregister` builds the undo argvs for the hosts
-    it is given; `None` when the hook has no undo."""
+    it is given; `None` when the hook has no undo. `standalone` maps ids wanted on every
+    machine regardless of agent hosts to their vendor source: recorded and undone like a
+    host, never a harness (`host_labels` drops them). `settled` is the hook's own read-only
+    status: the ids already satisfied, so the drift fact never reads them as pending."""
 
     targets: Mapping[str, str] | None
     register: Callable[[Method, Runner, tuple[str, ...]], HookOutcome]
     unregister: Callable[[str, tuple[str, ...]], tuple[tuple[str, ...], ...]] | None = None
+    standalone: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    settled: Callable[[str, Callable[[list[str]], str | None]], frozenset[str]] | None = None
 
 
 POSTINSTALL_HOOKS: dict[str, HookPair] = {
@@ -250,7 +415,11 @@ POSTINSTALL_HOOKS: dict[str, HookPair] = {
         unregister=_codegraph_unregister,
     ),
     "herdr-integration": HookPair(
-        targets=_HERDR_TARGETS, register=_herdr_register, unregister=_herdr_unregister
+        targets=_HERDR_TARGETS,
+        register=_herdr_register,
+        unregister=_herdr_unregister,
+        standalone={_SIDEBAR_ID: _SIDEBAR_SOURCE},
+        settled=_herdr_settled,
     ),
     "tealdeer-cache": HookPair(targets=None, register=_tealdeer_cache),
 }
@@ -260,12 +429,13 @@ def unregister_hosts(name: str, recorded: tuple[str, ...]) -> tuple[str, ...]:
     """The recorded hosts hook `name` can undo, in target-map order (D-04).
 
     `recorded` comes from a receipt a user can hand-edit, so it is filtered through
-    the code-owned target map: an id outside it (`all`, `auto`, a path) is dropped.
+    the code-owned target and standalone maps: an id outside them (`all`, `auto`, a path)
+    is dropped.
     """
     pair = POSTINSTALL_HOOKS.get(name)
     if pair is None or pair.targets is None or pair.unregister is None:
         return ()
-    return tuple(harness for harness in pair.targets if harness in recorded)
+    return tuple(known for known in (*pair.targets, *pair.standalone) if known in recorded)
 
 
 def unregister_argvs(
@@ -294,14 +464,21 @@ def hook_method(tool: Tool, receipt: receipts.Receipt) -> Method | None:
 
 
 def host_labels(hosts: Iterable[str]) -> str:
-    """Catalog ids of harness ids, sorted and comma-joined for display (UI-SPEC U10)."""
-    return ", ".join(sorted(HOST_CATALOG_IDS.get(host, host) for host in hosts))
+    """Catalog ids of harness ids, sorted and comma-joined for display (UI-SPEC U10).
+
+    A standalone target (herdr's `sidebar-markers`) is not an agent host and is dropped, so the
+    result is "" when only those are left: callers print their host sentence only when it is not.
+    """
+    return ", ".join(
+        sorted(HOST_CATALOG_IDS.get(host, host) for host in hosts if host in HARNESS_PRESENCE)
+    )
 
 
 def run_postinstall(
     name: str, method: Method, runner: Runner, hosts: frozenset[str]
 ) -> HookOutcome:
-    """Run hook `name` for the harnesses in `hosts` that it supports, in target-map order.
+    """Run hook `name` for the harnesses in `hosts` that it supports, in target-map order,
+    then the standalone ids in `hosts`.
 
     An unknown name, or no supported host present, runs nothing and returns ((), None).
     """
@@ -310,7 +487,7 @@ def run_postinstall(
         return (), None
     if pair.targets is None:
         return pair.register(method, runner, ())
-    wanted = tuple(harness for harness in pair.targets if harness in hosts)
+    wanted = tuple(known for known in (*pair.targets, *pair.standalone) if known in hosts)
     if not wanted:
         return (), None
     return pair.register(method, runner, wanted)
@@ -340,7 +517,8 @@ def register_hooks(
         return (), "hook not registered: no install receipt to record it in"
     present = present_hosts() if hosts is None else hosts
     recorded = frozenset(receipt.hooks.get(name, ()))
-    registered, warning = run_postinstall(name, method, runner, present - recorded)
+    wanted = (present | frozenset(pair.standalone)) - recorded
+    registered, warning = run_postinstall(name, method, runner, wanted)
     # An empty entry is recorded too: "hooks known, none registered yet" is swept for the
     # next host, unlike a receipt written before hooks were recorded (CR-06).
     if registered or name not in receipt.hooks:

@@ -1,4 +1,7 @@
+import hashlib
 import shutil
+import tomllib
+from collections.abc import Callable
 from itertools import combinations
 from pathlib import Path
 
@@ -6,11 +9,15 @@ import pytest
 
 import installer.engine as engine_mod
 import installer.postinstall as pi
-from installer import receipts
+from installer import app, receipts
 from installer.engine import install_tool
+from installer.enums import InstallStatus
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_tools
 from installer.platform import Platform
 from installer.run import CommandError
+from installer.uninstall import removal_plan, remove_paths
+from installer.versions import Release
+from tests.test_download import fixture_runner
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -248,11 +255,11 @@ def test_no_present_supported_host_runs_nothing(hosts: frozenset[str]) -> None:
     assert receipt.hooks == {"codegraph-mcp-register": ()}
 
 
-def test_pi_is_in_no_target_map() -> None:
+def test_only_herdr_maps_pi_and_targets_stay_harnesses() -> None:
     for name, pair in pi.POSTINSTALL_HOOKS.items():
         if pair.targets is None:
             continue
-        assert "pi" not in pair.targets, name
+        assert ("pi" in pair.targets) == (name == "herdr-integration"), name
         assert set(pair.targets) <= set(pi.HARNESS_PRESENCE), name
 
 
@@ -419,28 +426,139 @@ _TEALDEER = "tealdeer-cache"
 _TLDR_NOTE = "fetching the tldr page cache — tldr --update"
 
 
-def test_herdr_registers_and_unregisters_per_host() -> None:
+_STATUS_ALL_NEW = "claude: not installed (/x)\ncursor: not installed (/x)\npi: not installed (/x)\n"
+# src/cli/integration.rs parse_integration_target, herdr v0.9.5, read 2026-11-12
+_HERDR_V095_TARGETS = {
+    *("pi", "omp", "claude", "codex", "copilot", "devin", "droid", "kimi", "opencode", "kilo"),
+    *("hermes", "qodercli", "qwen", "letta", "cursor", "mastracode", "antigravity-cli", "grok"),
+}
+
+
+def test_herdr_targets_are_shared_hosts() -> None:
+    targets = pi.POSTINSTALL_HOOKS[_HERDR].targets
+    assert targets is not None
+    assert set(targets) == {
+        "claude",
+        "codex",
+        "opencode",
+        "cursor",
+        "pi",
+        "copilot",
+        "kilo",
+        "kimi",
+        "qwen",
+        "devin",
+        "grok",
+        "hermes",
+        "factory-droid",
+    }
+    assert set(targets) <= set(HARNESS_MARKER_DIRS)
+    assert set(targets.values()) <= _HERDR_V095_TARGETS
+    assert targets["factory-droid"] == "droid"
+    assert {"antigravity", "gemini-cli"}.isdisjoint(targets)
+    assert {"pi", "copilot"} <= set(pi.HOST_CATALOG_IDS)
+
+
+def test_herdr_registers_and_unregisters_per_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_herdr(monkeypatch, status=_STATUS_ALL_NEW)
     method = Method(kind="github_release", params={"bin_dir": "/b"})
     calls: list[list[str]] = []
-    outcome = pi.run_postinstall(
-        _HERDR, method, lambda cmd: calls.append(cmd), frozenset({"cursor", "claude", "pi"})
-    )
-    assert outcome == (("claude", "cursor"), None)
+    hosts = frozenset({"cursor", "claude", "pi"})
+    outcome = pi.run_postinstall(_HERDR, method, lambda cmd: calls.append(cmd), hosts)
+    assert outcome == (("claude", "cursor", "pi"), None)
     assert calls == [
         ["/b/herdr", "integration", "install", "claude"],
         ["/b/herdr", "integration", "install", "cursor"],
+        ["/b/herdr", "integration", "install", "pi"],
     ]
-    assert pi.unregister_argvs(_HERDR, "/b/herdr", ("cursor", "claude")) == (
+    assert pi.unregister_argvs(_HERDR, "/b/herdr", ("pi", "cursor", "claude")) == (
         ("/b/herdr", "integration", "uninstall", "claude"),
         ("/b/herdr", "integration", "uninstall", "cursor"),
+        ("/b/herdr", "integration", "uninstall", "pi"),
     )
 
     def cursor_fails(cmd: list[str]) -> None:
         if cmd[-1] == "cursor":
             raise CommandError(cmd, 1, detail="boom")
 
-    failed = pi.run_postinstall(_HERDR, method, cursor_fails, frozenset({"cursor", "claude", "pi"}))
-    assert failed == (("claude",), "cursor: boom")
+    failed = pi.run_postinstall(_HERDR, method, cursor_fails, hosts)
+    assert failed == (("claude", "pi"), "cursor: boom")
+
+
+def test_current_hosts_are_left_out_of_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = (
+        "claude: current (v10) (/x)\nopencode: needs repair (v13) (/x)\npi: not installed (/x)\n"
+    )
+    _fake_herdr(monkeypatch, status=status)
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+    calls: list[list[str]] = []
+    registered, warning = pi.run_postinstall(
+        _HERDR, method, lambda cmd: calls.append(cmd), frozenset({"claude", "opencode", "pi"})
+    )
+    assert registered == ("opencode", "pi")
+    assert calls == [
+        ["/b/herdr", "integration", "install", "opencode"],
+        ["/b/herdr", "integration", "install", "pi"],
+    ]
+    assert warning is not None
+    assert "claude" in warning
+    assert "yours" in warning
+
+
+@pytest.mark.parametrize("unreadable", [None, "no recognisable line\n"], ids=["none", "garbage"])
+def test_unreadable_status_registers_nothing(
+    monkeypatch: pytest.MonkeyPatch, unreadable: str | None
+) -> None:
+    _fake_herdr(monkeypatch, status=unreadable)
+    calls: list[list[str]] = []
+    registered, warning = pi.run_postinstall(
+        _HERDR,
+        Method(kind="github_release", params={"bin_dir": "/b"}),
+        calls.append,
+        frozenset({"claude"}),
+    )
+    assert (registered, calls) == ((), [])
+    assert warning is not None
+    assert "status" in warning
+
+
+def test_herdr_query_reads_output_whatever_the_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcomes: list[object] = [
+        "ok\n",
+        CommandError(["herdr"], 1, stdout="partial\n"),
+        CommandError(["herdr"], 127),
+        CommandError(["herdr"], 124, detail="timed out after 20s"),
+    ]
+
+    def fake_run_query(argv: list[str]) -> str:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, CommandError):
+            raise outcome
+        return str(outcome)
+
+    monkeypatch.setattr(pi, "run_query", fake_run_query)
+    assert [pi.herdr_query(["herdr", "x"]) for _ in range(4)] == ["ok\n", "partial\n", None, None]
+
+
+def test_one_host_failure_keeps_the_others(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = "opencode: not installed (/x)\npi: not installed (/x)\n"
+    _fake_herdr(monkeypatch, status=status)
+
+    def pi_fails(cmd: list[str]) -> None:
+        if cmd[-1] == "pi":
+            raise CommandError(cmd, 1, detail="boom")
+
+    registered, warning = pi.run_postinstall(
+        _HERDR,
+        Method(kind="github_release", params={"bin_dir": "/b"}),
+        pi_fails,
+        frozenset({"opencode", "pi"}),
+    )
+    assert registered == ("opencode",)
+    assert warning == "pi: boom"
+    assert pi.unregister_argvs(_HERDR, "/b/herdr", registered) == (
+        ("/b/herdr", "integration", "uninstall", "opencode"),
+    )
 
 
 def test_tealdeer_fetches_its_cache_after_install() -> None:
@@ -505,3 +623,211 @@ def test_which_with_brew_prefers_a_real_shutil_which_hit(monkeypatch: pytest.Mon
     monkeypatch.setattr(shutil, "which", which_hits)
 
     assert pi.which_with_brew("zsh") == "/usr/bin/zsh"
+
+
+_SIDEBAR_REF = "2b5ca2aedf06a5a988a5087da22e65b469ffc84d"
+_SIDEBAR_SOURCE = "castocolina/herdr-setup/plugins/workspace-here"
+_NO_PLUGINS = '{"id": "cli:plugin", "result": {"type": "plugin_list", "plugins": []}}'
+
+
+def _herdr_tool() -> Tool:
+    return next(tool for tool in load_tools(_REGISTRY) if tool.id == "herdr")
+
+
+def _fake_herdr(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str | None = "claude: not installed (/x)\n",
+    plugins: str = _NO_PLUGINS,
+) -> list[list[str]]:
+    """Replace the read-only herdr probe: `integration status` and `plugin list` answer from
+    the arguments, so no herdr process is ever launched."""
+    seen: list[list[str]] = []
+
+    def query(argv: list[str]) -> str | None:
+        seen.append(argv)
+        if argv[1:3] == ["integration", "status"]:
+            return status
+        if argv[1:3] == ["plugin", "list"]:
+            return plugins
+        return None
+
+    monkeypatch.setattr(pi, "herdr_query", query)
+    return seen
+
+
+def test_herdr_installs_registers_and_removes_end_to_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """24-07 tracer: the shipped herdr row installs, registers claude and the sidebar plugin,
+    records both, and its removal undoes exactly those, integration first."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("HERDR_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    herdr = _herdr_tool()
+    asset = "herdr-linux-x86_64"
+    payload = b"#!/bin/sh\nexit 0\n"
+    digest = hashlib.sha256(payload).hexdigest()
+    workdir = tmp_path / "dl"
+    workdir.mkdir()
+
+    def not_installed(_tool: Tool) -> bool:
+        return False
+
+    def release_resolver(_resolve_tag: object) -> Callable[[str], Release]:
+        return lambda _repo: Release("v0.9.5", {asset: digest})
+
+    def pinned_workdir(prefix: str) -> str:
+        return str(workdir)
+
+    monkeypatch.setattr(engine_mod, "is_installed", not_installed)
+    monkeypatch.setattr(engine_mod, "release_resolver", release_resolver)
+    monkeypatch.setattr(engine_mod.download.tempfile, "mkdtemp", pinned_workdir)
+    calls, runner = fixture_runner(workdir, {asset: payload})
+    monkeypatch.setattr(pi, "present_hosts", lambda: frozenset({"claude"}))
+    monkeypatch.setattr(pi, "has_python3", lambda: True)
+    _fake_herdr(monkeypatch)
+
+    outcome = install_tool(
+        herdr,
+        Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        runner=runner,
+    )
+
+    binary = str(tmp_path / ".local" / "bin" / "herdr")
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is None
+    assert [cmd for cmd in calls if cmd[0] == binary] == [
+        [binary, "integration", "install", "claude"],
+        [binary, "plugin", "install", "--ref", _SIDEBAR_REF, "--yes", _SIDEBAR_SOURCE],
+        [binary, "server", "reload-config"],
+    ]
+    config = tmp_path / ".config" / "herdr" / "config.toml"
+    sidebar = tomllib.loads(config.read_text(encoding="utf-8"))["ui"]["sidebar"]
+    assert set(sidebar["agents"]) == {"rows", "row_gap"}
+    assert set(sidebar["spaces"]) == {"rows"}
+    receipt = receipts.read("herdr")
+    assert receipt is not None
+    assert receipt.hooks == {_HERDR: ("claude", "sidebar-markers")}
+
+    plan = removal_plan(herdr, tmp_path / ".local" / "bin")
+    assert plan.unregister == (
+        (binary, "integration", "uninstall", "claude"),
+        (binary, "plugin", "uninstall", "herdr-setup.markers"),
+    )
+    assert remove_paths([plan.artifacts[path] for path in plan.removable]) == ()
+    app._after_removal(  # pyright: ignore[reportPrivateUsage]
+        herdr,
+        bundles=(),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        extra_policies=(),
+        platform_os="linux",
+    )
+    assert not config.exists() or "sidebar" not in config.read_text(encoding="utf-8")
+
+
+def test_standalone_targets_are_not_hosts() -> None:
+    """R1-06, R2-13: a standalone id is never a harness; the host-target maps stay harnesses."""
+    for name, pair in pi.POSTINSTALL_HOOKS.items():
+        if pair.targets is not None:
+            assert set(pair.targets) <= set(pi.HARNESS_PRESENCE), name
+        assert set(pair.standalone).isdisjoint(pi.HARNESS_PRESENCE), name
+    assert pi.unregister_hosts(_HERDR, ("claude", "sidebar-markers", "all")) == (
+        "claude",
+        "sidebar-markers",
+    )
+
+
+def test_host_labels_never_names_a_standalone_target() -> None:
+    assert pi.host_labels(("claude", "sidebar-markers")) == "claude"
+    assert pi.host_labels(("sidebar-markers",)) == ""
+
+
+_SIDEBAR_ONLY = frozenset({"sidebar-markers"})
+_PLUGIN_LISTED = (
+    '{"id": "cli:plugin", "result": {"type": "plugin_list", "plugins": '
+    '[{"plugin_id": "herdr-setup.markers"}]}}'
+)
+
+
+def _sidebar_run(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    python3: bool = True,
+    plugins: str = _NO_PLUGINS,
+    fail: str | None = None,
+) -> tuple[pi.HookOutcome, list[list[str]], Path]:
+    """Run the sidebar step in the scratch HOME; `fail` names the herdr verb whose call raises."""
+    monkeypatch.delenv("HERDR_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(pi, "has_python3", lambda: python3)
+    _fake_herdr(monkeypatch, plugins=plugins)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if fail is not None and fail in cmd:
+            raise CommandError(cmd, 1, detail=f"{fail} failed")
+
+    outcome = pi.run_postinstall(
+        _HERDR, Method(kind="github_release", params={"bin_dir": "/b"}), runner, _SIDEBAR_ONLY
+    )
+    return outcome, calls, Path.home() / ".config" / "herdr" / "config.toml"
+
+
+def test_sidebar_needs_python3(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, python3=False)
+    assert registered == ()
+    assert calls == []
+    assert not config.exists()
+    assert warning is not None
+    assert "needs python3" in warning
+
+
+def test_user_plugin_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, plugins=_PLUGIN_LISTED)
+    assert registered == ()
+    assert calls == []
+    assert not config.exists()
+    assert warning is not None
+    assert "herdr-setup.markers" in warning
+    assert "yours" in warning
+
+
+def test_unreadable_plugin_list_sets_nothing_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, plugins="not json")
+    assert (registered, calls) == ((), [])
+    assert not config.exists()
+    assert warning is not None
+    assert "plugin list" in warning
+
+
+def test_failed_plugin_install_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), _calls, config = _sidebar_run(monkeypatch, fail="plugin")
+    assert registered == ()
+    assert not config.exists()
+    assert warning == "sidebar markers: plugin failed"
+
+
+def test_user_rows_are_kept_and_the_tokens_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Path.home() / ".config" / "herdr" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[ui.sidebar.agents]\nrows = [["agent"]]\n', encoding="utf-8")
+    (registered, warning), _calls, _config = _sidebar_run(monkeypatch)
+    sidebar = tomllib.loads(config.read_text(encoding="utf-8"))["ui"]["sidebar"]
+    assert registered == ("sidebar-markers",)
+    assert sidebar["agents"]["rows"] == [["agent"]]
+    assert sidebar["agents"]["row_gap"] == 1
+    assert set(sidebar["spaces"]) == {"rows"}
+    assert warning is not None
+    assert '{ token = "$rule", dim = true }' in warning
+    assert '{ token = "$here", bold = true }' in warning
+
+
+def test_reload_failure_is_a_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, fail="reload-config")
+    assert registered == ("sidebar-markers",)
+    assert calls[-1] == ["/b/herdr", "server", "reload-config"]
+    assert "sidebar" in config.read_text(encoding="utf-8")
+    assert warning is not None
+    assert "reload-config failed" in warning

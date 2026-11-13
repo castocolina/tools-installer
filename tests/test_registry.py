@@ -249,7 +249,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     # moving between `both` and `ai`, which the set equality above cannot
     # see -- neither set mentions `ai`.
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
-        "both": 47,
+        "both": 48,  # Phase 24 adds herdr (audience both)
         "ai": 8,
         "human": 27,
     }
@@ -1102,7 +1102,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 82
+    assert len(tools) == 83  # Phase 24 adds the herdr row
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1157,7 +1157,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 26,
         "ai": 9,
-        "user": 47,
+        "user": 48,  # Phase 24 adds herdr (tier user)
     }
 
 
@@ -2065,23 +2065,29 @@ def test_codegraph_entry_records_the_postinstall_research_findings() -> None:
         assert needle in window, f"missing {needle!r} in codegraph's postinstall window"
 
 
-def test_only_codegraph_and_tealdeer_declare_a_postinstall_hook() -> None:
+def test_only_codegraph_tealdeer_and_herdr_declare_a_postinstall_hook() -> None:
     # graphify's host-registration hook was removed in Phase 17 (SAFE-02):
     # every graphify host-registration form writes into the working directory,
     # so the installer runs none of them. rtk's hook was removed 2026-11-02.
     tools = load_tools(REGISTRY)
     for tool in tools:
-        if tool.id in ("codegraph", "tealdeer"):
+        if tool.id in ("codegraph", "tealdeer", "herdr"):  # Phase 24 wires herdr's hook
             continue
         assert tool.postinstall is None, f"{tool.id}: unexpected postinstall hook declared"
 
 
-def test_herdr_is_not_wired_in_the_registry() -> None:
-    # Phase 24 wires herdr's integration pair to a tool; until then the name is only in the table.
-    from installer.model import POSTINSTALL_HOOK_NAMES
+def test_herdr_is_wired_to_its_integration_hook() -> None:
+    # Phase 24 (24-07) wires herdr's integration pair to its registry row.
+    assert _tools_by_id()["herdr"].postinstall == "herdr-integration"
 
-    assert "herdr-integration" in POSTINSTALL_HOOK_NAMES
-    assert all(tool.postinstall != "herdr-integration" for tool in load_tools(REGISTRY))
+
+def test_herdr_entry_declares_no_skill_pack() -> None:
+    herdr = _tools_by_id()["herdr"]
+    assert (herdr.tier, herdr.audience, herdr.category) == ("user", "both", "terminal")
+    assert herdr.config_paths == ("~/.config/herdr", "~/.local/state/herdr")
+    assert [m.kind for m in herdr.methods] == ["github_release", "github_release"]
+    assert not any("skill" in key for m in herdr.methods for key in m.params)
+    assert herdr.post_install == ()
 
 
 def test_tealdeer_declares_its_cache_in_config_paths() -> None:

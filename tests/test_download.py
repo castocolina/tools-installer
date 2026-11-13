@@ -2251,3 +2251,37 @@ def test_expand_script_token_resolves_zsh_when_the_default_dir_is_absent(
     monkeypatch.delenv("ZSH")
     assert download.expand_script_token(token) is None
     assert download.expand_script_token("~/.local/bin/uv") == str(home / ".local" / "bin" / "uv")
+
+
+@pytest.mark.parametrize(
+    ("os_name", "arch", "asset"),
+    [
+        ("debian", "amd64", "herdr-linux-x86_64"),
+        ("fedora", "arm64", "herdr-linux-aarch64"),
+        ("macos", "amd64", "herdr-macos-x86_64"),
+        ("macos", "arm64", "herdr-macos-aarch64"),
+    ],
+)
+def test_herdr_resolves_for_every_os_arch(os_name: str, arch: str, asset: str) -> None:
+    """24-07: herdr is a raw github_release binary verified by the API digest (no checksum file)."""
+    from installer.download import resolve_target
+    from installer.resolve import resolve_methods
+
+    registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
+    herdr = next(tool for tool in load_tools(registry) if tool.id == "herdr")
+    platform = Platform(os=os_name, arch=arch, immutable=False, has_brew=False)
+    (method,) = resolve_methods(herdr, platform)
+    digest = "a" * 64
+
+    ctx = ExecContext(
+        runner=lambda _cmd: None,
+        platform=platform,
+        resolve_release=lambda _repo: Release("v0.9.5", {asset: digest}),
+    )
+    target = resolve_target(method, ctx)
+    assert target.asset == asset
+    assert target.url == f"https://github.com/herdrdev/herdr/releases/download/v0.9.5/{asset}"
+    assert target.member == "herdr"
+    assert target.sha256 == digest
+    assert target.unverified_reason is None
+    assert method.params["raw"] is True

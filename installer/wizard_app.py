@@ -2036,10 +2036,8 @@ class UninstallScreen(AppScreen):
         if failed:
             summary_parts.append(fix_here)
         summary_parts.extend(self._config_lines(message.decision, swept))
-        if swept.unregistered:
-            summary_parts.append(
-                f"Unregistered from agent hosts: {host_labels(swept.unregistered)}."
-            )
+        if labels := host_labels(swept.unregistered):
+            summary_parts.append(f"Unregistered from agent hosts: {labels}.")
         summary_parts.extend(removal_result_lines(swept))
         # Empty when no lever was chosen; a blank line would cost a status row.
         if applied := self._applied_summary(message.decision, swept):

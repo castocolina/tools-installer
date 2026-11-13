@@ -6256,9 +6256,10 @@ def test_the_cli_uninstall_lists_only_keys_still_holding_our_value(
     assert "  ~/.codex/config.toml: approval_policy\n" in buf.getvalue()
 
 
-def test_no_config_agent_declares_config_paths() -> None:
-    """R1-58, R1-59: the guard the per-tool revert's shortcut relies on. When a settings agent
-    starts declaring config_paths, the removal must revert before it deletes."""
+def test_herdr_is_the_only_config_agent_declaring_config_paths() -> None:
+    """R1-16: herdr declares config_paths (24-07). Its per-tool removal reverts herdr's keys in
+    `_after_removal` before `_config_step` can delete the file, and the TUI route then drops the
+    remaining ledger after the delete. Any other settings agent declaring paths needs the same."""
     from installer import receipts
     from installer.model import load_tools
 
@@ -6268,7 +6269,7 @@ def test_no_config_agent_declares_config_paths() -> None:
         for tool in load_tools(registry)
         if tool.id in receipts.CONFIG_AGENTS and tool.config_paths
     ]
-    assert declared == []
+    assert declared == ["herdr"]
 
 
 def test_removing_zsh_sweeps_the_desktop_shell_file(
@@ -6761,3 +6762,170 @@ def test_herdr_removal_reverts_default_shell(tmp_path: Path) -> None:
 
     assert result.settings_reverted == ("herdr",)
     assert config.read_text(encoding="utf-8") == '[terminal]\nshell_mode = "auto"\n'
+
+
+def _herdr_with_claude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Tool, Tool, Path, Path]:
+    """claude and herdr installed under tmp_path: claude's auto-approve keys and herdr's sidebar
+    keys in their ledgers, herdr's hook recorded for claude and the sidebar. claude is listed
+    first. Returns (claude, herdr, claude's settings file, herdr's config file)."""
+    from dataclasses import replace
+
+    from installer import receipts
+    from installer.agent_settings import apply_setting, settings_file
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("HERDR_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    claude = plant_receipted_tool(tmp_path, "claude")
+    herdr = replace(
+        plant_receipted_tool(tmp_path, "herdr", postinstall="herdr-integration"),
+        config_paths=("~/.config/herdr", "~/.local/state/herdr"),
+    )
+    receipts.record_hooks("herdr", "herdr-integration", ("claude", "sidebar-markers"))
+    apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    # The user's own config file, so herdr's ledger does not list it among the files it created.
+    (tmp_path / ".config" / "herdr").mkdir(parents=True)
+    (tmp_path / ".config" / "herdr" / "config.toml").write_text("[terminal]\nscrollback = 1\n")
+    apply_setting("herdr", "sidebar", home=tmp_path, platform_os="linux")
+    claude_file = settings_file("claude", home=tmp_path, platform_os="linux", environ={})
+    return claude, herdr, claude_file, tmp_path / ".config" / "herdr" / "config.toml"
+
+
+def _hook_order_runner(claude_file: Path, seen: list[tuple[str, ...]]) -> Runner:
+    """Records each command (without the binary) and whether claude's keys were still there."""
+
+    def runner(cmd: list[str]) -> None:
+        seen.append((*cmd[1:], str("bypassPermissions" in claude_file.read_text())))
+
+    return runner
+
+
+_HERDR_UNDOS = [
+    ("integration", "uninstall", "claude", "True"),
+    ("plugin", "uninstall", "herdr-setup.markers", "True"),
+]
+
+
+def _tui_decision(
+    tools: Sequence[Tool], home: Path, config: Mapping[str, tuple[Path, ...]] | None = None
+) -> UninstallDecision:
+    from installer.uninstall import removal_plan
+
+    plans = {tool.id: removal_plan(tool, home / ".local" / "bin") for tool in tools}
+    return UninstallDecision(
+        tools=tuple(tools),
+        paths={tool_id: plan.removable for tool_id, plan in plans.items()},
+        argv={tool_id: plan.argv for tool_id, plan in plans.items()},
+        remove_ban=False,
+        remove_path_block=False,
+        unregister={tool_id: plan.unregister for tool_id, plan in plans.items()},
+        config=dict(config or {}),
+        revert_settings=True,
+    )
+
+
+@pytest.mark.parametrize("route", ["cli", "tui"])
+def test_full_uninstall_unregisters_hooks_before_agent_reverts(
+    route: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-28: claude is listed before herdr, yet herdr's integration undo runs while claude's
+    ledger keys are still in place; only then does claude's revert run, on both routes."""
+    claude, herdr, claude_file, _config = _herdr_with_claude(tmp_path, monkeypatch)
+    seen: list[tuple[str, ...]] = []
+    runner = _hook_order_runner(claude_file, seen)
+    if route == "cli":
+        from installer.app import run_uninstall
+
+        console, _buf = _console()
+        run_uninstall(
+            [claude, herdr],
+            console,
+            default_bin_dir=tmp_path / ".local" / "bin",
+            myshellrc_path=tmp_path / ".myshellrc",
+            rc_paths=[],
+            confirm=lambda _message: True,
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+            extra_policies=(),
+            runner=runner,
+            platform_os="linux",
+        )
+    else:
+        result = _apply(
+            _tui_decision([claude, herdr], tmp_path),
+            tmp_path,
+            runner=runner,
+            catalog=[claude, herdr],
+        )
+        assert result.removed == ("herdr", "claude")
+    assert seen == [tuple(row) for row in _HERDR_UNDOS]
+    assert not claude_file.exists() or "bypassPermissions" not in claude_file.read_text()
+
+
+def _herdr_config_dirs(tmp_path: Path, config: Path) -> tuple[Path, Path]:
+    """herdr's two declared config dirs, with the config file broken by a hand edit so the
+    per-tool revert refuses it and the ledger keeps its entries."""
+    state = tmp_path / ".local" / "state" / "herdr"
+    state.mkdir(parents=True)
+    config.write_text(config.read_text(encoding="utf-8") + "\n[[[ broken\n", encoding="utf-8")
+    return config.parent, state
+
+
+def test_deleting_herdr_config_drops_its_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-16: once the delete-config choice removes herdr's files, no ledger entry may point into
+    them, so the final revert has nothing to refuse."""
+    from installer import receipts
+
+    _claude, herdr, _claude_file, config = _herdr_with_claude(tmp_path, monkeypatch)
+    config_dir, state_dir = _herdr_config_dirs(tmp_path, config)
+    result = _apply(
+        _tui_decision([herdr], tmp_path, {"herdr": (config_dir, state_dir)}),
+        tmp_path,
+        runner=lambda _cmd: None,
+        catalog=[herdr],
+    )
+    assert result.config_deleted == ("herdr",)
+    assert not config.exists()
+    assert receipts.read_ledger("herdr") is None
+    assert not (receipts.config_ledger_dir() / "herdr.json").exists()
+    # Only the per-tool revert's refusal (the broken file); the final revert has no entry that
+    # points into the deleted file, so it adds no "missing" refusal.
+    assert len(result.warnings) == 1
+    assert "missing" not in result.warnings[0]
+
+
+def test_partial_herdr_config_deletion_keeps_its_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2-14: herdr declares two paths; `_config_step` lists it once any one is deleted. With the
+    config dir still on disk (its delete refused), the ledger entry that points into it stays."""
+    from installer import app as app_module
+    from installer import receipts
+
+    _claude, herdr, _claude_file, config = _herdr_with_claude(tmp_path, monkeypatch)
+    config_dir, state_dir = _herdr_config_dirs(tmp_path, config)
+    delete = app_module.delete_config_path
+
+    def refuse_the_config_dir(path: Path) -> None:
+        if path == config_dir:
+            raise OSError("busy")
+        delete(path)
+
+    monkeypatch.setattr(app_module, "delete_config_path", refuse_the_config_dir)
+    result = _apply(
+        _tui_decision([herdr], tmp_path, {"herdr": (config_dir, state_dir)}),
+        tmp_path,
+        runner=lambda _cmd: None,
+        catalog=[herdr],
+    )
+    assert result.config_deleted == ("herdr",)
+    assert config.exists()
+    ledger = receipts.read_ledger("herdr")
+    assert ledger is not None
+    assert {entry.key_path[-1] for entry in ledger.entries} == {"rows", "row_gap"}

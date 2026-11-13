@@ -350,7 +350,8 @@ def _register_hook_step(tool: Tool, ctx: RunContext) -> _StepResult:
         return _StepResult(failed="no install receipt to record the hook in")
     registered, warning = register_hooks(tool, method, ctx.runner)
     if registered:
-        note = f"registered for {host_labels(registered)}"
+        labels = host_labels(registered)
+        note = f"registered for {labels}" if labels else "registered"
         return _StepResult(warning=f"{note}; {_first_line_of(warning)}" if warning else note)
     if warning:
         return _StepResult(failed=_first_line_of(warning))

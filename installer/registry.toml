@@ -2977,6 +2977,62 @@ package = "alacritty"
 kind = "pacman"
 package = "alacritty"
 
+# Verified 2026-11-08, re-checked 2026-11-12 against the v0.9.5 tag source (24 D-09, D-10,
+# D-12): herdr is a single static binary published per OS and arch as a raw release asset
+# (herdr-linux-x86_64, herdr-linux-aarch64, herdr-macos-x86_64, herdr-macos-aarch64; the
+# Windows asset is a zip and out of scope). The release publishes no checksum file, so each
+# asset is verified by the sha256 digest the GitHub API returns for it (resolve_target); an
+# asset without a digest installs as unverified, never silently. `{arch.machine}` renders
+# x86_64 and aarch64. herdr has no skill pack and writes no skill files.
+# `herdr integration install <target>` accepts (src/cli/integration.rs, parse_integration_target):
+# pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen,
+# letta, cursor, mastracode, antigravity-cli, grok. It edits the agent's own config: claude and
+# copilot settings.json, cursor hooks.json, codex hooks.json and `[features] hooks = true` in
+# config.toml (herdr's uninstall removes the hook entries and the script and leaves the codex
+# config.toml line). `herdr integration status` always exits 0 and prints one line per target:
+# current, needs repair or not installed; only the last two are installed (and recorded) by the
+# hook, so an integration the user already runs is never claimed or removed (24 D-27).
+# The workspace separator and current indicator come from the user's own plugin
+# castocolina/herdr-setup, pinned to commit 2b5ca2a: `herdr plugin install --ref <sha> --yes
+# castocolina/herdr-setup/plugins/workspace-here` (manifest id herdr-setup.markers, min herdr
+# 0.9.0, linux and macos). Installing it needs git; running it needs python3 (every command is
+# `python3 mark.py`), so a machine without python3 gets neither the plugin nor the rows. The
+# three sidebar keys are written absent-only through herdr's ledger. The plugin also declares
+# manual sort-native and sort-local actions; the installer never enables the local-first sort.
+# Known limits of the pinned plugin: the separators follow the plugin's own pane order, not
+# herdr's pane_order; it makes one herdr CLI call per workspace, tab and agent on every focus
+# event; a failed socket call is silent. `herdr server reload-config` needs a running herdr
+# server, so the reload is best effort and a failure is only a note (no server runs in the e2e
+# containers). `herdr update` replaces the binary in place, after which the receipt reads
+# BROKEN until a reinstall (the same accepted class as 23.2's EX-02; follow-up, 24-RESEARCH Q8).
+# Config lives in ~/.config/herdr (settings, plugins) and ~/.local/state/herdr (plugin state).
+[[tool]]
+id = "herdr"
+name = "herdr"
+category = "terminal"
+cmd = "herdr"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-11-08
+desc = "Terminal multiplexer for coding agents; registers its agent integrations and a sidebar workspace marker"
+config_paths = ["~/.config/herdr", "~/.local/state/herdr"]
+postinstall = "herdr-integration"
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "fedora", "arch"]
+repo = "herdrdev/herdr"
+asset = "herdr-linux-{arch.machine}"
+member = "herdr"
+raw = true
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "herdrdev/herdr"
+asset = "herdr-macos-{arch.machine}"
+member = "herdr"
+raw = true
+
 [[tool]]
 id = "glab"
 name = "GitLab CLI"
