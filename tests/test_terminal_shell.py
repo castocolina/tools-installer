@@ -1514,3 +1514,59 @@ def test_zsh_gone_reverts_only_the_ledgered_default_shell() -> None:
     kept = _sync_herdr(lookup=_lookup(herdr=_HERDR))
     assert "herdr" not in kept.reverted
     assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == "/bin/fish"
+
+
+def test_alacritty_dotfile_in_home_is_edited_in_place_and_nothing_shadows_it() -> None:
+    from installer.terminal_shell import alacritty_config_path
+
+    dotfile = Path.home() / ".alacritty.toml"
+    dotfile.write_text("[font]\nsize = 12\n")
+    assert alacritty_config_path(Path.home(), dict(os.environ)) == dotfile
+
+    _sync_alacritty()
+    assert dotfile.read_text().startswith("[font]\nsize = 12\n")
+    assert not _alacritty_toml().exists()
+
+
+def test_alacritty_config_precedence_prefers_xdg_over_the_home_dotfile() -> None:
+    from installer.terminal_shell import alacritty_config_path
+
+    (Path.home() / ".alacritty.toml").write_text("")
+    _alacritty_toml().parent.mkdir(parents=True)
+    _alacritty_toml().write_text("")
+    assert alacritty_config_path(Path.home(), dict(os.environ)) == _alacritty_toml()
+
+
+def test_alacritty_file_the_installer_created_is_deleted_when_only_whitespace_is_left(
+    tmp_path: Path,
+) -> None:
+    from installer.post_install import run_post_install
+
+    run_post_install(_alacritty_tool(), _platform())
+    _sync_alacritty()
+    assert _alacritty_toml().is_file()
+
+    _remove_alacritty(tmp_path)
+    assert not _alacritty_toml().exists()
+
+
+def test_alacritty_created_file_that_gained_user_content_is_kept(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    run_post_install(_alacritty_tool(), _platform())
+    with _alacritty_toml().open("a") as handle:
+        handle.write("\n[font]\nsize = 9\n")
+
+    _remove_alacritty(tmp_path)
+    assert tomllib.loads(_alacritty_toml().read_text()) == {"font": {"size": 9}}
+
+
+def test_alacritty_file_the_user_created_empty_is_kept(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    _alacritty_toml().parent.mkdir(parents=True)
+    _alacritty_toml().write_text("")
+    run_post_install(_alacritty_tool(), _platform())
+
+    _remove_alacritty(tmp_path)
+    assert _alacritty_toml().read_text() == ""

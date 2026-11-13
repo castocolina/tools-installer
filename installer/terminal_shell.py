@@ -470,6 +470,7 @@ ALACRITTY_KEYS = "alacritty-keys"
 # version_status turns it into its `≈ apply install tuning` fact.
 KEYS_PENDING = "install tuning not applied"
 _KEYS_RECORD = "terminal-tuning-alacritty"
+_CREATED_RECORD = "terminal-alacritty-created"
 # TOML 1.0 escapes: `\u001b` is ESC. The Alt+arrow byte strings are the readline word keys.
 _KEY_BINDINGS = (
     ("Left", "Alt", 'chars = "\\u001bb"'),
@@ -480,18 +481,26 @@ _KEYS_HEADER = re.compile(r"^\s*\[\[\s*keyboard\.bindings\s*\]\]", re.MULTILINE)
 
 
 def alacritty_config_path(home: Path, environ: Mapping[str, str]) -> Path:
-    """The first existing of Alacritty's three config locations, else the XDG one."""
+    """The first existing of Alacritty's user config locations, in its own precedence order
+    (alacritty(5): XDG alacritty/, XDG file, ~/.config/alacritty/, ~/.alacritty.toml), else the
+    XDG one. The system-wide /etc/alacritty/alacritty.toml is never edited: it is not ours."""
     config_home = _xdg_config_home(home, environ)
     candidates = (
         config_home / "alacritty" / "alacritty.toml",
         config_home / "alacritty.toml",
         home / ".config" / "alacritty" / "alacritty.toml",
+        home / ".alacritty.toml",
     )
     return next((path for path in candidates if path.exists()), candidates[0])
 
 
 def _keys_record(home: Path, environ: Mapping[str, str]) -> Path:
     return _xdg_data_home(home, environ) / "tools-installer" / _KEYS_RECORD
+
+
+def _created_marker(home: Path, environ: Mapping[str, str]) -> Path:
+    """Present while the installer itself created the Alacritty config file."""
+    return _xdg_data_home(home, environ) / "tools-installer" / _CREATED_RECORD
 
 
 def _first_line(exc: BaseException) -> str:
@@ -576,7 +585,13 @@ def _keys_plan(document: Mapping[str, object], outside: str) -> _KeysPlan:
 
 
 def _commit_alacritty(
-    path: Path, before: FileSnapshot | None, text: str, updated: str, *, write: bool
+    path: Path,
+    before: FileSnapshot | None,
+    text: str,
+    updated: str,
+    *,
+    write: bool,
+    created_marker: Path,
 ) -> bool:
     """Report whether `updated` differs; write it only when `write`, and only after it re-parses
     and only if the file still is what was read (compare-before-commit)."""
@@ -588,6 +603,9 @@ def _commit_alacritty(
         raise TerminalShellError(f"the edit would not re-parse ({exc}); nothing written") from exc
     if write:
         write_if_unchanged(path, before, updated)
+        if before is None:  # the file is ours: strip may delete it once nothing else is in it
+            created_marker.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(created_marker, "created\n")
     return True
 
 
@@ -603,7 +621,14 @@ def _sync_alacritty(
         body, warnings = _shell_plan(document, zsh_path)
         warnings.extend(_keys_plan(document, outside).conflicts)
         updated = _replace_owned_region(text, ALACRITTY, body)
-        drifted = _commit_alacritty(path, before, text, updated, write=write)
+        drifted = _commit_alacritty(
+            path,
+            before,
+            text,
+            updated,
+            write=write,
+            created_marker=_created_marker(home, environ),
+        )
     except OSError as exc:
         return False, False, (f"alacritty: {_first_line(exc)}",)
     return body is not None, drifted, tuple(warnings)
@@ -639,7 +664,14 @@ def apply_alacritty_keys(
         if plan.refusal is not None:
             return (), plan.refusal
         updated = _replace_owned_region(text, ALACRITTY_KEYS, plan.body)
-        _commit_alacritty(path, before, text, updated, write=True)
+        _commit_alacritty(
+            path,
+            before,
+            text,
+            updated,
+            write=True,
+            created_marker=_created_marker(home, environ),
+        )
         record.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(record, "written\n")
     except OSError as exc:
@@ -680,7 +712,24 @@ def strip_alacritty(home: Path, environ: Mapping[str, str]) -> tuple[str, ...]:
             warnings.append(f"alacritty: {_first_line(exc)}")
     if not warnings:
         _keys_record(home, environ).unlink(missing_ok=True)
+        warnings.extend(_drop_created_config(path, _created_marker(home, environ)))
     return tuple(warnings)
+
+
+def _drop_created_config(path: Path, marker: Path) -> list[str]:
+    """Delete the config file the installer created once nothing but whitespace is left."""
+    if not marker.exists():
+        return []
+    try:
+        before = read_settings(path)
+        if before is None or _snapshot_text(before).strip():
+            marker.unlink()  # gone, or the user's now: never ours to delete
+            return []
+        path.unlink(missing_ok=True)
+        marker.unlink()
+    except OSError as exc:
+        return [f"alacritty: {_first_line(exc)}"]
+    return []
 
 
 # ---------------------------------------------------------------------------
