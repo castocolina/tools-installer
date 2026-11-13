@@ -1,3 +1,5 @@
+import re
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -311,6 +313,83 @@ def test_tool_onboarding_skill_states_the_install_tuning_rule() -> None:
     for line in text.splitlines():
         if "Policies" in line:
             assert line.isascii(), f"non-ASCII line naming Policies: {line!r}"
+
+
+def _skill_section(number: str) -> str:
+    """The text of one numbered `### N.` step of the onboarding skill, heading included."""
+    text = TOOL_ONBOARDING_SKILL.read_text(encoding="utf-8")
+    start = re.search(rf"^### {re.escape(number)}\. ", text, re.MULTILINE)
+    assert start, f"missing skill step {number}"
+    nxt = re.search(r"^### \d+b?\. ", text[start.end() :], re.MULTILINE)
+    return text[start.start() : start.end() + nxt.start()] if nxt else text[start.start() :]
+
+
+def test_tool_onboarding_skill_names_every_lifecycle_param() -> None:
+    """ONB-03: step 4b gives one TOML example line for each Phase 22 lifecycle param."""
+    text = TOOL_ONBOARDING_SKILL.read_text(encoding="utf-8")
+    section = _skill_section("4b")
+    every = ("paths", "remove", "update", "writable_prefix", "config_paths", "cargo_distrobox")
+    for param in every:
+        assert param in text, f"skill never names {param}"
+    for param in ("paths", "remove", "update", "writable_prefix", "config_paths"):
+        example = re.search(rf"^\s*{param} = ", section, re.MULTILINE)
+        assert example, f"4b has no example for {param}"
+
+
+_POLICIES_RULE_SENTENCES = (
+    "A Policies row is only for something outside any install",
+    "never becomes a Policies knob by default",
+)
+
+
+def test_tool_onboarding_skill_keeps_the_policies_rule_verbatim() -> None:
+    """D-24: 23.2's two rule sentences survive every skill edit, character for character."""
+    text = TOOL_ONBOARDING_SKILL.read_text(encoding="utf-8")
+    for sentence in _POLICIES_RULE_SENTENCES:
+        assert sentence in text, f"rule sentence dropped: {sentence}"
+
+
+def test_tool_onboarding_skill_has_no_skill_pack_text() -> None:
+    """D-24: skill packs left the catalog in 23.1; the skill must not mention them."""
+    text = TOOL_ONBOARDING_SKILL.read_text(encoding="utf-8")
+    assert not re.search(r"skill.pack|skill_lifecycle", text, re.IGNORECASE)
+
+
+def test_tool_onboarding_skill_terminal_bullet() -> None:
+    """D-24: step 7 sends a terminal's shell to the zsh sync, the rest to install tuning."""
+    section = _skill_section("7")
+    assert "zsh terminal sync" in section
+    assert "install tuning" in section
+    assert "never a Policies row" in section
+
+
+def test_tool_onboarding_skill_has_a_cargo_distrobox_example() -> None:
+    """R2-07: step 4b holds a parseable cargo_distrobox method with the four params' shapes."""
+    section = _skill_section("4b")
+    blocks = re.findall(r"```toml\n(.*?)```", section, re.DOTALL)
+    parsed = [tomllib.loads(block) for block in blocks]
+    methods = [
+        method
+        for doc in parsed
+        for tool in doc.get("tool", [])
+        for method in tool.get("method", [])
+        if method.get("kind") == "cargo_distrobox"
+    ]
+    assert methods, "4b has no fenced toml block with kind = cargo_distrobox"
+    method = methods[0]
+    assert re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", method["repo"])
+    assert re.fullmatch(r"[a-z0-9.-]+\.[a-z]+/\S+:\S+", method["image"])
+    assert method["packages"] and all(isinstance(p, str) for p in method["packages"])
+    assert method["artifacts"]
+    assert all(set(a) == {"box", "host"} for a in method["artifacts"])
+
+
+def test_tool_onboarding_skill_has_no_pre_phase_22_removal_text() -> None:
+    """R2-08: removal is planned by receipt now; the pre-Phase-22 caveats must be gone."""
+    text = TOOL_ONBOARDING_SKILL.read_text(encoding="utf-8")
+    assert "removal-manifest" not in text
+    assert "download and app kinds only" not in text
+    assert "removal_plan" in _skill_section("8")
 
 
 _INSTALL_TUNING_ARCHITECTURE_PHRASES = (

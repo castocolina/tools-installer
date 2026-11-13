@@ -6,9 +6,9 @@ The installer catalog only lists tools it can install with supported method kind
 
 `codegraph` is not added as an installable catalog row in this pass. The local Codex plugin exposes Codegraph as an MCP capability, but this project does not yet have a verified standalone install method that fits the supported registry method kinds.
 
-## Alacritty on immutable Fedora
+## Alacritty on immutable Fedora and macOS
 
-Alacritty is a catalog row. Mutable Fedora, Debian, and Arch install the distro package `alacritty`. Immutable Fedora skips those native methods, and the GitHub release publishes no Linux asset the installer can download, so the row has no method on Bazzite. A Distrobox install that stays off ostree is in `docs/research/2026-10-09-alacritty.md`. The official Homebrew cask is disabled, so macOS has no reviewed method either.
+Alacritty is a catalog row. On Linux with distrobox and podman present, the catalog builds the release tag with cargo in a throwaway Distrobox and installs the binary, desktop entry, icon and terminfo (`~/.terminfo`); the receipt records them and uninstall removes them. An immutable host without distrobox and podman shows `needs distrobox and podman`. A mutable Fedora, Debian or Arch host without them gets the distro package `alacritty` as a manual handoff. The official Homebrew cask is disabled, so macOS has no reviewed method and stays unsupported.
 
 ## PyCharm and IntelliJ IDEA
 
