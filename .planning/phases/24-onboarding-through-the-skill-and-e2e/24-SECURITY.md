@@ -28,7 +28,7 @@ registry, app, setup, version_status, resolve: 2745 passed, 0 failed, 0 skipped,
 
 ## Verdict
 
-**SECURED** - 43/43 closed (35 `mitigate` verified in code, 9 `accept` logged below, 0
+**SECURED** - 43/43 closed (34 `mitigate` verified in code, 9 `accept` logged below, 0
 unregistered flags). T-24-32 was re-dispositioned by the orchestrator on 2026-11-13 from `mitigate`
 to `accept`: the register's "no checksum-less fallback" overstated the code, which by CONTEXT D-09
 ("digests apply when the API provides them") installs a digest-less herdr asset as `unverified`
