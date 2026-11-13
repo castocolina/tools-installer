@@ -51,7 +51,7 @@
     {
       "number": "24",
       "name": "Onboarding through the skill and e2e",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "24.1",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 10 of 15 · 20% · executing"
+    "reason": "Phase 11 of 15 · 20% · executing"
   },
-  "updated_at": "2026-11-13T03:53:56.846Z"
+  "updated_at": "2026-11-13T11:52:40.360Z"
 }
