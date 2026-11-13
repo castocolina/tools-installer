@@ -131,8 +131,9 @@ def _child_env() -> dict[str, str]:
 
 
 def _kill_group(pid: int, sig: signal.Signals) -> None:
-    # A group already gone is the normal case for the SIGKILL, and still a timeout.
-    with contextlib.suppress(ProcessLookupError):
+    # A group already gone is the normal case for the SIGKILL, and still a timeout. macOS answers
+    # EPERM instead of ESRCH when only zombies are left in the group.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pid, sig)
 
 

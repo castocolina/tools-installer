@@ -366,7 +366,8 @@ def test_manager_env_carries_the_brew_policy(
 ) -> None:
     bin_dir = tmp_path / "bin"
     seen = tmp_path / "env.txt"
-    _script(bin_dir, "brew", f'set > "{seen}"')
+    # env, not the shell's set: dash and bash quote set's values differently.
+    _script(bin_dir, "brew", f'/usr/bin/env > "{seen}"')
     monkeypatch.setenv("PATH", str(bin_dir))
     monkeypatch.setenv("SUDO_ASKPASS", "/tmp/askpass")
     monkeypatch.setenv("HOMEBREW_NO_SUDO", "0")
@@ -605,3 +606,15 @@ def test_two_writers_share_the_log_lock(tmp_path: Path) -> None:
     assert lines
     assert all(re.fullmatch(rf"{_TS} w[12] ok: \d+", line) for line in lines)
     assert log.read_text().endswith("\n")
+
+
+@pytest.mark.parametrize("error", [ProcessLookupError, PermissionError])
+def test_kill_group_tolerates_a_group_that_is_gone(
+    monkeypatch: pytest.MonkeyPatch, error: type[OSError]
+) -> None:
+    # macOS answers EPERM, Linux ESRCH, when only zombies are left in the group.
+    def gone(pid: int, sig: int) -> None:
+        raise error
+
+    monkeypatch.setattr(schedule_runner.os, "killpg", gone)
+    vars(schedule_runner)["_kill_group"](4242, signal.SIGKILL)
