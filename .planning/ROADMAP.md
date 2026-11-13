@@ -535,7 +535,7 @@ Plans:
   2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
   3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes" *(amended 2026-11-07, 24.1 D-14/D-15, needs confirmation: applied at install with no question — `EDITOR` only when the user set none, kickstart only into an absent or empty dir)*; kickstart is never cloned over an existing `~/.config/nvim` and starts zero LSP processes for Python, Lua, TypeScript, Go and Java files, and `EDITOR` is reverted on removal.
 
-**Plans**: 2/5 plans executed
+**Plans**: 3/5 plans executed
 
 Plans:
 **Wave 1**
@@ -543,7 +543,7 @@ Plans:
 - [x] 24.1-04-PLAN.md — Container harness: installed and removed neovim probes in the shared passes, `nvim-lsp` zero-LSP subcommand on fedora, `.local/state/nvim` allowlist (host-tested only) (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 24.1-02-PLAN.md — `EDITOR`/`VISUAL` install tuning that yields to a user export: `find_export`, `user_export`, one gate for the writer and the `≈` fact (wave 2)
+- [x] 24.1-02-PLAN.md — `EDITOR`/`VISUAL` install tuning that yields to a user export: `find_export`, `user_export`, one gate for the writer and the `≈` fact (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 24.1-03-PLAN.md — Pinned no-LSP kickstart starter through an injected git runner, the hints on every install, the patch file, Phase 25 deferral notes (wave 3)
@@ -623,7 +623,7 @@ Plans:
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
-| 24.1 Onboard Neovim through the tool-onboarding skill | 2/5 | In Progress | - |
+| 24.1 Onboard Neovim through the tool-onboarding skill | 3/5 | In Progress | - |
 | 24.2 Schedules view | 0/TBD | Not started | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
