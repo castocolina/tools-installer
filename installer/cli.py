@@ -3,6 +3,8 @@
 import argparse
 from dataclasses import dataclass
 
+from installer import schedules
+
 
 @dataclass(frozen=True)
 class Options:
@@ -15,6 +17,8 @@ class Options:
     guard: bool = False
     unguard: bool = False
     link_mode: str | None = None
+    run_schedule: str | None = None
+    parent_holds_run_lock: bool = False
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -57,6 +61,18 @@ def parse_args(argv: list[str]) -> Options:
         default=None,
         help="how to wire PATH into your shells (default: ask, or centralized)",
     )
+    parser.add_argument(
+        "--run-schedule",
+        choices=list(schedules.UPDATE_SCHEDULE_IDS),
+        default=None,
+        metavar="ID",
+        help="run one scheduled update and print one result line (used by the schedule timers)",
+    )
+    parser.add_argument(
+        "--parent-holds-run-lock",
+        action="store_true",
+        help="internal: the schedule runner already holds the run lock",
+    )
     ns = parser.parse_args(argv)
 
     categories: list[str] = []
@@ -76,4 +92,6 @@ def parse_args(argv: list[str]) -> Options:
         guard=ns.guard,
         unguard=ns.unguard,
         link_mode=ns.link_mode,
+        run_schedule=ns.run_schedule,
+        parent_holds_run_lock=ns.parent_holds_run_lock,
     )

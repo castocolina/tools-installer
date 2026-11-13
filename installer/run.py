@@ -104,6 +104,7 @@ def run_output_with_stderr(
     *,
     timeout: float | None = None,
     env: Mapping[str, str] | None = None,
+    new_session: bool = True,
 ) -> tuple[str, str]:
     """Run argv and return ``(stdout, stderr)``, raising CommandError on non-zero exit.
 
@@ -125,7 +126,7 @@ def run_output_with_stderr(
             errors="replace",
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            start_new_session=new_session,
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
@@ -142,6 +143,7 @@ def run_output(
     *,
     timeout: float | None = None,
     env: Mapping[str, str] | None = None,
+    new_session: bool = True,
 ) -> str:
     """Run argv and return its stdout, raising CommandError on non-zero exit.
 
@@ -160,7 +162,7 @@ def run_output(
     child (`pnpm add -g` of a Puppeteer-carrying package) legitimately takes
     minutes, and killing it half-way is worse than waiting.
     """
-    return run_output_with_stderr(cmd, timeout=timeout, env=env)[0]
+    return run_output_with_stderr(cmd, timeout=timeout, env=env, new_session=new_session)[0]
 
 
 _GIT_INHERITED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_ASKPASS", "SSH_ASKPASS")
@@ -188,6 +190,16 @@ def run_captured(cmd: list[str], *, timeout: float | None = None) -> None:
     straight into the rendered frame. `timeout` bounds a short command (see `run_bounded`).
     """
     run_output(cmd, timeout=timeout)
+
+
+def run_captured_in_group(cmd: list[str], *, timeout: float | None = None) -> None:
+    """`run_captured` that keeps the child in the caller's process group.
+
+    Safe only for the headless `--run-schedule` route: it owns no terminal (stdin is still
+    `/dev/null`), and the schedule runner kills this process's whole group on a timeout, which
+    a new session would escape.
+    """
+    run_output(cmd, timeout=timeout, new_session=False)
 
 
 def run_bounded(runner: Runner, cmd: list[str], seconds: float | None = None) -> None:

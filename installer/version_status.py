@@ -414,7 +414,7 @@ def _version_file(ownership: ManagerOwnership) -> str | None | Literal[False]:
     return extract_observed_version(lines[0] if lines else "")
 
 
-def _probed_version(
+def probed_version(
     tool: Tool,
     ownership: ManagerOwnership,
     probe_output: Callable[[list[str]], str | None],
@@ -502,7 +502,7 @@ def resolve_status(
                 pinned_spec=pin,
             )
             return pinned, new_entry
-        probed = _probed_version(tool, ownership, probe_output, unresolved=unresolved)
+        probed = probed_version(tool, ownership, probe_output, unresolved=unresolved)
         return (
             VersionStatus(
                 tool_id=tool.id,
@@ -522,7 +522,7 @@ def resolve_status(
             "pnpm": outdated.pnpm,
             "uv": outdated.uv,
         }[owner]
-        probed = _probed_version(tool, ownership, probe_output, unresolved=unresolved)
+        probed = probed_version(tool, ownership, probe_output, unresolved=unresolved)
         if mapping is None:
             return (
                 VersionStatus(
@@ -578,7 +578,7 @@ def resolve_status(
             ),
             None,
         )
-    probed = _probed_version(tool, ownership, probe_output, unresolved=unresolved)
+    probed = probed_version(tool, ownership, probe_output, unresolved=unresolved)
     return (
         VersionStatus(
             tool_id=tool.id,
