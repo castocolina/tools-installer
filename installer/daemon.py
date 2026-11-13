@@ -13,6 +13,7 @@ import contextlib
 import importlib.resources
 import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import plistlib
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -30,6 +31,8 @@ DEFAULT_HOUR = 3
 DEFAULT_MINUTE = 0
 DEFAULT_DAYS = 3
 DEFAULT_CAP_BYTES = 256 * 1024
+# The only environment keys an agent or unit may carry (shared with systemd_daemon).
+ENVIRONMENT_KEYS = ("PATH", "HOME", "TMPDIR")
 
 # Live-verified this session (see 11-01-PLAN.md Task 1 <read_first>): a real
 # `launchctl bootout` against a nonexistent label on this machine exits 3, and
@@ -149,9 +152,9 @@ def render_plist(
         raise DaemonScheduleError(f"minute must be within 0-59: {minute!r}")
     if days < 1:
         raise DaemonScheduleError(f"days must be >= 1: {days!r}")
-    return {
-        "Label": label,
-        "ProgramArguments": [
+    return render_agent_plist(
+        label=label,
+        program_arguments=[
             str(uv_path),
             "run",
             "--no-project",
@@ -168,11 +171,59 @@ def render_plist(
             "--days",
             str(days),
         ],
-        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
-        "StandardOutPath": str(log_path),
-        "StandardErrorPath": str(log_path),
+        environment={"PATH": path_value, "TMPDIR": tmpdir, "HOME": home},
+        calendar={"Hour": hour, "Minute": minute},
+        stdout_path=log_path,
+        stderr_path=log_path,
+    )
+
+
+def _check_slot(entry: Mapping[str, int]) -> None:
+    hour, minute = entry.get("Hour"), entry.get("Minute")
+    if not isinstance(hour, int) or not 0 <= hour <= 23:
+        raise DaemonScheduleError(f"Hour must be within 0-23: {hour!r}")
+    if not isinstance(minute, int) or not 0 <= minute <= 59:
+        raise DaemonScheduleError(f"Minute must be within 0-59: {minute!r}")
+
+
+def render_agent_plist(
+    *,
+    label: str,
+    program_arguments: Sequence[str],
+    environment: Mapping[str, str],
+    calendar: Mapping[str, int] | Sequence[Mapping[str, int]],
+    stdout_path: Path,
+    stderr_path: Path,
+) -> dict[str, object]:
+    """The LaunchAgent plist dict for any argv on any calendar, validated first.
+
+    `calendar` is one {Hour, Minute} dict or a non-empty list of them (launchd
+    fires at every entry). `program_arguments[0]` must be absolute and the
+    environment is closed to PATH, HOME and TMPDIR. Raises DaemonScheduleError
+    before returning anything, so a bad value never reaches a written plist.
+    """
+    if not program_arguments or not Path(program_arguments[0]).is_absolute():
+        raise DaemonScheduleError(
+            f"program_arguments[0] must be an absolute path: {list(program_arguments)[:1]!r}"
+        )
+    unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
+    if unknown:
+        raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
+    entries = [calendar] if isinstance(calendar, Mapping) else list(calendar)
+    if not entries:
+        raise DaemonScheduleError("calendar must hold at least one slot")
+    for entry in entries:
+        _check_slot(entry)
+    return {
+        "Label": label,
+        "ProgramArguments": list(program_arguments),
+        "StartCalendarInterval": dict(calendar)
+        if isinstance(calendar, Mapping)
+        else [dict(entry) for entry in entries],
+        "StandardOutPath": str(stdout_path),
+        "StandardErrorPath": str(stderr_path),
         "RunAtLoad": False,
-        "EnvironmentVariables": {"PATH": path_value, "TMPDIR": tmpdir, "HOME": home},
+        "EnvironmentVariables": dict(environment),
     }
 
 
@@ -214,33 +265,55 @@ def write_plist(
         path_value=path_value,
         label=label,
     )
+    write_agent_plist(plist_path, plist_dict)
+
+
+def write_agent_plist(plist_path: Path, plist: Mapping[str, object]) -> None:
+    """Serialize an already-rendered plist dict and write it atomically at 0o644."""
     plist_path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(plist_path, plistlib.dumps(plist_dict), mode=0o644)
+    _atomic_write(plist_path, plistlib.dumps(plist), mode=0o644)
 
 
-def read_schedule(plist_path: Path) -> tuple[int, int] | None:
-    """The (hour, minute) StartCalendarInterval, or None -- total over any input.
+def _read_slot(entry: object) -> tuple[int, int] | None:
+    if not isinstance(entry, dict):
+        return None
+    values = cast("dict[object, object]", entry)
+    hour, minute = values["Hour"], values["Minute"]
+    if not isinstance(hour, int) or not isinstance(minute, int):
+        return None
+    return (hour, minute) if 0 <= hour <= 23 and 0 <= minute <= 59 else None
 
-    Returns None when the path does not exist, when plistlib.loads raises on
-    genuinely invalid plist XML bytes (plistlib.InvalidFileException is a
-    ValueError subclass, live-verified this session -- 11-REVIEWS.md cycle 2
-    finding #3), or when StartCalendarInterval is missing/malformed. Never raises.
+
+def read_calendar(plist_path: Path) -> tuple[tuple[int, int], ...] | None:
+    """The sorted (hour, minute) slots of StartCalendarInterval, or None -- total.
+
+    Reads both forms launchd accepts: one dict, or a list of dicts. Returns None
+    when the path does not exist, when plistlib.loads raises on genuinely invalid
+    plist XML bytes (plistlib.InvalidFileException is a ValueError subclass,
+    live-verified -- 11-REVIEWS.md cycle 2 finding #3), or when the interval is
+    missing, empty or holds any malformed or out-of-range slot. Never raises.
     """
     if not plist_path.exists():
         return None
     try:
         data: dict[str, object] = plistlib.loads(plist_path.read_bytes())
         interval = data["StartCalendarInterval"]
-        if not isinstance(interval, dict):
-            return None
-        interval_values = cast("dict[object, object]", interval)
-        hour = interval_values["Hour"]
-        minute = interval_values["Minute"]
-        if not isinstance(hour, int) or not isinstance(minute, int):
-            return None
-        return hour, minute
+        entries = cast("list[object]", interval) if isinstance(interval, list) else [interval]
+        found = [_read_slot(entry) for entry in entries]
     except (KeyError, TypeError, ValueError):
         return None
+    if not found or None in found:
+        return None
+    return tuple(sorted({slot for slot in found if slot is not None}))
+
+
+def read_schedule(plist_path: Path) -> tuple[int, int] | None:
+    """The one (hour, minute) StartCalendarInterval, or None -- total over any input.
+
+    None as well when the plist carries several slots (read_calendar has them).
+    """
+    calendar = read_calendar(plist_path)
+    return calendar[0] if calendar is not None and len(calendar) == 1 else None
 
 
 def bootstrap(

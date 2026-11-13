@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import setup
-from installer import daemon, systemd_daemon
+from installer import daemon, schedules, systemd_daemon
 from installer.daemon import DaemonScheduleError
 from installer.enums import DaemonState
 from installer.platform import Platform
@@ -1310,3 +1310,273 @@ def test_render_service_rejects_a_dollar_sign_in_any_rendered_value(tmp_path: Pa
         render(script_path=tmp_path / "pru$ne.sh")
     with pytest.raises(DaemonScheduleError):
         render(path_value="/usr/bin:${HOME}/bin")
+
+
+# --- Named calendar unit pairs (24.2-04) -------------------------------------
+
+_SCHEDULE_BASENAME = "tools-installer-schedule-update-claude"
+_SCHEDULE_ARGV = [
+    "/abs/uv",
+    "run",
+    "--no-project",
+    "--script",
+    "/abs/runner.py",
+    "update",
+    "claude",
+]
+_SCHEDULE_ENV = {"PATH": "/a:/b", "HOME": "/h", "TMPDIR": "/t"}
+
+
+def _schedule_service() -> str:
+    return systemd_daemon.render_exec_service(
+        argv=_SCHEDULE_ARGV,
+        environment=_SCHEDULE_ENV,
+        description="tools-installer schedule: claude update",
+    )
+
+
+def _schedule_timer() -> str:
+    return systemd_daemon.render_timer(
+        description="tools-installer schedule: claude update timer",
+        on_calendar=schedules.on_calendar(schedules.slots(6, "00:00")),
+        basename=_SCHEDULE_BASENAME,
+    )
+
+
+def test_calendar_unit_pair_for_a_named_schedule(tmp_path: Path) -> None:
+    service_text = _schedule_service()
+    assert service_text == (
+        "[Unit]\n"
+        "Description=tools-installer schedule: claude update\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        'ExecStart="/abs/uv" "run" "--no-project" "--script" "/abs/runner.py" "update" "claude"\n'
+        'Environment="PATH=/a:/b"\n'
+        'Environment="HOME=/h"\n'
+        'Environment="TMPDIR=/t"\n'
+    )
+    timer_text = _schedule_timer()
+    assert "OnCalendar=*-*-* 00,06,12,18:00:00\n" in timer_text
+    assert "Persistent=true\n" in timer_text
+    assert f"Unit={_SCHEDULE_BASENAME}.service\n" in timer_text
+    assert "WantedBy=timers.target\n" in timer_text
+    assert "OnBootSec" not in timer_text
+    assert "OnUnitActiveSec" not in timer_text
+
+    unit_dir = tmp_path / "unit"
+    service_path, timer_path = systemd_daemon.write_unit_pair(
+        unit_dir, basename=_SCHEDULE_BASENAME, service_text=service_text, timer_text=timer_text
+    )
+    assert (service_path, timer_path) == systemd_daemon.unit_paths(
+        unit_dir, basename=_SCHEDULE_BASENAME
+    )
+    assert service_path.read_text() == service_text
+    assert timer_path.read_text() == timer_text
+    assert oct(service_path.stat().st_mode)[-3:] == "644"
+    assert oct(timer_path.stat().st_mode)[-3:] == "644"
+    assert systemd_daemon.units_present(unit_dir, basename=_SCHEDULE_BASENAME) is True
+    assert systemd_daemon.units_present(unit_dir) is False
+
+    recorder = _RecordingRun()
+    systemd_daemon.bootstrap(unit_dir, basename=_SCHEDULE_BASENAME, run=recorder)
+    assert recorder.calls == [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", f"{_SCHEDULE_BASENAME}.timer"],
+        ["systemctl", "--user", "restart", f"{_SCHEDULE_BASENAME}.timer"],
+    ]
+
+
+def test_named_unit_verbs_leave_the_prune_pair_alone(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    _write_units_present(unit_dir)
+    systemd_daemon.write_unit_pair(
+        unit_dir,
+        basename=_SCHEDULE_BASENAME,
+        service_text=_schedule_service(),
+        timer_text=_schedule_timer(),
+    )
+    link = systemd_daemon.wants_link_path(unit_dir, basename=_SCHEDULE_BASENAME)
+    link.parent.mkdir(parents=True)
+    link.symlink_to(unit_dir / f"{_SCHEDULE_BASENAME}.timer")
+    assert link.name == f"{_SCHEDULE_BASENAME}.timer"
+    assert systemd_daemon.footprint_present(unit_dir, basename=_SCHEDULE_BASENAME) is True
+
+    systemd_daemon.remove_units(unit_dir, basename=_SCHEDULE_BASENAME)
+    assert systemd_daemon.footprint_present(unit_dir, basename=_SCHEDULE_BASENAME) is False
+    assert not link.is_symlink()
+    assert systemd_daemon.units_present(unit_dir) is True
+
+    recorder = _RecordingRun()
+    systemd_daemon.disable_timer(basename=_SCHEDULE_BASENAME, run=recorder)
+    assert recorder.calls == [["systemctl", "--user", "disable", f"{_SCHEDULE_BASENAME}.timer"]]
+
+
+def test_default_renders_are_unchanged() -> None:
+    assert systemd_daemon.render_timer() == (
+        "[Unit]\n"
+        "Description=tools-installer background /tmp cleanup timer\n"
+        "\n"
+        "[Timer]\n"
+        "OnBootSec=2min\n"
+        "OnUnitActiveSec=10min\n"
+        "Unit=tools-installer-prune-tmp.service\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    assert systemd_daemon.render_service(**_service_kwargs()) == (  # type: ignore[arg-type]
+        "[Unit]\n"
+        "Description=tools-installer background /tmp cleanup\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        'ExecStart="/home/tester/.local/bin/uv" "run" "--no-project" "--script" '
+        '"/home/tester/.local/bin/tools-installer-prune-daemon" "--script" '
+        '"/home/tester/tools-installer/scripts/prune-tmp-linux.sh" "--log" '
+        '"/home/tester/.local/state/tools-installer/prune-daemon.log" "--cap-bytes" '
+        '"262144" "--" "--apply" "--minutes" "10"\n'
+        'Environment="PATH=/usr/bin:/bin"\n'
+        'Environment="HOME=/home/tester"\n'
+        'Environment="TMPDIR=/tmp"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    ("argv", "environment"),
+    [
+        (["/abs/uv", 'a"b'], _SCHEDULE_ENV),
+        (["/abs/uv", "a\\b"], _SCHEDULE_ENV),
+        (["/abs/uv", "a%b"], _SCHEDULE_ENV),
+        (["/abs/uv", "a$b"], _SCHEDULE_ENV),
+        (["/abs/uv", "a\nb"], _SCHEDULE_ENV),
+        (["relative/uv", "run"], _SCHEDULE_ENV),
+        ([], _SCHEDULE_ENV),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "HOME": 'h"x'}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "HOME": "relative"}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "TMPDIR": "relative"}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "PATH": ""}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "PATH": "/a%b"}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "LD_PRELOAD": "/x.so"}),
+    ],
+)
+def test_render_exec_service_rejects_bad_input(
+    argv: list[str], environment: dict[str, str]
+) -> None:
+    with pytest.raises(DaemonScheduleError):
+        systemd_daemon.render_exec_service(argv=argv, environment=environment, description="d")
+
+
+@pytest.mark.parametrize("on_calendar", ["*-*-* 23/6:30:00", "daily", "*-*-* 00,06:00:05", ""])
+def test_render_timer_rejects_a_calendar_outside_the_hour_list_form(on_calendar: str) -> None:
+    with pytest.raises(DaemonScheduleError):
+        systemd_daemon.render_timer(on_calendar=on_calendar)
+
+
+def test_render_rejects_bad_input_before_writing(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    service_path, timer_path = systemd_daemon.unit_paths(unit_dir, basename=_SCHEDULE_BASENAME)
+    systemd_daemon.write_unit_pair(
+        unit_dir,
+        basename=_SCHEDULE_BASENAME,
+        service_text="old service\n",
+        timer_text="old timer\n",
+    )
+
+    def render_and_write() -> None:
+        # The caller flow: render both texts, then write; a raise stops before any write.
+        service_text = systemd_daemon.render_exec_service(
+            argv=["/abs/uv", 'bad"token'], environment=_SCHEDULE_ENV, description="d"
+        )
+        systemd_daemon.write_unit_pair(
+            unit_dir, basename=_SCHEDULE_BASENAME, service_text=service_text, timer_text="t\n"
+        )
+
+    with pytest.raises(DaemonScheduleError):
+        render_and_write()
+    assert service_path.read_text() == "old service\n"
+    assert timer_path.read_text() == "old timer\n"
+    assert sorted(path.name for path in unit_dir.iterdir()) == sorted(
+        [service_path.name, timer_path.name]
+    )
+
+
+def _fail(cmd: list[str]) -> None:
+    raise CommandError(cmd, 1)
+
+
+def test_teardown_verbs_take_a_basename(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    timer = f"{_SCHEDULE_BASENAME}.timer"
+
+    recorder = _RecordingRun()
+    assert systemd_daemon.bootout(
+        unit_dir, basename=_SCHEDULE_BASENAME, run=recorder, read_output=_ScriptedReadOutput()
+    )
+    assert recorder.calls == [["systemctl", "--user", "disable", "--now", timer]]
+
+    probe = _ScriptedReadOutput("inactive")
+    assert (
+        systemd_daemon.bootout(unit_dir, basename=_SCHEDULE_BASENAME, run=_fail, read_output=probe)
+        is True
+    )
+    assert probe.calls == [["systemctl", "--user", "is-active", timer]]
+
+    probe = _ScriptedReadOutput("active")
+    assert systemd_daemon.probe_timer_state(basename=_SCHEDULE_BASENAME, read_output=probe) is (
+        DaemonState.ACTIVE
+    )
+    assert probe.calls == [["systemctl", "--user", "is-active", timer]]
+
+    _write_units_present(unit_dir)
+    systemd_daemon.write_unit_pair(
+        unit_dir,
+        basename=_SCHEDULE_BASENAME,
+        service_text=_schedule_service(),
+        timer_text=_schedule_timer(),
+    )
+    state_probe = _ScriptedReadOutput("active")
+    assert systemd_daemon.timer_state(
+        unit_dir, basename=_SCHEDULE_BASENAME, read_output=state_probe
+    ) is (DaemonState.ACTIVE)
+    assert state_probe.calls == [["systemctl", "--user", "is-active", timer]]
+    systemd_daemon.remove_units(unit_dir, basename=_SCHEDULE_BASENAME)
+    assert systemd_daemon.units_present(unit_dir) is True
+    assert systemd_daemon.units_present(unit_dir, basename=_SCHEDULE_BASENAME) is False
+    other = _ScriptedReadOutput("active")
+    assert systemd_daemon.timer_state(unit_dir, basename=_SCHEDULE_BASENAME, read_output=other) is (
+        DaemonState.INACTIVE
+    )
+    assert other.calls == []
+
+
+def test_clean_timer_state() -> None:
+    recorder = _RecordingRun()
+    systemd_daemon.clean_timer_state(basename=_SCHEDULE_BASENAME, run=recorder)
+    assert recorder.calls == [
+        ["systemctl", "--user", "clean", "--what=state", f"{_SCHEDULE_BASENAME}.timer"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ("running\n", True),
+        ("degraded\n", True),
+        ("starting\n", True),
+        ("initializing\n", True),
+        ("maintenance\n", True),
+        ("", False),
+        ("offline\n", False),
+        ("stopping\n", False),
+        ("unknown\n", False),
+    ],
+)
+def test_user_manager_reachable(stdout: str, expected: bool) -> None:
+    read_output = _ScriptedReadOutput(stdout)
+    assert systemd_daemon.user_manager_reachable(read_output=read_output) is expected
+    assert read_output.calls == [["systemctl", "--user", "is-system-running"]]
+
+
+def test_user_manager_reachable_reads_a_timeout_as_unreachable() -> None:
+    assert systemd_daemon.user_manager_reachable(read_output=_RaisingReadOutput()) is False
