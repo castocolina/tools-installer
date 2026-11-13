@@ -796,6 +796,20 @@ def test_two_writers_share_the_log_lock(tmp_path: Path) -> None:
     assert log.read_text().endswith("\n")
 
 
+@pytest.mark.parametrize("planted", ["run.log.lock", "run.log"])
+def test_a_symlink_at_the_log_or_its_lock_is_never_written_through(
+    tmp_path: Path, planted: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    victim = tmp_path / "victim"
+    victim.write_text("keep\n")
+    (state / planted).symlink_to(victim)
+    vars(schedule_runner)["_append"](state / "run.log", "2026-11-13T10:00:00+00:00 x ok\n", _CAP)
+    assert victim.read_text() == "keep\n"
+    assert "cannot write" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("error", [ProcessLookupError, PermissionError])
 def test_kill_group_tolerates_a_group_that_is_gone(
     monkeypatch: pytest.MonkeyPatch, error: type[OSError]

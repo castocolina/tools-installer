@@ -149,23 +149,41 @@ def _fit(existing: bytes, new: bytes, cap: int) -> bytes:
     return b"".join(reversed(kept)) + new
 
 
+_NOFOLLOW = os.O_NOFOLLOW | os.O_CLOEXEC  # never write through a planted symlink
+
+
 def _append(log_path: Path, line: str, cap: int) -> None:
-    """Append one line under the log lock; trim through a temp file when it would pass `cap`."""
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(f"{log_path}.lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    """Append one line under the log lock; trim through a temp file when it would pass `cap`.
+
+    Every open refuses a symlink; a failure goes to stderr, never through the link and never
+    as a traceback that would hide the job's own result.
+    """
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)  # blocking: held only for one short read-and-write
+        _append_locked(log_path, line, cap)
+    except OSError as error:
+        print(f"schedule_runner: cannot write {log_path}: {error}", file=sys.stderr)
+
+
+def _append_locked(log_path: Path, line: str, cap: int) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = os.open(f"{log_path}.lock", os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # blocking: held only for one short read-and-write
         new = line.encode("utf-8")
-        existing = log_path.read_bytes() if log_path.exists() else b""
-        if len(existing) + len(new) <= cap:
-            with log_path.open("ab") as handle:
+        fd = os.open(log_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | _NOFOLLOW, 0o600)
+        with os.fdopen(fd, "r+b") as handle:
+            existing = handle.read()
+            if len(existing) + len(new) <= cap:
                 handle.write(new)
-            return
+                return
         temp = log_path.with_name(f"{log_path.name}.{os.getpid()}.tmp")
-        temp.write_bytes(_fit(existing, new, cap))
+        temp.unlink(missing_ok=True)  # O_EXCL below: a planted or stale temp is never reused
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            out.write(_fit(existing, new, cap))
         os.replace(temp, log_path)
     finally:
-        os.close(fd)  # closing the descriptor releases the lock
+        os.close(lock)  # closing the descriptor releases the lock
 
 
 def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
