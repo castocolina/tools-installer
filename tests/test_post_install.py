@@ -1,4 +1,6 @@
 import os
+import re
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -899,3 +901,32 @@ def test_omz_install_tuning_on_reconfigure_skips_a_recorded_record() -> None:
     assert zshrc.read_text() == _OMZ_USER_ZSHRC
     assert apply_install_tuning(tool, _mutable(), skip_recorded=False).lines != ()
     assert "docker" in zshrc.read_text()
+
+
+def test_apply_terminal_tuning_writes_the_keys_once_and_reconfigure_respects_a_deletion() -> None:
+    tool = next(t for t in load_tools(REGISTRY) if t.id == "alacritty")
+    config = Path.home() / ".config" / "alacritty" / "alacritty.toml"
+
+    assert run_post_install(tool, _mutable()).warning is None
+    assert len(tomllib.loads(config.read_text())["keyboard"]["bindings"]) == 3
+
+    config.write_text(re.sub(r"# >>>.*?<<<[^\n]*\n", "", config.read_text(), flags=re.DOTALL))
+    assert apply_install_tuning(tool, _mutable(), skip_recorded=True).lines == ()
+    assert "keyboard" not in tomllib.loads(config.read_text())  # recorded, so the user's choice
+
+    apply_install_tuning(tool, _mutable(), skip_recorded=False)  # a reinstall writes it again
+    assert "keyboard" in tomllib.loads(config.read_text())
+
+
+def test_apply_terminal_tuning_names_the_refusal(tmp_path: Path) -> None:
+    config = Path.home() / ".config" / "alacritty" / "alacritty.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("keyboard.bindings = []\n")
+    tool = next(t for t in load_tools(REGISTRY) if t.id == "alacritty")
+
+    output = run_post_install(tool, _mutable())
+
+    assert output.lines == (
+        "Alacritty keys not changed: you already define keyboard.bindings inline",
+    )
+    assert config.read_text() == "keyboard.bindings = []\n"

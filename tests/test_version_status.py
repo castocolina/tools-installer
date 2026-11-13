@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -22,6 +23,7 @@ from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus, UninstallState
 from installer.guards import REDIRECT_SENTINEL
+from installer.locations import display_path
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
     ConfigStep,
@@ -43,6 +45,7 @@ from installer.ownership import (
     resolve_ownership,
 )
 from installer.platform import Platform
+from installer.post_install import apply_install_tuning, run_post_install
 from installer.postinstall import HARNESS_PRESENCE
 from installer.receipts import CHANGED_SINCE_INSTALL, Receipt, ReceiptMethod
 from installer.resolve import resolve_methods, unavailable_reason
@@ -55,7 +58,7 @@ from installer.session import (
     build_plan,
     execute_plan,
 )
-from installer.terminal_shell import TerminalShellResult
+from installer.terminal_shell import TerminalShellResult, sync_terminal_shells
 from installer.tweaks import (
     TweakBundle,
     shell_init_bundle,
@@ -6423,6 +6426,7 @@ def test_newer_alacritty_tag_reads_outdated(tmp_path: Path) -> None:
         resolve_tag=lambda _repo: "v0.18.0",
         platform=platform,
     )
+    run_post_install(alacritty, platform)  # an installed Alacritty has had its tuning applied
     service.refresh([alacritty])
     state = service.state_of("alacritty")
     assert state is not None
@@ -6432,3 +6436,120 @@ def test_newer_alacritty_tag_reads_outdated(tmp_path: Path) -> None:
     assert found is not None
     assert found[0].kind == "cargo_distrobox"
     assert found[1] == "alacritty/alacritty"
+
+
+# -- 24-06: Alacritty's rows (24 D-08, D-23) --
+
+
+def _alacritty_shipped() -> Tool:
+    return next(t for t in load_tools(REGISTRY) if t.id == "alacritty")
+
+
+def _alacritty_lookup(name: str) -> str | None:
+    return {"zsh": "/usr/bin/zsh", "alacritty": "/usr/bin/alacritty"}.get(name)
+
+
+def _real_terminal_drift(platform: Platform) -> TerminalShellResult:
+    return sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=platform,
+        lookup=_alacritty_lookup,
+        write=False,
+    )
+
+
+def _alacritty_file() -> Path:
+    return Path.home() / ".config" / "alacritty" / "alacritty.toml"
+
+
+def _strip_region(text: str, name: str) -> str:
+    return re.sub(
+        rf"# >>> tools-installer terminal-shell {name} >>>\n.*?"
+        rf"# <<< tools-installer terminal-shell {name} <<<\n",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+
+
+def test_alacritty_shell_region_drift_reads_terminal_sync_step(tmp_path: Path) -> None:
+    sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=_LINUX,
+        lookup=_alacritty_lookup,
+    )
+    config = _alacritty_file()
+    config.write_text(_strip_region(config.read_text(), "alacritty"))
+
+    service = _drift_service(
+        tmp_path, _real_terminal_drift, present=frozenset({"alacritty", "zsh"})
+    )
+    state = _settled_states(service, [_terminal_tool("alacritty")])["alacritty"]
+
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == "Alacritty does not start zsh"
+    assert state.unconfigured == (
+        ConfigStep(
+            "point Alacritty at zsh",
+            "terminal_sync",
+            report=f"Alacritty now starts zsh\n  {display_path(config)}",
+        ),
+    )
+
+
+def test_alacritty_keys_region_removed_by_hand_is_the_users_choice(tmp_path: Path) -> None:
+    tool = _alacritty_shipped()
+    run_post_install(tool, _LINUX)
+    config = _alacritty_file()
+    config.write_text(_strip_region(config.read_text(), "alacritty-keys"))
+
+    state = _tuning_state(tmp_path, tool)
+
+    assert state.health is Health.OK
+    assert state.unconfigured == ()
+
+
+def test_untuned_alacritty_reads_apply_install_tuning(tmp_path: Path) -> None:
+    tool = _alacritty_shipped()
+    state = _tuning_state(tmp_path, tool)
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    output = apply_install_tuning(tool, _LINUX, skip_recorded=True)
+
+    assert output.refused is None
+    assert "keyboard" in tomllib.loads(_alacritty_file().read_text())
+    again = _tuning_state(tmp_path, tool)
+    assert again.health is Health.OK and again.unconfigured == ()
+
+
+def test_alacritty_that_cannot_take_the_keys_shows_the_refusal_without_a_step(
+    tmp_path: Path,
+) -> None:
+    config = _alacritty_file()
+    config.parent.mkdir(parents=True)
+    config.write_text("keyboard.bindings = []\n")
+    state = _tuning_state(tmp_path, _alacritty_shipped())
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == "you already define keyboard.bindings inline"
+    assert state.unconfigured == ()
+
+
+def test_partial_warning_is_a_reason_not_a_note(tmp_path: Path) -> None:
+    partial = "alacritty: partial: you already define env"
+    tools = [_terminal_tool("alacritty"), _terminal_tool("kitty")]
+    present = frozenset({"alacritty", "kitty"})
+    state = _settled_states(
+        _drift_service(tmp_path, _warned(partial, "kitty: unsupported shape"), present=present),
+        tools,
+    )
+    alacritty, kitty = state["alacritty"], state["kitty"]
+    assert alacritty.health is Health.MISCONFIGURED
+    assert alacritty.reasons[0] == partial
+    assert alacritty.unconfigured == ()
+    assert kitty.health is Health.OK
+    assert "terminal shell not checked: kitty: unsupported shape" in kitty.reasons
+    assert not any(partial in reason for reason in kitty.reasons)
