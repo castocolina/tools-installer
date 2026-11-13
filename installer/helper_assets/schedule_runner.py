@@ -17,8 +17,9 @@ Argv: `<job> [job args] --log PATH --lock PATH --cap-bytes N` with the jobs
 
 Every run takes the cross-process run lock without blocking (a held lock is logged as
 `skipped: busy` and nothing runs), appends `<iso> <id> start`, does the work, and appends
-exactly one `<iso> <id> ok: ...|skipped: ...|failed: ...` line. Exit 0 for ok and skipped,
-1 for failed, 2 for a usage error.
+exactly one `<iso> <id> ok: ...|skipped: ...|failed: ...` line. SIGTERM and SIGINT kill the
+active child's process group and end the run as `failed: interrupted`. Exit 0 for ok and
+skipped, 1 for failed, 2 for a usage error.
 
 Standard library only, and it never imports `installer`: the unit starts it from a bare
 interpreter, and a moved or deleted checkout must still leave a logged failure instead of a
@@ -36,8 +37,10 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Generator
 from pathlib import Path
+from types import FrameType
 from typing import NamedTuple
 
 _TMP_TIMEOUT = 600
@@ -96,6 +99,13 @@ class _Child(NamedTuple):
 
 class _UsageError(Exception):
     pass
+
+
+class _Interrupted(BaseException):
+    """A SIGTERM or SIGINT arrived; a BaseException so no job's `except Exception` hides it."""
+
+
+_active: list[subprocess.Popen[bytes]] = []  # the children a signal handler must stop
 
 
 def _now() -> str:
@@ -160,6 +170,20 @@ def _kill_group(pid: int, sig: signal.Signals) -> None:
         os.killpg(pid, sig)
 
 
+def _stop(proc: subprocess.Popen[bytes]) -> None:
+    """SIGTERM the child's group, give it a grace, then SIGKILL what is left."""
+    _kill_group(proc.pid, signal.SIGTERM)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=_KILL_GRACE)
+    _kill_group(proc.pid, signal.SIGKILL)
+
+
+def _on_signal(signum: int, _frame: FrameType | None) -> None:
+    for proc in list(_active):
+        _stop(proc)
+    raise _Interrupted(signum)
+
+
 def _run_child(
     argv: list[str],
     *,
@@ -179,13 +203,11 @@ def _run_child(
         )
     except OSError as error:
         return _Child(None, b"", b"", f"could not start: {_sanitize(str(error))}")
+    _active.append(proc)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        _kill_group(proc.pid, signal.SIGTERM)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=_KILL_GRACE)
-        _kill_group(proc.pid, signal.SIGKILL)
+        _stop(proc)
         out = err = b""
         # A grandchild that escaped the group may still hold a pipe: bound the collect.
         try:
@@ -195,6 +217,8 @@ def _run_child(
                 if pipe is not None:
                     pipe.close()
         return _Child(None, out, err, "timed out")
+    finally:
+        _active.remove(proc)
     return _Child(proc.returncode, out, err, None)
 
 
@@ -390,6 +414,19 @@ def main(argv: list[str] | None = None) -> int:
     def emit(text: str) -> None:
         _append(log_path, f"{_now()} {run_id} {text}\n", cap)
 
+    if threading.current_thread() is not threading.main_thread():
+        return _locked_run(job, run_id, options, forwarded, emit)
+    previous = {sig: signal.signal(sig, _on_signal) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        return _locked_run(job, run_id, options, forwarded, emit)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+
+
+def _locked_run(
+    job: str, run_id: str, options: dict[str, str], forwarded: list[str], emit: Emit
+) -> int:
     with _run_lock(Path(options["--lock"]), run_id) as held:
         if not held:
             emit("skipped: busy")
@@ -402,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         try:
             result = runners[job]()
+        except _Interrupted:
+            result = "failed: interrupted"
         except Exception as error:  # the log must carry a result line whatever happened
             result = f"failed: {type(error).__name__}: {_sanitize(str(error))}"
         emit(result)

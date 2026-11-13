@@ -804,3 +804,34 @@ def test_kill_group_tolerates_a_group_that_is_gone(
 
     monkeypatch.setattr(schedule_runner.os, "killpg", gone)
     vars(schedule_runner)["_kill_group"](4242, signal.SIGKILL)
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_kills_the_child_group_logs_interrupted_and_frees_the_lock(
+    tmp_path: Path, sig: signal.Signals
+) -> None:
+    pidfile = tmp_path / "uv.pid"
+    grandchild = tmp_path / "grandchild.pid"
+    uv = _hanging_uv(
+        tmp_path, f'sleep 60 &\necho $! > "{grandchild}"\necho $$ > "{pidfile}"\nsleep 60'
+    )
+    before = signal.getsignal(sig)
+    # Fire once the child is up; the handler runs in this (main) thread.
+    killer = threading.Timer(
+        1.0, lambda: pidfile.exists() and grandchild.exists() and os.kill(os.getpid(), sig)
+    )
+    killer.start()
+    try:
+        code, lines = _update(tmp_path, uv)
+    finally:
+        killer.cancel()
+    pids = [int(pidfile.read_text()), int(grandchild.read_text())]
+    try:
+        assert code == 1
+        assert _texts(lines, "update-claude")[-1] == "failed: interrupted"
+        assert all(_gone(pid) for pid in pids)
+    finally:
+        for pid in pids:
+            _reap(pid)
+    _assert_lock_released(tmp_path)
+    assert signal.getsignal(sig) == before
