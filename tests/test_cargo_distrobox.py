@@ -476,3 +476,14 @@ def test_a_run_dir_that_cannot_be_removed_is_reported(monkeypatch: pytest.Monkey
     notes = run_install(FakeBox())
 
     assert any("could not remove" in note and "tools-installer-cargo-" in note for note in notes)
+
+
+def test_a_partial_uninstall_still_lists_the_surviving_recorded_artifacts() -> None:
+    assert install(FakeBox()).status is InstallStatus.INSTALLED
+    binary, *others = host_paths()
+    binary.unlink()  # a partial uninstall: the binary is gone, the rest is still there
+
+    plan = removal_plan(alacritty_tool(), Path.home() / ".local/bin")
+
+    assert plan.removable == ()
+    assert sorted(plan.yourself) == sorted(others)

@@ -281,7 +281,10 @@ def plan_removal(tools: list[Tool], default_bin_dir: Path, *, verify: bool = Fal
         if receipts.receipt_exists(tool.id):
             claimed = receipts.recorded_elsewhere(tool.id) if tool.retired else frozenset[Path]()
             proven = _receipt_proof(tool, default_bin_dir, verify=verify, claimed=claimed)
-            if tool.retired:
+            recorded = receipts.read(tool.id)
+            # A cargo_distrobox receipt also records files that `plan_uninstall` cannot attribute
+            # (it names only the binary), so those that survive a partial uninstall are listed.
+            if tool.retired or (recorded is not None and recorded.method.kind == "cargo_distrobox"):
                 leftovers.extend(_retired_leftovers(tool, {a.path for a in proven} | claimed))
             if proven:
                 by_tool[tool.id] = tuple(a.path for a in proven)
