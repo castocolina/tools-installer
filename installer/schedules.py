@@ -1154,7 +1154,24 @@ def _rerecord_shared(ctx: ScheduleContext, assets: tuple[ReceiptArtifact, ...]) 
 
 
 def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
-    """Write the shared assets, then the unit, register it, and record every file (D-02)."""
+    """Write the shared assets, then the unit, register it, and record every file (D-02).
+
+    Every user verb takes the reconcile lock, so a reconcile pass in another process cannot
+    interleave with it (F3); the lock order is run lock, reconcile lock, state lock.
+    """
+    _require_available(ctx, schedule_by_id(schedule_id))  # a refusal writes nothing, lock file too
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _turn_on(ctx, schedule_id)
+
+
+def _turn_on(
+    ctx: ScheduleContext, schedule_id: str, *, seen: ScheduleRecord | None = None
+) -> ApplyReport:
+    """The turn-on with the reconcile lock already held.
+
+    `seen` is the row the reconcile pass decided from: when the locked change finds another
+    decision, the units this call wrote are undone and nothing is recorded (F3).
+    """
     schedule = schedule_by_id(schedule_id)
     _require_available(ctx, schedule)  # before anything is written
     uv = _resolve_uv(ctx)
@@ -1183,8 +1200,13 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     models = _read_models(ctx) if schedule_id == _CURSOR_ID else None
     shim_report: cursor_shim.ShimReport | None = None
 
+    moved = False
+
     def change(current: ScheduleState) -> ScheduleState:
-        nonlocal shim_report
+        nonlocal shim_report, moved
+        if seen is not None and record_for(current, schedule_id).decided != seen.decided:
+            moved = True
+            return current
         status = current.cursor_shim
         if schedule_id == _CURSOR_ID:
             saved, shim_report, warning = _refresh_cursor_shim(
@@ -1204,6 +1226,9 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
         )
 
     saved_state = update_state(ctx.state_path, change)
+    if moved:  # another decision landed first: it wins, and what this call wrote goes
+        _remove_timer(ctx, schedule_id, keep_decision=True, restore_cursor_link=False)
+        return ApplyReport(False)
     grid = _grid(ctx, schedule, record_for(saved_state, schedule_id))
     upcoming = next_run(grid, datetime.now()) if grid else None
     return ApplyReport(True, upcoming, shim_report, tuple(warnings))
@@ -1339,6 +1364,11 @@ def _kept_message(kept: tuple[ReceiptArtifact, ...]) -> str:
 
 def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     """Disable first, then delete exactly the recorded files, then record the decision off."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _turn_off(ctx, schedule_id)
+
+
+def _turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     removal = _remove_timer(ctx, schedule_id, keep_decision=False)
     warnings = list(removal.warnings)
     if schedule_by_id(schedule_id).kind is JobKind.TMP_CLEANUP:
@@ -1370,6 +1400,11 @@ def _retimed_files(
 
 def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
     """Validate, then change the grid; an off row only saves it, an on row rewrites its timer."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _retime(ctx, schedule_id, interval, start)
+
+
+def _retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
     schedule = schedule_by_id(schedule_id)
     macos = ctx.platform_os == "macos"
     if schedule.kind is JobKind.TMP_CLEANUP:
@@ -1403,6 +1438,11 @@ def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) ->
 
 def set_cursor_model(ctx: ScheduleContext, model: str) -> ApplyReport:
     """Save the configured model; refresh the shim only when the row is on (SPEC R7, D-20)."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _set_cursor_model(ctx, model)
+
+
+def _set_cursor_model(ctx: ScheduleContext, model: str) -> ApplyReport:
     validate_model_id(model)
     advisory = record_for(load_state(ctx.state_path).state, _CURSOR_ID)
     # An off row spawns no `--list-models` (R3-10); the list is read before the lock (R2-05).
@@ -1493,9 +1533,11 @@ def _turn_on_default(
     if _decision_moved(ctx, schedule, seen):
         return
     try:
-        applied = turn_on(ctx, schedule.id)
+        applied = _turn_on(ctx, schedule.id, seen=seen)
     except (OSError, CommandError) as exc:
         warnings.append(f"Could not turn on {schedule.label}: {_error_line(exc)}.")
+        return
+    if not applied.changed:  # another decision landed first and was kept
         return
     turned.append(schedule.id)
     warnings.extend(applied.warnings)
@@ -1574,7 +1616,7 @@ def _refresh_in_place(ctx: ScheduleContext, schedule: Schedule, warnings: list[s
     if not _is_stale(ctx, load_state(ctx.state_path).state, schedule):
         return
     try:
-        applied = turn_on(ctx, schedule.id)
+        applied = _turn_on(ctx, schedule.id)
     except (OSError, CommandError) as exc:
         warnings.append(f"Could not refresh {schedule.label}: {_error_line(exc)}.")
         return

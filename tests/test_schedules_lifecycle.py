@@ -8,6 +8,7 @@ import os
 import plistlib
 import shutil
 import threading
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1070,3 +1071,68 @@ def test_the_reconcile_refuses_and_warns_for_a_user_edited_shared_copy(
     assert edited.read_bytes() == mine  # never overwritten
     assert any("prune-tmp-linux.sh" in warning for warning in report.warnings)
     assert (ctx.data_dir / "runner.py").read_bytes() == new["runner.py"]  # the others refresh
+
+
+def test_a_user_off_that_lands_mid_reconcile_stays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=("cursor-agent",))
+    ctx = lab.ctx
+    basename = "tools-installer-schedule-update-cursor-agent"
+    schedule_id = "update-cursor-agent"
+    entered, release = threading.Event(), threading.Event()
+
+    def hold_after_the_units_are_written() -> None:
+        # The model list is read after the units are registered and before the decision is saved.
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(10)
+
+    lab.env.models.on_call = hold_after_the_units_are_written
+    errors: list[BaseException] = []
+
+    def run(action: Callable[[], object]) -> threading.Thread:
+        def guarded() -> None:
+            try:
+                action()
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=guarded)
+        thread.start()
+        return thread
+
+    reconcile = run(lambda: ensure_schedule_defaults(ctx))
+    assert entered.wait(10)  # the pass is mid-flight: claude's units written, not yet recorded
+    off = run(lambda: turn_off(ctx, schedule_id))
+    time.sleep(0.3)  # without the reconcile lock the off would complete (and be undone) here
+    release.set()
+    reconcile.join(10)
+    off.join(10)
+
+    assert errors == []
+    state = load_state(ctx.state_path).state
+    assert state.records[schedule_id].decided is False
+    assert unit_files(ctx, basename) == []
+    cursor = schedules.schedule_by_id(schedule_id)
+    assert schedules.row_state(ctx, state, cursor, manager=True, present=ctx.present).word == "off"
+
+
+def test_a_reconcile_turn_on_whose_decision_moved_undoes_what_it_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on_for_pass = vars(schedules)["_turn_on"]
+    seen_before_the_off = ScheduleRecord(None, 6, "00:00", ())
+    off = ScheduleRecord(False, 6, "00:00", ())
+    update_state(
+        ctx.state_path,
+        lambda state: replace(state, records={**state.records, "update-claude": off}),
+    )
+
+    report = turn_on_for_pass(ctx, "update-claude", seen=seen_before_the_off)
+
+    assert report.changed is False
+    assert unit_files(ctx, CLAUDE_BASENAME) == []  # what the call wrote is undone
+    assert load_state(ctx.state_path).state.records["update-claude"].decided is False

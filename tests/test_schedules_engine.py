@@ -192,12 +192,16 @@ def tree(root: Path) -> dict[str, bytes | str]:
     return out
 
 
+LOCK_FILES = frozenset(
+    {"schedules.json", "schedules.json.lock", "schedules.reconcile.lock", "run.lock"}
+)  # lock files stay: deleting one another process holds would let a third lock a new inode
+
+
 def files_left(root: Path) -> list[str]:
     return [
         str(path.relative_to(root))
         for path in sorted(root.rglob("*"))
-        if (path.is_file() or path.is_symlink())
-        and path.name not in {"schedules.json", "schedules.json.lock", "run.lock"}
+        if (path.is_file() or path.is_symlink()) and path.name not in LOCK_FILES
     ]
 
 
