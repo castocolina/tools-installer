@@ -20,7 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from installer import daemon, receipts, runlock, systemd_daemon, uninstall
+from installer import cursor_shim, daemon, receipts, runlock, systemd_daemon, uninstall
 from installer.atomic import atomic_write_bytes, atomic_write_text, read_capped
 from installer.locations import ensure_dir
 from installer.ownership import NATIVE_OWNERS, OS_PACKAGE_OWNER
@@ -630,22 +630,36 @@ _UNREACHABLE_MANAGER_WARNING: Final = (
 class ApplyReport:
     changed: bool
     next_run: datetime | None = None
-    shim: object | None = None
+    shim: cursor_shim.ShimReport | None = None
     warnings: tuple[str, ...] = ()
+
+
+_TMP_ID: Final = "tmp-cleanup"
+_CURSOR_ID: Final = "update-cursor-agent"
+TMP_FIXED_CADENCE_MESSAGE: Final = (
+    "Cannot edit tmp cleanup: on Linux it runs every 10 min, a fixed cadence."
+)
+_KEPT_FOREIGN_WARNING: Final = (
+    "your own ~/.local/bin/cursor-agent is kept: it has no installer sentinel."
+)
 
 
 def basename_for(schedule_id: str) -> str:
     """The systemd unit basename; tmp cleanup keeps its existing units (D-03, D-08)."""
-    if schedule_id == "tmp-cleanup":
+    if schedule_id == _TMP_ID:
         return systemd_daemon.UNIT_BASENAME
     return f"tools-installer-schedule-{schedule_id}"
 
 
 def label_for(schedule_id: str) -> str:
     """The launchd label; tmp cleanup keeps its existing label (D-03, D-08)."""
-    if schedule_id == "tmp-cleanup":
+    if schedule_id == _TMP_ID:
         return daemon.LABEL
     return f"com.tools-installer.schedule.{schedule_id}"
+
+
+def _plist_path(ctx: ScheduleContext, schedule_id: str) -> Path:
+    return ctx.launch_agents_dir / f"{label_for(schedule_id)}.plist"
 
 
 def manager_reachable(ctx: ScheduleContext) -> bool:
@@ -753,16 +767,28 @@ def _on_schedules(ctx: ScheduleContext, state: ScheduleState, *, exclude: str) -
     """Whether any other schedule has files on disk; tmp cleanup counts by its units' names (F2)."""
     if any(key != exclude and record.files for key, record in state.records.items()):
         return True
-    return exclude != "tmp-cleanup" and systemd_daemon.units_present(ctx.unit_dir)
+    return exclude != _TMP_ID and _tmp_unit_present(ctx)
+
+
+def _tmp_unit_present(ctx: ScheduleContext) -> bool:
+    if ctx.platform_os == "macos":
+        return _plist_path(ctx, _TMP_ID).exists()
+    return systemd_daemon.units_present(ctx.unit_dir)
 
 
 def _grid(
     ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord
 ) -> tuple[Slot, ...] | None:
     """The run times; None for Linux tmp cleanup, whose cadence is a fixed monotonic timer."""
-    if schedule.kind is JobKind.TMP_CLEANUP:
-        return slots(24, record.start) if ctx.platform_os == "macos" else None
-    return slots(record.interval, record.start)
+    if schedule.kind is JobKind.TMP_CLEANUP and ctx.platform_os != "macos":
+        return None
+    return _calendar_grid(schedule, record)
+
+
+def _calendar_grid(schedule: Schedule, record: ScheduleRecord) -> tuple[Slot, ...]:
+    """tmp cleanup is a daily time on macOS; every other schedule runs on its own interval."""
+    interval = 24 if schedule.kind is JobKind.TMP_CLEANUP else record.interval
+    return slots(interval, record.start)
 
 
 def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]:
@@ -828,9 +854,15 @@ def _refuse_symlinks(paths: tuple[Path, ...], record: ScheduleRecord) -> None:
 
 
 def _apply_linux(
-    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord, uv: Path
+    ctx: ScheduleContext,
+    schedule: Schedule,
+    record: ScheduleRecord,
+    uv: Path,
+    *,
+    timer_only: bool,
+    clean_stamp: bool,
 ) -> None:
-    """Write the unit pair, then register; roll back on failure (linux_daemon_policy._apply)."""
+    """Write the unit files, then register; roll back on failure (linux_daemon_policy._apply)."""
     basename = basename_for(schedule.id)
     service_text = systemd_daemon.render_exec_service(
         argv=runner_argv(ctx, schedule, uv),
@@ -847,16 +879,23 @@ def _apply_linux(
             basename=basename,
         )
     )
-    unit_paths = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
-    _refuse_symlinks(unit_paths, record)
+    service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
+    written = (timer_path,) if timer_only else (service_path, timer_path)
+    _refuse_symlinks(written, record)
     link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
     prior_registration = systemd_daemon.units_present(ctx.unit_dir, basename=basename)
-    snapshot = _snapshot(unit_paths)
+    snapshot = _snapshot(written)
     link_existed_before = link.is_symlink()
     try:
-        systemd_daemon.write_unit_pair(
-            ctx.unit_dir, basename=basename, service_text=service_text, timer_text=timer_text
-        )
+        if timer_only:
+            atomic_write_bytes(timer_path, timer_text.encode("utf-8"), mode=0o644)
+        else:
+            systemd_daemon.write_unit_pair(
+                ctx.unit_dir, basename=basename, service_text=service_text, timer_text=timer_text
+            )
+        if clean_stamp:  # a missing stamp is not a failure
+            with contextlib.suppress(CommandError):
+                systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
         systemd_daemon.bootstrap(ctx.unit_dir, basename=basename, run=ctx.run)
     except (CommandError, OSError):
         if prior_registration:
@@ -881,13 +920,83 @@ def _apply_linux(
         raise
 
 
+def _apply_macos(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord, uv: Path
+) -> None:
+    """Write the plist, then register; roll back on failure (daemon_policy._apply)."""
+    label = label_for(schedule.id)
+    plist_path = _plist_path(ctx, schedule.id)
+    plist = daemon.render_agent_plist(
+        label=label,
+        program_arguments=runner_argv(ctx, schedule, uv),
+        environment=_unit_environment(ctx),
+        calendar=calendar_dicts(_calendar_grid(schedule, record)),
+        stdout_path=ctx.launchd_log_path,
+        stderr_path=ctx.launchd_log_path,
+    )
+    _refuse_symlinks((plist_path,), record)
+    # launchd needs StandardOutPath to resolve at registration (R1-06). A rollback leaves the
+    # empty file; the last sweep deletes it.
+    daemon.ensure_log_path(ctx.launchd_log_path)
+    snapshot = _snapshot((plist_path,))
+    try:
+        daemon.write_agent_plist(plist_path, plist)
+        daemon.bootstrap(ctx.uid, plist_path, label=label, run=ctx.run)
+    except (CommandError, OSError):
+        with contextlib.suppress(OSError):
+            _restore(snapshot)
+        if snapshot[plist_path] is not None:
+            with contextlib.suppress(CommandError):
+                daemon.bootstrap(ctx.uid, plist_path, label=label, run=ctx.run)
+        raise
+
+
+def _register(
+    ctx: ScheduleContext,
+    schedule: Schedule,
+    record: ScheduleRecord,
+    uv: Path,
+    *,
+    timer_only: bool = False,
+    clean_stamp: bool = False,
+) -> None:
+    if ctx.platform_os == "macos":
+        _apply_macos(ctx, schedule, record, uv)
+    else:
+        _apply_linux(ctx, schedule, record, uv, timer_only=timer_only, clean_stamp=clean_stamp)
+
+
 def _fingerprint_unit(ctx: ScheduleContext, schedule: Schedule) -> tuple[ReceiptArtifact, ...]:
-    """What is on disk now: the unit pair and its wants link."""
+    """What is on disk now: the unit pair and its wants link, or the plist."""
+    if ctx.platform_os == "macos":
+        return (_fingerprint(_plist_path(ctx, schedule.id), "file"),)
     basename = basename_for(schedule.id)
     paths = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
     link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
     files = tuple(_fingerprint(path, "file") for path in paths)
     return (*files, _fingerprint(link, "link")) if link.is_symlink() else files
+
+
+def _error_line(exc: BaseException) -> str:
+    return _first_line(str(exc), "unknown error")
+
+
+def _refresh_cursor_shim(
+    ctx: ScheduleContext, model: str, models: tuple[str, ...] | None
+) -> tuple[str | None, cursor_shim.ShimReport | None, str | None]:
+    """(status to save, report, warning); an unwritable shim leaves the status and warns."""
+    link, agent = cursor_shim.shim_paths(ctx.home)
+    try:
+        report = cursor_shim.refresh_shim(link=link, agent=agent, model=model, models=models)
+    except OSError as exc:
+        return None, None, f"Could not write the cursor-agent shim: {_error_line(exc)}."
+    if report.write == "kept-foreign":
+        return "kept-foreign", report, _KEPT_FOREIGN_WARNING
+    return report.check, report, None
+
+
+def _read_models(ctx: ScheduleContext) -> tuple[str, ...] | None:
+    return ctx.read_models(cursor_shim.shim_paths(ctx.home)[1])
 
 
 def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
@@ -899,7 +1008,7 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     record = record_for(state, schedule_id)
     assets, created = _ensure_shared_assets(ctx, state)
     try:
-        _apply_linux(ctx, schedule, record, uv)
+        _register(ctx, schedule, record, uv)
     except (CommandError, OSError):
         if not _on_schedules(ctx, state, exclude=schedule_id):
             for path in created:  # R1-14: no unrecorded asset outlives a failed first apply
@@ -908,43 +1017,71 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
             _prune_data_dirs(ctx)
         raise
     files = _fingerprint_unit(ctx, schedule)
+    warnings: list[str] = []
+    # The model list is read before the state lock, never inside it (R2-05).
+    models = _read_models(ctx) if schedule_id == _CURSOR_ID else None
+    shim_report: cursor_shim.ShimReport | None = None
 
     def change(current: ScheduleState) -> ScheduleState:
+        nonlocal shim_report
+        status = current.cursor_shim
+        if schedule_id == _CURSOR_ID:
+            saved, shim_report, warning = _refresh_cursor_shim(
+                ctx, current.cursor_default_model, models
+            )
+            status = saved or status
+            if warning:
+                warnings.append(warning)
         updated = replace(record_for(current, schedule_id), decided=True, files=files)
         return replace(
             current,
             records={**current.records, schedule_id: updated},
             shared=assets,
+            cursor_shim=status,
             checkout=str(ctx.checkout),
             uv=str(uv),
         )
 
-    saved = update_state(ctx.state_path, change)
-    grid = _grid(ctx, schedule, record_for(saved, schedule_id))
-    return ApplyReport(True, next_run(grid, datetime.now()) if grid else None)
+    saved_state = update_state(ctx.state_path, change)
+    grid = _grid(ctx, schedule, record_for(saved_state, schedule_id))
+    upcoming = next_run(grid, datetime.now()) if grid else None
+    return ApplyReport(True, upcoming, shim_report, tuple(warnings))
 
 
 def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     """Disable first, then delete exactly the recorded files, then record the decision off."""
     schedule = schedule_by_id(schedule_id)
-    basename = basename_for(schedule_id)
+    macos = ctx.platform_os == "macos"
+    basename, label = basename_for(schedule_id), label_for(schedule_id)
     record = record_for(load_state(ctx.state_path).state, schedule_id)
     warnings: list[str] = []
-    reached = systemd_daemon.bootout(
-        ctx.unit_dir, basename=basename, run=ctx.run, read_output=ctx.read_output
-    )
-    if not reached:
-        warnings.append(_UNREACHABLE_MANAGER_WARNING)
-    elif schedule.kind is not JobKind.TMP_CLEANUP:
-        # A calendar timer's Persistent= stamp, cleaned while the unit is still loaded.
-        with contextlib.suppress(CommandError, OSError):
-            systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
+    reached = True
+    if macos:
+        daemon.bootout(ctx.uid, label=label, run=ctx.run)
+    else:
+        reached = systemd_daemon.bootout(
+            ctx.unit_dir, basename=basename, run=ctx.run, read_output=ctx.read_output
+        )
+        if not reached:
+            warnings.append(_UNREACHABLE_MANAGER_WARNING)
+        elif schedule.kind is not JobKind.TMP_CLEANUP:
+            # A calendar timer's Persistent= stamp, cleaned while the unit is still loaded.
+            with contextlib.suppress(CommandError, OSError):
+                systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
     kept = _delete_recorded(record.files)
-    if reached:
+    if reached and not macos:
         with contextlib.suppress(CommandError):
             systemd_daemon.daemon_reload(run=ctx.run)
 
     def change(current: ScheduleState) -> ScheduleState:
+        status = current.cursor_shim
+        if schedule_id == _CURSOR_ID:
+            link, agent = cursor_shim.shim_paths(ctx.home)
+            try:  # under the state lock, so a run in flight cannot undo this off (R1-08)
+                cursor_shim.restore_link(link=link, agent=agent)
+            except OSError as exc:
+                warnings.append(f"Could not restore the cursor-agent link: {_error_line(exc)}.")
+            status = None
         updated = replace(record_for(current, schedule_id), decided=False, files=kept)
         records = {**current.records, schedule_id: updated}
         shared = current.shared
@@ -957,10 +1094,67 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
                 warnings.append(f"kept, changed since it was copied: {names}")
             else:
                 _prune_data_dirs(ctx)
-        return replace(current, records=records, shared=shared)
+        return replace(current, records=records, shared=shared, cursor_shim=status)
 
     update_state(ctx.state_path, change)
     if kept:
         names = ", ".join(str(artifact.path) for artifact in kept)
         raise OSError(f"kept, changed since it was written: {names}")
     return ApplyReport(True, None, None, tuple(warnings))
+
+
+def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
+    """Validate, then change the grid; an off row only saves it, an on row rewrites its timer."""
+    schedule = schedule_by_id(schedule_id)
+    macos = ctx.platform_os == "macos"
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        if not macos:
+            raise daemon.DaemonScheduleError(TMP_FIXED_CADENCE_MESSAGE)
+        interval = 24
+    interval = validate_interval(interval)
+    validate_start(start)
+    record = record_for(load_state(ctx.state_path).state, schedule_id)
+    if (interval, start) == (record.interval, record.start):
+        return ApplyReport(False)
+    fresh = replace(record, interval=interval, start=start)
+    is_on = record.decided is True
+    files = record.files
+    if is_on:
+        # Linux rewrites only the timer: a running job is never touched and the new grid applies
+        # from the next slot. macOS re-registers the plist, which stops a loaded run (R1-11).
+        uv = _resolve_uv(ctx) if macos else Path("/")
+        _register(ctx, schedule, fresh, uv, timer_only=True, clean_stamp=True)
+        files = _fingerprint_unit(ctx, schedule)
+
+    def change(current: ScheduleState) -> ScheduleState:
+        updated = replace(
+            record_for(current, schedule_id), interval=interval, start=start, files=files
+        )
+        return replace(current, records={**current.records, schedule_id: updated})
+
+    update_state(ctx.state_path, change)
+    grid = _grid(ctx, schedule, fresh) if is_on else None
+    return ApplyReport(True, next_run(grid, datetime.now()) if grid else None)
+
+
+def set_cursor_model(ctx: ScheduleContext, model: str) -> ApplyReport:
+    """Save the configured model; refresh the shim only when the row is on (SPEC R7, D-20)."""
+    validate_model_id(model)
+    advisory = record_for(load_state(ctx.state_path).state, _CURSOR_ID)
+    # An off row spawns no `--list-models` (R3-10); the list is read before the lock (R2-05).
+    models = _read_models(ctx) if advisory.decided is True else None
+    shim_report: cursor_shim.ShimReport | None = None
+    warnings: list[str] = []
+
+    def change(current: ScheduleState) -> ScheduleState:
+        nonlocal shim_report
+        updated = replace(current, cursor_default_model=model)
+        if record_for(current, _CURSOR_ID).decided is not True:
+            return updated  # the locked re-read says off: nothing to refresh
+        saved, shim_report, warning = _refresh_cursor_shim(ctx, model, models)
+        if warning:
+            warnings.append(warning)
+        return replace(updated, cursor_shim=saved or current.cursor_shim)
+
+    update_state(ctx.state_path, change)
+    return ApplyReport(True, None, shim_report, tuple(warnings))
