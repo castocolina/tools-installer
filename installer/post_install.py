@@ -11,7 +11,7 @@ are disjoint by design and must stay that way.
 
 An action in this table returns reviewed instruction lines for the user to
 run themselves (or a `PostInstallOutput` that also carries the settings it wrote)
-and never spawns a child process. This follows
+and never spawns an interactive child. This follows
 `installer/host_setup.py`'s documented doctrine: setup that needs a real
 terminal is displayed, never launched from the installer's worker thread.
 
@@ -31,10 +31,15 @@ the install ladder, so a successful reinstall dispatches actions once more. A
 tool whose installer refuses to run over an existing install is not re-run;
 the reinstall dispatches its actions directly. No path re-applies post-install
 actions on their own (D-06). No action asks a question (23.2 D-13).
+
+`clone_nvim_starter` is the one action that spawns a child at all: it runs non-interactive
+git (no terminal, `GIT_TERMINAL_PROMPT=0`, a timeout) through the runner the composition
+root injects with `use_git_runner`; with no runner wired it refuses (24.1 D-15, D-17).
 """
 
 import os
 import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -46,7 +51,7 @@ from installer.agent_settings import (
     apply_setting,
     settings_file,
 )
-from installer.locations import zshrc_path
+from installer.locations import display_path, xdg_config_base, zshrc_path
 from installer.model import Tool
 from installer.omz import (
     MANAGED_PLUGINS,
@@ -59,6 +64,7 @@ from installer.omz import (
 )
 from installer.platform import Platform
 from installer.policy import tweak_policy
+from installer.run import CommandError, OutputRunner, command_error_line
 from installer.sanitize import sanitize_log_line
 from installer.terminal_shell import apply_alacritty_keys
 from installer.tweaks import (
@@ -148,6 +154,106 @@ _LEAN_TIPS: tuple[str, ...] = (
     "Lean tip: skip resident type-checkers (Pylance held 358 MB here).",
     "Run the project's pre-commit as an on-demand task, not on every save.",
 )
+
+
+_KICKSTART_URL = "https://github.com/nvim-lua/kickstart.nvim.git"
+_KICKSTART_PIN = "8e35dbedb7966e3a95e1f26f9fc1179ab6c68db4"
+_KICKSTART_PATCH = Path(__file__).parent / "patches" / "kickstart-no-lsp.patch"
+
+
+def _no_git(argv: list[str]) -> str:
+    raise CommandError(argv, 127, detail="no git runner is wired")
+
+
+# The starter's git runs only through the composition root, which injects it once.
+_git: OutputRunner = _no_git
+
+
+def use_git_runner(runner: OutputRunner) -> None:
+    """Inject the non-interactive git runner that `clone_nvim_starter` runs through."""
+    global _git
+    _git = runner
+
+
+_NVIM_STARTER_TARGET = "~/.config/nvim"
+
+_NVIM_HINTS: tuple[str, ...] = (
+    "Neovim runs no language server: check the open file with :!pre-commit run --files %",
+    "For one session with a server, run :lsp enable <name> inside nvim.",
+)
+
+
+def _by_hand() -> tuple[str, ...]:
+    return (
+        "To add it by hand:",
+        f"git clone {_KICKSTART_URL} {_NVIM_STARTER_TARGET}",
+        f"git -C {_NVIM_STARTER_TARGET} checkout -B master {_KICKSTART_PIN}",
+        f"git -C {_NVIM_STARTER_TARGET} apply {_KICKSTART_PATCH}",
+    )
+
+
+def _absent_or_empty(path: Path) -> bool:
+    """True for a missing path or an empty directory; a link, a file or any entry is the user's."""
+    try:
+        if path.is_symlink():
+            return False
+        return not path.exists() or (path.is_dir() and not any(path.iterdir()))
+    except OSError:
+        return False
+
+
+def _clone_nvim_starter(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del tool, platform, confirm
+    home = Path.home()
+    config_dir = home / ".config"
+    target = config_dir / "nvim"
+    if xdg_config_base(home, os.environ) != config_dir:
+        return ("Starter not added: XDG_CONFIG_HOME points elsewhere than ~/.config (left as is).",)
+    if not _absent_or_empty(target):
+        return (f"Starter not added: {_NVIM_STARTER_TARGET} is yours (left as is).",)
+    if shutil.which("git") is None:
+        return ("Starter not added: git is not installed.", *_by_hand())
+    tmp: Path | None = None
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix=".nvim-starter.", dir=config_dir))
+        work = str(tmp)
+        patch = str(_KICKSTART_PATCH)
+        _git(["git", "clone", "--quiet", "--no-checkout", "--", _KICKSTART_URL, work])
+        _git(["git", "-C", work, "checkout", "--quiet", "-B", "master", _KICKSTART_PIN])
+        head = _git(["git", "-C", work, "rev-parse", "HEAD"]).strip()
+        if head != _KICKSTART_PIN:
+            reason = f"the checkout is at {head[:12]}, not the pinned {_KICKSTART_PIN[:12]}"
+            return (f"Starter not added: {reason}.", *_by_hand())
+        _git(["git", "-C", work, "apply", "--check", patch])
+        _git(["git", "-C", work, "apply", patch])
+        changed = (
+            f"Starter not added: {_NVIM_STARTER_TARGET} changed while the starter was prepared"
+            " (left as is).",
+        )
+        if not _absent_or_empty(target):
+            return changed
+        try:
+            os.rename(tmp, target)
+        except OSError:
+            return changed
+    except CommandError as exc:
+        reason = sanitize_log_line(command_error_line(exc))
+        return (f"Starter not added: {reason}.", *_by_hand())
+    except OSError as exc:
+        return (f"Starter not added: {sanitize_log_line(str(exc))}.", *_by_hand())
+    finally:
+        if tmp is not None and tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+    return (
+        f"Starter: kickstart.nvim {_KICKSTART_PIN[:7]} (no language servers) is in "
+        f"{display_path(target)}.",
+        "Open nvim once so the starter downloads its plugins (it asks Proceed? once).",
+    )
 
 
 def _set_login_shell(
@@ -305,6 +411,15 @@ def _show_lean_tips(
     return _LEAN_TIPS
 
 
+def _show_nvim_hints(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> tuple[str, ...]:
+    del tool, platform, confirm
+    return _NVIM_HINTS
+
+
 POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "set_login_shell": _set_login_shell,
     "source_shell_init": _source_shell_init,
@@ -313,6 +428,8 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "show_lean_tips": _show_lean_tips,
     "apply_agent_tuning": _apply_agent_tuning,
     "apply_terminal_tuning": _apply_terminal_tuning,
+    "clone_nvim_starter": _clone_nvim_starter,
+    "show_nvim_hints": _show_nvim_hints,
 }
 
 

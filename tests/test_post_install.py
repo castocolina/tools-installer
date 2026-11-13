@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import tomllib
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from installer.post_install import (
 )
 from installer.postinstall import POSTINSTALL_HOOKS
 from installer.receipts import read_ledger
+from installer.run import CommandError
 from installer.shellrc import write_myshellrc
 from installer.tweaks import (
     SHELL_INIT_TOOLS,
@@ -1161,3 +1163,134 @@ def test_apply_terminal_tuning_names_the_refusal(tmp_path: Path) -> None:
         "Alacritty keys not changed: you already define keyboard.bindings inline",
     )
     assert config.read_text() == "keyboard.bindings = []\n"
+
+
+_PATCHED_LINE = (
+    "  servers = {} -- tools-installer: no language servers; enable one with :lsp enable <name>"
+)
+_STARTER_URL = "https://github.com/nvim-lua/kickstart.nvim.git"
+_STARTER_LINES = (
+    "Starter: kickstart.nvim 8e35dbe (no language servers) is in ~/.config/nvim.",
+    "Open nvim once so the starter downloads its plugins (it asks Proceed? once).",
+)
+_HINT_LINES = (
+    "Neovim runs no language server: check the open file with :!pre-commit run --files %",
+    "For one session with a server, run :lsp enable <name> inside nvim.",
+)
+_SHELL_INIT_LINE = "Shell init on: open a new terminal to use it."
+
+
+def _kickstart_pin() -> str:
+    return str(vars(post_install)["_KICKSTART_PIN"])
+
+
+def _kickstart_patch() -> Path:
+    return Path(str(vars(post_install)["_KICKSTART_PATCH"]))
+
+
+def _shipped_neovim() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "neovim")
+
+
+class FakeGit:
+    """The injected git runner: records argv, simulates each step on disk, fails or hooks a step."""
+
+    def __init__(
+        self,
+        *,
+        fail_at: str | None = None,
+        head: str | None = None,
+        hooks: dict[str, Callable[[], None]] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self._fail_at = fail_at
+        self._head = head
+        self._hooks = hooks or {}
+        self._error = error
+
+    @staticmethod
+    def step(argv: list[str]) -> str:
+        if argv[1] == "clone":
+            return "clone"
+        verb = argv[3]
+        return "apply-check" if verb == "apply" and "--check" in argv else verb
+
+    def __call__(self, argv: list[str]) -> str:
+        self.calls.append(list(argv))
+        step = self.step(argv)
+        tmp = Path(argv[-1] if step == "clone" else argv[2])
+        if step in self._hooks:
+            self._hooks[step]()
+        if step == self._fail_at:
+            raise self._error or CommandError(argv, 128, detail="fatal: boom")
+        if step == "clone":
+            (tmp / ".git").mkdir()
+        elif step == "checkout":
+            (tmp / "init.lua").write_text("-- kickstart\n", encoding="utf-8")
+        elif step == "rev-parse":
+            return f"{self._head or _kickstart_pin()}\n"
+        elif step == "apply":
+            with (tmp / "init.lua").open("a", encoding="utf-8") as handle:
+                handle.write(_PATCHED_LINE + "\n")
+        return ""
+
+
+def _use_git(monkeypatch: pytest.MonkeyPatch, *, present: bool = True, **kwargs: Any) -> FakeGit:
+    """Install a fake git runner for this test (restored after it) and answer `which git`."""
+    fake = FakeGit(**kwargs)
+    monkeypatch.setattr(post_install, "_git", fake)
+    real_which = shutil.which
+
+    def which(cmd: str) -> str | None:
+        if cmd == "git":
+            return "/usr/bin/git" if present else None
+        return real_which(cmd)
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    return fake
+
+
+def test_starter_clones_the_pin_patches_and_moves_into_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _use_git(monkeypatch)
+    config = Path.home() / ".config"
+
+    output = run_post_install(_shipped_neovim(), _mutable())
+
+    assert output.warning is None
+    assert output.lines == (_SHELL_INIT_LINE, *_STARTER_LINES, *_HINT_LINES)
+    tmp = fake.calls[0][-1]
+    assert Path(tmp).parent == config
+    patch = str(_kickstart_patch())
+    assert fake.calls == [
+        ["git", "clone", "--quiet", "--no-checkout", "--", _STARTER_URL, tmp],
+        ["git", "-C", tmp, "checkout", "--quiet", "-B", "master", _kickstart_pin()],
+        ["git", "-C", tmp, "rev-parse", "HEAD"],
+        ["git", "-C", tmp, "apply", "--check", patch],
+        ["git", "-C", tmp, "apply", patch],
+    ]
+    assert (config / "nvim" / "init.lua").read_text().splitlines()[-1] == _PATCHED_LINE
+    assert not list(config.glob(".nvim-starter.*"))
+
+
+def test_neovim_hints_name_pre_commit_and_lsp_enable() -> None:
+    lines = run_post_install(_tool(post_install=("show_nvim_hints",)), _mutable()).lines
+    text = "\n".join(lines)
+    assert ":!pre-commit run --files %" in text
+    assert ":lsp enable <name>" in text
+
+
+def test_the_default_git_runner_refuses() -> None:
+    default = vars(post_install)["_git"]
+    with pytest.raises(CommandError) as raised:
+        default(["git", "clone", "x"])
+    assert raised.value.returncode == 127
+
+    def fake(argv: list[str]) -> str:
+        return ""
+
+    post_install.use_git_runner(fake)
+    assert vars(post_install)["_git"] is fake  # the autouse no_git_runner fixture resets it

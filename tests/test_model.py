@@ -1907,6 +1907,8 @@ def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> No
         "show_lean_tips",
         "apply_agent_tuning",
         "apply_terminal_tuning",
+        "clone_nvim_starter",
+        "show_nvim_hints",
     )
     assert SENSITIVE_POST_INSTALL_ACTIONS == ()
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["source_shell_init"]'))

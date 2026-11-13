@@ -1272,7 +1272,9 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     reviewed the two new declarers (CONF-11 theme, CONF-12 lean tips) and the
     six shell-init tools (D-11: the keyed, default-no source_shell_init).
     Phase 24 reviewed Alacritty's `apply_terminal_tuning` (24 D-23: its keybindings
-    region, written at install with no question).
+    region, written at install with no question). Phase 24.1 reviewed Neovim's
+    `clone_nvim_starter` and `show_nvim_hints` (24.1 D-15, D-19); neovim was already a
+    shell-init tool, so the declarer set did not change.
     """
     declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
     tuned = {"claude", "codex", "opencode", "cursor-agent", "copilot"}
@@ -1283,6 +1285,12 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     method = oh_my_zsh.methods[0]
     assert method.kind == "script"
     assert method.params["env"] == {"RUNZSH": "no", "CHSH": "no", "KEEP_ZSHRC": "yes"}
+
+
+def test_neovim_post_install_order() -> None:
+    neovim = _tools_by_id()["neovim"]
+    assert neovim.post_install == ("source_shell_init", "clone_nvim_starter", "show_nvim_hints")
+    assert neovim.requires == ()
 
 
 def test_selecting_oh_my_zsh_drags_in_zsh_and_git_in_deps_first_order() -> None:

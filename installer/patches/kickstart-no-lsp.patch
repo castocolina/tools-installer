@@ -1,0 +1,12 @@
+diff --git a/init.lua b/init.lua
+index 560c183..1c1f933 100644
+--- a/init.lua
++++ b/init.lua
+@@ -778,6 +778,7 @@ do
+       },
+     },
+   }
++  servers = {} -- tools-installer: no language servers; enable one with :lsp enable <name>
+
+   vim.pack.add {
+     gh 'neovim/nvim-lspconfig',

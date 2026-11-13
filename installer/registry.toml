@@ -2629,6 +2629,7 @@ archive = "xz"
 # yields to a user export (D-14, needs confirmation); a pinned no-LSP kickstart starter, placed only
 # into an absent or empty ~/.config/nvim (D-15, needs confirmation); the `:!pre-commit run --files %`
 # and `:lsp enable <name>` hints (D-19).
+# Its post_install actions are source_shell_init, clone_nvim_starter and show_nvim_hints.
 [[tool]]
 id = "neovim"
 name = "Neovim"
@@ -2641,7 +2642,7 @@ verified = 2026-11-13
 desc = "Vim-based modal text editor for the terminal"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 config_paths = ["~/.config/nvim"]
-post_install = ["source_shell_init"]
+post_install = ["source_shell_init", "clone_nvim_starter", "show_nvim_hints"]
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]

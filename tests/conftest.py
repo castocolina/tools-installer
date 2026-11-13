@@ -287,6 +287,12 @@ def no_shell_init_sourcing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_git_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test that builds the app wires the real runner; reset the refusing default (R1-04)."""
+    monkeypatch.setattr(post_install, "_git", vars(post_install)["_no_git"])
+
+
+@pytest.fixture(autouse=True)
 def sandboxed_setup_paths(sandboxed_home: None, monkeypatch: pytest.MonkeyPatch) -> None:
     setup_module = sys.modules.get("setup")
     if setup_module is None:

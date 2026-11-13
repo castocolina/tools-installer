@@ -4812,6 +4812,23 @@ def test_the_headless_route_injects_split_mode_sourcing(monkeypatch: pytest.Monk
     assert Path.home() / ".bashrc" in readings[0]
 
 
+def test_the_composition_root_wires_the_git_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    assert vars(post_install)["_git"] is vars(setup)["_run_git"]
+
+
+def test_the_headless_route_wires_the_git_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    assert setup.main(["--all", "--yes"]) == 0
+    assert vars(post_install)["_git"] is vars(setup)["_run_git"]
+
+
 # Whole identifiers of the code SPEC R7 / D-10 deleted. vulture at min_confidence = 80 would not
 # flag a leftover, so this test is the only guard (RESEARCH Pitfall 2).
 _DELETED_IDENTIFIERS = (
