@@ -1633,7 +1633,9 @@ def test_neovim_hints_survive_a_crashed_starter(monkeypatch: pytest.MonkeyPatch)
     assert output.lines == (_SHELL_INIT_LINE, *_HINT_LINES)
 
 
-def test_neovim_hints_print_with_your_own_config(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_neovim_hints_over_your_own_config_drop_the_no_server_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = use_fake_git(monkeypatch)
     mine = Path.home() / ".config" / "nvim"
     mine.mkdir(parents=True)
@@ -1641,7 +1643,12 @@ def test_neovim_hints_print_with_your_own_config(monkeypatch: pytest.MonkeyPatch
 
     output = run_post_install(_shipped_neovim(), _mutable())
 
-    assert output.lines == (_SHELL_INIT_LINE, _YOURS_LINE)
+    assert output.lines == (
+        _SHELL_INIT_LINE,
+        _YOURS_LINE,
+        "Check the open file with :!pre-commit run --files %",
+        _HINT_LINES[1],
+    )
     assert fake.calls == []
 
 

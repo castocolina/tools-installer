@@ -182,9 +182,15 @@ def use_git_runner(runner: OutputRunner) -> None:
 
 _NVIM_STARTER_TARGET = "~/.config/nvim"
 
+_NVIM_LSP_HINT = "For one session with a server, run :lsp enable <name> inside nvim."
 _NVIM_HINTS: tuple[str, ...] = (
     "Neovim runs no language server: check the open file with :!pre-commit run --files %",
-    "For one session with a server, run :lsp enable <name> inside nvim.",
+    _NVIM_LSP_HINT,
+)
+# D-19: a config of the user's own gets the same two commands without the no-server claim.
+_NVIM_OWN_CONFIG_HINTS: tuple[str, ...] = (
+    "Check the open file with :!pre-commit run --files %",
+    _NVIM_LSP_HINT,
 )
 
 
@@ -462,10 +468,10 @@ def _show_nvim_hints(
 ) -> tuple[str, ...]:
     del tool, platform, confirm
     target = Path.home() / ".config" / "nvim"
-    # The hints say Neovim runs no language server: true of the starter or of no config, not of
-    # a config of the user's own.
+    # "Neovim runs no language server" is true of the starter or of no config, not of a config
+    # of the user's own; the commands themselves help every setup (D-19).
     if not _absent_or_empty(target) and not _holds_starter(target):
-        return ()
+        return _NVIM_OWN_CONFIG_HINTS
     return _NVIM_HINTS
 
 
