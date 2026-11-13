@@ -13,7 +13,7 @@ import shutil
 import signal
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -861,35 +861,59 @@ def _hold(lock: Path, line: str) -> int:
     return descriptor
 
 
+def _wait_until(condition: Callable[[], bool], what: str, timeout: float = 15.0) -> None:
+    end = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < end, f"timed out waiting for {what}"
+        time.sleep(0.01)
+
+
 def test_two_runners_started_together_serialize_instead_of_skipping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
-    bin_dir = tmp_path / "bin"
-    _hanging_uv(tmp_path, "sleep 1")  # the cache job holds the lock for a second
-    monkeypatch.setenv("PATH", str(bin_dir))
+    # Deterministic overlap: the first runner's child waits on a gate file, and the gate opens
+    # only once the second runner has entered its wait for the lock.
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.01)
+    started, gate = tmp_path / "started", tmp_path / "gate"
+    wait = f'while [ ! -f "{gate}" ] && [ $n -lt 1500 ]; do sleep 0.01; n=$((n+1)); done'
+    hold = f'echo > "{started}"\nn=0\n{wait}'  # builtins only: PATH holds just the fake uv
+    _hanging_uv(tmp_path, hold)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
     cleanup = _script(tmp_path / "scripts", "clean.sh", "echo deleted: 0")
     base = ["--log", str(tmp_path / "state" / "run.log"), "--lock", str(tmp_path / "state" / "l")]
     base += ["--cap-bytes", str(_CAP)]
-    jobs: list[list[str]] = [
-        ["cache-cleanup", *base],
-        ["tmp-cleanup", "--script", str(cleanup), *base],
-    ]
+    waiting = threading.Event()
+    real_wait = vars(schedule_runner)["_wait_for_lock"]
+
+    def noting_wait(fd: int, emit: Callable[[str], None]) -> bool:
+        waiting.set()
+        return bool(real_wait(fd, emit))
+
+    monkeypatch.setitem(vars(schedule_runner), "_wait_for_lock", noting_wait)
     codes: list[int] = []
 
-    def go(argv: list[str]) -> None:
-        codes.append(schedule_runner.main(argv))
-
-    threads = [threading.Thread(target=go, args=(argv,)) for argv in jobs]
-    for thread in threads:
+    def go(argv: list[str]) -> threading.Thread:
+        thread = threading.Thread(
+            target=lambda: codes.append(schedule_runner.main(argv)), daemon=True
+        )
         thread.start()
-    for thread in threads:
+        return thread
+
+    first = go(["cache-cleanup", *base])
+    try:
+        _wait_until(started.exists, "the first runner's child to start")
+        second = go(["tmp-cleanup", "--script", str(cleanup), *base])
+        assert waiting.wait(15), "the second runner never waited for the lock"
+    finally:
+        gate.touch()
+    for thread in (first, second):
         thread.join(30)
+        assert not thread.is_alive()
     text = (tmp_path / "state" / "run.log").read_text()
     assert codes == [0, 0]
     assert "skipped: busy" not in text
     assert len(re.findall(r" ok: ", text)) == 2
-    assert len(re.findall(rf"{_TS} (\S+) waited: \d+s for (cache|tmp)-cleanup\n", text)) == 1
+    assert len(re.findall(rf"{_TS} tmp-cleanup waited: \d+s for cache-cleanup\n", text)) == 1
 
 
 def test_a_run_waits_only_for_a_scheduled_holder_never_the_installer(
