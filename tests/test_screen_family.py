@@ -1882,7 +1882,7 @@ async def test_the_schedule_setup_repaints_a_visible_uninstall(tmp_path: Path):
     def reconcile() -> ReconcileReport:
         if not release.wait(timeout=10):
             raise TimeoutError("the schedule setup was never released")
-        tweaks.append("daemon:prune-tmp-linux")
+        tweaks.append("schedule:tmp-cleanup")
         return ReconcileReport()
 
     states = [absent_state(_tool("rg")), absent_state(_tool("fd"))]
@@ -1913,7 +1913,7 @@ async def test_the_schedule_setup_repaints_a_visible_uninstall(tmp_path: Path):
             assert app.screen is screen
             cells = " ".join(str(cell) for cell in table.get_row("#tweaks"))
             assert "shell tweaks + background jobs" in cells
-            assert "daemon:prune-tmp-linux" in cells
+            assert "schedule:tmp-cleanup" in cells
             assert service.passes == before
             assert screen.status.text == ""
         finally:

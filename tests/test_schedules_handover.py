@@ -16,12 +16,19 @@ from textual.widgets import DataTable
 
 import setup
 from installer import daemon, policy, runlock, schedules
+from installer.app import (
+    UninstallDecision,
+    perform_uninstall,
+    removal_result_lines,
+    run_uninstall,
+)
 from installer.diskusage import DiskPressure
 from installer.enums import DaemonState, MutationHolder
 from installer.execute_screen import InstallRunFinished
 from installer.guidance import disk_pressure_guidance
-from installer.model import Tool
+from installer.model import Method, Tool
 from installer.platform import Platform
+from installer.policy import Policy
 from installer.schedules import (
     ReconcileReport,
     ScheduleContext,
@@ -30,7 +37,9 @@ from installer.schedules import (
     update_state,
 )
 from installer.session import Disposition, PlanRow, RowOutcome
+from installer.systemd_daemon import decided as systemd_decided
 from installer.ui_common import BASE_VIEW
+from installer.uninstall import SweepResult
 from installer.wizard_app import SchedulesScreen, UnifiedApp
 from tests import test_setup
 from tests.screen_family import settle
@@ -39,10 +48,12 @@ from tests.test_schedules_engine import (
     CLAUDE_BASENAME,
     TMP_BASENAME,
     Env,
+    Install,
     make_env,
     seed_legacy_tmp,
 )
 from tests.test_schedules_lifecycle import unit_files
+from tests.test_uninstall import plant_raw_yq, write_receipt
 
 TURNED_ON = (
     "Turned on schedules: tmp cleanup, cache cleanup, claude update. Change them in Schedules."
@@ -307,3 +318,254 @@ def test_disk_pressure_points_at_schedules() -> None:
     [item] = disk_pressure_guidance(pressure)
     assert item.next_step.startswith("Turn on tmp cleanup in `make setup`'s Schedules view; a ")
     assert "Policies" not in item.next_step
+
+
+# -- removals take their target's timer, and the uninstall sweeps every schedule --------------
+
+
+def _receipted(env: Env, tool_id: str, file_name: str) -> tuple[Tool, Path]:
+    """A receipt-proven raw download named `tool_id` under the scratch HOME's bin dir."""
+    yq, bin_dir = plant_raw_yq(env.home, with_receipt=False)
+    raw = Method(
+        kind="github_release",
+        params={"repo": f"a/{tool_id}", "asset": file_name, "member": file_name, "raw": True},
+    )
+    tool = replace(yq, id=tool_id, name=tool_id, cmd=tool_id, methods=(raw,))
+    binary = bin_dir / file_name
+    binary.write_text(f"{tool_id} raw binary")
+    write_receipt(tool, [(binary, "file")])
+    return tool, binary
+
+
+def _removal_hook(ctx: ScheduleContext) -> Callable[[str], tuple[str, ...]]:
+    def hook(tool_id: str) -> tuple[str, ...]:
+        report = schedules.after_target_removed(ctx, tool_id)
+        return tuple(text for text, _severity in schedules.reconcile_lines(report))
+
+    return hook
+
+
+def _perform(
+    env: Env,
+    decision: UninstallDecision,
+    *,
+    extras: tuple[Policy, ...] = (),
+    hook: Callable[[str], tuple[str, ...]] | None = None,
+) -> SweepResult:
+    return perform_uninstall(
+        decision,
+        bin_dir=env.home / ".local" / "bin",
+        myshellrc_path=env.ctx.myshellrc_path,
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=env.home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=extras,
+        runner=_no_command,
+        catalog=decision.tools,
+        schedule_removed=hook,
+    )
+
+
+def _absent(_tool_id: str) -> bool:
+    return False
+
+
+def _no_command(cmd: list[str]) -> None:
+    raise AssertionError(f"no removal command expected: {cmd}")
+
+
+def _decision(tool: Tool, binary: Path, *, tweaks: bool = False) -> UninstallDecision:
+    return UninstallDecision(
+        tools=(tool,),
+        paths={tool.id: (binary,)},
+        remove_ban=False,
+        remove_path_block=False,
+        remove_tweaks=tweaks,
+    )
+
+
+def test_tui_removal_takes_the_timer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3: removing a receipted claude takes its timer files, keeps its decision, says so, and
+    the Schedules row then reads unavailable at once."""
+    env = make_env(tmp_path, monkeypatch, present=frozenset({"claude"}))
+    ctx = env.ctx
+    claude, binary = _receipted(env, "claude", "claude")
+    schedules.turn_on(ctx, "update-claude")
+    assert len(unit_files(ctx, CLAUDE_BASENAME)) == 3
+
+    result = _perform(env, _decision(claude, binary), hook=_removal_hook(ctx))
+
+    assert not binary.exists(), (result.warnings, result.remove_failed)
+    assert unit_files(ctx, CLAUDE_BASENAME) == []
+    state = schedules.load_state(ctx.state_path).state
+    assert state.records["update-claude"].decided is True
+    assert "Removed the claude update timer because claude is gone." in removal_result_lines(result)
+    after = replace(ctx, present=_absent)
+    row = schedules.row_state(
+        after, state, schedules.schedule_by_id("update-claude"), manager=True, present=after.present
+    )
+    assert (row.word, row.reason) == ("n/a", "unavailable: claude not installed")
+
+
+def test_cli_removal_takes_the_timer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path, monkeypatch, present=frozenset({"claude"}))
+    ctx = env.ctx
+    claude, _binary = _receipted(env, "claude", "claude")
+    schedules.turn_on(ctx, "update-claude")
+    buffer = io.StringIO()
+
+    _removed, failed = run_uninstall(
+        [claude],
+        Console(file=buffer, width=200, no_color=True),
+        default_bin_dir=env.home / ".local" / "bin",
+        myshellrc_path=ctx.myshellrc_path,
+        rc_paths=[],
+        confirm=lambda _message: True,
+        bundles=(),
+        zshrc_path=env.home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_command,
+        schedule_removed=_removal_hook(ctx),
+    )
+
+    assert failed == ()
+    assert unit_files(ctx, CLAUDE_BASENAME) == []
+    assert "Removed the claude update timer because claude is gone." in buffer.getvalue()
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_cursor_removal_removes_the_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign: bool
+) -> None:
+    """Our cursor-agent shim goes with the tool; a file that is not ours stays."""
+    env = make_env(tmp_path, monkeypatch, present=frozenset({"cursor-agent"}))
+    install = Install(env.home, foreign=foreign)
+    cursor, _binary = _receipted(env, "cursor-agent", "cursor-agent-launcher")
+    schedules.turn_on(env.ctx, "update-cursor-agent")
+    assert install.link.exists() or install.link.is_symlink()
+
+    _perform(env, _decision(cursor, _binary), hook=_removal_hook(env.ctx))
+
+    if foreign:
+        assert install.link.read_text() == "#!/bin/sh\necho mine\n"
+    else:
+        assert not install.link.exists()
+        assert not install.link.is_symlink()
+
+
+def _on_lab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str) -> tuple[Env, list[str]]:
+    env = make_env(tmp_path, monkeypatch, os_key=os_key, present=frozenset({"claude"}))
+    ensure = schedules.ensure_schedule_defaults(env.ctx)
+    assert ensure.turned_on == ("tmp-cleanup", "cache-cleanup", "update-claude")
+    return env, ["schedule:tmp-cleanup", "schedule:cache-cleanup", "schedule:update-claude"]
+
+
+def _schedule_leftovers(ctx: ScheduleContext) -> list[str]:
+    found = [
+        str(path)
+        for root in (ctx.unit_dir, ctx.launch_agents_dir, ctx.data_dir)
+        if root.exists()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() or path.is_symlink()
+    ]
+    found += [
+        str(path) for path in (ctx.state_path, ctx.log_path, ctx.launchd_log_path) if path.exists()
+    ]
+    marker = daemon.decided if ctx.platform_os == "macos" else systemd_decided
+    if marker(ctx.myshellrc_path):
+        found.append("the tmp decided marker")
+    return found
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+def test_full_uninstall_sweeps_schedules_tui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    env, ids = _on_lab(tmp_path, monkeypatch, os_key)
+    ctx = env.ctx
+    claude, binary = _receipted(env, "claude", "claude")
+    extras = schedules.sweep_adapters(ctx)  # built before the removal (R1-19)
+    assert [policy.id for policy in extras] == ids
+
+    result = _perform(
+        env, _decision(claude, binary, tweaks=True), extras=extras, hook=_removal_hook(ctx)
+    )
+
+    # The removal hook took claude's timer first, so the sweep finds nothing left to sweep for it.
+    assert set(ids[:2]) <= set(result.swept)
+    assert "Removed the claude update timer because claude is gone." in removal_result_lines(result)
+    assert result.failed == ()
+    assert _schedule_leftovers(ctx) == []
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+def test_full_uninstall_sweeps_schedules_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    env, ids = _on_lab(tmp_path, monkeypatch, os_key)
+    ctx = env.ctx
+    claude, _binary = _receipted(env, "claude", "claude")
+    buffer = io.StringIO()
+
+    run_uninstall(
+        [claude],
+        Console(file=buffer, width=300, no_color=True),
+        default_bin_dir=env.home / ".local" / "bin",
+        myshellrc_path=ctx.myshellrc_path,
+        rc_paths=[],
+        confirm=lambda _message: True,
+        bundles=(),
+        zshrc_path=env.home / ".zshrc",
+        daemon_policy=None,
+        extra_policies=schedules.sweep_adapters(ctx),
+        runner=_no_command,
+        schedule_removed=_removal_hook(ctx),
+    )
+
+    text = buffer.getvalue()
+    assert "These shell tweaks and the background maintenance jobs will also be disabled" in text
+    assert "Shell tweaks and the background maintenance jobs disabled:" in text
+    assert all(schedule_id in text for schedule_id in ids)
+    assert _schedule_leftovers(ctx) == []
+
+
+def test_cli_uninstall_refuses_during_a_scheduled_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sandbox: Callable[[pytest.MonkeyPatch, Path], None] = vars(test_setup)["_sandbox"]
+    sandbox(monkeypatch, tmp_path)
+    state = schedules.default_state_path()
+    schedules.save_state(state, schedules.ScheduleState())
+    buffer = io.StringIO()
+    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+
+    def boom(*_args: object, **_kwargs: object) -> tuple[list[Path], tuple[str, ...]]:
+        raise AssertionError("the teardown must not start while a scheduled run holds the lock")
+
+    monkeypatch.setattr(setup, "run_uninstall", boom)
+    held = runlock.try_acquire(runlock.run_lock_path(), "update-claude")
+    assert held is not None
+    try:
+        assert setup.main(["--uninstall", "--yes"]) == 1
+    finally:
+        held.release()
+
+    assert REFUSAL in buffer.getvalue()
+    assert state.exists()
+
+
+def test_a_non_utf8_rc_breaks_neither_the_sweep_nor_the_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An rc file that cannot be read is never a crash and never an invitation to turn tmp on."""
+    env = make_env(tmp_path, monkeypatch, present=frozenset())
+    env.ctx.myshellrc_path.write_bytes(b"# caf\xe9\n")
+
+    assert schedules.sweep_adapters(env.ctx) == ()
+    report = schedules.ensure_schedule_defaults(env.ctx)
+
+    assert "tmp-cleanup" not in report.turned_on
+    assert not unit_files(env.ctx, TMP_BASENAME)
+    assert env.ctx.myshellrc_path.read_bytes() == b"# caf\xe9\n"

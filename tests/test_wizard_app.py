@@ -180,6 +180,7 @@ def _uninstall_inputs(
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     terminal_sync: Callable[[], str | None] | None = None,
     retired: Callable[[], Sequence[Tool]] = tuple,
+    platform_os: str = "",
 ) -> UninstallInputs:
     """The environment inputs keep the plain-value convenience: they are
     predicates, and most tests only care about one fixed reading."""
@@ -190,6 +191,7 @@ def _uninstall_inputs(
         tweak_ids=_predicate(tweak_ids),
         terminal_sync=terminal_sync,
         retired=retired,
+        platform_os=platform_os,
     )
 
 
@@ -3125,11 +3127,11 @@ async def test_uninstall_summary_says_so_when_the_sweep_found_nothing() -> None:
         assert "no shell tweaks were still enabled" in app.screen.status.text
 
 
-async def test_uninstall_tweak_row_names_background_jobs_when_a_daemon_id_is_offered() -> None:
+async def test_uninstall_tweak_row_names_background_jobs_when_a_schedule_id_is_offered() -> None:
     """Preview-row copy (11-REVIEWS.md cycle 2 finding #19's preview half): the
-    Tool-column label and detail both name the background job once a
-    daemon:-prefixed id is among what is offered."""
-    inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"))
+    Tool-column label and detail both name the background jobs once a
+    schedule:-prefixed id is among what is offered."""
+    inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "schedule:tmp-cleanup"))
     app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
@@ -3138,12 +3140,16 @@ async def test_uninstall_tweak_row_names_background_jobs_when_a_daemon_id_is_off
         rendered = " ".join(str(cell) for cell in cells)
         assert "shell tweaks + background jobs" in rendered
         await pilot.pause()
-        assert "background maintenance" in screen.detail_text.lower()
+        assert "systemd user timers" in screen.detail_text
 
 
-async def test_uninstall_tweak_row_names_the_linux_timer_and_the_cache_redirect() -> None:
+@pytest.mark.parametrize("platform_os", ["debian", "arch", "fedora"])
+async def test_uninstall_tweak_row_names_the_linux_timers_and_the_cache_redirect(
+    platform_os: str,
+) -> None:
     inputs = _uninstall_inputs(
-        tweak_ids=("tweak:countdown", "daemon:prune-tmp-linux", "cache-redirect:bun")
+        tweak_ids=("tweak:countdown", "schedule:tmp-cleanup", "cache-redirect:bun"),
+        platform_os=platform_os,
     )
     app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
@@ -3151,33 +3157,37 @@ async def test_uninstall_tweak_row_names_the_linux_timer_and_the_cache_redirect(
         assert isinstance(screen, UninstallScreen)
         await pilot.pause()
         detail = screen.detail_text
-        assert "systemd user timer" in detail
+        assert "systemd user timers" in detail
         assert "unit files" in detail
         assert "LaunchAgent" not in detail
         assert "environment cache redirect" in detail
 
 
-async def test_uninstall_tweak_row_keeps_the_macos_launchagent_sentence() -> None:
-    inputs = _uninstall_inputs(tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"))
+async def test_uninstall_tweak_row_names_the_macos_launchagents() -> None:
+    inputs = _uninstall_inputs(
+        tweak_ids=("tweak:countdown", "schedule:tmp-cleanup"), platform_os="macos"
+    )
     app = _app(cases=[], uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         await pilot.pause()
         assert (
-            "unregisters the background maintenance LaunchAgent (its plist and wrapper executable)"
-            in screen.detail_text
+            "unregisters the background maintenance LaunchAgents (their plists, the runner and "
+            "the schedule state)" in screen.detail_text
         )
+        assert "systemd" not in screen.detail_text
         assert "environment cache redirect" not in screen.detail_text
 
 
 async def test_uninstall_applied_summary_names_a_linux_sweep_without_a_launchagent() -> None:
     inputs = _uninstall_inputs(
-        tweak_ids=("daemon:prune-tmp-linux", "cache-redirect:bun"),
+        tweak_ids=("schedule:tmp-cleanup", "cache-redirect:bun"),
         remove=_recorder(
             [],
-            SweepResult(swept=("daemon:prune-tmp-linux", "cache-redirect:bun")),
+            SweepResult(swept=("schedule:tmp-cleanup", "cache-redirect:bun")),
         ),
+        platform_os="fedora",
     )
     app = _app(uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
@@ -3209,12 +3219,12 @@ async def test_uninstall_tweak_row_stays_byte_identical_without_a_daemon_id() ->
 
 
 async def test_uninstall_applied_summary_names_the_background_job_alone() -> None:
-    """The sweep swept ONLY the daemon: no shell reload is relevant, so the
+    """The sweep swept ONLY a schedule: no shell reload is relevant, so the
     hint must not be appended (11-REVIEWS.md cycle 2 finding #19)."""
     captured: list[UninstallDecision] = []
     inputs = _uninstall_inputs(
-        tweak_ids=("daemon:prune-tmpdir",),
-        remove=_recorder(captured, SweepResult(swept=("daemon:prune-tmpdir",))),
+        tweak_ids=("schedule:tmp-cleanup",),
+        remove=_recorder(captured, SweepResult(swept=("schedule:tmp-cleanup",))),
     )
     app = _app(uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:
@@ -3231,13 +3241,13 @@ async def test_uninstall_applied_summary_names_the_background_job_alone() -> Non
 
 
 async def test_uninstall_applied_summary_names_both_when_swept_together() -> None:
-    """The sweep swept the daemon AND a real shell tweak together: the
+    """The sweep swept a schedule AND a real shell tweak together: the
     background job is named AND the shell-reload hint is still appended,
     since a real tweak's reload is still relevant."""
     captured: list[UninstallDecision] = []
     inputs = _uninstall_inputs(
-        tweak_ids=("tweak:countdown", "daemon:prune-tmpdir"),
-        remove=_recorder(captured, SweepResult(swept=("tweak:countdown", "daemon:prune-tmpdir"))),
+        tweak_ids=("tweak:countdown", "schedule:tmp-cleanup"),
+        remove=_recorder(captured, SweepResult(swept=("tweak:countdown", "schedule:tmp-cleanup"))),
     )
     app = _app(uninstall=inputs, initial_view="uninstall")
     async with app.run_test(size=(100, 30)) as pilot:

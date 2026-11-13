@@ -841,6 +841,12 @@ def _schedule_context(
     )
 
 
+def _schedule_removed_lines(ctx: schedules.ScheduleContext, tool_id: str) -> tuple[str, ...]:
+    """A removed tool takes its timers with it and says so (D-09 amended by F3)."""
+    report = schedules.after_target_removed(ctx, tool_id)
+    return tuple(text for text, _severity in schedules.reconcile_lines(report))
+
+
 def _reconcile_headless(
     console: Console, tools: list[Tool], platform: Platform, refresh: VersionRefreshService
 ) -> None:
@@ -914,14 +920,14 @@ def _build_app(
     # below -- this is a reordering and nothing else.
     version_refresh, updates, policy, _install = _build_services(tools, platform)
 
-    # Constructed once, here, and shared: the Policies list below, the
-    # on-by-default auto-apply closure, and the Uninstall teardown closures
-    # (all wired further down) must never each build their own independent
-    # daemon_policy instance -- all three need to read and act on the exact
-    # same object.
-    daemon = _build_daemon_policy(
-        platform, version_refresh.installed_or(installed), timer_cache=timer_cache
-    )
+    # One context for the Schedules view, the reconciles and the uninstall sweep (24.2-11).
+    installed_now = version_refresh.installed_or(installed)
+    schedule_ctx = _schedule_context(platform, installed_now)
+
+    def _uninstall_extras() -> tuple[Policy, ...]:
+        # Read when a sweep starts, before any removal runs, so each adapter is built from what
+        # is on disk now (R1-19); the idempotent adapters tolerate a timer a removal took first.
+        return (*redirects, *desktop, *schedules.sweep_adapters(schedule_ctx))
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
@@ -935,9 +941,10 @@ def _build_app(
             rc_paths=_RC_PATHS,
             bundles=BUNDLES,
             zshrc_path=_ZSHRC,
-            daemon_policy=daemon,
-            extra_policies=(*redirects, *desktop),
+            daemon_policy=None,
+            extra_policies=_uninstall_extras(),
             catalog=tools,
+            schedule_removed=lambda tool_id: _schedule_removed_lines(schedule_ctx, tool_id),
         )
 
     def _ban_apply_rc_paths() -> list[Path]:
@@ -989,11 +996,12 @@ def _build_app(
             rc_path=_MYSHELLRC,
             bin_dir=_DEFAULT_BIN_DIR,
             zshrc_path=_ZSHRC,
-            daemon_policy=daemon,
-            extra_policies=(*redirects, *desktop),
+            daemon_policy=None,
+            extra_policies=_uninstall_extras(),
         ),
         terminal_sync=_uninstall_terminals,
         retired=lambda: scan_retired(catalog_ids).tools,
+        platform_os=platform.os,
     )
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
@@ -1032,9 +1040,8 @@ def _build_app(
         competing=competing,
     )
 
-    installed_now = version_refresh.installed_or(installed)
     schedule_inputs = ScheduleInputs(
-        context=_schedule_context(platform, installed_now),
+        context=schedule_ctx,
         present=installed_now,
         disk_pressure=disk_pressure,
         competing=competing,
@@ -1397,12 +1404,25 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
             )
             app.run()
         return _session_exit_code(app)
+    # D-12: the teardown shares one hold of the run lock with nothing else; a scheduled run
+    # that holds it finishes first.
+    run_lock = runlock.try_acquire(runlock.run_lock_path(), runlock.INSTALLER_JOB)
+    if run_lock is None:
+        console.print(runlock.BUSY_MESSAGE, markup=False, soft_wrap=True)
+        return 1
+    try:
+        return _teardown_cli(console, platform, assume_yes=assume_yes)
+    finally:
+        run_lock.release()
+
+
+def _teardown_cli(console: Console, platform: Platform, *, assume_yes: bool) -> int:
     confirm = (lambda _message: True) if assume_yes else ask_confirm
     tools = load_tools(_REGISTRY)
-    # Mirrors _build_app's own installed computation, so the non-interactive
-    # CLI teardown path gates fd/rg-aware daemon construction on the SAME
-    # real-installed-status map the interactive path would use.
+    # Mirrors _build_app's own installed computation, the real-installed-status map the
+    # interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
+    schedule_ctx = _schedule_context(platform, lambda tool_id: installed.get(tool_id, False))
     legacy, repairs = _launch_repairs()
     notice = legacy.uninstall_line()
     if notice is not None:
@@ -1411,7 +1431,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         console.print(text, markup=False, soft_wrap=True)
     for text, _severity in _warnings_only(repairs):
         console.print(text, markup=False, soft_wrap=True)
-    # Retired receipts join the teardown only; `installed` and the daemon policy stay catalog-only.
+    # Retired receipts join the teardown only; `installed` stays catalog-only.
     scan = scan_retired(frozenset(tool.id for tool in tools))
     for text in scan.warnings:
         console.print(text, markup=False, soft_wrap=True)
@@ -1427,8 +1447,13 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         # total (see _build_app).
         bundles=BUNDLES,
         zshrc_path=_ZSHRC,
-        daemon_policy=_build_daemon_policy(platform, installed),
-        extra_policies=(*_cache_redirect_policies(platform), *_desktop_shell_policies(platform)),
+        daemon_policy=None,
+        extra_policies=(
+            *_cache_redirect_policies(platform),
+            *_desktop_shell_policies(platform),
+            *schedules.sweep_adapters(schedule_ctx),
+        ),
+        schedule_removed=lambda tool_id: _schedule_removed_lines(schedule_ctx, tool_id),
     )
     # D-01/15.6-06 Task 2: absent zsh reverts only owned terminal
     # configuration (sync_terminal_shells' own no-zsh branch), so a teardown

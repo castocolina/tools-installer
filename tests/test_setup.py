@@ -595,6 +595,14 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup, "default_settings_path", lambda: settings_path, raising=False)
 
 
+def _plant_schedule_state(home: Path) -> None:
+    """A schedule state file under the scratch HOME: the one footprint a sweep adapter reports."""
+    from installer import schedules
+
+    schedules.save_state(schedules.default_state_path(), schedules.ScheduleState())
+    assert (home / ".local" / "state" / "tools-installer" / "schedules.json").exists()
+
+
 def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
     def install(
         tool: Tool,
@@ -1381,14 +1389,13 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
         importlib.reload(setup)
 
 
-def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
+def test_the_non_interactive_uninstall_cli_forwards_the_schedule_adapters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """setup.main(["--uninstall", "--yes"])'s non-interactive path constructs
-    and forwards a real (non-None) daemon_policy into run_uninstall on macOS
-    -- the CLI teardown sweep, per _build_daemon_policy's own single, shared
-    construction point."""
+    """setup.main(["--uninstall", "--yes"])'s non-interactive path forwards no daemon policy and
+    one `schedule:` adapter per owned schedule into run_uninstall, with the removal hook bound."""
     _sandbox(monkeypatch, tmp_path)
+    _plant_schedule_state(tmp_path)
     forwarded: list[dict[str, object]] = []
 
     def fake_run_uninstall(
@@ -1400,9 +1407,10 @@ def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
 
     assert setup.main(["--uninstall", "--yes"]) == 0
-    daemon_policy_obj = forwarded[0]["daemon_policy"]
-    assert isinstance(daemon_policy_obj, Policy)
-    assert daemon_policy_obj.id == "daemon:prune-tmpdir"
+    assert forwarded[0]["daemon_policy"] is None
+    extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
+    assert [p.id for p in extras if p.id.startswith("schedule:")] == ["schedule:state"]
+    assert callable(forwarded[0]["schedule_removed"])
 
 
 def test_both_removers_bind_run_captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1440,12 +1448,13 @@ def test_a_failed_cli_removal_exits_non_zero(
     assert setup.main(["--uninstall", "--yes"]) == 1
 
 
-def test_the_interactive_uninstall_view_forwards_the_daemon_policy(
+def test_the_interactive_uninstall_view_forwards_the_schedule_adapters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """_do_uninstall still sweeps the tmp units through the daemon policy until the schedule
-    adapters replace it (24.2-11 Task 3)."""
+    """_do_uninstall sweeps every schedule through its adapter in `extra_policies` and binds the
+    removal hook; it forwards no daemon policy any more (24.2-11 Task 3, D-23)."""
     _sandbox(monkeypatch, tmp_path)
+    _plant_schedule_state(tmp_path)
     seen = _capture_app(monkeypatch)
     forwarded: list[dict[str, object]] = []
 
@@ -1463,9 +1472,10 @@ def test_the_interactive_uninstall_view_forwards_the_daemon_policy(
             tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
         )
     )
-    forwarded_daemon = forwarded[0]["daemon_policy"]
-    assert isinstance(forwarded_daemon, Policy)
-    assert forwarded_daemon.id == "daemon:prune-tmpdir"
+    assert forwarded[0]["daemon_policy"] is None
+    extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
+    assert [p.id for p in extras if p.id.startswith("schedule:")] == ["schedule:state"]
+    assert callable(forwarded[0]["schedule_removed"])
     # The TUI remover runs its child on run_captured too (review R2-04).
     from installer.run import run_captured
 

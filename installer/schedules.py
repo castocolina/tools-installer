@@ -1135,9 +1135,18 @@ class _Removal:
     kept: tuple[ReceiptArtifact, ...]  # recorded files someone changed, so left in place
 
 
-def _tmp_decided(ctx: ScheduleContext) -> bool:
+def _tmp_decided(ctx: ScheduleContext, *, unreadable: bool = True) -> bool:
+    """Whether tmp cleanup's decided marker is in `~/.myshellrc`.
+
+    A rc file that cannot be read answers `unreadable`: the reconcile must not turn the row on
+    over a decision it cannot see (True), and the sweep must not touch a marker it cannot prove
+    (False, `_state_leftovers`).
+    """
     reader = daemon.decided if ctx.platform_os == "macos" else systemd_daemon.decided
-    return reader(ctx.myshellrc_path)
+    try:
+        return reader(ctx.myshellrc_path)
+    except (OSError, UnicodeDecodeError):
+        return unreadable
 
 
 def _remove_timer(
@@ -1589,7 +1598,9 @@ def _state_artifacts(ctx: ScheduleContext) -> tuple[Path, ...]:
 
 
 def _state_leftovers(ctx: ScheduleContext) -> bool:
-    return any(_exists(path) for path in _state_artifacts(ctx)) or _tmp_decided(ctx)
+    return any(_exists(path) for path in _state_artifacts(ctx)) or _tmp_decided(
+        ctx, unreadable=False
+    )
 
 
 def _footprint(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -> bool:

@@ -38,11 +38,13 @@ from installer import cursor_shim, daemon, env_redirect, receipts, runlock, sche
 from installer.agent_settings import ledger_summary
 from installer.app import (
     UninstallDecision,
+    has_schedule_id,
     path_writer_lines_for,
     pnpm_removal_packages,
     removal_change_lines,
     removal_result_lines,
     removal_runs_line,
+    schedule_phrase,
     settings_change_lines,
     unregister_runs_line,
 )
@@ -161,6 +163,9 @@ class UninstallInputs:
     # completed removal always leaves terminal shell configuration in sync
     # (or safely reverted when zsh itself was just removed).
     terminal_sync: Callable[[], str | None] | None = None
+    # The platform key (`Platform.os`), which words the timer sentence on the tweaks row; only
+    # "macos" is compared, every other key is Linux.
+    platform_os: str = ""
 
 
 # The composition root's disk probe (D-03): callable with no arguments, plus
@@ -1119,17 +1124,6 @@ _REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 _REMOVAL_QUIT_CUT = "Quit before the removal finished; some files may remain."
 
 
-def _has_daemon_id(ids: tuple[str, ...]) -> bool:
-    """True when any id in ids is the background daemon's own namespaced id.
-
-    Mirrors `installer.app._has_daemon_id` exactly: a tiny, named predicate
-    rather than an inline generator expression repeated at every daemon-aware
-    copy call site (preview row + success summary), keeping both byte-for-byte
-    consistent with each other and with the CLI's own equivalent wording.
-    """
-    return any(policy_id.startswith("daemon:") for policy_id in ids)
-
-
 def config_split(
     flagged: Sequence[Tool],
     catalog: Sequence[Tool],
@@ -1275,6 +1269,7 @@ class UninstallScreen(AppScreen):
         self._startup_error: str | None = env_error
         self._remove = inputs.remove
         self._terminal_sync = inputs.terminal_sync
+        self._platform_os = inputs.platform_os
         self.applied = False
         self.error: str | None = None
         # tool id -> its last `remove_failed` outcome; kept across navigation and
@@ -1456,26 +1451,25 @@ class UninstallScreen(AppScreen):
         )
 
     def _tweak_entry(self) -> _UninstallEntry:
-        # Byte-identical to today when no daemon: id is among the offered ids
-        # (Linux, or the daemon never enabled) -- the label/detail only name
-        # the background job when one is actually present.
-        has_daemon = _has_daemon_id(self._tweak_ids)
-        linux_daemon = any(policy_id == "daemon:prune-tmp-linux" for policy_id in self._tweak_ids)
+        # Byte-identical to today when no schedule: id is among the offered ids -- the
+        # label/detail only name the background jobs when one is actually present.
+        has_schedule = has_schedule_id(self._tweak_ids)
         has_redirect = any(policy_id.startswith("cache-redirect:") for policy_id in self._tweak_ids)
-        label = "shell tweaks + background jobs" if has_daemon else "shell tweaks"
+        label = "shell tweaks + background jobs" if has_schedule else "shell tweaks"
         detail = (
             "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
             "the managed helper executables, and the Oh-My-Zsh plugin names "
             "this installer added to .zshrc (never ones you added yourself)"
         )
-        if linux_daemon:
+        if has_schedule and self._platform_os == "macos":
             detail += (
-                " — and unregisters the systemd user timer (its unit files and wrapper executable)"
+                " — and unregisters the background maintenance LaunchAgents"
+                " (their plists, the runner and the schedule state)"
             )
-        elif has_daemon:
+        elif has_schedule:
             detail += (
-                " — and unregisters the background maintenance LaunchAgent"
-                " (its plist and wrapper executable)"
+                " — and unregisters the systemd user timers (their unit files, the runner and"
+                " the schedule state)"
             )
         if has_redirect:
             detail += "; the environment cache redirect is removed too"
@@ -1961,23 +1955,19 @@ class UninstallScreen(AppScreen):
             # From the sweep's own result, never from the row's snapshot: the
             # snapshot describes what was offered, not what came off.
             if swept.swept:
-                # Byte-identical to today when no daemon: id is among what was
+                # Byte-identical to today when no schedule: id is among what was
                 # actually swept. When one is present, name it explicitly and
-                # append the shell-reload hint only if a real, non-daemon
-                # tweak was ALSO swept -- a LaunchAgent needs no shell reload
+                # append the shell-reload hint only if a real, non-schedule
+                # tweak was ALSO swept -- a timer needs no shell reload
                 # at all (11-REVIEWS.md cycle 2 finding #19).
-                has_daemon = _has_daemon_id(swept.swept)
-                linux_daemon = "daemon:prune-tmp-linux" in swept.swept
+                phrase = schedule_phrase(swept.swept)
+                has_schedule = bool(phrase)
                 has_redirect = any(sid.startswith("cache-redirect:") for sid in swept.swept)
-                has_other = any(not sid.startswith("daemon:") for sid in swept.swept)
-                prefix = (
-                    "shell tweaks and the background maintenance job"
-                    if has_daemon
-                    else "shell tweaks"
-                )
-                if linux_daemon and has_redirect:
+                has_other = any(not sid.startswith("schedule:") for sid in swept.swept)
+                prefix = f"shell tweaks and {phrase}" if has_schedule else "shell tweaks"
+                if has_schedule and self._platform_os != "macos" and has_redirect:
                     reload_hint = " — log out and back in so the environment redirect is dropped."
-                elif not has_daemon or has_other:
+                elif not has_schedule or has_other:
                     reload_hint = " — open a new shell so functions and aliases refresh."
                 else:
                     reload_hint = "."
@@ -2630,7 +2620,7 @@ class PoliciesScreen(AppScreen):
             if schedule is not None:
                 hour, minute = schedule
                 lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
-        if _has_daemon_id((policy.id,)):
+        if policy.id.startswith("daemon:"):  # the old Policies row; 24.2-12 deletes this branch
             usage = _temp_usage_line(self._disk_pressure)
             if usage is not None:
                 lines.append(usage)
