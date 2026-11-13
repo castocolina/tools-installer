@@ -2189,6 +2189,9 @@ _NOUNS = {
     MutationHolder.GLOBALS_REINSTALL: _REINSTALL_REFUSAL,
     MutationHolder.DAEMON_DEFAULT: _DAEMON_REFUSAL,
     MutationHolder.POLICY_TOGGLE: _TOGGLE_REFUSAL,
+    MutationHolder.SCHEDULE_CHANGE: (
+        "A schedule change is running; wait for it to finish. Navigation still works."
+    ),
 }
 
 

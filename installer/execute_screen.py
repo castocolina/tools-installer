@@ -31,7 +31,7 @@ from textual.widgets import Label, ListItem, ListView, OptionList, RichLog, Stat
 from textual.widgets.option_list import Option
 
 from installer.engine import install_tool
-from installer.enums import Severity
+from installer.enums import MutationHolder, Severity
 from installer.model import Tool
 from installer.platform import Platform
 from installer.post_install import sensitive_prompt
@@ -605,6 +605,10 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.query_one("#execute-keys", Static).update(_KEYS_RETRY)
 
     def _begin_run(self) -> None:
+        # One take per run, before anything starts: a scheduled run holding the run lock
+        # leaves this run unstarted (D-12). The app releases it when InstallRunFinished arrives.
+        if not self.app.begin_mutation(MutationHolder.INSTALL_RUN, screen=self):
+            return
         self.started = True
         self.add_class("-running")
         self.post_message(InstallRunStarted())

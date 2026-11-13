@@ -31,7 +31,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from installer import daemon, env_redirect, receipts
+from installer import daemon, env_redirect, receipts, runlock
 from installer.agent_settings import ledger_summary
 from installer.app import (
     UninstallDecision,
@@ -825,7 +825,7 @@ class DoctorScreen(AppScreen):
         # line, so a repeat press is answered by what is on screen.
         if self.globals_done:
             return
-        if self.app.refuse_if_mutating(self):
+        if self.app.refuse_if_mutating(self, cross_process=True):
             return
         if self.globals_running:
             return
@@ -867,8 +867,9 @@ class DoctorScreen(AppScreen):
             return
         self.globals_note = None
         self.globals_invalidate_error = None
+        if not self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL, screen=self):
+            return
         self.globals_running = True
-        self.app.begin_mutation(MutationHolder.GLOBALS_REINSTALL)
         self._refresh_body()
         # The package list is passed in rather than re-derived inside the
         # worker: re-deriving would put `pnpm list -g --json` on a second
@@ -1863,9 +1864,10 @@ class UninstallScreen(AppScreen):
         return run
 
     def _apply_removal(self, decision: UninstallDecision) -> None:
-        if self.app.refuse_if_mutating(self):
+        if self.app.refuse_if_mutating(self, cross_process=True):
             return
-        self.app.begin_mutation(MutationHolder.REMOVAL)
+        if not self.app.begin_mutation(MutationHolder.REMOVAL, screen=self):
+            return
         for tool in decision.tools:
             self._failed_lines.pop(tool.id, None)
         if self._version_refresh is not None and decision.tools:
@@ -3094,6 +3096,9 @@ class LinkModeScreen(ModalScreen[str | None]):
 
 
 MUTATION_REFUSAL = "{holder} is running; wait for it to finish. Navigation still works."
+# Nothing in the app ever holds this noun: only a scheduled runner holds the run lock, so it
+# is a refusal, not a MutationHolder.
+SCHEDULED_RUN_REFUSAL = MUTATION_REFUSAL.format(holder="A scheduled run")
 
 
 class DaemonDefaultApplied(Message):
@@ -3135,9 +3140,22 @@ class RefreshFinished(Message):
 
 class MutationLock:
     """The one app mutation lock: a holder noun while a mutation runs, else None.
-    A plain base so `UnifiedApp` and a test host share it instead of copying it."""
+    A plain base so `UnifiedApp` and a test host share it instead of copying it.
+
+    The four holders that change installed tools also take the cross-process run lock, so a
+    scheduled run and the app never mutate at once (D-12); toggles and schedule changes stay
+    in-app only."""
 
     _mutation_holder: MutationHolder | None = None
+    _run_lock: runlock.RunLock | None = None
+    _CROSS_PROCESS = frozenset(
+        {
+            MutationHolder.INSTALL_RUN,
+            MutationHolder.UPDATE,
+            MutationHolder.REMOVAL,
+            MutationHolder.GLOBALS_REINSTALL,
+        }
+    )
 
     @property
     def mutation_in_flight(self) -> bool:
@@ -3147,24 +3165,49 @@ class MutationLock:
     def mutation_holder(self) -> MutationHolder | None:
         return self._mutation_holder
 
-    def begin_mutation(self, holder: MutationHolder) -> None:
+    def begin_mutation(
+        self, holder: MutationHolder, *, screen: AppScreen | ExecuteScreen | None = None
+    ) -> bool:
+        """Take the lock; False when a scheduled run holds the run lock (refusal on `screen`)."""
         # Every caller refuses first; a second take would let one end_mutation
         # release both (C-30), so it is a bug, never a queue.
         if self._mutation_holder is not None:
             raise RuntimeError(f"{self._mutation_holder} already holds the mutation lock")
+        if holder in self._CROSS_PROCESS:
+            run_lock = runlock.try_acquire(runlock.run_lock_path(), runlock.INSTALLER_JOB)
+            if run_lock is None:
+                if screen is not None:
+                    self._refuse(screen, SCHEDULED_RUN_REFUSAL)
+                return False
+            self._run_lock = run_lock
         self._mutation_holder = holder
+        return True
 
     def end_mutation(self) -> None:
+        if self._run_lock is not None:
+            self._run_lock.release()
+            self._run_lock = None
         self._mutation_holder = None
 
-    def refuse_if_mutating(self, screen: AppScreen) -> bool:
+    def refuse_if_mutating(
+        self, screen: AppScreen | ExecuteScreen, *, cross_process: bool = False
+    ) -> bool:
         """Refuse a second mutation while the lock is held: the one template on
-        `screen`'s status, true when refused."""
-        if self._mutation_holder is None:
-            return False
-        screen.status.set(MUTATION_REFUSAL.format(holder=self._mutation_holder), "warn")
+        `screen`'s status, true when refused. `cross_process` also refuses while a
+        scheduled run holds the run lock; it reads the holder line and never probes the
+        flock (a probe could make a starting runner see busy)."""
+        if self._mutation_holder is not None:
+            self._refuse(screen, MUTATION_REFUSAL.format(holder=self._mutation_holder))
+            return True
+        if cross_process and runlock.holder(runlock.run_lock_path()) is not None:
+            self._refuse(screen, SCHEDULED_RUN_REFUSAL)
+            return True
+        return False
+
+    @staticmethod
+    def _refuse(screen: AppScreen | ExecuteScreen, sentence: str) -> None:
+        screen.status.set(sentence, "warn")
         screen.post_message(RefreshRequested())  # SPEC R2: a refusal still ends with one pass
-        return True
 
 
 class UnifiedApp(MutationLock, App[list[str] | None]):
@@ -3803,9 +3846,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def on_install_run_started(self, message: InstallRunStarted) -> None:
         del message  # its arrival is its whole meaning
-        # run_in_flight stays the exit-code witness; the lock is the mutation guard.
+        # run_in_flight stays the exit-code witness; the lock is the mutation guard,
+        # taken by ExecuteScreen._begin_run before the run starts.
         self.run_in_flight = True
-        self.begin_mutation(MutationHolder.INSTALL_RUN)
 
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         self.end_mutation()
