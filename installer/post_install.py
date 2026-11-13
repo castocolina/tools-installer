@@ -66,6 +66,7 @@ from installer.platform import Platform
 from installer.policy import tweak_policy
 from installer.run import CommandError, OutputRunner, command_error_line
 from installer.sanitize import sanitize_log_line
+from installer.status import command_stub_reason
 from installer.terminal_shell import apply_alacritty_keys
 from installer.tweaks import (
     forget_shell_init,
@@ -209,7 +210,7 @@ def _clone_nvim_starter(
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    del tool, platform, confirm
+    del tool, confirm
     home = Path.home()
     config_dir = home / ".config"
     target = config_dir / "nvim"
@@ -219,6 +220,10 @@ def _clone_nvim_starter(
         return (f"Starter not added: {_NVIM_STARTER_TARGET} is yours (left as is).",)
     if shutil.which("git") is None:
         return ("Starter not added: git is not installed.", *_by_hand())
+    # On macOS without the Command Line Tools the system git is a stub that opens an install dialog.
+    stub = command_stub_reason("git", darwin=platform.os == "macos")
+    if stub is not None:
+        return (f"Starter not added: {sanitize_log_line(stub)}.", *_by_hand())
     tmp: Path | None = None
     try:
         config_dir.mkdir(parents=True, exist_ok=True)

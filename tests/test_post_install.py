@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -1476,6 +1476,30 @@ def test_starter_without_git_says_how(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert fake.calls == []
     assert not (Path.home() / ".config" / "nvim").exists()
+
+
+def test_starter_refuses_the_macos_git_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch)
+    probed: list[Sequence[str]] = []
+
+    def no_command_line_tools(argv: Sequence[str]) -> bool:
+        probed.append(argv)
+        return False
+
+    monkeypatch.setattr("installer.status._default_stub_probe", no_command_line_tools)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    lines = run_post_install(_tool(post_install=("clone_nvim_starter",)), macos).lines
+
+    assert lines == (
+        "Starter not added: /usr/bin/git is the macOS stub; the real tool is missing "
+        "(/usr/bin/xcode-select -p failed).",
+        *_by_hand_lines(),
+    )
+    assert probed == [("/usr/bin/xcode-select", "-p")]
+    assert fake.calls == []
+    assert not (Path.home() / ".config" / "nvim").exists()
+    assert _no_temp_dir()
 
 
 @pytest.mark.parametrize("step", ["clone", "checkout", "rev-parse", "apply-check", "apply"])

@@ -45,7 +45,18 @@ def macos_stub_reason(
     probe: StubProbe | None = None,
     which: Which | None = None,
 ) -> str | None:
-    """When `which` resolves to a macOS shim, return None if the real tool exists else a reason.
+    """`command_stub_reason` for the tool's own command."""
+    return command_stub_reason(tool.cmd, darwin=darwin, probe=probe, which=which)
+
+
+def command_stub_reason(
+    cmd: str,
+    *,
+    darwin: bool | None = None,
+    probe: StubProbe | None = None,
+    which: Which | None = None,
+) -> str | None:
+    """When `which` resolves `cmd` to a macOS shim, None if the real tool exists else a reason.
 
     `which` is resolved INSIDE the body (review H2): a `= shutil.which`
     default would bind at import time, so tests and callers that patch
@@ -54,7 +65,7 @@ def macos_stub_reason(
     if not _is_darwin(darwin=darwin):
         return None
     lookup: Which = shutil.which if which is None else which
-    resolved = lookup(tool.cmd)
+    resolved = lookup(cmd)
     if resolved is None:
         return None
     argv = MACOS_STUBS.get(resolved)
