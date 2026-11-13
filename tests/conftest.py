@@ -165,8 +165,12 @@ def refusals_fail_the_test() -> Iterator[None]:
 def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
     """`-n auto` uses at most ~40% of the usable CPUs (24 -> 10), so the host is never starved.
 
-    `PYTEST_XDIST_AUTO_NUM_WORKERS` still overrides this, per xdist.
+    `PYTEST_XDIST_AUTO_NUM_WORKERS` overrides it (CI sets it to the dedicated runner's CPUs).
+    This hook shadows xdist's own, which is where xdist reads that variable, so it reads it here.
     """
+    override = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS", "")
+    if override.isdigit() and int(override) > 0:
+        return int(override)
     if sys.platform == "linux":
         usable = len(os.sched_getaffinity(0))
     else:

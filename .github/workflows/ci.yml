@@ -34,4 +34,6 @@ jobs:
         # Below the job's 25: a stalled run fails this step and keeps its log.
         # The macOS runner needed ~12 min for ~6000 tests and timed out at 96% three times.
         timeout-minutes: 20
-        run: make test
+        # A dedicated runner needs no host headroom: use every CPU, not the 40% local cap
+        # (macos-latest has 3, which the cap turned into a single worker).
+        run: PYTEST_XDIST_AUTO_NUM_WORKERS="$(python3 -c 'import os; print(os.cpu_count() or 1)')" make test
