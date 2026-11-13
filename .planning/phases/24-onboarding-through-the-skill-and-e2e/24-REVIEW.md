@@ -6,7 +6,7 @@ lanes:
   - deep: 24-REVIEW-deep.md (gsd-code-reviewer) — 0 CRITICAL, 2 HIGH, 3 MEDIUM, 5 LOW
   - ponytail: 24-REVIEW-ponytail.md — 0 HIGH, 3 MEDIUM, 7 LOW
   - external: 24-REVIEW-external.md (opencode referee-one/three; referee-two unavailable) — 0 CRITICAL, 2 HIGH, 14 MEDIUM, 6 LOW
-status: fixing
+status: fixed
 ---
 
 # Phase 24 — Consolidated Code Review
@@ -64,3 +64,35 @@ IDs below are the fix IDs the fix commits name; the source IDs are in brackets.
 | ponytail L | "kept the existing image" note on success | D-19 requires naming a kept image |
 | ponytail L | existing `~/.local/bin/alacritty` overwritten unrecorded | Ownership reads a present binary as the user's and skips the install; overwrite needs a forced reinstall path → verify in the fix loop, else todo |
 | ponytail M3 | the real Distrobox build never ran in automation | Addressed by E1/E2 and a nested re-run; else UAT test 6 |
+
+## Fix results (product) — merged 4cf1bb2
+
+| ID | Commit | Status |
+|----|--------|--------|
+| F1 | fbf7c28 | fixed: `~/.alacritty.toml` is the 4th candidate in alacritty(5) order; a config file the installer created is recorded and deleted on strip when only whitespace is left |
+| F2 | 6714a70 | fixed: a ledger-recorded `default_shell` is replaced (`replaced_ours`, reload triggered); an unrecorded value stays the user's |
+| F3, F6, F9, F14 | 43146f6 | fixed: `ExecutorError` caught so cleanup notes surface; staged-file unlink failures become notes and `_cleanup` always runs; every Distrobox step runs with `DBX_CONTAINER_MANAGER=podman`; `_swap` rolls back on `BaseException`; a leftover run dir is reported |
+| F4 | b6e9141 | fixed: one combined `hook_register` step |
+| F5 | a8df96a | fixed: ledger-drop `OSError` per agent becomes a warning |
+| F7 | 3dd5e2f | fixed: revert falls back to removing only the owned leaf key; header and user comments stay; re-parse guard kept |
+| F8 | 75ade96 | fixed: surviving receipt-recorded cargo artifacts listed as `yourself` after a partial uninstall |
+| F10 | 6843824 | fixed: receipt-backed `cargo_distrobox` kept for ownership; the rebuild refuses with a prerequisite message |
+| F11 | 9361f77 | fixed: TOML strings with `ensure_ascii=False` |
+| F12 | f1e3f80 | fixed: `run_bounded` / `run_captured(timeout=)`; both herdr reload-config sites bounded at 20 s |
+| F13 | 53f64bb | fixed: a config with `[general] import` (or legacy top-level `import`) refuses the tuning with a named reason; imports never followed |
+| ponytail L (binary overwrite) | a6f016a | reachable, fixed: install refuses before building when a non-receipt file sits at the binary path |
+
+Known limit kept with a `shortcut:` comment: a stale `.tools-installer.old` from an earlier failed rollback could be restored if an interrupt lands before the first move.
+
+## Fix results (harness) — merged 7665e38 and f484ea9
+
+| ID | Commit | Status |
+|----|--------|--------|
+| E1, E2, E9 | 1818504 | fixed: probe runs the hello image's default command, always `rmi -f`, image-left check skips the probe image; infeasible only on known environment errors; nested uninstall checks the five recorded files |
+| E2 (refinement) | f484ea9 | fixed: podman prints the reason on its own `Error:` line before the row, so the classifier reads the last `Error:` lines too (the real run-2 shape) |
+| E3, E5 | 858aff4 | fixed: herdr plugin list parsed as JSON (unreadable never "listed"); present herdr hosts must be recorded or user-owned |
+| E4 | f65ea70 | fixed: empty-container exemption limited to herdr's recorded hosts, always reported |
+| E6 | 44ab53c | fixed: `TRACER_DISTRO_MISCONFIGURED` only with no installed, skipped or manual rows |
+| E7, E8 | a40ba34 | fixed: pass2 refused after a chunked pass1; a failed pass2 prints its transcript |
+
+Nested feasibility, re-checked by the orchestrator in a disposable `quay.io/podman/stable` container (2026-11-13): inner rootless podman runs (`quay.io/podman/hello` OK), but the image's containers.conf pins `userns/utsns="host"`; `--hostname` (which `distrobox create` always passes) fails with "cannot set hostname when running in the host UTS namespace", `--uts=private` fails with "sethostname: Operation not permitted", and a per-user `userns="auto"` fails with "write to gid_map: Operation not permitted". An unprivileged outer container cannot host a Distrobox box, so the real build stays with UAT test 6.
