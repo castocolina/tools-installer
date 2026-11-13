@@ -22,8 +22,7 @@ the examples.
 below must land on a mechanism that exists in code today (a method kind, a
 param, a hook name, a classifier). Name the file that implements it. If the
 right answer needs a capability the registry, model or installer lacks — per-
-OS/arch artifacts a method kind cannot express, a removal path for a script
-install, a customization with no hook — do not approximate it in the entry.
+OS/arch artifacts a method kind cannot express, a customization with no hook — do not approximate it in the entry.
 Record it as a platform gap in the GSD backlog and say so in `# Verified`. A
 checklist that "covers" a case the platform silently mishandles is worse than
 no checklist.
@@ -54,7 +53,7 @@ Answer all of these; they drive every later step.
 | Question | Why it matters |
 |---|---|
 | OS/CLI tool, user-facing app, or LLM tooling? | tier + audience (step 5) |
-| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects `host_setup`, a `postinstall` hook, or a plain binary install; skill packs are not catalog entries since 23.1 |
+| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects `host_setup`, a `postinstall` hook, or a plain binary install; the catalog installs no skills |
 | Does it have a marketplace/registry entry? | prefer the marketplace route when the host supports it; use symlinks into the host's skills dir only when no marketplace exists or the registry needs a pinned, auditable copy. State the choice and reason. |
 | Does it need other tools at install time or at runtime? | `requires` / `recommends` |
 
@@ -85,10 +84,12 @@ removable by this installer:
 2. Release asset or tarball with a checksum (`github_release`, `tarball`).
 3. Language-ecosystem install (`node`, `uv-tool`, `sdkman`) with the manager in `requires`.
 4. Vendor `script` (curl|bash style) ONLY when the vendor offers nothing
-   better. A script install is **not** package-manager-owned and the Uninstall
-   screen cannot plan its removal: record what it creates (install dir,
-   symlinks, desktop files) in `# Verified` and file a removal-manifest
-   backlog item rather than pretending a package manager owns it.
+   better. A script install is **not** package-manager-owned: declare what it
+   creates in `paths` (receipt-proven, L2), its own uninstall argv in `remove`
+   (L3) and its self-update in `update` (step 4b); record anything else it
+   creates in `# Verified`.
+5. Source build in a throwaway Distrobox (`cargo_distrobox`) when no release
+   asset or package exists for the host and the tool builds with cargo.
 
 Never invent the exact method kind or param name — read the kinds and params
 actually present in `installer/model.py` and existing entries.
@@ -101,9 +102,40 @@ one tool-wide recipe or separate per-OS knobs. For each method from step 4:
 
 | Method kind | What you write | What you still verify |
 |---|---|---|
-| `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `node`, `sdkman` | nothing — removal derives from the manager | the package/candidate name the manager removes is the one installed |
-| `github_release`, `tarball`, `app` | nothing — removal is exactly the path the install computed | install and removal use the same path; nothing else shares that path |
-| `script`, `host_setup` | an explicit recipe: the vendor uninstaller, the exact files/symlinks/desktop entries it writes, or a verifying removal script | run the vendor installer in a disposable container and list what it wrote |
+| `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `node`, `sdkman` | nothing: removal derives from the manager (L1) | the package/candidate name the manager removes is the one installed |
+| `github_release`, `tarball`, `app` | nothing: removal is the receipt of the paths the install computed (L2) | install and removal use the same path; nothing else shares that path |
+| `cargo_distrobox` | `repo` (owner/name slug), `image` (fully qualified), `packages` (in-box build deps), `artifacts` (`{box, host}` tables) | the first artifact is the binary under ~/.local/bin; every `host` sits under ~/.local, ~/.config or ~/.terminfo; the box and the image it pulled are deleted on every outcome |
+| `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME` | run the vendor installer in a disposable container and list what it wrote |
+| `host_setup` | an explicit recipe: the files/symlinks/desktop entries it writes | the recipe removes exactly those |
+
+```toml
+[[tool]]
+id = "alacritty"
+config_paths = ["~/.config/alacritty"]   # tool level: kept on removal unless the user picks delete
+
+[[tool.method]]
+kind = "cargo_distrobox"
+repo = "alacritty/alacritty"
+image = "registry.fedoraproject.org/fedora-toolbox:44"
+packages = ["cargo", "git", "cmake"]
+artifacts = [
+  { box = "src/target/release/alacritty", host = "~/.local/bin/alacritty" },
+  { box = "terminfo/a/alacritty", host = "~/.terminfo/a/alacritty" },
+]
+```
+
+Removal has three levels, tried in order by `uninstall.removal_plan`: **L1** the
+manager's own remove, **L2** the receipt-proven artifacts (download, app,
+`cargo_distrobox`, script `paths`), **L3** the script's `remove` recipe. One
+example per script param (from the registry, except `remove`, which no entry
+ships yet; `{omz_root}` is the only placeholder a script argv may use):
+
+```toml
+paths = ["~/.local/bin/uv", "~/.local/bin/uvx"]   # L2: what the script created
+remove = ["{omz_root}/tools/uninstall.sh"]        # L3: its own uninstall argv (illustrative)
+update = ["uv", "self", "update"]                 # its self-update argv
+writable_prefix = "/home/linuxbrew"               # not writable by the user: hand off, never escalate
+```
 
 Per tool, shared by all its methods, research and record:
 - **Config and data paths** (per-OS variant only when they differ) and the
@@ -114,13 +146,6 @@ Per tool, shared by all its methods, research and record:
   both by explicit choice. A file with the right name is never proof we wrote it.
 - **Foreign owner:** if a manager the installer did not use owns the tool,
   removal delegates to that manager; it never runs another method's recipe.
-
-Then check the platform can express it (see the principle above). Today
-`Tool.uninstall` is a single free-text hint and `installer/uninstall.py`
-`plan_uninstall` treats download/app kinds generically — per-method removal,
-config policy and the removal prompt do not exist yet (backlog 999.8, design
-recorded there). Until they do, record the researched recipe in `# Verified`,
-set the `uninstall` hint, and do NOT claim the tool is removable.
 
 ### 5. Decide tier and audience
 
@@ -159,7 +184,10 @@ walk through (examples of the shape, not an exhaustive list):
 - Terminal emulators: word navigation with alt/option+arrows is often broken
   per OS (macOS vs Linux, per terminal); a "clear screen + scrollback" binding
   differs per OS (Cmd+K on macOS, Ctrl+Shift+K on Linux). Also which shell the
-  terminal should launch (see `installer/terminal_shell.py`).
+  terminal should launch: that is the zsh terminal sync
+  (`installer/terminal_shell.py`). Word navigation, clear-scrollback and other
+  terminal customizations are the terminal's install tuning (a `post_install`
+  action), never a Policies row.
 - Multiplexers/agent workspaces: companion scripts or a plugin from another
   repo (status icons, separators between agents).
 - Shells/prompts/editors: plugin managers, themes, shell-integration lines.
@@ -192,12 +220,13 @@ three independent ones decide what the user sees:
 
 - `installer/status.py` `is_installed` — the catalog's installed mark.
 - `installer/ownership.py` `resolve_ownership` — the Owner column.
-- `installer/uninstall.py` `plan_uninstall` — what the Uninstall screen can
-  remove (download and app kinds only).
+- `installer/uninstall.py` `removal_plan` — what the Uninstall screen can
+  remove: L1 the manager's own remove, L2 receipt-proven artifacts, L3 the
+  script's `remove` recipe (step 4b).
 
 For the new entry, confirm all three give a truthful answer: presence is
 detectable (`cmd`, `detect_path`, `bin_dir`), ownership resolves to something
-sensible, and removal is either plannable or honestly "its own installer".
+sensible, and removal is plannable or honestly "its own installer".
 Also scan existing entries sharing its category/kind for the conventions to
 copy (`rg` the registry, do not rely on memory).
 
