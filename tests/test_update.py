@@ -11,11 +11,13 @@ import pytest
 
 import installer.executors as executors
 import installer.update as update
-from installer import receipts
+from installer import cargo_distrobox, receipts
 from installer.apps import UpdateExecResult as AppUpdateExecResult
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.download import UpdateExecResult as DownloadUpdateExecResult
+from installer.engine import install_tool
+from installer.enums import InstallStatus
 from installer.executors import ExecutorError
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
@@ -29,12 +31,14 @@ from installer.ownership import (
     ManagerOwnership,
     Owner,
     OwnershipCandidate,
+    resolve_ownership,
 )
 from installer.platform import Platform
 from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
+from installer.session import Disposition, build_plan
 from installer.update import (
     InvalidateFn,
     PostinstallFn,
@@ -49,6 +53,17 @@ from installer.update import (
 )
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
+from tests.state_doubles import plan_state
+from tests.test_cargo_distrobox import (
+    FakeBox,
+    alacritty_method,
+    alacritty_tool,
+    failed_build,
+    host_paths,
+    immutable_with_tools,
+    inner,
+    step_of,
+)
 from tests.test_download import fixture_runner
 
 
@@ -2133,3 +2148,182 @@ def test_an_unpinned_app_still_updates(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert outcome.status == "updated"
     assert seen == [unpinned]
+
+
+class _TaggedBox(FakeBox):
+    """A FakeBox whose every output carries the release tag it was built from."""
+
+    def __init__(self, tag: str) -> None:
+        super().__init__()
+        self.tag = tag
+        self.binary_text = f"#!/bin/sh\necho 'alacritty {tag.lstrip('v')}'\n"
+
+    def _write(self, relative: str, text: str, mode: int) -> None:
+        super()._write(relative, f"{text}# built from {self.tag}\n", mode)
+
+
+def _digests(root: Path) -> dict[Path, str]:
+    return {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _box_name(box: FakeBox) -> str:
+    create = inner(box.calls[0])
+    return create[create.index("--name") + 1]
+
+
+def _alacritty_target(tool: Tool, platform: Platform, binary: Path) -> update.UpdateTarget:
+    ownership = resolve_ownership(
+        tool,
+        platform=platform,
+        inventory=ManagerInventory(
+            brew_formulae={},
+            brew_casks={},
+            pnpm_globals=frozenset(),
+            uv_tools={},
+            brew_prefix=None,
+        ),
+        artifacts=[binary],
+        which=lambda _cmd: str(binary),
+        managed_bin_dir=binary.parent,
+    )
+    return update.UpdateTarget(tool=tool, ownership=ownership)
+
+
+def _image_not_present(_ref: str) -> bool | None:
+    return False
+
+
+@pytest.fixture
+def scratch_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root = tmp_path / "run-root"
+    root.mkdir()
+    monkeypatch.setattr(cargo_distrobox, "RUN_ROOT", root)
+    monkeypatch.setattr(cargo_distrobox, "image_exists", _image_not_present)
+
+
+@pytest.mark.usefixtures("scratch_build")
+def test_newer_alacritty_tag_rebuilds_and_keeps_the_config() -> None:
+    tool = alacritty_tool()
+    platform = immutable_with_tools()
+    first = _TaggedBox("v0.17.0")
+    installed = install_tool(
+        tool,
+        platform,
+        runner=first,
+        resolve_tag=lambda _repo: "v0.17.0",
+        present=lambda _tool: False,
+    )
+    assert installed.status is InstallStatus.INSTALLED
+    binary, desktop, icon, terminfo, terminfo_direct = host_paths()
+    config = Path.home() / ".config/alacritty"
+    (config / "themes").mkdir(parents=True)
+    (config / "alacritty.toml").write_text("[font]\nsize = 11\n", encoding="utf-8")
+    (config / "themes/dark.toml").write_text("[colors]\n", encoding="utf-8")
+    config_before = _digests(config)
+
+    newer = _TaggedBox("v0.18.0")
+    outcome = update.perform_update(
+        _alacritty_target(tool, platform, binary),
+        platform=platform,
+        runner=newer,
+        resolve_tag=lambda _repo: "v0.18.0",
+    )
+
+    assert outcome.status == "updated", outcome.detail
+    assert _box_name(newer) != _box_name(first)
+    clone = next(inner(call) for call in newer.calls if step_of(call) == "clone")
+    assert clone[clone.index("--branch") + 1] == "v0.18.0"
+    assert "alacritty 0.18.0" in binary.read_text(encoding="utf-8")
+    receipt = receipts.read("alacritty")
+    assert receipt is not None
+    assert [(artifact.path, artifact.type) for artifact in receipt.artifacts] == [
+        (binary, "file"),
+        (desktop, "leaf"),
+        (icon, "leaf"),
+        (terminfo, "leaf"),
+        (terminfo_direct, "leaf"),
+    ]
+    assert receipt.artifacts[0].sha256 == hashlib.sha256(binary.read_bytes()).hexdigest()
+    for rebuilt in (desktop, icon, terminfo, terminfo_direct):
+        assert "# built from v0.18.0" in rebuilt.read_text(encoding="utf-8")
+    assert not any("kept your existing" in note for note in outcome.cleanup_warnings)
+    assert _digests(config) == config_before
+
+
+def _install_v017() -> None:
+    installed = install_tool(
+        alacritty_tool(),
+        immutable_with_tools(),
+        runner=_TaggedBox("v0.17.0"),
+        resolve_tag=lambda _repo: "v0.17.0",
+        present=lambda _tool: False,
+    )
+    assert installed.status is InstallStatus.INSTALLED
+
+
+def _old_install_bytes() -> dict[Path, bytes]:
+    receipt = receipts.receipt_path("alacritty")
+    return {path: path.read_bytes() for path in (*host_paths(), receipt)}
+
+
+def _rebuild_to_v018(runner: FakeBox) -> update.UpdateOutcome:
+    tool = alacritty_tool()
+    platform = immutable_with_tools()
+    return update.perform_update(
+        _alacritty_target(tool, platform, host_paths()[0]),
+        platform=platform,
+        runner=runner,
+        resolve_tag=lambda _repo: "v0.18.0",
+    )
+
+
+def test_current_alacritty_tag_plans_skip_without_a_box(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_box(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+        raise AssertionError("a current Alacritty must not start a build")
+
+    monkeypatch.setattr(cargo_distrobox, "install", no_box)
+    tool = alacritty_tool()
+    platform = immutable_with_tools()
+    state = plan_state(tool, platform=platform, owner="installer", method=alacritty_method())
+    [row] = build_plan([tool.id], [tool], lambda _id: state, platform, reinstall=frozenset())
+    assert row.disposition is Disposition.SKIP
+    assert row.reason == "already current"
+
+
+@pytest.mark.usefixtures("scratch_build")
+def test_failed_rebuild_raises_and_keeps_the_old_install() -> None:
+    _install_v017()
+    before = _old_install_bytes()
+    with pytest.raises(ExecutorError, match="error: could not compile"):
+        cargo_distrobox.install(
+            alacritty_method(),
+            ExecContext(
+                runner=FakeBox(failed_build()),
+                platform=immutable_with_tools(),
+                resolve_release=release_resolver(lambda _repo: "v0.18.0"),
+            ),
+        )
+
+    failing = FakeBox(failed_build())
+    outcome = _rebuild_to_v018(failing)
+    assert outcome.status == "failed"
+    assert outcome.detail == "error: could not compile"
+    assert failing.steps() == ["create", "clone", "build", "rm", "rmi"]
+    assert _old_install_bytes() == before
+
+
+@pytest.mark.usefixtures("scratch_build")
+def test_interrupted_rebuild_keeps_the_old_binary() -> None:
+    """Backstop: 24-01's staged swap already guards this; the test pins it on the update route."""
+    _install_v017()
+    before = _old_install_bytes()
+    interrupted = FakeBox({"build": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        _rebuild_to_v018(interrupted)
+
+    assert interrupted.steps() == ["create", "clone", "build", "rm", "rmi"]
+    assert _old_install_bytes() == before

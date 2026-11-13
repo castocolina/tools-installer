@@ -80,7 +80,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol, cast
 
-from installer import apps, download, executors, receipts
+from installer import apps, cargo_distrobox, download, executors, receipts
 from installer import ownership as ownership_mod
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
@@ -447,6 +447,16 @@ def _update_installer_owned(
             executors.sdk_pipeline(argv) if argv[:1] == ["sdk"] else _declared_leaf(method, argv)
         )
         return ()
+    if method.kind == "cargo_distrobox":
+        # D-04: the newer tag is rebuilt in a fresh box; its ExecutorError reaches perform_update.
+        return cargo_distrobox.install(
+            method,
+            ExecContext(
+                runner=runner,
+                platform=platform,
+                resolve_release=release_resolver(resolve_tag),
+            ),
+        )
     raise UpdateError(f"no installer-owned update path for method kind '{method.kind}'")
 
 
