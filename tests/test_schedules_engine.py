@@ -1718,3 +1718,54 @@ def test_a_failed_registration_re_records_the_shared_files_it_rewrote(
     shared = load_state(ctx.state_path).state.shared
     assert shared
     assert all(receipts.matches(a, rehash=True) for a in shared)
+
+
+PASSTHROUGH = {
+    "PNPM_HOME": "/opt/pnpm",
+    "HTTP_PROXY": "http://proxy.example:3128",
+    "HTTPS_PROXY": "http://proxy.example:3128",
+    "NO_PROXY": "localhost,.corp",
+    "no_proxy": "localhost,.corp",
+    "SSL_CERT_FILE": "/etc/ssl/ca.pem",
+    "REQUESTS_CA_BUNDLE": "/etc/ssl/ca.pem",
+    "NODE_EXTRA_CA_CERTS": "/etc/ssl/ca.pem",
+}
+
+
+def passthrough_ctx(env: Env, extra: dict[str, str]) -> ScheduleContext:
+    return replace(env.ctx, environ={**env.ctx.environ, **PASSTHROUGH, **extra})
+
+
+def test_the_linux_unit_carries_the_proxy_and_certificate_variables(env: Env) -> None:
+    ctx = passthrough_ctx(env, {"HTTP_PROXY": "bad\nvalue", "https_proxy": 'has"quote'})
+    turn_on(ctx, "update-claude")
+    lines = (ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text().splitlines()
+    for key, value in PASSTHROUGH.items():
+        if key != "HTTP_PROXY":
+            assert f'Environment="{key}={value}"' in lines
+    text = "\n".join(lines)
+    assert "bad" not in text  # an unrenderable value is dropped, not written
+    assert 'has"quote' not in text
+    assert "HTTP_PROXY" not in text
+
+
+def test_a_unit_without_those_variables_in_the_writing_process_carries_none(env: Env) -> None:
+    turn_on(env.ctx, "update-claude")
+    text = (env.ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text()
+    assert not any(key in text for key in PASSTHROUGH)
+
+
+def test_the_macos_plist_carries_the_proxy_and_certificate_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mac = make_env(tmp_path, monkeypatch, os_key="macos")
+    ctx = passthrough_ctx(mac, {"HTTP_PROXY": "bad\nvalue"})
+    turn_on(ctx, "update-claude")
+    plist = plistlib.loads(
+        (ctx.launch_agents_dir / "com.tools-installer.schedule.update-claude.plist").read_bytes()
+    )
+    carried = plist["EnvironmentVariables"]
+    assert {key: carried[key] for key in PASSTHROUGH if key != "HTTP_PROXY"} == {
+        key: value for key, value in PASSTHROUGH.items() if key != "HTTP_PROXY"
+    }
+    assert "HTTP_PROXY" not in carried

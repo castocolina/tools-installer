@@ -865,7 +865,15 @@ def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]
 
 def _unit_environment(ctx: ScheduleContext) -> dict[str, str]:
     path = clean_unit_path(ctx.home, platform_os=ctx.platform_os, environ=ctx.environ)
-    return {"PATH": path, "HOME": str(ctx.home), "TMPDIR": ctx.tmpdir}
+    environment = {"PATH": path, "HOME": str(ctx.home), "TMPDIR": ctx.tmpdir}
+    # F8: what the installing process has, for the scheduled run to hand its children. A value
+    # the unit grammar cannot carry is dropped rather than failing the whole schedule.
+    macos = ctx.platform_os == "macos"  # every other Platform.os key is Linux
+    for key in daemon.PASSTHROUGH_KEYS:
+        value = ctx.environ.get(key, "")
+        if daemon.valid_passthrough_value(value) and (macos or systemd_daemon.quotable(value)):
+            environment[key] = value
+    return environment
 
 
 def _snapshot(paths: tuple[Path, ...]) -> dict[Path, bytes | None]:

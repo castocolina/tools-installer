@@ -24,6 +24,7 @@ from installer.atomic import atomic_write_bytes
 from installer.daemon import (
     ENVIRONMENT_KEYS,
     DaemonScheduleError,
+    check_environment,
     ensure_log_path,
     remove_wrapper,
     wrapper_present,
@@ -154,6 +155,11 @@ def systemd_available(*, which: Callable[[str], str | None] = shutil.which) -> b
 _REJECTED_CHARS = ('"', "\\", "%", "$", "\n", "\r")
 
 
+def quotable(value: str) -> bool:
+    """Whether `_quote` would accept `value`; a caller drops what a unit cannot carry."""
+    return not any(char in value for char in _REJECTED_CHARS)
+
+
 def _quote(value: str) -> str:
     """Validate one rendered value and return it wrapped in double quotes.
 
@@ -180,22 +186,16 @@ def render_exec_service(
 ) -> str:
     """The systemd unit (.service) INI text for a oneshot run of any argv.
 
-    `argv[0]` must be absolute. The environment is closed to PATH, HOME and
-    TMPDIR (rendered in that order, whichever are given); HOME and TMPDIR must
-    be absolute and PATH non-empty. Every token and every KEY=value goes through
+    `argv[0]` must be absolute. The environment is closed to PATH, HOME, TMPDIR and
+    the passthrough keys (rendered in that order, whichever are given); HOME and TMPDIR
+    must be absolute, PATH non-empty and a passthrough value free of control
+    characters. Every token and every KEY=value goes through
     _quote, and everything is validated before anything is returned, so a bad
     value can never reach a written unit file.
     """
     if not argv or not Path(argv[0]).is_absolute():
         raise DaemonScheduleError(f"argv[0] must be an absolute path: {list(argv)[:1]!r}")
-    unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
-    if unknown:
-        raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
-    if "PATH" in environment and not environment["PATH"]:
-        raise DaemonScheduleError("PATH must not be empty")
-    for key in ("HOME", "TMPDIR"):
-        if key in environment and not Path(environment[key]).is_absolute():
-            raise DaemonScheduleError(f"{key} must be an absolute path: {environment[key]!r}")
+    check_environment(environment)
     exec_start = " ".join(_quote(token) for token in argv)
     lines = [
         "[Unit]",
