@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import daemon, receipts, schedules, systemd_daemon
+from installer import daemon, receipts, runlock, schedules, systemd_daemon
 from installer.cursor_shim import is_our_shim
 from installer.run import CommandError
 from installer.schedules import (
@@ -524,7 +524,9 @@ def test_no_manager_reconcile_writes_nothing(
 
 # --- Task 3: uninstall-sweep adapters that leave no schedule file, script or record ---
 
-LOCK_NAMES = frozenset({"schedules.json.lock", "schedules.log.lock", "schedules.reconcile.lock"})
+LOCK_NAMES = frozenset(
+    {"schedules.json.lock", "schedules.log.lock", "schedules.reconcile.lock", "run.lock"}
+)
 ALL_IDS = ("schedule:tmp-cleanup", "schedule:cache-cleanup", "schedule:update-claude")
 
 
@@ -906,3 +908,88 @@ def test_the_sweep_under_a_damaged_state_removes_every_timer_before_the_damaged_
     assert all(seen)  # the copy outlived every unit removal
     assert not damaged.exists()
     assert not lab.ctx.state_path.exists()
+
+
+def shared_files(ctx: ScheduleContext) -> list[Path]:
+    return [ctx.data_dir / name for name in ("runner.py", "prune-tmp-linux.sh")]
+
+
+def test_turning_off_the_last_schedule_keeps_the_shared_files_while_a_run_holds_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on(ctx, "update-claude")
+    held = runlock.try_acquire(ctx.lock_path, "update-claude")  # a scheduled run in flight
+    assert held is not None
+    try:
+        turn_off(ctx, "update-claude")
+    finally:
+        held.release()
+
+    assert unit_files(ctx, CLAUDE_BASENAME) == []
+    assert all(path.exists() for path in shared_files(ctx))  # a run may be reading them
+    assert load_state(ctx.state_path).state.shared  # still recorded, so a later off can remove
+
+    turn_on(ctx, "update-claude")
+    turn_off(ctx, "update-claude")  # idle now: the last off removes them
+    assert not any(path.exists() for path in shared_files(ctx))
+    assert load_state(ctx.state_path).state.shared == ()
+
+
+def test_shared_files_stay_while_any_unit_exists_on_disk_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on(ctx, "update-claude")
+
+    def another_process_adopts_the_assets(_cmd: list[str]) -> None:
+        # a unit pair another process wrote and has not recorded yet
+        systemd_daemon.write_unit_pair(
+            ctx.unit_dir, basename=CACHE_BASENAME, service_text="s\n", timer_text="t\n"
+        )
+
+    lab.env.run.hooks["daemon-reload"] = another_process_adopts_the_assets
+    turn_off(ctx, "update-claude")
+
+    assert all(path.exists() for path in shared_files(ctx))
+
+
+def test_the_sweep_reports_a_busy_run_and_keeps_the_shared_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    held = runlock.try_acquire(ctx.lock_path, "update-claude")
+    assert held is not None
+    try:
+        result = sweep_policies(list(sweep_adapters(ctx)))
+    finally:
+        held.release()
+
+    assert result.failed
+    assert all(path.exists() for path in shared_files(ctx))
+    assert ctx.state_path.exists()  # not removed under a run
+
+    result = sweep_policies(list(sweep_adapters(ctx)))
+    assert not result.failed
+    assert not any(path.exists() for path in shared_files(ctx))
+
+
+def test_the_installers_own_run_lock_does_not_block_removing_the_shared_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on(ctx, "update-claude")
+    mine = runlock.try_acquire(ctx.lock_path, runlock.INSTALLER_JOB)  # a REMOVAL in flight
+    assert mine is not None
+    try:
+        lab.live.discard("claude")
+        after_target_removed(ctx, "claude")
+    finally:
+        mine.release()
+
+    assert not any(path.exists() for path in shared_files(ctx))

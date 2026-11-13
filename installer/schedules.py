@@ -15,7 +15,7 @@ import re
 import shutil
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -1280,18 +1280,54 @@ def _remove_timer(
         records = {**current.records, schedule_id: updated}
         if forget and not kept:
             del records[schedule_id]
-        shared = current.shared
-        if shared and not _on_schedules(ctx, exclude=None):
-            shared = _delete_recorded(shared)
-            if shared:
-                names = ", ".join(str(artifact.path) for artifact in shared)
+        return replace(current, records=records, cursor_shim=status)
+
+    update_state(ctx.state_path, change)
+    _remove_shared_if_idle(ctx, warnings)
+    return _Removal(tuple(warnings), kept)
+
+
+@contextlib.contextmanager
+def _run_idle(ctx: ScheduleContext) -> Generator[bool]:
+    """Yield whether no scheduled run is in flight, holding the run lock for the body (F4).
+
+    The take never waits, so taking it under the reconcile lock cannot deadlock the order run
+    lock, reconcile lock, state lock. The installer's own mutation holds the run lock in this
+    process (a removal in flight); that is idle, not a scheduled run.
+    """
+    mine = runlock.holder(ctx.lock_path)
+    if mine is not None and mine.job == runlock.INSTALLER_JOB and mine.pid == os.getpid():
+        yield True
+        return
+    lock = runlock.try_acquire(ctx.lock_path, runlock.INSTALLER_JOB)
+    try:
+        yield lock is not None
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def _remove_shared_if_idle(ctx: ScheduleContext, warnings: list[str]) -> None:
+    """Delete the recorded shared files once no unit exists on disk and no run is in flight (F4).
+
+    The caller holds the reconcile lock, so no `turn_on` can adopt the files meanwhile; a
+    busy run leaves them recorded for the next removal."""
+    if not load_state(ctx.state_path).state.shared or _on_schedules(ctx, exclude=None):
+        return
+    with _run_idle(ctx) as idle:
+        if not idle:
+            return
+
+        def change(current: ScheduleState) -> ScheduleState:
+            kept = _delete_recorded(current.shared)
+            if kept:
+                names = ", ".join(str(artifact.path) for artifact in kept)
                 warnings.append(f"kept, changed since it was copied: {names}")
             else:
                 _prune_data_dirs(ctx)
-        return replace(current, records=records, shared=shared, cursor_shim=status)
+            return replace(current, shared=kept)
 
-    update_state(ctx.state_path, change)
-    return _Removal(tuple(warnings), kept)
+        update_state(ctx.state_path, change)
 
 
 def _kept_message(kept: tuple[ReceiptArtifact, ...]) -> str:
@@ -1718,13 +1754,18 @@ def _cleanup_if_last(ctx: ScheduleContext) -> None:
     state = load_state(ctx.state_path).state
     if any(_footprint(ctx, state, schedule) for schedule in SCHEDULES):
         return
-    kept = _delete_recorded(state.shared)
-    if kept:
-        raise OSError(f"kept, changed since it was copied: {', '.join(str(a.path) for a in kept)}")
-    _prune_data_dirs(ctx)
-    _clear_tmp_decided(ctx)
-    for path in _state_artifacts(ctx):
-        path.unlink(missing_ok=True)
+    with _run_idle(ctx) as idle:
+        if not idle:  # a run is reading the scripts and writing the log
+            raise OSError(runlock.BUSY_MESSAGE)
+        kept = _delete_recorded(state.shared)
+        if kept:
+            raise OSError(
+                f"kept, changed since it was copied: {', '.join(str(a.path) for a in kept)}"
+            )
+        _prune_data_dirs(ctx)
+        _clear_tmp_decided(ctx)
+        for path in _state_artifacts(ctx):
+            path.unlink(missing_ok=True)
 
 
 def _clear_tmp_decided(ctx: ScheduleContext) -> None:
@@ -1738,6 +1779,11 @@ def _sweep_result(layer: str, detail: str, warnings: Iterable[str]) -> PolicyRes
 
 def _sweep_schedule(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
     """The full removal of one schedule; idempotent, and it raises OSError naming what it kept."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):  # a turn-on cannot adopt meanwhile
+        return _sweep_schedule_locked(ctx, schedule)
+
+
+def _sweep_schedule_locked(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
     state = load_state(ctx.state_path).state
     warnings: list[str] = []
     refused: list[str] = []
@@ -1780,7 +1826,8 @@ def _schedule_policy(ctx: ScheduleContext, schedule: Schedule) -> Policy:
 
 def _state_policy(ctx: ScheduleContext) -> Policy:
     def clean() -> PolicyResult:
-        _cleanup_if_last(ctx)
+        with runlock.hold(reconcile_lock_path(ctx.state_path)):
+            _cleanup_if_last(ctx)
         return _sweep_result("state", "removed", ())
 
     return Policy(

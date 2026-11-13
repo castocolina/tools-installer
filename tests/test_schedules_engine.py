@@ -197,7 +197,7 @@ def files_left(root: Path) -> list[str]:
         str(path.relative_to(root))
         for path in sorted(root.rglob("*"))
         if (path.is_file() or path.is_symlink())
-        and path.name not in {"schedules.json", "schedules.json.lock"}
+        and path.name not in {"schedules.json", "schedules.json.lock", "run.lock"}
     ]
 
 
@@ -1068,7 +1068,10 @@ def test_toggle_during_a_run_leaves_the_run_alone(env: Env) -> None:
         assert runlock.try_acquire(ctx.lock_path, "probe") is None  # still held
     finally:
         held.release()
-    assert files_left(env.home) == [".local/state/tools-installer/run.lock"]  # only the run lock
+    # the run was reading them, so the off kept the shared files (F4)
+    assert files_left(env.home) == sorted(
+        f".local/share/tools-installer/schedules/{name}" for name in SHARED_NAMES
+    )
 
 
 ESCALATION = re.compile(r"\b(sudo|pkexec|doas)\b")
