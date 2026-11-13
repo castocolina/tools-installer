@@ -2682,6 +2682,24 @@ def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
         "env XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box: cannot set hostname when "
         "running in the host UTS namespace"
     ]
+    engine = classify(
+        "engine",
+        "Creating 'box' using image registry.fedoraproject.org/fedora-toolbox:44\tError: invalid "
+        "config provided: cannot set hostname when running in the host UTS namespace: invalid "
+        "configuration\n"
+        "✖ alacritty  failed — command failed (125): timeout 900 env\n"
+        "✖ alacritty failed: command failed (125): timeout 900 env distrobox create --yes",
+    )
+    # The real run-2 shape: the reason is podman's own line, not part of the row.
+    assert engine.returncode == 2, engine.stdout
+    first = engine.stdout.splitlines()[0]
+    assert first.startswith("TRACER_NESTED_INFEASIBLE step=distrobox-create")
+    unrelated = classify(
+        "unrelated",
+        "Error: some other step\n"
+        "✖ alacritty failed: command failed (125): timeout 900 env distrobox create --yes",
+    )
+    assert unrelated.returncode == 1, unrelated.stdout
     broken = classify("broken", "✖ alacritty  failed — cargo build: exit 101")
     assert broken.returncode == 1
     assert broken.stdout.splitlines() == [

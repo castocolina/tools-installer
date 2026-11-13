@@ -1624,7 +1624,7 @@ nested_environment_error() {
 # $1 is the install transcript. Returns 0 when Alacritty installed, 2 (infeasible: the box could
 # not be created for a known environment reason) or 1 (a product failure, or no Alacritty row at all).
 nested_classify_alacritty() {
-  local row word detail full
+  local row word detail full engine
   row="$(sed -nE 's/^[^ ]+ +alacritty +(installed|failed|checksum mismatch|crashed|dependency failed|not attempted|blocked|manual|skipped|updated|repaired|reconfigured|reinstalled)( — (.*))?$/\1|\3/p' "$1" | tail -n 1)"
   if [[ -z "$row" ]]; then
     printf 'TRACER_NESTED_BUILD_FAILED detail=no alacritty row in the install output\n'
@@ -1638,7 +1638,11 @@ nested_classify_alacritty() {
       # The Summary row wraps a long reason over several lines; the unwrapped `<mark> alacritty
       # failed: ...` line after it carries the whole command (24-08 nested run #2).
       full="$(sed -nE 's/^[^ ]+ alacritty failed: (.*)$/\1/p' "$1" | tail -n 1)"
-      if [[ "$detail $full" == *"distrobox create"* ]] && nested_environment_error "$detail $full"; then
+      # Podman prints the reason on its own `Error: ...` line before the row (24-08 nested run #2:
+      # "cannot set hostname when running in the host UTS namespace"), not in the row itself.
+      engine="$(grep -E 'Error: ' "$1" | tail -n 5 || true)"
+      if [[ "$detail $full" == *"distrobox create"* ]] \
+        && nested_environment_error "$detail $full $engine"; then
         nested_infeasible distrobox-create "${full:-$detail}"
         return 2
       fi
