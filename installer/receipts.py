@@ -116,23 +116,24 @@ def method_key(method: Method) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def artifact_to_json(artifact: ReceiptArtifact) -> dict[str, object]:
+    """The one JSON encoding of an artifact; `artifact_from_json` is its decoder."""
+    if not Path(artifact.path).is_absolute():
+        raise ValueError(f"receipt artifact path must be absolute: {artifact.path}")
+    return {
+        "path": str(artifact.path),
+        "type": artifact.type,
+        "target": artifact.target,
+        "sha256": artifact.sha256,
+        "size": artifact.size,
+        "mtime_ns": artifact.mtime_ns,
+        "key": artifact.key,
+    }
+
+
 def _write_unlocked(receipt: Receipt) -> None:
     """Encode and atomically write one receipt. The caller must hold _WRITE_LOCK."""
-    artifacts: list[dict[str, object]] = []
-    for artifact in receipt.artifacts:
-        if not Path(artifact.path).is_absolute():
-            raise ValueError(f"receipt artifact path must be absolute: {artifact.path}")
-        artifacts.append(
-            {
-                "path": str(artifact.path),
-                "type": artifact.type,
-                "target": artifact.target,
-                "sha256": artifact.sha256,
-                "size": artifact.size,
-                "mtime_ns": artifact.mtime_ns,
-                "key": artifact.key,
-            }
-        )
+    artifacts = [artifact_to_json(artifact) for artifact in receipt.artifacts]
     payload: dict[str, object] = {
         "v": 1,
         "tool": receipt.tool,
@@ -210,7 +211,7 @@ def read(tool_id: str) -> Receipt | None:
     artifact_list: list[object] = list(cast(list[object], raw_artifacts))
     artifacts: list[ReceiptArtifact] = []
     for raw_artifact in artifact_list:
-        artifact = _read_artifact(raw_artifact)
+        artifact = artifact_from_json(raw_artifact)
         if artifact is None:
             return None
         artifacts.append(artifact)
@@ -990,7 +991,7 @@ def _read_type_only(artifact: dict[str, object], path: Path, kind: str) -> Recei
     return ReceiptArtifact(path=path, type="leaf", target=target)
 
 
-def _read_artifact(raw: object) -> ReceiptArtifact | None:
+def artifact_from_json(raw: object) -> ReceiptArtifact | None:
     """Decode one artifact, enforcing each type's required fields.
 
     Each type keeps only the fields it is checked on: a `file` its 64-hex
