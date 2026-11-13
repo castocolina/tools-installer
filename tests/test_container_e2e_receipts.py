@@ -1213,6 +1213,10 @@ def test_hook_probe_before_reads_the_real_codegraph_receipt(
         )
     )
     (scratch / ".claude.json").write_text('{"mcpServers": {"codegraph": {}}}', encoding="utf-8")
+    # The Claude CLI's own backup of .claude.json is not the installer's file to clean.
+    (scratch / ".claude" / "backups").mkdir(parents=True)
+    backup = scratch / ".claude" / "backups" / ".claude.json.backup.1"
+    backup.write_text('{"mcpServers": {"codegraph": {}}}', encoding="utf-8")
     (scratch / "phase").mkdir()
     script = "\n".join(
         [
@@ -1227,6 +1231,7 @@ def test_hook_probe_before_reads_the_real_codegraph_receipt(
     result = _run(script, scratch)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.splitlines() == ["TRACER_HOOKS_RECORDED hosts=claude files=1"]
+    assert (scratch / "phase" / "hook-files.txt").read_text(encoding="utf-8") == ".claude.json\n"
 
 
 _REQUIRED_TUNED = ("claude", "codex", "copilot")

@@ -746,7 +746,8 @@ assert_removed_receipts_gone() {
 }
 
 # Before --uninstall --yes: the hosts codegraph's receipt records under its MCP hook (read by the
-# installer's own reader) and the HOME-relative config files that mention codegraph. Writes
+# installer's own reader) and the HOME-relative config files that mention codegraph (not the Claude
+# CLI's own ~/.claude/backups copies of .claude.json, which the installer never owns). Writes
 # hook-hosts.txt and hook-files.txt; no receipt, no recorded host, or a recorded host with no
 # config file at all fails.
 hook_probe_before() {
@@ -754,7 +755,7 @@ hook_probe_before() {
   printf -v workspace '%q' "$TESTER_WORKSPACE"
   out="$(exec_tester "set -euo pipefail
 eval \"\$(${BREW_BIN} shellenv)\"
-cd ~ && for p in .claude.json .claude .codex .config/opencode .cursor; do [ -e \"\$p\" ] && grep -rlI codegraph -- \"\$p\" || true; done | sed 's/^/F /'
+cd ~ && for p in .claude.json .claude .codex .config/opencode .cursor; do [ -e \"\$p\" ] && grep -rlI codegraph -- \"\$p\" || true; done | sed '/^\.claude\/backups\//d; s/^/F /'
 cd ${workspace}
 uv run --isolated --no-dev python -c '
 from installer import receipts
