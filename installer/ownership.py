@@ -153,7 +153,7 @@ _KIND_TO_OWNER: dict[str, Owner] = {
     "uv-tool": "uv",
     "sdkman": "sdkman",
 }
-_INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script"))
+_INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script", "cargo_distrobox"))
 _CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv", "sdkman")
 
 # 15.4-02/D-01 (second half): the closed, declared set of method kinds allowed
@@ -1317,7 +1317,7 @@ OWNER_LABELS: dict[Owner, str] = {
     "installer": "installer artifact",
 }
 
-# The four `ManagerOwnership.method.kind` values an installer-owned record can
+# The five `ManagerOwnership.method.kind` values an installer-owned record can
 # carry (`ownership.py:517-532` and `:396-413`), mapped to human text for the
 # Owner column.
 _INSTALLER_KIND_LABELS: dict[str, str] = {
@@ -1325,6 +1325,7 @@ _INSTALLER_KIND_LABELS: dict[str, str] = {
     "tarball": "tarball download",
     "app": "downloaded app",
     "script": "own installer",
+    "cargo_distrobox": "built from source in a throwaway Distrobox",
 }
 
 

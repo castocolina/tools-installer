@@ -520,6 +520,26 @@ def _remove_dir(artifact: receipts.ReceiptArtifact) -> bool:
     return True
 
 
+def _prune_empty_parents(path: Path) -> None:
+    """Remove the now-empty directories a terminal tool's leaf sat in, best effort.
+
+    Only below the three roots its files land under: `~/.terminfo` (the root too), and strictly
+    below `~/.local/share/applications` and `~/.local/share/icons`. One level at a time, never
+    a non-empty directory, never recursive; every other leaf keeps its parents as before."""
+    home = Path.home()
+    share = home / ".local" / "share"
+    roots = (home / ".terminfo", share / "applications", share / "icons")
+    parent = path.parent
+    while parent.is_relative_to(roots[0]) or any(
+        parent != root and parent.is_relative_to(root) for root in roots[1:]
+    ):
+        try:
+            parent.rmdir()
+        except OSError:
+            return
+        parent = parent.parent
+
+
 def remove_paths(
     artifacts: Sequence[receipts.ReceiptArtifact], *, trees: Sequence[Path] | None = None
 ) -> tuple[Path, ...]:
@@ -551,6 +571,8 @@ def remove_paths(
                 refused.append(artifact.path)
         else:
             artifact.path.unlink()
+            if artifact.type == "leaf":
+                _prune_empty_parents(artifact.path)
     return tuple(refused)
 
 

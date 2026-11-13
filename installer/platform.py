@@ -26,6 +26,10 @@ class Platform:
     # Sole consumer: a method's optional min_os_version gate in resolve._applies.
     # Comparison is installer.versions.meets_minimum; this module does no parsing.
     os_version: str | None = None
+    # distrobox and podman on PATH, re-read every version pass like has_brew. The
+    # cargo_distrobox kind needs both (resolve._applies); defaults keep older constructions valid.
+    has_distrobox: bool = False
+    has_podman: bool = False
 
 
 def normalize_arch(machine: str) -> str:
@@ -66,5 +70,7 @@ def detect() -> Platform:
         arch=normalize_arch(stdlib_platform.machine()),
         immutable=detect_immutable(),
         has_brew=available("brew"),
+        has_distrobox=available("distrobox"),
+        has_podman=available("podman"),
         os_version=(stdlib_platform.mac_ver()[0] or None) if system == "Darwin" else None,
     )

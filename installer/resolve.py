@@ -19,6 +19,7 @@ _RANK = {
     "sdkman": 20,
     "tarball": 20,
     "app": 20,
+    "cargo_distrobox": 25,
     "dnf": 30,
     "apt": 30,
     "pacman": 30,
@@ -61,6 +62,9 @@ def _applies(method: Method, platform: Platform) -> bool:
         "host_setup",
     ):
         return True
+    if kind == "cargo_distrobox":
+        # A source build inside a throwaway box: it needs both tools, on any host kind.
+        return platform.has_distrobox and platform.has_podman
     if kind == "brew":
         return platform.has_brew
     if kind == "cask":
@@ -82,6 +86,9 @@ def resolve_methods(tool: Tool, platform: Platform) -> list[Method]:
     return sorted(applicable, key=lambda m: _RANK[m.kind])
 
 
+NEEDS_TOOLS = "needs distrobox and podman"
+
+
 class UnavailableReason(NamedTuple):
     short: str
     detail: str
@@ -99,6 +106,8 @@ def _rejection(method: Method, platform: Platform) -> str:
     ):
         return "min_os_version"
     kind = method.kind
+    if kind == "cargo_distrobox":
+        return "tools"
     if kind == "rpm_ostree" or (kind in _NATIVE_OS and platform.immutable):
         return "immutable"
     return "os"
@@ -123,6 +132,8 @@ def _method_short(category: str, platform: Platform, method: Method) -> str:
         return f"not built for {platform.arch}"
     if category == "min_os_version":
         return f"needs macOS {method.params.get('min_os_version')}+"
+    if category == "tools":
+        return NEEDS_TOOLS
     return "immutable host"
 
 
@@ -135,6 +146,13 @@ def unavailable_reason(tool: Tool, platform: Platform) -> UnavailableReason | No
     probed = replace(platform, has_brew=True)
     rejected = [(method, _rejection(method, probed)) for method in tool.methods]
     categories = {category for _, category in rejected}
+    if "tools" in categories and categories <= {"tools", "immutable"}:
+        # The actionable case: only the missing tools (or immutability) stand in the way.
+        return UnavailableReason(
+            NEEDS_TOOLS,
+            f"{tool.id} builds in a throwaway Distrobox here; install distrobox and podman, "
+            "or use a mutable host's package manager.",
+        )
     if len(categories) != 1:
         shorts = [_method_short(category, probed, method) for method, category in rejected]
         sentence = f"no method applies here: {'; '.join(shorts)}"

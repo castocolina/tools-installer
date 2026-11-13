@@ -3247,3 +3247,19 @@ def test_omz_plugins_full_uninstall_restores_the_users_list(tmp_path: Path) -> N
 
     assert "plugins=(git z)\n" in zshrc.read_text()
     assert not plugins_owned(rc_path)
+
+
+def test_script_leaf_removal_keeps_its_empty_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the three terminal roots are pruned: a script leaf leaves its parent, as before."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    leaf = tmp_path / ".local" / "share" / "fnm" / "fnm"
+    leaf.parent.mkdir(parents=True)
+    leaf.write_text("fnm binary")
+    artifact = receipts.ReceiptArtifact(leaf, "leaf")
+
+    assert remove_paths([artifact]) == ()
+
+    assert not leaf.exists()
+    assert leaf.parent.is_dir()

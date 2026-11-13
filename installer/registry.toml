@@ -2930,8 +2930,16 @@ app = "WezTerm.app"
 # (formulae.brew.sh/cask/alacritty; alacritty issue 8749), so this entry
 # declares no cask. A github_release method would rank ahead of dnf and fail
 # on the missing Linux asset, including on immutable Fedora where native
-# kinds are skipped (installer/resolve.py). Alacritty itself has no applicable
-# method on immutable Fedora. Distrobox is not a method kind.
+# kinds are skipped (installer/resolve.py).
+# Verified 2026-11-08: on immutable Fedora Alacritty is built from the release
+# tag with cargo inside a throwaway Distrobox (user decision O5, 2026-10-13):
+# the fedora-toolbox:44 image carries a cargo well above Alacritty's 1.85 MSRV,
+# the box and the image this run pulled are removed afterwards, and the binary,
+# desktop entry, icon and compiled terminfo are placed from the box home. The
+# terminfo goes to ~/.terminfo because ncurses and Alacritty do not search
+# ~/.local/share/terminfo (24 D-07 amendment). The native methods stay for
+# mutable hosts without distrobox and podman. ~/.config/alacritty is the
+# user's and is never touched by the install.
 [[tool]]
 id = "alacritty"
 name = "Alacritty"
@@ -2940,9 +2948,24 @@ cmd = "alacritty"
 priority = "P3"
 audience = "human"
 tier = "user"
-verified = 2026-10-09
+verified = 2026-11-08
 desc = "Cross-platform OpenGL terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+config_paths = ["~/.config/alacritty"]
+[[tool.method]]
+kind = "cargo_distrobox"
+os = ["debian", "fedora", "arch"]
+arch = ["amd64"]
+repo = "alacritty/alacritty"
+image = "registry.fedoraproject.org/fedora-toolbox:44"
+packages = ["cargo", "git", "gcc-c++", "cmake", "freetype-devel", "fontconfig-devel", "libxcb-devel", "libxkbcommon-devel", "ncurses"]
+artifacts = [
+  { box = "src/target/release/alacritty", host = "~/.local/bin/alacritty" },
+  { box = "src/extra/linux/Alacritty.desktop", host = "~/.local/share/applications/Alacritty.desktop" },
+  { box = "src/extra/logo/alacritty-term.svg", host = "~/.local/share/icons/hicolor/scalable/apps/Alacritty.svg" },
+  { box = "terminfo/a/alacritty", host = "~/.terminfo/a/alacritty" },
+  { box = "terminfo/a/alacritty-direct", host = "~/.terminfo/a/alacritty-direct" },
+]
 [[tool.method]]
 kind = "dnf"
 package = "alacritty"

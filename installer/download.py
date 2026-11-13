@@ -290,8 +290,9 @@ def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...
     when it unpacks an archive, or one (`<bin>/name`, file) when it is raw;
     an app kind maps to the userspace bundle and, when `cli` is declared, the
     cli link; a script kind maps each declared `paths` entry to a `tree` (it
-    ends in `/`) or a `leaf`; every other kind creates nothing this formula
-    describes. A script path is evidence only (D-10), never authority.
+    ends in `/`) or a `leaf`; a cargo_distrobox kind maps each declared artifact
+    host to a `file` (the first, the binary) or a `leaf`; every other kind
+    creates nothing this formula describes. A script path is evidence only (D-10), never authority.
     `<bin>` is the method's declared `bin_dir` when set, else
     `default_bin_dir`. `bin_name` and `cli_name` are honored. A missing
     member, an unsafe final name (review M2) or an invalid app name yields no
@@ -338,7 +339,28 @@ def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...
             if path is not None:
                 found.append(Artifact(Path(path), "tree" if entry.endswith("/") else "leaf"))
         return tuple(found)
+    if method.kind == "cargo_distrobox":
+        # The first artifact is the binary (a file); the rest are type-only leaves, so a user's
+        # edit to the desktop entry never turns the receipt BROKEN.
+        hosts = cargo_hosts(method)
+        return tuple(
+            Artifact(host, "file" if index == 0 else "leaf") for index, host in enumerate(hosts)
+        )
     return ()
+
+
+def cargo_hosts(method: Method) -> tuple[Path, ...]:
+    """The `host` paths of a cargo_distrobox method's `artifacts`, `~` expanded; () if malformed."""
+    declared = method.params.get("artifacts")
+    if not isinstance(declared, list):
+        return ()
+    hosts: list[Path] = []
+    for entry in cast(list[object], declared):
+        host = cast(dict[str, object], entry).get("host") if isinstance(entry, dict) else None
+        if not isinstance(host, str):
+            return ()
+        hosts.append(Path(host).expanduser())
+    return tuple(hosts)
 
 
 def is_still_proven(path: Path, root: Path | None = None) -> bool:

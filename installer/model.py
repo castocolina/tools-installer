@@ -32,6 +32,7 @@ METHOD_KINDS = (
     "github_release",
     "tarball",
     "app",
+    "cargo_distrobox",
     "dnf",
     "apt",
     "pacman",
@@ -93,6 +94,9 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
         }
     ),
     "app": frozenset({"url", "app", "cli", "cli_name", "version", "sha256", "smoke_argv"}),
+    # A source build in a throwaway Distrobox: `repo` is the GitHub slug (version source and
+    # clone URL), `artifacts` the {box, host} files it places.
+    "cargo_distrobox": frozenset({"repo", "image", "packages", "artifacts", "smoke_argv"}),
     "dnf": frozenset({"package", "smoke_argv"}),
     "apt": frozenset({"package", "smoke_argv"}),
     "pacman": frozenset({"package", "smoke_argv"}),

@@ -214,14 +214,15 @@ def _registry_tool(tool_id: str) -> Tool:
     return next(tool for tool in load_tools(_REGISTRY) if tool.id == tool_id)
 
 
-def test_unavailable_reason_alacritty_names_immutable_host() -> None:
+def test_unavailable_reason_alacritty_names_distrobox_and_podman() -> None:
     reason = unavailable_reason(
         _registry_tool("alacritty"),
         Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
     )
     assert reason is not None
-    assert reason.short == "immutable host"
-    assert "immutable (ostree) host" in reason.detail
+    assert reason.short == "needs distrobox and podman"
+    assert "distrobox" in reason.detail
+    assert "podman" in reason.detail
 
 
 def test_unavailable_reason_gnu_bash_names_unsupported_os() -> None:

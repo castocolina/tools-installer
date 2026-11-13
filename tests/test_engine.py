@@ -2074,10 +2074,12 @@ def test_archive_install_writes_a_receipt(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def _fake_perform(monkeypatch: pytest.MonkeyPatch, place: Callable[[], None] | None = None) -> None:
-    def fake(_method: Method, _ctx: ExecContext) -> tuple[bool, None, tuple[str, ...]]:
+    def fake(
+        _method: Method, _ctx: ExecContext
+    ) -> tuple[bool, None, tuple[str, ...], tuple[str, ...]]:
         if place is not None:
             place()
-        return False, None, ()
+        return False, None, (), ()
 
     monkeypatch.setattr(engine, "_perform", fake)
 
