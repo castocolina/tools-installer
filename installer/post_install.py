@@ -226,7 +226,7 @@ def _clone_nvim_starter(
     home = Path.home()
     config_dir = home / ".config"
     target = config_dir / "nvim"
-    if xdg_config_base(home, os.environ) != config_dir:
+    if xdg_config_base(home, os.environ).resolve() != config_dir.resolve():
         return ("Starter not added: XDG_CONFIG_HOME points elsewhere than ~/.config (left as is).",)
     if not _absent_or_empty(target):
         if _holds_starter(target):

@@ -1666,3 +1666,19 @@ def test_the_by_hand_patch_path_is_quoted(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setitem(vars(post_install), "_KICKSTART_PATCH", Path("/opt/my tools/a.patch"))
 
     assert _starter()[-1] == "git -C ~/.config/nvim apply '/opt/my tools/a.patch'"
+
+
+def test_starter_accepts_an_xdg_config_home_that_resolves_to_dot_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = use_fake_git(monkeypatch)
+    config = Path.home() / ".config"
+    config.mkdir()
+    alias = Path.home() / "var-home-style-alias"
+    alias.symlink_to(config)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(alias))
+
+    assert _starter()[0].startswith("Starter: kickstart.nvim")
+
+    assert len(fake.calls) == 5
+    assert (config / "nvim" / "init.lua").is_file()
