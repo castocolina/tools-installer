@@ -1552,7 +1552,7 @@ nested_probe_podman() {
 # $1 is the install transcript. Returns 0 when Alacritty installed, 2 (infeasible: the box could
 # not be created) or 1 (a product failure, or no Alacritty row at all).
 nested_classify_alacritty() {
-  local row word detail
+  local row word detail full
   row="$(sed -nE 's/^[^ ]+ +alacritty +(installed|failed|checksum mismatch|crashed|dependency failed|not attempted|blocked|manual|skipped|updated|repaired|reconfigured|reinstalled)( — (.*))?$/\1|\3/p' "$1" | tail -n 1)"
   if [[ -z "$row" ]]; then
     printf 'TRACER_NESTED_BUILD_FAILED detail=no alacritty row in the install output\n'
@@ -1563,8 +1563,11 @@ nested_classify_alacritty() {
   case "$word" in
     installed) return 0 ;;
     failed)
-      if [[ "$detail" == *"distrobox create"* ]]; then
-        nested_infeasible distrobox-create "$detail"
+      # The Summary row wraps a long reason over several lines; the unwrapped `<mark> alacritty
+      # failed: ...` line after it carries the whole command (24-08 nested run #2).
+      full="$(sed -nE 's/^[^ ]+ alacritty failed: (.*)$/\1/p' "$1" | tail -n 1)"
+      if [[ "$detail" == *"distrobox create"* || "$full" == *"distrobox create"* ]]; then
+        nested_infeasible distrobox-create "${full:-$detail}"
         return 2
       fi
       ;;

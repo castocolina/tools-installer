@@ -2490,6 +2490,18 @@ def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
         "TRACER_NESTED_INFEASIBLE step=distrobox-create "
         "detail=distrobox create: cannot reach the engine"
     ]
+    wrapped = classify(
+        "wrapped",
+        "✖ alacritty  failed — command failed (125): timeout 900 env\n"
+        "             XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box\n"
+        "✖ alacritty failed: command failed (125): timeout 900 env XDG_CACHE_HOME=/tmp/c "
+        "distrobox create --yes --name box",
+    )
+    assert wrapped.returncode == 2, wrapped.stdout  # 24-08 nested run #2: the row wraps
+    assert wrapped.stdout.splitlines() == [
+        "TRACER_NESTED_INFEASIBLE step=distrobox-create detail=command failed (125): timeout 900 "
+        "env XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box"
+    ]
     broken = classify("broken", "✖ alacritty  failed — cargo build: exit 101")
     assert broken.returncode == 1
     assert broken.stdout.splitlines() == [
