@@ -148,6 +148,7 @@ def _summary_harness(*names: str) -> str:
         "ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0\n"
         "ACC_DEP_FAILED=0; ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0\n"
         "ACC_POST_RUN_ERRORS=0\n"
+        "ACC_REPAIRED=0; ACC_RECONFIGURED=0; ACC_REINSTALLED=0\n"
     )
     return "\n".join(parts)
 
@@ -673,7 +674,8 @@ def _uv_stub() -> str:
         '  while [[ $# -gt 0 && "$1" != python ]]; do shift; done\n'
         '  [[ "${1:-}" == python ]] || return 127\n'
         "  shift\n"
-        f'  exec {exe} "$@"\n'
+        # No exec: a probe that prints a closing marker after `uv run` must still reach it.
+        f'  {exe} "$@"\n'
         "}\n"
         "export -f uv\n"
     )
@@ -1686,3 +1688,510 @@ def test_harness_never_runs_setup_outside_a_container() -> None:
     for line in code.splitlines():
         if invoking.search(line) and not line.lstrip().startswith("#"):
             assert line in runner, line
+
+
+# --- Phase 24-04 task 2: the rerun gate, the blocked listing, the herdr probes ----------
+
+_UNEXPECTED_KINDS = {
+    "installed": "installed",
+    "updated": "updated",
+    "repaired": "repaired",
+    "reconfigured": "reconfigured",
+    "reinstalled": "reinstalled",
+    "failed": "failed",
+    "mismatched": "checksum mismatch",
+    "dependency_failed": "dependency failed",
+}
+_MANUAL_PI = "○ pi  manual — see the setup steps in the log"
+_MANUAL_ZSH = "○ zsh  manual — you run: `sudo dnf install zsh`"
+
+
+def _rerun_harness() -> str:
+    names = (
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+        "rerun_step_ok",
+    )
+    return 'PHASE_DIR="$SCRATCH/phase"\n' + _summary_harness(*names)
+
+
+def _rerun(
+    scratch: Path, transcript: str, baseline: Sequence[str] | None, command: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    phase = scratch / "phase"
+    phase.mkdir(parents=True, exist_ok=True)
+    if baseline is not None:
+        _write_listing(phase / "pass1-manual.txt", baseline)
+    return _summary_run(
+        _rerun_harness(),
+        scratch,
+        transcript,
+        command or "accumulate_summaries $TRANSCRIPT; rerun_step_ok",
+    )
+
+
+def test_rerun_with_only_skipped_rows_passes(tmp_path: Path) -> None:
+    result = _rerun(tmp_path, "Summary — 5 skipped, 2 blocked\n", [])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TRACER_RERUN_UNEXPECTED" not in result.stdout
+
+
+def test_rerun_with_the_same_manual_set_passes(tmp_path: Path) -> None:
+    transcript = f"Summary — 5 skipped, 2 manual\n{_MANUAL_PI}\n{_MANUAL_ZSH}\n"
+    result = _rerun(tmp_path, transcript, ["pi", "zsh"])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_rerun_with_a_new_manual_row_fails(tmp_path: Path) -> None:
+    transcript = f"Summary — 5 skipped, 2 manual\n{_MANUAL_PI}\n{_MANUAL_ZSH}\n"
+    added = _rerun(tmp_path / "added", transcript, ["pi"])
+    assert added.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED" in added.stdout
+    assert "manual_added=zsh" in added.stdout
+    missing = _rerun(
+        tmp_path / "missing", f"Summary — 5 skipped, 1 manual\n{_MANUAL_PI}\n", ["pi", "zsh"]
+    )
+    assert missing.returncode != 0
+    assert "manual_missing=zsh" in missing.stdout
+
+
+def test_rerun_without_a_pass1_manual_baseline_fails(tmp_path: Path) -> None:
+    result = _rerun(tmp_path, "Summary — 5 skipped\n", None)
+    assert result.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED" in result.stdout
+
+
+@pytest.mark.parametrize("kind", sorted(_UNEXPECTED_KINDS))
+def test_rerun_with_an_unexpected_row_fails(tmp_path: Path, kind: str) -> None:
+    result = _rerun(tmp_path, f"Summary — 4 skipped, 1 {_UNEXPECTED_KINDS[kind]}\n", [])
+    assert result.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED" in result.stdout
+    assert f"{kind}=1" in result.stdout
+
+
+def test_rerun_with_an_explained_dependency_failure_fails(tmp_path: Path) -> None:
+    """R2-10: pass 1 would accept this transcript; the rerun must not."""
+    transcript = "\n".join(
+        (
+            "Summary — 5 skipped, 1 manual, 1 dependency failed",
+            "✖ mmdc  dependency failed — pi",
+            _MANUAL_PI,
+        )
+    )
+    both = "accumulate_summaries $TRANSCRIPT; install_step_ok 1"
+    assert _rerun(tmp_path / "gate", transcript, ["pi"], both).returncode == 0
+    result = _rerun(tmp_path / "rerun", transcript, ["pi"])
+    assert result.returncode != 0
+    assert "dependency_failed=1" in result.stdout
+    assert "TRACER_RERUN_UNEXPECTED" in result.stdout
+
+
+def _pass1_script(scratch: Path, transcript: str, call: str) -> str:
+    """cmd_pass1 with the container-bound helpers stubbed and a fixed transcript per run."""
+    fixture = scratch / "pass1-transcript.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(transcript, encoding="utf-8")
+    names = (
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+        "list_blocked_rows",
+        "ensure_phase_dir",
+        "die",
+        "cmd_pass1",
+    )
+    stubs = (
+        "container_running() { return 0; }\n"
+        f"run_setup_as_tester() {{ cat {shlex.quote(str(fixture))}; }}\n"
+        "assert_receipt_present() { return 0; }\n"
+        "assert_gsd_absent() { return 0; }\n"
+    )
+    return (
+        'PHASE_DIR="$SCRATCH/phase"\nDISTRO=debian\n'
+        + _summary_harness(*names)
+        + "\n"
+        + stubs
+        + call
+        + "\n"
+    )
+
+
+def test_pass1_manual_set_is_persisted_sorted_unique(tmp_path: Path) -> None:
+    transcript = f"Summary — 2 installed, 2 manual\n{_MANUAL_ZSH}\n{_MANUAL_PI}\n"
+    result = _run(_pass1_script(tmp_path, transcript, "cmd_pass1 --categories a,b"), tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    saved = (tmp_path / "phase" / "pass1-manual.txt").read_text(encoding="utf-8")
+    assert saved == "pi\nzsh\n"
+
+
+def test_blocked_rows_are_listed_once_with_their_reason(tmp_path: Path) -> None:
+    """R1-23: a plan row and an outcome row for one tool print one line, and the step passes."""
+    rows = (
+        "✖ mmdc  blocked — needs Node 20 or newer",
+        "✖ puppeteer  blocked — needs Node 22 or newer",
+    )
+    transcript = "\n".join(
+        ("Install plan — 3 install, 2 blocked", *rows, "Summary — 3 installed, 2 blocked", *rows)
+    )
+    result = _run(_pass1_script(tmp_path, transcript, "cmd_pass1"), tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    listed = [
+        line for line in result.stdout.splitlines() if line.startswith("TRACER_DISTRO_BLOCKED")
+    ]
+    assert listed == [
+        "TRACER_DISTRO_BLOCKED distro=debian tool=mmdc reason=needs Node 20 or newer",
+        "TRACER_DISTRO_BLOCKED distro=debian tool=puppeteer reason=needs Node 22 or newer",
+    ]
+    assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
+
+
+def test_a_pass_that_installs_nothing_is_misconfigured(tmp_path: Path) -> None:
+    result = _run(_pass1_script(tmp_path, "Summary — 3 skipped\n", "cmd_pass1"), tmp_path)
+    assert result.returncode != 0
+    assert "TRACER_DISTRO_MISCONFIGURED distro=debian" in result.stdout
+    assert "TRACER_CLEAN_INSTALL_OK" not in result.stdout
+
+
+def test_rerun_gate_is_wired_into_pass2() -> None:
+    pass2 = _function("cmd_pass2")
+    gate = pass2.index("install_step_ok ")
+    rerun = pass2.index("rerun_step_ok")
+    assert gate < rerun < pass2.index("TRACER_RERUN_OK")
+    assert "ACC_REPAIRED=0" in pass2
+    assert "ACC_REINSTALLED=0" in _function("cmd_pass1")
+
+
+def test_the_herdr_probes_are_wired_around_the_uninstall_step() -> None:
+    pass2 = _function("cmd_pass2")
+    first_run = pass2.index('run_pass2_step "--all --yes"')
+    uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("herdr_probe_installed") < first_run < uninstall
+    assert pass2.index("settings_probe_revert") < pass2.index("herdr_probe_after") < reinstall
+
+
+# --- herdr -------------------------------------------------------------------------------
+
+
+def _herdr_script(*extra: str) -> str:
+    text = _script_text()
+    names = (
+        "ensure_phase_dir",
+        "herdr_sidebar_keys",
+        "herdr_status_parse",
+        "herdr_status_clean",
+        "herdr_installed_verdict",
+        "herdr_removed_verdict",
+        "herdr_probe_installed",
+        "herdr_probe_after",
+    )
+    parts = [
+        f"HERDR_PLUGIN_ID={_constant('HERDR_PLUGIN_ID', text)}",
+        'HERDR_PROBE_COPY="$SCRATCH/herdr-probe"',
+        'PHASE_DIR="$SCRATCH/phase"',
+        *(_function(name, text) for name in names),
+        *extra,
+    ]
+    return "\n".join(parts)
+
+
+_STATUS_CLEAN = (
+    "claude: not installed (/x)\nletta (experimental): not installed (/y)\npi: not installed"
+)
+
+
+def test_herdr_status_parse(tmp_path: Path) -> None:
+    fixture = tmp_path / "status.txt"
+
+    def parse(text: str, command: str = "herdr_status_parse") -> subprocess.CompletedProcess[str]:
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+        fixture.write_text(text, encoding="utf-8")
+        return _run(
+            _herdr_script() + f'\n{command} < "{fixture}"\n', tmp_path, path="/usr/bin:/bin"
+        )
+
+    parsed = parse(_STATUS_CLEAN + "\n")
+    assert parsed.stdout.splitlines() == [
+        "claude|not installed",
+        "letta|not installed",
+        "pi|not installed",
+    ]
+    clean = parse(_STATUS_CLEAN + "\n", "herdr_status_clean")
+    assert clean.returncode == 0, clean.stdout
+    dirty = parse(
+        "claude: current (v10) (/x)\nopencode: needs repair (v13) (/y)\npi: not installed\n",
+        "herdr_status_clean",
+    )
+    assert dirty.returncode != 0
+    assert dirty.stdout.splitlines() == [
+        "TRACER_HERDR_NOT_CURRENT target=claude",
+        "TRACER_HERDR_NOT_CURRENT target=opencode",
+    ]
+    unreadable = parse("error: no server\n", "herdr_status_clean")
+    assert unreadable.returncode != 0
+    assert "TRACER_HERDR_STATUS_UNREADABLE" in unreadable.stdout
+
+
+def _facts(*lines: str, done: bool = True) -> str:
+    return "\n".join([*lines, *(["D"] if done else [])]) + "\n"
+
+
+_GOOD_FACTS = (
+    "H claude",
+    "H sidebar-markers",
+    "S claude: current (v10) (/x)",
+    "S pi: not installed",
+    'Y [{"id": "herdr-setup.markers"}]',
+    "C ui.sidebar.agents.rows",
+    "C ui.sidebar.agents.row_gap",
+    "C ui.sidebar.spaces.rows",
+    "E sidebar ui.sidebar.agents.rows []",
+)
+
+
+def _verdict(tmp_path: Path, facts: str) -> subprocess.CompletedProcess[str]:
+    fixture = tmp_path / "facts.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(facts, encoding="utf-8")
+    return _run(
+        _herdr_script() + f'\nherdr_installed_verdict < "{fixture}"\n',
+        tmp_path,
+        path="/usr/bin:/bin",
+    )
+
+
+def test_herdr_installed_probe_requires_every_piece(tmp_path: Path) -> None:
+    ok = _verdict(tmp_path / "ok", _facts(*_GOOD_FACTS))
+    assert ok.returncode == 0, ok.stdout
+    assert ok.stdout.splitlines() == ["TRACER_HERDR_INSTALLED_OK hosts=claude"]
+
+    def drop(prefix: str) -> tuple[str, ...]:
+        return tuple(line for line in _GOOD_FACTS if not line.startswith(prefix))
+
+    cases = {
+        "no-receipt": (("N",), "TRACER_HERDR_NOT_RECORDED reason=no-receipt"),
+        "no-sidebar": (drop("H sidebar"), "TRACER_HERDR_NOT_RECORDED reason=no-sidebar"),
+        "no-hosts": (drop("H claude"), "TRACER_HERDR_NOT_RECORDED reason=no-hosts"),
+        "not-current": (
+            (*drop("S claude"), "S claude: needs repair (v9) (/x)"),
+            "TRACER_HERDR_NOT_CURRENT target=claude",
+        ),
+        "no-status-line": (drop("S claude"), "TRACER_HERDR_NOT_CURRENT target=claude"),
+        "no-plugin": (drop("Y "), "TRACER_HERDR_PLUGIN_MISSING"),
+        "no-key": (
+            drop("C ui.sidebar.spaces.rows"),
+            "TRACER_HERDR_KEY_MISSING key=ui.sidebar.spaces.rows",
+        ),
+        "skill": (
+            (*_GOOD_FACTS, "W /home/tester/.claude/skills/herdr"),
+            "TRACER_HERDR_SKILL_FOUND path=/home/tester/.claude/skills/herdr",
+        ),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _verdict(tmp_path / name, _facts(*lines))
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert not any(
+            line.startswith("TRACER_HERDR_INSTALLED_OK") for line in result.stdout.splitlines()
+        )
+    cut = _verdict(tmp_path / "cut", _facts(*_GOOD_FACTS, done=False))
+    assert cut.returncode != 0
+    assert "TRACER_HERDR_PROBE_FAILED" in cut.stdout
+
+
+def test_herdr_probe_expects_no_default_shell_without_zsh(tmp_path: Path) -> None:
+    """R1-19: these containers carry no zsh, so no default_shell may be written."""
+    for name, extra, found in (
+        ("config", "DS /usr/bin/zsh", "/usr/bin/zsh"),
+        ("ledger", 'E default-shell terminal.default_shell "/bin/zsh"', '"/bin/zsh"'),
+    ):
+        result = _verdict(tmp_path / name, _facts(*_GOOD_FACTS, extra))
+        assert result.returncode != 0
+        assert f"TRACER_HERDR_SHELL_SET found={found}" in result.stdout.splitlines()
+    assert _verdict(tmp_path / "none", _facts(*_GOOD_FACTS)).returncode == 0
+
+
+def _herdr_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, status_exit: int = 0) -> Path:
+    """A scratch HOME with a fake herdr, its receipt, ledger, plugin answer and config.toml."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    (scratch / "phase").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    receipts.write(
+        Receipt(
+            tool="herdr",
+            at="2026-11-12T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"herdr-integration": ("claude", "sidebar-markers")},
+        )
+    )
+    binary = scratch / ".local" / "bin" / "herdr"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        '  "integration status")\n'
+        '    printf "claude: current (v10) (/x)\\npi: not installed (/y)\\n"\n'
+        f"    exit {status_exit} ;;\n"
+        '  "plugin list") printf \'[{"id": "herdr-setup.markers"}]\\n\' ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    config = scratch / ".config" / "herdr" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[ui.sidebar.agents]\nrows = [["agent"]]\nrow_gap = 1\n\n[ui.sidebar.spaces]\nrows = []\n',
+        encoding="utf-8",
+    )
+    ledger = receipts.config_ledger_dir() / "herdr.json"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    entries = [
+        {"setting": "sidebar", "key_path": ["ui", "sidebar", "agents", "rows"], "value": []},
+        {"setting": "sidebar", "key_path": ["ui", "sidebar", "agents", "row_gap"], "value": 1},
+        {"setting": "sidebar", "key_path": ["ui", "sidebar", "spaces", "rows"], "value": []},
+    ]
+    ledger.write_text(json.dumps({"v": 1, "agent": "herdr", "entries": entries}), encoding="utf-8")
+    return scratch
+
+
+def _herdr_probe_script(tmp_path: Path, call: str) -> str:
+    brew = tmp_path / "linuxbrew" / "bin" / "brew"
+    return _herdr_script(
+        f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+        _assign("TESTER_WORKSPACE", str(tmp_path)),
+        _assign("BREW_BIN", str(brew if brew.exists() else _brew_stub(tmp_path))),
+        'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        _uv_stub(),
+        call,
+    )
+
+
+def test_herdr_reload_failure_is_not_a_probe_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-28: no herdr server runs in a container, and `integration status` may exit non-zero."""
+    scratch = _herdr_home(tmp_path, monkeypatch, status_exit=3)
+    log = scratch / "phase" / "pass1-transcript.log"
+    log.write_text("note: herdr server reload-config failed: no server running\n", encoding="utf-8")
+    result = _run(_herdr_probe_script(tmp_path, "herdr_probe_installed"), scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["TRACER_HERDR_INSTALLED_OK hosts=claude"]
+    keys = (scratch / "phase" / "herdr-ledger-keys.txt").read_text(encoding="utf-8").split()
+    assert keys == [
+        "ui.sidebar.agents.rows",
+        "ui.sidebar.agents.row_gap",
+        "ui.sidebar.spaces.rows",
+    ]
+    assert (scratch / "herdr-probe").exists()
+
+
+def test_herdr_probe_after_proves_status_plugin_and_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch = _herdr_home(tmp_path, monkeypatch)
+    assert _run(_herdr_probe_script(tmp_path, "herdr_probe_installed"), scratch).returncode == 0
+    after = _herdr_probe_script(tmp_path, "herdr_probe_after")
+    # The fake herdr still reports claude current and the plugin listed, and the keys remain.
+    dirty = _run(after, scratch)
+    assert dirty.returncode != 0
+    lines = dirty.stdout.splitlines()
+    assert "TRACER_HERDR_NOT_CURRENT target=claude" in lines
+    assert "TRACER_HERDR_PLUGIN_LEFT" in lines
+    assert "TRACER_HERDR_KEY_LEFT key=ui.sidebar.agents.row_gap" in lines
+    # After the uninstall: every target not installed, no plugin, config.toml without our keys.
+    (scratch / ".config" / "herdr" / "config.toml").write_text("onboarding = false\n")
+    (scratch / "herdr-probe").write_text(
+        '#!/bin/sh\ncase "$1 $2" in\n  "integration status") echo "claude: not installed (/x)" ;;\n'
+        '  "plugin list") echo "[]" ;;\nesac\n',
+        encoding="utf-8",
+    )
+    clean = _run(after, scratch)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == [
+        "TRACER_HERDR_STATUS_CLEAN_OK",
+        "TRACER_HERDR_REVERT_OK",
+    ]
+    (scratch / "phase" / "herdr-ledger-keys.txt").unlink()
+    unknown = _run(after, scratch)
+    assert unknown.returncode != 0
+    assert "TRACER_HERDR_REVERT_UNKNOWN" in unknown.stdout
+
+
+def _revert_with_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: str,
+    text: str,
+    *,
+    created: bool,
+) -> subprocess.CompletedProcess[str]:
+    from installer import agent_settings
+
+    home = _TunedHome(tmp_path, monkeypatch)
+    path = agent_settings.settings_file(agent, home=home.scratch, platform_os="linux")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    (home.workspace / ".e2e-tuned-agents.json").write_text(
+        json.dumps({"agents": [agent], "created": {agent: [str(path)] if created else []}}),
+        encoding="utf-8",
+    )
+    return home.run("settings_probe_revert")
+
+
+def test_settings_revert_tolerates_herdr_residue_only_in_created_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-22: empty containers and codex's `features.hooks` are herdr's residue, if we made it."""
+    empty = _revert_with_file(
+        tmp_path / "empty", monkeypatch, "claude", '{"hooks": {}}', created=True
+    )
+    assert empty.returncode == 0, empty.stdout + empty.stderr
+    assert empty.stdout.splitlines() == [
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['claude'])}"
+    ]
+
+    marked = _revert_with_file(
+        tmp_path / "marked", monkeypatch, "claude", '{"herdr-agent-state": {}}', created=True
+    )
+    assert marked.returncode != 0
+    assert marked.stdout.splitlines() == [
+        'TRACER_SETTINGS_FILE_LEFT agent=claude residue={"herdr-agent-state":{}}'
+    ]
+
+    codex = _revert_with_file(
+        tmp_path / "codex", monkeypatch, "codex", "[features]\nhooks = true\n", created=True
+    )
+    assert codex.returncode == 0, codex.stdout + codex.stderr
+    assert codex.stdout.splitlines() == [
+        "TRACER_HERDR_RESIDUE agent=codex key=features.hooks",
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['codex'])}",
+    ]
+
+    other = _revert_with_file(
+        tmp_path / "other",
+        monkeypatch,
+        "codex",
+        '[features]\nhooks = true\nmore = "x"\n',
+        created=True,
+    )
+    assert other.returncode != 0
+    assert other.stdout.startswith("TRACER_SETTINGS_FILE_LEFT agent=codex")
+
+    foreign = _revert_with_file(
+        tmp_path / "foreign",
+        monkeypatch,
+        "claude",
+        '{"hooks": {"Stop": []}, "mine": 1}',
+        created=False,
+    )
+    assert foreign.returncode == 0, foreign.stdout + foreign.stderr

@@ -28,6 +28,9 @@ RECEIPT_PROBE_CATEGORY=data
 TESTER_WORKSPACE=/home/tester/workspace
 # Homebrew binary evaluated by tester functions; host tests replace it with a stub.
 BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
+# herdr's plugin id (24-07) and where its probe keeps a copy of the binary for the after-uninstall check.
+HERDR_PLUGIN_ID=herdr-setup.markers
+HERDR_PROBE_COPY=/tmp/herdr-probe
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -461,6 +464,9 @@ accumulate_summaries() {
     ACC_SUMMARIES=$((ACC_SUMMARIES + 1))
     ACC_INSTALLED=$((ACC_INSTALLED + PARSE_INSTALLED))
     ACC_UPDATED=$((ACC_UPDATED + PARSE_UPDATED))
+    ACC_REPAIRED=$((ACC_REPAIRED + PARSE_REPAIRED))
+    ACC_RECONFIGURED=$((ACC_RECONFIGURED + PARSE_RECONFIGURED))
+    ACC_REINSTALLED=$((ACC_REINSTALLED + PARSE_REINSTALLED))
     ACC_SKIPPED=$((ACC_SKIPPED + PARSE_SKIPPED))
     ACC_FAILED=$((ACC_FAILED + PARSE_FAILED))
     ACC_DEP_FAILED=$((ACC_DEP_FAILED + PARSE_DEP_FAILED))
@@ -527,6 +533,41 @@ install_step_ok() {
   [[ "$setup_exit" -eq 1 && "$ACC_DEP_FAILED" -gt 0 ]]
 }
 
+# The rerun pass (SPEC R8, D-25) may report only skipped or blocked rows, plus the manual rows pass 1
+# already reported. Any installed, updated, repaired, reconfigured, reinstalled, failed, checksum
+# mismatch or dependency failed row fails it, even a dependency failure that pass 1's explained-
+# dependency rule would accept: that rule belongs to pass 1 and is never consulted here. Reads the
+# ACC_* counters and manual names of the rerun and the manual set pass 1 wrote to $PHASE_DIR.
+rerun_step_ok() {
+  local baseline="$PHASE_DIR/pass1-manual.txt" now added="" missing=""
+  now="$(mktemp)"
+  LC_ALL=C sort -u "$ACC_MANUAL_NAMES_FILE" >"$now"
+  if [[ -f "$baseline" ]]; then
+    added="$(LC_ALL=C comm -13 <(LC_ALL=C sort -u "$baseline") "$now" | paste -sd, -)"
+    missing="$(LC_ALL=C comm -23 <(LC_ALL=C sort -u "$baseline") "$now" | paste -sd, -)"
+  else
+    missing="pass1-manual.txt"
+  fi
+  rm -f "$now"
+  if [[ "$ACC_INSTALLED" -eq 0 && "$ACC_UPDATED" -eq 0 && "$ACC_REPAIRED" -eq 0 \
+    && "$ACC_RECONFIGURED" -eq 0 && "$ACC_REINSTALLED" -eq 0 && "$ACC_FAILED" -eq 0 \
+    && "$ACC_MISMATCHED" -eq 0 && "$ACC_DEP_FAILED" -eq 0 \
+    && -z "$added" && -z "$missing" ]]; then
+    return 0
+  fi
+  printf 'TRACER_RERUN_UNEXPECTED installed=%s updated=%s repaired=%s reconfigured=%s reinstalled=%s failed=%s mismatched=%s dependency_failed=%s manual_added=%s manual_missing=%s\n' \
+    "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_REPAIRED" "$ACC_RECONFIGURED" "$ACC_REINSTALLED" \
+    "$ACC_FAILED" "$ACC_MISMATCHED" "$ACC_DEP_FAILED" "$added" "$missing"
+  return 1
+}
+
+# One TRACER_DISTRO_BLOCKED line per tool id across the BLOCKED rows of a transcript (the plan row
+# and the outcome row of one tool print once; the first reason seen wins). Never fails the run.
+list_blocked_rows() {
+  sed -nE 's/^[^ ]+ +([^ ]+) +blocked — (.*)$/\1 \2/p' "$1" \
+    | awk -v distro="$DISTRO" '!seen[$1]++ { id = $1; sub(/^[^ ]+ /, ""); printf "TRACER_DISTRO_BLOCKED distro=%s tool=%s reason=%s\n", distro, id, $0 }'
+}
+
 cmd_pass1() {
   container_running || die "container $CONTAINER_NAME is not running"
   local categories=""
@@ -537,13 +578,17 @@ cmd_pass1() {
     die "unknown pass1 option: $1"
   fi
 
-  local tmp
+  local tmp all_runs
   tmp="$(mktemp)"
+  all_runs="$(mktemp)"
   ACC_DEP_LINES_FILE="$(mktemp)"
   ACC_MANUAL_NAMES_FILE="$(mktemp)"
 
   ACC_INSTALLED=0
   ACC_UPDATED=0
+  ACC_REPAIRED=0
+  ACC_RECONFIGURED=0
+  ACC_REINSTALLED=0
   ACC_SKIPPED=0
   ACC_FAILED=0
   ACC_DEP_FAILED=0
@@ -577,6 +622,7 @@ cmd_pass1() {
       local st=$?
       set -e
       cat "$tmp"
+      cat "$tmp" >>"$all_runs"
       accumulate_summaries "$tmp"
       if [[ "$st" -ne 0 && "$st" -ne 1 ]]; then
         setup_status="$st"
@@ -591,6 +637,7 @@ cmd_pass1() {
     setup_status=$?
     set -e
     cat "$tmp"
+    cat "$tmp" >>"$all_runs"
     accumulate_summaries "$tmp"
   fi
 
@@ -598,7 +645,17 @@ cmd_pass1() {
     "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_BLOCKED" "$ACC_MANUAL" \
     "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
 
+  # Pass 2's rerun may repeat exactly these manual handoffs and nothing else (rerun_step_ok).
+  ensure_phase_dir
+  LC_ALL=C sort -u "$ACC_MANUAL_NAMES_FILE" >"$PHASE_DIR/pass1-manual.txt"
+  list_blocked_rows "$all_runs"
+
   if install_step_ok "$setup_status"; then
+    if [[ "$ACC_INSTALLED" -eq 0 ]]; then
+      printf 'TRACER_DISTRO_MISCONFIGURED distro=%s\n' "$DISTRO"
+      rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+      return 1
+    fi
     if [[ "$ACC_DEP_FAILED" -gt 0 ]]; then
       printf 'TRACER_CLEAN_INSTALL_OK (dependency_failed=%s fully explained by manual handoffs — see outcome rows above) installed=%s updated=%s skipped=%s failed=%s blocked=%s manual=%s\n' \
         "$ACC_DEP_FAILED" "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL"
@@ -606,7 +663,7 @@ cmd_pass1() {
       printf 'TRACER_CLEAN_INSTALL_OK installed=%s updated=%s skipped=%s failed=%s blocked=%s manual=%s\n' \
         "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL"
     fi
-    rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+    rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     assert_receipt_present "$categories" || return 1
     assert_gsd_absent install || return 1
     return 0
@@ -614,7 +671,7 @@ cmd_pass1() {
   printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
     "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
     "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
-  rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+  rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   return 1
 }
 
@@ -972,6 +1029,11 @@ home = Path.home()
 tuned = json.loads(Path(\".e2e-tuned-agents.json\").read_text(encoding=\"utf-8\"))
 agents = tuned[\"agents\"]
 count = 0
+def pruned(value):
+    if not isinstance(value, dict):
+        return value
+    kept = {k: pruned(v) for k, v in value.items()}
+    return {k: v for k, v in kept.items() if v not in ({}, [])}
 for agent in agents:
     path = s.settings_file(agent, home=home, platform_os=\"linux\", environ=os.environ)
     text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
@@ -990,7 +1052,12 @@ for agent in agents:
     # created, unless the revert restored a CLI default into it (cursor-agent), which keeps it.
     if path.exists() and str(path) in tuned[\"created\"].get(agent, []) and not restored_any:
         residue = json.dumps(doc, sort_keys=True, separators=(\",\", \":\"), default=str)
-        print(\"F\", agent, residue[:200])
+        # herdr integration uninstall leaves empty containers (and codex a hooks feature flag) in a
+        # file we created: that is its residue, not ours, unless a herdr marker is still in the text.
+        if agent == \"codex\" and doc == {\"features\": {\"hooks\": True}}:
+            print(\"R\", agent, \"features.hooks\")
+        elif not (doc and not pruned(doc) and \"herdr-agent-state\" not in text):
+            print(\"F\", agent, residue[:200])
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)
 if \"copilot\" in agents:
@@ -1012,6 +1079,10 @@ print(\"K\", count)
         printf 'TRACER_SETTINGS_FILE_LEFT agent=%s residue=%s\n' "${agent%% *}" "${agent#* }"
         failed=1
         ;;
+      "R "*)
+        agent="${line#R }"
+        printf 'TRACER_HERDR_RESIDUE agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
+        ;;
       "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
       "C "*) printf 'TRACER_COPILOT_LEFT path=%s\n' "${line#C }"; failed=1 ;;
       "K "*) keys="${line#K }" ;;
@@ -1020,6 +1091,229 @@ print(\"K\", count)
   [[ "$failed" -eq 0 ]] || return 1
   [[ -n "$keys" ]] || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
   printf 'TRACER_SETTINGS_REVERT_OK keys=%s\n' "$keys"
+}
+
+# herdr (ONB-01). The facts come from the container as one prefixed line each (see the two probes
+# below) and the verdicts are decided here, so a host test can drive them with fixture lines.
+# The three sidebar keys herdr's hook writes into its config.toml (24-02, the ledger group `sidebar`).
+herdr_sidebar_keys() {
+  printf '%s\n' ui.sidebar.agents.rows ui.sidebar.agents.row_gap ui.sidebar.spaces.rows
+}
+
+# `herdr integration status` text on stdin -> `target|state` lines. The command always exits 0
+# (herdr v0.9.5 src/cli/integration.rs), and an experimental target reads `letta (experimental): ...`.
+herdr_status_parse() {
+  sed -nE 's/^([^ :]+)( \(experimental\))?: (not installed|current|needs repair).*$/\1|\3/p'
+}
+
+# Raw status text on stdin: every target must read `not installed`. Prints one NOT_CURRENT line per
+# target that does not, or STATUS_UNREADABLE when nothing parsed.
+herdr_status_clean() {
+  local parsed line clean=0
+  parsed="$(herdr_status_parse)"
+  if [[ -z "$parsed" ]]; then
+    printf 'TRACER_HERDR_STATUS_UNREADABLE\n'
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "${line#*|}" != "not installed" ]]; then
+      printf 'TRACER_HERDR_NOT_CURRENT target=%s\n' "${line%%|*}"
+      clean=1
+    fi
+  done <<<"$parsed"
+  return "$clean"
+}
+
+# Fact lines on stdin from herdr_probe_installed: `H <hook id>`, `N` (no receipt), `S <status line>`,
+# `Y <plugin list output>`, `C <sidebar key present>`, `DS <default_shell value>`, `E <ledger entry>`,
+# `W <skill path>` and the closing `D`. No zsh is installed in the distro containers, so herdr must
+# have written neither a default_shell key nor a default-shell ledger entry (D-08b, R1-19).
+herdr_installed_verdict() {
+  local line hosts="" sidebar=0 no_receipt=0 done=0 plugin=0 failed=0 shell=""
+  local keys_seen=" " status="" parsed host state key rest
+  while IFS= read -r line; do
+    case "$line" in
+      N) no_receipt=1 ;;
+      "H sidebar-markers") sidebar=1 ;;
+      "H "*) hosts="${hosts:+$hosts,}${line#H }" ;;
+      "S "*) status+="${line#S }"$'\n' ;;
+      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "C "*) keys_seen+="${line#C } " ;;
+      "DS "*) shell="${line#DS }" ;;
+      "E default-shell "*)
+        rest="${line#E default-shell }"
+        [[ -n "$shell" ]] || shell="${rest#* }"
+        ;;
+      "W "*)
+        printf 'TRACER_HERDR_SKILL_FOUND path=%s\n' "${line#W }"
+        failed=1
+        ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_HERDR_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ "$no_receipt" -eq 1 ]]; then
+    printf 'TRACER_HERDR_NOT_RECORDED reason=no-receipt\n'
+    failed=1
+  else
+    if [[ "$sidebar" -eq 0 ]]; then
+      printf 'TRACER_HERDR_NOT_RECORDED reason=no-sidebar\n'
+      failed=1
+    fi
+    if [[ -z "$hosts" ]]; then
+      printf 'TRACER_HERDR_NOT_RECORDED reason=no-hosts\n'
+      failed=1
+    fi
+  fi
+  parsed="$(printf '%s' "$status" | herdr_status_parse)"
+  local -a host_list=()
+  IFS=',' read -ra host_list <<<"$hosts"
+  for host in ${host_list[@]+"${host_list[@]}"}; do
+    state="$(printf '%s\n' "$parsed" | awk -F'|' -v target="$host" '$1 == target { print $2; exit }')"
+    if [[ "$state" != "current" ]]; then
+      printf 'TRACER_HERDR_NOT_CURRENT target=%s\n' "$host"
+      failed=1
+    fi
+  done
+  if [[ "$plugin" -eq 0 ]]; then
+    printf 'TRACER_HERDR_PLUGIN_MISSING\n'
+    failed=1
+  fi
+  while IFS= read -r key; do
+    if [[ "$keys_seen" != *" $key "* ]]; then
+      printf 'TRACER_HERDR_KEY_MISSING key=%s\n' "$key"
+      failed=1
+    fi
+  done < <(herdr_sidebar_keys)
+  if [[ -n "$shell" ]]; then
+    printf 'TRACER_HERDR_SHELL_SET found=%s\n' "$shell"
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_HERDR_INSTALLED_OK hosts=%s\n' "$hosts"
+}
+
+# After pass 1, before the rerun: gather herdr's facts as the tester and decide. Output of every
+# herdr command is read whatever its exit code; a `herdr server reload-config` failure (no server
+# runs in a container) never reaches this probe. A copy of the binary and the ledger's key paths are
+# kept for herdr_probe_after, since the uninstall removes the binary and the ledger.
+herdr_probe_installed() {
+  local py out workspace keys
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='import json, sys, tomllib
+from pathlib import Path
+from installer import receipts
+home = Path.home()
+receipt = receipts.read("herdr")
+if receipt is None:
+    print("N")
+for host in (receipt.hooks.get("herdr-integration", ()) if receipt else ()):
+    print("H " + host)
+config = home / ".config" / "herdr" / "config.toml"
+doc = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+for dotted in sys.argv[1:]:
+    node = doc
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    if node is not None:
+        print("C " + dotted)
+terminal = doc.get("terminal")
+shell = terminal.get("default_shell") if isinstance(terminal, dict) else None
+if shell is not None:
+    print("DS " + str(shell))
+ledger = receipts.config_ledger_dir() / "herdr.json"
+if ledger.exists():
+    for entry in json.loads(ledger.read_text(encoding="utf-8")).get("entries", []):
+        print("E " + entry["setting"] + " " + ".".join(entry["key_path"]) + " " + json.dumps(entry["value"]))
+'
+  keys="$(herdr_sidebar_keys | paste -sd' ' -)"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+herdr=\"\$HOME/.local/bin/herdr\"
+if [ -x \"\$herdr\" ]; then
+  cp \"\$herdr\" ${HERDR_PROBE_COPY}
+  { \"\$herdr\" integration status 2>&1 || true; } | sed 's/^/S /'
+  printf 'Y %s\\n' \"\$({ \"\$herdr\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+fi
+for d in .claude/skills .agents/skills .codex/skills .cursor/skills .copilot/skills .config/opencode/skills; do
+  if [ -d \"\$HOME/\$d\" ]; then find \"\$HOME/\$d\" -maxdepth 1 -iname '*herdr*' -print | sed 's/^/W /'; fi
+done
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py") ${keys}
+echo D
+")" || { printf 'TRACER_HERDR_PROBE_FAILED\n'; return 1; }
+  ensure_phase_dir
+  printf '%s\n' "$out" | sed -n 's/^E [^ ]* \([^ ]*\) .*$/\1/p' >"$PHASE_DIR/herdr-ledger-keys.txt"
+  printf '%s\n' "$out" | herdr_installed_verdict
+}
+
+# Fact lines on stdin from herdr_probe_after: `S`, `Y`, `K <ledger key still in config.toml>`, `D`.
+herdr_removed_verdict() {
+  local line status="" plugin=0 done=0 failed=0 key
+  while IFS= read -r line; do
+    case "$line" in
+      "S "*) status+="${line#S }"$'\n' ;;
+      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "K "*)
+        key="${line#K }"
+        printf 'TRACER_HERDR_KEY_LEFT key=%s\n' "$key"
+        failed=1
+        ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_HERDR_PROBE_FAILED\n'
+    return 1
+  fi
+  printf '%s' "$status" | herdr_status_clean || failed=1
+  if [[ "$plugin" -eq 1 ]]; then
+    printf 'TRACER_HERDR_PLUGIN_LEFT\n'
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_HERDR_STATUS_CLEAN_OK\nTRACER_HERDR_REVERT_OK\n'
+}
+
+# After the full uninstall: a copy of the binary (taken before it) must report every target
+# `not installed` and no plugin, and herdr's kept config.toml must hold none of the keys the ledger
+# recorded.
+herdr_probe_after() {
+  local py out workspace keys key_file="$PHASE_DIR/herdr-ledger-keys.txt"
+  if [[ ! -s "$key_file" ]]; then
+    printf 'TRACER_HERDR_REVERT_UNKNOWN\n'
+    return 1
+  fi
+  keys="$(paste -sd' ' - <"$key_file")"
+  # The keys were written by this harness's own probe from the ledger; refuse anything else.
+  [[ "$keys" =~ ^[A-Za-z0-9_.\ -]+$ ]] || { printf 'TRACER_HERDR_REVERT_UNKNOWN\n'; return 1; }
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='import sys, tomllib
+from pathlib import Path
+config = Path.home() / ".config" / "herdr" / "config.toml"
+doc = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+for dotted in sys.argv[1:]:
+    node = doc
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    if node is not None:
+        print("K " + dotted)
+'
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+probe=${HERDR_PROBE_COPY}
+if [ -x \"\$probe\" ]; then
+  { \"\$probe\" integration status 2>&1 || true; } | sed 's/^/S /'
+  printf 'Y %s\\n' \"\$({ \"\$probe\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+fi
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py") ${keys}
+echo D
+")" || { printf 'TRACER_HERDR_PROBE_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | herdr_removed_verdict
 }
 
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
@@ -1045,8 +1339,14 @@ cmd_pass2() {
   local log="$PHASE_DIR/pass2-transcript.log"
   : > "$log"
 
+  # Pass 1 left herdr installed: prove its integrations, plugin and sidebar keys before the rerun.
+  if ! herdr_probe_installed >> "$log"; then
+    return 1
+  fi
+
   # Step 1: rerun — a second full install over already-installed state.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
+  ACC_REPAIRED=0; ACC_RECONFIGURED=0; ACC_REINSTALLED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
   ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0; ACC_POST_RUN_ERRORS=0
   ACC_DEP_LINES_FILE="$(mktemp)"
@@ -1060,6 +1360,10 @@ cmd_pass2() {
     printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
       "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
       "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
+    rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+    return 1
+  fi
+  if ! rerun_step_ok >> "$log"; then
     rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     return 1
   fi
@@ -1105,12 +1409,16 @@ cmd_pass2() {
   if ! settings_probe_revert >> "$log"; then
     return 1
   fi
+  if ! herdr_probe_after >> "$log"; then
+    return 1
+  fi
   if ! assert_gsd_absent uninstall >> "$log"; then
     return 1
   fi
 
   # Step 3: reinstall — catches state the uninstall sweep left stray.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
+  ACC_REPAIRED=0; ACC_RECONFIGURED=0; ACC_REINSTALLED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
   ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0; ACC_POST_RUN_ERRORS=0
   ACC_DEP_LINES_FILE="$(mktemp)"
