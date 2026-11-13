@@ -1,5 +1,7 @@
 import os
 import re
+import shutil
+import subprocess
 import tomllib
 from dataclasses import replace
 from pathlib import Path
@@ -498,6 +500,101 @@ def test_neovim_ignores_an_environment_editor(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("EDITOR", "vim")
     assert _neovim_lines() == ("Shell init on: open a new terminal to use it.",)
     assert "tweak:neovim" in (Path.home() / ".myshellrc").read_text()
+
+
+def _fake_nvim_dir(tmp_path: Path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    nvim = bin_dir / "nvim"
+    nvim.write_text("#!/bin/sh\n")
+    nvim.chmod(0o755)
+    return bin_dir
+
+
+def _probe_output(shell: list[str], tmp_path: Path, script: str, path_dirs: str) -> str:
+    """Run `script` as a file (the 23.1 sandbox cannot resolve `$HOME` in a word sourced through
+    `-c`) in a fresh shell holding only HOME and PATH, and return what it printed."""
+    probe = tmp_path / "probe.sh"
+    probe.write_text(script)
+    done = subprocess.run(
+        [*shell, str(probe)],
+        env={"HOME": str(Path.home()), "PATH": path_dirs},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _sourcing_probe(*files: Path) -> str:
+    return "".join(f'. "{file}"\n' for file in files) + 'printf "%s" "$EDITOR $VISUAL"\n'
+
+
+def _shells() -> list[object]:
+    bash, zsh = shutil.which("bash"), shutil.which("zsh")
+    return [
+        pytest.param([bash, "--noprofile", "--norc"], id="bash"),
+        pytest.param(
+            [zsh, "-f"],
+            id="zsh",
+            marks=pytest.mark.skipif(zsh is None, reason="zsh is not on PATH; zsh run skipped"),
+        ),
+    ]
+
+
+@pytest.mark.parametrize("shell", _shells())
+def test_a_new_shell_prints_nvim(shell: list[str], tmp_path: Path) -> None:
+    run_post_install(_shell_init_tool("neovim"), _mutable(), None)
+    probe = _sourcing_probe(Path.home() / ".myshellrc")
+    with_nvim = f"{_fake_nvim_dir(tmp_path)}:/usr/bin:/bin"
+    assert _probe_output(shell, tmp_path, probe, with_nvim) == "nvim nvim"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _probe_output(shell, tmp_path, probe, str(empty)) == " "  # the guard holds
+
+
+@pytest.mark.parametrize("shell", _shells())
+def test_an_os_default_editor_is_overridden(shell: list[str], tmp_path: Path) -> None:
+    run_post_install(_shell_init_tool("neovim"), _mutable(), None)
+    script = "export EDITOR=/usr/bin/nano\n" + _sourcing_probe(Path.home() / ".myshellrc")
+    path_dirs = f"{_fake_nvim_dir(tmp_path)}:/usr/bin:/bin"
+    assert _probe_output(shell, tmp_path, script, path_dirs).startswith("nvim")
+
+
+def test_your_editor_wins_in_a_new_shell(tmp_path: Path) -> None:
+    home = Path.home()
+    (home / ".bashrc").write_text("export EDITOR=vim\n")
+    run_post_install(_shell_init_tool("neovim"), _mutable(), None)
+    assert not (home / ".myshellrc").exists()
+    shell = [shutil.which("bash") or "bash", "--noprofile", "--norc"]
+    out = _probe_output(shell, tmp_path, _sourcing_probe(home / ".bashrc"), "/usr/bin:/bin")
+    assert out == "vim "
+
+
+def test_neovim_reinstall_rewrites_the_block_in_place() -> None:
+    home = Path.home()
+    for _ in range(2):
+        assert _neovim_lines() == ("Shell init on: open a new terminal to use it.",)
+    text = (home / ".myshellrc").read_text()
+    assert text.count("# >>> tools-installer tweak:neovim >>>") == 1
+    assert shell_init_record(home / ".myshellrc") == ("neovim",)
+
+
+def test_interrupted_editor_block_write_keeps_the_old_rc(monkeypatch: pytest.MonkeyPatch) -> None:
+    rc = Path.home() / ".myshellrc"
+    rc.write_text("export KEEP=1\n")
+    before = rc.read_bytes()
+
+    def interrupted(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("installer.tweaks.atomic_write_text", interrupted)
+    output = run_post_install(_shell_init_tool("neovim"), _mutable(), None)
+    assert output.warning == "source_shell_init crashed: disk full"
+    assert rc.read_bytes() == before
+    assert shell_init_record(rc) is None
 
 
 def test_shell_init_missing_myshellrc_is_created() -> None:

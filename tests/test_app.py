@@ -6633,6 +6633,52 @@ def test_shell_init_removal_removes_only_that_block(
     assert shell_init_record(myshellrc) == ("starship",)
 
 
+def test_neovim_removal_turns_off_its_editor_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import perform_uninstall, removal_change_lines, removal_result_lines
+    from installer.tweaks import (
+        BUNDLES,
+        record_shell_init,
+        shell_init_bundle,
+        shell_init_record,
+        tweak_present,
+        write_tweak,
+    )
+    from tests.test_uninstall import plant_receipted_tool
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    myshellrc = tmp_path / ".myshellrc"
+    neovim = shell_init_bundle("neovim")
+    starship = shell_init_bundle("starship")
+    assert neovim is not None
+    assert starship is not None
+    for bundle in (neovim, starship):
+        write_tweak(bundle, myshellrc)
+        record_shell_init(myshellrc, bundle.id)
+    tool = plant_receipted_tool(tmp_path, "neovim")
+    assert removal_change_lines([tool], active_tweaks={"tweak:neovim"}) == (
+        "neovim: turns off its shell init in ~/.myshellrc",
+    )
+    result = perform_uninstall(
+        _removal_decision(tool),
+        bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+        bundles=BUNDLES,
+        zshrc_path=tmp_path / ".zshrc",
+        daemon_policy=None,
+        extra_policies=(),
+        runner=_no_removal_runner,
+        catalog=(tool,),
+    )
+    assert result.shell_init_off == ("neovim",)
+    assert tweak_present(neovim, myshellrc) is False
+    assert tweak_present(starship, myshellrc) is True
+    assert shell_init_record(myshellrc) == ("starship",)
+    assert "Shell init turned off for neovim." in removal_result_lines(result)
+
+
 def test_a_full_uninstall_clears_the_shell_init_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

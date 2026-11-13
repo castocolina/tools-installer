@@ -6486,6 +6486,16 @@ def test_neovim_pending_tuning_when_you_set_none(tmp_path: Path) -> None:
     assert again.unconfigured == ()
 
 
+def test_forced_reconfigure_with_your_editor_writes_nothing(tmp_path: Path) -> None:
+    (Path.home() / ".bashrc").write_text("export EDITOR=vim\n")
+    _myshellrc().write_text("export KEEP=1\n")
+    before = _myshellrc().read_bytes()
+    outcome = _forced_reconfigure(_shell_tool("neovim"))
+    assert outcome.result == "done"
+    assert "Kept your EDITOR=vim" in outcome.detail
+    assert _myshellrc().read_bytes() == before
+
+
 def test_pending_tuning_shell_init_block_without_a_record_is_not_pending(tmp_path: Path) -> None:
     bundle = shell_init_bundle("zoxide")
     assert bundle is not None
