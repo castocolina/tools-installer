@@ -54,6 +54,7 @@ None of these has landed as of 2026-10-14. *(amended 2026-11-07: 22 and 23 have 
 - **D-04:** Update by rebuild. The GitHub tag is the version source (the 7-day TTL path), and a newer tag means OUTDATED.
   - `u` rebuilds that tag, replaces the artifacts and rewrites the receipt.
   - `~/.config/alacritty` is never touched; a checksum test proves it.
+  - **Amended 2026-11-13 (planner, 24-REVIEWS R2-12):** "never touched" applies to the rebuild. The post-run terminal follow-up D-22 runs after every route, `u` included, and may rewrite only the owned `alacritty` shell region when it drifted; best over easy: special-casing the update route would make a drifted region repair on install and doctor but not after `u`, against D-22's "every lifecycle route". SPEC R4 carries the same dated amendment.
 - **D-05:** Precedence goes through `resolve.py`'s one switch (`_RANK` :13-29, `_applies`/`_rejection` :39-128). This makes `_rejection` the single source of the reason, so the review and the ladder can't disagree (the 19 D-14 lesson).
   - New `Platform.has_distrobox`/`has_podman` fields are re-read each pass, following 19 D-14's `has_brew`.
   - `cargo_distrobox` ranks ahead of the native kinds on Linux.

@@ -68,8 +68,8 @@ Scouted 2026-10-13:
 
 4. **Update by rebuild (ONB-02)**: A newer Alacritty GitHub release shows `↑`, and `u` rebuilds that tag.
    - Current: No version source.
-   - Target: `~/.config/alacritty` is never touched by an update.
-   - Acceptance: A fake release feed with a newer tag shows `↑`. `u` rebuilds and replaces the artifacts and rewrites the receipt. A checksum of the config dir is unchanged after the update.
+   - Target: `~/.config/alacritty` is never touched by an update. *(amended 2026-11-13, 24 R2-12: the rebuild itself never touches it; the post-run terminal follow-up that runs after every lifecycle route, `u` included (locked 24 D-22, `UpdateService.terminal_follow_up` -> `setup._sync_terminals`), may rewrite only the installer's owned `alacritty` shell region and only when that region drifted from what the sync writes; it never touches a byte outside the owned regions, and Alacritty's keybindings region is install tuning, which the update route does not run)*
+   - Acceptance: A fake release feed with a newer tag shows `↑`. `u` rebuilds and replaces the artifacts and rewrites the receipt. A checksum of the config dir is unchanged after the update. *(amended 2026-11-13, 24 R2-12: the checksum holds on the full `UpdateService` route with intact regions; with the shell region removed by hand, the follow-up restores only that region and every byte outside the regions is unchanged)*
 
 5. **Method precedence (decision)**: On Linux, the `cargo_distrobox` method comes first when `distrobox` and `podman` are both present.
    - Current: Native methods only.
@@ -197,7 +197,7 @@ Scouted 2026-10-13:
 | Prohibition (must-NOT statement) | Requirement | Status | Verification / Reason |
 |----------------------------------|-------------|--------|------------------------|
 | MUST NOT leave a Distrobox container or image after any build outcome | R2 | resolved | test: the fake runner sees rm and image rm on failure; the real run lists none *(amended 2026-11-07, 24 D-19: an image the run did not pull is never removed)* |
-| MUST NOT touch `~/.config/alacritty` outside the owned region, nor at all on update | R4, R6 | resolved | test: checksum and user keys unchanged |
+| MUST NOT touch `~/.config/alacritty` outside the owned region, nor at all on update | R4, R6 | resolved | test: checksum and user keys unchanged *(amended 2026-11-13, 24 R2-12: "on update" means the rebuild; the shared post-run terminal follow-up (D-22) may repair only a drifted owned shell region on every route, `u` included; test: the UpdateService route keeps the checksum with intact regions and restores only the owned region when it drifted)* |
 | MUST NOT run sudo for the build or the fallback | R2, R5 | resolved | test: the Phase 22 grep stays green; the native fallback is a handoff |
 | MUST NOT run e2e installs on the host | R8 | resolved | judgment: the harness refuses to run outside a container (existing guard) *(amended 2026-11-07, 24 D-18: the one real Alacritty build also runs in a disposable container, never on the host's podman)* |
 
