@@ -23,7 +23,6 @@ from typing import Generic, TypeVar
 from installer.atomic import atomic_write_bytes
 from installer.daemon import (
     ENVIRONMENT_KEYS,
-    WRAPPER_COMMAND,
     DaemonScheduleError,
     ensure_log_path,
     remove_wrapper,
@@ -34,9 +33,8 @@ from installer.locations import xdg_config_base
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_query
 from installer.shellrc import apply_block, strip_block
 
-# Re-exported (imported, never re-declared -- the schedule engine needs these same names,
-# exactly like it imports installer.daemon's WRAPPER_COMMAND/remove_wrapper rather than
-# re-declaring a parallel copy).
+# Re-exported (imported, never re-declared -- the schedule engine needs these same names
+# rather than a parallel copy).
 __all__ = [
     "COMPETING_UNITS",
     "DEFAULT_AGE_MINUTES",
@@ -55,7 +53,6 @@ __all__ = [
     "CompetitorCache",
     "TimerStateCache",
     "UNIT_BASENAME",
-    "WRAPPER_COMMAND",
     "bootout",
     "bootstrap",
     "clean_timer_state",

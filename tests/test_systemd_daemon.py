@@ -1313,3 +1313,8 @@ def test_user_manager_reachable(stdout: str, expected: bool) -> None:
 
 def test_user_manager_reachable_reads_a_timeout_as_unreachable() -> None:
     assert systemd_daemon.user_manager_reachable(read_output=_RaisingReadOutput()) is False
+
+
+def test_the_unused_wrapper_command_is_not_re_exported() -> None:
+    assert "WRAPPER_COMMAND" not in vars(systemd_daemon)
+    assert "WRAPPER_COMMAND" not in systemd_daemon.__all__
