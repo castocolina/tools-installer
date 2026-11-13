@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -2493,3 +2495,107 @@ def test_cargo_distrobox_kept_image_note_reaches_the_outcome(
         "kept the existing image registry.fedoraproject.org/fedora-toolbox:44"
         in outcome.postinstall_warning
     )
+
+
+# --- Plan 24-09: a script install whose download failed is a failure ----------------------------
+
+
+# The autouse PATH sandbox hides every shell, so the script tests look for theirs on the host's.
+_HOST_UTILS = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
+
+
+def _fake_script_toolchain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, curl_exit: int
+) -> tuple[Path, Path, Path]:
+    """Fakes for every command the production script runs, with the script's own PATH on them.
+
+    Returns (fake bin dir, marker the downloaded script touches, the file mktemp hands out).
+    """
+    real_bash = shutil.which("bash", path=_HOST_UTILS)
+    assert real_bash is not None
+    real_rm = shutil.which("rm", path=_HOST_UTILS)
+    assert real_rm is not None
+    fake = tmp_path / "script-fakes"
+    fake.mkdir()
+    marker = tmp_path / "script-ran"
+    temp_file = tmp_path / "download.tmp"
+    curl_body = (
+        'echo "curl: (35) TLS connect error" >&2\nexit 35\n'
+        if curl_exit
+        else f"printf ': > %q\\n' {marker} > \"$out\"\n"
+    )
+    bodies = {
+        "curl": (
+            'while [ $# -gt 0 ]; do\n  if [ "$1" = -o ]; then out=$2; shift; fi\n  shift\ndone\n'
+            + curl_body
+        ),
+        "mktemp": f": > {temp_file}\necho {temp_file}\n",
+        "rm": f'exec {real_rm} "$@"\n',
+        # a fake shell that runs its stdin, which is where the downloaded script arrives
+        "bash": 'while IFS= read -r line || [ -n "$line" ]; do eval "$line"; done\n',
+    }
+    for name, body in bodies.items():
+        script = fake / name
+        script.write_text(f"#!{real_bash}\n{body}", encoding="utf-8")
+        script.chmod(0o755)
+    monkeypatch.setattr(executors, "shell_path", lambda: str(fake))
+    return fake, marker, temp_file
+
+
+def _file_runner(tmp_path: Path, fake: Path) -> Callable[[list[str]], None]:
+    """Run a `sh -c` script as a file with bash (the sandbox refuses the `-c` string itself)."""
+    real_bash = shutil.which("bash", path=_HOST_UTILS)
+    assert real_bash is not None
+
+    def runner(cmd: list[str]) -> None:
+        assert cmd[:2] == ["sh", "-c"]
+        script_file = tmp_path / "script-under-test.sh"
+        script_file.write_text(cmd[2], encoding="utf-8")
+        done = subprocess.run(
+            [real_bash, str(script_file)],
+            env={"PATH": str(fake), "HOME": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode:
+            raise CommandError(cmd, done.returncode, detail=done.stderr)
+
+    return runner
+
+
+def _script_tool() -> Tool:
+    return _tool(
+        Method(kind="script", params={"url": "https://example.test/i.sh", "shell": "bash"})
+    )
+
+
+def test_script_download_failure_fails_the_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    fake, marker, _temp = _fake_script_toolchain(tmp_path, monkeypatch, curl_exit=35)
+    tool = _script_tool()
+
+    outcome = install_tool(tool, _platform(), runner=_file_runner(tmp_path, fake))
+
+    assert outcome.status == InstallStatus.FAILED
+    (error,) = outcome.errors
+    assert isinstance(error, CommandError)
+    assert error.returncode == 35
+    assert "TLS connect error" in error.detail
+    assert not marker.exists()
+    assert receipts.read(tool.id) is None
+
+
+def test_script_download_success_runs_the_script_on_stdin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    fake, marker, temp_file = _fake_script_toolchain(tmp_path, monkeypatch, curl_exit=0)
+
+    outcome = install_tool(_script_tool(), _platform(), runner=_file_runner(tmp_path, fake))
+
+    assert outcome.status == InstallStatus.INSTALLED
+    assert marker.exists()
+    assert not temp_file.exists()

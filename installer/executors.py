@@ -420,9 +420,8 @@ def _env_prefix(method: Method) -> str:
     """Shell-quoted `KEY=value` assignments for the script shell, sorted by key.
 
     Keys come only from the trusted registry, so they are not shell-quoted; values
-    are. The prefix attaches to the shell (the right side of the `curl | shell`
-    pipe), not to curl — in POSIX sh a pipeline component's assignments are local
-    to that component, so the installer would otherwise never see them.
+    are. The prefix attaches to the shell that reads the downloaded script, not to
+    curl, so the installer sees the variables and curl does not.
     """
     raw = method.params.get("env")
     if not isinstance(raw, dict):
@@ -447,8 +446,15 @@ def _script(method: Method, runner: Runner) -> None:
         for item in cast(list[object], raw_args):
             parts.append(shlex.quote(item if isinstance(item, str) else str(item)))
         invoke = f"{invoke} -s -- {' '.join(parts)}"
-    pipeline = f"{_path_prefix()}curl -fsSL -- {shlex.quote(url)} | {invoke}"
-    runner(["sh", "-c", pipeline])
+    # The shell runs only a complete download: a `curl | sh` pipe hid curl's exit status and ran
+    # an empty or truncated script. curl's own `-o` file is also what makes retrying every
+    # error safe (curl resets a partial file before a retry; a pipe would receive duplicated bytes).
+    script = (
+        f'f="$(mktemp)" || exit 1; trap \'rm -f "$f"\' EXIT; '
+        f'curl -fsSL --retry 3 --retry-all-errors -o "$f" -- {shlex.quote(url)} '
+        f'&& {invoke} < "$f"'
+    )
+    runner(["sh", "-c", f"{_path_prefix()}{script}"])
 
 
 def _brew(method: Method, runner: Runner) -> None:

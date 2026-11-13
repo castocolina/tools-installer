@@ -2856,7 +2856,7 @@ def test_fnm_installer_skips_its_shell_block() -> None:
     executors.execute(script, calls.append)
     assert len(calls) == 1
     assert calls[0][:2] == ["sh", "-c"]
-    assert calls[0][2].endswith("bash -s -- --skip-shell")
+    assert calls[0][2].endswith('bash -s -- --skip-shell < "$f"')
 
     block = REGISTRY.read_text(encoding="utf-8").split('id = "fnm"', 1)[1].split("[[tool]]", 1)[0]
     assert "--skip-shell" in block
