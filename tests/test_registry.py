@@ -16,6 +16,7 @@ from installer.download import Artifact, artifact_paths, pinned_url
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.resolve import resolve_methods
+from installer.schedules import SCHEDULES
 from installer.tweaks import SHELL_INIT_TOOLS
 from installer.uninstall import removal_plan
 
@@ -2896,3 +2897,9 @@ def test_fnm_installer_skips_its_shell_block() -> None:
     block = REGISTRY.read_text(encoding="utf-8").split('id = "fnm"', 1)[1].split("[[tool]]", 1)[0]
     assert "--skip-shell" in block
     assert "Verified 2026-11-08" in block
+
+
+def test_schedule_targets_are_catalog_tools():
+    targets = {schedule.target for schedule in SCHEDULES if schedule.target is not None}
+    assert targets == {"claude", "opencode", "pi", "cursor-agent", "copilot"}
+    assert targets <= set(_tools_by_id())

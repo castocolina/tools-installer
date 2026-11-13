@@ -19,7 +19,10 @@ from typing import Final, cast
 from installer import daemon, receipts, runlock
 from installer.atomic import atomic_write_bytes, atomic_write_text, read_capped
 from installer.locations import ensure_dir
+from installer.ownership import NATIVE_OWNERS, OS_PACKAGE_OWNER
 from installer.receipts import ReceiptArtifact
+from installer.sanitize import sanitize_log_line
+from installer.update import UpdateOutcome
 
 
 class JobKind(StrEnum):
@@ -90,6 +93,39 @@ def schedule_by_id(schedule_id: str) -> Schedule:
 
 INTERVALS: Final[tuple[int, ...]] = (1, 2, 3, 4, 6, 8, 12, 24)
 _START_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+_MODEL_CHARS_RE = re.compile(r"[A-Za-z0-9._\-\[\]=,]*")
+_MODEL_MAX_LENGTH = 128
+INTERVAL_MESSAGE: Final = "Interval must be 1, 2, 3, 4, 6, 8, 12 or 24 hours."
+START_MESSAGE: Final = "Start must be HH:MM from 00:00 to 23:59, for example 01:30."
+MODEL_CHARSET_MESSAGE: Final = "Model ids use letters, digits and . _ - [ ] = , only."
+# Beyond the UI-SPEC copy (F6): a model id must never read as a flag.
+MODEL_SHAPE_MESSAGE: Final = (
+    "Model ids start with a letter or digit and are at most 128 characters."
+)
+
+
+def validate_interval(value: int | str) -> int:
+    if isinstance(value, str):
+        value = int(value) if value.isascii() and value.isdigit() else -1
+    if isinstance(value, bool) or value not in INTERVALS:
+        raise daemon.DaemonScheduleError(INTERVAL_MESSAGE)
+    return value
+
+
+def validate_start(value: str) -> tuple[int, int]:
+    if not _START_RE.fullmatch(value):
+        raise daemon.DaemonScheduleError(START_MESSAGE)
+    return int(value[:2]), int(value[3:])
+
+
+def validate_model_id(value: str) -> str:
+    """A model id reaches a shim's argv, so it can never start with `-` or hold shell syntax."""
+    if not _MODEL_CHARS_RE.fullmatch(value):
+        raise daemon.DaemonScheduleError(MODEL_CHARSET_MESSAGE)
+    if not value[:1].isalnum() or len(value) > _MODEL_MAX_LENGTH:
+        raise daemon.DaemonScheduleError(MODEL_SHAPE_MESSAGE)
+    return value
+
 
 # Needs the user's confirmation (D-20, UI-SPEC P7): the user asked for `gpt-6.1-sol`,
 # which `cursor-agent --list-models` lacks.
@@ -102,8 +138,9 @@ Slot = tuple[int, int]
 
 def slots(interval: int, start: str) -> tuple[Slot, ...]:
     """The day's run times: `start` plus every `interval` hours, wrapped past midnight."""
-    hour, minute = int(start[:2]), int(start[3:])
-    return tuple(sorted(((hour + k * interval) % 24, minute) for k in range(24 // interval)))
+    hour, minute = validate_start(start)
+    step = validate_interval(interval)
+    return tuple(sorted(((hour + k * step) % 24, minute) for k in range(24 // step)))
 
 
 def on_calendar(grid: tuple[Slot, ...]) -> str:
@@ -226,11 +263,14 @@ def _decode_record(raw: object) -> ScheduleRecord:
     if decided is not None and not isinstance(decided, bool):
         raise _StateError("decided is neither true, false nor null")
     interval = data.get("interval")
-    if not isinstance(interval, int) or isinstance(interval, bool) or interval not in INTERVALS:
-        raise _StateError("interval is not an allowed value")
     start = data.get("start")
-    if not isinstance(start, str) or not _START_RE.fullmatch(start):
-        raise _StateError("start is not HH:MM")
+    if not isinstance(interval, int) or not isinstance(start, str):
+        raise _StateError("interval or start has the wrong type")
+    try:
+        validate_interval(interval)
+        validate_start(start)
+    except daemon.DaemonScheduleError as exc:
+        raise _StateError(str(exc)) from exc
     return ScheduleRecord(decided, interval, start, _decode_files(data.get("files", [])))
 
 
@@ -260,6 +300,10 @@ def _decode_state(raw: object) -> ScheduleState:
     model = data.get("cursor_default_model", DEFAULT_CURSOR_MODEL)
     if not isinstance(model, str):
         raise _StateError("cursor_default_model is not text")
+    try:
+        validate_model_id(model)
+    except daemon.DaemonScheduleError as exc:
+        raise _StateError(str(exc)) from exc
     shim = _optional_text(data, "cursor_shim")
     if shim is not None and shim not in _SHIMS:
         raise _StateError("cursor_shim is not an allowed value")
@@ -342,3 +386,71 @@ def update_state(path: Path, change: Callable[[ScheduleState], ScheduleState]) -
         state = change(load_state(path).state)
         save_state(path, state)
     return state
+
+
+_SYSTEM_BINS: Final = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+
+
+def clean_unit_path(
+    home: Path,
+    *,
+    platform_os: str,
+    environ: Mapping[str, str],
+    is_dir: Callable[[Path], bool] = Path.is_dir,
+) -> str:
+    """A deterministic PATH for a scheduled unit: fixed absolute parts, never the caller's PATH.
+
+    The interactive PATH carries the checkout's `.venv/bin` and transient `/run/user/*` dirs,
+    which would make a run depend on the checkout and the login session (F4).
+    """
+    macos = platform_os == "macos"  # every other Platform.os key is Linux
+    pnpm_env = environ.get("PNPM_HOME", "")
+    pnpm_home = (
+        Path(pnpm_env)
+        if pnpm_env and Path(pnpm_env).is_absolute()
+        else home / ("Library/pnpm" if macos else ".local/share/pnpm")
+    )
+    optional = [home / ".volta/bin", home / ".bun/bin", home / ".opencode/bin"]
+    brew = Path("/opt/homebrew/bin" if macos else "/home/linuxbrew/.linuxbrew/bin")
+    parts = [
+        home / ".local/bin",
+        pnpm_home,
+        *(path for path in (*optional, brew) if is_dir(path)),
+    ]
+    # shortcut: a tool installed outside these dirs is not found by a scheduled run; upgrade by
+    # adding its dir here.
+    return ":".join(dict.fromkeys([*map(str, parts), *_SYSTEM_BINS]))
+
+
+_DETAIL_LIMIT = 300
+# Owners whose tool this installer never mutates: the result names the owner and the tool.
+_OWNER_SKIPS: Final = frozenset({*NATIVE_OWNERS, OS_PACKAGE_OWNER, "sdkman"})
+
+
+def _first_line(text: str, fallback: str) -> str:
+    """The first non-empty line of `text`, sanitized and bounded to 300 characters."""
+    lines = (line.strip() for line in sanitize_log_line(text).splitlines())
+    return (next((line for line in lines if line), "")[:_DETAIL_LIMIT]) or fallback
+
+
+def update_result_line(
+    outcome: UpdateOutcome, before: str | None, after: str | None
+) -> tuple[str, int]:
+    """One total mapping from an update outcome to its log result line and exit code (F7)."""
+    if outcome.status == "updated":
+        if before is None or after is None:
+            line = "ok: updated"
+        elif before == after:
+            line = "ok: up to date"
+        else:
+            line = f"ok: updated {_first_line(before, '?')} → {_first_line(after, '?')}"
+        code = 0
+    elif outcome.status == "failed":
+        line, code = f"failed: {_first_line(outcome.detail, 'update failed')}", 1
+    elif outcome.status == "unsupported" and outcome.owner in _OWNER_SKIPS:
+        line, code = f"skipped: {outcome.owner} owns {outcome.tool_id}", 0
+    else:  # "unsupported" for any other owner, and "unknown-owner": skipped, never red
+        line, code = f"skipped: {_first_line(outcome.detail, 'not updatable')}", 0
+    if outcome.postinstall_warning:
+        line += f"; postinstall warning: {_first_line(outcome.postinstall_warning, 'see log')}"
+    return line, code
