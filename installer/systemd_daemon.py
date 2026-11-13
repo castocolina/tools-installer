@@ -14,10 +14,11 @@ from installer/run.py -- this module never imports subprocess.
 
 from __future__ import annotations
 
+import re
 import shutil
 import threading
 import time
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, TypeVar
@@ -80,6 +81,7 @@ __all__ = [
     "record_decided",
     "remove_units",
     "remove_wrapper",
+    "render_exec_service",
     "render_service",
     "render_timer",
     "system_scope_warning",
@@ -92,6 +94,7 @@ __all__ = [
     "user_unit_dir",
     "wants_link_path",
     "wrapper_present",
+    "write_unit_pair",
     "write_units",
 ]
 
@@ -181,6 +184,48 @@ def _quote(value: str) -> str:
     return f'"{value}"'
 
 
+_ENVIRONMENT_KEYS = ("PATH", "HOME", "TMPDIR")
+_CALENDAR_RE = re.compile(r"\*-\*-\* \d{2}(,\d{2})*:\d{2}:00")
+
+
+def render_exec_service(
+    *, argv: Sequence[str], environment: Mapping[str, str], description: str
+) -> str:
+    """The systemd unit (.service) INI text for a oneshot run of any argv.
+
+    `argv[0]` must be absolute. The environment is closed to PATH, HOME and
+    TMPDIR (rendered in that order, whichever are given); HOME and TMPDIR must
+    be absolute and PATH non-empty. Every token and every KEY=value goes through
+    _quote, and everything is validated before anything is returned, so a bad
+    value can never reach a written unit file.
+    """
+    if not argv or not Path(argv[0]).is_absolute():
+        raise DaemonScheduleError(f"argv[0] must be an absolute path: {list(argv)[:1]!r}")
+    unknown = sorted(set(environment) - set(_ENVIRONMENT_KEYS))
+    if unknown:
+        raise DaemonScheduleError(f"environment keys must be within {_ENVIRONMENT_KEYS}: {unknown}")
+    if "PATH" in environment and not environment["PATH"]:
+        raise DaemonScheduleError("PATH must not be empty")
+    for key in ("HOME", "TMPDIR"):
+        if key in environment and not Path(environment[key]).is_absolute():
+            raise DaemonScheduleError(f"{key} must be an absolute path: {environment[key]!r}")
+    exec_start = " ".join(_quote(token) for token in argv)
+    lines = [
+        "[Unit]",
+        f"Description={description}",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        f"ExecStart={exec_start}",
+        *(
+            f"Environment={_quote(f'{key}={environment[key]}')}"
+            for key in _ENVIRONMENT_KEYS
+            if key in environment
+        ),
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def render_service(
     *,
     uv_path: Path,
@@ -233,7 +278,7 @@ def render_service(
     if age_minutes < 1:
         raise DaemonScheduleError(f"age_minutes must be >= 1: {age_minutes!r}")
 
-    exec_tokens = [
+    argv = [
         str(uv_path),
         "run",
         "--no-project",
@@ -250,38 +295,44 @@ def render_service(
         "--minutes",
         str(age_minutes),
     ]
-    exec_start = " ".join(_quote(token) for token in exec_tokens)
-    lines = [
-        "[Unit]",
-        f"Description={description}",
-        "",
-        "[Service]",
-        "Type=oneshot",
-        f"ExecStart={exec_start}",
-        f"Environment={_quote(f'PATH={path_value}')}",
-        f"Environment={_quote(f'HOME={home}')}",
-        f"Environment={_quote(f'TMPDIR={tmpdir}')}",
-    ]
-    return "\n".join(lines) + "\n"
+    return render_exec_service(
+        argv=argv,
+        environment={"PATH": path_value, "HOME": home, "TMPDIR": tmpdir},
+        description=description,
+    )
 
 
-def render_timer(*, description: str = "tools-installer background /tmp cleanup timer") -> str:
-    """The systemd unit (.timer) INI text: a monotonic boot-delay + interval
-    timer, never an OnCalendar= one.
+def render_timer(
+    *,
+    description: str = "tools-installer background /tmp cleanup timer",
+    on_calendar: str | None = None,
+    basename: str = UNIT_BASENAME,
+) -> str:
+    """The systemd unit (.timer) INI text.
 
-    Deliberately declares NO Persistent= key: that key only gives catch-up
+    With no `on_calendar`: a monotonic boot-delay + interval timer, which
+    deliberately declares NO Persistent= key -- that key only gives catch-up
     semantics for an OnCalendar= timer, and declaring it on a monotonic
     OnBootSec=/OnUnitActiveSec= timer buys nothing while implying a catch-up
     guarantee systemd does not provide here (review LOW 15.7-01).
+
+    With `on_calendar` (an explicit hour list, `*-*-* HH(,HH)*:MM:00`): an
+    OnCalendar= timer with Persistent=true -- the form where Persistent= gives
+    catch-up, firing a run missed while the machine was off at the next start.
     """
+    if on_calendar is None:
+        schedule_lines = [f"OnBootSec={DEFAULT_BOOT_DELAY}", f"OnUnitActiveSec={DEFAULT_INTERVAL}"]
+    elif _CALENDAR_RE.fullmatch(on_calendar):
+        schedule_lines = [f"OnCalendar={on_calendar}", "Persistent=true"]
+    else:
+        raise DaemonScheduleError(f"on_calendar must be an explicit hour list: {on_calendar!r}")
     lines = [
         "[Unit]",
         f"Description={description}",
         "",
         "[Timer]",
-        f"OnBootSec={DEFAULT_BOOT_DELAY}",
-        f"OnUnitActiveSec={DEFAULT_INTERVAL}",
-        f"Unit={SERVICE_NAME}",
+        *schedule_lines,
+        f"Unit={basename}.service",
         "",
         "[Install]",
         "WantedBy=timers.target",
@@ -289,27 +340,27 @@ def render_timer(*, description: str = "tools-installer background /tmp cleanup 
     return "\n".join(lines) + "\n"
 
 
-def unit_paths(unit_dir: Path) -> tuple[Path, Path]:
+def unit_paths(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> tuple[Path, Path]:
     """(service_path, timer_path) under unit_dir -- never checks existence."""
-    return unit_dir / SERVICE_NAME, unit_dir / TIMER_NAME
+    return unit_dir / f"{basename}.service", unit_dir / f"{basename}.timer"
 
 
-def units_present(unit_dir: Path) -> bool:
+def units_present(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> bool:
     """True only when BOTH unit files exist."""
-    service_path, timer_path = unit_paths(unit_dir)
+    service_path, timer_path = unit_paths(unit_dir, basename=basename)
     return service_path.exists() and timer_path.exists()
 
 
-def wants_link_path(unit_dir: Path) -> Path:
+def wants_link_path(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> Path:
     """The enablement symlink `systemctl --user enable` creates for the timer.
 
     The name is this project's own timer name inside the user unit dir, so the
     path identifies it as ours without reading the link target.
     """
-    return unit_dir / "timers.target.wants" / TIMER_NAME
+    return unit_dir / "timers.target.wants" / f"{basename}.timer"
 
 
-def footprint_present(unit_dir: Path) -> bool:
+def footprint_present(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> bool:
     """True when ANY file this project installs into unit_dir is on disk.
 
     The uninstall question is "is this ours", not "is it running" (CR-01): a
@@ -317,8 +368,8 @@ def footprint_present(unit_dir: Path) -> bool:
     still has files that restart it at the next login. Either unit file or a
     leftover enablement symlink (even a dangling one) counts.
     """
-    service_path, timer_path = unit_paths(unit_dir)
-    link = wants_link_path(unit_dir)
+    service_path, timer_path = unit_paths(unit_dir, basename=basename)
+    link = wants_link_path(unit_dir, basename=basename)
     return service_path.exists() or timer_path.exists() or link.is_symlink()
 
 
@@ -355,14 +406,28 @@ def write_units(
         cap_bytes=cap_bytes,
         age_minutes=age_minutes,
     )
-    timer_text = render_timer()
-    service_path, timer_path = unit_paths(unit_dir)
+    write_unit_pair(
+        unit_dir, basename=UNIT_BASENAME, service_text=service_text, timer_text=render_timer()
+    )
+
+
+def write_unit_pair(
+    unit_dir: Path, *, basename: str, service_text: str, timer_text: str
+) -> tuple[Path, Path]:
+    """Write already-rendered service and timer text atomically at 0o644.
+
+    The caller renders first, so a render error never reaches the filesystem;
+    the forced mode is independent of the umask or any pre-existing mode on the
+    target (T-15.7-02). Returns (service_path, timer_path).
+    """
+    service_path, timer_path = unit_paths(unit_dir, basename=basename)
     unit_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(service_path, service_text.encode("utf-8"), mode=0o644)
     atomic_write_bytes(timer_path, timer_text.encode("utf-8"), mode=0o644)
+    return service_path, timer_path
 
 
-def remove_units(unit_dir: Path) -> None:
+def remove_units(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> None:
     """Delete both unit files and the timer's enablement symlink.
 
     missing_ok throughout, so it never raises when already gone. The symlink
@@ -371,9 +436,9 @@ def remove_units(unit_dir: Path) -> None:
     unit that the manager reports as missing at every login. Only a symlink is
     unlinked: a regular file at that path is not something enable creates.
     """
-    for path in unit_paths(unit_dir):
+    for path in unit_paths(unit_dir, basename=basename):
         path.unlink(missing_ok=True)
-    link = wants_link_path(unit_dir)
+    link = wants_link_path(unit_dir, basename=basename)
     if link.is_symlink():
         link.unlink(missing_ok=True)
 
@@ -383,16 +448,16 @@ def daemon_reload(*, run: Runner = run_captured) -> None:
     run(["systemctl", "--user", "daemon-reload"])
 
 
-def disable_timer(*, run: Runner = run_captured) -> None:
+def disable_timer(*, basename: str = UNIT_BASENAME, run: Runner = run_captured) -> None:
     """`systemctl --user disable <timer>` -- undo `enable`'s wants symlink.
 
     No `--now`: this is the first-apply rollback, which undoes only what
     `bootstrap` did before it failed (WR-01).
     """
-    run(["systemctl", "--user", "disable", TIMER_NAME])
+    run(["systemctl", "--user", "disable", f"{basename}.timer"])
 
 
-def bootstrap(unit_dir: Path, *, run: Runner = run_captured) -> None:
+def bootstrap(unit_dir: Path, *, basename: str = UNIT_BASENAME, run: Runner = run_captured) -> None:
     """Idempotently (re)register the timer: daemon-reload, enable, restart.
 
     Restart rather than start: a re-apply that rewrote the unit content must
@@ -405,8 +470,8 @@ def bootstrap(unit_dir: Path, *, run: Runner = run_captured) -> None:
     """
     del unit_dir
     daemon_reload(run=run)
-    run(["systemctl", "--user", "enable", TIMER_NAME])
-    run(["systemctl", "--user", "restart", TIMER_NAME])
+    run(["systemctl", "--user", "enable", f"{basename}.timer"])
+    run(["systemctl", "--user", "restart", f"{basename}.timer"])
 
 
 def query_systemctl(cmd: list[str]) -> str:
