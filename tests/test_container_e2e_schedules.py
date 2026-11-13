@@ -584,6 +584,7 @@ def test_busy_verdict(tmp_path: Path, last: str, expected: str, code: int) -> No
     assert "run.lock" in calls[holder]
     assert "flock -n" in calls[holder]
     assert "sleep 60" in calls[holder]
+    assert "echo installer >" in calls[holder]
 
 
 @pytest.mark.parametrize(

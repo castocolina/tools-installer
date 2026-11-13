@@ -2441,9 +2441,10 @@ schedules_start_count() {
 schedules_busy_check() {
   local log last rc=0
   # The holder runs as a transient user unit: a background process started inside `su -` did
-  # not outlive the exec session, so the runner took the lock it was meant to find held.
+  # not outlive the exec session, so the runner took the lock it was meant to find held. It names
+  # itself `installer` as the installer does; a runner waits for another scheduled run instead.
   schedules_tester "mkdir -p \"\$HOME/.local/state/tools-installer\"
-systemd-run --user --quiet --unit=${SCHEDULES_HOLDER_UNIT} flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" sleep 60
+systemd-run --user --quiet --unit=${SCHEDULES_HOLDER_UNIT} flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" sh -c 'echo installer > \"\$HOME/${SCHEDULES_LOCK_REL}\"; exec sleep 60'
 for _ in 1 2 3 4 5 6 7 8 9 10; do flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" true || break; sleep 0.5; done" || true
   schedules_tester "systemctl --user start tools-installer-schedule-cache-cleanup.service" || true
   log="$(mktemp)"
