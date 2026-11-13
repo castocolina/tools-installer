@@ -6731,3 +6731,33 @@ def test_headless_omz_install_without_chsh_prints_the_explanation_instead(
     assert "removed chsh" in output
     assert "chsh -s" not in output
     assert all(call[0] != "chsh" for call in calls)
+
+
+def test_herdr_removal_reverts_default_shell(tmp_path: Path) -> None:
+    from installer import app as app_module
+    from installer.agent_settings import apply_value, settings_file
+
+    herdr = Tool(
+        id="herdr",
+        name="herdr",
+        category="terminal",
+        cmd="herdr",
+        methods=(Method(kind="brew", params={"formula": "herdr"}),),
+    )
+    config = settings_file("herdr", home=Path.home(), platform_os="fedora", environ={})
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n', encoding="utf-8")
+    apply_value("herdr", "default-shell", "/usr/bin/zsh", home=Path.home(), platform_os="fedora")
+    assert "default_shell" in config.read_text(encoding="utf-8")
+
+    result = app_module._after_removal(  # pyright: ignore[reportPrivateUsage]
+        herdr,
+        bundles=(),
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        extra_policies=(),
+        platform_os="fedora",
+    )
+
+    assert result.settings_reverted == ("herdr",)
+    assert config.read_text(encoding="utf-8") == '[terminal]\nshell_mode = "auto"\n'

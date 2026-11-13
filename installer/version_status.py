@@ -95,7 +95,7 @@ from installer.receipts import CHANGED_SINCE_INSTALL, Receipt
 from installer.resolve import resolve_methods, unavailable_reason
 from installer.run import CommandError, run_query
 from installer.status import is_installed
-from installer.terminal_shell import TerminalShellResult
+from installer.terminal_shell import KEYS_PENDING, TerminalShellResult, alacritty_keys_pending
 from installer.tweaks import bundle_marker_present, shell_init_bundle, shell_init_record
 from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
 from installer.update import update_refusal
@@ -607,6 +607,8 @@ _TERMINAL_ROWS: dict[str, tuple[str, str]] = {
     "kitty": ("kitty", "Kitty"),
     "wezterm": ("wezterm", "WezTerm"),
     "konsole": ("zsh", "Konsole"),
+    "alacritty": ("alacritty", "Alacritty"),
+    "herdr": ("herdr", "herdr"),
 }
 
 
@@ -650,6 +652,8 @@ def _tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
         return _omz_tuning_fact()
     if present and "source_shell_init" in tool.post_install:
         return _shell_init_tuning_fact(tool, platform)
+    if present and "apply_terminal_tuning" in tool.post_install:
+        return _terminal_tuning_fact()
     return _agent_tuning_fact(tool, present, platform)
 
 
@@ -682,6 +686,21 @@ def _omz_tuning_fact() -> _ConfigFacts:
     if refusal is not None:
         return _ConfigFacts((refusal,))
     return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
+
+
+def _terminal_tuning_fact() -> _ConfigFacts:
+    """A present Alacritty whose keybindings the installer never wrote reads `≈` with the one
+    step; a region the user removed after the install is recorded, so theirs; a file that
+    cannot take the region is a reason with no step (24 D-23)."""
+    try:
+        reason = alacritty_keys_pending(Path.home(), os.environ)
+    except Exception as exc:  # a read-only secondary fact must never fail the pass
+        return _ConfigFacts(unchecked=(f"keybindings not checked: {exc}",))
+    if reason is None:
+        return _NO_FACTS
+    if reason == KEYS_PENDING:
+        return _ConfigFacts((TUNING_PENDING,), (TUNING_STEP,))
+    return _ConfigFacts((reason,))
 
 
 def _agent_tuning_fact(tool: Tool, present: bool, platform: Platform) -> _ConfigFacts:
@@ -1364,7 +1383,8 @@ class VersionRefreshService:
         """D-16: ONE dry-run sync per pass; each drifted terminal is its row's fact.
 
         A warning is a note, never a step (G11): the synchronizer cannot handle
-        that shape. Its prefix before the first colon names the terminal; an
+        that shape. A `<terminal>: partial: ...` warning is a reason instead: the user's own
+        setting blocks part of the sync. Its prefix before the first colon names the terminal; an
         unknown prefix lands on every terminal row.
         """
         if self._terminal_drift is None:
@@ -1413,7 +1433,12 @@ class VersionRefreshService:
             facts[row] = facts.get(row, _NO_FACTS).plus(fact)
         rows = tuple(dict.fromkeys(row for row, _label in _TERMINAL_ROWS.values()))
         for warning in result.warnings:
-            prefix = warning.split(":", 1)[0]
+            prefix, _, rest = warning.partition(":")
+            if prefix in _TERMINAL_ROWS and rest.strip().startswith("partial:"):
+                # The user's own setting blocks part of the sync: a reason, never a step (24 D-08).
+                row = _TERMINAL_ROWS[prefix][0]
+                facts[row] = facts.get(row, _NO_FACTS).plus(_ConfigFacts((warning,)))
+                continue
             if prefix == "zshenv":
                 targets: tuple[str, ...] = ("zsh",)  # the zsh row carries ~/.zshenv
             elif prefix in _TERMINAL_ROWS:

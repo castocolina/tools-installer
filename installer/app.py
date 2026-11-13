@@ -89,6 +89,7 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
+from installer.terminal_shell import strip_alacritty
 from installer.tweaks import (
     SHELL_INIT_TOOLS,
     TweakBundle,
@@ -695,6 +696,8 @@ def _after_removal(
         # settings file; when one does, revert first, then delete it and drop its ledger entries.
         reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
         parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
+    if tool.id == "alacritty":  # both owned regions and the record go with the tool (24 D-23)
+        parts.append(SweepResult(warnings=strip_alacritty(Path.home(), os.environ)))
     bundle = next((b for b in bundles if b.id == tool.id), None)
     if tool.id in SHELL_INIT_TOOLS and bundle is not None:
         shell = sweep_policies(active_policies((bundle,), rc_path=myshellrc_path, bin_dir=bin_dir))

@@ -2,23 +2,31 @@
 
 import contextlib
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import threading
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
 import pytest
 
+from installer import terminal_shell
+from installer.model import Tool, load_tools
 from installer.platform import Platform
+from installer.receipts import read_ledger
+from installer.run import CommandError
 from installer.terminal_shell import (
     TerminalShellError,
     sync_message,
     sync_terminal_shells,
     terminal_sync_warning,
 )
+
+REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 class _SyncArgs(TypedDict):
@@ -1097,3 +1105,412 @@ def test_a_post_run_sync_that_writes_reports_the_shell_lines(tmp_path: Path) -> 
     assert "Shell: kitty now starts zsh" in message
     assert sync_message(first) is None
     assert sync_message(again, report_changes=True) is None
+
+
+# ---------------------------------------------------------------------------
+# Alacritty (24 D-08, D-23): the `alacritty` shell region and the `alacritty-keys` region.
+# ---------------------------------------------------------------------------
+
+_ZSH = "/usr/bin/zsh"
+_ALACRITTY_LOOKUP = _lookup(zsh=_ZSH, alacritty="/usr/bin/alacritty")
+
+
+def _alacritty_tool() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "alacritty")
+
+
+def _alacritty_toml() -> Path:
+    return Path.home() / ".config" / "alacritty" / "alacritty.toml"
+
+
+def _alacritty_record() -> Path:
+    return Path.home() / ".local" / "share" / "tools-installer" / "terminal-tuning-alacritty"
+
+
+def _sync_alacritty(*, write: bool = True, lookup: Callable[[str], str | None] | None = None):
+    return sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=_platform(),
+        lookup=lookup or _ALACRITTY_LOOKUP,
+        write=write,
+    )
+
+
+def _remove_alacritty(tmp_path: Path) -> None:
+    from installer import app as app_module
+
+    app_module._after_removal(  # pyright: ignore[reportPrivateUsage]
+        _alacritty_tool(),
+        bundles=(),
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        extra_policies=(),
+        platform_os="fedora",
+    )
+
+
+def test_alacritty_install_writes_both_regions_and_removal_strips_them(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("[font]\nsize = 12\n")
+
+    run_post_install(_alacritty_tool(), _platform())
+    keys_only = tomllib.loads(config.read_text())
+    assert [(b["key"], b["mods"]) for b in keys_only["keyboard"]["bindings"]] == [
+        ("Left", "Alt"),
+        ("Right", "Alt"),
+        ("K", "Control|Shift"),
+    ]
+    assert keys_only["keyboard"]["bindings"][0]["chars"] == "\x1bb"
+    assert keys_only["keyboard"]["bindings"][1]["chars"] == "\x1bf"
+    assert keys_only["keyboard"]["bindings"][2]["action"] == "ClearHistory"
+    assert _alacritty_record().is_file()
+
+    result = _sync_alacritty()
+    document = tomllib.loads(config.read_text())
+    assert document["terminal"]["shell"] == {"program": _ZSH, "args": ["-l"]}
+    assert document["env"] == {"SHELL": _ZSH}
+    assert document["font"] == {"size": 12}
+    assert "alacritty" in result.configured
+    assert ("alacritty", config) in result.paths
+
+    settled = config.read_bytes()
+    _sync_alacritty()
+    assert config.read_bytes() == settled
+
+    _remove_alacritty(tmp_path)
+    assert config.read_text() == "[font]\nsize = 12\n"
+    assert not _alacritty_record().exists()
+
+
+_REGION = re.compile(
+    r"# >>> tools-installer terminal-shell alacritty(-keys)? >>>\n.*?"
+    r"# <<< tools-installer terminal-shell alacritty(-keys)? <<<\n",
+    re.DOTALL,
+)
+
+
+def _outside_regions(text: str) -> str:
+    return _REGION.sub("", text)
+
+
+_USER_SHELL = '[terminal.shell]\nprogram = "/bin/fish"\n'
+_USER_ENV = '[env]\nTERM = "xterm"\n'
+_USER_ALT_LEFT = '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "x"\n'
+
+
+@pytest.mark.parametrize(
+    ("user_text", "warning", "refusal"),
+    [
+        (_USER_SHELL, "alacritty: partial: you already define terminal.shell", None),
+        (_USER_ENV, "alacritty: partial: you already define env", None),
+        (_USER_ALT_LEFT, "alacritty: partial: you already bind Alt+Left", None),
+        (
+            "keyboard.bindings = []\n",
+            None,
+            "you already define keyboard.bindings inline",
+        ),
+    ],
+    ids=["terminal-shell", "env", "binding", "inline-bindings"],
+)
+def test_alacritty_partial_conflicts(user_text: str, warning: str | None, refusal: str | None):
+    from installer.terminal_shell import apply_alacritty_keys
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text(user_text)
+    environ = dict(os.environ)
+
+    lines, refused = apply_alacritty_keys(Path.home(), environ, skip_recorded=False)
+    result = _sync_alacritty()
+
+    assert refused == refusal
+    if refusal is None:
+        assert warning in result.warnings
+        if "you already bind" in warning:  # the install action names it too
+            assert warning in lines
+    else:
+        assert not _alacritty_record().exists()
+        assert warning is None and result.warnings == ()
+    final = config.read_text()
+    assert _outside_regions(final) == user_text  # the user's bytes survive untouched
+    document = tomllib.loads(final)
+    program = document["terminal"]["shell"]["program"] if "terminal" in document else None
+    assert program == ("/bin/fish" if user_text == _USER_SHELL else _ZSH)
+    assert ("SHELL" in document.get("env", {})) == (user_text != _USER_ENV)
+    if user_text == _USER_ENV:
+        assert document["env"] == {"TERM": "xterm"}
+    if user_text == _USER_ALT_LEFT:
+        pairs = [(b["key"], b["mods"]) for b in document["keyboard"]["bindings"]]
+        assert pairs.count(("Left", "Alt")) == 1 and ("Right", "Alt") in pairs
+    if refusal is not None:
+        assert "keyboard" in document and "[[keyboard.bindings]]" not in final
+
+
+def test_alacritty_invalid_toml_writes_nothing() -> None:
+    from installer.terminal_shell import apply_alacritty_keys
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("[font\nsize = 12\n")
+    before = config.read_bytes()
+
+    result = _sync_alacritty()
+    _lines, refused = apply_alacritty_keys(Path.home(), dict(os.environ), skip_recorded=False)
+
+    assert config.read_bytes() == before
+    assert result.warnings[0].startswith("alacritty: the file does not parse")
+    assert "alacritty" not in result.configured
+    assert refused is not None and refused.startswith("the file does not parse")
+    assert not _alacritty_record().exists()
+
+
+def test_alacritty_changed_before_commit_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Backstop: a file edited between the read and the write is not overwritten."""
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("[font]\nsize = 12\n")
+    real_read = terminal_shell.read_settings
+
+    def racing_read(path: Path):
+        snapshot = real_read(path)
+        path.write_text(path.read_text() + "# edited meanwhile\n")
+        return snapshot
+
+    monkeypatch.setattr(terminal_shell, "read_settings", racing_read)
+
+    result = _sync_alacritty()
+
+    assert config.read_text() == "[font]\nsize = 12\n# edited meanwhile\n"
+    assert "alacritty" not in result.configured + result.drifted
+    assert result.warnings == ("alacritty: changed while being written",)
+
+
+def test_alacritty_region_that_would_not_reparse_is_refused() -> None:
+    """Backstop: an edit whose whole document fails `tomllib` writes nothing."""
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('terminal = { osc52 = "Disabled" }\n')
+    before = config.read_bytes()
+
+    result = _sync_alacritty()
+
+    assert config.read_bytes() == before
+    assert result.warnings[0].startswith("alacritty: the edit would not re-parse")
+
+
+def test_alacritty_keys_without_zsh() -> None:
+    from installer.post_install import run_post_install
+
+    config = _alacritty_toml()
+    run_post_install(_alacritty_tool(), _platform())  # needs no zsh
+    assert "keyboard" in tomllib.loads(config.read_text())
+
+    _sync_alacritty()
+    assert "shell" in tomllib.loads(config.read_text())["terminal"]
+    result = _sync_alacritty(lookup=_lookup(alacritty="/usr/bin/alacritty"))
+
+    document = tomllib.loads(config.read_text())
+    assert "terminal" not in document and "env" not in document
+    assert len(document["keyboard"]["bindings"]) == 3
+    assert "alacritty" in result.reverted
+
+
+def test_alacritty_regions_are_replaced_in_place_and_stay_apart() -> None:
+    from installer.terminal_shell import apply_alacritty_keys
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("[font]\nsize = 12\n")
+    _sync_alacritty()
+    apply_alacritty_keys(Path.home(), dict(os.environ), skip_recorded=False)
+    text = config.read_text()
+    assert text.index("terminal-shell alacritty >>>") < text.index(
+        "terminal-shell alacritty-keys >>>"
+    )
+
+    _sync_alacritty(lookup=_lookup(zsh="/opt/zsh", alacritty="/usr/bin/alacritty"))
+    after = config.read_text()
+    assert '"/opt/zsh"' in after and _ZSH not in after
+    assert after.index("terminal-shell alacritty >>>") < after.index(
+        "terminal-shell alacritty-keys >>>"
+    )
+    # the keys region is the exact bytes it was before the shell region changed
+    keys = re.search(r"# >>> [^\n]*alacritty-keys >>>.*?<<<\n", text, re.DOTALL)
+    assert keys is not None and keys.group(0) in after
+
+
+def test_alacritty_is_created_in_the_first_existing_location_or_the_xdg_one() -> None:
+    from installer.terminal_shell import alacritty_config_path
+
+    home = Path.home()
+    environ = {"XDG_CONFIG_HOME": str(home / "xdg")}
+    assert alacritty_config_path(home, environ) == home / "xdg" / "alacritty" / "alacritty.toml"
+    (home / "xdg").mkdir()
+    flat = home / "xdg" / "alacritty.toml"
+    flat.write_text("")
+    assert alacritty_config_path(home, environ) == flat
+
+    result = sync_terminal_shells(
+        home=home, environ=environ, platform=_platform(), lookup=_ALACRITTY_LOOKUP
+    )
+    assert "alacritty" in result.configured
+    text = flat.read_text()
+    assert text.startswith("# >>> tools-installer terminal-shell alacritty >>>")
+    assert _outside_regions(text) == ""
+
+
+# ---------------------------------------------------------------------------
+# herdr (24 D-08b, D-22): terminal.default_shell follows zsh, then the server reloads.
+# ---------------------------------------------------------------------------
+
+_HERDR = "/usr/bin/herdr"
+_HERDR_LOOKUP = _lookup(zsh=_ZSH, herdr=_HERDR)
+
+
+def _herdr_toml() -> Path:
+    return Path.home() / ".config" / "herdr" / "config.toml"
+
+
+def _sync_herdr(
+    *,
+    lookup: Callable[[str], str | None] = _HERDR_LOOKUP,
+    write: bool = True,
+    runner: Callable[[list[str]], None] | None = None,
+):
+    return sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=_platform(),
+        lookup=lookup,
+        write=write,
+        runner=runner,
+    )
+
+
+def _ledgered_settings() -> list[str]:
+    ledger = read_ledger("herdr")
+    return [entry.setting for entry in ledger.entries] if ledger else []
+
+
+def test_herdr_default_shell_written_and_reloaded() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n')
+    calls: list[list[str]] = []
+
+    result = _sync_herdr(runner=calls.append)
+
+    assert tomllib.loads(config.read_text())["terminal"] == {
+        "shell_mode": "auto",
+        "default_shell": _ZSH,
+    }
+    assert _ledgered_settings() == ["default-shell"]
+    assert calls == [[_HERDR, "server", "reload-config"]]
+    assert "herdr" in result.configured and "herdr" in result.drifted
+    assert ("herdr", config) in result.paths
+
+    settled = config.read_bytes()
+    _sync_herdr(runner=calls.append)
+    assert config.read_bytes() == settled
+    assert len(calls) == 1
+
+
+def test_herdr_reload_failure_is_a_note() -> None:
+    config = _herdr_toml()
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    result = _sync_herdr(runner=failing)
+
+    assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == _ZSH
+    assert any(w.startswith("herdr: reload-config failed") for w in result.warnings)
+    assert "herdr" in result.configured
+
+
+def test_herdr_user_default_shell_is_kept() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    calls: list[list[str]] = []
+
+    same = f'[terminal]\ndefault_shell = "{_ZSH}"\n'
+    config.write_text(same)
+    result = _sync_herdr(runner=calls.append)
+    assert config.read_text() == same
+    assert _ledgered_settings() == []
+    assert result.warnings == () and "herdr" in result.configured
+    assert "herdr" not in result.drifted
+
+    other = '[terminal]\ndefault_shell = "/bin/fish"\n'
+    config.write_text(other)
+    result = _sync_herdr(runner=calls.append)
+    assert config.read_text() == other
+    assert result.warnings == ("herdr: partial: you already set terminal.default_shell",)
+    assert "herdr" not in result.configured
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [_lookup(zsh=_ZSH), _lookup(herdr=_HERDR)],
+    ids=["no-herdr", "no-zsh"],
+)
+def test_herdr_nothing_without_zsh_or_herdr(lookup: Callable[[str], str | None]) -> None:
+    calls: list[list[str]] = []
+
+    result = _sync_herdr(lookup=lookup, runner=calls.append)
+
+    assert not _herdr_toml().exists()
+    assert calls == []
+    assert "herdr" not in result.configured
+
+
+def test_herdr_dry_run_reports_drift_without_reloading() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n')
+    before = config.read_bytes()
+    calls: list[list[str]] = []
+
+    result = _sync_herdr(write=False, runner=calls.append)
+
+    assert "herdr" in result.drifted
+    assert config.read_bytes() == before
+    assert calls == []
+    assert _ledgered_settings() == []
+
+    config.write_text('[terminal]\ndefault_shell = "/bin/fish"\n')
+    kept = _sync_herdr(write=False)
+    assert "herdr" not in kept.drifted
+    assert kept.warnings == ("herdr: partial: you already set terminal.default_shell",)
+
+    config.write_text("[terminal\n")
+    broken = _sync_herdr(write=False)
+    assert broken.warnings and broken.warnings[0].startswith("herdr: ")
+    assert "herdr" not in broken.drifted
+
+
+def test_zsh_gone_reverts_only_the_ledgered_default_shell() -> None:
+    from installer.agent_settings import apply_setting
+
+    config = _herdr_toml()
+    apply_setting("herdr", "sidebar", home=Path.home(), platform_os="fedora", environ=os.environ)
+    _sync_herdr()
+    assert set(_ledgered_settings()) == {"default-shell", "sidebar"}  # sidebar: one per key
+
+    result = _sync_herdr(lookup=_lookup(herdr=_HERDR))
+
+    assert "herdr" in result.reverted
+    assert "default_shell" not in tomllib.loads(config.read_text()).get("terminal", {})
+    assert "ui" in tomllib.loads(config.read_text())  # the sidebar keys stay
+    assert set(_ledgered_settings()) == {"sidebar"}
+
+    _sync_herdr()
+    config.write_text(config.read_text().replace(_ZSH, "/bin/fish"))
+    kept = _sync_herdr(lookup=_lookup(herdr=_HERDR))
+    assert "herdr" not in kept.reverted
+    assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == "/bin/fish"

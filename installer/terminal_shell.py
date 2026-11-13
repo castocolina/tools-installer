@@ -6,15 +6,31 @@ It never invokes a shell or changes an account login shell.
 
 from __future__ import annotations
 
+import json
+import re
 import shlex
+import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
-from installer.atomic import atomic_write_text, read_capped
+from installer.agent_settings import (
+    ABSENT,
+    apply_value,
+    parse_settings,
+    read_settings,
+    revert_group,
+    same_value,
+    settings_file,
+    write_if_unchanged,
+)
+from installer.agent_settings import lookup as settings_lookup
+from installer.atomic import FileSnapshot, atomic_write_text, read_capped
 from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
+from installer.run import CommandError, Runner
 from installer.shellrc import apply_block, strip_block
 
 Lookup = Callable[[str], str | None]
@@ -63,7 +79,7 @@ class TerminalShellResult:
     `drifted` names the terminals whose owned region differed from what
     synchronization writes (a write run then fixes it); the refresh pass reads
     it from a dry run for `≈` (D-16). `zsh` is the resolved zsh path and `paths`
-    maps each synchronized target (`zshenv`, `kitty`, `wezterm`, `konsole`) to
+    maps each synchronized target (`zshenv`, `kitty`, `wezterm`, `konsole`, `alacritty`) to
     the file it wrote or checked.
     """
 
@@ -442,7 +458,320 @@ def _revert_konsole(*, home: Path, environ: Mapping[str, str]) -> bool:
     return reverted
 
 
-def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> TerminalShellResult:
+# ---------------------------------------------------------------------------
+# Alacritty (24 D-08, D-23): two owned regions in one TOML file. `alacritty` is the shell
+# region (a branch of the synchronizer, follows zsh); `alacritty-keys` is install tuning
+# (keybindings, written once at install, stripped with the tool). Each is guarded per part.
+# ---------------------------------------------------------------------------
+
+ALACRITTY = "alacritty"
+ALACRITTY_KEYS = "alacritty-keys"
+# The reason `alacritty_keys_pending` returns when only the install tuning has not run;
+# version_status turns it into its `≈ apply install tuning` fact.
+KEYS_PENDING = "install tuning not applied"
+_KEYS_RECORD = "terminal-tuning-alacritty"
+# TOML 1.0 escapes: `\u001b` is ESC. The Alt+arrow byte strings are the readline word keys.
+_KEY_BINDINGS = (
+    ("Left", "Alt", 'chars = "\\u001bb"'),
+    ("Right", "Alt", 'chars = "\\u001bf"'),
+    ("K", "Control|Shift", 'action = "ClearHistory"'),
+)
+_KEYS_HEADER = re.compile(r"^\s*\[\[\s*keyboard\.bindings\s*\]\]", re.MULTILINE)
+
+
+def alacritty_config_path(home: Path, environ: Mapping[str, str]) -> Path:
+    """The first existing of Alacritty's three config locations, else the XDG one."""
+    config_home = _xdg_config_home(home, environ)
+    candidates = (
+        config_home / "alacritty" / "alacritty.toml",
+        config_home / "alacritty.toml",
+        home / ".config" / "alacritty" / "alacritty.toml",
+    )
+    return next((path for path in candidates if path.exists()), candidates[0])
+
+
+def _keys_record(home: Path, environ: Mapping[str, str]) -> Path:
+    return _xdg_data_home(home, environ) / "tools-installer" / _KEYS_RECORD
+
+
+def _first_line(exc: BaseException) -> str:
+    return (str(exc).splitlines() or [type(exc).__name__])[0]
+
+
+def _toml_string(value: str) -> str:
+    """A TOML basic string; json.dumps escapes exactly what TOML requires."""
+    return json.dumps(value)
+
+
+def _snapshot_text(snapshot: FileSnapshot | None) -> str:
+    if snapshot is None:
+        return ""
+    try:
+        return snapshot.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TerminalShellError("the file is not valid UTF-8; refusing to rewrite it") from exc
+
+
+def _user_document(text: str) -> tuple[dict[str, object], str]:
+    """The parsed text outside both owned regions, and that text. Never raises a ValueError."""
+    outside = _replace_owned_region(
+        _replace_owned_region(text, ALACRITTY, None), ALACRITTY_KEYS, None
+    )
+    try:
+        return tomllib.loads(outside), outside
+    except tomllib.TOMLDecodeError as exc:
+        raise TerminalShellError(f"the file does not parse ({exc}); left as it is") from exc
+
+
+def _table(document: Mapping[str, object], name: str) -> Mapping[str, object]:
+    value = document.get(name)
+    return cast("Mapping[str, object]", value) if isinstance(value, dict) else {}
+
+
+def _shell_plan(document: Mapping[str, object], zsh_path: str) -> tuple[str | None, list[str]]:
+    """The shell region body and the `partial:` warnings, decided per part (D-08)."""
+    parts: list[str] = []
+    warnings: list[str] = []
+    if "shell" in _table(document, "terminal"):
+        warnings.append("alacritty: partial: you already define terminal.shell")
+    else:
+        parts.append(f'[terminal.shell]\nprogram = {_toml_string(zsh_path)}\nargs = ["-l"]')
+    if "env" in document:
+        warnings.append("alacritty: partial: you already define env")
+    else:
+        parts.append(f"[env]\nSHELL = {_toml_string(zsh_path)}")
+    return "\n\n".join(parts) or None, warnings
+
+
+@dataclass(frozen=True)
+class _KeysPlan:
+    body: str | None
+    conflicts: tuple[str, ...] = ()
+    refusal: str | None = None
+
+
+def _binding_id(key: object, mods: object) -> tuple[str, frozenset[str]]:
+    """Alacritty reads key and modifier names case-insensitively, in any order."""
+    names = str(mods or "").split("|")
+    return str(key).lower(), frozenset(name.strip().lower() for name in names if name.strip())
+
+
+def _keys_plan(document: Mapping[str, object], outside: str) -> _KeysPlan:
+    bindings = _table(document, "keyboard").get("bindings")
+    if bindings is not None and not _KEYS_HEADER.search(outside):
+        return _KeysPlan(None, refusal="you already define keyboard.bindings inline")
+    entries = cast("list[object]", bindings) if isinstance(bindings, list) else []
+    taken = {
+        _binding_id(entry.get("key"), entry.get("mods"))
+        for entry in (cast("Mapping[str, object]", e) for e in entries if isinstance(e, dict))
+    }
+    blocks: list[str] = []
+    conflicts: list[str] = []
+    for key, mods, action in _KEY_BINDINGS:
+        if _binding_id(key, mods) in taken:
+            conflicts.append(f"alacritty: partial: you already bind {mods.replace('|', '+')}+{key}")
+        else:
+            blocks.append(f'[[keyboard.bindings]]\nkey = "{key}"\nmods = "{mods}"\n{action}')
+    return _KeysPlan("\n\n".join(blocks) or None, tuple(conflicts))
+
+
+def _commit_alacritty(
+    path: Path, before: FileSnapshot | None, text: str, updated: str, *, write: bool
+) -> bool:
+    """Report whether `updated` differs; write it only when `write`, and only after it re-parses
+    and only if the file still is what was read (compare-before-commit)."""
+    if updated == text:
+        return False
+    try:
+        tomllib.loads(updated)
+    except tomllib.TOMLDecodeError as exc:
+        raise TerminalShellError(f"the edit would not re-parse ({exc}); nothing written") from exc
+    if write:
+        write_if_unchanged(path, before, updated)
+    return True
+
+
+def _sync_alacritty(
+    home: Path, environ: Mapping[str, str], zsh_path: str, *, write: bool
+) -> tuple[bool, bool, tuple[str, ...]]:
+    """Write or check the `alacritty` region. Returns (configured, drifted, warnings)."""
+    path = alacritty_config_path(home, environ)
+    try:
+        before = read_settings(path)
+        text = _snapshot_text(before)
+        document, outside = _user_document(text)
+        body, warnings = _shell_plan(document, zsh_path)
+        warnings.extend(_keys_plan(document, outside).conflicts)
+        updated = _replace_owned_region(text, ALACRITTY, body)
+        drifted = _commit_alacritty(path, before, text, updated, write=write)
+    except OSError as exc:
+        return False, False, (f"alacritty: {_first_line(exc)}",)
+    return body is not None, drifted, tuple(warnings)
+
+
+def _strip_alacritty_region(path: Path, region: str) -> bool:
+    before = read_settings(path)
+    if before is None:
+        return False
+    text = _snapshot_text(before)
+    updated = _replace_owned_region(text, region, None)
+    if updated == text:
+        return False
+    write_if_unchanged(path, before, updated)
+    return True
+
+
+def apply_alacritty_keys(
+    home: Path, environ: Mapping[str, str], *, skip_recorded: bool
+) -> tuple[tuple[str, ...], str | None]:
+    """Write the `alacritty-keys` region, then its written-once record. Returns (lines, refusal).
+
+    `skip_recorded` (RECONFIGURE) leaves a recorded install alone: a region the user deleted
+    stays deleted. Nothing is written when the file cannot take the region."""
+    record = _keys_record(home, environ)
+    if skip_recorded and record.exists():
+        return (), None
+    path = alacritty_config_path(home, environ)
+    try:
+        before = read_settings(path)
+        text = _snapshot_text(before)
+        plan = _keys_plan(*_user_document(text))
+        if plan.refusal is not None:
+            return (), plan.refusal
+        updated = _replace_owned_region(text, ALACRITTY_KEYS, plan.body)
+        _commit_alacritty(path, before, text, updated, write=True)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(record, "written\n")
+    except OSError as exc:
+        return (), _first_line(exc)
+    added = (
+        ("Alacritty keys: Alt+Left and Alt+Right move by word, Control+Shift+K clears history.",)
+        if plan.body is not None
+        else ()
+    )
+    return (*added, *plan.conflicts), None
+
+
+def alacritty_keys_pending(home: Path, environ: Mapping[str, str]) -> str | None:
+    """None when the keys region or its record exists (a hand-removed region is the user's
+    choice); `KEYS_PENDING` when the install tuning has not run; else why the file cannot
+    take the region."""
+    if _keys_record(home, environ).exists():
+        return None
+    try:
+        text = _snapshot_text(read_settings(alacritty_config_path(home, environ)))
+        if _replace_owned_region(text, ALACRITTY_KEYS, None) != text:
+            return None
+        plan = _keys_plan(*_user_document(text))
+    except OSError as exc:
+        return _first_line(exc)
+    return plan.refusal or KEYS_PENDING
+
+
+def strip_alacritty(home: Path, environ: Mapping[str, str]) -> tuple[str, ...]:
+    """Remove both owned regions and the record (the tool is gone); the file stays.
+    Returns warnings. A region that could not be stripped keeps the record."""
+    path = alacritty_config_path(home, environ)
+    warnings: list[str] = []
+    for region in (ALACRITTY, ALACRITTY_KEYS):
+        try:
+            _strip_alacritty_region(path, region)
+        except OSError as exc:
+            warnings.append(f"alacritty: {_first_line(exc)}")
+    if not warnings:
+        _keys_record(home, environ).unlink(missing_ok=True)
+    return tuple(warnings)
+
+
+# ---------------------------------------------------------------------------
+# herdr (24 D-08b, D-22): `terminal.default_shell` follows zsh. Written absent-only through the
+# ledgered settings writer, so a user's own value is never overwritten and the key is reverted
+# only while it still holds the path written; the running server is asked to reload it.
+# ---------------------------------------------------------------------------
+
+HERDR = "herdr"
+_HERDR_SHELL_KEY = ("terminal", "default_shell")
+_HERDR_PARTIAL = "herdr: partial: you already set terminal.default_shell"
+
+
+def _herdr_reload(herdr_path: str, runner: Runner | None) -> tuple[str, ...]:
+    """Ask the running server to re-read its config; a failure is a note, never a failure."""
+    if runner is None:
+        return ()
+    try:
+        runner([herdr_path, "server", "reload-config"])
+    except (CommandError, OSError) as exc:
+        return (f"herdr: reload-config failed ({_first_line(exc)}); new panes read it on restart",)
+    return ()
+
+
+def _herdr_check(path: Path, zsh_path: str) -> tuple[bool, bool, tuple[str, ...]]:
+    """The dry run: (configured, drifted, warnings) from the config as it is now."""
+    try:
+        snapshot = read_settings(path)
+        text = snapshot.data.decode("utf-8") if snapshot is not None else ""
+        document = parse_settings(text, "toml")
+    except (OSError, ValueError) as exc:  # UnicodeDecodeError and SettingsParseError
+        return False, False, (f"herdr: {_first_line(exc)}",)
+    current = settings_lookup(document, _HERDR_SHELL_KEY)
+    if current is ABSENT:
+        return True, True, ()
+    if same_value(current, zsh_path):
+        return True, False, ()
+    return False, False, (_HERDR_PARTIAL,)
+
+
+def _sync_herdr(
+    home: Path,
+    environ: Mapping[str, str],
+    platform: Platform,
+    zsh_path: str,
+    herdr_path: str,
+    *,
+    write: bool,
+    runner: Runner | None,
+) -> tuple[bool, bool, tuple[str, ...]]:
+    """Point herdr at zsh. Returns (configured, drifted, warnings)."""
+    path = settings_file(HERDR, home=home, platform_os=platform.os, environ=environ)
+    if not write:
+        return _herdr_check(path, zsh_path)
+    try:
+        result = apply_value(
+            HERDR,
+            "default-shell",
+            zsh_path,
+            home=home,
+            platform_os=platform.os,
+            environ=environ,
+        )
+    except OSError as exc:
+        return False, False, (f"herdr: {_first_line(exc)}",)
+    if result.refused is not None:
+        return False, False, (f"herdr: {result.refused.splitlines()[0]}",)
+    kinds = {key.kind for key in result.keys}
+    if "set_by_you" in kinds:
+        return False, False, (_HERDR_PARTIAL,)
+    wrote = "wrote" in kinds
+    return True, wrote, _herdr_reload(herdr_path, runner) if wrote else ()
+
+
+def _revert_herdr(home: Path, environ: Mapping[str, str], platform: Platform) -> tuple[bool, str]:
+    """Remove the ledgered key while it still holds the written path. Returns (removed, warning);
+    the reload is skipped here: panes already open keep the shell they started with."""
+    try:
+        results = revert_group(
+            HERDR, "default-shell", home=home, platform_os=platform.os, environ=environ
+        )
+    except OSError as exc:
+        return False, f"herdr: {_first_line(exc)}"
+    removed = any(key.kind == "removed" for result in results for key in result.keys)
+    refused = next((result.refused for result in results if result.refused), None)
+    return removed, f"herdr: {refused.splitlines()[0]}" if refused else ""
+
+
+def _revert_terminal_shells(
+    *, home: Path, environ: Mapping[str, str], platform: Platform
+) -> TerminalShellResult:
     """Remove only complete terminal regions created by this synchronizer."""
     reverted: list[str] = []
     zshenv_changed, zshenv_warning = _edit_zshenv(home, environ, None, write=True)
@@ -463,7 +792,20 @@ def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> Termin
         reverted.append("wezterm")
     if _revert_konsole(home=home, environ=environ):
         reverted.append("konsole")
-    return TerminalShellResult(reverted=tuple(reverted), skipped=("zsh unavailable",))
+    warnings: list[str] = []
+    try:
+        if _strip_alacritty_region(alacritty_config_path(home, environ), ALACRITTY):
+            reverted.append("alacritty")
+    except OSError as exc:
+        warnings.append(f"alacritty: {_first_line(exc)}")
+    herdr_removed, herdr_warning = _revert_herdr(home, environ, platform)
+    if herdr_removed:
+        reverted.append("herdr")
+    if herdr_warning:
+        warnings.append(herdr_warning)
+    return TerminalShellResult(
+        reverted=tuple(reverted), skipped=("zsh unavailable",), warnings=tuple(warnings)
+    )
 
 
 def sync_terminal_shells(
@@ -474,6 +816,7 @@ def sync_terminal_shells(
     lookup: Lookup,
     write: bool = True,
     strip_only: bool = False,
+    runner: Runner | None = None,
 ) -> TerminalShellResult:
     """Synchronize zsh into detected Linux terminal emulators and the .zshenv zsh reads.
 
@@ -483,7 +826,8 @@ def sync_terminal_shells(
     run (D-16, L-19-05): it reports `drifted` and writes, creates, renames and
     deletes nothing -- no revert, no .zshrc repair, no terminal config. `strip_only`
     is the uninstall form: it only strips the owned regions once zsh is gone and
-    never writes or creates one while zsh is still present (CR-09).
+    never writes or creates one while zsh is still present (CR-09). `runner` runs herdr's
+    `server reload-config` after its `default_shell` was written; a dry run never reloads.
     """
     if platform.os == "macos":
         return TerminalShellResult(skipped=("macos",))
@@ -492,7 +836,7 @@ def sync_terminal_shells(
     if zsh_path is None:
         if not write:
             return TerminalShellResult(skipped=("zsh unavailable",))
-        return _revert_terminal_shells(home=home, environ=environ)
+        return _revert_terminal_shells(home=home, environ=environ, platform=platform)
     if strip_only:
         return TerminalShellResult(skipped=("zsh present",), zsh=zsh_path)
 
@@ -573,6 +917,29 @@ def sync_terminal_shells(
         drifted.append("konsole")
     if konsole_warning is not None:
         warnings.append(konsole_warning)
+    if _safe_executable(lookup("alacritty")) is not None:
+        has_shell, shell_drifted, shell_warnings = _sync_alacritty(
+            home, environ, zsh_path, write=write
+        )
+        if has_shell:
+            configured.append("alacritty")
+            paths.append(("alacritty", alacritty_config_path(home, environ)))
+        if shell_drifted:
+            drifted.append("alacritty")
+        warnings.extend(shell_warnings)
+    herdr_path = _safe_executable(lookup(HERDR))
+    if herdr_path is not None:
+        has_default, default_drifted, default_warnings = _sync_herdr(
+            home, environ, platform, zsh_path, herdr_path, write=write, runner=runner
+        )
+        if has_default:
+            configured.append(HERDR)
+            paths.append(
+                (HERDR, settings_file(HERDR, home=home, platform_os=platform.os, environ=environ))
+            )
+        if default_drifted:
+            drifted.append(HERDR)
+        warnings.extend(default_warnings)
     return TerminalShellResult(
         configured=tuple(configured),
         skipped=tuple(skipped),

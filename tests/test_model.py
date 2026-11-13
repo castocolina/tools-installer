@@ -1906,6 +1906,7 @@ def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> No
         "set_omz_plugins",
         "show_lean_tips",
         "apply_agent_tuning",
+        "apply_terminal_tuning",
     )
     assert SENSITIVE_POST_INSTALL_ACTIONS == ()
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["source_shell_init"]'))

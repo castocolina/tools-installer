@@ -1247,10 +1247,12 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     the only automated thing standing between those two states. Phase 23
     reviewed the two new declarers (CONF-11 theme, CONF-12 lean tips) and the
     six shell-init tools (D-11: the keyed, default-no source_shell_init).
+    Phase 24 reviewed Alacritty's `apply_terminal_tuning` (24 D-23: its keybindings
+    region, written at install with no question).
     """
     declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
     tuned = {"claude", "codex", "opencode", "cursor-agent", "copilot"}
-    assert declarers == {"oh-my-zsh", "vscode", *tuned, *SHELL_INIT_TOOLS}
+    assert declarers == {"oh-my-zsh", "vscode", "alacritty", *tuned, *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
     assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme", "set_omz_plugins")
     assert oh_my_zsh.requires == ("zsh", "git")
@@ -1572,6 +1574,10 @@ def test_alacritty_builds_in_distrobox_or_uses_distro_packages() -> None:
     assert kinds("arch", "arm64", immutable=False) == ["pacman"]
     assert kinds("macos", "arm64", immutable=False) == []
     assert {m.kind for m in alacritty.methods} == {"cargo_distrobox", "dnf", "apt", "pacman"}
+
+
+def test_alacritty_entry_declares_its_terminal_tuning() -> None:
+    assert _tools_by_id()["alacritty"].post_install == ("apply_terminal_tuning",)
 
 
 def test_alacritty_cargo_method_is_well_formed() -> None:
