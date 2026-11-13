@@ -1549,30 +1549,52 @@ def test_no_registry_comment_names_a_deleted_download_function() -> None:
     assert "_place_verified" not in text
 
 
-def test_alacritty_uses_distro_packages_only() -> None:
+def test_alacritty_builds_in_distrobox_or_uses_distro_packages() -> None:
     alacritty = _tools_by_id()["alacritty"]
-    fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
-    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
-    arch = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
-    bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
-    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
-    assert [m.kind for m in resolve_methods(alacritty, fedora)] == ["dnf"]
-    assert [m.kind for m in resolve_methods(alacritty, debian)] == ["apt"]
-    assert [m.kind for m in resolve_methods(alacritty, arch)] == ["pacman"]
-    assert resolve_methods(alacritty, bazzite) == []
-    assert resolve_methods(alacritty, macos) == []
-    assert {m.kind for m in alacritty.methods} == {"dnf", "apt", "pacman"}
+
+    def kinds(os_name: str, arch: str, *, immutable: bool, tools: bool = False) -> list[str]:
+        platform = Platform(
+            os=os_name,
+            arch=arch,
+            immutable=immutable,
+            has_brew=True,
+            has_distrobox=tools,
+            has_podman=tools,
+            os_version="26.0" if os_name == "macos" else None,
+        )
+        return [m.kind for m in resolve_methods(alacritty, platform)]
+
+    assert kinds("fedora", "amd64", immutable=True) == []
+    assert kinds("fedora", "amd64", immutable=True, tools=True) == ["cargo_distrobox"]
+    assert kinds("fedora", "amd64", immutable=False) == ["dnf"]
+    assert kinds("fedora", "amd64", immutable=False, tools=True) == ["cargo_distrobox", "dnf"]
+    assert kinds("debian", "amd64", immutable=False) == ["apt"]
+    assert kinds("arch", "arm64", immutable=False) == ["pacman"]
+    assert kinds("macos", "arm64", immutable=False) == []
+    assert {m.kind for m in alacritty.methods} == {"cargo_distrobox", "dnf", "apt", "pacman"}
+
+
+def test_alacritty_cargo_method_is_well_formed() -> None:
+    alacritty = _tools_by_id()["alacritty"]
+    assert [m.kind for m in alacritty.methods] == ["cargo_distrobox", "dnf", "apt", "pacman"]
+    artifacts = cast(list[dict[str, str]], alacritty.methods[0].params["artifacts"])
+    hosts = [entry["host"] for entry in artifacts]
+    assert hosts[0] == "~/.local/bin/alacritty"
+    assert hosts[3:] == ["~/.terminfo/a/alacritty", "~/.terminfo/a/alacritty-direct"]
+    assert alacritty.config_paths == ("~/.config/alacritty",)
 
 
 def test_alacritty_entry_records_the_missing_linux_release_and_disabled_cask() -> None:
     lines = REGISTRY.read_text(encoding="utf-8").splitlines()
     idx = next(i for i, line in enumerate(lines) if line == 'id = "alacritty"')
-    window = "\n".join(lines[max(0, idx - 20) : idx])
+    window = "\n".join(lines[max(0, idx - 30) : idx])
     for fragment in (
         "v0.17.0",
         "no Linux binary",
         "disabled 2026-09-01",
         "immutable Fedora",
+        "throwaway Distrobox",
+        "~/.terminfo",
     ):
         assert fragment in window, f'missing {fragment!r} above id = "alacritty"'
 

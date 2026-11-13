@@ -273,12 +273,12 @@ def tool_health(ev: Evidence) -> tuple[Health, tuple[str, ...]]:
 
 
 def github_repo(tool: Tool, platform: Platform) -> tuple[Method, str] | None:
-    """The first applicable github_release method and its repo string.
+    """The first applicable github_release or cargo_distrobox method and its repo string.
 
     Used ONLY to find the latest-version SOURCE. This is not an ownership claim.
     """
     for method in resolve_methods(tool, platform):
-        if method.kind != "github_release":
+        if method.kind not in ("github_release", "cargo_distrobox"):
             continue
         repo = method.params.get("repo")
         if isinstance(repo, str) and repo:
@@ -774,6 +774,9 @@ def pnpm_findings(tool_id: str, reasons: Sequence[str]) -> tuple[str, ...]:
 
 # The missing names reach the step text, so only plain npm names get a step.
 _NPM_NAME_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/-]*$")
+# `node --version` is `v<major>.<minor>.<patch>` with an optional prerelease; anything else
+# (a different tool's `1.0.0`, extra words) is unread, never a floor decision.
+_NODE_VERSION = re.compile(r"^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$")
 
 
 def _pnpm_group_facts(
@@ -1310,7 +1313,7 @@ class VersionRefreshService:
         if found is None or entry is None or entry.latest_version is None or not entry.digests:
             return None
         method = found[0]
-        if method.params.get("raw") is not True:
+        if method.kind != "github_release" or method.params.get("raw") is not True:
             return None
         release = Release(tag=entry.latest_version, digests=entry.digests)
         ctx = ExecContext(
@@ -1422,6 +1425,26 @@ class VersionRefreshService:
                 facts[row] = facts.get(row, _NO_FACTS).plus(note)
         return facts
 
+    def _live_platform(self) -> Platform:
+        """The platform with the host facts a pass re-reads: brew, distrobox, podman, node.
+
+        `node --version` runs only when this pass's `which("node")` resolves, through that
+        path, so a probe that answers one string to every command (or a PATH without node)
+        publishes `node_version=None` and the Node floor stays open."""
+        node_version: str | None = None
+        node = self._which("node")
+        if node is not None:
+            output = self._probe_output([node, "--version"])
+            match = _NODE_VERSION.fullmatch(output.strip()) if output is not None else None
+            node_version = match[1] if match is not None else None
+        return replace(
+            self._platform,
+            has_brew=self._which("brew") is not None,
+            has_distrobox=self._which("distrobox") is not None,
+            has_podman=self._which("podman") is not None,
+            node_version=node_version,
+        )
+
     def _artifacts(self, tool: Tool) -> Sequence[Path]:
         if self._artifacts_for is not None:
             return self._artifacts_for(tool)
@@ -1435,7 +1458,7 @@ class VersionRefreshService:
         tool dir` when uv is on PATH, the look-through `which` and the native
         probe. Nothing is published.
         """
-        platform = replace(self._platform, has_brew=self._which("brew") is not None)
+        platform = self._live_platform()
         inventory = self._read_inventory(
             has_brew=platform.has_brew, query=self._query, pnpm_packages=self._pnpm_packages
         )
@@ -1601,11 +1624,14 @@ class VersionRefreshService:
     def _pass(self, tools: Sequence[Tool], *, seq: int, started_epoch: int) -> None:
         # D-14: brew is re-read every pass. Every helper of this pass gets this
         # one value; none reads the shared `self._platform`, which an
-        # overlapping pass may replace mid-pass (review M5).
-        platform = replace(self._platform, has_brew=self._which("brew") is not None)
+        # overlapping pass may replace mid-pass (review M5). The evidence snapshot comes first:
+        # the node probe inside `_live_platform` is a probe like any other, and evidence
+        # recorded while it runs belongs to the next pass.
+        with self._lock:
+            evidence = dict(self._evidence)
+        platform = self._live_platform()
         with self._lock:
             self._platform = platform
-            evidence = dict(self._evidence)
         # L-19-01: `uv tool dir`, asked once per pass and only when uv is on PATH.
         uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
         now = self._now()

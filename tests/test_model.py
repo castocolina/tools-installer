@@ -1935,3 +1935,102 @@ def test_sensitive_tables_are_empty(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="unknown sensitive post-install action 'set_login_shell'"):
         load_tools(manifest)
+
+
+_CARGO_DEFAULTS: dict[str, str] = {
+    "repo": '"alacritty/alacritty"',
+    "image": '"registry.fedoraproject.org/fedora-toolbox:44"',
+    "packages": '["cargo", "gcc-c++"]',
+    "artifacts": (
+        '[{ box = "src/target/release/demo", host = "~/.local/bin/demo" },'
+        ' { box = "terminfo/a/demo", host = "~/.terminfo/a/demo" }]'
+    ),
+}
+
+
+def _cargo_registry(tmp_path: Path, **overrides: str) -> Path:
+    values = {**_CARGO_DEFAULTS, **overrides}
+    body = "\n".join(f"{key} = {value}" for key, value in values.items())
+    return _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "terminal"
+cmd = "demo"
+tier = "user"
+[[tool.method]]
+kind = "cargo_distrobox"
+{body}
+""",
+    )
+
+
+def test_cargo_distrobox_method_loads(tmp_path: Path) -> None:
+    method = load_tools(_cargo_registry(tmp_path))[0].methods[0]
+    assert method.kind == "cargo_distrobox"
+    assert method.params["repo"] == "alacritty/alacritty"
+
+
+def test_cargo_distrobox_accepts_the_three_host_roots(tmp_path: Path) -> None:
+    artifacts = (
+        '[{ box = "a", host = "~/.local/bin/demo" }, { box = "b", host = "~/.config/demo/x" },'
+        ' { box = "c", host = "~/.terminfo/a/demo" }]'
+    )
+    load_tools(_cargo_registry(tmp_path, artifacts=artifacts))
+
+
+def test_cargo_distrobox_accepts_an_empty_package_list(tmp_path: Path) -> None:
+    """Backstop: an empty `packages` list is valid (the image already holds the toolchain)."""
+    load_tools(_cargo_registry(tmp_path, packages="[]"))
+
+
+def test_cargo_distrobox_rejects_an_empty_artifact_list(tmp_path: Path) -> None:
+    """Backstop: a method that places nothing is refused at load."""
+    with pytest.raises(ValueError, match="demo.*artifacts"):
+        load_tools(_cargo_registry(tmp_path, artifacts="[]"))
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("repo", '"not-a-slug"'),
+        ("repo", '"a/b/c"'),
+        ("repo", '"-x/y"'),
+        ("repo", '"a b/c"'),
+        ("repo", "5"),
+        ("image", '"fedora-toolbox:44"'),
+        ("image", '"registry.example.test/fedora"'),
+        ("image", '"registry.example.test/fed ora:44"'),
+        ("packages", '["cargo gcc"]'),
+        ("packages", '["-cargo"]'),
+        ("packages", '"cargo"'),
+        ("packages", "[5]"),
+        ("artifacts", '[{ box = "/abs/demo", host = "~/.local/bin/demo" }]'),
+        ("artifacts", '[{ box = "../demo", host = "~/.local/bin/demo" }]'),
+        ("artifacts", '[{ box = "a/../demo", host = "~/.local/bin/demo" }]'),
+        ("artifacts", '[{ box = "src/demo", host = "/usr/bin/demo" }]'),
+        ("artifacts", '[{ box = "src/demo", host = "~/.ssh/demo" }]'),
+        ("artifacts", '[{ box = "src/demo", host = "~/.local/bin/../x/demo" }]'),
+        ("artifacts", '[{ box = "src/demo", host = "~/.config/demo" }]'),
+        ("artifacts", '[{ box = "src/demo", host = "~/.local/share/demo" }]'),
+        ("artifacts", '[{ box = "src/demo" }]'),
+        ("artifacts", '[{ box = "a", host = "~/.local/bin/a", extra = "x" }]'),
+        ("artifacts", '["src/demo"]'),
+        ("artifacts", '"src/demo"'),
+    ],
+)
+def test_cargo_distrobox_rejects_a_malformed_param(tmp_path: Path, key: str, value: str) -> None:
+    with pytest.raises(ValueError, match=f"demo.*{key}"):
+        load_tools(_cargo_registry(tmp_path, **{key: value}))
+
+
+def test_cargo_distrobox_rejects_a_first_artifact_outside_the_bin_dir(tmp_path: Path) -> None:
+    artifacts = '[{ box = "a", host = "~/.terminfo/a/demo" }]'
+    with pytest.raises(ValueError, match="demo.*artifacts.*~/.local/bin/"):
+        load_tools(_cargo_registry(tmp_path, artifacts=artifacts))
+
+
+def test_cargo_distrobox_rejects_an_unknown_key(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unknown key 'flags'"):
+        load_tools(_cargo_registry(tmp_path, flags='"--x"'))

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from installer import apps, download, executors, receipts
+from installer import apps, cargo_distrobox, download, executors, receipts
 from installer.agent_settings import FileResult
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
@@ -35,7 +35,11 @@ _HANDOFF_KINDS = frozenset({"host_setup"})
 
 
 def _manager_method(method: Method) -> bool:
-    if method.kind in download.DOWNLOAD_KINDS or method.kind in apps.APP_KINDS:
+    if (
+        method.kind in download.DOWNLOAD_KINDS
+        or method.kind in apps.APP_KINDS
+        or method.kind == "cargo_distrobox"
+    ):
         return False
     return method.kind not in _HANDOFF_KINDS
 
@@ -126,10 +130,14 @@ class InstallOutcome:
         object.__setattr__(self, "settings", settings)
 
 
-def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[str, ...]]:
+def _perform(
+    method: Method, ctx: ExecContext
+) -> tuple[bool, str | None, tuple[str, ...], tuple[str, ...]]:
     """Route download kinds to the download executor; everything else to a command executor.
 
-    Returns ``(verified, unverified_reason, handoff)``. `verified` is True when
+    Returns ``(verified, unverified_reason, handoff, notes)``. `notes` are row notes the
+    install carries to `postinstall_warning`; only a source build has any. A source build is
+    never sha256-verified and its failures raise like every executor's. `verified` is True when
     the download was sha256-verified (non-download methods are never marked
     verified — their package managers do their own checks; pinned or declared
     app zips are sha256-verified). A non-empty `handoff` means the reviewed
@@ -138,14 +146,16 @@ def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[
     """
     if method.kind in download.DOWNLOAD_KINDS:
         reason = download.install_download(method, ctx)
-        return reason is None, reason, ()
+        return reason is None, reason, (), ()
     if method.kind in apps.APP_KINDS:
         reason = apps.install_app(method, ctx.runner)
-        return reason is None, reason, ()
+        return reason is None, reason, (), ()
     if method.kind == "host_setup":
-        return False, None, executors.host_setup_handoff(method)
+        return False, None, executors.host_setup_handoff(method), ()
+    if method.kind == "cargo_distrobox":
+        return False, None, (), cargo_distrobox.install(method, ctx)
     executors.execute(method, ctx.runner)
-    return False, None, ()
+    return False, None, (), ()
 
 
 def install_tool(
@@ -269,7 +279,7 @@ def install_tool(
         already_there = _package_already_there(method, package, manager_inventory)
         path_before = os.environ.get("PATH", "")
         try:
-            verified, unverified_reason, handoff = _perform(method, ctx)
+            verified, unverified_reason, handoff, notes = _perform(method, ctx)
             if handoff:
                 return InstallOutcome(
                     tool.id,
@@ -307,8 +317,10 @@ def install_tool(
             # An app is smoked only when it declares a cli (_stage_and_swap_app);
             # a receipt must not claim a check that never ran (IN-04). Download
             # kinds always smoke before their link swap.
-            smoked_artifact = method.kind in download.DOWNLOAD_KINDS or (
-                method.kind in apps.APP_KINDS and method.params.get("cli") is not None
+            smoked_artifact = (
+                method.kind in download.DOWNLOAD_KINDS
+                or method.kind == "cargo_distrobox"
+                or (method.kind in apps.APP_KINDS and method.params.get("cli") is not None)
             )
             # A package the manager already had is not this install's to claim, unless the
             # previous receipt already proved that same package (review R3-02).
@@ -333,6 +345,7 @@ def install_tool(
             output, crash = _dispatch_post_install(tool, platform, confirm_sensitive_action)
             if crash:
                 warning = f"{warning}; {crash}" if warning else crash
+            leftovers.extend(notes)
             if leftovers:
                 joined = "; ".join(leftovers)
                 warning = f"{warning}; {joined}" if warning else joined

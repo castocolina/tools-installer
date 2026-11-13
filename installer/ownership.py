@@ -153,7 +153,7 @@ _KIND_TO_OWNER: dict[str, Owner] = {
     "uv-tool": "uv",
     "sdkman": "sdkman",
 }
-_INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script"))
+_INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script", "cargo_distrobox"))
 _CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv", "sdkman")
 
 # 15.4-02/D-01 (second half): the closed, declared set of method kinds allowed
@@ -232,6 +232,12 @@ def _method_targets_platform(
     )
 
 
+def _applicable_methods(tool: Tool, platform: Platform) -> list[Method]:
+    """`resolve_methods` with the Node floor open: the floor gates installs only, so a copy
+    installed under an older node is still owned by its method (update and removal keep it)."""
+    return resolve_methods(tool, replace(platform, node_version=None))
+
+
 def _ownership_only_methods(tool: Tool, platform: Platform) -> tuple[Method, ...]:
     """Methods that count as OWNERSHIP evidence but never as install
     candidates -- 15.4-RESEARCH.md Open Question 2, resolved as option (b),
@@ -273,7 +279,7 @@ def _ownership_only_methods(tool: Tool, platform: Platform) -> tuple[Method, ...
     """
     if not platform.has_brew:
         return ()
-    installable = resolve_methods(tool, platform)
+    installable = _applicable_methods(tool, platform)
     return tuple(
         method
         for method in tool.methods
@@ -534,7 +540,10 @@ def attribute_path(path: Path | None, dirs: Mapping[Owner, tuple[Path, ...]]) ->
 
 def competing_owners(tool: Tool, platform: Platform) -> frozenset[Owner]:
     owners: set[Owner] = set()
-    for method in (*resolve_methods(tool, platform), *_ownership_only_methods(tool, platform)):
+    for method in (
+        *_applicable_methods(tool, platform),
+        *_ownership_only_methods(tool, platform),
+    ):
         mapped = _KIND_TO_OWNER.get(method.kind)
         if mapped is not None:
             owners.add(mapped)
@@ -618,7 +627,7 @@ def resolve_ownership(
     native_probe: ProbeRunner | None = None,
     uv_tool_dir: Path | None = None,
 ) -> ManagerOwnership:
-    applicable = resolve_methods(tool, platform)
+    applicable = _applicable_methods(tool, platform)
     methods = (*applicable, *_ownership_only_methods(tool, platform))
     active_path = _resolve_active_path(which(tool.cmd))
     candidates = _collect_candidates(tool, methods, inventory, artifacts)
@@ -1317,7 +1326,7 @@ OWNER_LABELS: dict[Owner, str] = {
     "installer": "installer artifact",
 }
 
-# The four `ManagerOwnership.method.kind` values an installer-owned record can
+# The five `ManagerOwnership.method.kind` values an installer-owned record can
 # carry (`ownership.py:517-532` and `:396-413`), mapped to human text for the
 # Owner column.
 _INSTALLER_KIND_LABELS: dict[str, str] = {
@@ -1325,6 +1334,7 @@ _INSTALLER_KIND_LABELS: dict[str, str] = {
     "tarball": "tarball download",
     "app": "downloaded app",
     "script": "own installer",
+    "cargo_distrobox": "built from source in a throwaway Distrobox",
 }
 
 
@@ -1437,7 +1447,7 @@ def declared_manager_label(tool: Tool, platform: Platform) -> str | None:
     that already succeeded. Native kinds are not in `_KIND_TO_OWNER`; `dnf`
     stays `dnf` and `rpm_ostree` becomes `rpm-ostree`, matching OWNER_LABELS.
     """
-    methods = resolve_methods(tool, platform)
+    methods = _applicable_methods(tool, platform)
     if not methods:
         # resolve.py always skips rpm_ostree, but it is still a declared policy.
         methods = [

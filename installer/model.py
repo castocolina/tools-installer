@@ -32,6 +32,7 @@ METHOD_KINDS = (
     "github_release",
     "tarball",
     "app",
+    "cargo_distrobox",
     "dnf",
     "apt",
     "pacman",
@@ -93,6 +94,9 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
         }
     ),
     "app": frozenset({"url", "app", "cli", "cli_name", "version", "sha256", "smoke_argv"}),
+    # A source build in a throwaway Distrobox: `repo` is the GitHub slug (version source and
+    # clone URL), `artifacts` the {box, host} files it places.
+    "cargo_distrobox": frozenset({"repo", "image", "packages", "artifacts", "smoke_argv"}),
     "dnf": frozenset({"package", "smoke_argv"}),
     "apt": frozenset({"package", "smoke_argv"}),
     "pacman": frozenset({"package", "smoke_argv"}),
@@ -169,6 +173,15 @@ _SCRIPT_ARG_RE = re.compile(r"^[A-Za-z0-9=._:/+-]+$")
 _SCRIPT_PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 _WRITABLE_PREFIX_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 _PINNED_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# cargo_distrobox: a GitHub owner/name slug, a registry-qualified image with a tag or digest,
+# and a distro package name; none may start with a dash (each becomes an argv word).
+_REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_IMAGE_REF_RE = re.compile(
+    r"^(?P<host>[A-Za-z0-9][A-Za-z0-9.-]*(?::\d+)?)/[A-Za-z0-9._/-]+"
+    r"(?::[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$"
+)
+_DISTRO_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+_CARGO_HOST_ROOTS = ("~/.local/", "~/.config/", "~/.terminfo/")
 # A tool id names its receipt file, so it can never hold `/`, `..` or a leading `-`.
 TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
@@ -477,6 +490,56 @@ def _script_token_ok(token: str) -> str | None:
     return None
 
 
+def _cargo_distrobox_refusal(params: dict[str, object]) -> str | None:
+    """Why a cargo_distrobox method's params are refused (naming the key), else None."""
+    repo = params.get("repo")
+    if not isinstance(repo, str) or _REPO_SLUG_RE.fullmatch(repo) is None:
+        return "key 'repo' must be a GitHub owner/name slug"
+    image = params.get("image")
+    match = _IMAGE_REF_RE.fullmatch(image) if isinstance(image, str) else None
+    # A registry host part names a dot (a domain) or a port; a bare first word is a user name.
+    qualified = match is not None and (
+        any(char in match["host"] for char in ".:") or match["host"] == "localhost"
+    )
+    if not qualified:
+        return "key 'image' must be a fully qualified reference (registry/name:tag)"
+    if "packages" in params:
+        packages = params["packages"]
+        if not isinstance(packages, list) or not all(
+            isinstance(item, str) and _DISTRO_PACKAGE_RE.fullmatch(item) is not None
+            for item in cast(list[object], packages)
+        ):
+            return (
+                "key 'packages' must be a list of package names "
+                "matching ^[A-Za-z0-9][A-Za-z0-9.+_-]*$"
+            )
+    artifacts = params.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return "key 'artifacts' must be a non-empty list of {box, host} tables"
+    hosts: list[str] = []
+    for entry in cast(list[object], artifacts):
+        if not isinstance(entry, dict) or set(cast(dict[str, object], entry)) != {"box", "host"}:
+            return "key 'artifacts' entries must be tables with exactly 'box' and 'host'"
+        box, host = cast(dict[str, object], entry)["box"], cast(dict[str, object], entry)["host"]
+        if not isinstance(box, str) or not isinstance(host, str):
+            return "key 'artifacts' entries must be tables with exactly 'box' and 'host'"
+        if any(ord(char) < 32 or ord(char) == 127 for char in box + host):
+            return "key 'artifacts' paths must not hold control characters"
+        if box.startswith("/") or _relative_parts(box) is None:
+            return f"key 'artifacts' box '{box}' must be relative with no empty, . or .. part"
+        if not host.startswith(_CARGO_HOST_ROOTS) or _relative_parts(host[2:]) is None:
+            return (
+                f"key 'artifacts' host '{host}' must sit under ~/.local, ~/.config or ~/.terminfo "
+                "with no empty, . or .. part"
+            )
+        hosts.append(host)
+    if not hosts[0].startswith("~/.local/bin/"):
+        return "key 'artifacts' first host (the binary) must sit under ~/.local/bin/"
+    if len(set(hosts)) != len(hosts):
+        return "key 'artifacts' hosts must be distinct"
+    return None
+
+
 def _is_argv(raw: object, token_ok: Callable[[str], bool]) -> bool:
     """A non-empty list of strings, each accepted by token_ok."""
     if not isinstance(raw, list) or not raw:
@@ -717,6 +780,8 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                         f"tool '{row['id']}': method 'script' key 'writable_prefix' "
                         "must be an absolute path without . or .. parts"
                     )
+            if kind == "cargo_distrobox" and (why := _cargo_distrobox_refusal(params)):
+                raise ValueError(f"tool '{row['id']}': method 'cargo_distrobox' {why}")
             if kind == "host_setup":
                 setup_id = params.get("setup_id")
                 if not isinstance(setup_id, str) or setup_id not in HOST_SETUP_IDS:

@@ -942,7 +942,7 @@ def test_unavailable_reason_renders_in_row_and_detail() -> None:
         unavailable={tool.id: reason},
     )
     desc = screen._row_cells(tool)[8].plain  # pyright: ignore[reportPrivateUsage]
-    assert "(not available: immutable host)" in desc
+    assert "(not available: needs distrobox and podman)" in desc
     assert reason.detail in screen._detail_text(tool)  # pyright: ignore[reportPrivateUsage]
     assert screen._adapter().selectable(tool) is False  # pyright: ignore[reportPrivateUsage]
 

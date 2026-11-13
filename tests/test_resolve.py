@@ -1,9 +1,15 @@
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from installer.assets import arch_tokens, render_asset
 from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
 from installer.resolve import platform_could_support, resolve_methods, unavailable_reason
+from installer.session import Disposition, build_plan
+from installer.version_status import Health
+from tests.state_doubles import pass_state, plan_state
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -214,14 +220,15 @@ def _registry_tool(tool_id: str) -> Tool:
     return next(tool for tool in load_tools(_REGISTRY) if tool.id == tool_id)
 
 
-def test_unavailable_reason_alacritty_names_immutable_host() -> None:
+def test_unavailable_reason_alacritty_names_distrobox_and_podman() -> None:
     reason = unavailable_reason(
         _registry_tool("alacritty"),
         Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
     )
     assert reason is not None
-    assert reason.short == "immutable host"
-    assert "immutable (ostree) host" in reason.detail
+    assert reason.short == "needs distrobox and podman"
+    assert "distrobox" in reason.detail
+    assert "podman" in reason.detail
 
 
 def test_unavailable_reason_gnu_bash_names_unsupported_os() -> None:
@@ -260,6 +267,30 @@ def test_unavailable_reason_mixed_lists_shorts_in_declaration_order() -> None:
         category="c",
         cmd="split",
         methods=(
+            Method(
+                kind="script",
+                params={"url": "https://example.test/l"},
+                os=("fedora",),
+                arch=("arm64",),
+            ),
+            Method(kind="dnf", params={"package": "split"}),
+        ),
+    )
+    reason = unavailable_reason(
+        tool, Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+    )
+    assert reason is not None
+    assert reason.detail == "no method applies here: not built for amd64; immutable host"
+
+
+def test_unavailable_reason_drops_an_os_only_rejection_beside_an_arch_one() -> None:
+    """The old fixture (a macOS-only method plus a fedora/arm64 one) now reads one category."""
+    tool = Tool(
+        id="split",
+        name="split",
+        category="c",
+        cmd="split",
+        methods=(
             Method(kind="script", params={"url": "https://example.test/m"}, os=("macos",)),
             Method(
                 kind="script",
@@ -273,7 +304,7 @@ def test_unavailable_reason_mixed_lists_shorts_in_declaration_order() -> None:
         tool, Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     )
     assert reason is not None
-    assert reason.detail == "no method applies here: fedora not supported; not built for amd64"
+    assert reason.short == "not built for amd64"
 
 
 def test_unavailable_reason_empty_methods() -> None:
@@ -343,3 +374,126 @@ def test_copilot_resolves_per_platform() -> None:
         assert render_asset(str(methods[0].params["asset"]), "1.0.107", arch_tokens(arch)) == asset
         with_brew = Platform(os=os_name, arch=arch, immutable=False, has_brew=True)
         assert "cask" not in [m.kind for m in resolve_methods(copilot, with_brew)]
+
+
+def _host(
+    os_name: str = "fedora",
+    *,
+    arch: str = "amd64",
+    immutable: bool = False,
+    tools: bool = False,
+    node: str | None = None,
+) -> Platform:
+    return Platform(
+        os=os_name,
+        arch=arch,
+        immutable=immutable,
+        has_brew=False,
+        has_distrobox=tools,
+        has_podman=tools,
+        node_version=node,
+    )
+
+
+@pytest.mark.parametrize(
+    ("platform", "first", "short"),
+    [
+        (_host(immutable=True, tools=True), "cargo_distrobox", None),
+        (_host(immutable=True), None, "needs distrobox and podman"),
+        (_host(), "dnf", None),
+        (_host(tools=True), "cargo_distrobox", None),
+        (_host("macos", arch="arm64"), None, "macos not supported"),
+    ],
+)
+def test_precedence_fixtures(platform: Platform, first: str | None, short: str | None) -> None:
+    alacritty = _registry_tool("alacritty")
+    methods = resolve_methods(alacritty, platform)
+    assert (methods[0].kind if methods else None) == first
+    reason = unavailable_reason(alacritty, platform)
+    assert (reason.short if reason else None) == short
+
+
+def test_mutable_without_tools_plans_the_dnf_handoff() -> None:
+    alacritty = _registry_tool("alacritty")
+    platform = _host()
+    state = plan_state(alacritty, platform=platform, health=Health.MISSING, present=False)
+    rows = build_plan(
+        ["alacritty"], [alacritty], {"alacritty": state}.get, platform, reinstall=frozenset()
+    )
+    assert [row.disposition for row in rows] == [Disposition.MANUAL]
+    assert rows[0].manual_command is not None
+    assert "dnf" in rows[0].manual_command
+
+
+@pytest.mark.parametrize("which", ["distrobox", "podman"])
+def test_only_distrobox_or_only_podman_is_not_enough(which: str) -> None:
+    alacritty = _registry_tool("alacritty")
+    platform = replace(
+        _host(immutable=True), has_distrobox=which == "distrobox", has_podman=which == "podman"
+    )
+    assert resolve_methods(alacritty, platform) == []
+    reason = unavailable_reason(alacritty, platform)
+    assert reason is not None
+    assert reason.short == "needs distrobox and podman"
+
+
+def test_unavailable_reason_deduplicates_shorts() -> None:
+    tool = Tool(
+        id="split",
+        name="split",
+        category="c",
+        cmd="split",
+        methods=(
+            Method(kind="dnf", params={"package": "x"}),
+            Method(kind="apt", params={"package": "x"}),
+            Method(kind="pacman", params={"package": "x"}),
+            Method(kind="script", params={"url": "https://example.test/l"}, arch=("arm64",)),
+        ),
+    )
+    reason = unavailable_reason(tool, _host(immutable=True))
+    assert reason is not None
+    assert reason.detail == "no method applies here: immutable host; not built for amd64"
+
+
+def test_os_only_rejections_drop_when_another_method_passes_the_os_gate() -> None:
+    puppeteer = _registry_tool("puppeteer")
+    floor = unavailable_reason(puppeteer, _host("debian", node="20.19.2"))
+    assert floor is not None
+    assert floor.short == "needs Node >= 22.12.0; this system has 20.19.2"
+    arm = unavailable_reason(puppeteer, _host("debian", arch="arm64"))
+    assert arm is not None
+    assert arm.short == "not built for arm64"
+    assert "debian not supported" not in arm.detail
+
+
+def test_node_floor_rejects_with_the_reason() -> None:
+    mmdc = _registry_tool("mmdc")
+    reason = unavailable_reason(mmdc, _host("debian", node="20.19.2"))
+    assert reason is not None
+    assert reason.short == "needs Node >= 22.12.0; this system has 20.19.2"
+    assert "mmdc needs Node 22.12.0 or newer" in reason.detail
+    assert resolve_methods(mmdc, _host("debian", node="20.19.2")) == []
+    assert [m.kind for m in resolve_methods(mmdc, _host("debian", node="26.13.0"))] == ["node"]
+    assert [m.kind for m in resolve_methods(mmdc, _host("debian", node="22.12.0"))] == ["node"]
+    assert [m.kind for m in resolve_methods(mmdc, _host("debian", node=None))] == ["node"]
+
+
+def test_node_floor_rejects_a_prerelease_at_the_floor() -> None:
+    mmdc = _registry_tool("mmdc")
+    reason = unavailable_reason(mmdc, _host("debian", node="22.12.0-rc.1"))
+    assert reason is not None
+    assert reason.short == "needs Node >= 22.12.0; this system has 22.12.0-rc.1"
+
+
+def test_node_floor_plans_blocked_not_failed() -> None:
+    catalog = [_registry_tool(tool_id) for tool_id in ("pnpm", "puppeteer", "mmdc")]
+    platform = _host("debian", node="20.19.2")
+    states = {tool.id: pass_state(tool, platform=platform, present=False) for tool in catalog}
+    rows = {
+        row.tool_id: row
+        for row in build_plan(["mmdc"], catalog, states.get, platform, reinstall=frozenset())
+    }
+    assert rows["mmdc"].disposition is Disposition.BLOCKED
+    assert "needs Node 22.12.0 or newer" in rows["mmdc"].reason
+    assert "20.19.2" in rows["mmdc"].reason
+    assert rows["puppeteer"].disposition is Disposition.BLOCKED
