@@ -188,6 +188,16 @@ VIEWS: tuple[View, ...] = (
         hint="space toggles a policy and applies it now; reversible",
         actions="space toggle | m link mode",
     ),
+    View(
+        name="schedules",
+        label="Schedules",
+        palette="Schedules - cleanup and tool updates on a timer",
+        mode="LIVE",
+        glyph="*",
+        style="yellow",
+        hint="space turns a schedule on or off now; e sets when it runs",
+        actions="space toggle | e time | m model",
+    ),
 )
 
 VIEW_ORDER: tuple[str, ...] = tuple(view.name for view in VIEWS)
@@ -248,7 +258,8 @@ class WayfindingHeader(Horizontal):
 
     DEFAULT_CSS = """
     WayfindingHeader { height: 1; padding: 0 1; }
-    WayfindingHeader > WayfindingTab { width: auto; height: 1; margin-right: 4; }
+    WayfindingHeader > WayfindingTab { width: auto; height: 1; margin-right: 1; }
+    WayfindingHeader > WayfindingTab:last-of-type { margin-right: 0; }
     """
 
     def __init__(self, *, active: str, accent: str = "$accent") -> None:

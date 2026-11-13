@@ -68,7 +68,7 @@ from tests.state_doubles import (
     removable_state,
 )
 
-VIEW_NAMES = ["system", "user", "ai", "doctor", "uninstall", "policies"]
+VIEW_NAMES = ["system", "user", "ai", "doctor", "uninstall", "policies", "schedules"]
 
 
 def _tool(tool_id: str) -> Tool:
@@ -2061,7 +2061,7 @@ async def test_navigation_works_during_a_removal(tmp_path: Path):
     async with app.run_test(size=(120, 30)) as pilot:
         try:
             await _hold_a_removal(app, pilot, remover, "fd")
-            for key, name in zip("123456", VIEW_NAMES, strict=True):
+            for key, name in zip("1234567", VIEW_NAMES, strict=True):
                 await pilot.press(key)
                 await wait_until(pilot, lambda name=name: app.current_view == name)
             await pilot.press("escape")
@@ -3573,7 +3573,9 @@ MATRIX_TARGETS: dict[str, tuple[Callable[[UnifiedApp], bool], Callable[[UnifiedA
 def test_the_matrix_covers_seven_sources_and_six_targets():
     assert len(MATRIX_SOURCES) == 7
     assert len(MATRIX_TARGETS) == 6
-    assert set(MATRIX_TARGETS) == set(VIEW_NAMES)
+    # The matrix proves a mutation's tool-state publish repaints every view; the Schedules rows
+    # read schedule files and the run log on their own refresh (tests/test_schedules_view.py).
+    assert set(MATRIX_TARGETS) == set(VIEW_NAMES) - {"schedules"}
 
 
 @pytest.mark.parametrize("target", list(MATRIX_TARGETS))

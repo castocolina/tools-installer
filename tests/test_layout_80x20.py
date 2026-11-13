@@ -57,7 +57,15 @@ from tests.state_doubles import (
 )
 from tests.test_registry import REGISTRY
 
-_KEY = {"system": "1", "user": "2", "ai": "3", "doctor": "4", "uninstall": "5", "policies": "6"}
+_KEY = {
+    "system": "1",
+    "user": "2",
+    "ai": "3",
+    "doctor": "4",
+    "uninstall": "5",
+    "policies": "6",
+    "schedules": "7",
+}
 _TIERS = ["system", "user", "ai"]
 
 
@@ -304,6 +312,18 @@ async def test_policies_chrome_at_80x20(tmp_path: Path) -> None:
         for selector in ("#link-mode-line", "#policy-detail"):
             assert rows_of(screen, screen.query_one(selector)), selector
         assert rows_of(screen, screen.query_one(DataTable[Any]))
+
+
+async def test_schedules_chrome_at_80x20(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "schedules")
+        _assert_chrome(screen)
+        # Note, the header row and seven schedule rows, then the detail panel down to the status.
+        assert rows_of(screen, screen.query_one("#schedule-note")) == {3}
+        assert rows_of(screen, screen.query_one(DataTable[Any])) == set(range(4, 12))
+        assert rows_of(screen, screen.query_one("#schedule-detail")) == set(range(12, 18))
+        assert rows_of(screen, app.view("schedules").status) == {18}
 
 
 _MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
