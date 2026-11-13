@@ -8,7 +8,7 @@ import os
 import plistlib
 import shutil
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -993,3 +993,80 @@ def test_the_installers_own_run_lock_does_not_block_removing_the_shared_files(
         mine.release()
 
     assert not any(path.exists() for path in shared_files(ctx))
+
+
+def ship_new_sources(
+    monkeypatch: pytest.MonkeyPatch, ctx: ScheduleContext, tmp_path: Path, *names: str
+) -> dict[str, bytes]:
+    """The checkout now ships changed copies of these shared assets (after a `git pull`)."""
+    original: Callable[[ScheduleContext], tuple[tuple[Path, Path], ...]] = vars(schedules)[
+        "_shared_pairs"
+    ]
+    new_bytes: dict[str, bytes] = {}
+    swapped: dict[Path, Path] = {}
+    for _source, target in original(ctx):
+        if target.name in names:
+            replacement = tmp_path / f"new-{target.name}"
+            replacement.write_bytes(target.read_bytes() + b"\n# a bug fix\n")
+            new_bytes[target.name] = replacement.read_bytes()
+            swapped[target] = replacement
+
+    def patched(context: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
+        return tuple((swapped.get(target, source), target) for source, target in original(context))
+
+    monkeypatch.setitem(vars(schedules), "_shared_pairs", patched)
+    return new_bytes
+
+
+def test_the_reconcile_refreshes_a_shared_asset_that_differs_from_its_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    new = ship_new_sources(monkeypatch, ctx, tmp_path, "runner.py", "prune-tmp-linux.sh")
+
+    report = ensure_schedule_defaults(ctx)
+
+    assert (ctx.data_dir / "runner.py").read_bytes() == new["runner.py"]
+    assert (ctx.data_dir / "prune-tmp-linux.sh").read_bytes() == new["prune-tmp-linux.sh"]
+    assert report.warnings == ()
+    shared = load_state(ctx.state_path).state.shared
+    assert all(receipts.matches(a, rehash=True) for a in shared)
+    assert ensure_schedule_defaults(ctx) == ReconcileReport()  # and then it is quiet
+
+
+def test_the_reconcile_restores_a_deleted_shared_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    runner = ctx.data_dir / "runner.py"
+    original = runner.read_bytes()
+    runner.unlink()
+
+    ensure_schedule_defaults(ctx)
+
+    assert runner.read_bytes() == original
+    assert os.access(runner, os.X_OK)
+    shared = load_state(ctx.state_path).state.shared
+    assert all(receipts.matches(a, rehash=True) for a in shared)
+
+
+def test_the_reconcile_refuses_and_warns_for_a_user_edited_shared_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    edited = ctx.data_dir / "prune-tmp-linux.sh"
+    mine = edited.read_bytes() + b"# my own tweak\n"
+    edited.write_bytes(mine)
+    new = ship_new_sources(monkeypatch, ctx, tmp_path, "runner.py", "prune-tmp-linux.sh")
+
+    report = ensure_schedule_defaults(ctx)
+
+    assert edited.read_bytes() == mine  # never overwritten
+    assert any("prune-tmp-linux.sh" in warning for warning in report.warnings)
+    assert (ctx.data_dir / "runner.py").read_bytes() == new["runner.py"]  # the others refresh

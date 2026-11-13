@@ -740,7 +740,9 @@ def _shared_pairs(ctx: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
 
 
 def _ensure_shared_assets(
-    ctx: ScheduleContext, state: ScheduleState
+    ctx: ScheduleContext,
+    state: ScheduleState,
+    pairs: tuple[tuple[Path, Path], ...] | None = None,
 ) -> tuple[tuple[ReceiptArtifact, ...], tuple[Path, ...]]:
     """Copy the runner and the prune scripts into the data dir; return (artifacts, newly created).
 
@@ -748,11 +750,12 @@ def _ensure_shared_assets(
     `state.shared` is their ownership proof, standing in for SPEC R5's sentinel (R1-16); the
     runner keeps its own sentinel header. Every target is validated before any write, and a
     failed write puts back what this call already wrote, so a failure leaves no unrecorded
-    asset (R2-08).
+    asset (R2-08). `pairs` narrows the call to some of the shared assets (the reconcile's
+    refresh takes them one by one).
     """
     recorded = {Path(artifact.path): artifact for artifact in state.shared}
     pending: list[tuple[Path, bytes, bytes | None]] = []
-    for source, target in _shared_pairs(ctx):
+    for source, target in pairs or _shared_pairs(ctx):
         data = source.read_bytes()  # a missing source raises an OSError naming it
         if target.is_symlink():
             raise OSError(f"{target} is a symlink, not a file tools-installer wrote")
@@ -1605,12 +1608,46 @@ def _drop_gone_target(
     return True
 
 
+def _refresh_shared(ctx: ScheduleContext, warnings: list[str]) -> None:
+    """Refresh each recorded shared asset that differs from its source or is missing (F5).
+
+    One asset at a time: a copy the user edited (its recorded sha256 no longer matches) is
+    refused and warned about, and never blocks refreshing the others."""
+    state = load_state(ctx.state_path).state
+    recorded = {Path(artifact.path): artifact for artifact in state.shared}
+    fresh: dict[Path, ReceiptArtifact] = {}
+    for pair in _shared_pairs(ctx):
+        target = pair[1]
+        if target not in recorded:
+            continue
+        try:
+            (artifact,), _created = _ensure_shared_assets(ctx, state, pairs=(pair,))
+        except OSError as exc:
+            warnings.append(f"Could not refresh {target.name}: {_error_line(exc)}.")
+            continue
+        if artifact != recorded[target]:
+            fresh[target] = artifact
+    if not fresh:
+        return
+
+    def change(current: ScheduleState) -> ScheduleState:
+        shared = tuple(fresh.get(Path(item.path), item) for item in current.shared)
+        return replace(current, shared=shared)
+
+    try:
+        update_state(ctx.state_path, change)
+    except OSError as exc:
+        warnings.append(f"Could not record the refreshed shared scripts: {_error_line(exc)}.")
+
+
 def _reconcile_pass(ctx: ScheduleContext) -> ReconcileReport:
     loaded = load_state(ctx.state_path)
     damaged = loaded.damaged or loaded.warning is not None
     turned: list[str] = []
     removed: list[str] = []
     warnings: list[str] = [loaded.warning or STICKY_DAMAGE_WARNING] if damaged else []
+    if not damaged:
+        _refresh_shared(ctx, warnings)
     for schedule in SCHEDULES:
         record = record_for(load_state(ctx.state_path).state, schedule.id)
         if schedule.kind is JobKind.UPDATE and not ctx.present(schedule.target or ""):
