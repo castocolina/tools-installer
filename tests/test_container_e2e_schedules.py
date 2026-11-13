@@ -457,10 +457,12 @@ schedules_tester() {
     "date +%H:%M") echo "$CLOCK" ;;
     *"journalctl --user"*) printf 'journal line one\njournal line two\n' ;;
     *"test -e"*) [ "${STAMP:-1}" = 1 ]; return ;;
-    *"stat -c"*) head -n 1 "$SCRATCH/mtimes"; sed -i 1d "$SCRATCH/mtimes" ;;
+    *"stat -c"*) head -n 1 "$SCRATCH/mtimes"
+      tail -n +2 "$SCRATCH/mtimes" > "$SCRATCH/mtimes.next"
+      mv "$SCRATCH/mtimes.next" "$SCRATCH/mtimes" ;;
     *"touch -d"*) : ;;
-    "systemctl --user start "*".timer") for _ in $(seq "${TIMER_RUNS:-0}"); do
-      echo "2026-11-13T10:00:00+00:00 cache-cleanup start" >> "$SCRATCH/log"; done ;;
+    "systemctl --user start "*".timer") n=0; while [ "$n" -lt "${TIMER_RUNS:-0}" ]; do
+      echo "2026-11-13T10:00:00+00:00 cache-cleanup start" >> "$SCRATCH/log"; n=$((n + 1)); done ;;
   esac
   return 0
 }
