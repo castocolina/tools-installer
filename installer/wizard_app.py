@@ -2126,7 +2126,7 @@ def _temp_usage_line(disk_pressure: DiskPressureProbe | None) -> str | None:
 
     - The mount reads stay synchronous and un-cached. `shutil.disk_usage`
       is one statvfs on an already-mounted filesystem -- the same order of
-      cost as the read_schedule/last_run_summary reads above, and it spawns
+      cost as the schedule log read, and it spawns
       no process, unlike the pnpm audit the Doctor runs on a worker. A
       worker here would buy nothing and cost a cross-thread hand-off plus a
       stale-value window on a number whose whole point is being current.

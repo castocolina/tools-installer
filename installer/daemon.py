@@ -1,16 +1,13 @@
-"""Background maintenance daemon mechanism: LaunchAgent plist generation/parsing via
+"""Background maintenance mechanism for macOS: LaunchAgent plist generation/parsing via
 plistlib, launchctl bootstrap/bootout invocation through an injectable run seam, the
-wrapper-executable install/remove mechanism, and the "has any decision ever been
-recorded for this policy" ownership marker.
+removal of the previous installer's wrapper executable, and the "has any decision ever been
+recorded" ownership marker.
 
-Parallel to installer/omz.py's mechanism-tier role for the omz-plugins policy: this
-module is pure-enough plumbing that installer/policy.py's daemon_policy factory (a
-later plan) composes into an actual Policy. Nothing here reads argv, prompts, or
-renders UI.
+Pure-enough plumbing that installer/schedules.py composes into the schedule engine. Nothing
+here reads argv, prompts, or renders UI.
 """
 
 import contextlib
-import importlib.resources
 import os  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import plistlib
 from collections.abc import Mapping, Sequence
@@ -22,7 +19,7 @@ from installer.run import CommandError, Runner, run_captured
 from installer.shellrc import apply_block, strip_block
 
 # `import os` is the monkeypatch surface tests/test_daemon.py and
-# tests/test_policy_daemon.py use (`daemon.os.replace`). It is the same stdlib
+# the schedule engine tests use (`daemon.os.replace`). It is the same stdlib
 # module installer.atomic imports, so those patches still intercept the write
 # after this body became a delegation.
 
@@ -39,15 +36,9 @@ ENVIRONMENT_KEYS = ("PATH", "HOME", "TMPDIR")
 # `launchctl error 3` decodes it as "3: No such process" (Darwin's ESRCH).
 _ALREADY_UNLOADED_EXIT_CODE = 3
 
-# The wrapper asset copied into the managed bin dir at apply time, mirroring
-# installer/tweaks.py's ManagedExecutable/_is_our_executable sentinel-checked
-# copy pattern for a single executable outside the TweakBundle mechanism.
-_WRAPPER_ASSET = "helper_assets/prune_daemon_runner.py"
-# Public: installer/policy.py's daemon_policy factory needs this same filename
-# to build a pre-write validation path before install_wrapper ever runs, and a
-# private symbol should never be re-declared across a module boundary (a
-# post-implementation review flagged the previous hand-duplicated copy as a
-# silent-drift trap -- this is the single source of truth instead).
+# The command name and sentinel the previous installer's wrapper carried. The wrapper itself is
+# gone; hosts that never launched this version keep one, which the first tmp-cleanup apply and the
+# sweep remove (sentinel-checked, so a same-named file of someone else is never touched).
 WRAPPER_COMMAND = "tools-installer-prune-daemon"
 _WRAPPER_SENTINEL = "tools-installer-helper: prune-daemon"
 
@@ -84,98 +75,13 @@ def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
     different permission requirements, so one hardcoded policy cannot serve
     both callers. When `mode` is given, the temp file is chmod'd to exactly
     that value before the replace -- an explicit, umask-independent permission
-    (write_plist's own forced 0o644 for a LaunchAgent config nobody else
+    (write_agent_plist's own forced 0o644 for a LaunchAgent config nobody else
     should be able to edit). When `mode` is None (the default), this mirrors
     installer/omz.py::_atomic_write exactly: shutil.copymode from an existing
     target, no explicit chmod otherwise (record_decided's mode-PRESERVING
     write against ~/.myshellrc).
     """
     atomic_write_bytes(path, data, mode=mode)
-
-
-def render_plist(
-    *,
-    uv_path: Path,
-    wrapper_path: Path,
-    script_path: Path,
-    log_path: Path,
-    hour: int,
-    minute: int,
-    days: int,
-    tmpdir: str,
-    home: str,
-    path_value: str,
-    label: str = LABEL,
-) -> dict[str, object]:
-    """The LaunchAgent plist dict for the daily prune run, fully validated first.
-
-    ProgramArguments names the apply-time-resolved `uv` executable first, then the
-    installed wrapper's path as `uv run --script`'s target, never
-    scripts/prune-user-tmpdir.sh directly and never a bare python3 shebang --
-    mirroring installer/tweaks.py:64's `_COUNTDOWN_BODY` invocation shape. This is
-    live-verified this session: `uv run --no-project --script FILE --script /tmp/s
-    ... -- --apply --days 3` forwards every trailing argument, including a literal
-    `--` token, verbatim as sys.argv[1:] to FILE.
-
-    TMPDIR and HOME are resolved into EnvironmentVariables, not baked into
-    ProgramArguments as flags -- this reaches scripts/prune-user-tmpdir.sh's own
-    `${TMPDIR:-}` read (line 24, hard error if empty) and its `$HOME` expansion
-    under `set -u` (line 72) with zero wrapper-side plumbing, since subprocess.run
-    inherits the wrapper's own process environment by default. A freshly
-    bootstrapped LaunchAgent's default environment is only
-    `{PATH => /usr/bin:/bin:/usr/sbin:/sbin}` (live-verified, 11-RESEARCH.md
-    Pitfall 3) -- TMPDIR and HOME are equally absent otherwise.
-
-    Every path/schedule argument is validated -- raising DaemonScheduleError the
-    instant any is invalid -- BEFORE this function returns anything, so an empty
-    TMPDIR/HOME (11-REVIEWS.md cycle 1 finding #5, extended to HOME by cycle 2
-    finding #1), an unresolved `uv` (modeled identically: shutil.which("uv")
-    returning None becomes an empty, non-absolute uv_path, the SAME validation
-    rejects), or an out-of-range hour/minute/days can never reach a written plist
-    or a launchctl bootstrap call.
-    """
-    for name, path_arg in (
-        ("uv_path", uv_path),
-        ("wrapper_path", wrapper_path),
-        ("script_path", script_path),
-        ("log_path", log_path),
-    ):
-        if not path_arg.is_absolute():
-            raise DaemonScheduleError(f"{name} must be a non-empty absolute path: {path_arg!r}")
-    if not tmpdir or not Path(tmpdir).is_absolute():
-        raise DaemonScheduleError(f"tmpdir must be a non-empty absolute path: {tmpdir!r}")
-    if not home or not Path(home).is_absolute():
-        raise DaemonScheduleError(f"home must be a non-empty absolute path: {home!r}")
-    if not 0 <= hour <= 23:
-        raise DaemonScheduleError(f"hour must be within 0-23: {hour!r}")
-    if not 0 <= minute <= 59:
-        raise DaemonScheduleError(f"minute must be within 0-59: {minute!r}")
-    if days < 1:
-        raise DaemonScheduleError(f"days must be >= 1: {days!r}")
-    return render_agent_plist(
-        label=label,
-        program_arguments=[
-            str(uv_path),
-            "run",
-            "--no-project",
-            "--script",
-            str(wrapper_path),
-            "--script",
-            str(script_path),
-            "--log",
-            str(log_path),
-            "--cap-bytes",
-            str(DEFAULT_CAP_BYTES),
-            "--",
-            "--apply",
-            "--days",
-            str(days),
-        ],
-        environment={"PATH": path_value, "TMPDIR": tmpdir, "HOME": home},
-        calendar={"Hour": hour, "Minute": minute},
-        stdout_path=log_path,
-        stderr_path=log_path,
-    )
 
 
 def _check_slot(entry: Mapping[str, int]) -> None:
@@ -234,47 +140,6 @@ def render_agent_plist(
         "RunAtLoad": False,
         "EnvironmentVariables": dict(environment),
     }
-
-
-def write_plist(
-    plist_path: Path,
-    *,
-    uv_path: Path,
-    wrapper_path: Path,
-    script_path: Path,
-    log_path: Path,
-    hour: int,
-    minute: int,
-    days: int,
-    tmpdir: str,
-    home: str,
-    path_value: str,
-    label: str = LABEL,
-) -> None:
-    """Validate and serialize the plist, writing it atomically at 0o644.
-
-    render_plist runs FIRST; a DaemonScheduleError propagates with zero filesystem
-    side effects (no partial/temp file left behind). Only once it returns
-    successfully does this create plist_path's parent directories and write
-    through the shared _atomic_write helper with an explicit, forced mode=0o644
-    (RESEARCH's Tampering mitigation for group/world-writable LaunchAgent
-    configs) -- independent of the invoking process's umask or any pre-existing
-    mode on the target file.
-    """
-    plist_dict = render_plist(
-        uv_path=uv_path,
-        wrapper_path=wrapper_path,
-        script_path=script_path,
-        log_path=log_path,
-        hour=hour,
-        minute=minute,
-        days=days,
-        tmpdir=tmpdir,
-        home=home,
-        path_value=path_value,
-        label=label,
-    )
-    write_agent_plist(plist_path, plist_dict)
 
 
 def write_agent_plist(plist_path: Path, plist: Mapping[str, object]) -> None:
@@ -364,10 +229,9 @@ def ensure_log_path(log_path: Path) -> None:
     """Create log_path's parent directory and an empty file if absent.
 
     This is the AUTHORITATIVE log-path creation point, called at APPLY time
-    (before write_plist/bootstrap) because launchd needs StandardOutPath's
+    (before write_agent_plist/bootstrap) because launchd needs StandardOutPath's
     location to already resolve at registration time -- creating it lazily
-    inside the wrapper, as originally planned, is too late (11-REVIEWS.md
-    cycle 1 finding #2). Never truncates an existing log.
+    inside the runner is too late. Never truncates an existing log.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.touch(exist_ok=True)
@@ -378,30 +242,6 @@ def _is_our_wrapper(path: Path) -> bool:
         return _WRAPPER_SENTINEL in path.read_text()
     except (OSError, UnicodeDecodeError):
         return False
-
-
-def install_wrapper(bin_dir: Path) -> Path:
-    """Copy the wrapper asset into bin_dir, chmod 0o755. Returns the installed path.
-
-    Mirrors installer/tweaks.py's install_tweak_executables/ManagedExecutable copy
-    pattern for a single, non-TweakBundle executable. Refuses to overwrite a
-    same-named file it does not own (no sentinel present) rather than clobbering
-    an unrelated file a user or another tool placed there.
-
-    Written through the shared _atomic_write helper (forced mode=0o755) rather
-    than a plain write_text/chmod pair: every other artifact this feature writes
-    (the plist, the "decided" marker) is already crash-safe, and a truncated
-    wrapper file left by a crash/disk-full mid-write would otherwise be silently
-    re-interpreted by `uv run --script` on every subsequent scheduled run
-    (post-implementation review finding WR-01).
-    """
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    target = bin_dir / WRAPPER_COMMAND
-    if target.exists() and not _is_our_wrapper(target):
-        raise OSError(f"{target} exists and is not managed by tools-installer")
-    source = importlib.resources.files("installer").joinpath(_WRAPPER_ASSET).read_text()
-    _atomic_write(target, source.encode("utf-8"), mode=0o755)
-    return target
 
 
 def remove_wrapper(bin_dir: Path) -> None:
@@ -481,9 +321,8 @@ def clear_decided(state_path: Path) -> None:
 
     Mirrors installer/omz.py::_clear_owned exactly: only writes when the
     stripped content actually differs from the original. Deliberately NEVER
-    called by decided/record_decided/daemon_policy.remove() -- its one caller
-    is a later plan's full-uninstall composition, run AFTER that plan's sweep
-    completes (11-REVIEWS.md cycle 2 finding #17).
+    called by decided/record_decided -- its callers are the schedule sweep's adapters,
+    run AFTER the removal completes.
     """
     if not state_path.exists():
         return
@@ -491,46 +330,3 @@ def clear_decided(state_path: Path) -> None:
     stripped = strip_block(original, _DECIDED_BEGIN, _DECIDED_END)
     if stripped != original:
         _atomic_write(state_path, stripped.encode("utf-8"), mode=None)
-
-
-_DELETED_PREFIX = "deleted: "
-
-
-def last_run_summary(log_path: Path) -> str | None:
-    """The last "=== " block's timestamp and deleted-count summary, or None.
-
-    None when log_path does not exist or contains no "=== " block; otherwise
-    the LAST such block's timestamp, plus its `deleted: N` count when present
-    (the script's own literal `printf 'deleted: %s\\n' "$deleted"` summary
-    line), or a "(see log for details)" fallback when the last block has no
-    such line (a dry-run block, or a script-side failure body) -- never
-    fabricating a count. Reads via read_bytes().decode(errors="replace"),
-    never Path.read_text()'s strict decode, so a hand-edited or externally-
-    corrupted log file can never raise UnicodeDecodeError out of a function
-    a detail-panel render calls on every normal render (11-REVIEWS.md cycle 2
-    finding #3).
-    """
-    if not log_path.exists():
-        return None
-    text = log_path.read_bytes().decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    header_indices = [index for index, line in enumerate(lines) if line.startswith("=== ")]
-    if not header_indices:
-        return None
-    start = header_indices[-1]
-    header_line = lines[start]
-    timestamp = header_line.removeprefix("=== ").removesuffix(" ===")
-    body_lines = lines[start + 1 :]
-    if body_lines and body_lines[-1] == "":
-        body_lines = body_lines[:-1]
-    deleted: int | None = None
-    for line in body_lines:
-        if line.startswith(_DELETED_PREFIX):
-            try:
-                deleted = int(line.removeprefix(_DELETED_PREFIX).strip())
-            except ValueError:
-                deleted = None
-            break
-    if deleted is not None:
-        return f"last run: {timestamp}, {deleted} item(s) removed"
-    return f"last run: {timestamp} (see log for details)"

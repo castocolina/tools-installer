@@ -19,8 +19,8 @@
 # 3-day default, its own five target families, its own extra refusal
 # entries, and the lsof-based open-file skip that has no Linux counterpart.
 # Its --days flag, default and argv contract are UNCHANGED: the shipped
-# macOS LaunchAgent already invokes this exact grammar through
-# installer/helper_assets/prune_daemon_runner.py.
+# macOS LaunchAgent already invokes this exact grammar through the
+# schedule runner (installer/helper_assets/schedule_runner.py).
 #
 # Usage:
 #   ./scripts/prune-user-tmpdir.sh              # dry-run (safe)

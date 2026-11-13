@@ -1,15 +1,12 @@
-"""Background maintenance daemon mechanism: Linux systemd user-timer + oneshot
-service unit generation/parsing, `systemctl --user` invocation through an
-injectable run seam, the wrapper-executable install/remove mechanism (reused
-from installer.daemon), and the "has any decision ever been recorded for this
-policy" ownership marker -- the Linux mirror of installer/daemon.py's macOS
-launchd mechanism (D-01).
+"""Background maintenance mechanism for Linux: systemd user-timer + oneshot service unit
+generation/parsing, `systemctl --user` invocation through an injectable run seam, the removal of
+the previous installer's wrapper executable (reused from installer.daemon), and the "has any
+decision ever been recorded" ownership marker -- the Linux mirror of installer/daemon.py's macOS
+launchd mechanism.
 
-Parallel to installer/daemon.py's mechanism-tier role: this module is
-pure-enough plumbing that installer/policy.py's linux_daemon_policy factory
-composes into an actual Policy. Nothing here reads argv, prompts, or renders
-UI. Every external call goes through the injected Runner/OutputRunner seams
-from installer/run.py -- this module never imports subprocess.
+Pure-enough plumbing that installer/schedules.py composes into the schedule engine. Nothing here
+reads argv, prompts, or renders UI. Every external call goes through the injected
+Runner/OutputRunner seams from installer/run.py -- this module never imports subprocess.
 """
 
 from __future__ import annotations
@@ -25,13 +22,10 @@ from typing import Generic, TypeVar
 
 from installer.atomic import atomic_write_bytes
 from installer.daemon import (
-    DEFAULT_CAP_BYTES,
     ENVIRONMENT_KEYS,
     WRAPPER_COMMAND,
     DaemonScheduleError,
     ensure_log_path,
-    install_wrapper,
-    last_run_summary,
     remove_wrapper,
     wrapper_present,
 )
@@ -40,15 +34,13 @@ from installer.locations import xdg_config_base
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_query
 from installer.shellrc import apply_block, strip_block
 
-# Re-exported (imported, never re-declared -- installer/policy.py's Linux
-# factory needs these same names, exactly like it already imports
-# installer.daemon's WRAPPER_COMMAND/install_wrapper/etc. rather than
+# Re-exported (imported, never re-declared -- the schedule engine needs these same names,
+# exactly like it imports installer.daemon's WRAPPER_COMMAND/remove_wrapper rather than
 # re-declaring a parallel copy).
 __all__ = [
     "COMPETING_UNITS",
     "DEFAULT_AGE_MINUTES",
     "DEFAULT_BOOT_DELAY",
-    "DEFAULT_CAP_BYTES",
     "DEFAULT_INTERVAL",
     "ENABLED_STATES",
     "INERT_STATES",
@@ -75,8 +67,6 @@ __all__ = [
     "disable_timer",
     "ensure_log_path",
     "footprint_present",
-    "install_wrapper",
-    "last_run_summary",
     "parse_unit_files",
     "probe_timer_state",
     "query_systemctl",
@@ -84,7 +74,6 @@ __all__ = [
     "remove_units",
     "remove_wrapper",
     "render_exec_service",
-    "render_service",
     "render_timer",
     "system_scope_warning",
     "systemd_available",
@@ -98,7 +87,6 @@ __all__ = [
     "wants_link_path",
     "wrapper_present",
     "write_unit_pair",
-    "write_units",
 ]
 
 # Mirrors installer/daemon.py's LABEL -- a stable per-project unit basename,
@@ -178,7 +166,7 @@ def _quote(value: str) -> str:
     inside unit values, dollar because systemd substitutes $VAR/${VAR}
     inside ExecStart= arguments even quoted ones (IN-01), the rest because
     they break or inject into the unit grammar. Mirrors
-    installer/daemon.py::render_plist's fail-closed validation ordering:
+    installer/daemon.py::render_agent_plist's fail-closed validation ordering:
     every value is validated before anything is returned.
     """
     for char in _REJECTED_CHARS:
@@ -226,82 +214,6 @@ def render_exec_service(
         ),
     ]
     return "\n".join(lines) + "\n"
-
-
-def render_service(
-    *,
-    uv_path: Path,
-    wrapper_path: Path,
-    script_path: Path,
-    log_path: Path,
-    tmpdir: str,
-    home: str,
-    path_value: str,
-    cap_bytes: int = DEFAULT_CAP_BYTES,
-    age_minutes: int = DEFAULT_AGE_MINUTES,
-    description: str = "tools-installer background /tmp cleanup",
-) -> str:
-    """The systemd unit (.service) INI text for the oneshot cleanup run,
-    fully validated first.
-
-    ExecStart names, in order, the apply-time-resolved `uv` executable, then
-    the installed wrapper's path as `uv run --script`'s target, then the
-    cleanup script's own path -- mirroring installer/daemon.py::render_plist's
-    ProgramArguments shape and installer/tweaks.py's `_COUNTDOWN_BODY`
-    invocation pattern. Every token is double-quoted (D-01c/T-15.7-01) so a
-    value containing a space is still one argv element and so a value cannot
-    inject additional unit-file syntax.
-
-    PATH/HOME/TMPDIR are resolved into Environment= assignments, not baked
-    into ExecStart as flags -- this reaches scripts/prune-tmp-linux.sh's own
-    environment reads with zero wrapper-side plumbing, since subprocess.run
-    inherits the wrapper's own process environment by default. A freshly
-    started systemd user manager's own default environment carries none of
-    these reliably, mirroring the LaunchAgent default-environment gap
-    installer/daemon.py::render_plist already documents.
-
-    Every path/schedule argument is validated -- raising DaemonScheduleError
-    the instant any is invalid -- BEFORE this function returns anything, so
-    an empty TMPDIR/HOME, an unresolved `uv`, or an out-of-range age_minutes
-    can never reach a written unit file or a systemctl bootstrap call.
-    """
-    for name, path_arg in (
-        ("uv_path", uv_path),
-        ("wrapper_path", wrapper_path),
-        ("script_path", script_path),
-        ("log_path", log_path),
-    ):
-        if not path_arg.is_absolute():
-            raise DaemonScheduleError(f"{name} must be a non-empty absolute path: {path_arg!r}")
-    if not tmpdir or not Path(tmpdir).is_absolute():
-        raise DaemonScheduleError(f"tmpdir must be a non-empty absolute path: {tmpdir!r}")
-    if not home or not Path(home).is_absolute():
-        raise DaemonScheduleError(f"home must be a non-empty absolute path: {home!r}")
-    if age_minutes < 1:
-        raise DaemonScheduleError(f"age_minutes must be >= 1: {age_minutes!r}")
-
-    argv = [
-        str(uv_path),
-        "run",
-        "--no-project",
-        "--script",
-        str(wrapper_path),
-        "--script",
-        str(script_path),
-        "--log",
-        str(log_path),
-        "--cap-bytes",
-        str(cap_bytes),
-        "--",
-        "--apply",
-        "--minutes",
-        str(age_minutes),
-    ]
-    return render_exec_service(
-        argv=argv,
-        environment={"PATH": path_value, "HOME": home, "TMPDIR": tmpdir},
-        description=description,
-    )
 
 
 def render_timer(
@@ -373,44 +285,6 @@ def footprint_present(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> bool:
     service_path, timer_path = unit_paths(unit_dir, basename=basename)
     link = wants_link_path(unit_dir, basename=basename)
     return service_path.exists() or timer_path.exists() or link.is_symlink()
-
-
-def write_units(
-    unit_dir: Path,
-    *,
-    uv_path: Path,
-    wrapper_path: Path,
-    script_path: Path,
-    log_path: Path,
-    tmpdir: str,
-    home: str,
-    path_value: str,
-    cap_bytes: int = DEFAULT_CAP_BYTES,
-    age_minutes: int = DEFAULT_AGE_MINUTES,
-) -> None:
-    """Validate and write both unit files atomically at 0o644.
-
-    render_service/render_timer run FIRST; a DaemonScheduleError propagates
-    with zero filesystem side effects (no partial/temp file, no directory
-    created). Only once both renders succeed does this create unit_dir and
-    write each file through installer.atomic.atomic_write_bytes with an
-    explicit, forced mode=0o644 -- independent of the invoking process's
-    umask or any pre-existing mode on the target file (T-15.7-02).
-    """
-    service_text = render_service(
-        uv_path=uv_path,
-        wrapper_path=wrapper_path,
-        script_path=script_path,
-        log_path=log_path,
-        tmpdir=tmpdir,
-        home=home,
-        path_value=path_value,
-        cap_bytes=cap_bytes,
-        age_minutes=age_minutes,
-    )
-    write_unit_pair(
-        unit_dir, basename=UNIT_BASENAME, service_text=service_text, timer_text=render_timer()
-    )
 
 
 def write_unit_pair(
@@ -886,7 +760,7 @@ def disable_competing(
     system-scope disclosure, down with it) -- never a file-removing verb, never an unlink
     (D-02b): the competitor's unit files belong to whoever installed them,
     matching this project's own ownership discipline
-    (daemon.install_wrapper/remove_wrapper/wrapper_present's sentinel-checked
+    (daemon.remove_wrapper/wrapper_present's sentinel-checked
     refusal to touch a same-named artifact it did not create), and a disabled
     unit is a state the user can undo while a deleted one is not.
 

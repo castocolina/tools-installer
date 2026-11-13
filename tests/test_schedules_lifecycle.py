@@ -342,18 +342,41 @@ def test_macos_adoption_keeps_the_daily_time(
     lab = make_lab(tmp_path, monkeypatch, present=(), os_key="macos")
     ctx = lab.ctx
     plist_path = ctx.launch_agents_dir / "com.tools-installer.prune-tmpdir.plist"
-    daemon.write_plist(
-        plist_path,
-        uv_path=lab.env.uv,
-        wrapper_path=daemon.install_wrapper(ctx.legacy_bin_dir),
-        script_path=CHECKOUT / "scripts" / "prune-user-tmpdir.sh",
-        log_path=ctx.home / "Library/Logs/tools-installer/prune-daemon.log",
-        hour=5,
-        minute=15,
-        days=3,
-        tmpdir=ctx.tmpdir,
-        home=str(ctx.home),
-        path_value="/usr/bin",
+    wrapper = legacy_wrapper(ctx)
+    log = ctx.home / "Library/Logs/tools-installer/prune-daemon.log"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_bytes(  # the previous installer's plist: the wrapper drives the script
+        plistlib.dumps(
+            {
+                "Label": "com.tools-installer.prune-tmpdir",
+                "ProgramArguments": [
+                    str(lab.env.uv),
+                    "run",
+                    "--no-project",
+                    "--script",
+                    str(wrapper),
+                    "--script",
+                    str(CHECKOUT / "scripts" / "prune-user-tmpdir.sh"),
+                    "--log",
+                    str(log),
+                    "--cap-bytes",
+                    "262144",
+                    "--",
+                    "--apply",
+                    "--days",
+                    "3",
+                ],
+                "StartCalendarInterval": {"Hour": 5, "Minute": 15},
+                "StandardOutPath": str(log),
+                "StandardErrorPath": str(log),
+                "RunAtLoad": False,
+                "EnvironmentVariables": {
+                    "PATH": "/usr/bin",
+                    "TMPDIR": ctx.tmpdir,
+                    "HOME": str(ctx.home),
+                },
+            }
+        )
     )
     daemon.record_decided(ctx.myshellrc_path)
     decide_off(ctx, "cache-cleanup")

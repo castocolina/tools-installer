@@ -585,6 +585,88 @@ def test_a_line_longer_than_the_cap_is_cut_to_its_newest_bytes(tmp_path: Path) -
     assert data.count(b"\n") == 1
 
 
+def test_a_log_under_the_cap_is_appended_untouched(tmp_path: Path) -> None:
+    append = vars(schedule_runner)["_append"]
+    log = tmp_path / "run.log"
+    append(log, "first\n", 1000)
+    before = log.read_bytes()
+    append(log, "second\n", 1000)
+    assert log.read_bytes() == before + b"second\n"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_trim_never_splits_a_multibyte_character(tmp_path: Path) -> None:
+    append = vars(schedule_runner)["_append"]
+    log = tmp_path / "run.log"
+    for index in range(10):
+        append(log, f"run-{index:02d} \U0001f600 body \U0001f600 {index:02d}\n", 80)
+    text = log.read_bytes().decode("utf-8")  # strict: a split character would raise
+    assert len(log.read_bytes()) <= 80
+    assert text.startswith("run-")
+    assert "run-09" in text
+    assert "run-00" not in text
+    assert "\U0001f600" in text
+
+
+def test_a_trim_recovers_from_invalid_utf8_already_in_the_log(tmp_path: Path) -> None:
+    append = vars(schedule_runner)["_append"]
+    log = tmp_path / "run.log"
+    log.write_bytes(b"run-00 start\n" + b"\xff" * 300 + b"\n")
+    append(log, "run-01 ok: done\n", 100)
+    data = log.read_bytes()
+    assert len(data) <= 100
+    assert data.decode("utf-8").endswith("run-01 ok: done\n")  # strict decode: valid again
+
+
+def test_a_multibyte_line_over_the_cap_is_cut_on_a_character_boundary(tmp_path: Path) -> None:
+    append = vars(schedule_runner)["_append"]
+    log = tmp_path / "run.log"
+    append(log, "\U0001f600" * 200 + "\n", 101)  # 4-byte characters never fit 100 bytes evenly
+    data = log.read_bytes()
+    assert len(data) <= 101
+    assert data.decode("utf-8").endswith("\U0001f600\n")
+    assert data.count(b"\n") == 1
+
+
+def test_a_trim_leaves_a_newline_so_the_next_append_starts_a_new_line(tmp_path: Path) -> None:
+    append = vars(schedule_runner)["_append"]
+    log = tmp_path / "run.log"
+    for index in range(20):
+        append(log, f"2026-11-13T10:00:00+00:00 job ok: {index:02d}\n", 200)
+    append(log, "next\n", 200)
+    lines = log.read_text().splitlines()
+    assert lines[-1] == "next"
+    assert lines[-2].startswith("2026-11-13T10:00:00+00:00 job ok: ")
+    assert lines.count("next") == 1
+
+
+@pytest.mark.parametrize(
+    ("output", "result"),
+    [
+        ("deleted: 4\n", "ok: deleted 4"),
+        ("deleted: 4\nmore\ndeleted: 9\n", "ok: deleted 9"),
+        ("deleted: not-a-number\n", "ok: done"),
+        ("nothing to say\n", "ok: done"),
+    ],
+)
+def test_tmp_cleanup_reads_the_last_deleted_line_and_never_invents_a_count(
+    tmp_path: Path, output: str, result: str
+) -> None:
+    script = _script(tmp_path / "bin", "prune.sh", f"printf '{output}'".replace("\n", "\\n"))
+    code, lines = _run(tmp_path, "tmp-cleanup", "--script", str(script))
+    assert code == 0
+    assert lines[-1].endswith(f"tmp-cleanup {result}")
+
+
+def test_tmp_cleanup_output_that_is_not_utf8_still_logs_its_result(tmp_path: Path) -> None:
+    script = _script(
+        tmp_path / "bin", "prune.sh", "printf '\\377\\376 junk\\n'\nprintf 'deleted: 3\\n'"
+    )
+    code, lines = _run(tmp_path, "tmp-cleanup", "--script", str(script))
+    assert code == 0
+    assert lines[-1].endswith("tmp-cleanup ok: deleted 3")
+
+
 def test_two_writers_share_the_log_lock(tmp_path: Path) -> None:
     append = vars(schedule_runner)["_append"]
     log = tmp_path / "state" / "run.log"

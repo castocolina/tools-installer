@@ -83,79 +83,6 @@ def _platform(os_name: str = "fedora") -> Platform:
 
 # --- Mechanism-layer tests ---------------------------------------------------
 
-_VALID_SERVICE_KWARGS: dict[str, object] = {
-    "uv_path": Path("/home/tester/.local/bin/uv"),
-    "wrapper_path": Path("/home/tester/.local/bin/tools-installer-prune-daemon"),
-    "script_path": Path("/home/tester/tools-installer/scripts/prune-tmp-linux.sh"),
-    "log_path": Path("/home/tester/.local/state/tools-installer/prune-daemon.log"),
-    "tmpdir": "/tmp",
-    "home": "/home/tester",
-    "path_value": "/usr/bin:/bin",
-}
-
-
-def _service_kwargs(**overrides: object) -> dict[str, object]:
-    merged = dict(_VALID_SERVICE_KWARGS)
-    merged.update(overrides)
-    return merged
-
-
-def test_render_service_exec_start_order_and_quoting() -> None:
-    text = systemd_daemon.render_service(**_service_kwargs())  # type: ignore[arg-type]
-    assert "[Service]" in text
-    assert "Type=oneshot" in text
-    exec_line = next(line for line in text.splitlines() if line.startswith("ExecStart="))
-    assert exec_line == (
-        'ExecStart="/home/tester/.local/bin/uv" "run" "--no-project" "--script" '
-        '"/home/tester/.local/bin/tools-installer-prune-daemon" "--script" '
-        '"/home/tester/tools-installer/scripts/prune-tmp-linux.sh" "--log" '
-        '"/home/tester/.local/state/tools-installer/prune-daemon.log" "--cap-bytes" '
-        f'"{systemd_daemon.DEFAULT_CAP_BYTES}" "--" "--apply" "--minutes" '
-        f'"{systemd_daemon.DEFAULT_AGE_MINUTES}"'
-    )
-
-
-def test_render_service_environment_lines_are_single_quoted_tokens() -> None:
-    text = systemd_daemon.render_service(
-        **_service_kwargs(path_value="/usr/bin:/bin with space")  # type: ignore[arg-type]
-    )
-    lines = text.splitlines()
-    assert 'Environment="PATH=/usr/bin:/bin with space"' in lines
-    assert 'Environment="HOME=/home/tester"' in lines
-    assert 'Environment="TMPDIR=/tmp"' in lines
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"uv_path": Path("relative/uv")},
-        {"uv_path": Path()},
-        {"wrapper_path": Path("relative/wrapper")},
-        {"script_path": Path("relative/script.sh")},
-        {"log_path": Path("relative/log")},
-        {"home": ""},
-        {"home": "relative/home"},
-        {"tmpdir": ""},
-        {"tmpdir": "relative/tmp"},
-        {"age_minutes": 0},
-        {"path_value": 'has"quote'},
-        {"path_value": "has\\backslash"},
-        {"path_value": "has%percent"},
-        {"path_value": "has\nnewline"},
-        {"path_value": "has\rcarriage"},
-    ],
-)
-def test_render_service_rejects_invalid_input(overrides: dict[str, object]) -> None:
-    with pytest.raises(DaemonScheduleError):
-        systemd_daemon.render_service(**_service_kwargs(**overrides))  # type: ignore[arg-type]
-
-
-def test_render_service_raises_with_zero_filesystem_side_effects(tmp_path: Path) -> None:
-    before = list(tmp_path.iterdir())
-    with pytest.raises(DaemonScheduleError):
-        systemd_daemon.render_service(**_service_kwargs(age_minutes=0))  # type: ignore[arg-type]
-    assert list(tmp_path.iterdir()) == before
-
 
 def test_render_timer_shape() -> None:
     text = systemd_daemon.render_timer()
@@ -165,41 +92,6 @@ def test_render_timer_shape() -> None:
     assert "[Install]" in text
     assert "WantedBy=timers.target" in text
     assert "Persistent" not in text
-
-
-def test_write_units_validates_before_creating_directory_or_files(tmp_path: Path) -> None:
-    unit_dir = tmp_path / "unit"
-    with pytest.raises(DaemonScheduleError):
-        systemd_daemon.write_units(
-            unit_dir,
-            uv_path=Path("relative/uv"),
-            wrapper_path=Path("/abs/wrapper"),
-            script_path=Path("/abs/script.sh"),
-            log_path=Path("/abs/log"),
-            tmpdir="/tmp",
-            home="/home/tester",
-            path_value="/usr/bin",
-        )
-    assert not unit_dir.exists()
-
-
-def test_write_units_writes_both_files_at_0o644(tmp_path: Path) -> None:
-    unit_dir = tmp_path / "unit"
-    systemd_daemon.write_units(
-        unit_dir,
-        uv_path=tmp_path / "uv",
-        wrapper_path=tmp_path / "wrapper",
-        script_path=tmp_path / "script.sh",
-        log_path=tmp_path / "log",
-        tmpdir=str(tmp_path / "tmp"),
-        home=str(tmp_path / "home"),
-        path_value="/usr/bin",
-    )
-    service_path, timer_path = systemd_daemon.unit_paths(unit_dir)
-    assert service_path.exists()
-    assert timer_path.exists()
-    assert oct(service_path.stat().st_mode)[-3:] == "644"
-    assert oct(timer_path.stat().st_mode)[-3:] == "644"
 
 
 def test_units_present_requires_both_files(tmp_path: Path) -> None:
@@ -1089,28 +981,6 @@ def test_disable_competing_counts_an_oserror_as_failed_and_keeps_going() -> None
     assert failed == ("a.timer",)
 
 
-def test_render_service_rejects_a_dollar_sign_in_any_rendered_value(tmp_path: Path) -> None:
-    """IN-01: systemd substitutes $VAR/${VAR} inside ExecStart= arguments,
-    even quoted ones, so a path carrying one would be silently rewritten."""
-
-    def render(*, script_path: Path | None = None, path_value: str = "/usr/bin:/bin") -> str:
-        return systemd_daemon.render_service(
-            uv_path=tmp_path / "uv",
-            wrapper_path=tmp_path / "wrapper",
-            script_path=script_path if script_path is not None else tmp_path / "prune.sh",
-            log_path=tmp_path / "prune.log",
-            tmpdir=str(tmp_path / "tmp"),
-            home=str(tmp_path / "home"),
-            path_value=path_value,
-        )
-
-    assert render()  # the same values without a $ render fine
-    with pytest.raises(DaemonScheduleError):
-        render(script_path=tmp_path / "pru$ne.sh")
-    with pytest.raises(DaemonScheduleError):
-        render(path_value="/usr/bin:${HOME}/bin")
-
-
 # --- Named calendar unit pairs (24.2-04) -------------------------------------
 
 _SCHEDULE_BASENAME = "tools-installer-schedule-update-claude"
@@ -1224,17 +1094,30 @@ def test_default_renders_are_unchanged() -> None:
         "[Install]\n"
         "WantedBy=timers.target\n"
     )
-    assert systemd_daemon.render_service(**_service_kwargs()) == (  # type: ignore[arg-type]
+    assert systemd_daemon.render_exec_service(
+        argv=[
+            "/home/tester/.local/bin/uv",
+            "run",
+            "--no-project",
+            "--script",
+            "/home/tester/.local/share/tools-installer/schedules/runner.py",
+            "tmp-cleanup",
+            "--",
+            "--apply",
+            "--minutes",
+            "10",
+        ],
+        environment={"PATH": "/usr/bin:/bin", "HOME": "/home/tester", "TMPDIR": "/tmp"},
+        description="tools-installer background /tmp cleanup",
+    ) == (
         "[Unit]\n"
         "Description=tools-installer background /tmp cleanup\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
         'ExecStart="/home/tester/.local/bin/uv" "run" "--no-project" "--script" '
-        '"/home/tester/.local/bin/tools-installer-prune-daemon" "--script" '
-        '"/home/tester/tools-installer/scripts/prune-tmp-linux.sh" "--log" '
-        '"/home/tester/.local/state/tools-installer/prune-daemon.log" "--cap-bytes" '
-        '"262144" "--" "--apply" "--minutes" "10"\n'
+        '"/home/tester/.local/share/tools-installer/schedules/runner.py" "tmp-cleanup" '
+        '"--" "--apply" "--minutes" "10"\n'
         'Environment="PATH=/usr/bin:/bin"\n'
         'Environment="HOME=/home/tester"\n'
         'Environment="TMPDIR=/tmp"\n'
@@ -1249,11 +1132,16 @@ def test_default_renders_are_unchanged() -> None:
         (["/abs/uv", "a%b"], _SCHEDULE_ENV),
         (["/abs/uv", "a$b"], _SCHEDULE_ENV),
         (["/abs/uv", "a\nb"], _SCHEDULE_ENV),
+        (["/abs/uv", "a\rb"], _SCHEDULE_ENV),
         (["relative/uv", "run"], _SCHEDULE_ENV),
+        (["", "run"], _SCHEDULE_ENV),
         ([], _SCHEDULE_ENV),
         (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "HOME": 'h"x'}),
         (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "HOME": "relative"}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "HOME": ""}),
         (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "TMPDIR": "relative"}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "TMPDIR": ""}),
+        (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "PATH": "/usr/bin:${HOME}/bin"}),
         (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "PATH": ""}),
         (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "PATH": "/a%b"}),
         (_SCHEDULE_ARGV, {**_SCHEDULE_ENV, "LD_PRELOAD": "/x.so"}),
@@ -1270,6 +1158,52 @@ def test_render_exec_service_rejects_bad_input(
 def test_render_timer_rejects_a_calendar_outside_the_hour_list_form(on_calendar: str) -> None:
     with pytest.raises(DaemonScheduleError):
         systemd_daemon.render_timer(on_calendar=on_calendar)
+
+
+def test_render_exec_service_exec_start_order_and_quoting() -> None:
+    text = systemd_daemon.render_exec_service(
+        argv=[*_SCHEDULE_ARGV, "a path with spaces"], environment=_SCHEDULE_ENV, description="d"
+    )
+    assert "[Service]" in text
+    assert "Type=oneshot" in text
+    exec_line = next(line for line in text.splitlines() if line.startswith("ExecStart="))
+    assert exec_line == (
+        'ExecStart="/abs/uv" "run" "--no-project" "--script" "/abs/runner.py" "update" '
+        '"claude" "a path with spaces"'
+    )
+
+
+def test_render_exec_service_environment_lines_are_single_quoted_tokens() -> None:
+    lines = systemd_daemon.render_exec_service(
+        argv=_SCHEDULE_ARGV,
+        environment={**_SCHEDULE_ENV, "PATH": "/usr/bin:/bin with space"},
+        description="d",
+    ).splitlines()
+    assert 'Environment="PATH=/usr/bin:/bin with space"' in lines
+    assert 'Environment="HOME=/h"' in lines
+    assert 'Environment="TMPDIR=/t"' in lines
+
+
+def test_write_unit_pair_writes_both_files_at_0o644(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    systemd_daemon.write_unit_pair(
+        unit_dir, basename=_SCHEDULE_BASENAME, service_text="s\n", timer_text="t\n"
+    )
+    service_path, timer_path = systemd_daemon.unit_paths(unit_dir, basename=_SCHEDULE_BASENAME)
+    assert oct(service_path.stat().st_mode)[-3:] == "644"
+    assert oct(timer_path.stat().st_mode)[-3:] == "644"
+
+
+def test_a_rejected_render_creates_no_directory_and_no_file(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    with pytest.raises(DaemonScheduleError):
+        service_text = systemd_daemon.render_exec_service(
+            argv=["relative/uv"], environment=_SCHEDULE_ENV, description="d"
+        )
+        systemd_daemon.write_unit_pair(
+            unit_dir, basename=_SCHEDULE_BASENAME, service_text=service_text, timer_text="t\n"
+        )
+    assert not unit_dir.exists()
 
 
 def test_render_rejects_bad_input_before_writing(tmp_path: Path) -> None:

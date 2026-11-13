@@ -4,7 +4,8 @@
 pins the CONTRACT the Task 2 extraction (scripts/lib/prune-tmp-common.sh) was
 not allowed to break: flag grammar, broad-path refusal, age validation,
 target-family matching, depth-1 traversal, and the `deleted: N` summary line
-`installer.daemon.last_run_summary` parses. Task 2 then extracted the shared
+the schedule runner logs as `ok: deleted N` (read back by
+`schedules.read_last_runs` and `last_cell`). Task 2 then extracted the shared
 core and updated exactly the two assertions licensed below -- every other
 assertion in this file is byte-identical to what Task 1 first pinned against
 the unmodified script.

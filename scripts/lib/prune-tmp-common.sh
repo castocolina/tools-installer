@@ -166,8 +166,8 @@ _prune_common_bytes_free() {
 }
 
 # _prune_common_emit_deleted N
-# Prints the exact "deleted: N" line installer.daemon.last_run_summary
-# parses for the Policies "last run" detail. The ONLY line this extraction
+# Prints the exact "deleted: N" line the schedule runner turns into the
+# logged result `ok: deleted N`. The ONLY line this extraction
 # guarantees identical in shape from both wrappers -- everything around it
 # (headers, breakdowns, disk-free stats) stays wrapper-owned.
 _prune_common_emit_deleted() {

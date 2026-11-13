@@ -49,8 +49,8 @@ Target (depth 1, mtime older than N minutes):
   .{16 hex}-{8 digit}.so    Bun runtime-transpiler-cache shared objects
   .{16 hex}-{8 digit}.node  Bun native addons
 
-Prints a final "deleted: N" line, the exact prefix
-installer.daemon.last_run_summary parses for the Policies "last run" detail.
+Prints a final "deleted: N" line, the exact prefix the schedule runner
+turns into the logged result `ok: deleted N` that the Schedules view reads.
 EOF
 }
 

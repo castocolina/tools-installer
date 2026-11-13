@@ -2,7 +2,8 @@
 
 Mirrors tests/test_install_sh.py's subprocess-against-real-script convention
 -- the script's own contract (broad-path refusal, age-boundary matching, the
-exact "deleted: N" line installer.daemon.last_run_summary parses) can only be
+exact "deleted: N" line the schedule runner logs as `ok: deleted N`, which
+schedules.read_last_runs and last_cell then read) can only be
 proven by actually running it, not by re-deriving its regex in Python.
 
 find/rm are real (never stubbed): every path this file exercises is created
