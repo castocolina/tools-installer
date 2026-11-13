@@ -24,8 +24,18 @@ IMAGE_ARCH=docker.io/library/archlinux:latest
 # raw github_release (category data). A constant: never interpolated from input.
 RECEIPT_PROBE_TOOL=yq
 RECEIPT_PROBE_CATEGORY=data
-# The checkout run_setup_as_tester already cds into; the host test overrides it.
-TESTER_WORKSPACE=/home/tester/workspace
+# The user every tester helper runs as, its home and the checkout run_setup_as_tester cds into.
+# The nested target (cmd_nested) sets all three for the nested image's rootless user; the host
+# test overrides them too.
+TESTER_USER=tester
+TESTER_HOME=/home/tester
+TESTER_WORKSPACE=$TESTER_HOME/workspace
+# The nested-podman target (orchestrator only, D-18): image, outer container and its rootless user.
+NESTED_IMAGE=quay.io/podman/stable:latest
+NESTED_CONTAINER_NAME=tools-installer-e2e-nested
+NESTED_USER=podman
+# A tiny image the inner podman pulls, runs and removes to prove nested podman works.
+NESTED_PROBE_IMAGE=quay.io/podman/hello:latest
 # Homebrew binary evaluated by tester functions; host tests replace it with a stub.
 BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
 # herdr's plugin id (24-07) and where its probe keeps a copy of the binary for the after-uninstall check.
@@ -65,6 +75,14 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           Tears the container down (rm -f) once all three succeed.
   all                     bootstrap --replace, pass1, pass2, then remove the
                           container whatever the outcome (what `make e2e` runs).
+  nested                  Orchestrator only, a time-boxed spike: start a disposable
+                          quay.io/podman/stable container (--device /dev/fuse,
+                          label=disable, never privileged), install zsh there and run the
+                          terminal category as its rootless user for the one real Alacritty
+                          build and herdr's default_shell write. Prints
+                          TRACER_NESTED_PODMAN_OK / _BUILD_OK / _UNINSTALL_OK /
+                          _HERDR_SHELL_OK / _HERDR_REVERT_OK / _TEARDOWN_OK, or
+                          TRACER_NESTED_INFEASIBLE step=... when nested podman cannot run.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -111,7 +129,7 @@ exec_root() {
 # Login-shell as tester, never a TTY. $1 is the command string, expanded by
 # the container shell only (callers must single-quote or escape host $()).
 exec_tester() {
-  ct exec "$CONTAINER_NAME" su - tester -c "$1"
+  ct exec "$CONTAINER_NAME" su - "$TESTER_USER" -c "$1"
 }
 
 ensure_phase_dir() {
@@ -181,30 +199,35 @@ install_root_prereqs() {
 }
 
 create_tester() {
-  if exec_root id tester >/dev/null 2>&1; then
-    printf 'user tester already exists\n'
+  if exec_root id "$TESTER_USER" >/dev/null 2>&1; then
+    printf 'user %s already exists\n' "$TESTER_USER"
   else
-    # -s /bin/bash on every distro: Debian's useradd defaults to /bin/sh, where the probes'
-    # `[[`, pipefail and the ~/.bash_profile PATH wiring would fail.
-    exec_root useradd -m -s /bin/bash tester
+    # With the defaults this is `useradd -m -s /bin/bash tester`: -s /bin/bash on every distro,
+    # because Debian's useradd defaults to /bin/sh, where the probes' `[[`, pipefail and the
+    # ~/.bash_profile PATH wiring would fail.
+    exec_root useradd -m -s /bin/bash "$TESTER_USER"
   fi
-  exec_root bash -c 'printf "%s\n" "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester && chmod 440 /etc/sudoers.d/tester'
+  exec_root bash -c "printf \"%s\n\" \"${TESTER_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${TESTER_USER} && chmod 440 /etc/sudoers.d/${TESTER_USER}"
   exec_root mkdir -p /home/linuxbrew/.linuxbrew
-  exec_root chown -R tester:tester /home/linuxbrew
+  exec_root chown -R "${TESTER_USER}:${TESTER_USER}" /home/linuxbrew
 }
 
 # Stream the working tree git sees (tracked + untracked, never ignored) into
 # the workspace. Ignored caches (graphify-out/, .codegraph/, .venv/) hold
 # owner-only files tester cannot read, and they are not the product anyway.
 stream_worktree() {
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
   git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard \
     | while IFS= read -r -d '' f; do [[ -e "$REPO_ROOT/$f" ]] && printf '%s\0' "$f"; done \
     | tar -C "$REPO_ROOT" --null -T - -cf - \
-    | ct exec -i "$CONTAINER_NAME" su - tester -c 'mkdir -p /home/tester/workspace && tar -C /home/tester/workspace -xf -'
+    | ct exec -i "$CONTAINER_NAME" su - "$TESTER_USER" -c "mkdir -p ${workspace} && tar -C ${workspace} -xf -"
 }
 
 copy_workspace() {
-  exec_tester 'rm -rf /home/tester/workspace'
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  exec_tester "rm -rf ${workspace}"
   stream_worktree
 }
 
@@ -241,28 +264,36 @@ fi
 '
 }
 
-bootstrap_homebrew_and_uv() {
-  # shellcheck disable=SC2016 # $() and $HOME expand in the tester's shell
+bootstrap_uv() {
+  # shellcheck disable=SC2016 # $HOME expands in the tester's shell
   exec_tester 'set -euo pipefail
-if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-fi
 if [[ ! -x "$HOME/.local/bin/uv" ]] && ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 '
+}
+
+bootstrap_homebrew_and_uv() {
+  # shellcheck disable=SC2016 # $() expands in the tester's shell
+  exec_tester 'set -euo pipefail
+if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+'
+  bootstrap_uv
   write_tester_path
 }
 
 sync_workspace() {
-  # shellcheck disable=SC2016 # $() and $HOME expand in the tester's shell
-  exec_tester 'set -euo pipefail
-eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-export PATH="$HOME/.local/bin:$PATH"
-cd /home/tester/workspace
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+cd ${workspace}
 uv sync
-uv run --isolated --no-dev python -c "import installer"
-'
+uv run --isolated --no-dev python -c \"import installer\"
+"
 }
 
 print_harness_ready() {
@@ -427,7 +458,8 @@ echo GSD_PROBE_DONE')"; then
 }
 
 run_setup_as_tester() {
-  local args="$1"
+  local args="$1" workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
   # COLUMNS is forced wide so Rich's non-tty Console (default width 80) does
   # not wrap ordinary transcript output. Outcome rows can still fold at the
   # renderer's 100-cell budget; accumulate_summaries joins their continuations.
@@ -438,7 +470,7 @@ export COLUMNS=2000
 # Container has no FUSE device; extract-and-run stands in for a desktop that mounts AppImages.
 export APPIMAGE_EXTRACT_AND_RUN=1
 if [[ -r \"\$HOME/.github-token\" ]]; then export GITHUB_TOKEN=\"\$(cat \"\$HOME/.github-token\")\"; fi
-cd /home/tester/workspace
+cd ${workspace}
 uv run --isolated --no-dev setup.py ${args}
 "
 }
@@ -450,7 +482,7 @@ install_github_token() {
   local token="${GITHUB_TOKEN:-}"
   [[ -n "$token" ]] || token="$(gh auth token 2>/dev/null || true)"
   [[ -n "$token" ]] || return 0
-  printf '%s' "$token" | ct exec -i "$CONTAINER_NAME" su - tester -c 'umask 077; cat > ~/.github-token'
+  printf '%s' "$token" | ct exec -i "$CONTAINER_NAME" su - "$TESTER_USER" -c 'umask 077; cat > ~/.github-token'
 }
 
 accumulate_summaries() {
@@ -678,7 +710,7 @@ cmd_pass1() {
 # The tester's HOME-relative listing, workspace pruned, empty dirs skipped (shortcut: a surviving
 # empty must-clear or receipt dir goes unreported; list dirs to close it). `~` is expanded by the container shell.
 home_listing() {
-  local workspace="${TESTER_WORKSPACE#/home/tester/}"
+  local workspace="${TESTER_WORKSPACE#"$TESTER_HOME"/}"
   exec_tester 'cd ~ && find . -mindepth 1 \( -path "./'"$workspace"'" -prune \) -o \( -type d -empty \) -o -print | sed "s|^\./||" | LC_ALL=C sort'
 }
 
@@ -1455,6 +1487,304 @@ cmd_all() {
   cat "$PHASE_DIR/pass2-transcript.log"
 }
 
+# --- nested target (D-18, D-29): orchestrator only, a time-boxed spike --------------------------
+# One disposable quay.io/podman/stable container runs the installer as that image's rootless user
+# through the same tester helpers (the user, home and workspace are parameters), with zsh installed,
+# for the one real Alacritty build (distrobox + inner podman) and herdr's default_shell write.
+
+# The five HOME-relative paths Alacritty's receipt holds (24-01).
+nested_alacritty_paths() {
+  printf '%s\n' .local/bin/alacritty \
+    .local/share/applications/Alacritty.desktop \
+    .local/share/icons/hicolor/scalable/apps/Alacritty.svg \
+    .terminfo/a/alacritty \
+    .terminfo/a/alacritty-direct
+}
+
+nested_start() {
+  ct rm -f "$NESTED_CONTAINER_NAME" >/dev/null 2>&1 || true
+  # label=disable: SELinux on the host blocks the nested podman store otherwise; /dev/fuse is for
+  # fuse-overlayfs. Never privileged.
+  ct run -d --name "$NESTED_CONTAINER_NAME" --device /dev/fuse --security-opt label=disable \
+    "$NESTED_IMAGE" sleep infinity >/dev/null
+}
+
+# EXIT trap: the outer container goes on every outcome.
+nested_teardown() {
+  ct rm -f "$NESTED_CONTAINER_NAME" >/dev/null 2>&1 || true
+  printf 'TRACER_NESTED_TEARDOWN_OK\n'
+}
+
+# $1 names the step, $2 is the failing command's output; only its first non-empty line is reported.
+nested_infeasible() {
+  local detail
+  detail="$(printf '%s\n' "$2" | sed -n '/./{p;q;}')"
+  printf 'TRACER_NESTED_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
+}
+
+# Root installs the box's tools (curl and tar for the uv bootstrap and the workspace stream), the
+# workspace is streamed and uv bootstrapped for the nested user through the shared helpers.
+nested_prepare() {
+  exec_root dnf install -y distrobox desktop-file-utils ncurses git python3 zsh curl tar || return 1
+  install_github_token || return 1
+  copy_workspace || return 1
+  bootstrap_uv || return 1
+  write_tester_path || return 1
+  sync_workspace || return 1
+}
+
+# Inner podman works or it does not: either way the run goes on to the installer step.
+nested_probe_podman() {
+  local out
+  if ! out="$(exec_tester 'podman info >/dev/null' 2>&1)"; then
+    nested_infeasible podman-info "$out"
+    return 0
+  fi
+  if ! out="$(exec_tester "podman run --rm ${NESTED_PROBE_IMAGE} true && podman rmi ${NESTED_PROBE_IMAGE}" 2>&1)"; then
+    nested_infeasible podman-run "$out"
+    return 0
+  fi
+  printf 'TRACER_NESTED_PODMAN_OK\n'
+}
+
+# $1 is the install transcript. Returns 0 when Alacritty installed, 2 (infeasible: the box could
+# not be created) or 1 (a product failure, or no Alacritty row at all).
+nested_classify_alacritty() {
+  local row word detail
+  row="$(sed -nE 's/^[^ ]+ +alacritty +(installed|failed|checksum mismatch|crashed|dependency failed|not attempted|blocked|manual|skipped|updated|repaired|reconfigured|reinstalled)( — (.*))?$/\1|\3/p' "$1" | tail -n 1)"
+  if [[ -z "$row" ]]; then
+    printf 'TRACER_NESTED_BUILD_FAILED detail=no alacritty row in the install output\n'
+    return 1
+  fi
+  word="${row%%|*}"
+  detail="${row#*|}"
+  case "$word" in
+    installed) return 0 ;;
+    failed)
+      if [[ "$detail" == *"distrobox create"* ]]; then
+        nested_infeasible distrobox-create "$detail"
+        return 2
+      fi
+      ;;
+  esac
+  printf 'TRACER_NESTED_BUILD_FAILED detail=%s%s\n' "$word" "${detail:+ — $detail}"
+  return 1
+}
+
+# --categories is the production flag; the terminal category also installs kitty, WezTerm and
+# herdr, which is how herdr's default_shell write gets proven. Only the Alacritty and herdr rows
+# are judged; the others' outcomes are ignored here.
+nested_install() {
+  local tmp status=0 rc=0
+  tmp="$(mktemp)"
+  set +e
+  run_setup_as_tester "--categories terminal --yes" >"$tmp" 2>&1
+  status=$?
+  set -e
+  cat "$tmp"
+  cat "$tmp" >"$PHASE_DIR/nested-install.log"
+  nested_classify_alacritty "$tmp" || rc=$?
+  rm -f "$tmp"
+  if [[ "$status" -gt 1 && "$rc" -eq 0 ]]; then
+    printf 'TRACER_NESTED_BUILD_FAILED detail=setup exit %s\n' "$status"
+    rc=1
+  fi
+  return "$rc"
+}
+
+# After a real build: the receipt holds the five artifacts, the desktop entry validates, terminfo
+# resolves with and without TERMINFO set (SPEC R3), and the inner podman holds no container or image.
+nested_artifacts_ok() {
+  local py out workspace line failed=0 done=0 seen=" " path desktop="" t1="" t2=""
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='from pathlib import Path
+from installer import receipts
+home = Path.home()
+receipt = receipts.read("alacritty")
+for artifact in (receipt.artifacts if receipt else ()):
+    if artifact.path.is_relative_to(home):
+        print("P " + artifact.path.relative_to(home).as_posix())
+'
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py")
+if desktop-file-validate \"\$HOME/.local/share/applications/Alacritty.desktop\" >/dev/null 2>&1; then echo 'V ok'; else echo 'V fail'; fi
+if infocmp -A \"\$HOME/.terminfo\" alacritty >/dev/null 2>&1; then echo 'T1 ok'; else echo 'T1 fail'; fi
+if env -u TERMINFO -u TERMINFO_DIRS infocmp alacritty >/dev/null 2>&1; then echo 'T2 ok'; else echo 'T2 fail'; fi
+podman ps -a -q | sed 's/^/C /'
+podman images -q | sed 's/^/M /'
+echo D
+")" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "P "*) seen+="${line#P } " ;;
+      "V "*) desktop="${line#V }" ;;
+      "T1 "*) t1="${line#T1 }" ;;
+      "T2 "*) t2="${line#T2 }" ;;
+      "C "*) printf 'TRACER_NESTED_CONTAINER_LEFT id=%s\n' "${line#C }"; failed=1 ;;
+      "M "*) printf 'TRACER_NESTED_IMAGE_LEFT id=%s\n' "${line#M }"; failed=1 ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  while IFS= read -r path; do
+    if [[ "$seen" != *" $path "* ]]; then
+      printf 'TRACER_NESTED_ARTIFACT_MISSING path=%s\n' "$path"
+      failed=1
+    fi
+  done < <(nested_alacritty_paths)
+  if [[ "$desktop" != ok ]]; then printf 'TRACER_NESTED_DESKTOP_INVALID\n'; failed=1; fi
+  if [[ "$t1" != ok ]]; then printf 'TRACER_NESTED_TERMINFO_FAILED step=infocmp-A\n'; failed=1; fi
+  if [[ "$t2" != ok ]]; then printf 'TRACER_NESTED_TERMINFO_FAILED step=infocmp-env\n'; failed=1; fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NESTED_BUILD_OK\n'
+}
+
+# herdr's config.toml default_shell, read as the nested user: `DS <value>` when the key is set,
+# `L <value>` per default-shell ledger entry, `W <path>` for the zsh the installer itself resolves.
+nested_herdr_facts() {
+  local py workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='import json, tomllib
+from pathlib import Path
+from installer import postinstall, receipts
+home = Path.home()
+config = home / ".config" / "herdr" / "config.toml"
+doc = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+terminal = doc.get("terminal")
+shell = terminal.get("default_shell") if isinstance(terminal, dict) else None
+if shell is not None:
+    print("DS " + str(shell))
+ledger = receipts.config_ledger_dir() / "herdr.json"
+if ledger.exists():
+    for entry in json.loads(ledger.read_text(encoding="utf-8")).get("entries", []):
+        if entry["setting"] == "default-shell":
+            print("L " + str(entry["value"]))
+print("W " + (postinstall.which_with_brew("zsh") or ""))
+'
+  exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py")
+echo D
+"
+}
+
+# After the install: default_shell equals the zsh the installer resolves, and the ledger recorded it.
+nested_herdr_shell_ok() {
+  local out line shell=none ledger="" expected="" done=0
+  out="$(nested_herdr_facts)" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "DS "*) shell="${line#DS }" ;;
+      "L "*) ledger="${line#L }" ;;
+      "W "*) expected="${line#W }" ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -z "$expected" || "$shell" != "$expected" ]]; then
+    printf 'TRACER_NESTED_HERDR_SHELL_MISMATCH found=%s expected=%s\n' "$shell" "$expected"
+    return 1
+  fi
+  if [[ "$ledger" != "$expected" ]]; then
+    printf 'TRACER_NESTED_HERDR_SHELL_UNRECORDED expected=%s\n' "$expected"
+    return 1
+  fi
+  printf 'TRACER_NESTED_HERDR_SHELL_OK\n'
+}
+
+# After the uninstall: the key is gone from herdr's kept config.toml.
+nested_herdr_revert_ok() {
+  local out line shell="" done=0
+  out="$(nested_herdr_facts)" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "DS "*) shell="${line#DS }" ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -n "$shell" ]]; then
+    printf 'TRACER_NESTED_HERDR_REVERT_LEFT found=%s\n' "$shell"
+    return 1
+  fi
+  printf 'TRACER_NESTED_HERDR_REVERT_OK\n'
+}
+
+nested_uninstall_run() {
+  local tmp status=0
+  tmp="$(mktemp)"
+  set +e
+  run_setup_as_tester "--uninstall --yes" >"$tmp" 2>&1
+  status=$?
+  set -e
+  cat "$tmp"
+  cat "$tmp" >"$PHASE_DIR/nested-uninstall.log"
+  rm -f "$tmp"
+  if [[ "$status" -ne 0 ]]; then
+    printf 'TRACER_NESTED_UNINSTALL_INCOMPLETE exit=%s\n' "$status"
+    return 1
+  fi
+}
+
+# None of the five paths and no ~/.terminfo/a may remain after the uninstall.
+nested_uninstall_ok() {
+  local out line paths left=0 done=0
+  paths="$(nested_alacritty_paths | paste -sd' ' -)"
+  out="$(exec_tester "cd ~ && for p in ${paths} .terminfo/a; do if [ -e \"\$p\" ] || [ -L \"\$p\" ]; then echo \"L \$p\"; fi; done; echo D")" \
+    || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "L "*) printf 'TRACER_NESTED_UNINSTALL_LEFT path=%s\n' "${line#L }"; left=1 ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  [[ "$left" -eq 0 ]] || return 1
+  printf 'TRACER_NESTED_UNINSTALL_OK\n'
+}
+
+cmd_nested() {
+  CONTAINER_NAME="$NESTED_CONTAINER_NAME"
+  TESTER_USER="$NESTED_USER"
+  TESTER_HOME="/home/$NESTED_USER"
+  TESTER_WORKSPACE="$TESTER_HOME/workspace"
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-nested"
+  # No Homebrew in this box: a no-op stands in so the tester helpers' shellenv evals expand to nothing.
+  BREW_BIN=/bin/true
+  trap nested_teardown EXIT
+  ensure_phase_dir
+  local failed=0 build=0
+  nested_start || return 1
+  nested_prepare || return 1
+  nested_probe_podman
+  nested_install || build=$?
+  case "$build" in
+    0) nested_artifacts_ok || failed=1 ;;
+    2) ;; # infeasible: reported by nested_infeasible, not a product failure
+    *) failed=1 ;;
+  esac
+  nested_herdr_shell_ok || failed=1
+  nested_uninstall_run || failed=1
+  nested_uninstall_ok || failed=1
+  nested_herdr_revert_ok || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -1482,6 +1812,7 @@ main() {
     pass2) cmd_pass2 "$@" ;;
     resync) cmd_resync "$@" ;;
     all) cmd_all "$@" ;;
+    nested) cmd_nested "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

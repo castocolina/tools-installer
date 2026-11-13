@@ -40,6 +40,8 @@ _FUNCTIONS = (
 _CONSTANTS = (
     "RECEIPT_PROBE_TOOL",
     "RECEIPT_PROBE_CATEGORY",
+    "TESTER_USER",
+    "TESTER_HOME",
     "TESTER_WORKSPACE",
     "BREW_BIN",
 )
@@ -1565,6 +1567,9 @@ def _distro_harness() -> str:
     parts = [
         'REPO_ROOT="$SCRATCH/repo"',
         *(f"IMAGE_{name.upper()}={_constant(f'IMAGE_{name.upper()}', text)}" for name in _DISTROS),
+        *(f"{name}={_constant(name, text)}" for name in ("TESTER_USER", "TESTER_HOME")),
+        'TESTER_WORKSPACE="$TESTER_HOME/workspace"',
+        _assign("BREW_BIN", "/nonexistent/brew"),
         "set -euo pipefail",
         *(_function(name, text) for name in names),
         _distro_stub_ct(),
@@ -2195,3 +2200,445 @@ def test_settings_revert_tolerates_herdr_residue_only_in_created_files(
         created=False,
     )
     assert foreign.returncode == 0, foreign.stdout + foreign.stderr
+
+
+# --- Phase 24-04 task 3: tester user parameters and the nested-podman target ----------------
+
+_TESTER_NAMES = ("exec_tester", "stream_worktree", "copy_workspace", "run_setup_as_tester")
+_NESTED_OVERRIDE = (
+    "TESTER_USER=podman\nTESTER_HOME=/home/podman\nTESTER_WORKSPACE=/home/podman/workspace\n"
+    "CONTAINER_NAME=tools-installer-e2e-nested\n"
+)
+
+
+def _tester_script(scratch: Path, override: str = "") -> str:
+    """The tester helpers over a recording `ct`; git and tar are stubbed (R1-20)."""
+    text = _script_text()
+    parts = [
+        _distro_harness(),
+        *(_function(name, text) for name in _TESTER_NAMES[1:]),
+        "git() { :; }",
+        "tar() { :; }",
+        override,
+    ]
+    return "\n".join(parts)
+
+
+def test_default_tester_argv_is_unchanged(tmp_path: Path) -> None:
+    """R1-21: with the defaults every recorded argv is today's; the nested user changes it."""
+    default = tmp_path / "default"
+    default.mkdir()
+    script = (
+        _tester_script(default) + "\nexec_tester x\nstream_worktree\nrun_setup_as_tester '--x'\n"
+    )
+    result = _run(script, default)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (default / "calls").read_text(encoding="utf-8")
+    assert "exec tools-installer-e2e-fedora su - tester -c x\n" in calls
+    assert (
+        "exec -i tools-installer-e2e-fedora su - tester -c "
+        "mkdir -p /home/tester/workspace && tar -C /home/tester/workspace -xf -\n"
+    ) in calls
+    assert "cd /home/tester/workspace\n" in calls
+
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    script = (
+        _tester_script(nested, _NESTED_OVERRIDE)
+        + "\nexec_tester x\nstream_worktree\nrun_setup_as_tester '--x'\n"
+    )
+    result = _run(script, nested)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (nested / "calls").read_text(encoding="utf-8")
+    assert "exec tools-installer-e2e-nested su - podman -c x\n" in calls
+    assert (
+        "exec -i tools-installer-e2e-nested su - podman -c "
+        "mkdir -p /home/podman/workspace && tar -C /home/podman/workspace -xf -\n"
+    ) in calls
+    assert "cd /home/podman/workspace\n" in calls
+    assert "/home/tester" not in calls
+
+
+def test_create_tester_follows_the_tester_user(tmp_path: Path) -> None:
+    """The sudoers file and the brew chown name the parameterized user; defaults are unchanged."""
+    default = tmp_path / "default"
+    default.mkdir()
+    run = _run(_tester_script(default) + "\ncreate_tester\n", default)
+    assert run.returncode == 0, run.stderr
+    calls = (default / "calls").read_text(encoding="utf-8")
+    assert "tester ALL=(ALL) NOPASSWD:ALL" in calls
+    assert "/etc/sudoers.d/tester && chmod 440 /etc/sudoers.d/tester" in calls
+    assert "chown -R tester:tester /home/linuxbrew" in calls
+
+
+_NESTED_CONSTANTS = ("NESTED_IMAGE", "NESTED_CONTAINER_NAME", "NESTED_USER", "NESTED_PROBE_IMAGE")
+_NESTED_STEPS = (
+    "nested_start",
+    "nested_prepare",
+    "nested_probe_podman",
+    "nested_install",
+    "nested_artifacts_ok",
+    "nested_herdr_shell_ok",
+    "nested_uninstall_run",
+    "nested_uninstall_ok",
+    "nested_herdr_revert_ok",
+)
+
+
+def _nested_script(call: str, *, real: Sequence[str] = (), stubs: str = "") -> str:
+    """cmd_nested's helpers over a recording `ct`; a step not named in `real` prints its name."""
+    text = _script_text()
+    names = (
+        "nested_teardown",
+        "nested_infeasible",
+        "nested_alacritty_paths",
+        "nested_herdr_facts",
+        "cmd_nested",
+        *real,
+    )
+    steps = "\n".join(
+        f'{name}() {{ printf "STEP {name}\\n"; }}' for name in _NESTED_STEPS if name not in real
+    )
+    parts = [
+        _distro_harness(),
+        *(f"{name}={_constant(name, text)}" for name in _NESTED_CONSTANTS),
+        *(_function(name, text) for name in dict.fromkeys(names)),
+        steps,
+        stubs,
+        call,
+    ]
+    return "\n".join(parts)
+
+
+def test_nested_outer_container_flags(tmp_path: Path) -> None:
+    """D-18: the outer box gets /dev/fuse and label=disable, never a privileged flag."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_nested_script("nested_start", real=("nested_start",)), scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_lines = [call for call in _calls(scratch) if call.startswith("run ")]
+    assert run_lines == [
+        "run -d --name tools-installer-e2e-nested --device /dev/fuse "
+        "--security-opt label=disable quay.io/podman/stable:latest sleep infinity"
+    ]
+    assert "privileged" not in " ".join(_calls(scratch))
+
+
+def test_nested_teardown_runs_on_failure(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _nested_script("cmd_nested || true", stubs="nested_install() { return 1; }")
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "rm -f tools-installer-e2e-nested" in _calls(scratch)
+    assert "TRACER_NESTED_TEARDOWN_OK" in result.stdout
+    # The nested run is told apart from a distro run by its own container, user and artifact dir.
+    assert "STEP nested_start" in result.stdout
+
+
+def test_nested_cmd_fails_when_a_step_fails(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _nested_script(
+        'rc=0; cmd_nested || rc=$?; printf "RC=%s\\n" "$rc"', stubs="nested_install() { return 1; }"
+    )
+    failing = _run(script, scratch)
+    assert "RC=1" in failing.stdout
+    assert "STEP nested_artifacts_ok" not in failing.stdout
+    passing = _run(
+        _nested_script('rc=0; cmd_nested || rc=$?; printf "RC=%s\\n" "$rc"'), tmp_path / "ok"
+    )
+    assert "RC=0" in passing.stdout
+    steps = [line for line in passing.stdout.splitlines() if line.startswith("STEP ")]
+    assert steps == [
+        "STEP nested_start",
+        "STEP nested_prepare",
+        "STEP nested_probe_podman",
+        "STEP nested_install",
+        "STEP nested_artifacts_ok",
+        "STEP nested_herdr_shell_ok",
+        "STEP nested_uninstall_run",
+        "STEP nested_uninstall_ok",
+        "STEP nested_herdr_revert_ok",
+    ]
+
+
+_ALACRITTY_PATHS = (
+    ".local/bin/alacritty",
+    ".local/share/applications/Alacritty.desktop",
+    ".local/share/icons/hicolor/scalable/apps/Alacritty.svg",
+    ".terminfo/a/alacritty",
+    ".terminfo/a/alacritty-direct",
+)
+_ARTIFACT_FACTS = (*(f"P {path}" for path in _ALACRITTY_PATHS), "V ok", "T1 ok", "T2 ok")
+
+
+def _fact_stub(*lines: str) -> str:
+    return _assign("FACTS", "\n".join(lines)) + '\nexec_tester() { printf "%s\\n" "$FACTS"; }\n'
+
+
+def test_nested_artifact_check(tmp_path: Path) -> None:
+    def check(name: str, *lines: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        script = _nested_script(
+            "nested_artifacts_ok", real=("nested_artifacts_ok",), stubs=_fact_stub(*lines, "D")
+        )
+        return _run(script, scratch)
+
+    ok = check("ok", *_ARTIFACT_FACTS)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NESTED_BUILD_OK"]
+    image = check("image", *_ARTIFACT_FACTS, "M sha256abc")
+    assert image.returncode != 0
+    assert image.stdout.splitlines() == ["TRACER_NESTED_IMAGE_LEFT id=sha256abc"]
+    box = check("box", *_ARTIFACT_FACTS, "C abc123")
+    assert box.returncode != 0
+    assert "TRACER_NESTED_CONTAINER_LEFT id=abc123" in box.stdout
+    leaf = check(
+        "leaf", *(fact for fact in _ARTIFACT_FACTS if not fact.endswith("alacritty-direct"))
+    )
+    assert leaf.returncode != 0
+    assert leaf.stdout.splitlines() == [
+        "TRACER_NESTED_ARTIFACT_MISSING path=.terminfo/a/alacritty-direct"
+    ]
+    for failing, expected in (
+        ("V fail", "TRACER_NESTED_DESKTOP_INVALID"),
+        ("T1 fail", "TRACER_NESTED_TERMINFO_FAILED step=infocmp-A"),
+        ("T2 fail", "TRACER_NESTED_TERMINFO_FAILED step=infocmp-env"),
+    ):
+        facts = tuple(f for f in _ARTIFACT_FACTS if f[:2] != failing[:2])
+        result = check(failing.replace(" ", "-"), *facts, failing)
+        assert result.returncode != 0
+        assert expected in result.stdout.splitlines()
+    cut = _run(
+        _nested_script(
+            "nested_artifacts_ok", real=("nested_artifacts_ok",), stubs=_fact_stub(*_ARTIFACT_FACTS)
+        ),
+        tmp_path / "cut",
+    )
+    assert cut.returncode != 0
+    assert "TRACER_NESTED_PROBE_FAILED" in cut.stdout
+
+
+def test_nested_infeasible_is_distinct(tmp_path: Path) -> None:
+    """An inner podman that cannot run is infeasibility, not a product failure; the run goes on."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    stubs = (
+        "exec_tester() { case \"$1\" in *'podman info'*) "
+        "printf 'Error: no newuidmap\\nsecond line\\n'; return 1 ;; esac; }\n"
+        'nested_install() { printf "INSTALLER_RAN\\n"; }\n'
+    )
+    script = _nested_script("cmd_nested || true", real=("nested_probe_podman",), stubs=stubs)
+    result = _run(script, scratch)
+    lines = result.stdout.splitlines()
+    assert "TRACER_NESTED_INFEASIBLE step=podman-info detail=Error: no newuidmap" in lines
+    assert not any("TRACER_NESTED_BUILD_FAILED" in line for line in lines)
+    assert "TRACER_NESTED_PODMAN_OK" not in lines
+    assert lines.index("INSTALLER_RAN") > lines.index(
+        "TRACER_NESTED_INFEASIBLE step=podman-info detail=Error: no newuidmap"
+    )
+    ok = _run(
+        _nested_script(
+            "nested_probe_podman",
+            real=("nested_probe_podman",),
+            stubs="exec_tester() { return 0; }\n",
+        ),
+        tmp_path / "ok",
+    )
+    assert ok.stdout.splitlines() == ["TRACER_NESTED_PODMAN_OK"]
+    run_step = _run(
+        _nested_script(
+            "nested_probe_podman",
+            real=("nested_probe_podman",),
+            stubs=(
+                "exec_tester() { case \"$1\" in *'podman run'*) "
+                "echo 'pull failed'; return 1;; esac; }\n"
+            ),
+        ),
+        tmp_path / "run",
+    )
+    assert run_step.stdout.splitlines() == [
+        "TRACER_NESTED_INFEASIBLE step=podman-run detail=pull failed"
+    ]
+
+
+def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
+    def classify(name: str, row: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        fixture = scratch / "install.txt"
+        fixture.write_text(f"Install plan — 1 install\n○ alacritty  will install\n{row}\n")
+        script = _nested_script(
+            f"nested_classify_alacritty {shlex.quote(str(fixture))}",
+            real=("nested_classify_alacritty", "nested_infeasible"),
+        )
+        return _run(script, scratch)
+
+    done = classify("done", "✓ alacritty  installed")
+    assert done.returncode == 0, done.stdout
+    cannot = classify("cannot", "✖ alacritty  failed — distrobox create: cannot reach the engine")
+    assert cannot.returncode == 2
+    assert cannot.stdout.splitlines() == [
+        "TRACER_NESTED_INFEASIBLE step=distrobox-create "
+        "detail=distrobox create: cannot reach the engine"
+    ]
+    broken = classify("broken", "✖ alacritty  failed — cargo build: exit 101")
+    assert broken.returncode == 1
+    assert broken.stdout.splitlines() == [
+        "TRACER_NESTED_BUILD_FAILED detail=failed — cargo build: exit 101"
+    ]
+    (tmp_path / "absent").mkdir()
+    absent = _run(
+        _nested_script(
+            'printf "Summary — 1 installed\\n" > "$SCRATCH/none.txt"; '
+            'nested_classify_alacritty "$SCRATCH/none.txt"',
+            real=("nested_classify_alacritty", "nested_infeasible"),
+        ),
+        tmp_path / "absent",
+    )
+    assert absent.returncode == 1
+    assert "TRACER_NESTED_BUILD_FAILED" in absent.stdout
+
+
+def test_nested_herdr_shell_check(tmp_path: Path) -> None:
+    def check(name: str, call: str, *lines: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        real = ("nested_herdr_shell_ok", "nested_herdr_revert_ok")
+        return _run(_nested_script(call, real=real, stubs=_fact_stub(*lines, "D")), scratch)
+
+    good = ("DS /usr/bin/zsh", "L /usr/bin/zsh", "W /usr/bin/zsh")
+    ok = check("ok", "nested_herdr_shell_ok", *good)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NESTED_HERDR_SHELL_OK"]
+    other = check("other", "nested_herdr_shell_ok", "DS /bin/fish", "L /bin/fish", "W /usr/bin/zsh")
+    assert other.returncode != 0
+    assert other.stdout.splitlines() == [
+        "TRACER_NESTED_HERDR_SHELL_MISMATCH found=/bin/fish expected=/usr/bin/zsh"
+    ]
+    unrecorded = check("unrecorded", "nested_herdr_shell_ok", "DS /usr/bin/zsh", "W /usr/bin/zsh")
+    assert unrecorded.returncode != 0
+    assert unrecorded.stdout.splitlines() == [
+        "TRACER_NESTED_HERDR_SHELL_UNRECORDED expected=/usr/bin/zsh"
+    ]
+    none = check("none", "nested_herdr_shell_ok", "W /usr/bin/zsh")
+    assert none.returncode != 0
+    assert "found=none expected=/usr/bin/zsh" in none.stdout
+    reverted = check("reverted", "nested_herdr_revert_ok")
+    assert reverted.returncode == 0
+    assert reverted.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_OK"]
+    kept = check("kept", "nested_herdr_revert_ok", "DS /usr/bin/zsh")
+    assert kept.returncode != 0
+    assert kept.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_LEFT found=/usr/bin/zsh"]
+
+
+def test_nested_uninstall_check(tmp_path: Path) -> None:
+    def check(name: str, *lines: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        script = _nested_script(
+            "nested_uninstall_ok", real=("nested_uninstall_ok",), stubs=_fact_stub(*lines, "D")
+        )
+        return _run(script, scratch)
+
+    clean = check("clean")
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_NESTED_UNINSTALL_OK"]
+    left = check("left", "L .terminfo/a", "L .local/bin/alacritty")
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == [
+        "TRACER_NESTED_UNINSTALL_LEFT path=.terminfo/a",
+        "TRACER_NESTED_UNINSTALL_LEFT path=.local/bin/alacritty",
+    ]
+
+
+def test_nested_is_wired_into_main_and_usage() -> None:
+    assert "nested) cmd_nested" in _function("main")
+    assert "nested" in _function("usage")
+    assert "--privileged" not in "\n".join(
+        line for line in _script_text().splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _stub_bin(directory: Path, bodies: dict[str, str]) -> Path:
+    """Executable shell stubs named after the container programs a probe runs."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, body in bodies.items():
+        stub = directory / name
+        stub.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        stub.chmod(0o755)
+    return directory
+
+
+def test_nested_gathers_run_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The python and shell the nested probes send to the container run, with stub programs."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    receipts.write(
+        Receipt(
+            tool="alacritty",
+            at="2026-11-12T12:00:00+00:00",
+            method=ReceiptMethod(kind="cargo_distrobox", key="a" * 64),
+            package=None,
+            artifacts=tuple(
+                ReceiptArtifact(path=scratch / path, type="leaf") for path in _ALACRITTY_PATHS
+            ),
+            smoke=None,
+            hooks={},
+        )
+    )
+    config = scratch / ".config" / "herdr" / "config.toml"
+    config.parent.mkdir(parents=True)
+    zsh_path = str(tmp_path / "bin" / "zsh")
+    config.write_text(f'[terminal]\ndefault_shell = "{zsh_path}"\n', encoding="utf-8")
+    ledger = receipts.config_ledger_dir() / "herdr.json"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"setting": "default-shell", "key_path": ["terminal", "default_shell"]}
+    ledger.write_text(
+        json.dumps({"v": 1, "agent": "herdr", "entries": [{**entry, "value": zsh_path}]}),
+        encoding="utf-8",
+    )
+    bins = _stub_bin(
+        tmp_path / "bin",
+        {
+            "desktop-file-validate": "exit 0",
+            "infocmp": "exit 0",
+            "podman": "exit 0",
+            "zsh": "exit 0",
+        },
+    )
+    (bins / "bash").symlink_to(_bash())
+    env_path = f"{bins}:/usr/bin:/bin"
+    base = _nested_script(
+        "",
+        real=("nested_artifacts_ok", "nested_herdr_shell_ok", "nested_herdr_revert_ok"),
+        stubs="\n".join(
+            [
+                f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+                _assign("TESTER_WORKSPACE", str(tmp_path)),
+                _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+                'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+                _uv_stub(),
+            ]
+        ),
+    )
+    artifacts = _run(base + "\nnested_artifacts_ok\n", scratch, path=env_path)
+    assert artifacts.returncode == 0, artifacts.stdout + artifacts.stderr
+    assert artifacts.stdout.splitlines() == ["TRACER_NESTED_BUILD_OK"]
+    # `which_with_brew("zsh")` answers the stub, which is also what the config and ledger hold.
+    shell = _run(base + "\nnested_herdr_shell_ok\n", scratch, path=env_path)
+    assert shell.returncode == 0, shell.stdout + shell.stderr
+    assert shell.stdout.splitlines() == ["TRACER_NESTED_HERDR_SHELL_OK"]
+    config.write_text("onboarding = false\n", encoding="utf-8")
+    reverted = _run(base + "\nnested_herdr_revert_ok\n", scratch, path=env_path)
+    assert reverted.returncode == 0, reverted.stdout + reverted.stderr
+    assert reverted.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_OK"]
