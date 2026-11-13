@@ -509,8 +509,9 @@ def _first_line(exc: BaseException) -> str:
 
 
 def _toml_string(value: str) -> str:
-    """A TOML basic string; json.dumps escapes exactly what TOML requires."""
-    return json.dumps(value)
+    """A TOML basic string; json.dumps escapes what TOML requires, and non-ASCII stays literal
+    (the default would write a non-BMP character as a surrogate pair, which TOML rejects)."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _snapshot_text(snapshot: FileSnapshot | None) -> str:

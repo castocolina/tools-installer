@@ -1589,3 +1589,14 @@ def test_herdr_default_shell_follows_a_moved_zsh_and_reloads() -> None:
     assert result.warnings == () and "herdr" in result.drifted
     assert len(calls) == 2
     assert _ledgered_settings() == ["default-shell"]
+
+
+def test_alacritty_shell_path_with_a_non_bmp_character_is_valid_toml() -> None:
+    zsh = "/home/\U0001f600/.local/bin/zsh"
+
+    result = _sync_alacritty(lookup=_lookup(zsh=zsh, alacritty="/usr/bin/alacritty"))
+
+    assert "alacritty" in result.configured
+    assert result.warnings == ()
+    document = tomllib.loads(_alacritty_toml().read_text(encoding="utf-8"))
+    assert document["terminal"]["shell"]["program"] == zsh
