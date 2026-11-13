@@ -102,3 +102,20 @@ def test_detect_leaves_os_version_none_off_darwin(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(plat, "detect_immutable", lambda: False)
 
     assert detect().os_version is None
+
+
+def test_detect_sets_distrobox_and_podman(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.platform as plat
+
+    def fake_which(cmd: str) -> str | None:
+        return f"/usr/bin/{cmd}" if cmd in ("dnf", "distrobox") else None
+
+    monkeypatch.setattr(plat.stdlib_platform, "system", lambda: "Linux")
+    monkeypatch.setattr(plat.stdlib_platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(plat.shutil, "which", fake_which)
+    monkeypatch.setattr(plat, "detect_immutable", lambda: True)
+
+    result = detect()
+    assert result.has_distrobox is True
+    assert result.has_podman is False
+    assert result.node_version is None  # detect() starts no child process

@@ -89,6 +89,7 @@ from installer.version_status import (
     ToolState,
     VersionRefreshService,
     VersionStatus,
+    github_repo,
     ownership_notes,
     pnpm_findings,
     resolve_github_release_status,
@@ -6295,3 +6296,139 @@ def test_pending_tuning_shell_init_bundle_absent_on_this_os_reads_ok(
 
     monkeypatch.setattr(version_status, "shell_init_bundle", macos_only)
     assert _tuning_state(tmp_path, _shell_tool()).health is Health.OK
+
+
+# -- 24-01 Task 3: distrobox, podman and the system node are re-read every pass. --
+
+
+class _HostFacts:
+    """A PATH and a `node --version` answer that change between passes."""
+
+    def __init__(self, managed: Path) -> None:
+        self.managed = managed
+        self.on_path: set[str] = set()
+        self.node_output: str | None = None
+        self.probes: list[list[str]] = []
+
+    def which(self, cmd: str) -> str | None:
+        return str(self.managed / cmd) if cmd in self.on_path else None
+
+    def probe(self, argv: list[str]) -> str | None:
+        self.probes.append(list(argv))
+        return self.node_output if argv[0].endswith("/node") else None
+
+    def service(self, tmp_path: Path, platform: Platform) -> VersionRefreshService:
+        return VersionRefreshService(
+            platform=platform,
+            cache_path=tmp_path / "versions.json",
+            resolve_tag=lambda _repo: "1.0.0",
+            probe_output=self.probe,
+            now=lambda: _STATE_NOW,
+            managed_bin_dir=self.managed,
+            which=self.which,
+            artifacts_for=lambda _tool: [],
+            read_inventory_fn=_empty_inventory,
+            read_outdated_fn=_empty_outdated,
+            pnpm_packages=lambda: (),
+            resolve_pnpm=lambda: None,
+            query=lambda *_args, **_kwargs: "",
+        )
+
+
+def _debian() -> Platform:
+    return Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+
+
+def test_pass_rereads_distrobox_podman_and_node(tmp_path: Path) -> None:
+    world = _HostFacts(tmp_path / "managed")
+    service = world.service(tmp_path, _debian())
+    tool = _gh_tool("alpha")
+    world.on_path = {"distrobox", "podman", "node"}
+    world.node_output = "v20.19.2\n"
+    service.refresh([tool])
+    platform = service.platform
+    assert (platform.has_distrobox, platform.has_podman) == (True, True)
+    assert platform.node_version == "20.19.2"
+    assert [str(world.managed / "node"), "--version"] in world.probes
+
+    world.on_path = {"podman", "node"}
+    world.node_output = "v22.12.0-rc.1"
+    service.refresh([tool])
+    platform = service.platform
+    assert (platform.has_distrobox, platform.has_podman) == (False, True)
+    assert platform.node_version == "22.12.0-rc.1"
+
+    for unreadable in ("1.0.0", "node v22.1.0", None):
+        world.node_output = unreadable
+        service.refresh([tool])
+        assert service.platform.node_version is None
+
+    world.on_path = set()
+    world.probes.clear()
+    world.node_output = "v22.0.0"
+    service.refresh([tool])
+    assert service.platform.node_version is None
+    assert not any(argv[0].endswith("/node") for argv in world.probes)
+
+
+def test_node_floor_reads_the_probed_prerelease(tmp_path: Path) -> None:
+    world = _HostFacts(tmp_path / "managed")
+    service = world.service(tmp_path, _debian())
+    mmdc = next(tool for tool in load_tools(REGISTRY) if tool.id == "mmdc")
+    world.on_path = {"node"}
+    world.node_output = "v22.12.0-rc.1"
+    service.refresh([mmdc])
+    reason = unavailable_reason(mmdc, service.platform)
+    assert reason is not None
+    assert reason.short == "needs Node >= 22.12.0; this system has 22.12.0-rc.1"
+    world.node_output = "v22.12.0"
+    service.refresh([mmdc])
+    assert resolve_methods(mmdc, service.platform)
+
+
+def test_constant_probe_service_keeps_mmdc_available(tmp_path: Path) -> None:
+    """R1-02: a probe that answers `1.0.0` to everything never publishes a node floor."""
+    managed = tmp_path / "managed"
+    service = VersionRefreshService(
+        platform=_debian(),
+        cache_path=tmp_path / "versions.json",
+        resolve_tag=lambda _repo: "1.0.0",
+        probe_output=lambda _argv: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=managed,
+        which=lambda cmd: str(managed / cmd),
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+    )
+    mmdc = next(tool for tool in load_tools(REGISTRY) if tool.id == "mmdc")
+    service.refresh([mmdc])
+    assert service.platform.node_version is None
+    assert [m.kind for m in resolve_methods(mmdc, service.platform)] == ["node"]
+
+
+def test_newer_alacritty_tag_reads_outdated(tmp_path: Path) -> None:
+    alacritty = next(tool for tool in load_tools(REGISTRY) if tool.id == "alacritty")
+    managed = tmp_path / "managed"
+    platform = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
+    service = _state_service(
+        tmp_path,
+        which=lambda cmd: (
+            str(managed / cmd) if cmd in ("alacritty", "distrobox", "podman") else None
+        ),
+        probe_output=lambda _argv: "0.17.0",
+        resolve_tag=lambda _repo: "v0.18.0",
+        platform=platform,
+    )
+    service.refresh([alacritty])
+    state = service.state_of("alacritty")
+    assert state is not None
+    assert state.health is Health.OUTDATED
+    assert state.reasons[0] == "0.17.0 -> v0.18.0 available"
+    found = github_repo(alacritty, service.platform)
+    assert found is not None
+    assert found[0].kind == "cargo_distrobox"
+    assert found[1] == "alacritty/alacritty"

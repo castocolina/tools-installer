@@ -1682,7 +1682,7 @@ def test_ownership_only_methods_wired_into_both_candidate_and_competing_paths() 
     competing_owners_source = inspect.getsource(ownership.competing_owners)
     assert "_ownership_only_methods" in resolve_ownership_source
     assert "_ownership_only_methods" in competing_owners_source
-    assert "resolve_methods(tool, platform)" in resolve_ownership_source
+    assert "_applicable_methods(tool, platform)" in resolve_ownership_source
 
 
 def test_resolve_py_cask_gate_unchanged_by_ownership_only_path() -> None:
@@ -3176,3 +3176,30 @@ def test_only_the_binary_is_ownership_evidence(
         managed_bin_dir=managed,
     )
     assert owned.owner == "installer"
+
+
+def test_node_floor_never_drops_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R1-11: a present pnpm-owned mmdc under Node 20 is still owned by its `node` method."""
+    monkeypatch.setenv("PNPM_HOME", str(_PNPM_HOME))
+    mmdc = next(tool for tool in load_tools(_REGISTRY) if tool.id == "mmdc")
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+
+    def owned(node_version: str | None) -> ManagerOwnership:
+        return _resolve(
+            mmdc,
+            inventory=_readable(pnpm_globals=frozenset({"@mermaid-js/mermaid-cli"})),
+            which=str(_PNPM_HOME / "mmdc"),
+            platform=replace(debian, node_version=node_version),
+        )
+
+    assert resolve_methods(mmdc, replace(debian, node_version="20.19.2")) == []
+    old, unknown = owned("20.19.2"), owned(None)
+    assert old.owner == "pnpm"
+    assert old.method is not None
+    assert old.method.kind == "node"
+    assert (old.owner, old.method, old.package, old.confidence) == (
+        unknown.owner,
+        unknown.method,
+        unknown.package,
+        unknown.confidence,
+    )

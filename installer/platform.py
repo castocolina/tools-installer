@@ -30,6 +30,10 @@ class Platform:
     # cargo_distrobox kind needs both (resolve._applies); defaults keep older constructions valid.
     has_distrobox: bool = False
     has_podman: bool = False
+    # The system `node` the version pass saw (e.g. "22.12.0", a prerelease keeps its suffix); None
+    # when absent or unread. detect() leaves it None: no child process at start-up. Sole
+    # consumer: a node method's `min_node` floor in resolve._applies.
+    node_version: str | None = None
 
 
 def normalize_arch(machine: str) -> str:
