@@ -1523,6 +1523,68 @@ EOF
   printf '%s\n' "$out" | nvim_installed_verdict
 }
 
+# Fact lines on stdin from nvim_probe_after: `L` (the link or a file is still at ~/.local/bin/nvim),
+# `O` (~/.local/opt/nvim is still there), `N` (the receipt file is still there), `B <tweak block
+# count>`, `K` (the user's ~/.config/nvim/init.lua is kept) and the closing `D`.
+nvim_removed_verdict() {
+  local line link=0 tree=0 receipt=0 bundle=0 kept=0 done=0 failed=0
+  while IFS= read -r line; do
+    case "$line" in
+      L) link=1 ;;
+      O) tree=1 ;;
+      N) receipt=1 ;;
+      "B "*) bundle="${line#B }" ;;
+      K) kept=1 ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NVIM_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ "$link" -eq 1 ]]; then
+    printf 'TRACER_NVIM_LINK_LEFT\n'
+    failed=1
+  fi
+  if [[ "$tree" -eq 1 ]]; then
+    printf 'TRACER_NVIM_TREE_LEFT\n'
+    failed=1
+  fi
+  if [[ "$receipt" -eq 1 ]]; then
+    printf 'TRACER_NVIM_RECEIPT_LEFT\n'
+    failed=1
+  fi
+  if [[ "$bundle" != 0 ]]; then
+    printf 'TRACER_NVIM_BUNDLE_LEFT count=%s\n' "$bundle"
+    failed=1
+  fi
+  if [[ "$kept" -eq 0 ]]; then
+    printf 'TRACER_NVIM_CONFIG_GONE\n'
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NVIM_REMOVED_OK\n'
+}
+
+# After the full uninstall: neovim's link, opt tree, receipt and EDITOR block are gone, and the
+# user's ~/.config/nvim is kept (SPEC R3, D-20). The receipt path is a $HOME-relative literal, the
+# way assert_receipt_removed writes it, and mirrors installer/receipts.py::default_receipts_dir.
+nvim_probe_after() {
+  local body out
+  IFS= read -r -d '' body <<'EOF' || true
+set -euo pipefail
+if [ -e "$HOME/.local/bin/nvim" ] || [ -L "$HOME/.local/bin/nvim" ]; then echo L; fi
+if [ -e "$HOME/.local/opt/nvim" ] || [ -L "$HOME/.local/opt/nvim" ]; then echo O; fi
+if [ -e "$HOME/.local/state/tools-installer/receipts/neovim.json" ]; then echo N; fi
+b="$(grep -cFx '# >>> tools-installer tweak:neovim >>>' "$HOME/.myshellrc" 2>/dev/null || true)"
+printf 'B %s\n' "${b:-0}"
+if [ -f "$HOME/.config/nvim/init.lua" ]; then echo K; fi
+echo D
+EOF
+  out="$(exec_tester "$body")" || { printf 'TRACER_NVIM_PROBE_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | nvim_removed_verdict
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -1623,6 +1685,9 @@ cmd_pass2() {
     return 1
   fi
   if ! herdr_probe_after >> "$log"; then
+    return 1
+  fi
+  if ! nvim_probe_after >> "$log"; then
     return 1
   fi
   if ! assert_gsd_absent uninstall >> "$log"; then

@@ -3072,3 +3072,56 @@ def test_the_allowlist_holds_the_nvim_log_dir() -> None:
     lines = (ROOT / "scripts" / "e2e-residue-allowlist.txt").read_text(encoding="utf-8")
     entries = [line for line in lines.splitlines() if line.startswith(".local/state/nvim  # ")]
     assert len(entries) == 1
+
+
+def test_nvim_removed_verdict(tmp_path: Path) -> None:
+    verdict = "nvim_removed_verdict"
+    ok = _nvim_verdict(tmp_path / "ok", _facts("B 0", "K"), verdict)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_REMOVED_OK"]
+    cases = {
+        "link": (("L", "B 0", "K"), "TRACER_NVIM_LINK_LEFT"),
+        "tree": (("O", "B 0", "K"), "TRACER_NVIM_TREE_LEFT"),
+        "receipt": (("N", "B 0", "K"), "TRACER_NVIM_RECEIPT_LEFT"),
+        "block": (("B 1", "K"), "TRACER_NVIM_BUNDLE_LEFT count=1"),
+        "config": (("B 0",), "TRACER_NVIM_CONFIG_GONE"),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _nvim_verdict(tmp_path / name, _facts(*lines), verdict)
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert "TRACER_NVIM_REMOVED_OK" not in result.stdout.splitlines(), name
+    cut = _nvim_verdict(tmp_path / "cut", _facts("B 0", "K", done=False), verdict)
+    assert cut.returncode != 0
+    assert cut.stdout.splitlines() == ["TRACER_NVIM_PROBE_FAILED"]
+
+
+def test_nvim_removed_gather_runs_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch = _nvim_home(tmp_path, monkeypatch, installed=False)
+    names = ("nvim_removed_verdict", "nvim_probe_after")
+    script = _nvim_probe_script(tmp_path, scratch, names, "nvim_probe_after")
+    ok = _run(script, scratch)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_REMOVED_OK"]
+
+    (scratch / ".local" / "bin" / "nvim").symlink_to(scratch / ".local" / "opt" / "nvim")
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert "TRACER_NVIM_LINK_LEFT" in left.stdout.splitlines()
+
+
+def test_nvim_probe_after_names_the_module_receipt_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The receipt the gather looks for is the receipts module's own file for neovim."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    relative = default_receipts_dir().relative_to(tmp_path)
+    assert f"$HOME/{relative}/neovim.json" in _function("nvim_probe_after")
+
+
+def test_nvim_probe_after_is_wired_after_the_herdr_probe() -> None:
+    pass2 = _function("cmd_pass2")
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("herdr_probe_after") < pass2.index("nvim_probe_after") < reinstall
