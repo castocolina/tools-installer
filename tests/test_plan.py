@@ -10,7 +10,7 @@ import pytest
 
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
-from installer.model import ConfigStep, Method, Tool
+from installer.model import ConfigStep, Method, Tool, load_tools
 from installer.ownership import UNMANAGEABLE_OWNERS, Owner, owner_label
 from installer.platform import Platform
 from installer.receipts import CHANGED_SINCE_INSTALL
@@ -1123,6 +1123,27 @@ def test_a_dependent_of_a_manual_row_is_blocked_at_plan_time():
         Disposition.BLOCKED,
         "needs zsh",
     )
+
+
+def test_sdkman_is_blocked_not_attempted_while_unzip_is_missing_on_debian():
+    catalog = load_tools(Path(__file__).resolve().parent.parent / "installer" / "registry.toml")
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    states = {
+        tool.id: plan_state(tool, platform=debian, health=Health.MISSING, present=False)
+        for tool in catalog
+    }
+
+    rows = build_plan(["java"], catalog, _state_of(states), debian, reinstall=frozenset())
+    by_id = {row.tool_id: row for row in rows}
+
+    # Native apt outranks brew, so both prerequisites are sudo handoffs the installer never runs.
+    assert by_id["unzip"].manual_command == "sudo apt-get install unzip"
+    assert by_id["zip"].manual_command == "sudo apt-get install zip"
+    assert (by_id["sdkman"].disposition, by_id["sdkman"].reason) == (
+        Disposition.BLOCKED,
+        "needs unzip",
+    )
+    assert by_id["java"].disposition is Disposition.BLOCKED
 
 
 def _bootstrap_tool(prefix: Path) -> Tool:

@@ -249,7 +249,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     # moving between `both` and `ai`, which the set equality above cannot
     # see -- neither set mentions `ai`.
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
-        "both": 48,  # Phase 24 adds herdr (audience both)
+        "both": 50,  # Phase 24 adds herdr, unzip and zip (audience both)
         "ai": 8,
         "human": 27,
     }
@@ -293,6 +293,24 @@ def test_java_tools_depend_on_sdkman() -> None:
     tools = _tools_by_id()
     for tool_id in ("java", "groovy", "springbootcli", "gradle", "maven"):
         assert "sdkman" in tools[tool_id].requires
+
+
+def test_sdkman_requires_unzip_and_zip_declared_as_system_tools() -> None:
+    # SDKMAN's installer exits 1 ("Looking for unzip... Not found") without them; the Phase 24
+    # debian:13 e2e failed sdkman and every JVM row behind it.
+    tools = _tools_by_id()
+    assert tools["sdkman"].requires == ("unzip", "zip")
+    for tool_id in ("unzip", "zip"):
+        assert tools[tool_id].tier == "system"
+        assert [
+            (m.kind, m.params.get("package") or m.params.get("formula"))
+            for m in tools[tool_id].methods
+        ] == [
+            ("dnf", tool_id),
+            ("apt", tool_id),
+            ("pacman", tool_id),
+            ("brew", tool_id),
+        ]
 
 
 def test_sdkman_uses_init_script_and_declares_bin_dir() -> None:
@@ -1102,7 +1120,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 83  # Phase 24 adds the herdr row
+    assert len(tools) == 85  # Phase 24 adds the herdr, unzip and zip rows
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1155,7 +1173,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # (ROADMAP Phases 7 and 8 both will) must update these counts in the same
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
-        "system": 26,
+        "system": 28,  # Phase 24 adds unzip and zip (SDKMAN prerequisites)
         "ai": 9,
         "user": 48,  # Phase 24 adds herdr (tier user)
     }
@@ -2099,7 +2117,7 @@ def test_tealdeer_declares_its_cache_in_config_paths() -> None:
 
 
 def test_native_package_manager_rows_declare_their_owner_probes() -> None:
-    # D-05: exactly the eleven rows that can be installed through a native
+    # D-05: exactly the thirteen rows that can be installed through a native
     # OS package manager (or, for opencode/wezterm, pacman alone) declare
     # owner_probes so detect_owner can actually answer for them.
     # rpm-ostree is listed FIRST on the nine dnf/apt/pacman-capable rows: on
@@ -2113,6 +2131,8 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
         "jq": full,
         "git": full,
         "zsh": full,
+        "unzip": full,
+        "zip": full,
         "watch": full,
         "docker": full,
         "podman": full,
