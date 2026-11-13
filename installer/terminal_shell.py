@@ -539,8 +539,19 @@ def _table(document: Mapping[str, object], name: str) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, dict) else {}
 
 
+_IMPORTS = "you import other files (general.import); they are not followed"
+
+
+def _imports_files(document: Mapping[str, object]) -> bool:
+    """`[general] import` (or the legacy top-level `import`) names files this module never reads,
+    so a shell or binding the user keeps there cannot be checked for a conflict."""
+    return "import" in _table(document, "general") or "import" in document
+
+
 def _shell_plan(document: Mapping[str, object], zsh_path: str) -> tuple[str | None, list[str]]:
     """The shell region body and the `partial:` warnings, decided per part (D-08)."""
+    if _imports_files(document):
+        return None, [f"alacritty: partial: {_IMPORTS}"]
     parts: list[str] = []
     warnings: list[str] = []
     if "shell" in _table(document, "terminal"):
@@ -568,6 +579,8 @@ def _binding_id(key: object, mods: object) -> tuple[str, frozenset[str]]:
 
 
 def _keys_plan(document: Mapping[str, object], outside: str) -> _KeysPlan:
+    if _imports_files(document):
+        return _KeysPlan(None, refusal=_IMPORTS)
     bindings = _table(document, "keyboard").get("bindings")
     if bindings is not None and not _KEYS_HEADER.search(outside):
         return _KeysPlan(None, refusal="you already define keyboard.bindings inline")

@@ -1614,3 +1614,26 @@ def test_herdr_reload_is_bounded_for_a_runner_that_takes_a_timeout() -> None:
     _sync_herdr(runner=runner)
 
     assert seen == [20.0]
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    ['[general]\nimport = ["~/.config/alacritty/theme.toml"]\n', 'import = ["/x/theme.toml"]\n'],
+    ids=["general-import", "legacy-top-level-import"],
+)
+def test_alacritty_config_that_imports_files_is_refused_with_a_reason(user_text: str) -> None:
+    from installer.terminal_shell import apply_alacritty_keys
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text(user_text)
+
+    lines, refused = apply_alacritty_keys(Path.home(), dict(os.environ), skip_recorded=False)
+    result = _sync_alacritty()
+
+    assert refused is not None and "import" in refused
+    assert lines == ()
+    assert any(w.startswith("alacritty: partial:") and "import" in w for w in result.warnings)
+    assert "alacritty" not in result.configured
+    assert config.read_text() == user_text
+    assert not _alacritty_record().exists()
