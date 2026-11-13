@@ -244,6 +244,7 @@ def test_missing_requires_matches_the_real_registry_cross_tier_edge() -> None:
     assert missing_requires(mmdc, catalog, staged=empty, installed=installed) == (
         "pnpm",
         "puppeteer",
+        "unzip",  # puppeteer's own prerequisite (Phase 24 archlinux e2e)
     )
     assert mmdc.tier != pnpm.tier
 

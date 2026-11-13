@@ -295,6 +295,11 @@ def test_java_tools_depend_on_sdkman() -> None:
         assert "sdkman" in tools[tool_id].requires
 
 
+def test_puppeteer_requires_unzip_to_extract_its_chrome() -> None:
+    # The Phase 24 archlinux e2e failed puppeteer (and mmdc behind it): no zip archiver.
+    assert "unzip" in _tools_by_id()["puppeteer"].requires
+
+
 def test_sdkman_requires_unzip_and_zip_declared_as_system_tools() -> None:
     # SDKMAN's installer exits 1 ("Looking for unzip... Not found") without them; the Phase 24
     # debian:13 e2e failed sdkman and every JVM row behind it.
@@ -857,7 +862,7 @@ def test_puppeteer_is_an_ai_tier_node_tool_requiring_pnpm() -> None:
         puppeteer.audience,
         puppeteer.tier,
     ) == ("Puppeteer", "dev", "puppeteer", "P3", "both", "ai")
-    assert puppeteer.requires == ("pnpm",)
+    assert puppeteer.requires == ("pnpm", "unzip")
     assert puppeteer.recommends == ()
     assert len(puppeteer.methods) == 2
     assert {m.kind for m in puppeteer.methods} == {"node"}

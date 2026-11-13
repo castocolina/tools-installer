@@ -2814,9 +2814,11 @@ audience = "both"
 # Runtime dependency of mmdc, never launched by the human directly — its own
 # desc above already says so (D-08).
 tier = "ai"
-verified = 2026-10-10
+verified = 2026-11-13
 desc = "Headless-Chrome automation library; downloads its own Chrome and chrome-headless-shell. Required at runtime by mmdc."
-requires = ["pnpm"]
+# Verified 2026-11-13 (Phase 24 archlinux e2e): its postinstall extracts the Chrome zip with
+# `unzip` ("Extraction failed: no zip archiver is available"), so unzip is a prerequisite.
+requires = ["pnpm", "unzip"]
 [[tool.method]]
 kind = "node"
 os = ["macos"]
