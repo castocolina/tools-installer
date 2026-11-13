@@ -15,7 +15,7 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -26,6 +26,7 @@ from installer import cursor_shim, daemon, receipts, runlock, systemd_daemon, un
 from installer.atomic import atomic_write_bytes, atomic_write_text, read_capped
 from installer.locations import ensure_dir
 from installer.ownership import NATIVE_OWNERS, OS_PACKAGE_OWNER
+from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.receipts import ReceiptArtifact
 from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.sanitize import sanitize_log_line
@@ -1525,3 +1526,148 @@ def reconcile_lines(report: ReconcileReport) -> tuple[tuple[str, Literal["ok", "
         )
     lines.extend((warning, "warn") for warning in report.warnings)
     return tuple(lines)
+
+
+# --- The uninstall sweep: one adapter per schedule with anything of ours on disk (24.2-08) ----
+
+
+def _exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _legacy_log_path(ctx: ScheduleContext) -> Path:
+    """The old tmp cleanup's `prune-daemon.log`, beside the schedule log on both OSes."""
+    return ctx.log_path.with_name("prune-daemon.log")
+
+
+def _state_artifacts(ctx: ScheduleContext) -> tuple[Path, ...]:
+    # The lock files stay: deleting one another process holds would let a third lock a new inode.
+    return (
+        ctx.state_path,
+        damaged_path(ctx.state_path),
+        ctx.log_path,
+        ctx.launchd_log_path,
+        _legacy_log_path(ctx),
+    )
+
+
+def _state_leftovers(ctx: ScheduleContext) -> bool:
+    return any(_exists(path) for path in _state_artifacts(ctx)) or _tmp_decided(ctx)
+
+
+def _footprint(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -> bool:
+    """Whether anything of this schedule is on disk; file reads only."""
+    if any(_exists(Path(artifact.path)) for artifact in record_for(state, schedule.id).files):
+        return True
+    if schedule.kind is not JobKind.TMP_CLEANUP:
+        return False
+    if daemon.wrapper_present(ctx.legacy_bin_dir):
+        return True
+    if ctx.platform_os == "macos":
+        return _exists(_plist_path(ctx, schedule.id))
+    return systemd_daemon.footprint_present(ctx.unit_dir)
+
+
+def _forget(ctx: ScheduleContext, schedule_id: str) -> None:
+    def change(current: ScheduleState) -> ScheduleState:
+        records = {key: value for key, value in current.records.items() if key != schedule_id}
+        return replace(current, records=records)
+
+    update_state(ctx.state_path, change)
+
+
+def _cleanup_if_last(ctx: ScheduleContext) -> None:
+    """With no schedule left, delete the shared scripts, the state, the logs and tmp's marker."""
+    state = load_state(ctx.state_path).state
+    if any(_footprint(ctx, state, schedule) for schedule in SCHEDULES):
+        return
+    kept = _delete_recorded(state.shared)
+    if kept:
+        raise OSError(f"kept, changed since it was copied: {', '.join(str(a.path) for a in kept)}")
+    _prune_data_dirs(ctx)
+    _clear_tmp_decided(ctx)
+    for path in _state_artifacts(ctx):
+        path.unlink(missing_ok=True)
+
+
+def _clear_tmp_decided(ctx: ScheduleContext) -> None:
+    clearer = daemon.clear_decided if ctx.platform_os == "macos" else systemd_daemon.clear_decided
+    clearer(ctx.myshellrc_path)
+
+
+def _sweep_result(layer: str, detail: str, warnings: Iterable[str]) -> PolicyResult:
+    return PolicyResult((PolicyLayer(layer, detail),), None, "; ".join(warnings) or None)
+
+
+def _sweep_schedule(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
+    """The full removal of one schedule; idempotent, and it raises OSError naming what it kept."""
+    state = load_state(ctx.state_path).state
+    warnings: list[str] = []
+    refused: list[str] = []
+    if _footprint(ctx, state, schedule):
+        removal = _remove_timer(ctx, schedule.id, keep_decision=False, forget=True)
+        warnings.extend(removal.warnings)
+        refused.extend(str(artifact.path) for artifact in removal.kept)
+    elif schedule.id in state.records:
+        _forget(ctx, schedule.id)
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        try:
+            daemon.remove_wrapper(ctx.legacy_bin_dir)  # sentinel-checked
+            _legacy_log_path(ctx).unlink(missing_ok=True)
+        except OSError as exc:
+            refused.append(str(exc))
+    if refused:
+        raise OSError(f"kept: {', '.join(refused)}")  # tmp's marker stays while a unit remains
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        _clear_tmp_decided(ctx)
+    _cleanup_if_last(ctx)
+    return _sweep_result(schedule.label, "removed", warnings)
+
+
+def _turn_on_result(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
+    report = turn_on(ctx, schedule.id)
+    return _sweep_result(schedule.label, "on", report.warnings)
+
+
+def _schedule_policy(ctx: ScheduleContext, schedule: Schedule) -> Policy:
+    return Policy(
+        id=f"schedule:{schedule.id}",
+        label=schedule.label,
+        description=f"the {schedule.label} timer, its unit files and its scripts",
+        active=True,
+        apply=lambda: _turn_on_result(ctx, schedule),
+        remove=lambda: _sweep_schedule(ctx, schedule),
+        owned=lambda: _footprint(ctx, load_state(ctx.state_path).state, schedule),
+    )
+
+
+def _state_policy(ctx: ScheduleContext) -> Policy:
+    def clean() -> PolicyResult:
+        _cleanup_if_last(ctx)
+        return _sweep_result("state", "removed", ())
+
+    return Policy(
+        id="schedule:state",
+        label="Schedules state and logs",
+        description="removes schedules.json and the schedule logs",
+        active=True,
+        apply=lambda: PolicyResult((), None, None, changed=False),
+        remove=clean,
+        owned=lambda: _state_leftovers(ctx),
+    )
+
+
+def sweep_adapters(ctx: ScheduleContext) -> tuple[Policy, ...]:
+    """One uninstall policy per schedule with a footprint, in table order (D-23, SPEC R5).
+
+    With no schedule on but state files left behind, a single `schedule:state` policy removes
+    them (R1-12)."""
+    state = load_state(ctx.state_path).state
+    owned = tuple(
+        _schedule_policy(ctx, schedule)
+        for schedule in SCHEDULES
+        if _footprint(ctx, state, schedule)
+    )
+    if owned or not _state_leftovers(ctx):
+        return owned
+    return (_state_policy(ctx),)

@@ -4,6 +4,7 @@ Every service-manager call goes to the recording fakes of `test_schedules_engine
 lands under `tmp_path`. Private names are read through `vars(schedules)`.
 """
 
+import os
 import plistlib
 import shutil
 import threading
@@ -25,10 +26,12 @@ from installer.schedules import (
     ensure_schedule_defaults,
     load_state,
     reconcile_lines,
+    sweep_adapters,
     turn_off,
     turn_on,
     update_state,
 )
+from installer.uninstall import SweepResult, active_policies, sweep_policies
 from tests.test_schedules_engine import (
     CHECKOUT,
     CLAUDE_BASENAME,
@@ -36,6 +39,7 @@ from tests.test_schedules_engine import (
     Env,
     Install,
     make_env,
+    no_process_ctx,
     seed_legacy_tmp,
     tree,
 )
@@ -490,3 +494,216 @@ def test_no_manager_reconcile_writes_nothing(
     assert report == ReconcileReport()
     assert tree(lab.env.home) == before
     assert lab.env.run.calls == []
+
+
+# --- Task 3: uninstall-sweep adapters that leave no schedule file, script or record ---
+
+LOCK_NAMES = frozenset({"schedules.json.lock", "schedules.log.lock", "schedules.reconcile.lock"})
+ALL_IDS = ("schedule:tmp-cleanup", "schedule:cache-cleanup", "schedule:update-claude")
+
+
+def sweep(lab: Lab) -> SweepResult:
+    ctx = lab.ctx
+    policies = active_policies(
+        (),
+        rc_path=ctx.myshellrc_path,
+        bin_dir=ctx.legacy_bin_dir,
+        extra_policies=sweep_adapters(ctx),
+    )
+    return sweep_policies(policies)
+
+
+def plant_logs(ctx: ScheduleContext) -> list[Path]:
+    """The logs a host holds after some runs: the schedule log, launchd's, and the old tmp one."""
+    paths = [ctx.log_path, ctx.launchd_log_path, ctx.log_path.with_name("prune-daemon.log")]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("an old line\n")
+    return paths
+
+
+def leftovers(home: Path) -> list[str]:
+    """Every file or link under `home`; the lock files and the rc file may stay."""
+    names = [
+        str(path.relative_to(home))
+        for path in sorted(home.rglob("*"))
+        if (path.is_file() or path.is_symlink()) and path.name not in LOCK_NAMES | {".myshellrc"}
+    ]
+    return names
+
+
+def test_sweep_adapters_cover_every_owned_schedule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    assert sweep_adapters(ctx) == ()  # nothing on and no state file
+
+    ensure_schedule_defaults(ctx)
+    adapters = sweep_adapters(no_process_ctx(ctx))  # every predicate below starts no process
+    assert tuple(policy.id for policy in adapters) == ALL_IDS
+    assert all(policy.owned is not None and policy.owned() for policy in adapters)
+
+
+def test_sweep_adapters_with_every_schedule_off_give_the_state_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    for schedule_id in ("tmp-cleanup", "cache-cleanup", "update-claude"):
+        turn_off(ctx, schedule_id)
+    assert ctx.state_path.exists()
+
+    adapters = sweep_adapters(ctx)
+
+    assert tuple(policy.id for policy in adapters) == ("schedule:state",)
+
+
+def test_sweep_adapters_for_a_legacy_only_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=())
+    seed_legacy_tmp(lab.env)
+    plant_logs(lab.ctx)
+    assert not lab.ctx.state_path.exists()
+
+    adapters = sweep_adapters(lab.ctx)
+
+    assert tuple(policy.id for policy in adapters) == ("schedule:tmp-cleanup",)
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "debian", "arch", "macos"])
+def test_full_uninstall_leaves_nothing(
+    os_key: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, os_key=os_key)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    plant_logs(ctx)
+    daemon.install_wrapper(ctx.legacy_bin_dir)
+    damaged_path(ctx.state_path).write_bytes(b"{old damage")
+    assert leftovers(lab.env.home)
+
+    result = sweep(lab)
+
+    assert result.swept == ALL_IDS
+    assert result.failed == ()
+    assert leftovers(lab.env.home) == []
+    assert not (ctx.data_dir).exists()
+    marker_present = (
+        daemon.decided(ctx.myshellrc_path)
+        if os_key == "macos"
+        else systemd_daemon.decided(ctx.myshellrc_path)
+    )
+    assert not marker_present
+
+
+def test_full_uninstall_with_every_schedule_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    for schedule_id in ("tmp-cleanup", "cache-cleanup", "update-claude"):
+        turn_off(ctx, schedule_id)
+    plant_logs(ctx)
+    policies = active_policies(
+        (),
+        rc_path=ctx.myshellrc_path,
+        bin_dir=ctx.legacy_bin_dir,
+        extra_policies=sweep_adapters(ctx),
+    )
+    assert [policy.id for policy in policies] == ["schedule:state"]
+    assert policies[0].label == "Schedules state and logs"
+    assert policies[0].description == "removes schedules.json and the schedule logs"
+
+    result = sweep_policies(policies)
+
+    assert result.swept == ("schedule:state",)
+    assert result.failed == ()
+    assert leftovers(lab.env.home) == []
+    assert not systemd_daemon.decided(ctx.myshellrc_path)
+
+
+def test_adapter_remove_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=("claude", "cursor-agent"))
+    ctx = lab.ctx
+    Install(lab.env.home)
+    ensure_schedule_defaults(ctx)
+    adapters = sweep_adapters(ctx)  # built before any removal
+    after_target_removed(ctx, "claude")
+    after_target_removed(ctx, "cursor-agent")
+
+    for policy in adapters:
+        policy.remove()
+    assert not ctx.state_path.exists()
+    assert not ctx.data_dir.exists()
+    assert not list(ctx.unit_dir.glob("*.timer"))
+    before = tree(lab.env.home)
+    for policy in adapters:
+        policy.remove()  # a second call, and one after after_target_removed: nothing to change
+    assert tree(lab.env.home) == before
+
+
+def test_sweep_refuses_a_changed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    timer = ctx.unit_dir / f"{CLAUDE_BASENAME}.timer"
+    edited = timer.read_bytes() + b"# edited after recording\n"
+    timer.write_bytes(edited)
+
+    result = sweep(lab)
+
+    assert result.failed == ("schedule:update-claude",)
+    assert result.swept == ("schedule:tmp-cleanup", "schedule:cache-cleanup")
+    assert timer.read_bytes() == edited
+    assert unit_files(ctx, CACHE_BASENAME) == []
+    assert ctx.state_path.exists()  # the changed file is still recorded
+
+
+def test_sweep_refuses_a_changed_tmp_unit_and_keeps_the_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    service = ctx.unit_dir / f"{TMP_BASENAME}.service"
+    edited = service.read_bytes() + b"# edited after recording\n"
+    service.write_bytes(edited)
+
+    result = sweep(lab)
+
+    assert result.failed == ("schedule:tmp-cleanup",)
+    assert result.swept == ("schedule:cache-cleanup", "schedule:update-claude")
+    assert service.read_bytes() == edited
+    assert systemd_daemon.decided(ctx.myshellrc_path)  # a unit of it remains: the decision stays
+
+
+def test_sweep_restores_the_cursor_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=("cursor-agent",))
+    install = Install(lab.env.home)
+    turn_on(lab.ctx, "update-cursor-agent")
+    assert is_our_shim(install.link)
+
+    result = sweep(lab)
+
+    assert result.failed == ()
+    assert install.link.is_symlink()
+    assert os.readlink(install.link) == os.readlink(install.agent)
+
+
+def test_full_uninstall_of_a_legacy_only_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=())
+    ctx = lab.ctx
+    seed_legacy_tmp(lab.env)
+    plant_logs(ctx)
+
+    result = sweep(lab)
+
+    assert (result.swept, result.failed) == (("schedule:tmp-cleanup",), ())
+    assert leftovers(lab.env.home) == []
+    assert not systemd_daemon.decided(ctx.myshellrc_path)
