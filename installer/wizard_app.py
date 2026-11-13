@@ -18,7 +18,7 @@ import shlex
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -2130,6 +2130,81 @@ class UninstallScreen(AppScreen):
             self.app.request_refresh()
 
 
+_LINGER_SENTENCE = (
+    "The timer runs while you are logged in. For always-on operation, run"
+    " `loginctl enable-linger $USER` yourself; this installer does not run that"
+    " command for you, because it is a system-wide setting for the whole account."
+)
+
+
+def _competing_line(competing: CompetingProbe | None) -> str | None:
+    """WR-10: name a system-scope competitor on the background-cleanup row.
+
+    Peek only -- this runs on every row highlight -- so it says nothing
+    until the screen's own warm-up worker has landed an answer. Only
+    system-scope units appear: a user-scope one is taken over by the
+    apply, so repeating it here would describe a stopped mechanism.
+    """
+    if competing is None:
+        return None
+    try:
+        units = competing(blocking=False)
+    except (OSError, ValueError, CommandError):
+        return None
+    names = sorted({unit.name for unit in units if unit.scope == SCOPE_SYSTEM})
+    if not names:
+        return None
+    return (
+        f"Also installed system-wide: {', '.join(names)} (root-owned; this installer "
+        "cannot stop it without sudo)"
+    )
+
+
+def _temp_usage_line(disk_pressure: DiskPressureProbe | None) -> str | None:
+    """The live temp-usage line for a background-cleanup row, or None.
+
+    This runs on EVERY row-highlight, i.e. on every arrow key, so the two
+    halves of the probe are handled differently on purpose:
+
+    - The mount reads stay synchronous and un-cached. `shutil.disk_usage`
+      is one statvfs on an already-mounted filesystem -- the same order of
+      cost as the read_schedule/last_run_summary reads above, and it spawns
+      no process, unlike the pnpm audit the Doctor runs on a worker. A
+      worker here would buy nothing and cost a cross-thread hand-off plus a
+      stale-value window on a number whose whole point is being current.
+    - The daemon-state half is a `systemctl --user is-active` SUBPROCESS
+      (plan 15.7-01's D-01c), so this path does not run it AT ALL:
+      blocking=False makes the closure read TimerStateCache.peek(), which
+      never probes. Memoization alone is not the answer, although "it's
+      cached" reads like one: a memo still has a cold first read and a TTL
+      expiry, and on those a read() blocks the Textual event loop for up to
+      systemd_daemon.SYSTEMCTL_QUERY_TIMEOUT (5 s) -- bounded, but a frozen UI. Nor is "move it
+      to a worker": the daemon state is not even shown on this line, so a
+      worker would add async plumbing to fetch a value nothing renders.
+
+    Failures follow plan 15.7-02's D-03b: probe_disk_pressure is TOTAL over
+    filesystem and probe-conversion failure, and any other exception
+    propagates uncaught. This guard is the documented second layer over the
+    injected closure, the same pairing the adjacent reads use.
+
+    Only a number the probe actually measured is stated: the temp-directory
+    usage (measured on macOS too, per D-03d), else -- only when the temp
+    mount was unreadable -- the free space on the filesystem holding the
+    user's home directory, labelled as such, else no line at all.
+    """
+    if disk_pressure is None:
+        return None
+    try:
+        pressure = disk_pressure(blocking=False)
+    except (OSError, ValueError):
+        return None
+    if pressure.tmp_used_percent is not None:
+        return f"Current temp-directory usage: {pressure.tmp_used_percent:.1f}%"
+    if pressure.home_free_percent is not None:
+        return f"Current home filesystem free space: {pressure.home_free_percent:.1f}%"
+    return None
+
+
 _POLICY_READ_ERROR = "Could not read the policy state: "
 
 
@@ -2491,9 +2566,7 @@ class PoliciesScreen(AppScreen):
             ),
             "daemon:prune-tmp-linux": (
                 "Deletes orphaned Bun runtime-cache files from the OS temp dir, every ten minutes.",
-                "The timer runs while you are logged in. For always-on operation, run"
-                " `loginctl enable-linger $USER` yourself; this installer does not run that"
-                " command for you, because it is a system-wide setting for the whole account.",
+                _LINGER_SENTENCE,
                 "Disabling only unregisters the timer and its unit files: it never deletes"
                 " temp files directly.",
                 "The daily time picker does not apply to this row.",
@@ -2557,79 +2630,13 @@ class PoliciesScreen(AppScreen):
                 hour, minute = schedule
                 lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
         if _has_daemon_id((policy.id,)):
-            usage = self._temp_usage_line()
+            usage = _temp_usage_line(self._disk_pressure)
             if usage is not None:
                 lines.append(usage)
-            competing = self._competing_line()
+            competing = _competing_line(self._competing)
             if competing is not None:
                 lines.append(competing)
         return "\n".join(lines)
-
-    def _competing_line(self) -> str | None:
-        """WR-10: name a system-scope competitor on the background-cleanup row.
-
-        Peek only -- this runs on every row highlight -- so it says nothing
-        until the screen's own warm-up worker has landed an answer. Only
-        system-scope units appear: a user-scope one is taken over by the
-        apply, so repeating it here would describe a stopped mechanism.
-        """
-        if self._competing is None:
-            return None
-        try:
-            units = self._competing(blocking=False)
-        except (OSError, ValueError, CommandError):
-            return None
-        names = sorted({unit.name for unit in units if unit.scope == SCOPE_SYSTEM})
-        if not names:
-            return None
-        return (
-            f"Also installed system-wide: {', '.join(names)} (root-owned; this installer "
-            "cannot stop it without sudo)"
-        )
-
-    def _temp_usage_line(self) -> str | None:
-        """The live temp-usage line for a background-cleanup row, or None.
-
-        This runs on EVERY row-highlight, i.e. on every arrow key, so the two
-        halves of the probe are handled differently on purpose:
-
-        - The mount reads stay synchronous and un-cached. `shutil.disk_usage`
-          is one statvfs on an already-mounted filesystem -- the same order of
-          cost as the read_schedule/last_run_summary reads above, and it spawns
-          no process, unlike the pnpm audit the Doctor runs on a worker. A
-          worker here would buy nothing and cost a cross-thread hand-off plus a
-          stale-value window on a number whose whole point is being current.
-        - The daemon-state half is a `systemctl --user is-active` SUBPROCESS
-          (plan 15.7-01's D-01c), so this path does not run it AT ALL:
-          blocking=False makes the closure read TimerStateCache.peek(), which
-          never probes. Memoization alone is not the answer, although "it's
-          cached" reads like one: a memo still has a cold first read and a TTL
-          expiry, and on those a read() blocks the Textual event loop for up to
-          systemd_daemon.SYSTEMCTL_QUERY_TIMEOUT (5 s) -- bounded, but a frozen UI. Nor is "move it
-          to a worker": the daemon state is not even shown on this line, so a
-          worker would add async plumbing to fetch a value nothing renders.
-
-        Failures follow plan 15.7-02's D-03b: probe_disk_pressure is TOTAL over
-        filesystem and probe-conversion failure, and any other exception
-        propagates uncaught. This guard is the documented second layer over the
-        injected closure, the same pairing the adjacent reads use.
-
-        Only a number the probe actually measured is stated: the temp-directory
-        usage (measured on macOS too, per D-03d), else -- only when the temp
-        mount was unreadable -- the free space on the filesystem holding the
-        user's home directory, labelled as such, else no line at all.
-        """
-        if self._disk_pressure is None:
-            return None
-        try:
-            pressure = self._disk_pressure(blocking=False)
-        except (OSError, ValueError):
-            return None
-        if pressure.tmp_used_percent is not None:
-            return f"Current temp-directory usage: {pressure.tmp_used_percent:.1f}%"
-        if pressure.home_free_percent is not None:
-            return f"Current home filesystem free space: {pressure.home_free_percent:.1f}%"
-        return None
 
     def _set_detail(self, policy: Policy | None) -> None:
         if policy is not None and self._log_view and policy.log_path is not None:
@@ -2956,6 +2963,7 @@ def _link_mode_status(
 
 
 _STILL_CHECKING = "Still checking for a user timer manager; try again in a moment."
+_REFRESH_SECONDS = 30
 _SCHEDULE_COLUMNS = (
     ("schedule", "Schedule", 13),
     ("target", "Target", 12),
@@ -2965,14 +2973,30 @@ _SCHEDULE_COLUMNS = (
     ("last", "Last", 7),
     ("script", "Script", 9),
 )
-_CACHE_MANAGERS = ("uv", "pnpm", "brew", "npm")
 _STATE_CELLS = {
     "on": ("● [on]", "green"),
     "off": ("○ [off]", "dim"),
     "drift": ("! [drift]", "yellow"),
     "n/a": ("– [n/a]", "dim"),
-    "unknown": ("…", ""),
+    "unknown": ("…", "dim"),
 }
+_LAST_STYLES = {"ok": "green", "skipped": "yellow", "failed": "red", "interrupted": "red"}
+_CHECKING_NOTE = "Checking for a user timer manager…"
+_NO_MANAGER_NOTE = "unavailable: no user timer manager — nothing is scheduled on this machine."
+_LINUX_NOTE = "Timers run while you are logged in; a missed run catches up once at login."
+_MACOS_NOTE = "Missed during sleep: runs once at wake. Missed while shut down: skipped."
+_SCHEDULE_DRIFT = "Drift: its timer files are missing or changed. space writes them again."
+_DAMAGED_COPY = "schedules.json was damaged earlier; the damaged copy is kept beside it."
+# The cache cleanup managers in the UI's target order, with the command each one runs.
+_CACHE_PRUNES = (
+    ("uv", "uv cache prune"),
+    ("pnpm", "pnpm store prune"),
+    ("brew", "brew cleanup"),
+    ("npm", "npm cache verify"),
+)
+_TMP_WHAT = "deletes orphaned Bun runtime files from the temp dir"
+_CACHE_WHAT = "runs each installed package manager's prune command"
+_TIMES_LISTED = 8  # more slots than this are shown as a compressed range
 
 
 def _fit(text: str, width: int, *, from_left: bool = False) -> str:
@@ -2991,13 +3015,20 @@ def _sentence(text: str) -> str:
     return f"{(lines[0] if lines else 'unknown error').rstrip('.')}."
 
 
+def _tilde(path: Path, home: Path) -> str:
+    """`path` with a leading `home` shown as `~`."""
+    if path == home or home in path.parents:
+        return f"~/{path.relative_to(home)}" if path != home else "~"
+    return str(path)
+
+
 class SchedulesScreen(AppScreen):
     """The built-in schedules: state, timing and last result, toggled live (D-21).
 
     `space` turns the highlighted schedule on or off now; every change runs on a thread
     worker through `run_live` under the in-app mutation lock only, so a scheduled run in
-    flight is never touched (SPEC edge R5). Render reads files only; nothing here starts a
-    process except the probe and change workers.
+    flight is never touched (SPEC edge R5). Render reads files only: the manager probe and
+    the change are the only workers that start a process (D-13).
     """
 
     if TYPE_CHECKING:
@@ -3009,7 +3040,11 @@ class SchedulesScreen(AppScreen):
         Binding("space", "toggle_schedule", "toggle schedule", show=True, priority=True),
     ]
     DEFAULT_CSS = """
+    SchedulesScreen #schedule-note { height: 1; padding: 0 1; }
     SchedulesScreen DataTable { height: auto; max-height: 8; }
+    SchedulesScreen #schedule-detail {
+        height: 1fr; padding: 0 1; background: $surface; overflow-y: auto;
+    }
     """
 
     def __init__(self, inputs: ScheduleInputs) -> None:
@@ -3019,9 +3054,19 @@ class SchedulesScreen(AppScreen):
         # None until the probe answers; a host with no context never probes.
         self._manager: bool | None = None if inputs.context is not None else False
         self._state = schedules.ScheduleState()
+        self._last: dict[str, schedules.LastRun] = {}
+        self._log_error: str | None = None
+        self._log_line: str | None = None
+        self._damage: str | None = None
+        # The damage warning shows once per entry, never on a refresh.
+        self._announce_damage = False
+        self.note_text = ""
+        self.detail_text = ""
 
     def compose_body(self) -> ComposeResult:
+        yield Static("", id="schedule-note")
         yield DataTable()
+        yield Static("", id="schedule-detail")
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable[Any])
@@ -3031,11 +3076,18 @@ class SchedulesScreen(AppScreen):
         for schedule in schedules.SCHEDULES:
             table.add_row(*self._cells(schedule), key=schedule.id)
         table.focus()
+        self.set_interval(_REFRESH_SECONDS, self.tick)
 
     def enter_view(self) -> None:
+        self._announce_damage = True
         if self._ctx is not None:
             self._probe_worker()
         self.state_refreshed()
+
+    def tick(self) -> None:
+        """The periodic refresh: only while this view is on top and nothing is mutating."""
+        if self.is_mounted and self.app.screen is self and not self.app.mutation_in_flight:
+            self.state_refreshed()
 
     @work(thread=True, exclusive=True, group="schedule-probe", exit_on_error=False)
     def _probe_worker(self) -> None:
@@ -3054,11 +3106,11 @@ class SchedulesScreen(AppScreen):
         self.state_refreshed()
 
     def state_refreshed(self) -> None:
-        """Re-read the state file and repaint every row (files only, never a process)."""
-        ctx = self._ctx
-        if ctx is not None:
-            loaded, _error = run_live(lambda: schedules.load_state(ctx.state_path))
-            self._state = loaded.state if loaded is not None else schedules.ScheduleState()
+        """Re-read the state file, the run log and the holder line, then repaint (files only)."""
+        self._reread()
+        announce, self._announce_damage = self._announce_damage, False
+        if announce and self._damage is not None:
+            self.status.set(self._damage, "warn")
         if not self.is_mounted:
             return
         table = self.query_one(DataTable[Any])
@@ -3067,6 +3119,49 @@ class SchedulesScreen(AppScreen):
                 _SCHEDULE_COLUMNS, self._cells(schedule), strict=True
             ):
                 table.update_cell(schedule.id, column, text)
+        self.note_text = self._note()
+        self.query_one("#schedule-note", Static).update(Text(self.note_text, style="dim"))
+        self._set_detail()
+        self._show_log_error()
+
+    def _reread(self) -> None:
+        ctx = self._ctx
+        if ctx is None:
+            return
+        loaded, error = run_live(lambda: schedules.load_state(ctx.state_path))
+        if loaded is None:
+            self._state = schedules.ScheduleState()
+            problem = _sentence(error or "unknown error").rstrip(".")
+            self._damage = f"Could not read schedules.json ({problem}); using defaults."
+        else:
+            self._state = loaded.state
+            self._damage = loaded.warning or (_DAMAGED_COPY if loaded.damaged else None)
+        last, self._log_error = run_live(
+            lambda: schedules.read_last_runs(ctx.log_path, ctx.lock_path)
+        )
+        self._last = last or {}
+
+    def _show_log_error(self) -> None:
+        """Over an empty status or this screen's own earlier line only (Policies' rule)."""
+        previous = self._log_line
+        self._log_line = (
+            None
+            if self._log_error is None
+            else f"Could not read the schedule log: {_sentence(self._log_error)}"
+        )
+        if self._log_line is None:
+            if previous is not None:
+                self.status.retract(previous)
+        elif not self.status.text or self.status.text == previous:
+            self.status.set(self._log_line, "error")
+
+    def _note(self) -> str:
+        ctx = self._ctx
+        if self._manager is None:
+            return _CHECKING_NOTE
+        if not self._manager or ctx is None:
+            return _NO_MANAGER_NOTE
+        return _MACOS_NOTE if ctx.platform_os == "macos" else _LINUX_NOTE
 
     def _row_state(self, schedule: schedules.Schedule) -> schedules.RowState:
         ctx = self._ctx
@@ -3076,27 +3171,165 @@ class SchedulesScreen(AppScreen):
             ctx, self._state, schedule, manager=self._manager, present=self._inputs.present
         )
 
+    def _is_linux_tmp(self, schedule: schedules.Schedule) -> bool:
+        ctx = self._ctx
+        is_macos = ctx is not None and ctx.platform_os == "macos"
+        return schedule.kind is schedules.JobKind.TMP_CLEANUP and not is_macos
+
+    def _grid(self, schedule: schedules.Schedule) -> tuple[schedules.Slot, ...] | None:
+        """The run times from the record; None for Linux tmp cleanup's fixed monotonic timer."""
+        if self._is_linux_tmp(schedule):
+            return None
+        record = schedules.record_for(self._state, schedule.id)
+        interval = 24 if schedule.kind is schedules.JobKind.TMP_CLEANUP else record.interval
+        return schedules.slots(interval, record.start)
+
     def _cells(self, schedule: schedules.Schedule) -> list[Text]:
-        word, style = _STATE_CELLS[self._row_state(schedule).word]
+        row = self._row_state(schedule)
+        word, style = _STATE_CELLS[row.word]
+        dim = "dim" if row.word in ("off", "n/a", "unknown") else ""
+        record = schedules.record_for(self._state, schedule.id)
+        if self._is_linux_tmp(schedule):
+            every = "10 min"
+        else:
+            tmp = schedule.kind is schedules.JobKind.TMP_CLEANUP
+            every = f"{24 if tmp else record.interval}h {record.start}"
         job = "update" if schedule.kind is schedules.JobKind.UPDATE else schedule.label
+        upcoming = self._next_text(schedule, row)
         return [
             Text(_fit(job, 13), style="bold"),
             Text(_fit(self._target(schedule), 12)),
             Text(word, style=style),
-            Text(""),
-            Text(""),
-            Text(""),
-            Text(""),
+            Text(_fit(every, 9), style=dim),
+            Text(upcoming, style="" if upcoming != "–" else "dim"),
+            self._last_cell(schedule.id),
+            Text(_fit(schedules.RUNNER_NAME, 9, from_left=True), style="dim"),
         ]
+
+    def _next_text(self, schedule: schedules.Schedule, row: schedules.RowState) -> str:
+        """HH:MM of the next run for an on row, from the unit's own slot function (D-04)."""
+        if row.word != "on":
+            return "–"
+        grid = self._grid(schedule)
+        if grid is None:  # Linux tmp cleanup: its last result plus the fixed 10 minutes
+            last = self._last.get(schedule.id)
+            if last is None or last.at is None:
+                return "–"
+            return f"{last.at + timedelta(minutes=10):%H:%M}"
+        return f"{schedules.next_run(grid, self._inputs.now()):%H:%M}"
+
+    def _last_cell(self, schedule_id: str) -> Text:
+        if self._log_error is not None:
+            return Text("…")
+        last = self._last.get(schedule_id)
+        text = schedules.last_cell(last, self._inputs.now())
+        if last is None:
+            return Text(text, style="dim")
+        return Text(text, style=_LAST_STYLES.get(last.word, ""))
 
     def _target(self, schedule: schedules.Schedule) -> str:
         if schedule.kind is schedules.JobKind.UPDATE:
             return schedule.target or ""
         if schedule.kind is schedules.JobKind.TMP_CLEANUP:
             return "$TMPDIR"
+        return " ".join(name for name, _command in self._managers()) or "none"
+
+    def _managers(self) -> list[tuple[str, str]]:
         ctx = self._ctx
-        found = [name for name in _CACHE_MANAGERS if ctx is not None and ctx.which(name)]
-        return " ".join(found) or "none"
+        if ctx is None:
+            return []
+        return [(name, command) for name, command in _CACHE_PRUNES if ctx.which(name)]
+
+    def _set_detail(self) -> None:
+        schedule = self._highlighted_schedule()
+        self.detail_text = "" if schedule is None else self._detail(schedule)
+        self.query_one("#schedule-detail", Static).update(Text(self.detail_text))
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        del event  # the highlighted row is read back from the table
+        self._set_detail()
+
+    def _detail(self, schedule: schedules.Schedule) -> str:
+        """The panel for one row, most important line first (UI-SPEC section 4)."""
+        row = self._row_state(schedule)
+        if schedule.kind is schedules.JobKind.UPDATE:
+            what = f"runs {schedule.target}'s update the way the catalog's u does"
+        elif schedule.kind is schedules.JobKind.TMP_CLEANUP:
+            what = _TMP_WHAT
+        else:
+            what = _CACHE_WHAT
+        if row.word == "drift":
+            lines = [_SCHEDULE_DRIFT]
+        elif row.word == "n/a":
+            lines = [row.reason or schedules.NO_MANAGER_REASON, f"{what}."]
+        elif row.word == "unknown":
+            lines = [f"{schedule.label} — checking its state…"]
+        else:
+            lines = [f"{schedule.label} is {row.word} — {what}."]
+        lines += [self._last_line(schedule.id), self._times_line(schedule)]
+        lines += self._extra_lines(schedule)
+        ctx = self._ctx
+        if ctx is not None:
+            runner = _tilde(ctx.data_dir / schedules.RUNNER_NAME, ctx.home)
+            job = f"update {schedule.target}" if schedule.target else schedule.kind.value
+            lines.append(f"runs: uv run --no-project --script {runner} {job}")
+        return "\n".join(sanitize_log_line(line) for line in lines)
+
+    def _last_line(self, schedule_id: str) -> str:
+        if self._log_error is not None:
+            return "last: could not be read"
+        last = self._last.get(schedule_id)
+        if last is None:
+            return "last: never"
+        if last.word == "running":
+            return f"last: running since {last.at:%H:%M}" if last.at else "last: running"
+        if last.at is None:
+            return f"last: {last.text}"
+        return f"last: {last.at.astimezone().isoformat(timespec='seconds')} {last.text}"
+
+    def _times_line(self, schedule: schedules.Schedule) -> str:
+        grid = self._grid(schedule)
+        if grid is None:
+            return "times: every 10 min, first run 2 min after login"
+        names = [f"{hour:02d}:{minute:02d}" for hour, minute in grid]
+        if schedule.kind is schedules.JobKind.TMP_CLEANUP:
+            return f"times: daily at {names[0]} (local)"
+        if len(names) <= _TIMES_LISTED:
+            return f"times: {', '.join(names)} (local)"
+        interval = schedules.record_for(self._state, schedule.id).interval
+        every = "hour" if interval == 1 else f"{interval} hours"
+        return f"times: {', '.join(names[:3])} … {names[-1]}, every {every} (local)"
+
+    def _extra_lines(self, schedule: schedules.Schedule) -> list[str]:
+        """The row-specific lines: what a cache prune runs, the cursor model, the tmp notes."""
+        if schedule.kind is schedules.JobKind.CACHE_CLEANUP:
+            commands = [command for _name, command in self._managers()]
+            if not commands:
+                return ["prunes: nothing — no uv, pnpm, brew or npm found"]
+            return [f"prunes: {' · '.join(commands)}"]
+        if schedule.kind is schedules.JobKind.UPDATE and schedule.id == "update-cursor-agent":
+            model = self._state.cursor_default_model
+            lines = [f"model: {model} — press m to change"]
+            shim = self._state.cursor_shim
+            if shim == "not-listed":
+                lines.append(
+                    f"! {model} is not in your model list; the shim passes arguments through."
+                )
+            elif shim == "unverified":
+                lines.append(
+                    f"model unverified: could not read the cursor-agent model list; using {model}."
+                )
+            elif shim == "kept-foreign":
+                lines.append(
+                    "your own ~/.local/bin/cursor-agent is kept: it has no installer sentinel."
+                )
+            return lines
+        if schedule.kind is schedules.JobKind.TMP_CLEANUP:
+            lines = [_LINGER_SENTENCE] if self._is_linux_tmp(schedule) else []
+            usage = _temp_usage_line(self._inputs.disk_pressure)
+            competing = _competing_line(self._inputs.competing)
+            return [*lines, *filter(None, (usage, competing))]
+        return []
 
     def _highlighted_schedule(self) -> schedules.Schedule | None:
         key = highlighted_key(self.query_one(DataTable[Any]))
@@ -3145,30 +3378,21 @@ class SchedulesScreen(AppScreen):
         text, severity = self._change_line(message)
         self.app.show_result(self, text, severity)
 
-    def _next_text(self, schedule_id: str) -> str | None:
-        ctx = self._ctx
-        schedule = schedules.schedule_by_id(schedule_id)
-        if ctx is None or (
-            schedule.kind is schedules.JobKind.TMP_CLEANUP and ctx.platform_os != "macos"
-        ):
-            return None
-        record = schedules.record_for(self._state, schedule_id)
-        interval = 24 if schedule.kind is schedules.JobKind.TMP_CLEANUP else record.interval
-        grid = schedules.slots(interval, record.start)
-        return f"{schedules.next_run(grid, self._inputs.now()):%H:%M}"
-
     def _change_line(self, message: ScheduleChanged) -> tuple[str, str]:
         change, error = message.change, message.error
-        label = schedules.schedule_by_id(change.schedule_id).label
+        schedule = schedules.schedule_by_id(change.schedule_id)
+        label = schedule.label
         if error is not None:
             verb = "turn off" if change.verb == "off" else "turn on"
             return f"Could not {verb} {label}: {_sentence(error)}", "error"
         if change.verb == "off":
             return f"Turned off {label}; its timer files are removed.", "ok"
-        upcoming = self._next_text(change.schedule_id)
+        grid = self._grid(schedule)
+        upcoming = f"{schedules.next_run(grid, self._inputs.now()):%H:%M}" if grid else None
+        when = f"next run at {upcoming}" if upcoming else "runs every 10 min"
         if change.was_drift:
-            return f"Rewrote the {label} timer files: next run at {upcoming}.", "ok"
-        return f"Turned on {label}: next run at {upcoming}.", "ok"
+            return f"Rewrote the {label} timer files: {when}.", "ok"
+        return f"Turned on {label}: {when}.", "ok"
 
 
 class ConfirmGuardFile(ModalScreen[bool]):

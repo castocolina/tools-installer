@@ -258,7 +258,8 @@ class WayfindingHeader(Horizontal):
 
     DEFAULT_CSS = """
     WayfindingHeader { height: 1; padding: 0 1; }
-    WayfindingHeader > WayfindingTab { width: auto; height: 1; margin-right: 4; }
+    WayfindingHeader > WayfindingTab { width: auto; height: 1; margin-right: 1; }
+    WayfindingHeader > WayfindingTab:last-of-type { margin-right: 0; }
     """
 
     def __init__(self, *, active: str, accent: str = "$accent") -> None:
