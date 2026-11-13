@@ -367,13 +367,19 @@ def query_systemctl(cmd: list[str]) -> str:
     return run_query(cmd, timeout=SYSTEMCTL_QUERY_TIMEOUT, accept_codes=(0, 1, 3, 4))
 
 
+def stop_timer(*, basename: str, run: Runner = run_captured) -> None:
+    """`systemctl --user stop <timer>` -- `clean` refuses an active timer, so stop it first."""
+    run(["systemctl", "--user", "stop", f"{basename}.timer"])
+
+
 def clean_timer_state(*, basename: str, run: Runner = run_captured) -> None:
     """`systemctl --user clean --what=state <timer>` -- drop the Persistent= stamp.
 
     `man systemd.timer` says to use this command before uninstalling a timer
     unit: without it the stamp survives and a later timer of the same name fires
     a catch-up for a schedule that is gone or re-timed. The caller runs it while
-    the unit is still loaded.
+    the unit is still loaded. systemd refuses it on an ACTIVE timer, so a caller that keeps the
+    timer (a re-time) stops it first with `stop_timer` and starts it again afterwards.
     """
     run(["systemctl", "--user", "clean", "--what=state", f"{basename}.timer"])
 

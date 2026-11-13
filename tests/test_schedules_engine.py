@@ -470,6 +470,7 @@ def test_retime(env: Env) -> None:
     assert "OnCalendar=*-*-* 01,09,17:30:00" in timer.read_text().splitlines()
     timer_name = f"{CLAUDE_BASENAME}.timer"
     assert env.run.text() == [
+        f"stop {timer_name}",  # F13: `clean` refuses an active timer
         f"clean --what=state {timer_name}",
         "daemon-reload",
         f"enable {timer_name}",
@@ -1190,6 +1191,7 @@ def test_a_failed_retime_restores_the_bytes_and_reregisters_after_the_reload(
     assert service.read_bytes() == service_before
     assert timer.read_bytes() == timer_before  # not the 8 h attempt
     assert timer_verbs(env) == [
+        "stop",
         "clean",
         "daemon-reload",
         "enable",

@@ -951,8 +951,9 @@ def _apply_linux(
             systemd_daemon.write_unit_pair(
                 ctx.unit_dir, basename=basename, service_text=service_text, timer_text=timer_text
             )
-        if clean_stamp:  # a missing stamp is not a failure
-            with contextlib.suppress(CommandError):
+        if clean_stamp:  # F13: `clean` refuses an active timer; the bootstrap starts it again
+            with contextlib.suppress(CommandError):  # a missing stamp is not a failure
+                systemd_daemon.stop_timer(basename=basename, run=ctx.run)
                 systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
         systemd_daemon.bootstrap(ctx.unit_dir, basename=basename, run=ctx.run)
     except (CommandError, OSError):

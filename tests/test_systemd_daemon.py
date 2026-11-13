@@ -1283,6 +1283,12 @@ def test_teardown_verbs_take_a_basename(tmp_path: Path) -> None:
     assert other.calls == []
 
 
+def test_stop_timer() -> None:
+    recorder = _RecordingRun()
+    systemd_daemon.stop_timer(basename=_SCHEDULE_BASENAME, run=recorder)
+    assert recorder.calls == [["systemctl", "--user", "stop", f"{_SCHEDULE_BASENAME}.timer"]]
+
+
 def test_clean_timer_state() -> None:
     recorder = _RecordingRun()
     systemd_daemon.clean_timer_state(basename=_SCHEDULE_BASENAME, run=recorder)
