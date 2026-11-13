@@ -15,11 +15,13 @@ Argv: `<job> [job args] --log PATH --lock PATH --cap-bytes N` with the jobs
 `update <tool> --installer CHECKOUT --uv UV`. The log id is `tmp-cleanup`,
 `cache-cleanup` or `update-<tool>`.
 
-Every run takes the cross-process run lock without blocking (a held lock is logged as
-`skipped: busy` and nothing runs), appends `<iso> <id> start`, does the work, and appends
-exactly one `<iso> <id> ok: ...|skipped: ...|failed: ...` line. SIGTERM and SIGINT kill the
-active child's process group and end the run as `failed: interrupted`. Exit 0 for ok and
-skipped, 1 for failed, 2 for a usage error.
+Every run takes the cross-process run lock. A lock held by another scheduled run is waited
+for (polled, bounded, one `waited:` line); a lock held by the installer, or a wait that passes
+its bound, is logged as `skipped: busy` and nothing runs. The run then appends
+`<iso> <id> start`, does the work, and appends exactly one
+`<iso> <id> ok: ...|skipped: ...|failed: ...` line. SIGTERM and SIGINT kill the active child's
+process group and end the run as `failed: interrupted`. Exit 0 for ok and skipped, 1 for
+failed, 2 for a usage error.
 
 Standard library only, and it never imports `installer`: the unit starts it from a bare
 interpreter, and a moved or deleted checkout must still leave a logged failure instead of a
@@ -38,6 +40,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 from types import FrameType
@@ -60,6 +63,15 @@ _MANAGERS = (
 # wait turns a busy cache into a skip instead of a 5-minute stall and a failure.
 _UV_LOCK_TIMEOUT = "5"
 _UV_LOCK_MARKER = b"when waiting for lock"
+# The six calendar schedules share one grid, so they fire together: a runner that finds the
+# lock held by another scheduled run waits for it. The bound is 2 h: a holder lives at most
+# _UPDATE_TIMEOUT plus the kill grace (about 30 min), so a queue of waiters drains well inside
+# it, and a waiter that then runs for up to 30 min still ends 2.5 h after its slot, before the
+# next 3 h slot (24.2 F1).
+_WAIT_BOUND = 7200
+_WAIT_POLL = 5
+_INSTALLER_JOB = "installer"  # source: installer/runlock.py INSTALLER_JOB
+_HOLDER_READ = 4096
 _KILL_GRACE = 10  # seconds a group gets between SIGTERM and SIGKILL, and for the last collect
 # The house child policy; source: installer/run.py CHILD_ENV (this file cannot import it).
 _CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
@@ -222,9 +234,37 @@ def _run_child(
     return _Child(proc.returncode, out, err, None)
 
 
+def _holder_job(fd: int) -> str:
+    """The job named by the holder line, or "" when it is empty or half-written."""
+    fields = os.pread(fd, _HOLDER_READ, 0).decode("utf-8", errors="replace").split()
+    return fields[0] if fields else ""
+
+
+def _wait_for_lock(fd: int, emit: Emit) -> bool:
+    """Wait for a lock another scheduled run holds; False for the installer or an expired bound.
+
+    The holder line is re-read every poll, so an installer that takes the lock next ends the wait
+    with `skipped: busy` at once instead of making a timer wait for a long update.
+    """
+    began = time.monotonic()
+    job = ""
+    while True:
+        job = _holder_job(fd) or job
+        if job == _INSTALLER_JOB or time.monotonic() - began >= _WAIT_BOUND:
+            return False
+        time.sleep(_WAIT_POLL)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            continue
+        who = _sanitize(job)[:60] or "another run"
+        emit(f"waited: {round(time.monotonic() - began)}s for {who}")
+        return True
+
+
 @contextlib.contextmanager
-def _run_lock(lock_path: Path, run_id: str) -> Generator[bool]:
-    """Hold the run lock for the block; False when another run holds it."""
+def _run_lock(lock_path: Path, run_id: str, emit: Emit) -> Generator[bool]:
+    """Hold the run lock for the block; False when the installer holds it or the wait ran out."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC  # never O_TRUNC
     fd = os.open(lock_path, flags, 0o600)
@@ -232,8 +272,9 @@ def _run_lock(lock_path: Path, run_id: str) -> Generator[bool]:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            yield False
-            return
+            if not _wait_for_lock(fd, emit):
+                yield False
+                return
         os.ftruncate(fd, 0)
         os.write(fd, f"{run_id} {os.getpid()} {_now()}\n".encode())
         try:
@@ -419,6 +460,9 @@ def main(argv: list[str] | None = None) -> int:
     previous = {sig: signal.signal(sig, _on_signal) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         return _locked_run(job, run_id, options, forwarded, emit)
+    except _Interrupted:  # only the wait for the lock lets it through: nothing ran, no start line
+        emit("skipped: interrupted while waiting for the run lock")
+        return 0
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
@@ -427,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
 def _locked_run(
     job: str, run_id: str, options: dict[str, str], forwarded: list[str], emit: Emit
 ) -> int:
-    with _run_lock(Path(options["--lock"]), run_id) as held:
+    with _run_lock(Path(options["--lock"]), run_id, emit) as held:
         if not held:
             emit("skipped: busy")
             return 0

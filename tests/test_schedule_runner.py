@@ -621,6 +621,8 @@ def test_update_timeout_kills_the_installer_grandchild(
 
 
 def test_busy_lock_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_BOUND", 0.3)
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
     state = tmp_path / "state"
     state.mkdir()
     lock = state / "run.lock"
@@ -835,3 +837,79 @@ def test_a_signal_kills_the_child_group_logs_interrupted_and_frees_the_lock(
             _reap(pid)
     _assert_lock_released(tmp_path)
     assert signal.getsignal(sig) == before
+
+
+def _hold(lock: Path, line: str) -> int:
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(line)
+    descriptor = os.open(lock, os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return descriptor
+
+
+def test_two_runners_started_together_serialize_instead_of_skipping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
+    bin_dir = tmp_path / "bin"
+    _hanging_uv(tmp_path, "sleep 1")  # the cache job holds the lock for a second
+    monkeypatch.setenv("PATH", str(bin_dir))
+    cleanup = _script(tmp_path / "scripts", "clean.sh", "echo deleted: 0")
+    base = ["--log", str(tmp_path / "state" / "run.log"), "--lock", str(tmp_path / "state" / "l")]
+    base += ["--cap-bytes", str(_CAP)]
+    jobs: list[list[str]] = [
+        ["cache-cleanup", *base],
+        ["tmp-cleanup", "--script", str(cleanup), *base],
+    ]
+    codes: list[int] = []
+
+    def go(argv: list[str]) -> None:
+        codes.append(schedule_runner.main(argv))
+
+    threads = [threading.Thread(target=go, args=(argv,)) for argv in jobs]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    text = (tmp_path / "state" / "run.log").read_text()
+    assert codes == [0, 0]
+    assert "skipped: busy" not in text
+    assert len(re.findall(r" ok: ", text)) == 2
+    assert len(re.findall(rf"{_TS} (\S+) waited: \d+s for (cache|tmp)-cleanup\n", text)) == 1
+
+
+def test_a_run_waits_only_for_a_scheduled_holder_never_the_installer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_BOUND", 60)
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    holder = _hold(
+        tmp_path / "state" / "run.lock", f"installer {os.getpid()} 2026-11-13T00:00:00+00:00\n"
+    )
+    began = time.monotonic()
+    try:
+        code, lines = _run(tmp_path, "cache-cleanup")
+    finally:
+        os.close(holder)
+    assert time.monotonic() - began < 5
+    assert (code, _texts(lines)) == (0, ["skipped: busy"])
+
+
+def test_a_signal_while_waiting_ends_the_wait_without_a_start_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_BOUND", 60)
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    holder = _hold(
+        tmp_path / "state" / "run.lock", f"update-claude {os.getpid()} 2026-11-13T00:00:00+00:00\n"
+    )
+    killer = threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGTERM))
+    killer.start()
+    try:
+        code, lines = _run(tmp_path, "cache-cleanup")
+    finally:
+        killer.cancel()
+        os.close(holder)
+    assert (code, _texts(lines)) == (0, ["skipped: interrupted while waiting for the run lock"])
