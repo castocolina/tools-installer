@@ -9,12 +9,12 @@ import os
 import plistlib
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
 
-from installer import receipts, runlock, schedules
+from installer import daemon, receipts, runlock, schedules, systemd_daemon
 from installer.cursor_shim import ShimReport, is_our_shim
 from installer.daemon import DaemonScheduleError
 from installer.run import CommandError
@@ -22,8 +22,11 @@ from installer.schedules import (
     INTERVAL_MESSAGE,
     MODEL_CHARSET_MESSAGE,
     MODEL_SHAPE_MESSAGE,
+    SCHEDULES,
     START_MESSAGE,
+    RowState,
     ScheduleContext,
+    ScheduleRecord,
     ScheduleUnavailable,
     basename_for,
     calendar_dicts,
@@ -32,6 +35,7 @@ from installer.schedules import (
     label_for,
     load_state,
     retime,
+    row_state,
     runner_argv,
     schedule_by_id,
     set_cursor_model,
@@ -64,7 +68,12 @@ class Recorder:
         self.calls: list[list[str]] = []
         self.fail_on = fail_on
         self.hooks: dict[str, Callable[[list[str]], None]] = {}
-        self._seen: dict[str, int] = {}
+        self.seen: dict[str, int] = {}
+
+    def arm(self, fail_on: frozenset[tuple[str, int]]) -> None:
+        """Fail these (verb, occurrence) pairs, counting from now."""
+        self.fail_on = fail_on
+        self.seen.clear()
 
     def verb(self, cmd: list[str]) -> str:
         return cmd[2] if cmd[0] == "systemctl" else cmd[1]
@@ -72,10 +81,10 @@ class Recorder:
     def __call__(self, cmd: list[str]) -> None:
         self.calls.append(cmd)
         verb = self.verb(cmd)
-        self._seen[verb] = self._seen.get(verb, 0) + 1
+        self.seen[verb] = self.seen.get(verb, 0) + 1
         if verb in self.hooks:
             self.hooks[verb](cmd)
-        if (verb, self._seen[verb]) in self.fail_on:
+        if (verb, self.seen[verb]) in self.fail_on:
             raise CommandError(cmd, 5)
         if cmd[0] != "systemctl" or not cmd[-1].endswith(".timer"):
             return
@@ -667,3 +676,340 @@ def test_require_available_uses_manager_reachable(
     with pytest.raises(ScheduleUnavailable, match="unavailable: no user timer manager"):
         turn_on(env.ctx, "update-claude")
     assert env.output.calls == []
+
+
+# --- Task 3: tmp cleanup adopted by name, rollback on every verb, takeover, row states ---
+
+TMP_BASENAME = "tools-installer-prune-tmp"
+COMPETING_TIMER, COMPETING_SERVICE = systemd_daemon.COMPETING_UNITS
+
+
+def seed_legacy_tmp(env: Env, *, marker: bool = True) -> dict[Path, bytes]:
+    """Today's tmp cleanup: old wrapper-driven units, wants link, wrapper and decided marker."""
+    ctx = env.ctx
+    wrapper = daemon.install_wrapper(ctx.legacy_bin_dir)
+    service = systemd_daemon.render_service(
+        uv_path=env.uv,
+        wrapper_path=wrapper,
+        script_path=CHECKOUT / "scripts" / "prune-tmp-linux.sh",
+        log_path=ctx.home / ".local/state/prune.log",
+        tmpdir=ctx.tmpdir,
+        home=str(ctx.home),
+        path_value="/usr/bin",
+    )
+    service_path, timer_path = systemd_daemon.write_unit_pair(
+        ctx.unit_dir,
+        basename=TMP_BASENAME,
+        service_text=service,
+        timer_text=systemd_daemon.render_timer(),
+    )
+    link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=TMP_BASENAME)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(timer_path)
+    if marker:
+        systemd_daemon.record_decided(ctx.myshellrc_path)
+    return {service_path: service_path.read_bytes(), timer_path: timer_path.read_bytes()}
+
+
+def test_tmp_cleanup_is_adopted_in_place(env: Env) -> None:
+    ctx = env.ctx
+    old = seed_legacy_tmp(env)
+    tmp = schedule_by_id("tmp-cleanup")
+    before = load_state(ctx.state_path).state
+    assert row_state(ctx, before, tmp, manager=True, present=None) == RowState("on")
+
+    report = turn_on(ctx, "tmp-cleanup")
+
+    assert env.run.text() == [
+        "daemon-reload",
+        f"enable {TMP_BASENAME}.timer",
+        f"restart {TMP_BASENAME}.timer",
+    ]
+    service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=TMP_BASENAME)
+    argv = [
+        str(env.uv),
+        "run",
+        "--no-project",
+        "--script",
+        str(ctx.data_dir / "runner.py"),
+        "tmp-cleanup",
+        "--script",
+        str(ctx.data_dir / "prune-tmp-linux.sh"),
+        "--log",
+        str(ctx.log_path),
+        "--lock",
+        str(ctx.lock_path),
+        "--cap-bytes",
+        "262144",
+        "--",
+        "--apply",
+        "--minutes",
+        "10",
+    ]
+    assert (
+        "ExecStart=" + " ".join(f'"{token}"' for token in argv)
+        in service_path.read_text().splitlines()
+    )
+    assert service_path.read_bytes() != old[service_path]
+    timer_lines = timer_path.read_text().splitlines()
+    assert "OnBootSec=2min" in timer_lines
+    assert "OnUnitActiveSec=10min" in timer_lines
+    assert not any(line.startswith(("OnCalendar", "Persistent")) for line in timer_lines)
+    assert sorted(path.name for path in ctx.unit_dir.iterdir()) == [
+        "timers.target.wants",
+        f"{TMP_BASENAME}.service",
+        f"{TMP_BASENAME}.timer",
+    ]
+    assert not (ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND).exists()
+    assert systemd_daemon.decided(ctx.myshellrc_path)
+    assert report.next_run is None  # a fixed monotonic cadence has no calendar slot
+    record = load_state(ctx.state_path).state.records["tmp-cleanup"]
+    assert record.decided is True
+    assert {Path(a.path) for a in record.files} == {
+        service_path,
+        timer_path,
+        systemd_daemon.wants_link_path(ctx.unit_dir, basename=TMP_BASENAME),
+    }
+
+
+def test_failed_adoption_keeps_the_old_units(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, fail_on=frozenset({("restart", 1)}))
+    old = seed_legacy_tmp(env)
+    with pytest.raises(CommandError):
+        turn_on(env.ctx, "tmp-cleanup")
+    assert {path: path.read_bytes() for path in old} == old
+    assert (env.ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND).is_file()
+    assert systemd_daemon.decided(env.ctx.myshellrc_path)
+    assert load_state(env.ctx.state_path).state.records == {}
+    assert not env.ctx.data_dir.exists()
+
+
+@pytest.mark.parametrize("adopted", [True, False])
+def test_tmp_off_records_the_decision(env: Env, adopted: bool) -> None:
+    ctx = env.ctx
+    seed_legacy_tmp(env, marker=adopted)
+    if adopted:
+        turn_on(ctx, "tmp-cleanup")
+    turn_off(ctx, "tmp-cleanup")
+    service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=TMP_BASENAME)
+    assert not service_path.exists()
+    assert not timer_path.exists()
+    assert not systemd_daemon.wants_link_path(ctx.unit_dir, basename=TMP_BASENAME).is_symlink()
+    assert not (ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND).exists()
+    assert systemd_daemon.decided(ctx.myshellrc_path)  # kept, so the reconcile never re-enables it
+    tmp = schedule_by_id("tmp-cleanup")
+    assert row_state(ctx, load_state(ctx.state_path).state, tmp, manager=True, present=None) == (
+        RowState("off")
+    )
+
+
+class CompetingOutput(Output):
+    def __init__(self) -> None:
+        super().__init__()
+        listing = f"{COMPETING_TIMER}        enabled        -\n"
+        self.user_listing = listing
+        self.system_listing = listing
+
+    def __call__(self, cmd: list[str]) -> str:
+        if "list-unit-files" in cmd:
+            self.calls.append(cmd)
+            return self.user_listing if "--user" in cmd else self.system_listing
+        return super().__call__(cmd)
+
+
+def test_competing_takeover_runs_after_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch)
+    ctx = replace(env.ctx, read_output=CompetingOutput())
+    report = turn_on(ctx, "tmp-cleanup")
+    verbs = env.run.text()
+    assert verbs.index(f"restart {TMP_BASENAME}.timer") < verbs.index(
+        f"disable --now {COMPETING_TIMER}"
+    )
+    system = systemd_daemon.CompetingUnit(COMPETING_TIMER, "system", "enabled")
+    assert report.warnings == (
+        systemd_daemon.takeover_disclosure([COMPETING_TIMER]),
+        systemd_daemon.system_scope_warning([system]),
+    )
+    assert load_state(ctx.state_path).state.records["tmp-cleanup"].decided is True
+
+
+def test_competing_takeover_failure_never_undoes_the_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, fail_on=frozenset({("disable", 1)}))
+    ctx = replace(env.ctx, read_output=CompetingOutput())
+    report = turn_on(ctx, "tmp-cleanup")
+    assert systemd_daemon.user_scope_failure_warning([COMPETING_TIMER]) in report.warnings
+    record = load_state(ctx.state_path).state.records["tmp-cleanup"]
+    assert record.decided is True
+    assert all(receipts.matches(a, rehash=True) for a in record.files)
+
+
+def unit_paths_on_disk(ctx: ScheduleContext) -> set[Path]:
+    basename = CLAUDE_BASENAME
+    service, timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
+    link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
+    return {p for p in (service, timer, link) if p.exists() or p.is_symlink()}
+
+
+EMPTY_RECORD = ScheduleRecord(None, 6, "00:00", ())
+ROLLBACK_CASES: list[tuple[str, frozenset[tuple[str, int]], bool]] = [
+    # (action, failing verbs, whether the verb ends in an error; clean and reload are best effort)
+    ("on", frozenset({("daemon-reload", 1)}), True),
+    ("on", frozenset({("enable", 1)}), True),
+    ("on", frozenset({("restart", 1)}), True),
+    ("on", frozenset({("restart", 1), ("disable", 1)}), True),
+    ("on", frozenset({("enable", 1), ("daemon-reload", 2)}), True),
+    ("retime", frozenset({("clean", 1)}), False),
+    ("retime", frozenset({("daemon-reload", 1)}), True),
+    ("retime", frozenset({("enable", 1)}), True),
+    ("retime", frozenset({("restart", 1)}), True),
+    ("retime", frozenset({("restart", 1), ("daemon-reload", 2)}), True),
+    ("off", frozenset({("disable", 1)}), True),
+    ("off", frozenset({("clean", 1)}), False),
+    ("off", frozenset({("daemon-reload", 1)}), False),
+]
+
+
+@pytest.mark.parametrize(("action", "fail_on", "raises"), ROLLBACK_CASES)
+def test_rollback_on_every_verb(
+    action: str,
+    fail_on: frozenset[tuple[str, int]],
+    raises: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = make_env(tmp_path, monkeypatch)
+    ctx = env.ctx
+    if action != "on":
+        turn_on(ctx, "update-claude")
+    env.run.arm(fail_on)  # counted from here on, after the setup's own verbs
+    outcomes: list[BaseException | None] = []
+    try:
+        if action == "on":
+            turn_on(ctx, "update-claude")
+        elif action == "retime":
+            retime(ctx, "update-claude", 8, "01:30")
+        else:
+            turn_off(ctx, "update-claude")
+        outcomes.append(None)
+    except (CommandError, OSError) as exc:
+        outcomes.append(exc)
+    assert (outcomes[0] is not None) is raises
+    files = load_state(ctx.state_path).state.records.get("update-claude", EMPTY_RECORD).files
+    # the state never names a file that is not on disk, and names every file that is
+    assert {Path(a.path) for a in files} == unit_paths_on_disk(ctx)
+    assert all(receipts.matches(a, rehash=True) for a in files)
+    if action == "on" and outcomes[0] is not None:
+        # no unit and no shared asset survives a failed first apply
+        assert files_left(env.home) == []
+
+
+def no_process_ctx(ctx: ScheduleContext) -> ScheduleContext:
+    """A context whose every process seam fails the test when called."""
+
+    def boom(cmd: list[str]) -> None:
+        raise AssertionError(f"row_state started a process: {cmd}")
+
+    def boom_output(cmd: list[str]) -> str:
+        raise AssertionError(f"row_state started a process: {cmd}")
+
+    def boom_models(agent: Path) -> tuple[str, ...] | None:
+        raise AssertionError(f"row_state read the model list: {agent}")
+
+    def boom_which(name: str) -> str | None:
+        raise AssertionError(f"row_state resolved a program: {name}")
+
+    return replace(
+        ctx, run=boom, read_output=boom_output, read_models=boom_models, which=boom_which
+    )
+
+
+def test_row_state_matrix(env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = no_process_ctx(env.ctx)
+    claude = schedule_by_id("update-claude")
+    cache = schedule_by_id("cache-cleanup")
+    tmp = schedule_by_id("tmp-cleanup")
+    empty = load_state(ctx.state_path).state
+
+    for schedule in SCHEDULES:  # the manager probe or the tool state is still pending
+        assert row_state(ctx, empty, schedule, manager=None, present=None) == RowState("unknown")
+        assert row_state(ctx, empty, schedule, manager=False, present=None) == RowState(
+            "n/a", "unavailable: no user timer manager"
+        )
+    assert row_state(ctx, empty, claude, manager=True, present=None) == RowState("unknown")
+    assert row_state(ctx, empty, claude, manager=True, present=lambda _tool: False) == RowState(
+        "n/a", "unavailable: claude not installed"
+    )
+    assert row_state(ctx, empty, claude, manager=True, present=lambda _tool: True) == RowState(
+        "off"
+    )
+    # cache cleanup has no target, so a missing tool never makes it n/a
+    assert row_state(ctx, empty, cache, manager=True, present=lambda _tool: False) == RowState(
+        "off"
+    )
+    assert row_state(ctx, empty, tmp, manager=True, present=None) == RowState("off")
+
+    turn_on(env.ctx, "update-claude")
+    state = load_state(ctx.state_path).state
+    assert row_state(ctx, state, claude, manager=True, present=lambda _tool: True) == RowState("on")
+    timer = ctx.unit_dir / f"{CLAUDE_BASENAME}.timer"
+    original = timer.read_bytes()
+    timer.write_bytes(original + b"# edited by hand\n")
+    assert row_state(ctx, state, claude, manager=True, present=lambda _tool: True) == RowState(
+        "drift"
+    )
+    timer.write_bytes(original)
+    service = ctx.unit_dir / f"{CLAUDE_BASENAME}.service"
+    service.unlink()
+    assert row_state(ctx, state, claude, manager=True, present=lambda _tool: True) == RowState(
+        "drift"
+    )
+
+    # tmp cleanup reads on from its units by name, on macOS from its plist
+    seed_legacy_tmp(env)
+    assert row_state(ctx, state, tmp, manager=True, present=None) == RowState("on")
+    mac = make_env(tmp_path / "mac", monkeypatch, os_key="macos")
+    assert row_state(no_process_ctx(mac.ctx), empty, tmp, manager=True, present=None) == RowState(
+        "off"
+    )
+    plist = mac.ctx.launch_agents_dir / "com.tools-installer.prune-tmpdir.plist"
+    plist.parent.mkdir(parents=True)
+    plist.write_bytes(b"<plist/>")
+    assert row_state(no_process_ctx(mac.ctx), empty, tmp, manager=True, present=None) == RowState(
+        "on"
+    )
+
+
+def test_toggle_during_a_run_leaves_the_run_alone(env: Env) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    held = runlock.try_acquire(ctx.lock_path, "update-claude")
+    assert held is not None
+    content = ctx.lock_path.read_bytes()
+    try:
+        turn_off(ctx, "update-claude")
+        assert ctx.lock_path.read_bytes() == content
+        holder = runlock.holder(ctx.lock_path)
+        assert holder is not None
+        assert holder.job == "update-claude"
+        assert runlock.try_acquire(ctx.lock_path, "probe") is None  # still held
+    finally:
+        held.release()
+    assert files_left(env.home) == [".local/state/tools-installer/run.lock"]  # only the run lock
+
+
+ESCALATION = re.compile(r"\b(sudo|pkexec|doas)\b")
+
+
+def test_new_modules_name_no_privilege_escalation() -> None:
+    package = Path(schedules.__file__).parent
+    names = ["schedules.py", "runlock.py", "cursor_shim.py", "helper_assets/schedule_runner.py"]
+    if (package / "schedule_run.py").exists():
+        names.append("schedule_run.py")
+    for name in names:
+        assert ESCALATION.search((package / name).read_text()) is None, name

@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -999,6 +1000,62 @@ def _read_models(ctx: ScheduleContext) -> tuple[str, ...] | None:
     return ctx.read_models(cursor_shim.shim_paths(ctx.home)[1])
 
 
+def _record_decided_durably(record: Callable[[Path], None], path: Path) -> None:
+    # Ported from installer/policy.py `_record_decided_durably`: a transient failure after a
+    # manual off would let the next default-on reverse the user's choice, so retry once.
+    try:
+        record(path)
+    except OSError:
+        time.sleep(0.05)
+        record(path)
+
+
+def _record_tmp_decision(ctx: ScheduleContext, warnings: list[str]) -> None:
+    recorder = (
+        daemon.record_decided if ctx.platform_os == "macos" else systemd_daemon.record_decided
+    )
+    try:
+        _record_decided_durably(recorder, ctx.myshellrc_path)
+    except OSError as exc:
+        warnings.append(f"decision not recorded: {exc}")
+
+
+def _remove_legacy_wrapper(ctx: ScheduleContext, warnings: list[str]) -> None:
+    try:
+        daemon.remove_wrapper(ctx.legacy_bin_dir)  # sentinel-checked
+    except OSError as exc:
+        warnings.append(f"wrapper removal failed: {exc}")
+
+
+def _take_over_competitors(ctx: ScheduleContext) -> tuple[str, ...]:
+    """Disclosure warnings after taking over a competing user-scope cleanup timer (D-02).
+
+    Port of `_detect_and_take_over_competitors`: runs only after our own registration worked,
+    and a detection or takeover failure never undoes it (T-15.7-13); the guards stay separate so
+    what was learned survives a failure in the next step (IN-07)."""
+    try:
+        competitors = systemd_daemon.detect_competing(read_output=ctx.read_output)
+    except (CommandError, OSError, ValueError):
+        return ()
+    if not competitors:
+        return ()
+    system_warning = systemd_daemon.system_scope_warning(competitors)
+    user_scope = [c for c in competitors if c.scope == systemd_daemon.SCOPE_USER]
+    disabled: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+    if user_scope:
+        try:
+            disabled, failed = systemd_daemon.disable_competing(user_scope, run=ctx.run)
+        except ValueError:  # structural refusal; fires before any argv
+            failed = tuple(unit.name for unit in user_scope)
+    sentences = (
+        systemd_daemon.takeover_disclosure(disabled),
+        system_warning,
+        systemd_daemon.user_scope_failure_warning(failed),
+    )
+    return tuple(sentence for sentence in sentences if sentence)
+
+
 def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     """Write the shared assets, then the unit, register it, and record every file (D-02)."""
     schedule = schedule_by_id(schedule_id)
@@ -1018,6 +1075,12 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
         raise
     files = _fingerprint_unit(ctx, schedule)
     warnings: list[str] = []
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        # Only now that the registration worked: the old wrapper goes, the decision is kept.
+        _remove_legacy_wrapper(ctx, warnings)
+        _record_tmp_decision(ctx, warnings)
+        if ctx.platform_os != "macos":
+            warnings.extend(_take_over_competitors(ctx))
     # The model list is read before the state lock, never inside it (R2-05).
     models = _read_models(ctx) if schedule_id == _CURSOR_ID else None
     shim_report: cursor_shim.ShimReport | None = None
@@ -1069,9 +1132,18 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
             with contextlib.suppress(CommandError, OSError):
                 systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
     kept = _delete_recorded(record.files)
+    tmp = schedule.kind is JobKind.TMP_CLEANUP
+    if tmp and not record.files:  # units adopted by name, never recorded
+        if macos:
+            _plist_path(ctx, schedule_id).unlink(missing_ok=True)
+        else:
+            systemd_daemon.remove_units(ctx.unit_dir)
     if reached and not macos:
         with contextlib.suppress(CommandError):
             systemd_daemon.daemon_reload(run=ctx.run)
+    if tmp:
+        _remove_legacy_wrapper(ctx, warnings)
+        _record_tmp_decision(ctx, warnings)
 
     def change(current: ScheduleState) -> ScheduleState:
         status = current.cursor_shim
@@ -1122,8 +1194,7 @@ def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) ->
     if is_on:
         # Linux rewrites only the timer: a running job is never touched and the new grid applies
         # from the next slot. macOS re-registers the plist, which stops a loaded run (R1-11).
-        uv = _resolve_uv(ctx) if macos else Path("/")
-        _register(ctx, schedule, fresh, uv, timer_only=True, clean_stamp=True)
+        _register(ctx, schedule, fresh, _resolve_uv(ctx), timer_only=True, clean_stamp=True)
         files = _fingerprint_unit(ctx, schedule)
 
     def change(current: ScheduleState) -> ScheduleState:
@@ -1158,3 +1229,35 @@ def set_cursor_model(ctx: ScheduleContext, model: str) -> ApplyReport:
 
     update_state(ctx.state_path, change)
     return ApplyReport(True, None, shim_report, tuple(warnings))
+
+
+@dataclass(frozen=True)
+class RowState:
+    word: Literal["on", "off", "drift", "n/a", "unknown"]
+    reason: str | None = None
+
+
+def row_state(
+    ctx: ScheduleContext,
+    state: ScheduleState,
+    schedule: Schedule,
+    *,
+    manager: bool | None,
+    present: Callable[[str], bool] | None,
+) -> RowState:
+    """A row's state word from file reads only (UI-SPEC section 3); None means still pending."""
+    if manager is None:
+        return RowState("unknown")
+    if not manager:
+        return RowState("n/a", NO_MANAGER_REASON)
+    if schedule.kind is JobKind.UPDATE:
+        if present is None:
+            return RowState("unknown")
+        if not present(schedule.target or ""):
+            return RowState("n/a", f"unavailable: {schedule.target} not installed")
+    record = record_for(state, schedule.id)
+    if not record.files:
+        # tmp cleanup's existing units are ours by name, even before they are recorded (R9)
+        on_by_name = schedule.kind is JobKind.TMP_CLEANUP and _tmp_unit_present(ctx)
+        return RowState("on" if on_by_name else "off")
+    return RowState("on" if all(receipts.matches(a) for a in record.files) else "drift")
