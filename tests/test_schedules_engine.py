@@ -684,18 +684,26 @@ TMP_BASENAME = "tools-installer-prune-tmp"
 COMPETING_TIMER, COMPETING_SERVICE = systemd_daemon.COMPETING_UNITS
 
 
+WRAPPER_SENTINEL: str = vars(daemon)["_WRAPPER_SENTINEL"]
+
+
+def legacy_wrapper(ctx: ScheduleContext) -> Path:
+    """The old wrapper command, as the previous installer wrote it (sentinel included)."""
+    wrapper = ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(f"#!/bin/sh\n# {WRAPPER_SENTINEL}\nexit 0\n")
+    wrapper.chmod(0o755)
+    return wrapper
+
+
 def seed_legacy_tmp(env: Env, *, marker: bool = True) -> dict[Path, bytes]:
     """Today's tmp cleanup: old wrapper-driven units, wants link, wrapper and decided marker."""
     ctx = env.ctx
-    wrapper = daemon.install_wrapper(ctx.legacy_bin_dir)
-    service = systemd_daemon.render_service(
-        uv_path=env.uv,
-        wrapper_path=wrapper,
-        script_path=CHECKOUT / "scripts" / "prune-tmp-linux.sh",
-        log_path=ctx.home / ".local/state/prune.log",
-        tmpdir=ctx.tmpdir,
-        home=str(ctx.home),
-        path_value="/usr/bin",
+    wrapper = legacy_wrapper(ctx)
+    script = CHECKOUT / "scripts" / "prune-tmp-linux.sh"
+    service = (
+        "[Unit]\nDescription=tools-installer tmpdir prune\n\n[Service]\nType=oneshot\n"
+        f'ExecStart="{env.uv}" run --script "{wrapper}" "{script}" --apply\n'
     )
     service_path, timer_path = systemd_daemon.write_unit_pair(
         ctx.unit_dir,
@@ -1013,3 +1021,599 @@ def test_new_modules_name_no_privilege_escalation() -> None:
         names.append("schedule_run.py")
     for name in names:
         assert ESCALATION.search((package / name).read_text()) is None, name
+
+
+# --- Migrated from the deleted daemon policies: transactional apply, takeover, marker, wrapper ---
+
+
+def timer_verbs(env: Env) -> list[str]:
+    """The systemctl verbs issued so far (argv index 2)."""
+    return [cmd[2] for cmd in env.run.calls if cmd[0] == "systemctl"]
+
+
+def detection_listing(*entries: tuple[str, str]) -> str:
+    lines = [f"{name}        {state}        -" for name, state in entries]
+    lines.append(f"{len(entries)} unit files listed.")
+    return "\n".join(lines) + "\n"
+
+
+class Detection(Output):
+    """The read-only answers with an independent unit listing per scope."""
+
+    def __init__(self, *, user: str = "", system: str = "") -> None:
+        super().__init__()
+        self.user = user
+        self.system = system
+
+    def __call__(self, cmd: list[str]) -> str:
+        if "list-unit-files" in cmd:
+            self.calls.append(cmd)
+            return self.user if "--user" in cmd else self.system
+        return super().__call__(cmd)
+
+
+def with_competitors(env: Env, *, user: str = "", system: str = "") -> ScheduleContext:
+    return replace(env.ctx, read_output=Detection(user=user, system=system))
+
+
+def tmp_marker_fails(
+    monkeypatch: pytest.MonkeyPatch, ctx: ScheduleContext, *, first_only: bool
+) -> list[int]:
+    """Make every replace of the rc file fail (or only the first one); returns the attempts."""
+    attempts: list[int] = []
+    real = os.replace
+
+    def flaky(src: object, dst: object) -> None:
+        if Path(str(dst)) == ctx.myshellrc_path:
+            attempts.append(1)
+            if not first_only or len(attempts) == 1:
+                raise OSError("simulated disk full")
+        real(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", flaky)
+    return attempts
+
+
+def test_a_failed_unit_write_runs_no_systemctl_and_keeps_no_asset(env: Env) -> None:
+    ctx = env.ctx
+    ctx.unit_dir.parent.mkdir(parents=True, exist_ok=True)
+    ctx.unit_dir.write_text("not a directory")  # the write half collides with a plain file
+    with pytest.raises(OSError):
+        turn_on(ctx, "tmp-cleanup")
+    assert not {"enable", "restart"} & set(timer_verbs(env))  # registration was never reached
+    assert files_left(ctx.data_dir) == []
+    assert not systemd_daemon.decided(ctx.myshellrc_path)
+
+
+def test_a_failed_apply_keeps_the_assets_another_schedule_owns(env: Env) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-opencode")
+    before = tree(ctx.data_dir)
+    env.run.arm(frozenset({("enable", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(ctx, "update-claude")
+    assert tree(ctx.data_dir) == before  # recorded shared assets survive another row's failure
+    assert (ctx.unit_dir / "tools-installer-schedule-update-opencode.timer").is_file()
+
+
+def test_the_first_apply_rolls_back_in_the_order_disable_then_reload(env: Env) -> None:
+    env.run.arm(frozenset({("enable", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(env.ctx, "update-claude")
+    # reload before enable, enable fails, disable undoes any wants link, then the reload that
+    # runs AFTER the unit files are gone
+    assert timer_verbs(env) == ["daemon-reload", "enable", "disable", "daemon-reload"]
+
+
+def test_a_first_apply_over_a_half_removed_install_keeps_the_lone_unit_file(env: Env) -> None:
+    ctx = env.ctx
+    service, timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=CLAUDE_BASENAME)
+    service.parent.mkdir(parents=True)
+    service.write_bytes(b"hand-edited service\n")
+    env.run.arm(frozenset({("enable", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(ctx, "update-claude")
+    assert service.read_bytes() == b"hand-edited service\n"  # not a prior registration: kept
+    assert not timer.exists()
+
+
+def test_a_failed_retime_restores_the_bytes_and_reregisters_after_the_reload(
+    env: Env,
+) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    service, timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=CLAUDE_BASENAME)
+    service_before, timer_before = service.read_bytes(), timer.read_bytes()
+    env.run.calls.clear()
+    env.run.arm(frozenset({("restart", 1)}))
+    with pytest.raises(CommandError):
+        retime(ctx, "update-claude", 8, "01:30")
+    assert service.read_bytes() == service_before
+    assert timer.read_bytes() == timer_before  # not the 8 h attempt
+    assert timer_verbs(env) == [
+        "clean",
+        "daemon-reload",
+        "enable",
+        "restart",  # fails
+        "daemon-reload",  # the compensating reload, BEFORE the re-registration below
+        "daemon-reload",  # bootstrap's own pre-enable reload
+        "enable",
+        "restart",  # the best-effort re-registration of the restored timer
+    ]
+    assert row_state(
+        ctx,
+        load_state(ctx.state_path).state,
+        schedule_by_id("update-claude"),
+        manager=True,
+        present=lambda _tool: True,
+    ) == RowState("on")  # the restored files still match the record: not left as a false drift
+
+
+def test_a_failing_compensating_reload_never_masks_the_original_failure(env: Env) -> None:
+    env.run.arm(frozenset({("enable", 1), ("daemon-reload", 2)}))
+    with pytest.raises(CommandError) as excinfo:
+        turn_on(env.ctx, "update-claude")
+    assert excinfo.value.cmd[2] == "enable"
+
+
+def test_a_failing_disable_leaves_the_unit_files_and_reraises(env: Env) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    service, timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=CLAUDE_BASENAME)
+    env.run.arm(frozenset({("disable", 1)}))
+    with pytest.raises(CommandError):
+        turn_off(ctx, "update-claude")
+    assert service.exists()
+    assert timer.exists()
+    assert load_state(ctx.state_path).state.records["update-claude"].decided is True
+
+
+@pytest.mark.parametrize("victim", ["service", "timer"])
+def test_a_failed_unit_unlink_raises_and_keeps_the_record(
+    env: Env, monkeypatch: pytest.MonkeyPatch, victim: str
+) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    service, timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=CLAUDE_BASENAME)
+    target = service if victim == "service" else timer
+    real = Path.unlink
+
+    def failing(self: Path, missing_ok: bool = False) -> None:
+        if self == target:
+            raise OSError("simulated unlink failure")
+        real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", failing)
+    with pytest.raises(OSError, match="simulated unlink failure"):
+        turn_off(ctx, "update-claude")
+    assert target.exists()
+    # the unit stays recorded, so a later sweep or toggle still finds it
+    assert target in {
+        Path(a.path) for a in load_state(ctx.state_path).state.records["update-claude"].files
+    }
+
+
+def test_the_decided_marker_is_linux_only_on_linux(env: Env) -> None:
+    turn_on(env.ctx, "tmp-cleanup")
+    assert systemd_daemon.decided(env.ctx.myshellrc_path) is True
+    assert daemon.decided(env.ctx.myshellrc_path) is False  # the macOS marker is a different key
+
+
+def test_a_marker_write_failure_on_turn_on_degrades_to_a_warning(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = tmp_marker_fails(monkeypatch, env.ctx, first_only=False)
+    report = turn_on(env.ctx, "tmp-cleanup")
+    assert any("decision not recorded" in warning for warning in report.warnings)
+    assert len(attempts) == 2  # one retry
+    service, timer = systemd_daemon.unit_paths(env.ctx.unit_dir, basename=TMP_BASENAME)
+    assert service.exists()
+    assert timer.exists()
+    assert "enable" in timer_verbs(env)
+    assert systemd_daemon.decided(env.ctx.myshellrc_path) is False
+    assert load_state(env.ctx.state_path).state.records["tmp-cleanup"].decided is True
+
+
+def test_a_transient_marker_failure_recovers_on_turn_on_and_turn_off(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = tmp_marker_fails(monkeypatch, env.ctx, first_only=True)
+    assert turn_on(env.ctx, "tmp-cleanup").warnings == ()
+    assert systemd_daemon.decided(env.ctx.myshellrc_path) is True
+    assert len(attempts) == 2
+    monkeypatch.undo()
+    attempts = tmp_marker_fails(monkeypatch, env.ctx, first_only=True)
+    assert turn_off(env.ctx, "tmp-cleanup").warnings == ()
+    assert systemd_daemon.decided(env.ctx.myshellrc_path) is True  # an explicit off is decided
+    assert len(attempts) == 2
+
+
+def test_a_marker_write_failure_on_turn_off_warns_and_leaves_it_undecided(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "tmp-cleanup")
+    ctx.myshellrc_path.unlink()  # no decision was ever durably recorded
+    tmp_marker_fails(monkeypatch, ctx, first_only=False)
+    report = turn_off(ctx, "tmp-cleanup")
+    assert any("decision not recorded" in warning for warning in report.warnings)
+    assert systemd_daemon.units_present(ctx.unit_dir, basename=TMP_BASENAME) is False
+    assert systemd_daemon.decided(ctx.myshellrc_path) is False
+
+
+def test_a_wrapper_unlink_failure_degrades_to_a_warning_and_the_marker_failure_is_added(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "tmp-cleanup")
+    wrapper = legacy_wrapper(ctx)
+    real = Path.unlink
+
+    def failing(self: Path, missing_ok: bool = False) -> None:
+        if self == wrapper:
+            raise OSError("simulated wrapper removal failure")
+        real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", failing)
+    report = turn_off(ctx, "tmp-cleanup")
+    assert any("wrapper removal failed" in warning for warning in report.warnings)
+    assert systemd_daemon.units_present(ctx.unit_dir, basename=TMP_BASENAME) is False
+    assert any(cmd[2] == "disable" for cmd in env.run.calls)
+
+    ctx.myshellrc_path.unlink()
+    tmp_marker_fails(monkeypatch, ctx, first_only=False)
+    both = turn_off(ctx, "tmp-cleanup")
+    assert any("wrapper removal failed" in warning for warning in both.warnings)
+    assert any("decision not recorded" in warning for warning in both.warnings)
+
+
+def test_turn_on_removes_a_wrapper_it_did_not_write_only_when_it_is_ours(env: Env) -> None:
+    ctx = env.ctx
+    foreign = ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("#!/bin/sh\necho someone else's command\n")
+    turn_on(ctx, "tmp-cleanup")
+    assert foreign.read_text() == "#!/bin/sh\necho someone else's command\n"  # no sentinel: kept
+    foreign.unlink()
+    legacy_wrapper(ctx)
+    turn_off(ctx, "tmp-cleanup")
+    assert not (ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND).exists()
+
+
+def test_a_user_scope_competitor_is_disabled_after_registration_and_disclosed(
+    env: Env,
+) -> None:
+    ctx = with_competitors(env, user=detection_listing((COMPETING_TIMER, "enabled")))
+    report = turn_on(ctx, "tmp-cleanup")
+    assert timer_verbs(env) == ["daemon-reload", "enable", "restart", "disable"]
+    assert env.run.calls[-1] == ["systemctl", "--user", "disable", "--now", COMPETING_TIMER]
+    [warning] = report.warnings
+    assert f"Stopped and disabled {COMPETING_TIMER}" in warning
+    assert f"systemctl --user enable --now {COMPETING_TIMER}" in warning
+    assert "sudo" not in warning
+
+
+def no_tool(_tool: str) -> bool:
+    return False
+
+
+def test_the_reconcile_forwards_the_takeover_disclosure(env: Env) -> None:
+    ctx = replace(
+        with_competitors(env, user=detection_listing((COMPETING_TIMER, "enabled"))),
+        present=no_tool,
+    )
+    report = schedules.ensure_schedule_defaults(ctx)
+    assert "tmp-cleanup" in report.turned_on
+    assert any(
+        COMPETING_TIMER in warning and f"systemctl --user enable --now {COMPETING_TIMER}" in warning
+        for warning in report.warnings
+    )
+
+
+def test_a_system_scope_competitor_is_never_disabled_and_is_disclosed(env: Env) -> None:
+    ctx = with_competitors(env, system=detection_listing((COMPETING_TIMER, "enabled")))
+    report = turn_on(ctx, "tmp-cleanup")
+    assert not any(COMPETING_TIMER in cmd for cmd in env.run.calls)
+    assert timer_verbs(env) == ["daemon-reload", "enable", "restart"]
+    [warning] = report.warnings
+    assert f"sudo systemctl disable --now {COMPETING_TIMER}" in warning
+
+
+def test_with_both_scopes_only_the_user_scope_one_is_disabled(env: Env) -> None:
+    ctx = with_competitors(
+        env,
+        user=detection_listing((COMPETING_TIMER, "enabled")),
+        system=detection_listing((COMPETING_SERVICE, "enabled")),
+    )
+    report = turn_on(ctx, "tmp-cleanup")
+    disables = [cmd for cmd in env.run.calls if cmd[2] == "disable"]
+    assert disables == [["systemctl", "--user", "disable", "--now", COMPETING_TIMER]]
+    text = " ".join(report.warnings)
+    assert COMPETING_SERVICE in text
+    assert f"sudo systemctl disable --now {COMPETING_SERVICE}" not in text  # not a timer
+    assert f"sudo systemctl stop {COMPETING_SERVICE}" in text
+
+
+def test_a_failed_user_scope_disable_keeps_the_registration_and_names_the_survivor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, fail_on=frozenset({("disable", 1)}))
+    ctx = with_competitors(env, user=detection_listing((COMPETING_TIMER, "enabled")))
+    report = turn_on(ctx, "tmp-cleanup")  # must not raise: proceed and disclose
+    assert systemd_daemon.units_present(ctx.unit_dir, basename=TMP_BASENAME)
+    text = " ".join(report.warnings)
+    assert COMPETING_TIMER in text
+    assert "still running" in text
+    assert f"systemctl --user disable --now {COMPETING_TIMER}" in text
+    assert "sudo" not in text  # a user-scope competitor never gets a sudo command
+
+
+def test_a_partial_takeover_of_two_user_scope_units_is_never_reported_as_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, fail_on=frozenset({("disable", 2)}))
+    ctx = with_competitors(
+        env,
+        user=detection_listing((COMPETING_TIMER, "enabled"), (COMPETING_SERVICE, "enabled")),
+    )
+    report = turn_on(ctx, "tmp-cleanup")
+    disables = [cmd for cmd in env.run.calls if cmd[2] == "disable"]
+    assert [cmd[-1] for cmd in disables] == sorted([COMPETING_SERVICE, COMPETING_TIMER])
+    text = " ".join(report.warnings)
+    assert f"Stopped and disabled {COMPETING_SERVICE}" in text
+    assert f"systemctl --user enable --now {COMPETING_SERVICE}" in text
+    assert f"{COMPETING_TIMER} could not be stopped and disabled" in text
+    assert f"systemctl --user disable --now {COMPETING_TIMER}" in text
+
+
+def test_the_system_scope_disclosure_survives_an_oserror_from_the_user_scope_disable(
+    env: Env,
+) -> None:
+    def vanishing_bus(cmd: list[str]) -> None:
+        if cmd[2] == "disable":
+            raise OSError("dbus socket vanished")
+        env.run(cmd)
+
+    base = with_competitors(
+        env,
+        user=detection_listing((COMPETING_TIMER, "enabled")),
+        system=detection_listing((COMPETING_SERVICE, "enabled")),
+    )
+    report = turn_on(replace(base, run=vanishing_bus), "tmp-cleanup")
+    text = " ".join(report.warnings)
+    assert f"sudo systemctl stop {COMPETING_SERVICE}" in text  # system scope, still disclosed
+    assert f"systemctl --user disable --now {COMPETING_TIMER}" in text  # still running
+
+
+def test_a_failing_detection_probe_behaves_like_no_competitor(env: Env) -> None:
+    def raising(cmd: list[str]) -> str:
+        if "list-unit-files" in cmd:
+            raise CommandError(cmd, 1)
+        return env.output(cmd)
+
+    report = turn_on(replace(env.ctx, read_output=raising), "tmp-cleanup")
+    assert not any(cmd[2] == "disable" for cmd in env.run.calls)
+    assert report.warnings == ()
+
+
+def test_no_competitor_means_no_warning(env: Env) -> None:
+    assert turn_on(env.ctx, "tmp-cleanup").warnings == ()
+
+
+# macOS: the plist, the bootout-then-bootstrap order and the rollback (the old launchd policy)
+
+
+def mac_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> Env:
+    return make_env(tmp_path, monkeypatch, os_key="macos", **kwargs)  # type: ignore[arg-type]
+
+
+def mac_plist_path(env: Env) -> Path:
+    return env.home / "Library/LaunchAgents/com.tools-installer.prune-tmpdir.plist"
+
+
+def test_the_macos_tmp_plist_carries_the_schedule_the_environment_and_the_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    ctx = env.ctx
+    report = turn_on(ctx, "tmp-cleanup")
+    assert report.warnings == ()
+    data = plistlib.loads(mac_plist_path(env).read_bytes())
+    assert data["StartCalendarInterval"] == [{"Hour": 3, "Minute": 0}]
+    argv = data["ProgramArguments"]
+    assert str(env.uv) in argv
+    assert str(ctx.data_dir / "prune-user-tmpdir.sh") in argv
+    assert str(daemon.DEFAULT_DAYS) in argv
+    assert data["EnvironmentVariables"]["TMPDIR"] == ctx.tmpdir
+    assert data["EnvironmentVariables"]["HOME"] == str(env.home)
+    assert data["EnvironmentVariables"]["PATH"] == clean_unit_path(
+        env.home, platform_os="macos", environ=ctx.environ
+    )
+    assert daemon.decided(ctx.myshellrc_path) is True
+    assert systemd_daemon.decided(ctx.myshellrc_path) is False
+    assert row_state(
+        ctx,
+        load_state(ctx.state_path).state,
+        schedule_by_id("tmp-cleanup"),
+        manager=True,
+        present=None,
+    ) == RowState("on")
+
+    turn_off(ctx, "tmp-cleanup")
+    assert not mac_plist_path(env).exists()
+    assert daemon.decided(ctx.myshellrc_path) is True  # an explicit off is still decided
+
+
+def test_a_macos_reapply_keeps_a_time_set_with_retime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+    retime(env.ctx, "tmp-cleanup", 24, "04:15")
+    turn_on(env.ctx, "tmp-cleanup")
+    data = plistlib.loads(mac_plist_path(env).read_bytes())
+    assert data["StartCalendarInterval"] == [{"Hour": 4, "Minute": 15}]
+
+
+@pytest.mark.parametrize("platform_os", ["fedora", "macos"])
+def test_a_bad_environment_fails_closed_before_any_unit_or_asset_is_written(
+    platform_os: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key=platform_os)
+    ctx = replace(env.ctx, tmpdir="relative/not/absolute")
+    with pytest.raises(DaemonScheduleError):
+        turn_on(ctx, "tmp-cleanup")
+    assert files_left(env.home) == []
+    assert env.run.calls == []
+    assert not mac_plist_path(env).exists()
+
+
+def test_a_macos_first_bootstrap_failure_rolls_back_the_plist_and_the_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch, fail_on=frozenset({("bootstrap", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(env.ctx, "tmp-cleanup")
+    assert not mac_plist_path(env).exists()
+    assert not env.ctx.data_dir.exists()
+    assert load_state(env.ctx.state_path).state.records == {}
+    assert daemon.decided(env.ctx.myshellrc_path) is False
+    assert [cmd[1] for cmd in env.run.calls] == ["bootout", "bootstrap"]
+
+
+def test_a_launchd_log_that_already_existed_survives_a_failed_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch, fail_on=frozenset({("bootstrap", 1)}))
+    daemon.ensure_log_path(env.ctx.launchd_log_path)
+    with pytest.raises(CommandError):
+        turn_on(env.ctx, "tmp-cleanup")
+    assert env.ctx.launchd_log_path.exists()
+
+
+def test_a_macos_plist_write_failure_on_the_first_apply_rolls_back_everything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+
+    def disk_full(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated disk full writing the plist")
+
+    monkeypatch.setattr(daemon, "write_agent_plist", disk_full)
+    with pytest.raises(OSError, match="disk full"):
+        turn_on(env.ctx, "tmp-cleanup")
+    assert not mac_plist_path(env).exists()
+    assert not env.ctx.data_dir.exists()
+    assert not any(cmd[1] == "bootstrap" for cmd in env.run.calls)
+    assert daemon.decided(env.ctx.myshellrc_path) is False
+
+
+def test_a_macos_plist_write_failure_on_a_reapply_restores_the_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+    original = mac_plist_path(env).read_bytes()
+    env.run.calls.clear()
+
+    def disk_full(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated disk full writing the plist")
+
+    monkeypatch.setattr(daemon, "write_agent_plist", disk_full)
+    with pytest.raises(OSError, match="disk full"):
+        turn_on(env.ctx, "tmp-cleanup")
+    assert mac_plist_path(env).read_bytes() == original
+    assert [cmd[1] for cmd in env.run.calls].count("bootstrap") == 1  # the best-effort re-register
+
+
+def test_a_macos_bootstrap_failure_on_a_reapply_restores_the_bytes_and_reregisters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+    original = mac_plist_path(env).read_bytes()
+    env.run.calls.clear()
+    env.run.arm(frozenset({("bootstrap", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(env.ctx, "tmp-cleanup")
+    assert mac_plist_path(env).read_bytes() == original
+    assert [cmd[1] for cmd in env.run.calls].count("bootstrap") == 2  # the failed one + re-register
+
+
+def test_a_macos_retime_bootstrap_failure_rolls_back_and_reregisters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+    original = mac_plist_path(env).read_bytes()
+    env.run.calls.clear()
+    env.run.arm(frozenset({("bootstrap", 1)}))
+    with pytest.raises(CommandError):
+        retime(env.ctx, "tmp-cleanup", 24, "04:15")
+    assert mac_plist_path(env).read_bytes() == original
+    assert [cmd[1] for cmd in env.run.calls].count("bootstrap") == 2
+    record = load_state(env.ctx.state_path).state.records["tmp-cleanup"]
+    assert record.start == "03:00"  # the saved time is not changed by a failed re-register
+
+
+def test_a_macos_bootout_failure_leaves_the_plist_and_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+    env.run.arm(frozenset({("bootout", 1)}))
+    with pytest.raises(CommandError):
+        turn_off(env.ctx, "tmp-cleanup")
+    assert mac_plist_path(env).exists()
+    assert daemon.decided(env.ctx.myshellrc_path) is True  # unchanged from the earlier apply
+    assert load_state(env.ctx.state_path).state.records["tmp-cleanup"].decided is True
+
+
+def test_a_macos_bootout_of_a_job_that_is_not_loaded_completes_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+
+    def not_loaded(cmd: list[str]) -> None:
+        env.run(cmd)
+        if cmd[1] == "bootout":
+            raise CommandError(cmd, 3)  # launchctl's idempotent "not loaded" exit
+
+    report = turn_off(replace(env.ctx, run=not_loaded), "tmp-cleanup")
+    assert report.warnings == ()
+    assert not mac_plist_path(env).exists()
+
+
+def test_a_macos_plist_unlink_failure_raises_and_keeps_the_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    turn_on(env.ctx, "tmp-cleanup")
+    plist = mac_plist_path(env)
+    real = Path.unlink
+
+    def failing(self: Path, missing_ok: bool = False) -> None:
+        if self == plist:
+            raise OSError("simulated unlink failure")
+        real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", failing)
+    with pytest.raises(OSError, match="simulated unlink failure"):
+        turn_off(env.ctx, "tmp-cleanup")
+    assert plist.exists()
+    assert plist in {
+        Path(a.path) for a in load_state(env.ctx.state_path).state.records["tmp-cleanup"].files
+    }
+
+
+def test_a_macos_retime_on_an_off_row_only_saves_and_writes_no_plist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = mac_tmp(tmp_path, monkeypatch)
+    report = retime(env.ctx, "tmp-cleanup", 24, "04:15")
+    assert report.changed is True
+    assert report.next_run is None
+    assert env.run.calls == []
+    assert not mac_plist_path(env).exists()
+    assert load_state(env.ctx.state_path).state.records["tmp-cleanup"].start == "04:15"

@@ -5,7 +5,6 @@ screenshots for agent inspection."""
 
 import os
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,6 @@ import pytest
 from textual.binding import Binding
 from textual.widgets import DataTable
 
-from installer import systemd_daemon
 from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
 from installer.enums import Severity
@@ -23,7 +21,6 @@ from installer.policy import (
     Policy,
     PolicyResult,
     ban_policy,
-    daemon_policy,
     omz_plugins_policy,
     tweak_policy,
 )
@@ -456,7 +453,6 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
     policies = [
         tweak_policy(_countdown(), rc_path=rc, bin_dir=bin_dir, installed_tools={"uv": True}),
         omz_plugins_policy(zshrc_path=zshrc, state_path=rc, present=True),
-        _daemon_policy_for_test(tmp_path, installed_tools={"fd": True, "rg": True}),
     ]
     app = UnifiedApp(
         [_tool()],
@@ -497,93 +493,15 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
             await pilot.pause()
 
 
-class _FakeDaemonRun:
-    """Records every argv; never touches real launchctl."""
-
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-
-    def __call__(self, cmd: list[str]) -> None:
-        self.calls.append(cmd)
-
-
-def _daemon_policy_for_test(
-    home: Path, *, installed_tools: dict[str, bool] | None = None
-) -> Policy:
-    """A real daemon_policy against tmp_path-scoped artifacts, with an injected
-    fake run so no real launchctl call is ever made."""
-    plist_path = home / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    log_path = home / "Logs" / "prune-daemon.log"
-    wrapper_bin_dir = home / ".local" / "bin"
-    script_path = home / "scripts" / "prune-user-tmpdir.sh"
-    script_path.parent.mkdir(parents=True, exist_ok=True)
-    script_path.write_text("#!/bin/sh\n")
-    return daemon_policy(
-        plist_path=plist_path,
-        log_path=log_path,
-        wrapper_bin_dir=wrapper_bin_dir,
-        script_path=script_path,
-        state_path=home / ".myshellrc",
-        installed_tools=installed_tools or {},
-        path_value="/usr/bin:/bin",
-        tmpdir_value=str(home / "tmp"),
-        home_value=str(home),
-        uv_path=home / "uv",  # fake, absolute -- the fake run never executes it
-        uid=501,
-        run=_FakeDaemonRun(),
-    )
-
-
-def _daemon_app(home: Path, *, installed_tools: dict[str, bool]) -> tuple[UnifiedApp, Path, Path]:
-    policy = _daemon_policy_for_test(home, installed_tools=installed_tools)
-    assert policy.log_path is not None  # daemon_policy always sets this
-    wrapper_bin_dir = home / ".local" / "bin"
-    plist_path = home / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    app = UnifiedApp(
-        [_tool()],
-        {"search": ""},
-        report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(wrapper_bin_dir), None),
-        fix_preview="",
-        fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list,
-            has_path_block=lambda: False,
-            remove=lambda _d: SweepResult(),
-        ),
-        policies=PolicyInputs(policies=[policy]),
-        initial_view="policies",
-    )
-    return app, plist_path, policy.log_path
-
-
-async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
+async def test_cache_redirect_toggles_against_a_sandboxed_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from installer.env_redirect import BUN_CACHE_REDIRECT
-    from installer.policy import cache_redirect_policy, linux_daemon_policy
+    from installer.policy import cache_redirect_policy
 
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    script = home / "scripts" / "prune-tmp-linux.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/bin/sh\n")
-    unit_dir = home / "config" / "systemd" / "user"
     conf_dir = home / ".config" / "environment.d"
-    daemon = linux_daemon_policy(
-        unit_dir=unit_dir,
-        log_path=home / "state" / "prune-daemon.log",
-        wrapper_bin_dir=home / ".local" / "bin",
-        script_path=script,
-        state_path=home / ".myshellrc",
-        installed_tools={},
-        path_value="/usr/bin:/bin",
-        tmpdir_value=str(home / "tmp"),
-        home_value=str(home),
-        uv_path=home / "uv",
-        run=lambda _cmd: None,
-        read_output=lambda _cmd: "inactive",
-    )
     redirect = cache_redirect_policy(
         BUN_CACHE_REDIRECT,
         platform_os="linux",
@@ -601,22 +519,14 @@ async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
         uninstall=UninstallInputs(
             ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
         ),
-        policies=PolicyInputs(policies=[daemon, redirect]),
+        policies=PolicyInputs(policies=[redirect]),
         initial_view="policies",
     )
-    service, timer = systemd_daemon.unit_paths(unit_dir)
     conf = conf_dir / BUN_CACHE_REDIRECT.conf_basename
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")
-        await settle(app, pilot)
-        assert service.exists() and timer.exists()
-        await pilot.press("space")
-        await settle(app, pilot)
-        assert not service.exists() and not timer.exists()
-        await pilot.press("down")
         await pilot.press("space")
         await settle(app, pilot)
         assert conf.exists()
@@ -626,41 +536,7 @@ async def test_linux_daemon_and_cache_redirect_toggle_against_a_sandboxed_home(
         assert not conf.exists()
         assert home == tmp_path
         assert os.environ["HOME"] == str(tmp_path)
-        _snapshot(app, "linux-daemon-and-redirect.svg")
-
-
-async def test_daemon_policy_toggles_on_despite_missing_fd_and_rg_with_recommended_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    app, plist_path, _log_path = _daemon_app(
-        Path.home(), installed_tools={"fd": False, "rg": False}
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        table = screen.query_one(DataTable[Any])
-        requires_cell = table.get_cell("daemon:prune-tmpdir", "requires").plain
-        assert requires_cell == "recommended: fd, rg"
-        assert "Recommended tool(s): fd, rg. Not required — apply still runs and falls back" in (
-            screen.detail_text
-        )
-        assert "missing:" not in requires_cell
-        assert "Missing required tool(s)" not in screen.detail_text
-        assert "before enabling" not in screen.detail_text
-
-        await pilot.press("space")
-        await settle(app, pilot)
-        assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
-        assert plist_path.exists()  # concrete proof apply() actually ran
-
-        await pilot.press("space")
-        await settle(app, pilot)
-        assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is False
-        assert not plist_path.exists()
+        _snapshot(app, "linux-redirect.svg")
 
 
 async def test_policies_screen_link_mode_change_moves_active_policies(
@@ -1124,20 +1000,6 @@ async def test_installing_watch_unblocks_the_docker_tweak(tmp_path: Path) -> Non
         app.post_message(RefreshRequested())
         await settle(app, pilot)
         assert "missing" not in _cell(app, "tweak:docker", "requires")
-
-
-async def test_macos_prune_reads_off_without_its_plist(tmp_path: Path) -> None:
-    policy = _daemon_policy_for_test(tmp_path)
-    plist = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    plist.parent.mkdir(parents=True, exist_ok=True)
-    plist.write_bytes(b"")
-    # The policy's cached `active` says on; the plist is gone by the first entry.
-    stale = replace(policy, active=True)
-    plist.unlink()
-    app = _live_app([stale])
-    async with app.run_test(size=(120, 30)) as pilot:
-        await settle(app, pilot)
-        assert _cell(app, stale.id, "state") == "○ [off]"
 
 
 async def test_entering_policies_starts_no_pass(tmp_path: Path) -> None:

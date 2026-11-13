@@ -200,6 +200,7 @@ def _tui_app(
     present: set[str],
     *,
     initial_view: str = BASE_VIEW,
+    warnings: ScheduleDefaultWarnings | None = None,
 ) -> UnifiedApp:
     """The real `_build_app` on a scratch HOME, wired to `env`'s fake schedule seams."""
     sandbox: Callable[[pytest.MonkeyPatch, Path], None] = vars(test_setup)["_sandbox"]
@@ -218,6 +219,7 @@ def _tui_app(
         FEDORA,
         initial_view=initial_view,
         apply_schedule_defaults=True,
+        schedule_default_warnings=warnings,
         competing=no_competitors,  # the Schedules view warms this probe; never the host's
     )
 
@@ -259,6 +261,26 @@ async def test_the_mount_reconcile_releases_the_lock_when_it_raises(
         await settle(app, pilot)
         assert not app.mutation_in_flight
         assert app.view(BASE_VIEW).status.text == ""
+
+
+async def test_the_reconcile_closure_finishes_the_warning_collector_when_it_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The console waits on the collector after the app exits: an exception outside the
+    reconcile's own handling must still signal it, or the wait runs its full timeout."""
+    env = make_env(tmp_path, monkeypatch, present=frozenset())
+    collector = ScheduleDefaultWarnings()
+    app = _tui_app(monkeypatch, tmp_path, env, {"claude"}, warnings=collector)
+
+    def boom(_ctx: ScheduleContext) -> ReconcileReport:
+        raise RuntimeError("outside the reconcile's own handling")
+
+    monkeypatch.setattr(schedules, "ensure_schedule_defaults", boom)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+    messages, completed = collector.wait(0.05)
+    assert messages == ()
+    assert completed is True
 
 
 async def test_install_run_then_reconcile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -369,7 +391,6 @@ def _perform(
         rc_paths=[],
         bundles=(),
         zshrc_path=env.home / ".zshrc",
-        daemon_policy=None,
         extra_policies=extras,
         runner=_no_command,
         catalog=decision.tools,
@@ -434,7 +455,6 @@ def test_cli_removal_takes_the_timer(tmp_path: Path, monkeypatch: pytest.MonkeyP
         confirm=lambda _message: True,
         bundles=(),
         zshrc_path=env.home / ".zshrc",
-        daemon_policy=None,
         extra_policies=(),
         runner=_no_command,
         schedule_removed=_removal_hook(ctx),
@@ -528,7 +548,6 @@ def test_full_uninstall_sweeps_schedules_cli(
         confirm=lambda _message: True,
         bundles=(),
         zshrc_path=env.home / ".zshrc",
-        daemon_policy=None,
         extra_policies=schedules.sweep_adapters(ctx),
         runner=_no_command,
         schedule_removed=_removal_hook(ctx),

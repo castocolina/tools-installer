@@ -199,7 +199,8 @@ def render_agent_plist(
 
     `calendar` is one {Hour, Minute} dict or a non-empty list of them (launchd
     fires at every entry). `program_arguments[0]` must be absolute and the
-    environment is closed to PATH, HOME and TMPDIR. Raises DaemonScheduleError
+    environment is closed to PATH, HOME and TMPDIR (HOME and TMPDIR absolute, PATH non-empty)
+    and both log paths are absolute. Raises DaemonScheduleError
     before returning anything, so a bad value never reaches a written plist.
     """
     if not program_arguments or not Path(program_arguments[0]).is_absolute():
@@ -209,6 +210,14 @@ def render_agent_plist(
     unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
     if unknown:
         raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
+    if "PATH" in environment and not environment["PATH"]:
+        raise DaemonScheduleError("PATH must not be empty")
+    for key in ("HOME", "TMPDIR"):
+        if key in environment and not Path(environment[key]).is_absolute():
+            raise DaemonScheduleError(f"{key} must be an absolute path: {environment[key]!r}")
+    for name, log in (("stdout_path", stdout_path), ("stderr_path", stderr_path)):
+        if not log.is_absolute():
+            raise DaemonScheduleError(f"{name} must be a non-empty absolute path: {log!r}")
     entries = [calendar] if isinstance(calendar, Mapping) else list(calendar)
     if not entries:
         raise DaemonScheduleError("calendar must hold at least one slot")

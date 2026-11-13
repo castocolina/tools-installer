@@ -104,7 +104,6 @@ def _remove(tool: Tool, config: dict[str, tuple[Path, ...]] | None = None) -> Sw
         rc_paths=[],
         bundles=(),
         zshrc_path=Path.home() / ".zshrc",
-        daemon_policy=None,
         extra_policies=(),
         runner=lambda _argv: None,
         catalog=[tool],

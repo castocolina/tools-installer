@@ -723,7 +723,6 @@ def active_policies(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
-    daemon_policy: Policy | None = None,
     extra_policies: tuple[Policy, ...] = (),
 ) -> list[Policy]:
     """Every policy whose footprint is still on this machine, built exactly once.
@@ -736,16 +735,10 @@ def active_policies(
     between its preview and its sweep, all from the same rc file and bin dir the
     predicate below reads.
 
-    `daemon_policy`, when given, is appended last when `policy_owned` says
-    its footprint is still here -- its `owned()` footprint predicate when it
-    binds one (CR-01), else `is_active()` (11-REVIEWS.md cycle 2 finding #13),
-    NEVER the frozen `.active` field alone: `daemon_policy` is a frozen
-    dataclass instance shared with the Policies list and the on-by-default
-    worker, which may enable it on a separate thread AFTER construction --
-    reading `is_active()` re-probes the real, current state instead of
-    trusting a stale construction-time snapshot. Every other policy kind is
-    unaffected (`is_active` is `None` for all of them, so the `.active`
-    fallback runs, unchanged from today).
+    `extra_policies` (the cache redirects and the schedule adapters) are appended last when
+    `policy_owned` says their footprint is still here: the policy's `owned()` footprint
+    predicate when it binds one (CR-01), else `is_active()`, never the frozen `.active`
+    field alone. Every other policy kind has no `is_active`, so the `.active` fallback runs.
     """
     policies: list[Policy] = []
     for bundle in bundles:
@@ -755,8 +748,6 @@ def active_policies(
         policy = _omz_policy(zshrc_path, rc_path)
         if policy.active:
             policies.append(policy)
-    if daemon_policy is not None and policy_owned(daemon_policy):
-        policies.append(daemon_policy)
     for extra in extra_policies:
         if policy_owned(extra):
             policies.append(extra)
@@ -769,7 +760,6 @@ def active_tweak_ids(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
-    daemon_policy: Policy | None = None,
     extra_policies: tuple[Policy, ...] = (),
 ) -> tuple[str, ...]:
     """Ids of tweaks still present on this machine.
@@ -793,10 +783,9 @@ def active_tweak_ids(
     `docker` — and let a future bundle named `omz-plugins` make the two arms
     below fire off one another's entry in a flat set.
 
-    The None default on zshrc_path/daemon_policy exists for unit tests and any
-    caller working only with bundles; production callers MUST pass the real
-    values, because omitting them silently narrows the sweep and leaves the
-    Oh-My-Zsh plugins=(...) edit / an active daemon registration on the
+    The None default on zshrc_path exists for unit tests and any caller working only
+    with bundles; production callers MUST pass the real value, because omitting it
+    silently narrows the sweep and leaves the Oh-My-Zsh plugins=(...) edit on the
     machine with nothing reporting it.
     """
     return tuple(
@@ -806,7 +795,6 @@ def active_tweak_ids(
             rc_path=rc_path,
             bin_dir=bin_dir,
             zshrc_path=zshrc_path,
-            daemon_policy=daemon_policy,
             extra_policies=extra_policies,
         )
     )
@@ -827,8 +815,8 @@ def sweep_policies(policies: list[Policy]) -> SweepResult:
 
     Failures are isolated per policy. A read-only ~/.local/bin, an
     immutable-flagged rc file or an EACCES on an unlink raises OSError, and a
-    real `launchctl` failure from the daemon's own `.remove()` raises
-    CommandError (11-02's transactional design) -- letting either propagate
+    real `launchctl` failure from a schedule adapter's `.remove()` raises
+    CommandError (the schedule adapters' transactional design) -- letting either propagate
     would abandon every later bundle and the .zshrc arm after it, leaving a
     half-torn-down machine with no record of what had already gone. Each
     failure is collected and the sweep continues, so the caller can name what
@@ -855,7 +843,6 @@ def sweep_tweaks(
     rc_path: Path,
     bin_dir: Path,
     zshrc_path: Path | None = None,
-    daemon_policy: Policy | None = None,
     extra_policies: tuple[Policy, ...] = (),
 ) -> SweepResult:
     """Read what is active right now and disable it: `active_policies` + `sweep_policies`.
@@ -867,10 +854,9 @@ def sweep_tweaks(
 
     Idempotent: a second call finds nothing active and reports nothing.
 
-    The None default on zshrc_path/daemon_policy exists for unit tests and any
-    caller working only with bundles; production callers MUST pass the real
-    values, because omitting them silently narrows the sweep and leaves the
-    Oh-My-Zsh plugins=(...) edit / an active daemon registration on the
+    The None default on zshrc_path exists for unit tests and any caller working only
+    with bundles; production callers MUST pass the real value, because omitting it
+    silently narrows the sweep and leaves the Oh-My-Zsh plugins=(...) edit on the
     machine with nothing reporting it.
     """
     return sweep_policies(
@@ -879,7 +865,6 @@ def sweep_tweaks(
             rc_path=rc_path,
             bin_dir=bin_dir,
             zshrc_path=zshrc_path,
-            daemon_policy=daemon_policy,
             extra_policies=extra_policies,
         )
     )

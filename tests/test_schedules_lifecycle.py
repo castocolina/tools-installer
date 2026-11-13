@@ -16,6 +16,7 @@ import pytest
 
 from installer import daemon, receipts, schedules, systemd_daemon
 from installer.cursor_shim import is_our_shim
+from installer.run import CommandError
 from installer.schedules import (
     ReconcileReport,
     ScheduleContext,
@@ -38,6 +39,7 @@ from tests.test_schedules_engine import (
     TMP_BASENAME,
     Env,
     Install,
+    legacy_wrapper,
     make_env,
     no_process_ctx,
     seed_legacy_tmp,
@@ -581,7 +583,7 @@ def test_full_uninstall_leaves_nothing(
     ctx = lab.ctx
     ensure_schedule_defaults(ctx)
     plant_logs(ctx)
-    daemon.install_wrapper(ctx.legacy_bin_dir)
+    legacy_wrapper(ctx)
     damaged_path(ctx.state_path).write_bytes(b"{old damage")
     assert leftovers(lab.env.home)
 
@@ -707,3 +709,68 @@ def test_full_uninstall_of_a_legacy_only_host(
     assert (result.swept, result.failed) == (("schedule:tmp-cleanup",), ())
     assert leftovers(lab.env.home) == []
     assert not systemd_daemon.decided(ctx.myshellrc_path)
+
+
+def test_a_disable_failure_fails_the_adapter_and_keeps_the_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timer that is provably still running is never swept away: its adapter fails and the
+    decision it recorded stays (the old daemon policy's CR-01 guarantee)."""
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    lab.env.run.arm(frozenset({("disable", 1)}))
+
+    result = sweep(lab)
+
+    assert result.failed == ("schedule:tmp-cleanup",)
+    assert unit_files(ctx, TMP_BASENAME)  # the units that restart it were not deleted
+    assert systemd_daemon.decided(ctx.myshellrc_path)
+
+
+def test_a_stopped_timer_with_unit_files_is_still_owned_and_swept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`owned` answers "is a file of ours still here", never "is it running"."""
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+
+    def all_inactive(_cmd: list[str]) -> str:
+        return "inactive"
+
+    quiet = replace(ctx, read_output=all_inactive)
+
+    policies = active_policies(
+        (),
+        rc_path=quiet.myshellrc_path,
+        bin_dir=quiet.legacy_bin_dir,
+        extra_policies=sweep_adapters(quiet),
+    )
+    assert [policy.id for policy in policies] == list(ALL_IDS)
+    result = sweep_policies(policies)
+
+    assert result.failed == ()
+    assert leftovers(lab.env.home) == []
+
+
+def test_an_unreachable_manager_removes_the_files_and_discloses_the_missing_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-01: with no user bus the files still go (they would restart the timer at the next
+    login) and the result says no daemon-reload could run."""
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    lab.env.run.calls.clear()
+    lab.env.run.arm(frozenset({("disable", 1)}))
+
+    def no_bus(cmd: list[str]) -> str:
+        raise CommandError(cmd, 1)
+
+    unreachable = replace(ctx, read_output=no_bus)
+    report = turn_off(unreachable, "tmp-cleanup")
+
+    assert unit_files(ctx, TMP_BASENAME) == []
+    assert any("could not be reached" in warning for warning in report.warnings)
+    assert "daemon-reload" not in lab.env.run.text()

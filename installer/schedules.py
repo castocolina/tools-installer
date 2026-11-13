@@ -840,8 +840,7 @@ def _snapshot(paths: tuple[Path, ...]) -> dict[Path, bytes | None]:
 
 
 def _restore(snapshot: dict[Path, bytes | None]) -> None:
-    # Back to exactly the snapshot: a file that existed gets its prior bytes, a new one goes
-    # (ported from linux_daemon_policy._restore_units).
+    # Back to exactly the snapshot: a file that existed gets its prior bytes, a new one goes.
     for path, previous in snapshot.items():
         if previous is None:
             path.unlink(missing_ok=True)
@@ -902,7 +901,7 @@ def _apply_linux(
     timer_only: bool,
     clean_stamp: bool,
 ) -> None:
-    """Write the unit files, then register; roll back on failure (linux_daemon_policy._apply)."""
+    """Write the unit files, then register; roll back on failure."""
     basename = basename_for(schedule.id)
     service_text, timer_text = _linux_texts(ctx, schedule, record, uv)
     service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
@@ -949,7 +948,7 @@ def _apply_linux(
 def _apply_macos(
     ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord, uv: Path
 ) -> None:
-    """Write the plist, then register; roll back on failure (daemon_policy._apply)."""
+    """Write the plist, then register; roll back on failure."""
     label = label_for(schedule.id)
     plist_path = _plist_path(ctx, schedule.id)
     plist = _macos_plist(ctx, schedule, record, uv)

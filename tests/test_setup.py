@@ -18,7 +18,7 @@ from rich.console import Console
 from textual.pilot import Pilot
 
 import setup
-from installer import pnpm_globals, post_install, postinstall, receipts, systemd_daemon
+from installer import pnpm_globals, post_install, postinstall, receipts, schedules, systemd_daemon
 from installer.app import UninstallDecision
 from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
@@ -54,6 +54,7 @@ from installer.wizard_app import (
     DoctorScreen,
     ExecuteScreen,
     PolicyInputs,
+    ScheduleInputs,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
@@ -571,9 +572,6 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
     monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
     monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "LaunchAgents" / "daemon.plist")
-    monkeypatch.setattr(setup, "_DAEMON_LOG_PATH", tmp_path / "Logs" / "prune-daemon.log")
-    monkeypatch.setattr(setup, "_DAEMON_SCRIPT_PATH", tmp_path / "scripts" / "prune-user-tmpdir.sh")
-    monkeypatch.setattr(setup, "_DAEMON_STATE_PATH", tmp_path / ".myshellrc")
     monkeypatch.setattr(setup, "_ENVIRONMENT_D_DIR", tmp_path / ".config" / "environment.d")
     # Linux mirror of the macOS daemon paths above: without this, the
     # module-level _LINUX_DAEMON_UNIT_DIR constant (computed once, at import
@@ -583,9 +581,6 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # boundary, but also what keeps timer_state()'s own presence short-circuit
     # (D-01c) from ever reaching the real systemctl in these tests.
     monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
-    monkeypatch.setattr(
-        setup, "_LINUX_DAEMON_LOG_PATH", tmp_path / "state" / "tools-installer" / "prune-daemon.log"
-    )
     monkeypatch.setattr(setup, "load_tools", _no_tools)
     monkeypatch.setattr(setup, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
@@ -937,7 +932,7 @@ def _systemctl_and_uv(name: str) -> str | None:
     return f"/usr/bin/{name}" if name in ("systemctl", "uv") else None
 
 
-def test_daemon_policy_is_absent_on_linux_without_systemd(
+def test_no_daemon_row_in_policies_on_linux_without_systemd(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """D-01b, not ROADMAP SC#2: a host without systemd gets no daemon row.
@@ -971,89 +966,114 @@ def test_no_daemon_row_in_policies_on_linux_with_systemd(
     assert not [policy.id for policy in policies.policies if policy.id.startswith("daemon:")]
 
 
-def test_build_daemon_policy_returns_none_off_macos_only_when_systemctl_is_unresolvable() -> None:
-    """Renamed from test_build_daemon_policy_returns_none_off_macos: this
-    phase's D-01a means "off macOS" alone no longer implies None -- the
-    function returns None off macOS only when systemctl is unresolvable
-    (D-01b). See test_build_daemon_policy_returns_a_linux_policy_when_systemctl_is_resolvable
-    for the positive case."""
-    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
-    # _build_daemon_policy is setup.py's own private composition-root helper;
-    # the plan's own <behavior> requires testing it directly (construction
-    # must never raise on a bad environment) -- there is no public seam that
-    # exercises this without going through the full main()/_build_app flow.
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        linux, {}, which=_no_systemctl
-    )
-    assert policy is None
+def _schedule_context(
+    platform: Platform, present: Callable[[str], bool]
+) -> schedules.ScheduleContext:
+    builder: Callable[..., schedules.ScheduleContext] = vars(setup)["_schedule_context"]
+    return builder(platform, present)
 
 
-def test_build_daemon_policy_returns_a_linux_policy_when_systemctl_is_resolvable(
+def _launchctl_and_uv(name: str) -> str | None:
+    return f"/usr/bin/{name}" if name in ("launchctl", "uv") else None
+
+
+def test_the_schedule_context_binds_the_checkout_the_lookup_and_the_presence_probe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Sandboxed so Policy construction's own active=_is_active() probe (which
-    # checks units_present() before ever calling read_output) reads a
-    # guaranteed-empty directory, not whatever the real dev host happens to
-    # have under ~/.config/systemd/user.
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        linux, {}, which=_systemctl_and_uv
-    )
-    assert policy is not None
-    assert policy.id == "daemon:prune-tmp-linux"
+    # Construction spawns nothing: the suite's launch guard fails the test if it did.
+    ctx = _schedule_context(linux, lambda tool_id: tool_id == "claude")
+    assert ctx.platform_os == "debian"
+    assert ctx.checkout == Path(setup.__file__).resolve().parent
+    assert ctx.which("systemctl") == "/usr/bin/systemctl"
+    assert ctx.which("launchctl") is None
+    assert ctx.present("claude") is True
+    assert ctx.present("pi") is False
 
 
-def test_build_daemon_policy_on_linux_never_reaches_the_hosts_real_systemctl(
+def test_a_host_without_systemctl_gets_an_unavailable_schedule_context(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Construction alone (no apply()/is_active() call) must never spawn a
-    real subprocess -- proven with a recording run/read_output pair, sandboxed
-    against a fresh, always-empty unit dir so the D-01c presence short-circuit
-    itself can never mask a real escape (units_present() genuinely False here,
-    not merely False by luck of the real dev host's own state)."""
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
-    run_calls: list[list[str]] = []
-    read_calls: list[list[str]] = []
-
-    def recording_run(cmd: list[str]) -> None:
-        run_calls.append(cmd)
-
-    def recording_read_output(cmd: list[str]) -> str:
-        read_calls.append(cmd)
-        return "active"
-
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", _no_systemctl)
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        linux,
-        {},
-        which=_systemctl_and_uv,
-        run=recording_run,
-        read_output=recording_read_output,
-    )
-    assert policy is not None
-    assert policy.id == "daemon:prune-tmp-linux"
-    assert run_calls == []
-    assert read_calls == []
+    ctx = _schedule_context(linux, lambda _tool: True)
+    assert schedules.manager_reachable(ctx) is False
 
 
-def _no_uv(_name: str) -> str | None:
-    return None
-
-
-def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environment(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_bad_environment_fails_closed_through_the_schedule_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Construction never raises on an unresolvable TMPDIR/HOME/uv -- only a
-    later apply() would, via installer.daemon's own fail-closed validation
-    gate. The fail-closed contract lives in the validation, not in a guard
-    that hides the policy from view."""
+    """Construction never raises on a bad TMPDIR; the render that precedes every write does."""
+    from dataclasses import replace
+
+    from installer.daemon import DaemonScheduleError
+
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", _launchctl_and_uv)
     monkeypatch.delenv("TMPDIR", raising=False)
-    monkeypatch.delenv("HOME", raising=False)
-    monkeypatch.setattr(setup.shutil, "which", _no_uv)
-    policy = setup._build_daemon_policy(_platform(), {})  # pyright: ignore[reportPrivateUsage]
-    assert policy is not None
-    assert policy.id == "daemon:prune-tmpdir"
+    ctx = _schedule_context(_platform(), lambda _tool: True)
+    assert Path(ctx.tmpdir).is_absolute()  # an unset TMPDIR falls back to the system temp dir
+
+    monkeypatch.setenv("TMPDIR", "relative/not/absolute")
+    calls: list[list[str]] = []
+    ctx = replace(
+        _schedule_context(_platform(), lambda _tool: True),
+        run=calls.append,
+    )
+    with pytest.raises(DaemonScheduleError):
+        schedules.turn_on(ctx, "tmp-cleanup")
+    assert calls == []
+    assert not (tmp_path / "Library" / "LaunchAgents").exists()
+
+
+def test_a_timer_change_invalidates_the_doctors_shared_cache_on_success_and_on_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    from installer.enums import DaemonState
+    from installer.run import CommandError
+    from installer.systemd_daemon import TimerStateCache
+
+    _sandbox(monkeypatch, tmp_path)
+    cache = TimerStateCache(lambda: DaemonState.INACTIVE)
+    invalidations: list[int] = []
+    monkeypatch.setattr(cache, "invalidate", lambda: invalidations.append(1))
+
+    def shared_cache(*_args: object, **_kwargs: object) -> TimerStateCache:
+        return cache
+
+    monkeypatch.setattr(setup, "_timer_state_cache", shared_cache)
+    ran: list[list[str]] = []
+
+    def run(cmd: list[str]) -> None:
+        ran.append(cmd)
+        if cmd[-1] == "boom":
+            raise CommandError(cmd, 5)
+
+    real_context: Callable[..., schedules.ScheduleContext] = vars(setup)["_schedule_context"]
+
+    def recording_context(
+        platform: Platform, present: Callable[[str], bool]
+    ) -> schedules.ScheduleContext:
+        return replace(real_context(platform, present), run=run)
+
+    monkeypatch.setattr(setup, "_schedule_context", recording_context)
+    seen = _capture_app(monkeypatch)
+    assert setup.main([]) == 0
+    schedule_inputs = seen[0]["schedules"]
+    assert isinstance(schedule_inputs, ScheduleInputs)
+    ctx = schedule_inputs.context
+    assert ctx is not None
+    ctx.run(["systemctl", "--user", "daemon-reload"])
+    assert invalidations == [1]
+    with pytest.raises(CommandError):
+        ctx.run(["systemctl", "--user", "boom"])
+    assert invalidations == [1, 1]
+    assert [cmd[-1] for cmd in ran] == ["daemon-reload", "boom"]
 
 
 def test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_point(
@@ -1407,7 +1427,7 @@ def test_the_non_interactive_uninstall_cli_forwards_the_schedule_adapters(
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
 
     assert setup.main(["--uninstall", "--yes"]) == 0
-    assert forwarded[0]["daemon_policy"] is None
+    assert "daemon_policy" not in forwarded[0]
     extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
     assert [p.id for p in extras if p.id.startswith("schedule:")] == ["schedule:state"]
     assert callable(forwarded[0]["schedule_removed"])
@@ -1472,7 +1492,7 @@ def test_the_interactive_uninstall_view_forwards_the_schedule_adapters(
             tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
         )
     )
-    assert forwarded[0]["daemon_policy"] is None
+    assert "daemon_policy" not in forwarded[0]
     extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
     assert [p.id for p in extras if p.id.startswith("schedule:")] == ["schedule:state"]
     assert callable(forwarded[0]["schedule_removed"])
@@ -3306,39 +3326,6 @@ def test_the_disk_probe_measures_the_root_mount_on_a_single_root_host(
     assert pressure.low_disk is False
 
 
-def test_probe_and_policy_share_one_cache_and_issue_one_query(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from installer.enums import DaemonState
-
-    queries: list[list[str]] = []
-    unit_dir = tmp_path / "user"
-    unit_dir.mkdir()
-    (unit_dir / "tools-installer-prune-tmp.timer").write_text("timer")
-    (unit_dir / "tools-installer-prune-tmp.service").write_text("service")
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    cache = setup._timer_state_cache(  # pyright: ignore[reportPrivateUsage]
-        _linux_platform(),
-        which=lambda _name: "/usr/bin/systemctl",
-        read_output=_recording_reader(queries),
-    )
-    assert cache is not None
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        _linux_platform(), {}, which=lambda _name: "/usr/bin/systemctl", timer_cache=cache
-    )
-    assert policy is not None
-    assert policy.state_cache is cache
-    active = policy.is_active
-    assert active is not None
-    assert active() is False
-    probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
-        _linux_platform(), timer_cache=cache
-    )
-    assert probe().daemon is DaemonState.INACTIVE
-    assert len(queries) == 1
-
-
 def test_run_doctor_non_tty_forwards_the_probe_closure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -3543,7 +3530,7 @@ def test_build_app_calls_timer_state_cache_at_most_once(
     assert calls["n"] == 1
 
 
-def test_probe_reports_unavailable_when_no_daemon_policy_exists(
+def test_probe_reports_unavailable_when_there_is_no_timer_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from installer.enums import DaemonState
@@ -4347,13 +4334,9 @@ def _headless_teardown(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
     buffer = io.StringIO()
     monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
 
-    def no_daemon_policy(*_args: object, **_kwargs: object) -> None:
-        return None
-
     def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
         return TerminalShellResult()
 
-    monkeypatch.setattr(setup, "_build_daemon_policy", no_daemon_policy)
     monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
     return buffer
 

@@ -877,7 +877,6 @@ def run_uninstall(
     confirm: Callable[[str], bool],
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
-    daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
     runner: Runner,
     platform_os: str = HOST_SETTINGS_OS,
@@ -885,7 +884,7 @@ def run_uninstall(
 ) -> tuple[list[Path], tuple[str, ...]]:
     """Preview each tool's removal, confirm, then remove the tools in dependency order,
     the PATH block, any pip/npm-ban artifacts (shims + alias blocks), and still-enabled
-    shell tweaks (the background maintenance daemon included, when active).
+    shell tweaks (the background maintenance jobs included, when owned).
 
     Returns (the removed proven paths, the ids whose removal failed), both in removal
     order; ([], ()) when nothing is to be removed or the user declined. Each tool goes
@@ -893,15 +892,13 @@ def run_uninstall(
     are removed; unproven name matches are listed via render_remove_yourself and left on
     disk (SAFE-03/D-04).
 
-    `bundles`, `zshrc_path`, `daemon_policy`, and `extra_policies` are required,
+    `bundles`, `zshrc_path` and `extra_policies` are required,
     unlike on the uninstall primitives they forward to. There the defaults are
     a test affordance; here a dropped kwarg would type-check, pass the suite,
     and silently sweep nothing while reporting success — a user-visible
-    data-integrity regression that nothing else can catch. `daemon_policy` is
-    `None` on any platform where the daemon is never constructed, or when the
-    caller genuinely has none to offer. `extra_policies` has the identical
-    property: drop it and a cache-redirect file survives an uninstall that
-    printed success.
+    data-integrity regression that nothing else can catch. `extra_policies`
+    carries the cache-redirect files and the schedule adapters: drop it and
+    either survives an uninstall that printed success.
 
     The tweak preview and the tweak sweep are one `active_policies` list, not
     two reads of it: `remove_paths`, `remove_managed_block`, `remove_shims` and
@@ -939,7 +936,6 @@ def run_uninstall(
         rc_path=myshellrc_path,
         bin_dir=default_bin_dir,
         zshrc_path=zshrc_path,
-        daemon_policy=daemon_policy,
         extra_policies=extra_policies,
     )
     tweaks = tuple(policy.id for policy in policies)
@@ -964,14 +960,6 @@ def run_uninstall(
         # Even here the user learns what matched by name and was left alone.
         render_remove_yourself(yourself, console)
         _print_retired_preview(retired, console)
-        # A daemon with no footprint left never appears in `tweaks`
-        # (active_policies includes it only when policy_owned() is True) and
-        # needs no confirm --
-        # nothing destructive happens, only an internal marker resetting so a
-        # later reinstall is genuinely fresh (11-REVIEWS.md cycle 3 finding
-        # #13's "already disabled, nothing to sweep" case).
-        if daemon_policy is not None and daemon_policy.clear_decided is not None:
-            daemon_policy.clear_decided()
         return [], ()
     if paths:
         render_uninstall(paths, console)
@@ -1123,21 +1111,6 @@ def run_uninstall(
         console.print(line, markup=False)
     for warning in (*done.warnings, *swept.warnings):
         console.print(f"Warning: {warning}.")
-    # Composition-root-only, and only AFTER the sweep: daemon_policy.remove()
-    # itself still calls daemon.record_decided as part of that same sweep
-    # call, so clearing the marker BEFORE the sweep would be immediately
-    # undone by that call running moments later (11-REVIEWS.md cycle 2
-    # finding #17). Cleared whenever the daemon is NOT left in a FAILED state
-    # -- whether it was actively swept, or was already off and had nothing to
-    # sweep at all -- so a full uninstall+reinstall is genuinely fresh in
-    # both cases, while a genuine removal failure still preserves the marker
-    # (11-REVIEWS.md cycle 3 finding #13).
-    if (
-        daemon_policy is not None
-        and daemon_policy.id not in swept.failed
-        and daemon_policy.clear_decided is not None
-    ):
-        daemon_policy.clear_decided()
     return removed, tuple(failed)
 
 
@@ -1228,7 +1201,6 @@ def perform_uninstall(
     rc_paths: list[Path],
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
-    daemon_policy: Policy | None,
     extra_policies: tuple[Policy, ...],
     runner: Runner,
     catalog: Sequence[Tool],
@@ -1248,13 +1220,11 @@ def perform_uninstall(
     rather than the snapshot it rendered its rows from. Empty when the sweep
     lever was not selected.
 
-    `bundles`, `zshrc_path`, `daemon_policy`, and `extra_policies` are required
+    `bundles`, `zshrc_path` and `extra_policies` are required
     for the same reason they are on `run_uninstall`: this is a composition-root
     entry point, and a dropped kwarg here silently narrows a teardown instead
-    of narrowing a test. `daemon_policy` is `None` on any platform where the
-    daemon is never constructed, or when the caller genuinely has none to
-    offer. Dropping `extra_policies` leaves a cache-redirect file on disk
-    while the uninstall reports success."""
+    of narrowing a test. Dropping `extra_policies` leaves a cache-redirect file
+    or a schedule on disk while the uninstall reports success."""
     # H1 (17-REVIEW-opencode.md): the same remover and deletion-time re-proof
     # as run_uninstall. A path no longer proven (its link swapped for a foreign
     # file, dangling, looping, a drifted receipt) is refused and reported
@@ -1337,33 +1307,9 @@ def perform_uninstall(
             rc_path=myshellrc_path,
             bin_dir=bin_dir,
             zshrc_path=zshrc_path,
-            daemon_policy=daemon_policy,
             extra_policies=extra_policies,
         )
         clear_shell_init_record(myshellrc_path)
-        # Same post-sweep, composition-root-only marker clear as run_uninstall
-        # (see that function's own comment for the full ordering rationale).
-        if (
-            daemon_policy is not None
-            and daemon_policy.id not in swept.failed
-            and daemon_policy.clear_decided is not None
-        ):
-            daemon_policy.clear_decided()
-    # decision.remove_tweaks is False here -- either the user genuinely left
-    # an ACTIVE tweaks row unselected (keep the marker, nothing to clear), or
-    # there was no tweaks row to select at all because the daemon was already
-    # inactive (an already-disabled daemon never appears in active_policies).
-    # Only the second case should still clear the marker, mirroring
-    # run_uninstall's own "nothing to sweep" early-return branch -- an
-    # already-off daemon leaves no active state for a skipped selection to
-    # preserve, so a full visible uninstall must still leave the machine
-    # genuinely fresh (post-implementation review finding, second lane).
-    elif (
-        daemon_policy is not None
-        and daemon_policy.clear_decided is not None
-        and not policy_owned(daemon_policy)
-    ):
-        daemon_policy.clear_decided()
     merged = _merge([done, swept])
     return dataclasses.replace(
         merged,

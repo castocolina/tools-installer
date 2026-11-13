@@ -1,15 +1,14 @@
 """Tests for installer.systemd_daemon (the Linux mechanism tier, mirroring
 installer/daemon.py's macOS launchd shape) and this plan's composition-root
-wiring in setup.py (`_build_daemon_policy`'s Linux branch, `_timer_state_cache`).
+wiring in setup.py (`_timer_state_cache`).
 
 Every test uses an injected fake `run`/`read_output` -- never real
 `systemctl` -- mirroring tests/test_daemon.py's own injectable-run-seam
-tests and tests/test_policy_daemon.py's fixture structure.
+tests and tests/test_schedules_engine.py's recording fakes.
 """
 
 import inspect
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,6 @@ from installer import daemon, schedules, systemd_daemon
 from installer.daemon import DaemonScheduleError
 from installer.enums import DaemonState
 from installer.platform import Platform
-from installer.policy import Policy, PolicyResult, linux_daemon_policy
 from installer.run import CommandError
 
 # --- shared fakes ------------------------------------------------------------
@@ -77,151 +75,10 @@ def _platform(os_name: str = "fedora") -> Platform:
     return Platform(os=os_name, arch="amd64", immutable=False, has_brew=False)
 
 
-@dataclass
-class _Paths:
-    unit_dir: Path
-    log_path: Path
-    wrapper_bin_dir: Path
-    script_path: Path
-    state_path: Path
-    uv_path: Path
-    tmpdir_value: str
-    home_value: str
-
-
-def _make_paths(tmp_path: Path) -> _Paths:
-    script_path = tmp_path / "scripts" / "prune-tmp-linux.sh"
-    script_path.parent.mkdir(parents=True, exist_ok=True)
-    script_path.write_text("#!/bin/sh\n")
-    return _Paths(
-        unit_dir=tmp_path / "config" / "systemd" / "user",
-        log_path=tmp_path / "state" / "prune-daemon.log",
-        wrapper_bin_dir=tmp_path / "bin",
-        script_path=script_path,
-        state_path=tmp_path / ".myshellrc",
-        uv_path=tmp_path / "uv",
-        tmpdir_value=str(tmp_path / "tmp"),
-        home_value=str(tmp_path / "home"),
-    )
-
-
-def _build(
-    paths: _Paths,
-    *,
-    run: object,
-    read_output: object = systemd_daemon.query_systemctl,
-    timer_cache: systemd_daemon.TimerStateCache | None = None,
-) -> Policy:
-    return linux_daemon_policy(
-        unit_dir=paths.unit_dir,
-        log_path=paths.log_path,
-        wrapper_bin_dir=paths.wrapper_bin_dir,
-        script_path=paths.script_path,
-        state_path=paths.state_path,
-        installed_tools={},
-        path_value="/usr/bin:/bin",
-        tmpdir_value=paths.tmpdir_value,
-        home_value=paths.home_value,
-        uv_path=paths.uv_path,
-        run=run,  # type: ignore[arg-type]
-        read_output=read_output,  # type: ignore[arg-type]
-        timer_cache=timer_cache,
-    )
-
-
 # --- End-to-end: the tracer's own proof -------------------------------------
 
 
-def test_end_to_end_enable_and_disable_background_cleanup_on_linux(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
-    unit_dir = tmp_path / ".config" / "systemd" / "user"
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_LOG_PATH", tmp_path / "log" / "prune-daemon.log")
-    monkeypatch.setattr(setup, "_DAEMON_STATE_PATH", tmp_path / ".myshellrc")
-    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / "bin")
-
-    def which(name: str) -> str | None:
-        return f"/usr/bin/{name}" if name in ("systemctl", "uv") else None
-
-    fake_run = _RecordingRun()
-
-    def read_output(cmd: list[str]) -> str:
-        # The real D-01c predicate, exercised end-to-end: the answer tracks
-        # unit-file presence rather than being hardcoded, so a
-        # presence-only implementation would pass the post-remove half for
-        # the wrong reason (excluded separately by the runtime-state tests).
-        return "active" if systemd_daemon.units_present(unit_dir) else "inactive"
-
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        _platform(), {}, which=which, run=fake_run, read_output=read_output
-    )
-    assert policy is not None
-    assert policy.id.startswith("daemon:")
-
-    result = policy.apply()
-    assert result.warning is None
-    service_path, timer_path = systemd_daemon.unit_paths(unit_dir)
-    assert service_path.exists()
-    assert timer_path.exists()
-    assert oct(service_path.stat().st_mode)[-3:] == "644"
-    assert oct(timer_path.stat().st_mode)[-3:] == "644"
-    assert fake_run.calls == [
-        ["systemctl", "--user", "daemon-reload"],
-        ["systemctl", "--user", "enable", systemd_daemon.TIMER_NAME],
-        ["systemctl", "--user", "restart", systemd_daemon.TIMER_NAME],
-    ]
-
-    remove_result = policy.remove()
-    assert remove_result.warning is None
-    assert not service_path.exists()
-    assert not timer_path.exists()
-    assert policy.is_active is not None
-    assert policy.is_active() is False
-
-
 # --- Systemd availability gate (D-01b) --------------------------------------
-
-
-def test_build_daemon_policy_returns_none_when_systemctl_unresolvable_on_linux() -> None:
-    def which(_name: str) -> str | None:
-        return None
-
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        _platform(), {}, which=which
-    )
-    assert policy is None
-
-
-def test_build_daemon_policy_returns_a_policy_when_systemctl_resolves_but_uv_does_not() -> None:
-    """Mirrors test_build_daemon_policy_is_fail_closed_not_fail_hidden's
-    macOS contract: an unresolvable uv is the existing fail-closed-at-apply
-    behavior, not a second fail-hidden gate."""
-
-    def which(name: str) -> str | None:
-        return "/usr/bin/systemctl" if name == "systemctl" else None
-
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        _platform(), {}, which=which
-    )
-    assert policy is not None
-
-
-def test_build_daemon_policy_never_consults_the_lookup_for_systemctl_on_macos() -> None:
-    resolved: list[str] = []
-
-    def which(name: str) -> str | None:
-        resolved.append(name)
-        return "/usr/bin/uv" if name == "uv" else None
-
-    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        macos, {}, which=which
-    )
-    assert policy is not None
-    assert "systemctl" not in resolved
 
 
 # --- Mechanism-layer tests ---------------------------------------------------
@@ -531,41 +388,6 @@ def test_cache_an_invalidate_during_an_in_flight_probe_is_never_lost() -> None:
     assert cache.read() is DaemonState.ACTIVE  # ...but it was not memoized as fresh
 
 
-def test_linux_daemon_policy_uses_the_injected_cache_by_identity(tmp_path: Path) -> None:
-    paths = _make_paths(tmp_path)
-    injected = systemd_daemon.TimerStateCache(lambda: DaemonState.INACTIVE)
-    policy = _build(paths, run=_RecordingRun(), timer_cache=injected)
-    assert policy.state_cache is injected
-
-
-def test_an_unreachable_user_manager_is_a_failed_read_not_drift(tmp_path: Path) -> None:
-    """C-19: an UNAVAILABLE timer state is a failed read. With the unit files
-    on disk, answering False would paint the row as drift (owned, not active)."""
-    paths = _make_paths(tmp_path)
-    service_path, _timer_path = systemd_daemon.unit_paths(paths.unit_dir)
-    service_path.parent.mkdir(parents=True)
-    service_path.write_text("[Service]\n")
-    cache = systemd_daemon.TimerStateCache(lambda: DaemonState.UNAVAILABLE)
-    policy = _build(paths, run=_RecordingRun(), timer_cache=cache)
-    assert policy.active is False
-    assert policy.owned is not None and policy.owned()
-    assert policy.is_active is not None
-    with pytest.raises(OSError, match="the systemd user manager could not be reached"):
-        policy.is_active()
-
-
-def test_policy_without_state_cache_argument_still_builds_and_reads_none() -> None:
-    policy = Policy(
-        id="tweak:example",
-        label="Example",
-        description="an unrelated policy",
-        active=False,
-        apply=lambda: PolicyResult((), None, None),
-        remove=lambda: PolicyResult((), None, None),
-    )
-    assert policy.state_cache is None
-
-
 def test_timer_state_cache_helper_platform_matrix() -> None:
     def which_none(_name: str) -> str | None:
         return None
@@ -596,29 +418,6 @@ def test_timer_state_cache_helper_platform_matrix() -> None:
     )
     assert isinstance(linux_cache, systemd_daemon.TimerStateCache)
     assert read_calls == []  # construction never probes
-
-
-def test_build_daemon_policy_forwards_the_injected_timer_cache_by_identity() -> None:
-    def which(name: str) -> str | None:
-        return f"/usr/bin/{name}" if name in ("systemctl", "uv") else None
-
-    injected = systemd_daemon.TimerStateCache(lambda: DaemonState.INACTIVE)
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        _platform(), {}, which=which, timer_cache=injected
-    )
-    assert policy is not None
-    assert policy.state_cache is injected
-
-
-def test_build_daemon_policy_without_a_timer_cache_still_builds_a_non_none_one() -> None:
-    def which(name: str) -> str | None:
-        return f"/usr/bin/{name}" if name in ("systemctl", "uv") else None
-
-    policy = setup._build_daemon_policy(  # pyright: ignore[reportPrivateUsage]
-        _platform(), {}, which=which
-    )
-    assert policy is not None
-    assert policy.state_cache is not None
 
 
 def test_query_systemctl_passes_timeout_and_accept_codes(monkeypatch: pytest.MonkeyPatch) -> None:
