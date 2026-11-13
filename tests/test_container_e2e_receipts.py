@@ -1854,11 +1854,19 @@ def test_blocked_rows_are_listed_once_with_their_reason(tmp_path: Path) -> None:
     assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
 
 
-def test_a_pass_that_installs_nothing_is_misconfigured(tmp_path: Path) -> None:
-    result = _run(_pass1_script(tmp_path, "Summary — 3 skipped\n", "cmd_pass1"), tmp_path)
+def test_a_pass_with_nothing_available_is_misconfigured(tmp_path: Path) -> None:
+    result = _run(_pass1_script(tmp_path, "Summary — 3 blocked\n", "cmd_pass1"), tmp_path)
     assert result.returncode != 0
     assert "TRACER_DISTRO_MISCONFIGURED distro=debian" in result.stdout
     assert "TRACER_CLEAN_INSTALL_OK" not in result.stdout
+
+
+def test_a_rerun_pass1_that_skips_everything_is_not_misconfigured(tmp_path: Path) -> None:
+    """E6: the fix-and-rerun-pass1 loop finds everything already installed, so all rows skip."""
+    result = _run(_pass1_script(tmp_path, "Summary — 3 skipped\n", "cmd_pass1"), tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TRACER_DISTRO_MISCONFIGURED" not in result.stdout
+    assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
 
 
 def test_rerun_gate_is_wired_into_pass2() -> None:

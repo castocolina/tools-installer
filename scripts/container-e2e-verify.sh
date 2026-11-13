@@ -683,7 +683,8 @@ cmd_pass1() {
   list_blocked_rows "$all_runs"
 
   if install_step_ok "$setup_status"; then
-    if [[ "$ACC_INSTALLED" -eq 0 ]]; then
+    # Misconfigured means nothing was available at all; a re-run of a good pass 1 skips everything.
+    if [[ "$((ACC_INSTALLED + ACC_SKIPPED + ACC_MANUAL))" -eq 0 ]]; then
       printf 'TRACER_DISTRO_MISCONFIGURED distro=%s\n' "$DISTRO"
       rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
       return 1
