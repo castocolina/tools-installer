@@ -487,3 +487,17 @@ def test_a_partial_uninstall_still_lists_the_surviving_recorded_artifacts() -> N
 
     assert plan.removable == ()
     assert sorted(plan.yourself) == sorted(others)
+
+
+def test_a_binary_nobody_recorded_is_never_replaced() -> None:
+    binary = host_paths()[0]
+    binary.parent.mkdir(parents=True)
+    binary.write_text("my own alacritty, not executable\n")
+    binary.chmod(0o644)
+    box = FakeBox()
+
+    with pytest.raises(ExecutorError, match="existing .*alacritty"):
+        run_install(box)
+
+    assert box.calls == []  # refused before any box exists
+    assert binary.read_text() == "my own alacritty, not executable\n"

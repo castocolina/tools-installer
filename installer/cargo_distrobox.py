@@ -228,6 +228,22 @@ def _cleanup(run: _Run, name: str, image: str, *, pulled: bool) -> list[str]:
     return notes
 
 
+def _refuse_foreign_binary(method: Method) -> None:
+    """A file already at the binary's path that no receipt records is the user's: the swap would
+    replace it unrecorded and delete the original, so the run stops before it builds anything.
+    (An update or repair of this installer's own binary is recorded, so it passes.)"""
+    hosts = artifact_paths(method, locations.bin_dir(None))
+    if (
+        hosts
+        and os.path.lexists(hosts[0].path)
+        and hosts[0].path not in receipts.recorded_elsewhere("")
+    ):
+        raise ExecutorError(
+            f"refusing to replace your existing {locations.display_path(hosts[0].path)}; "
+            "move it away to let the installer build its own"
+        )
+
+
 def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
     """Build the latest release in a throwaway box and place its artifacts; return row notes.
 
@@ -237,6 +253,7 @@ def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
     tag = ctx.resolve_release(repo).tag
     if _TAG_RE.fullmatch(tag) is None:
         raise ExecutorError(f"refusing release tag {tag!r} of {repo}: not a safe git ref")
+    _refuse_foreign_binary(method)
     name = box_name(repo.split("/")[-1].lower())
     state = image_exists(image)
     pulled = state is False
