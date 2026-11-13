@@ -287,16 +287,18 @@ def footprint_present(unit_dir: Path, *, basename: str = UNIT_BASENAME) -> bool:
 def write_unit_pair(
     unit_dir: Path, *, basename: str, service_text: str, timer_text: str
 ) -> tuple[Path, Path]:
-    """Write already-rendered service and timer text atomically at 0o644.
+    """Write already-rendered service and timer text atomically at 0o600.
 
-    The caller renders first, so a render error never reaches the filesystem;
+    0o600, not 0o644: the service carries the installing shell's proxy variables, which can embed
+    credentials, and the user manager reads the user's own files. The caller renders first, so a
+    render error never reaches the filesystem;
     the forced mode is independent of the umask or any pre-existing mode on the
     target (T-15.7-02). Returns (service_path, timer_path).
     """
     service_path, timer_path = unit_paths(unit_dir, basename=basename)
     unit_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(service_path, service_text.encode("utf-8"), mode=0o644)
-    atomic_write_bytes(timer_path, timer_text.encode("utf-8"), mode=0o644)
+    atomic_write_bytes(service_path, service_text.encode("utf-8"), mode=0o600)
+    atomic_write_bytes(timer_path, timer_text.encode("utf-8"), mode=0o600)
     return service_path, timer_path
 
 

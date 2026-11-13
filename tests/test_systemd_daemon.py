@@ -1042,8 +1042,8 @@ def test_calendar_unit_pair_for_a_named_schedule(tmp_path: Path) -> None:
     )
     assert service_path.read_text() == service_text
     assert timer_path.read_text() == timer_text
-    assert oct(service_path.stat().st_mode)[-3:] == "644"
-    assert oct(timer_path.stat().st_mode)[-3:] == "644"
+    assert oct(service_path.stat().st_mode)[-3:] == "600"  # proxy credentials: owner only
+    assert oct(timer_path.stat().st_mode)[-3:] == "600"
     assert systemd_daemon.units_present(unit_dir, basename=_SCHEDULE_BASENAME) is True
     assert systemd_daemon.units_present(unit_dir) is False
 
@@ -1184,14 +1184,31 @@ def test_render_exec_service_environment_lines_are_single_quoted_tokens() -> Non
     assert 'Environment="TMPDIR=/t"' in lines
 
 
-def test_write_unit_pair_writes_both_files_at_0o644(tmp_path: Path) -> None:
+def test_write_unit_pair_writes_both_files_at_0o600(tmp_path: Path) -> None:
     unit_dir = tmp_path / "unit"
     systemd_daemon.write_unit_pair(
         unit_dir, basename=_SCHEDULE_BASENAME, service_text="s\n", timer_text="t\n"
     )
     service_path, timer_path = systemd_daemon.unit_paths(unit_dir, basename=_SCHEDULE_BASENAME)
-    assert oct(service_path.stat().st_mode)[-3:] == "644"
-    assert oct(timer_path.stat().st_mode)[-3:] == "644"
+    assert oct(service_path.stat().st_mode)[-3:] == "600"
+    assert oct(timer_path.stat().st_mode)[-3:] == "600"
+
+
+def test_a_unit_carrying_proxy_credentials_is_not_group_or_world_readable(
+    tmp_path: Path,
+) -> None:
+    text = systemd_daemon.render_exec_service(
+        argv=["/usr/bin/true"],
+        environment={"PATH": "/usr/bin", "HTTPS_PROXY": "http://u:p@host"},
+        description="x",
+    )
+    assert "HTTPS_PROXY=http://u:p@host" in text
+    unit_dir = tmp_path / "unit"
+    systemd_daemon.write_unit_pair(
+        unit_dir, basename=_SCHEDULE_BASENAME, service_text=text, timer_text="t\n"
+    )
+    service_path, _ = systemd_daemon.unit_paths(unit_dir, basename=_SCHEDULE_BASENAME)
+    assert service_path.stat().st_mode & 0o077 == 0
 
 
 def test_a_rejected_render_creates_no_directory_and_no_file(tmp_path: Path) -> None:

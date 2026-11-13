@@ -13,6 +13,7 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import threading
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping
@@ -49,6 +50,7 @@ class Schedule:
     default_start: str
 
 
+_UNIT_MODE = 0o600  # unit files and plists carry proxy credentials from the installing shell
 _DEFAULT_START = "00:00"
 _DEFAULT_INTERVAL = 6
 
@@ -909,7 +911,7 @@ def _restore(snapshot: dict[Path, bytes | None]) -> None:
         if previous is None:
             path.unlink(missing_ok=True)
         else:
-            atomic_write_bytes(path, previous, mode=0o644)
+            atomic_write_bytes(path, previous, mode=_UNIT_MODE)
 
 
 def _refuse_symlinks(paths: tuple[Path, ...]) -> None:
@@ -977,7 +979,7 @@ def _apply_linux(
     link_existed_before = link.is_symlink()
     try:
         if timer_only:
-            atomic_write_bytes(timer_path, timer_text.encode("utf-8"), mode=0o644)
+            atomic_write_bytes(timer_path, timer_text.encode("utf-8"), mode=_UNIT_MODE)
         else:
             systemd_daemon.write_unit_pair(
                 ctx.unit_dir, basename=basename, service_text=service_text, timer_text=timer_text
@@ -1605,7 +1607,11 @@ def _is_stale(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) ->
                 service_path: service_text.encode("utf-8"),
                 timer_path: timer_text.encode("utf-8"),
             }
-        return any(path.read_bytes() != text for path, text in wanted.items())
+        # A unit written at the old 0o644 is stale too: the rewrite lands 0o600 and ends it.
+        return any(
+            path.read_bytes() != text or stat.S_IMODE(path.stat().st_mode) != _UNIT_MODE
+            for path, text in wanted.items()
+        )
     except OSError:  # no uv, or an unreadable unit: nothing to refresh from here
         return False
 

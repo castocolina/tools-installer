@@ -111,8 +111,8 @@ def _atomic_write(path: Path, data: bytes, *, mode: int | None = None) -> None:
     different permission requirements, so one hardcoded policy cannot serve
     both callers. When `mode` is given, the temp file is chmod'd to exactly
     that value before the replace -- an explicit, umask-independent permission
-    (write_agent_plist's own forced 0o644 for a LaunchAgent config nobody else
-    should be able to edit). When `mode` is None (the default), this mirrors
+    (write_agent_plist's own forced 0o600 for a LaunchAgent config nobody else
+    should be able to read or edit). When `mode` is None (the default), this mirrors
     installer/omz.py::_atomic_write exactly: shutil.copymode from an existing
     target, no explicit chmod otherwise (record_decided's mode-PRESERVING
     write against ~/.myshellrc).
@@ -173,9 +173,12 @@ def render_agent_plist(
 
 
 def write_agent_plist(plist_path: Path, plist: Mapping[str, object]) -> None:
-    """Serialize an already-rendered plist dict and write it atomically at 0o644."""
+    """Serialize an already-rendered plist dict and write it atomically at 0o600.
+
+    Private because the environment can carry proxy credentials; launchd reads the user's own file.
+    """
     plist_path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(plist_path, plistlib.dumps(plist), mode=0o644)
+    _atomic_write(plist_path, plistlib.dumps(plist), mode=0o600)
 
 
 def _read_slot(entry: object) -> tuple[int, int] | None:

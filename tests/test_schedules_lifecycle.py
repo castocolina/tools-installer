@@ -309,6 +309,23 @@ def test_moved_checkout_refreshes_units_in_place(
     assert lab.env.run.calls == []
 
 
+def test_a_unit_left_at_the_old_0o644_mode_is_refreshed_to_0o600_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    service = lab.ctx.unit_dir / f"{CLAUDE_BASENAME}.service"
+    assert service.stat().st_mode & 0o777 == 0o600
+    service.chmod(0o644)  # what an earlier release wrote
+
+    ensure_schedule_defaults(lab.ctx)
+    assert service.stat().st_mode & 0o777 == 0o600
+
+    lab.env.run.calls.clear()
+    assert ensure_schedule_defaults(lab.ctx) == ReconcileReport()
+    assert lab.env.run.calls == []  # the new mode is not drift forever
+
+
 def test_old_tmp_units_are_adopted_on_reconcile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

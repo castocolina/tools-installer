@@ -147,12 +147,22 @@ def test_agent_plist_rejects_bad_input(overrides: dict[str, object]) -> None:
         daemon.render_agent_plist(**_agent_kwargs(**overrides))  # type: ignore[arg-type]
 
 
-def test_write_agent_plist_writes_a_rendered_dict_at_0o644(tmp_path: Path) -> None:
+def test_write_agent_plist_writes_a_rendered_dict_at_0o600(tmp_path: Path) -> None:
     plist_dict = daemon.render_agent_plist(**_agent_kwargs())  # type: ignore[arg-type]
     plist_path = tmp_path / "LaunchAgents" / "agent.plist"
     daemon.write_agent_plist(plist_path, plist_dict)
     assert plistlib.loads(plist_path.read_bytes()) == plist_dict
-    assert oct(plist_path.stat().st_mode)[-3:] == "644"
+    assert oct(plist_path.stat().st_mode)[-3:] == "600"  # proxy credentials: owner only
+
+
+def test_a_plist_carrying_proxy_credentials_is_not_group_or_world_readable(
+    tmp_path: Path,
+) -> None:
+    kwargs: Any = _agent_kwargs(environment={"PATH": "/usr/bin", "HTTPS_PROXY": "http://u:p@host"})
+    plist_path = tmp_path / "agent.plist"
+    daemon.write_agent_plist(plist_path, daemon.render_agent_plist(**kwargs))
+    assert b"http://u:p@host" in plist_path.read_bytes()
+    assert plist_path.stat().st_mode & 0o077 == 0
 
 
 def _rendered() -> dict[str, object]:
@@ -168,12 +178,12 @@ def test_write_agent_plist_creates_parent_dirs_and_the_calendar_reads_back(
     assert daemon.read_calendar(plist_path) == ((1, 30), (9, 30), (17, 30))
 
 
-def test_write_agent_plist_forces_0o644_regardless_of_prior_mode(tmp_path: Path) -> None:
+def test_write_agent_plist_forces_0o600_regardless_of_prior_mode(tmp_path: Path) -> None:
     plist_path = tmp_path / "agent.plist"
     plist_path.write_bytes(b"placeholder")
-    plist_path.chmod(0o600)
+    plist_path.chmod(0o644)
     daemon.write_agent_plist(plist_path, _rendered())
-    assert plist_path.stat().st_mode & 0o777 == 0o644
+    assert plist_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_write_agent_plist_leaves_no_temp_sibling_file(tmp_path: Path) -> None:
@@ -441,9 +451,9 @@ def test_a_reversed_marker_pair_reads_as_no_record(tmp_path: Path) -> None:
 
 
 def test_record_decided_preserves_the_existing_files_mode(tmp_path: Path) -> None:
-    # The exact INVERSE of write_agent_plist's forces-0o644 test: record_decided must
+    # The exact INVERSE of write_agent_plist's forces-0o600 test: record_decided must
     # PRESERVE state_path's existing mode, since it is called with _atomic_write's
-    # mode=None, never write_agent_plist's forced mode=0o644.
+    # mode=None, never write_agent_plist's forced mode=0o600.
     state_path = tmp_path / ".myshellrc"
     state_path.write_text("export EDITOR=vim\n")
     state_path.chmod(0o600)
