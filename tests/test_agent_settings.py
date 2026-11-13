@@ -1636,6 +1636,191 @@ def test_setting_keys_of_a_dynamic_group_is_empty() -> None:
         )
 
 
+def test_toml_never_adds_a_second_header() -> None:
+    config = _herdr_file()
+    # The only `[terminal]` line sits in a string; the real table is an inline one.
+    original = "note = '''\n[terminal]\n'''\nterminal = { shell_mode = \"auto\" }\n"
+    config.write_text(original, encoding="utf-8")
+
+    refused = _apply_shell()
+
+    assert refused.refused is not None
+    assert config.read_text(encoding="utf-8") == original
+    assert read_ledger("herdr") is None
+
+
+def test_toml_header_inside_a_multiline_string_is_skipped() -> None:
+    config = _herdr_file()
+    original = "note = '''\n[terminal]\n'''\n\n[terminal]\nshell_mode = \"auto\"\n"
+    config.write_text(original, encoding="utf-8")
+
+    assert _apply_shell().refused is None
+
+    doc = tomllib.loads(config.read_text(encoding="utf-8"))
+    assert doc["note"] == "[terminal]\n"
+    assert doc["terminal"] == {"shell_mode": "auto", "default_shell": ZSH}
+
+    (result,) = revert_agent("herdr", home=Path.home(), platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert config.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "value",
+    [7, True, 'say "hi" éü', [[1, 2], [3]], {"a": 1, "b-c": "x", "d": [True]}, {}],
+)
+def test_toml_values_round_trip(value: object) -> None:
+    original = "a = 1\n"
+
+    inserted = insert_key(original, "toml", ("x", "k"), value)
+
+    assert tomllib.loads(inserted.text)["x"]["k"] == value
+    assert type(tomllib.loads(inserted.text)["x"]["k"]) is type(value)
+    assert remove_key(inserted.text, "toml", ("x",), fragment=inserted.fragment) == original
+
+
+@pytest.mark.parametrize("value", [1.5, None, {"a b": 1}, [{"a.b": 1}], (1, 2)])
+def test_toml_values_outside_the_supported_set_are_refused(value: object) -> None:
+    with pytest.raises(SettingsEditRefused):
+        insert_key("a = 1\n", "toml", ("x", "k"), value)
+
+
+def test_toml_inline_ui_table_refuses() -> None:
+    config = _herdr_file()
+    original = "ui = { sidebar = {} }\n"
+    config.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=Path.home(), platform_os="linux", environ={})
+
+    assert applied.refused is not None
+    assert config.read_text(encoding="utf-8") == original
+    assert read_ledger("herdr") is None
+
+
+def test_toml_created_table_goes_with_its_last_key() -> None:
+    original = "a = 1\n"
+    first = insert_key(original, "toml", ("x", "k1"), 1)
+    second = insert_key(first.text, "toml", ("x", "k2"), 2)
+
+    assert (first.created_parent, second.created_parent) == (True, False)
+    assert second.text.count("[x]") == 1
+    without_second = remove_key(second.text, "toml", ("x", "k2"), fragment=second.fragment)
+    assert without_second == first.text
+    assert remove_key(without_second, "toml", ("x",), fragment=first.fragment) == original
+
+
+def test_toml_existing_table_keeps_its_header() -> None:
+    original = "[x]\nk0 = 0\n"
+
+    inserted = insert_key(original, "toml", ("x", "k1"), 1)
+
+    assert inserted.created_parent is False
+    assert inserted.text == "[x]\nk1 = 1\nk0 = 0\n"
+    with_fragment = remove_key(inserted.text, "toml", ("x", "k1"), fragment=inserted.fragment)
+    located = remove_key(inserted.text, "toml", ("x", "k1"))  # no fragment: found in its table
+    assert with_fragment == located == original
+
+
+def test_toml_a_header_without_a_final_newline_takes_the_key() -> None:
+    inserted = insert_key("[x]", "toml", ("x", "k"), 1)
+
+    assert tomllib.loads(inserted.text) == {"x": {"k": 1}}
+    assert remove_key(inserted.text, "toml", ("x", "k"), fragment=inserted.fragment) == "[x]"
+
+
+def test_herdr_config_changed_before_commit_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    seen: list[str] = []
+
+    def other_writer_wins(path: Path, before: FileSnapshot | None, text: str) -> None:
+        seen.append(text)
+        config.write_text(f"# the other writer, round {len(seen)}\n", encoding="utf-8")
+        agent_settings_write(path, before, text)
+
+    agent_settings_write = agent_settings.write_if_unchanged
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", other_writer_wins)
+
+    applied = _apply_shell()
+
+    assert applied.refused == CHANGED_WHILE_WRITING
+    assert len(seen) == 2
+    assert config.read_text(encoding="utf-8") == "# the other writer, round 2\n"
+    assert read_ledger("herdr") is None
+
+
+def test_herdr_write_failing_reparse_rolls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+
+    def broken_value(value: object) -> str:
+        return "[["
+
+    monkeypatch.setattr(agent_settings, "_toml_value", broken_value)
+
+    applied = _apply_shell()
+
+    assert applied.refused is not None  # every candidate fails the tomllib re-parse
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+
+def test_herdr_config_created_and_removed() -> None:
+    home = Path.home()
+    config = home / ".config" / "herdr" / "config.toml"
+    assert not config.parent.exists()
+
+    applied = apply_setting("herdr", "sidebar", home=home, platform_os="linux", environ={})
+
+    assert applied.refused is None
+    assert tomllib.loads(config.read_text(encoding="utf-8")) == {
+        "ui": {
+            "sidebar": {
+                "agents": {"rows": HERDR_AGENT_ROWS, "row_gap": 1},
+                "spaces": {"rows": HERDR_SPACES_ROWS},
+            }
+        }
+    }
+
+    (result,) = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert not config.exists()
+    assert not config.parent.exists()
+    assert read_ledger("herdr") is None
+
+
+def test_toml_revert_keeps_user_sidebar_keys() -> None:
+    config = _herdr_file()
+    original = '[ui]\nagent_panel_sort = "spaces"\n\n[ui.sidebar]\nwidth = 30\n'
+    config.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=Path.home(), platform_os="linux", environ={})
+
+    assert applied.refused is None
+    assert tomllib.loads(config.read_text(encoding="utf-8"))["ui"]["sidebar"]["width"] == 30
+    (result,) = revert_agent("herdr", home=Path.home(), platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_toml_revert_keeps_an_explicit_empty_ancestor() -> None:
+    config = _herdr_file()
+    original = "[ui]\nx = 1\n\n[ui.sidebar]\n"
+    config.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=Path.home(), platform_os="linux", environ={})
+
+    assert applied.refused is None
+    (result,) = revert_agent("herdr", home=Path.home(), platform_os="linux", environ={})
+
+    assert result.refused is None
+    assert config.read_text(encoding="utf-8") == original
+    assert tomllib.loads(original)["ui"]["sidebar"] == {}
+
+
 def test_herdr_is_a_config_agent_without_tuning() -> None:
     assert "herdr" in receipts.CONFIG_AGENTS
     assert agent_settings.AGENT_FORMATS["herdr"] == "toml"

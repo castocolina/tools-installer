@@ -126,6 +126,10 @@ def test_copilot_home_is_cleared_from_the_environment() -> None:
     assert env_names_to_clear({"COPILOT_HOME": "x"}) == ("COPILOT_HOME",)
 
 
+def test_env_names_to_clear_includes_herdr_config_path() -> None:
+    assert env_names_to_clear({"HERDR_CONFIG_PATH": "/x/h.toml"}) == ("HERDR_CONFIG_PATH",)
+
+
 def test_home_overrides_survive_the_configure_clearing() -> None:
     stashed: dict[str, str | None] = {
         "UV_TOOL_DIR": "/stash/uv",
