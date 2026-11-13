@@ -33,7 +33,7 @@ repos:
       # Same file set as `make validate`, so a commit cannot pass what the gate rejects.
       - id: shellcheck
         name: shellcheck
-        entry: uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh
+        entry: uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh scripts/container-e2e-verify.sh
         language: system
         pass_filenames: false
         types: [shell]

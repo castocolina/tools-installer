@@ -1507,3 +1507,182 @@ def test_the_settings_probes_are_wired_around_the_uninstall_step() -> None:
     assert pass2.index("hook_probe_after") < pass2.index("settings_probe_revert") < reinstall
     assert "settings_probe_write" not in _script_text()
     assert "TESTER_WORKSPACE" in _function("settings_probe_installed")
+
+
+# --- Phase 24-04: one table, three distros ---------------------------------
+
+_DISTROS = ("fedora", "debian", "arch")
+_IMAGES = {
+    "fedora": "fedora:latest",
+    "debian": "docker.io/library/debian:trixie",
+    "arch": "docker.io/library/archlinux:latest",
+}
+_RELEASE_FIXTURES = {
+    "fedora": ("/etc/fedora-release", "Fedora release 44", "Fedora release 44"),
+    "debian": ("/etc/debian_version", "13.1", "13.1"),
+    "arch": ("/etc/os-release", 'NAME="Arch Linux"\nPRETTY_NAME="Arch Linux"', "Arch Linux"),
+}
+
+
+def _distro_stub_ct() -> str:
+    """A `ct` that records its argv and answers the release files with fixture text."""
+    answers = "\n".join(
+        f'    "exec $CONTAINER_NAME cat {path}") printf "%s\\n" {shlex.quote(text)} ;;'
+        for path, text, _expected in _RELEASE_FIXTURES.values()
+    )
+    return (
+        "ct() {\n"
+        '  printf "%s\\n" "$*" >> "$CALLS"\n'
+        '  case "$*" in\n'
+        f"{answers}\n"
+        '    "exec $CONTAINER_NAME id tester") return 1 ;;\n'
+        '    "ps "*) return 0 ;;\n'
+        "  esac\n"
+        "}\n"
+    )
+
+
+def _distro_harness() -> str:
+    """The distro table and the ct-bound functions, with `ct` recording and nothing else real."""
+    text = _script_text()
+    names = (
+        "usage",
+        "select_distro",
+        "exec_root",
+        "exec_tester",
+        "container_running",
+        "container_exists",
+        "start_container",
+        "distro_release_record",
+        "install_root_prereqs",
+        "create_tester",
+        "ensure_phase_dir",
+        "main",
+        "cmd_all",
+    )
+    parts = [
+        'REPO_ROOT="$SCRATCH/repo"',
+        *(f"IMAGE_{name.upper()}={_constant(f'IMAGE_{name.upper()}', text)}" for name in _DISTROS),
+        "set -euo pipefail",
+        *(_function(name, text) for name in names),
+        _distro_stub_ct(),
+        "select_distro fedora",
+    ]
+    return "\n".join(parts)
+
+
+def _calls(scratch: Path) -> list[str]:
+    path = scratch / "calls"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+_STAGE_STUBS = (
+    'report() { printf "%s %s %s %s %s\\n" "$1" "$DISTRO" "$IMAGE" "$CONTAINER_NAME" '
+    '"$PHASE_DIR"; }\n'
+    'cmd_bootstrap() { report BOOT; mkdir -p "$PHASE_DIR"; }\n'
+    "cmd_pass1() { report PASS1; }\n"
+    'cmd_pass2() { report PASS2; printf "p2\\n" > "$PHASE_DIR/pass2-transcript.log"; }\n'
+)
+
+
+def test_distro_is_threaded_through_every_command(tmp_path: Path) -> None:
+    """R1-20: `main all --distro debian` selects one table entry and every stage reads it."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + "\n" + _STAGE_STUBS + "main all --distro debian\n", scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    phase = str(scratch / "repo" / ".e2e-artifacts" / "container-debian")
+    for stage in ("BOOT", "PASS1", "PASS2"):
+        assert (
+            f"{stage} debian docker.io/library/debian:trixie tools-installer-e2e-debian {phase}"
+            in result.stdout
+        )
+
+    for distro in _DISTROS:
+        direct = tmp_path / f"direct-{distro}"
+        direct.mkdir()
+        script = (
+            _distro_harness() + f"\nselect_distro {distro}\nstart_container\ninstall_root_prereqs\n"
+            "create_tester\ndistro_release_record\n"
+        )
+        run = _run(script, direct)
+        assert run.returncode == 0, run.stdout + run.stderr
+        name = f"tools-installer-e2e-{distro}"
+        assert f"run -d --name {name} {_IMAGES[distro]} sleep infinity" in _calls(direct)
+        expected = _RELEASE_FIXTURES[distro][2]
+        assert f"DISTRO_RELEASE={distro}:{expected}" in run.stdout
+
+    debian_calls = _calls(tmp_path / "direct-debian")
+    assert any(
+        "env DEBIAN_FRONTEND=noninteractive apt-get install" in call and " npm" in call
+        for call in debian_calls
+    )
+    assert any(call.endswith("apt-get update") for call in debian_calls)
+    arch_calls = _calls(tmp_path / "direct-arch")
+    assert any("pacman -Syu --noconfirm --needed" in call and " npm" in call for call in arch_calls)
+    fedora_calls = _calls(tmp_path / "direct-fedora")
+    assert any("dnf install -y" in call for call in fedora_calls)
+
+
+def test_unknown_distro_exits_2(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + "\n" + _STAGE_STUBS + "main all --distro gentoo\n", scratch)
+    assert result.returncode == 2
+    assert "unknown distro: gentoo" in result.stderr
+    assert "Usage: container-e2e-verify.sh" in result.stderr
+    assert "BOOT" not in result.stdout
+
+
+def test_distro_artifact_dirs_differ(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _distro_harness() + (
+        '\nselect_distro debian; printf "%s\\n" "$PHASE_DIR"\n'
+        'select_distro fedora; printf "%s\\n" "$PHASE_DIR"\n'
+        'select_distro arch; printf "%s\\n" "$PHASE_DIR" "$CONTAINER_NAME"\n'
+    )
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stderr
+    debian, fedora, arch, arch_name = result.stdout.splitlines()
+    assert debian.endswith("/.e2e-artifacts/container-debian")
+    assert fedora.endswith("/.e2e-artifacts/container-fedora")
+    assert arch.endswith("/.e2e-artifacts/container-arch")
+    assert arch_name == "tools-installer-e2e-arch"
+    assert len({debian, fedora, arch}) == 3
+
+
+@pytest.mark.parametrize("distro", _DISTROS)
+def test_every_distro_prereq_line_names_the_shared_set(tmp_path: Path, distro: str) -> None:
+    """R1-19: the shared set on every distro, and never zsh."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + f"\nselect_distro {distro}\ninstall_root_prereqs\n", scratch)
+    assert result.returncode == 0, result.stderr
+    installed = " ".join(_calls(scratch)).split()
+    # Arch names Python's package `python`; the other two ship `python3`.
+    python = "python" if distro == "arch" else "python3"
+    for word in ("sudo", "git", python, "nodejs", "chromium", "curl", "file"):
+        assert word in installed, (distro, word)
+    assert "zsh" not in installed
+
+
+@pytest.mark.parametrize("distro", _DISTROS)
+def test_tester_is_created_with_bash(tmp_path: Path, distro: str) -> None:
+    """R1-03: Debian's useradd defaults to /bin/sh, where the probes' `[[` and pipefail fail."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + f"\nselect_distro {distro}\ncreate_tester\n", scratch)
+    assert result.returncode == 0, result.stderr
+    assert f"exec tools-installer-e2e-{distro} useradd -m -s /bin/bash tester" in _calls(scratch)
+
+
+def test_harness_never_runs_setup_outside_a_container() -> None:
+    """Every `setup.py` invocation sits inside the one tester-exec helper, never on the host."""
+    text = _script_text()
+    runner = _function("run_setup_as_tester", text)
+    code = text.replace(_function("usage", text), "")
+    invoking = re.compile(r"\b(uv run|python3?)\b.*\bsetup\.py\b|\./setup\.py")
+    for line in code.splitlines():
+        if invoking.search(line) and not line.lstrip().startswith("#"):
+            assert line in runner, line

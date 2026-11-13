@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# container-e2e-verify.sh — Fedora-family container harness for D-04 / D-05.
+# container-e2e-verify.sh — container harness for D-04 / D-05, on Fedora, Debian or Arch.
 #
 # Bootstrap one long-lived named container (non-root, sudo-capable, Homebrew
 # + uv) and run Pass 1: a clean install of the full registry.toml catalog
 # through `uv run --isolated --no-dev setup.py --all --yes`, then Pass 2 (rerun, uninstall,
 # reinstall). `make e2e` runs `all`: every step, then removes the container.
+# `--distro fedora|debian|arch` picks the table entry (fedora when absent); each distro
+# runs in its own container `tools-installer-e2e-<distro>` with its own artifact dir
+# `.e2e-artifacts/container-<distro>`, so a run never touches another distro's container.
 #
 # First line of real logic sources scripts/detect-container-runtime.sh; a
 # non-zero detection exit is propagated immediately. Never fall back to the
@@ -12,8 +15,10 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="tools-installer-e2e"
-IMAGE="fedora:latest"
+# One image per distro (the only per-distro constants besides the prerequisite lists below).
+IMAGE_FEDORA=fedora:latest
+IMAGE_DEBIAN=docker.io/library/debian:trixie
+IMAGE_ARCH=docker.io/library/archlinux:latest
 
 # The first registry tool whose first applicable method on Fedora amd64 is a
 # raw github_release (category data). A constant: never interpolated from input.
@@ -26,14 +31,16 @@ BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-# Transcripts are run evidence, not source: .e2e-artifacts/ is gitignored.
-PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container"
 
 usage() {
   cat <<'EOF'
-Usage: container-e2e-verify.sh <command> [options]
+Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
 
-  bootstrap [--replace]   Create the named Fedora-family container, install
+  --distro NAME           Pick the distro table entry (default fedora): its image,
+                          container tools-installer-e2e-NAME and artifact dir
+                          .e2e-artifacts/container-NAME. Anywhere on the line.
+
+  bootstrap [--replace]   Create the named distro container, install
                           Homebrew-on-Linux prerequisites, create user tester,
                           bootstrap Homebrew + uv, uv sync. Prints
                           TRACER_HARNESS_READY_OK when ready.
@@ -66,6 +73,25 @@ die() {
   printf 'error: %s\n' "$1" >&2
   exit 1
 }
+
+# Selects the distro table entry: DISTRO, IMAGE, CONTAINER_NAME and PHASE_DIR. Transcripts are
+# run evidence, not source: .e2e-artifacts/ is gitignored. An unknown name exits 2 with the usage.
+select_distro() {
+  case "$1" in
+    fedora) IMAGE="$IMAGE_FEDORA" ;;
+    debian) IMAGE="$IMAGE_DEBIAN" ;;
+    arch) IMAGE="$IMAGE_ARCH" ;;
+    *)
+      printf 'error: unknown distro: %s (expected fedora, debian or arch)\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  DISTRO="$1"
+  CONTAINER_NAME="tools-installer-e2e-$1"
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-$1"
+}
+select_distro fedora
 
 # First line of real logic: detect. Non-zero exit propagates; never host-fallback.
 eval "$( "$SCRIPT_DIR/detect-container-runtime.sh" )"
@@ -114,26 +140,50 @@ start_container() {
   ct run -d --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
 }
 
-record_fedora_release() {
+distro_release_record() {
   local release
-  release="$(exec_root cat /etc/fedora-release)"
-  printf 'FEDORA_RELEASE=%s\n' "$release"
+  case "$DISTRO" in
+    fedora) release="$(exec_root cat /etc/fedora-release)" ;;
+    debian) release="$(exec_root cat /etc/debian_version)" ;;
+    arch)
+      release="$(exec_root cat /etc/os-release | sed -n 's/^PRETTY_NAME=//p' | tr -d '"')"
+      ;;
+  esac
+  printf 'DISTRO_RELEASE=%s:%s\n' "$DISTRO" "$release"
 }
 
+# Homebrew-on-Linux documented prerequisites, plus sudo, git, python3 (the Plan 12.3-01
+# offline fallback so uv sync does not fetch python-build-standalone), nodejs and chromium.
+# Debian and Arch ship npm as its own package (Fedora's nodejs pulls it in), and vendor
+# install scripts may call npm/npx. No distro gets zsh: with it the terminal sync would
+# write a WezTerm region that outlives the full uninstall (nested target covers zsh).
 install_root_prereqs() {
-  # Homebrew-on-Linux documented prerequisites, plus python3 as the Plan
-  # 12.3-01 offline-fallback so uv sync does not fetch python-build-standalone.
-  exec_root dnf install -y \
-    @development-tools \
-    procps-ng curl file git tar which sudo ca-certificates python3 \
-    nodejs chromium
+  case "$DISTRO" in
+    fedora)
+      exec_root dnf install -y \
+        @development-tools \
+        procps-ng curl file git tar which sudo ca-certificates python3 \
+        nodejs chromium
+      ;;
+    debian)
+      exec_root apt-get update
+      exec_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential procps curl file git ca-certificates sudo python3 nodejs npm chromium
+      ;;
+    arch)
+      exec_root pacman -Syu --noconfirm --needed \
+        base-devel procps-ng curl file git sudo which tar python nodejs npm chromium
+      ;;
+  esac
 }
 
 create_tester() {
   if exec_root id tester >/dev/null 2>&1; then
     printf 'user tester already exists\n'
   else
-    exec_root useradd -m tester
+    # -s /bin/bash on every distro: Debian's useradd defaults to /bin/sh, where the probes'
+    # `[[`, pipefail and the ~/.bash_profile PATH wiring would fail.
+    exec_root useradd -m -s /bin/bash tester
   fi
   exec_root bash -c 'printf "%s\n" "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester && chmod 440 /etc/sudoers.d/tester'
   exec_root mkdir -p /home/linuxbrew/.linuxbrew
@@ -167,6 +217,7 @@ write_tester_path() {
   # run_setup_as_tester are one-shot command prefixes in processes nothing
   # re-sources and are deliberately left alone.
   # su - resets the environment, so hand over the selected brew as a host-expanded prefix.
+  # shellcheck disable=SC2016 # the single-quoted part expands in the tester's shell
   exec_tester "BREW_BIN=${BREW_BIN}; "'touch ~/.bash_profile
 if ! grep -q linuxbrew ~/.bash_profile 2>/dev/null; then
   printf "%s\n" "eval \"\$(${BREW_BIN} shellenv)\"" >> ~/.bash_profile
@@ -188,6 +239,7 @@ fi
 }
 
 bootstrap_homebrew_and_uv() {
+  # shellcheck disable=SC2016 # $() and $HOME expand in the tester's shell
   exec_tester 'set -euo pipefail
 if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
   NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -200,6 +252,7 @@ fi
 }
 
 sync_workspace() {
+  # shellcheck disable=SC2016 # $() and $HOME expand in the tester's shell
   exec_tester 'set -euo pipefail
 eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 export PATH="$HOME/.local/bin:$PATH"
@@ -222,7 +275,7 @@ cmd_bootstrap() {
   fi
   ensure_phase_dir
   start_container "$replace"
-  record_fedora_release
+  distro_release_record
   install_root_prereqs
   create_tester
   install_github_token
@@ -1095,6 +1148,24 @@ cmd_all() {
 }
 
 main() {
+  local distro=fedora
+  local -a args=()
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--distro" ]]; then
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --distro needs a value\n' >&2
+        usage >&2
+        exit 2
+      fi
+      distro="$2"
+      shift 2
+    else
+      args+=("$1")
+      shift
+    fi
+  done
+  select_distro "$distro"
+  set -- ${args[@]+"${args[@]}"}
   local cmd="${1:-}"
   shift || true
   case "$cmd" in

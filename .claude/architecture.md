@@ -588,11 +588,14 @@ substitutes a different tool than the one it told the caller it detected.
 
 `scripts/container-e2e-verify.sh` is the harness built on top of that
 detection script for this phase's specific full-catalog proof: it
-bootstraps a named, long-lived Fedora 44 container
-(`tools-installer-e2e-12-3`) with a non-root sudo-capable tester user,
-Homebrew, and uv — never touching the host — then drives the real `uv run
-setup.py --all --yes` / `--uninstall --yes` entrypoints against it through
-three subcommands. `pass1` runs one clean-install pass and gates success on
+bootstraps a named, long-lived container per distro
+(`tools-installer-e2e-<distro>`, artifacts in `.e2e-artifacts/container-<distro>`,
+chosen with `--distro fedora|debian|arch`, fedora by default) with a non-root
+sudo-capable tester user (bash shell), Homebrew, and uv — never touching the
+host — then drives the real `uv run setup.py --all --yes` / `--uninstall --yes`
+entrypoints against it through three subcommands. An orchestrator-only `nested`
+target runs the same helpers inside a disposable `quay.io/podman/stable`
+container for the one real Alacritty build and herdr's `default_shell` write. `pass1` runs one clean-install pass and gates success on
 `failed == 0`, `mismatched == 0`, and every `dependency_failed` blocker
 being cross-checked (not assumed) against the same run's own
 `manual_required` list. `pass2` runs a second install over already-
