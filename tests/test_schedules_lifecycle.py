@@ -849,3 +849,60 @@ def test_macos_reconcile_honours_a_time_recorded_before_the_first_pass(
         {"Hour": 4, "Minute": 30}
     ]
     assert load_state(ctx.state_path).state.records["tmp-cleanup"].start == "04:30"
+
+
+def damage_state(ctx: ScheduleContext) -> None:
+    """A newer checkout's schema: unreadable to this one, so the load answers defaults."""
+    ctx.state_path.write_text('{"version": 2}')
+
+
+def test_a_damaged_state_still_reads_live_timers_as_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    damage_state(lab.ctx)
+    state = load_state(lab.ctx.state_path).state
+    for schedule_id in ("update-claude", "cache-cleanup", "tmp-cleanup"):
+        row = schedules.row_state(
+            lab.ctx,
+            state,
+            schedules.schedule_by_id(schedule_id),
+            manager=True,
+            present=lab.ctx.present,
+        )
+        assert row.word == "on"
+
+
+def test_turn_off_under_a_damaged_state_removes_the_live_timer_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    damage_state(lab.ctx)
+
+    turn_off(lab.ctx, "update-claude")
+
+    assert unit_files(lab.ctx, CLAUDE_BASENAME) == []
+    assert len(unit_files(lab.ctx, CACHE_BASENAME)) == 3  # only the one asked for
+
+
+def test_the_sweep_under_a_damaged_state_removes_every_timer_before_the_damaged_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    damage_state(lab.ctx)
+    load_state(lab.ctx.state_path)  # keeps the `.damaged` copy
+    damaged = schedules.damaged_path(lab.ctx.state_path)
+    seen: list[bool] = []
+    lab.env.run.hooks["disable"] = lambda _cmd: seen.append(damaged.exists())
+
+    sweep_policies(list(sweep_adapters(lab.ctx)))
+
+    for basename in (CLAUDE_BASENAME, CACHE_BASENAME, TMP_BASENAME):
+        assert unit_files(lab.ctx, basename) == []
+    assert seen
+    assert all(seen)  # the copy outlived every unit removal
+    assert not damaged.exists()
+    assert not lab.ctx.state_path.exists()

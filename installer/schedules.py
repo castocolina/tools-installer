@@ -797,17 +797,37 @@ def _delete_recorded(files: tuple[ReceiptArtifact, ...]) -> tuple[ReceiptArtifac
     return tuple(a for a in present if Path(a.path) in refused)
 
 
-def _on_schedules(ctx: ScheduleContext, state: ScheduleState, *, exclude: str) -> bool:
-    """Whether any other schedule has files on disk; tmp cleanup counts by its units' names (F2)."""
-    if any(key != exclude and record.files for key, record in state.records.items()):
-        return True
-    return exclude != _TMP_ID and _tmp_unit_present(ctx)
+def _on_schedules(ctx: ScheduleContext, *, exclude: str | None) -> bool:
+    """Whether any other schedule has a unit or plist on disk, counted by unit name (F4, F10).
+
+    Names are ours alone, so this holds with a damaged or newer-schema `schedules.json` too."""
+    return any(schedule.id != exclude and _unit_footprint(ctx, schedule) for schedule in SCHEDULES)
+
+
+def _unit_footprint(ctx: ScheduleContext, schedule: Schedule) -> bool:
+    """Whether any unit file, wants link or plist of this schedule is on disk, by name."""
+    if ctx.platform_os == "macos":
+        return _exists(_plist_path(ctx, schedule.id))
+    return systemd_daemon.footprint_present(ctx.unit_dir, basename=basename_for(schedule.id))
+
+
+def _units_present(ctx: ScheduleContext, schedule: Schedule) -> bool:
+    """Whether the schedule's unit pair (or plist) is on disk, by name."""
+    if ctx.platform_os == "macos":
+        return _plist_path(ctx, schedule.id).exists()
+    return systemd_daemon.units_present(ctx.unit_dir, basename=basename_for(schedule.id))
 
 
 def _tmp_unit_present(ctx: ScheduleContext) -> bool:
+    return _units_present(ctx, schedule_by_id(_TMP_ID))
+
+
+def _remove_units_by_name(ctx: ScheduleContext, schedule: Schedule) -> None:
+    """Delete a schedule's units by name: ours though unrecorded (adopted, or a lost state)."""
     if ctx.platform_os == "macos":
-        return _plist_path(ctx, _TMP_ID).exists()
-    return systemd_daemon.units_present(ctx.unit_dir)
+        _plist_path(ctx, schedule.id).unlink(missing_ok=True)
+    else:
+        systemd_daemon.remove_units(ctx.unit_dir, basename=basename_for(schedule.id))
 
 
 def _grid(
@@ -1141,7 +1161,7 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     try:
         _register(ctx, schedule, record, uv)
     except (CommandError, OSError):
-        if not _on_schedules(ctx, state, exclude=schedule_id):
+        if not _on_schedules(ctx, exclude=schedule_id):
             for path in created:  # R1-14: no unrecorded asset outlives a failed first apply
                 with contextlib.suppress(OSError):
                     path.unlink(missing_ok=True)
@@ -1239,11 +1259,8 @@ def _remove_timer(
             with contextlib.suppress(CommandError, OSError):
                 systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
     kept = _delete_recorded(record.files)
-    if schedule.kind is JobKind.TMP_CLEANUP and not record.files:  # adopted by name, never recorded
-        if macos:
-            _plist_path(ctx, schedule_id).unlink(missing_ok=True)
-        else:
-            systemd_daemon.remove_units(ctx.unit_dir)
+    if not record.files:  # adopted by name, or its record is lost: ours by name all the same
+        _remove_units_by_name(ctx, schedule)
     if reached and not macos:
         with contextlib.suppress(CommandError):
             systemd_daemon.daemon_reload(run=ctx.run)
@@ -1264,9 +1281,7 @@ def _remove_timer(
         if forget and not kept:
             del records[schedule_id]
         shared = current.shared
-        if shared and not _on_schedules(
-            ctx, replace(current, records=records), exclude=schedule_id
-        ):
+        if shared and not _on_schedules(ctx, exclude=None):
             shared = _delete_recorded(shared)
             if shared:
                 names = ", ".join(str(artifact.path) for artifact in shared)
@@ -1396,9 +1411,8 @@ def row_state(
             return RowState("n/a", f"unavailable: {schedule.target} not installed")
     record = record_for(state, schedule.id)
     if not record.files:
-        # tmp cleanup's existing units are ours by name, even before they are recorded (R9)
-        on_by_name = schedule.kind is JobKind.TMP_CLEANUP and _tmp_unit_present(ctx)
-        return RowState("on" if on_by_name else "off")
+        # Units are ours by name even before they are recorded (R9) or with the state lost (F10)
+        return RowState("on" if _units_present(ctx, schedule) else "off")
     return RowState("on" if all(receipts.matches(a) for a in record.files) else "drift")
 
 
@@ -1686,13 +1700,9 @@ def _footprint(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -
     """Whether anything of this schedule is on disk; file reads only."""
     if any(_exists(Path(artifact.path)) for artifact in record_for(state, schedule.id).files):
         return True
-    if schedule.kind is not JobKind.TMP_CLEANUP:
-        return False
-    if daemon.wrapper_present(ctx.legacy_bin_dir):
+    if _unit_footprint(ctx, schedule):  # by name, so a damaged state still finds it (F10)
         return True
-    if ctx.platform_os == "macos":
-        return _exists(_plist_path(ctx, schedule.id))
-    return systemd_daemon.footprint_present(ctx.unit_dir)
+    return schedule.kind is JobKind.TMP_CLEANUP and daemon.wrapper_present(ctx.legacy_bin_dir)
 
 
 def _forget(ctx: ScheduleContext, schedule_id: str) -> None:
