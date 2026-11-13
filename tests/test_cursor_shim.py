@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import run
+from installer import receipts, run, uninstall
 from installer.cursor_shim import (
     SHIM_SENTINEL,
     is_our_shim,
@@ -20,6 +20,7 @@ from installer.cursor_shim import (
     restore_link,
 )
 from installer.daemon import DaemonScheduleError
+from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
 
 MODEL = "gpt-5.6-sol-xhigh"
 
@@ -313,3 +314,67 @@ def test_concurrent_reader_sees_whole_files(install: Install) -> None:
         stop.set()
         thread.join()
     assert bad == []
+
+
+def plant_receipt(install: Install) -> None:
+    """cursor-agent's install receipt: both vendor links as leaves plus its version tree."""
+    tree = receipts.fingerprint(install.home / ".local" / "share" / "cursor-agent", "tree")
+    leaves = (
+        receipts.fingerprint(install.link, "leaf"),
+        receipts.fingerprint(install.agent, "leaf"),
+    )
+    artifacts = tuple(a for a in (*leaves, tree) if a is not None)
+    assert len(artifacts) == 3
+    receipts.write(
+        Receipt(
+            tool="cursor-agent",
+            at="t",
+            method=ReceiptMethod(kind="script", key="k"),
+            package=None,
+            artifacts=artifacts,
+            smoke=None,
+            hooks={},
+        )
+    )
+
+
+def stored_receipt() -> Receipt:
+    receipt = receipts.read("cursor-agent")
+    assert receipt is not None
+    return receipt
+
+
+def test_shim_write_keeps_the_receipt_gate_open(install: Install) -> None:
+    plant_receipt(install)
+    assert receipts.broken_drift(stored_receipt()) == ()
+
+    report = refresh_shim(link=install.link, agent=install.agent, model=MODEL, models=(MODEL,))
+    assert report.write == "written"
+    assert receipts.broken_drift(stored_receipt()) == ()
+    assert ReceiptArtifact(path=install.link, type="leaf") in stored_receipt().artifacts
+
+    assert restore_link(link=install.link, agent=install.agent)
+    assert receipts.broken_drift(stored_receipt()) == ()
+
+
+def test_receipt_removal_deletes_the_shim(install: Install) -> None:
+    plant_receipt(install)
+    refresh_shim(link=install.link, agent=install.agent, model=MODEL, models=(MODEL,))
+
+    assert uninstall.remove_paths(stored_receipt().artifacts) == ()
+    assert not install.link.exists()
+    assert not install.link.is_symlink()
+
+
+def test_remove_shim_alone(install: Install) -> None:
+    refresh_shim(link=install.link, agent=install.agent, model=MODEL, models=(MODEL,))
+    assert remove_shim(install.link)
+    assert not install.link.exists()
+
+
+def test_no_receipt_relies_on_the_sentinel(install: Install) -> None:
+    report = refresh_shim(link=install.link, agent=install.agent, model=MODEL, models=(MODEL,))
+    assert report.write == "written"
+    assert is_our_shim(install.link)
+    assert restore_link(link=install.link, agent=install.agent)
+    assert not receipts.receipt_path("cursor-agent").exists()

@@ -1816,3 +1816,59 @@ def test_a_hook_update_keeps_the_recorded_release(tmp_path: Path) -> None:
     kept = receipts.read("yq")
     assert kept is not None
     assert kept.release == "v1.1.0"
+
+
+def _leaf_receipt(tool: str, *artifacts: ReceiptArtifact) -> Receipt:
+    return Receipt(
+        tool=tool,
+        at="t",
+        method=ReceiptMethod(kind="script", key="k"),
+        package=None,
+        artifacts=artifacts,
+        smoke=None,
+        hooks={"h": ("claude",)},
+    )
+
+
+def test_refingerprint_leaf_updates_one_artifact(tmp_path: Path) -> None:
+    _script_install(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    link = bin_dir / "t"
+    other = bin_dir / "other"
+    other.symlink_to(link.resolve())
+    link_leaf = receipts.fingerprint(link, "leaf")
+    other_leaf = receipts.fingerprint(other, "leaf")
+    tree = receipts.fingerprint(tmp_path / ".local" / "share" / "t", "tree")
+    assert link_leaf is not None and other_leaf is not None and tree is not None
+    write(_leaf_receipt("t", link_leaf, other_leaf, tree))
+    link.unlink()
+    link.write_text("#!/bin/sh\n")
+
+    stored = receipts.read("t")
+    assert stored is not None
+    assert receipts.broken_drift(stored) == (link_leaf,)
+
+    assert receipts.refingerprint_leaf("t", link)
+
+    updated = receipts.read("t")
+    assert updated is not None
+    assert updated.artifacts == (ReceiptArtifact(path=link, type="leaf"), other_leaf, tree)
+    assert updated.hooks == stored.hooks
+    assert receipts.broken_drift(updated) == ()
+
+
+def test_refingerprint_leaf_writes_nothing_for_an_unrecorded_path(tmp_path: Path) -> None:
+    assert not receipts.refingerprint_leaf("t", tmp_path / "x")
+    assert not receipts.receipt_path("t").exists()
+
+    _script_install(tmp_path)
+    link = tmp_path / ".local" / "bin" / "t"
+    leaf = receipts.fingerprint(link, "leaf")
+    assert leaf is not None
+    write(_leaf_receipt("t", leaf))
+    before = receipts.receipt_path("t").read_bytes()
+
+    assert not receipts.refingerprint_leaf("t", tmp_path / ".local" / "bin" / "unrecorded")
+    link.unlink()
+    assert not receipts.refingerprint_leaf("t", link)  # nothing there to fingerprint
+    assert receipts.receipt_path("t").read_bytes() == before

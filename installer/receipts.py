@@ -178,6 +178,26 @@ def forget_hooks(tool_id: str, name: str) -> None:
             _write_unlocked(replace(receipt, hooks={**receipt.hooks, name: ()}))
 
 
+def refingerprint_leaf(tool_id: str, path: Path) -> bool:
+    """Re-take the `leaf` fingerprint of `path` in the tool's receipt, keeping all else.
+
+    For a path the installer itself rewrote (the cursor-agent shim replacing the vendor link),
+    so the update gate and the removal still prove it. False, with nothing written, when the
+    tool has no receipt, the receipt records no leaf at `path`, or `path` cannot be fingerprinted.
+    `_leaf_matches` stays as strict as before (D-19)."""
+    with _WRITE_LOCK:
+        receipt = read(tool_id)
+        fresh = fingerprint(path, "leaf")
+        if receipt is None or fresh is None:
+            return False
+        recorded = [a for a in receipt.artifacts if a.type == "leaf" and Path(a.path) == path]
+        if not recorded:
+            return False
+        artifacts = tuple(fresh if a in recorded else a for a in receipt.artifacts)
+        _write_unlocked(replace(receipt, artifacts=artifacts))
+    return True
+
+
 def read(tool_id: str) -> Receipt | None:
     """Read back the receipt written for `tool_id`; None when it cannot be trusted.
 

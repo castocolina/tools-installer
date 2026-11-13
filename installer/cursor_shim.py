@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-from installer import atomic, daemon, run, schedules
+from installer import atomic, daemon, receipts, run, schedules
 from installer.atomic import read_capped
 
 SHIM_SENTINEL: Final = "# tools-installer-helper: cursor-agent-shim"
@@ -103,6 +103,8 @@ def refresh_shim(
     if is_our_shim(link) and link.read_bytes() == text:
         return ShimReport("unchanged", check, model)
     atomic.atomic_replace_entry(link, text, mode=0o755)
+    # False is normal: no receipt on this host, and the sentinel alone proves ownership (D-19).
+    receipts.refingerprint_leaf("cursor-agent", link)
     return ShimReport("written", check, model)
 
 
@@ -111,6 +113,7 @@ def restore_link(*, link: Path, agent: Path) -> bool:
     if not (link.is_symlink() or is_our_shim(link)):
         return False
     atomic.replace_symlink(link, os.readlink(agent))
+    receipts.refingerprint_leaf("cursor-agent", link)
     return True
 
 
