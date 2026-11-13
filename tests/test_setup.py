@@ -40,7 +40,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import UnavailableReason
-from installer.run import run_captured
+from installer.run import run_captured, run_git_isolated
 from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
@@ -4818,7 +4818,7 @@ def test_the_composition_root_wires_the_git_runner(
     _sandbox(monkeypatch, tmp_path)
     _capture_app(monkeypatch)
     assert setup.main([]) == 0
-    assert vars(post_install)["_git"] is vars(setup)["_run_git"]
+    assert vars(post_install)["_git"] is run_git_isolated
 
 
 def test_the_headless_route_wires_the_git_runner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4826,7 +4826,7 @@ def test_the_headless_route_wires_the_git_runner(monkeypatch: pytest.MonkeyPatch
     done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
     _headless_main_fixture(monkeypatch, buffer, [done])
     assert setup.main(["--all", "--yes"]) == 0
-    assert vars(post_install)["_git"] is vars(setup)["_run_git"]
+    assert vars(post_install)["_git"] is run_git_isolated
 
 
 # Whole identifiers of the code SPEC R7 / D-10 deleted. vulture at min_confidence = 80 would not

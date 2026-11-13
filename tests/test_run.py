@@ -21,6 +21,7 @@ from installer.run import (
     run_bounded,
     run_captured,
     run_command,
+    run_git_isolated,
     run_output,
     run_output_with_stderr,
     run_query,
@@ -836,3 +837,41 @@ def test_run_bounded_calls_other_runners_as_they_are() -> None:
     run_bounded(calls.append, ["herdr", "server", "reload-config"])
 
     assert calls == [["herdr", "server", "reload-config"]]
+
+
+def test_run_git_isolated_scrubs_the_user_git_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["cmd"] = cmd
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_ASKPASS", "SSH_ASKPASS"):
+        monkeypatch.setenv(name, "/elsewhere")
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+    monkeypatch.setenv("KEEP_ME", "1")
+
+    assert run_git_isolated(["git", "-C", "/w", "rev-parse", "HEAD"]) == "ok\n"
+
+    assert seen["cmd"] == [
+        "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.autocrlf=false",
+        "-C",
+        "/w",
+        "rev-parse",
+        "HEAD",
+    ]
+    env = seen["env"]
+    assert isinstance(env, dict)
+    scrubbed = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_ASKPASS", "SSH_ASKPASS")
+    assert not any(name in env for name in scrubbed)
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["SSH_ASKPASS_REQUIRE"] == "never"
+    assert env["KEEP_ME"] == "1"
+    assert seen["timeout"] == 600
