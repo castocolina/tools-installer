@@ -595,8 +595,10 @@ def removal_order(tools: Sequence[Tool]) -> list[Tool]:
     """Dependents first: a tool comes before every selected tool it requires (review R1-09).
 
     Reuses the dependency resolver on the selection as its own catalog, so nothing is
-    dragged in or blocked; independents keep the order they were given."""
-    selected = list(tools)
+    dragged in or blocked; independents keep the order they were given, except that tools
+    with a registration hook go first: their unregister edits the agents' settings files, and
+    each agent's revert must see those files without the hook (23.2 e2e #8)."""
+    selected = sorted(tools, key=lambda tool: not tool.postinstall)
     resolution = resolve_dependencies(
         list(reversed(selected)),
         selected,

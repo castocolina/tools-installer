@@ -882,6 +882,28 @@ def _revert_pass(
     return text, tuple(results)
 
 
+def _empty_tree(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        _empty_tree(v) for v in cast(dict[str, object], value).values()
+    )
+
+
+def _holds_no_setting(text: str, fmt: SettingsFormat) -> bool:
+    """For a file the install created: True for whitespace or `{}`, and for a JSON document holding
+    only empty objects and a top-level `$schema` string, what another installer-run tool leaves
+    after its own uninstall (23.2 e2e #8: codegraph adds `$schema` to opencode.json and keeps it).
+    A comment is content."""
+    squeezed = "".join(text.split())
+    if squeezed in ("", "{}"):
+        return True
+    if fmt == "toml" or "".join(_clean(text, fmt).split()) != squeezed:
+        return False
+    doc = dict(parse_settings(text, fmt))
+    if isinstance(doc.get("$schema"), str):
+        del doc["$schema"]
+    return _empty_tree(doc)
+
+
 RECORDED_FILE_GONE: Final = "missing (moved or deleted); its keys stay recorded"
 NOT_A_SETTINGS_FILE: Final = "not a settings file of this agent; nothing is reverted there"
 
@@ -927,7 +949,7 @@ def _revert_once(
             # A created file goes only when nothing of the user's is left in it, comments too.
             bare = "".join(text.split()) in ("", "{}")
             blank = dict(ledger.blank_files).get(file)
-            if snap is not None and file in ledger.created_files and bare:
+            if snap is not None and file in ledger.created_files and _holds_no_setting(text, fmt):
                 delete_if_unchanged(path, snap)
                 dirs = _remove_created_dirs(dirs, home)
             elif snap is not None and blank is not None and bare:

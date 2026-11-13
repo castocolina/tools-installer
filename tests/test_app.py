@@ -4881,6 +4881,22 @@ def test_removal_order_puts_dependents_first() -> None:
     assert [t.id for t in removal_order(independent)] == ["uv", "jq"]
 
 
+def test_removal_order_puts_hook_tools_before_the_agents_they_registered_in() -> None:
+    """23.2 e2e #8: an agent reverted before codegraph unregistered kept its created settings
+    file, which codegraph then left as `{}` (claude) or `{"$schema": ...}` (opencode)."""
+    import dataclasses
+
+    from installer.app import removal_order
+
+    claude = _manager_tool("claude", Method(kind="brew", params={"formula": "claude"}))
+    jq = _manager_tool("jq", Method(kind="brew", params={"formula": "jq"}))
+    codegraph = dataclasses.replace(
+        _manager_tool("codegraph", Method(kind="brew", params={"formula": "codegraph"})),
+        postinstall="codegraph-mcp-register",
+    )
+    assert [t.id for t in removal_order([claude, jq, codegraph])] == ["codegraph", "claude", "jq"]
+
+
 def test_perform_uninstall_removes_a_dependent_before_its_manager(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

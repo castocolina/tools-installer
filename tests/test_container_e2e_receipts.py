@@ -1415,7 +1415,7 @@ def test_settings_probe_revert_flags_a_settings_file_that_outlived_the_uninstall
     result = home.run("settings_probe_revert")
 
     assert result.returncode != 0
-    assert result.stdout.splitlines() == ["TRACER_SETTINGS_FILE_LEFT agent=claude"]
+    assert result.stdout.splitlines() == ["TRACER_SETTINGS_FILE_LEFT agent=claude residue={}"]
 
 
 def test_settings_probe_revert_lets_a_file_the_install_did_not_create_stay(
@@ -1494,7 +1494,8 @@ def test_settings_probe_revert_accepts_a_key_restored_to_the_cli_default(
     assert kept.returncode != 0
     assert kept.stdout.splitlines() == [
         "TRACER_SETTINGS_REVERT_DIFF agent=cursor-agent key=attribution.attributeCommitsToAgent",
-        "TRACER_SETTINGS_FILE_LEFT agent=cursor-agent",
+        "TRACER_SETTINGS_FILE_LEFT agent=cursor-agent"
+        ' residue={"attribution":{"attributeCommitsToAgent":false}}',
     ]
 
 

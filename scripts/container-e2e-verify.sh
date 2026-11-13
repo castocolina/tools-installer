@@ -900,7 +900,8 @@ print(\"K\", count)
 # must be gone too when the install created it (unless a CLI default was restored into it), no
 # config-write ledger may remain, and neither
 # copilot's ~/.local/bin link nor its opt dir may remain. Prints TRACER_SETTINGS_REVERT_OK keys=N,
-# or one TRACER_SETTINGS_REVERT_DIFF / TRACER_SETTINGS_FILE_LEFT / TRACER_SETTINGS_LEDGER_LEFT /
+# or one TRACER_SETTINGS_REVERT_DIFF / TRACER_SETTINGS_FILE_LEFT (with the left document as
+# residue=, at most 200 characters) / TRACER_SETTINGS_LEDGER_LEFT /
 # TRACER_COPILOT_LEFT line per
 # finding; a missing or unreadable agent list prints TRACER_SETTINGS_REVERT_PROBE_FAILED.
 settings_probe_revert() {
@@ -935,7 +936,8 @@ for agent in agents:
     # it stays with its keys checked above; the installer owes the removal of only the files it
     # created, unless the revert restored a CLI default into it (cursor-agent), which keeps it.
     if path.exists() and str(path) in tuned[\"created\"].get(agent, []) and not restored_any:
-        print(\"F\", agent)
+        residue = json.dumps(doc, sort_keys=True, separators=(\",\", \":\"), default=str)
+        print(\"F\", agent, residue[:200])
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)
 if \"copilot\" in agents:
@@ -952,7 +954,11 @@ print(\"K\", count)
         printf 'TRACER_SETTINGS_REVERT_DIFF agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
         failed=1
         ;;
-      "F "*) printf 'TRACER_SETTINGS_FILE_LEFT agent=%s\n' "${line#F }"; failed=1 ;;
+      "F "*)
+        agent="${line#F }"
+        printf 'TRACER_SETTINGS_FILE_LEFT agent=%s residue=%s\n' "${agent%% *}" "${agent#* }"
+        failed=1
+        ;;
       "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
       "C "*) printf 'TRACER_COPILOT_LEFT path=%s\n' "${line#C }"; failed=1 ;;
       "K "*) keys="${line#K }" ;;

@@ -1127,6 +1127,38 @@ def test_a_created_file_the_user_commented_is_kept_on_revert() -> None:
     assert read_ledger("vscode") is None
 
 
+def test_a_created_file_left_with_only_a_schema_and_empty_objects_is_deleted_on_revert() -> None:
+    """23.2 e2e #8: codegraph adds `$schema` to the opencode.json the install created and keeps
+    it after its own uninstall; that marker and an emptied object are no setting of the user's."""
+    home = Path.home()
+    opencode = home / ".config" / "opencode" / "opencode.json"
+    apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    doc = json.loads(opencode.read_text(encoding="utf-8"))
+    doc |= {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": {}}}
+    opencode.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+    assert _reverted("opencode", home=home).refused is None
+
+    assert not opencode.exists()
+    assert read_ledger("opencode") is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"$schema": "https://opencode.ai/config.json", "model": "x"}, {"$schema": 1}, {"mcp": []}],
+)
+def test_a_created_file_left_with_a_real_value_is_kept_on_revert(extra: dict[str, object]) -> None:
+    home = Path.home()
+    opencode = home / ".config" / "opencode" / "opencode.json"
+    apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    doc = json.loads(opencode.read_text(encoding="utf-8")) | extra
+    opencode.write_text(json.dumps(doc), encoding="utf-8")
+
+    assert _reverted("opencode", home=home).refused is None
+
+    assert json.loads(opencode.read_text(encoding="utf-8")) == extra
+
+
 def test_the_removal_preview_lists_only_keys_still_holding_our_value() -> None:
     """F-3: a key the user changed since is named as kept, never promised as removed."""
     home = Path.home()
