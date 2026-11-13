@@ -502,7 +502,7 @@ Plans:
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
   5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
 
-**Plans**: 8 plans
+**Plans**: 9 plans
 
 Plans:
 **Wave 1**
@@ -519,7 +519,10 @@ Plans:
 - [ ] 24-07-PLAN.md — herdr entry, integrations for every shared host (user-owned rule), sidebar markers plugin, uninstall order (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 24-08-PLAN.md — Phase gate: full suite, orchestrator nested-podman build and three-distro runs, real-host UAT script (wave 4)
+- [ ] 24-09-PLAN.md — Clean rerun: a failed script download fails the install (curl retries, no masked pipe), and a receipt-proven release reads current (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 24-08-PLAN.md — Phase gate: full suite, orchestrator nested-podman build and three-distro runs, real-host UAT script (wave 5)
 
 ### Phase 24.1: Onboard Neovim through the tool-onboarding skill (INSERTED)
 
