@@ -107,7 +107,7 @@
 - [ ] **ONB-09**: Installing Neovim asks whether to make it the default `EDITOR`/`VISUAL`; "yes" writes a managed shell line that is removed with the tool [user request 2026-10-13] *(amended 2026-11-07, 24.1 D-14, **needs confirmation**: TUNE-04 "always, no question" — install writes the managed line with no question, only when the user's own shell files export neither `EDITOR` nor `VISUAL` (OS defaults are overridden, a user value is kept and named); removed with the tool)*
 - [ ] **ONB-10**: Installing Neovim offers kickstart.nvim as a starter config (asked), cloned into `~/.config/nvim` only when that directory is absent or empty, never over an existing config, and set up with **no language server**: opening Python, Lua, TypeScript, Go or Java files starts zero LSP processes, and Mason installs no servers. Linting and type checks run on demand through the project's pre-commit (`:!pre-commit run --files %`, named in the install summary together with `:lsp enable <name>` for a one-off session) [user decision 2026-10-13: "sin LSP en nvim"; measured: kickstart 26 MB PSS vs basedpyright +358 MB resident on this repo, 343 MB for 0.74 s on demand] *(amended 2026-11-07, 24.1 D-15/D-16, **needs confirmation**: TUNE-04 "always, no question" — not asked; cloned at install whenever `~/.config/nvim` is absent or empty, never offered again after the user deletes it, kept on removal unless "delete config too")*
 - [x] **ONB-03**: The tool-onboarding skill covers the new lifecycle params and is scored with skill-judge [999.5] *(amended 2026-11-07, 24 D-24: the skill also carries TUNE-04's rule, kept verbatim through this phase's edit; the baseline score is a fresh run on the skill as 23.2 leaves it)*
-- [ ] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
+- [x] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
 - [ ] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
 
 ### Host safety
@@ -248,7 +248,7 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | ONB-01 | Phase 24 | Pending |
 | ONB-02 | Phase 24 | Pending |
 | ONB-03 | Phase 24 | Complete |
-| ONB-04 | Phase 24 | Pending |
+| ONB-04 | Phase 24 | Complete |
 | ONB-05 | Phase 24 | Pending |
 | ONB-06 | Phase 24 | Pending |
 | ONB-07 | Phase 24 | Pending |

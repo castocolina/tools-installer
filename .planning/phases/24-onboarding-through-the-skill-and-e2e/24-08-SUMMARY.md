@@ -3,7 +3,7 @@ phase: 24-onboarding-through-the-skill-and-e2e
 plan: "08"
 subsystem: e2e-and-uat
 tags: [uat, container-e2e, nested-podman, merged-tree-gate, checkpoint]
-status: in-progress
+status: complete
 requires:
   - phase: 24-01
     provides: cargo_distrobox kind, Alacritty entry, Node floor
@@ -42,7 +42,7 @@ requirements-completed: []
 metrics:
   duration: "Task 1 only"
   completed: "2026-11-13"
-status_detail: "Task 1 done; Tasks 2 and 3 are orchestrator container runs and remain pending"
+status_detail: "Task 1 done; nested recorded infeasible (UAT test 6 REQUIRED); fedora, debian and arch pass; UAT handed to the user"
 commits: 1
 plan_head_before: 2c48c82b15258315834e0e99c2c3d31d174360b5
 plan_head_after: 24eaa92
@@ -123,6 +123,44 @@ Outcome: infeasible environment, not a product failure, so no third run (the pla
 network retry only). UAT test 6 is REQUIRED. D-29's container proof of herdr's `default_shell`
 write and revert IS present (the installer step ran). herdr's reload-config failed as a note
 (no herdr server in the container), as 24-07 designed.
+
+## Task 3 (orchestrator): three-distro runs — fedora, debian, arch PASS
+
+Round 1 (53c00ee/b114c1e, sequential, 2026-11-13):
+- fedora: EXIT=0 in 662 s, every listed tracer, rerun `installed=0 updated=0` (24-09's fixes hold).
+- debian (13.7): EXIT=1 in 410 s, `TRACER_CLEAN_INSTALL_INCOMPLETE failed=1 dependency_failed=5`:
+  SDKMAN's installer needs `unzip` ("Looking for unzip... Not found"), which debian:13 lacks; java,
+  gradle, maven, groovy and springbootcli failed behind it. Product failure.
+- arch: EXIT=1 in 350 s, same sdkman failure plus puppeteer's postinstall "Extraction failed: no zip
+  archiver is available" (mmdc failed behind it). Product failure.
+- Fixes (forward, no owning 24-NN plan, so `fix(24)`): `230deea` declares `unzip` and `zip` as
+  system-tier catalog tools (dnf/apt/pacman packages plus a brew formula, like zsh) and sdkman's
+  `requires = ["unzip", "zip"]`; `9069f3c` adds `unzip` to puppeteer's requires. Native managers
+  outrank brew, so on debian/arch without them the rows are MANUAL sudo handoffs and sdkman,
+  puppeteer and their dependents read BLOCKED "needs ..." instead of FAILED. Gate 6297 passed.
+
+Round 2 (9069f3c, sequential; fedora re-run because the catalog changed for every distro):
+- debian: EXIT=0, 571 s. `DISTRO_RELEASE=debian:13.7`, `TRACER_HARNESS_READY_OK`,
+  `TRACER_CLEAN_INSTALL_OK installed=61 updated=0 skipped=4 failed=0 blocked=11 manual=9`,
+  `TRACER_HERDR_INSTALLED_OK hosts=claude,codex,copilot,cursor,opencode`,
+  `TRACER_SETTINGS_INSTALLED_OK agents=6 keys=29`, `TRACER_COPILOT_VERSION_OK`,
+  `TRACER_RERUN_OK installed=0 updated=0 skipped=65 failed=0 dependency_failed=0 blocked=11 manual=9`
+  (no `TRACER_RERUN_UNEXPECTED`), `TRACER_GSD_ABSENT_OK` x3, `TRACER_UNINSTALL_OK`,
+  `TRACER_LEFTOVER_OK`, `TRACER_HOOKS_UNREGISTERED_OK count=8`, `TRACER_SETTINGS_REVERT_OK keys=29`,
+  `TRACER_HERDR_STATUS_CLEAN_OK`, `TRACER_HERDR_REVERT_OK`, `TRACER_REINSTALL_OK installed=61`,
+  `TRACER_CONTAINER_TEARDOWN_OK`. `TRACER_DISTRO_BLOCKED` once each for mmdc and puppeteer (Node
+  floor: "needs Node 22.12.0 or newer for its install method"), and for sdkman, java, gradle, maven,
+  groovy, springbootcli (needs unzip/zip), oh-my-zsh (needs zsh), gnu-bash and container (macOS only).
+- arch: EXIT=0, 489 s. Same tracer set; `TRACER_CLEAN_INSTALL_OK installed=60 ... blocked=11
+  manual=10`, `TRACER_RERUN_OK installed=0 updated=0 skipped=64`, `TRACER_REINSTALL_OK installed=60`;
+  BLOCKED: sdkman and the JVM tools, puppeteer and mmdc (needs unzip), oh-my-zsh, gnu-bash, container.
+- fedora: EXIT=0, 617 s. Same tracer set; `TRACER_CLEAN_INSTALL_OK installed=68 ... blocked=3
+  manual=7`, `TRACER_RERUN_OK installed=0 updated=0 skipped=75`, `TRACER_REINSTALL_OK installed=62`.
+- Every run: `TRACER_HERDR_RESIDUE agent=codex key=features.hooks` (herdr's documented residue,
+  D-28) and post-run `podman ps -a --format '{{.Names}}'` listed no `tools-installer-e2e-*`.
+
+Budget: two product-fix rounds used for debian and arch (the plan's maximum), about 1 h of the 12 h
+container budget. ONB-04 is met by these three runs; ONB-05 waits for the user's 24-UAT.md.
 
 ## Orchestrator: what remains (Tasks 2 and 3)
 

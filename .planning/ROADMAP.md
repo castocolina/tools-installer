@@ -502,7 +502,7 @@ Plans:
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
   5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
 
-**Plans**: 8/9 plans executed
+**Plans**: 9/9 plans executed
 
 Plans:
 **Wave 1**
@@ -522,7 +522,7 @@ Plans:
 - [x] 24-09-PLAN.md — Clean rerun: a failed script download fails the install (curl retries, no masked pipe), and a receipt-proven release reads current (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 24-08-PLAN.md — Phase gate: full suite, orchestrator nested-podman build and three-distro runs, real-host UAT script (wave 5)
+- [x] 24-08-PLAN.md — Phase gate: full suite, orchestrator nested-podman build and three-distro runs, real-host UAT script (wave 5)
 
 ### Phase 24.1: Onboard Neovim through the tool-onboarding skill (INSERTED)
 
@@ -608,7 +608,7 @@ Plans:
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
-| 24. Onboarding through the skill and e2e | 8/9 | In Progress | - |
+| 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 24.2 Schedules view | 0/TBD | Not started | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
