@@ -1,29 +1,31 @@
 """The Schedules core: the closed table of built-in schedules, the slot grid, the state file.
 
-Pure: no process is started and every HOME- or XDG-derived path is computed when a
-function is called, never held as a module constant.
+The core is pure; the engine (turn on and off) starts a process only through the context's
+seams. Every HOME- or XDG-derived path is computed when a function is called, never held as a
+module constant.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from installer import daemon, receipts, runlock, systemd_daemon
+from installer import daemon, receipts, runlock, systemd_daemon, uninstall
 from installer.atomic import atomic_write_bytes, atomic_write_text, read_capped
 from installer.locations import ensure_dir
 from installer.ownership import NATIVE_OWNERS, OS_PACKAGE_OWNER
 from installer.receipts import ReceiptArtifact
-from installer.run import OutputRunner, Runner, run_captured
+from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.sanitize import sanitize_log_line
 from installer.update import UpdateOutcome
 
@@ -606,3 +608,359 @@ def context_for(
         present=present,
         read_models=read_models,
     )
+
+
+# --- The engine: turn a schedule on or off (24.2-05) ---------------------------------------
+
+
+class ScheduleUnavailable(OSError):
+    """A schedule cannot be turned on here; the message is the literal `unavailable: ...` reason."""
+
+
+NO_MANAGER_REASON: Final = "unavailable: no user timer manager"
+# Ported from installer/policy.py `_UNREACHABLE_MANAGER_WARNING`.
+_UNREACHABLE_MANAGER_WARNING: Final = (
+    "the systemd user manager could not be reached, so `systemctl --user daemon-reload` "
+    "did not run; the unit files are removed, but a timer it already loaded may keep "
+    "running until you log out, or until you run `systemctl --user daemon-reload` yourself"
+)
+
+
+@dataclass(frozen=True)
+class ApplyReport:
+    changed: bool
+    next_run: datetime | None = None
+    shim: object | None = None
+    warnings: tuple[str, ...] = ()
+
+
+def basename_for(schedule_id: str) -> str:
+    """The systemd unit basename; tmp cleanup keeps its existing units (D-03, D-08)."""
+    if schedule_id == "tmp-cleanup":
+        return systemd_daemon.UNIT_BASENAME
+    return f"tools-installer-schedule-{schedule_id}"
+
+
+def label_for(schedule_id: str) -> str:
+    """The launchd label; tmp cleanup keeps its existing label (D-03, D-08)."""
+    if schedule_id == "tmp-cleanup":
+        return daemon.LABEL
+    return f"com.tools-installer.schedule.{schedule_id}"
+
+
+def manager_reachable(ctx: ScheduleContext) -> bool:
+    """The one decision whether a user timer manager exists (D-24); every check goes through it."""
+    if ctx.platform_os == "macos":  # every other Platform.os key is Linux
+        return ctx.which("launchctl") is not None
+    return ctx.which("systemctl") is not None and systemd_daemon.user_manager_reachable(
+        read_output=ctx.read_output
+    )
+
+
+def _require_available(ctx: ScheduleContext, schedule: Schedule) -> None:
+    if not manager_reachable(ctx):
+        raise ScheduleUnavailable(NO_MANAGER_REASON)
+    if schedule.kind is JobKind.UPDATE and not ctx.present(schedule.target or ""):
+        raise ScheduleUnavailable(f"unavailable: {schedule.target} not installed")
+
+
+def _resolve_uv(ctx: ScheduleContext) -> Path:
+    found = ctx.which("uv")
+    path = Path(os.path.abspath(found)) if found else None
+    if path is None or not path.is_file() or not os.access(path, os.X_OK):
+        raise daemon.DaemonScheduleError("uv was not found on PATH, so no schedule can run")
+    return path
+
+
+def _fingerprint(path: Path, kind: Literal["file", "link"]) -> ReceiptArtifact:
+    artifact = receipts.fingerprint(path, kind, rehash=True)
+    if artifact is None:
+        raise OSError(f"{path} could not be fingerprinted")
+    return artifact
+
+
+def _shared_pairs(ctx: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
+    """(source, target) per shared asset; the scripts source `lib/` next to themselves."""
+    scripts = ctx.checkout / "scripts"
+    runner = Path(__file__).parent / "helper_assets" / "schedule_runner.py"
+    return (
+        (runner, ctx.data_dir / RUNNER_NAME),
+        (scripts / "prune-tmp-linux.sh", ctx.data_dir / "prune-tmp-linux.sh"),
+        (scripts / "prune-user-tmpdir.sh", ctx.data_dir / "prune-user-tmpdir.sh"),
+        (scripts / "lib" / "prune-tmp-common.sh", ctx.data_dir / "lib" / "prune-tmp-common.sh"),
+    )
+
+
+def _ensure_shared_assets(
+    ctx: ScheduleContext, state: ScheduleState
+) -> tuple[tuple[ReceiptArtifact, ...], tuple[Path, ...]]:
+    """Copy the runner and the prune scripts into the data dir; return (artifacts, newly created).
+
+    The scripts are byte-for-byte copies with no sentinel added: the sha256 recorded in
+    `state.shared` is their ownership proof, standing in for SPEC R5's sentinel (R1-16); the
+    runner keeps its own sentinel header. Every target is validated before any write, and a
+    failed write puts back what this call already wrote, so a failure leaves no unrecorded
+    asset (R2-08).
+    """
+    recorded = {Path(artifact.path): artifact for artifact in state.shared}
+    pending: list[tuple[Path, bytes, bytes | None]] = []
+    for source, target in _shared_pairs(ctx):
+        data = source.read_bytes()  # a missing source raises an OSError naming it
+        if target.is_symlink():
+            raise OSError(f"{target} is a symlink, not a file tools-installer wrote")
+        current = target.read_bytes() if target.exists() else None
+        if current is not None and current != data:
+            mine = recorded.get(target)
+            if mine is None or not receipts.matches(mine, rehash=True):
+                raise OSError(f"{target} exists and is not managed by tools-installer")
+        pending.append((target, data, current))
+    written: list[tuple[Path, bytes | None]] = []
+    try:
+        for target, data, current in pending:
+            if current == data:  # identical bytes are adopted
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(target, data, mode=0o755)
+            written.append((target, current))
+    except OSError:
+        for target, previous in written:
+            with contextlib.suppress(OSError):
+                if previous is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    atomic_write_bytes(target, previous, mode=0o755)
+        raise
+    artifacts = tuple(_fingerprint(target, "file") for target, _data, _current in pending)
+    return artifacts, tuple(target for target, previous in written if previous is None)
+
+
+def _prune_data_dirs(ctx: ScheduleContext) -> None:
+    for directory in (ctx.data_dir / "lib", ctx.data_dir):
+        with contextlib.suppress(OSError):  # non-empty or already gone
+            directory.rmdir()
+
+
+def _delete_recorded(files: tuple[ReceiptArtifact, ...]) -> tuple[ReceiptArtifact, ...]:
+    """Delete recorded files through `remove_paths`; return those it refused (changed on disk).
+
+    A recorded file already gone is dropped silently: nothing is left to refuse."""
+    present = tuple(a for a in files if Path(a.path).exists() or Path(a.path).is_symlink())
+    refused = {Path(path) for path in uninstall.remove_paths(present)}
+    return tuple(a for a in present if Path(a.path) in refused)
+
+
+def _on_schedules(ctx: ScheduleContext, state: ScheduleState, *, exclude: str) -> bool:
+    """Whether any other schedule has files on disk; tmp cleanup counts by its units' names (F2)."""
+    if any(key != exclude and record.files for key, record in state.records.items()):
+        return True
+    return exclude != "tmp-cleanup" and systemd_daemon.units_present(ctx.unit_dir)
+
+
+def _grid(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord
+) -> tuple[Slot, ...] | None:
+    """The run times; None for Linux tmp cleanup, whose cadence is a fixed monotonic timer."""
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        return slots(24, record.start) if ctx.platform_os == "macos" else None
+    return slots(record.interval, record.start)
+
+
+def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]:
+    """What every unit executes (D-10): paths resolved fresh, never read from schedules.json."""
+    macos = ctx.platform_os == "macos"
+    job: list[str]
+    tail: list[str] = []
+    if schedule.kind is JobKind.UPDATE:
+        job = ["update", schedule.target or "", "--installer", str(ctx.checkout), "--uv", str(uv)]
+    elif schedule.kind is JobKind.CACHE_CLEANUP:
+        job = ["cache-cleanup"]
+    else:
+        script = "prune-user-tmpdir.sh" if macos else "prune-tmp-linux.sh"
+        job = ["tmp-cleanup", "--script", str(ctx.data_dir / script)]
+        amount = (
+            ["--days", str(daemon.DEFAULT_DAYS)]
+            if macos
+            else ["--minutes", str(systemd_daemon.DEFAULT_AGE_MINUTES)]
+        )
+        tail = ["--", "--apply", *amount]
+    return [
+        str(uv),
+        "run",
+        "--no-project",
+        "--script",
+        str(ctx.data_dir / RUNNER_NAME),
+        *job,
+        "--log",
+        str(ctx.log_path),
+        "--lock",
+        str(ctx.lock_path),
+        "--cap-bytes",
+        str(LOG_CAP_BYTES),
+        *tail,
+    ]
+
+
+def _unit_environment(ctx: ScheduleContext) -> dict[str, str]:
+    path = clean_unit_path(ctx.home, platform_os=ctx.platform_os, environ=ctx.environ)
+    return {"PATH": path, "HOME": str(ctx.home), "TMPDIR": ctx.tmpdir}
+
+
+def _snapshot(paths: tuple[Path, ...]) -> dict[Path, bytes | None]:
+    return {path: path.read_bytes() if path.exists() else None for path in paths}
+
+
+def _restore(snapshot: dict[Path, bytes | None]) -> None:
+    # Back to exactly the snapshot: a file that existed gets its prior bytes, a new one goes
+    # (ported from linux_daemon_policy._restore_units).
+    for path, previous in snapshot.items():
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic_write_bytes(path, previous, mode=0o644)
+
+
+def _refuse_symlinks(paths: tuple[Path, ...], record: ScheduleRecord) -> None:
+    """`atomic_write_bytes` writes through a symlink, so one not recorded as ours is refused."""
+    recorded = {Path(artifact.path) for artifact in record.files}
+    for path in paths:
+        if path.is_symlink() and path not in recorded:
+            raise OSError(f"{path} is a symlink that tools-installer did not create")
+
+
+def _apply_linux(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord, uv: Path
+) -> None:
+    """Write the unit pair, then register; roll back on failure (linux_daemon_policy._apply)."""
+    basename = basename_for(schedule.id)
+    service_text = systemd_daemon.render_exec_service(
+        argv=runner_argv(ctx, schedule, uv),
+        environment=_unit_environment(ctx),
+        description=f"tools-installer {schedule.label} schedule",
+    )
+    grid = _grid(ctx, schedule, record)
+    timer_text = (
+        systemd_daemon.render_timer()
+        if grid is None
+        else systemd_daemon.render_timer(
+            description=f"tools-installer {schedule.label} timer",
+            on_calendar=on_calendar(grid),
+            basename=basename,
+        )
+    )
+    unit_paths = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
+    _refuse_symlinks(unit_paths, record)
+    link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
+    prior_registration = systemd_daemon.units_present(ctx.unit_dir, basename=basename)
+    snapshot = _snapshot(unit_paths)
+    link_existed_before = link.is_symlink()
+    try:
+        systemd_daemon.write_unit_pair(
+            ctx.unit_dir, basename=basename, service_text=service_text, timer_text=timer_text
+        )
+        systemd_daemon.bootstrap(ctx.unit_dir, basename=basename, run=ctx.run)
+    except (CommandError, OSError):
+        if prior_registration:
+            # bootstrap's reload may already hold the new content: restore the files, reload,
+            # then re-register the restored content, all best effort.
+            with contextlib.suppress(OSError):
+                _restore(snapshot)
+            with contextlib.suppress(CommandError):
+                systemd_daemon.daemon_reload(run=ctx.run)
+            with contextlib.suppress(CommandError):
+                systemd_daemon.bootstrap(ctx.unit_dir, basename=basename, run=ctx.run)
+        else:
+            # A first apply: undo `enable`'s wants link before the unit it points at is gone.
+            with contextlib.suppress(CommandError):
+                systemd_daemon.disable_timer(basename=basename, run=ctx.run)
+            with contextlib.suppress(OSError):
+                _restore(snapshot)
+                if not link_existed_before and link.is_symlink():
+                    link.unlink()
+            with contextlib.suppress(CommandError):
+                systemd_daemon.daemon_reload(run=ctx.run)
+        raise
+
+
+def _fingerprint_unit(ctx: ScheduleContext, schedule: Schedule) -> tuple[ReceiptArtifact, ...]:
+    """What is on disk now: the unit pair and its wants link."""
+    basename = basename_for(schedule.id)
+    paths = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
+    link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
+    files = tuple(_fingerprint(path, "file") for path in paths)
+    return (*files, _fingerprint(link, "link")) if link.is_symlink() else files
+
+
+def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
+    """Write the shared assets, then the unit, register it, and record every file (D-02)."""
+    schedule = schedule_by_id(schedule_id)
+    _require_available(ctx, schedule)  # before anything is written
+    uv = _resolve_uv(ctx)
+    state = load_state(ctx.state_path).state
+    record = record_for(state, schedule_id)
+    assets, created = _ensure_shared_assets(ctx, state)
+    try:
+        _apply_linux(ctx, schedule, record, uv)
+    except (CommandError, OSError):
+        if not _on_schedules(ctx, state, exclude=schedule_id):
+            for path in created:  # R1-14: no unrecorded asset outlives a failed first apply
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
+            _prune_data_dirs(ctx)
+        raise
+    files = _fingerprint_unit(ctx, schedule)
+
+    def change(current: ScheduleState) -> ScheduleState:
+        updated = replace(record_for(current, schedule_id), decided=True, files=files)
+        return replace(
+            current,
+            records={**current.records, schedule_id: updated},
+            shared=assets,
+            checkout=str(ctx.checkout),
+            uv=str(uv),
+        )
+
+    saved = update_state(ctx.state_path, change)
+    grid = _grid(ctx, schedule, record_for(saved, schedule_id))
+    return ApplyReport(True, next_run(grid, datetime.now()) if grid else None)
+
+
+def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
+    """Disable first, then delete exactly the recorded files, then record the decision off."""
+    schedule = schedule_by_id(schedule_id)
+    basename = basename_for(schedule_id)
+    record = record_for(load_state(ctx.state_path).state, schedule_id)
+    warnings: list[str] = []
+    reached = systemd_daemon.bootout(
+        ctx.unit_dir, basename=basename, run=ctx.run, read_output=ctx.read_output
+    )
+    if not reached:
+        warnings.append(_UNREACHABLE_MANAGER_WARNING)
+    elif schedule.kind is not JobKind.TMP_CLEANUP:
+        # A calendar timer's Persistent= stamp, cleaned while the unit is still loaded.
+        with contextlib.suppress(CommandError, OSError):
+            systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
+    kept = _delete_recorded(record.files)
+    if reached:
+        with contextlib.suppress(CommandError):
+            systemd_daemon.daemon_reload(run=ctx.run)
+
+    def change(current: ScheduleState) -> ScheduleState:
+        updated = replace(record_for(current, schedule_id), decided=False, files=kept)
+        records = {**current.records, schedule_id: updated}
+        shared = current.shared
+        if shared and not _on_schedules(
+            ctx, replace(current, records=records), exclude=schedule_id
+        ):
+            shared = _delete_recorded(shared)
+            if shared:
+                names = ", ".join(str(artifact.path) for artifact in shared)
+                warnings.append(f"kept, changed since it was copied: {names}")
+            else:
+                _prune_data_dirs(ctx)
+        return replace(current, records=records, shared=shared)
+
+    update_state(ctx.state_path, change)
+    if kept:
+        names = ", ".join(str(artifact.path) for artifact in kept)
+        raise OSError(f"kept, changed since it was written: {names}")
+    return ApplyReport(True, None, None, tuple(warnings))
