@@ -806,6 +806,47 @@ def _codegraph_receipt(hooks: Mapping[str, tuple[str, ...]]) -> None:
 _REGISTER_CODEX = ConfigStep("register codegraph for codex", "hook_register")
 
 
+def test_installing_copilot_registers_herdr_for_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D-21: copilot is a herdr host, so installing it sweeps herdr's hook for copilot."""
+    herdr = Tool(
+        id="herdr",
+        name="herdr",
+        category="terminal",
+        cmd="herdr",
+        methods=(Method(kind="github_release", params={"bin_dir": "/b"}),),
+        tier="user",
+        postinstall="herdr-integration",
+    )
+    receipts.write(
+        receipts.Receipt(
+            tool="herdr",
+            at="2026-11-07T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="github_release", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"herdr-integration": ("claude", "sidebar-markers")},
+        )
+    )
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "copilot"}))
+
+    def status(argv: list[str]) -> str | None:
+        return "claude: current (v10) (/x)\ncopilot: not installed (/x)\n"
+
+    monkeypatch.setattr(postinstall, "herdr_query", status)
+    argvs: list[list[str]] = []
+    outcomes = execute_plan(
+        [PlanRow("copilot", Disposition.INSTALL, "not installed")],
+        _run_context(
+            RunRecorder(),
+            catalog={"herdr": herdr, "copilot": _tool("copilot")},
+            runner=lambda command: argvs.append(list(command)),
+        ),
+    )
+    assert argvs == [["/b/herdr", "integration", "install", "copilot"]]
+    assert outcomes[0].resynced == (("herdr", ("copilot",)),)
+
+
 def test_reconfigure_registers_the_missing_host(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "codex"}))
     _codegraph_receipt({"codegraph-mcp-register": ("claude",)})

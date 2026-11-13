@@ -17,7 +17,15 @@ from typing import Any, Literal, cast
 
 import pytest
 
-from installer import agent_settings, download, executors, receipts, uninstall, version_status
+from installer import (
+    agent_settings,
+    download,
+    executors,
+    postinstall,
+    receipts,
+    uninstall,
+    version_status,
+)
 from installer.app import run_wizard
 from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
@@ -4453,12 +4461,13 @@ def _hook_service(
     *,
     which: Callable[[str], str | None] | None = None,
     present: bool = True,
+    probe_output: Callable[[list[str]], str | None] | None = None,
 ) -> VersionRefreshService:
     return VersionRefreshService(
         platform=_LINUX,
         cache_path=tmp_path / "versions.json",
         resolve_tag=lambda _repo: "1.0.0",
-        probe_output=lambda _argv: "1.0.0",
+        probe_output=probe_output or (lambda _argv: "1.0.0"),
         now=lambda: _STATE_NOW,
         managed_bin_dir=tmp_path / "managed",
         which=which or (lambda cmd: f"/usr/bin/{cmd}" if cmd in commands else None),
@@ -4505,6 +4514,87 @@ def test_hook_drift_ignores_absent_unsupported_and_receiptless_tools(tmp_path: P
     recorded = _settled_states(_hook_service(tmp_path, present_all), [_hook_tool()])
     assert recorded["codegraph"].unconfigured == ()
     assert recorded["codegraph"].health is not Health.MISCONFIGURED
+
+
+_HERDR_PLUGIN_LISTED = (
+    '{"id": "cli:plugin", "result": {"type": "plugin_list", "plugins": '
+    '[{"plugin_id": "herdr-setup.markers"}]}}'
+)
+_HERDR_NO_PLUGIN = '{"id": "cli:plugin", "result": {"type": "plugin_list", "plugins": []}}'
+
+
+def _herdr_tool_row() -> Tool:
+    return Tool(
+        id="herdr",
+        name="herdr",
+        category="terminal",
+        cmd="herdr",
+        methods=(Method(kind="github_release", params={}),),
+        tier="user",
+        postinstall="herdr-integration",
+    )
+
+
+def _herdr_probe(status: str, plugins: str, seen: list[list[str]]) -> Callable[[list[str]], str]:
+    def probe(argv: list[str]) -> str:
+        if argv[1:3] == ["integration", "status"]:
+            seen.append(argv)
+            return status
+        if argv[1:3] == ["plugin", "list"]:
+            seen.append(argv)
+            return plugins
+        return "0.9.5"
+
+    return probe
+
+
+def test_hook_fact_ignores_settled_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(postinstall, "has_python3", lambda: True)
+    commands = frozenset({"claude", "herdr"})
+    _hook_receipt({"herdr-integration": ()}, "herdr")
+
+    def state(status: str, plugins: str, seen: list[list[str]]) -> ToolState:
+        service = _hook_service(
+            tmp_path, commands, probe_output=_herdr_probe(status, plugins, seen)
+        )
+        return _settled_states(service, [_herdr_tool_row()])["herdr"]
+
+    seen: list[list[str]] = []
+    current = state("claude: current (v10) (/x)\n", _HERDR_PLUGIN_LISTED, seen)
+    assert current.unconfigured == ()
+    assert current.health is not Health.MISCONFIGURED
+
+    fresh = state("claude: not installed (/x)\n", _HERDR_PLUGIN_LISTED, seen)
+    assert fresh.reasons[0] == "herdr is not registered for claude"
+    assert fresh.unconfigured == (ConfigStep("register herdr for claude", "hook_register"),)
+
+    sidebar_only = state("claude: current (v10) (/x)\n", _HERDR_NO_PLUGIN, seen)
+    assert sidebar_only.reasons[0] == "herdr's sidebar markers are not set up"
+    assert sidebar_only.unconfigured == (
+        ConfigStep("set up herdr's sidebar markers", "hook_register"),
+    )
+
+    _hook_receipt({"herdr-integration": ("claude", "sidebar-markers")}, "herdr")
+    seen.clear()
+    done = state("claude: current (v10) (/x)\n", _HERDR_NO_PLUGIN, seen)
+    assert done.unconfigured == ()
+    assert seen == []  # nothing pending: the status is never read
+
+
+def test_sidebar_without_python3_is_settled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(postinstall, "has_python3", lambda: False)
+    _hook_receipt({"herdr-integration": ()}, "herdr")
+    seen: list[list[str]] = []
+    service = _hook_service(
+        tmp_path,
+        frozenset({"herdr"}),
+        probe_output=_herdr_probe("claude: current (v10) (/x)\n", _HERDR_NO_PLUGIN, seen),
+    )
+    herdr = _settled_states(service, [_herdr_tool_row()])["herdr"]
+    assert herdr.unconfigured == ()
+    assert herdr.health is not Health.MISCONFIGURED
 
 
 def test_the_pass_calls_present_harnesses_once(

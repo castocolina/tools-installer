@@ -749,11 +749,19 @@ def _agent_tuning_fact(tool: Tool, present: bool, platform: Platform) -> _Config
 
 
 def _hook_fact(
-    tool: Tool, receipt: Receipt | None, hosts: frozenset[str], presence_error: str | None
+    tool: Tool,
+    receipt: Receipt | None,
+    hosts: frozenset[str],
+    presence_error: str | None,
+    binary: str | None,
+    probe_output: Callable[[list[str]], str | None],
 ) -> _ConfigFacts:
     """D-02: a present, supported host the receipt does not record is a `≈` with its register step.
 
     A tool with no receipt, or a hook with no per-host targets, has no hosts to record (D-03).
+    What the hook's own read-only status reports settled (an integration the user already runs, a
+    listed plugin, a sidebar nothing can run) is subtracted, and that probe runs only when
+    something is pending (D-27), so the `≈` agrees with what the register would do.
     """
     name = tool.postinstall or ""
     pair = POSTINSTALL_HOOKS.get(name)
@@ -762,14 +770,26 @@ def _hook_fact(
     if presence_error is not None:
         return _ConfigFacts(unchecked=(f"agent hosts not checked: {presence_error}",))
     recorded = receipt.hooks.get(name, ())
-    missing = [harness for harness in pair.targets if harness in hosts and harness not in recorded]
-    if not missing:
-        return _NO_FACTS
-    labels = host_labels(missing)
-    return _ConfigFacts(
-        (f"{tool.id} is not registered for {labels}",),
-        (ConfigStep(f"register {tool.id} for {labels}", "hook_register"),),
-    )
+    pending = [
+        wanted
+        for wanted in (
+            *(harness for harness in pair.targets if harness in hosts),
+            *pair.standalone,
+        )
+        if wanted not in recorded
+    ]
+    if pending and pair.settled is not None and binary is not None:
+        settled = pair.settled(binary, probe_output)
+        pending = [wanted for wanted in pending if wanted not in settled]
+    reasons: list[str] = []
+    steps: list[ConfigStep] = []
+    if labels := host_labels(pending):
+        reasons.append(f"{tool.id} is not registered for {labels}")
+        steps.append(ConfigStep(f"register {tool.id} for {labels}", "hook_register"))
+    if any(wanted in pair.standalone for wanted in pending):
+        reasons.append(f"{tool.id}'s sidebar markers are not set up")
+        steps.append(ConfigStep(f"set up {tool.id}'s sidebar markers", "hook_register"))
+    return _ConfigFacts(tuple(reasons), tuple(steps)) if reasons else _NO_FACTS
 
 
 PNPM_GROUP_UNREADABLE_NOTE = "pnpm group not checked: the pnpm inventory is unreadable"
@@ -1741,7 +1761,16 @@ class VersionRefreshService:
                 receipt_notes += (UNPROVEN_NOTE,)
             facts = (
                 config.get(tool.id, _NO_FACTS)
-                .plus(_hook_fact(tool, receipt, hosts, presence_error))
+                .plus(
+                    _hook_fact(
+                        tool,
+                        receipt,
+                        hosts,
+                        presence_error,
+                        which(tool.cmd),
+                        self._probe_output,
+                    )
+                )
                 .plus(_tuning_fact(tool, present, platform))
             )
             found_broken, found_notes = evidence.get(tool.id, ((), ()))

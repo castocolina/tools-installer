@@ -255,11 +255,11 @@ def test_no_present_supported_host_runs_nothing(hosts: frozenset[str]) -> None:
     assert receipt.hooks == {"codegraph-mcp-register": ()}
 
 
-def test_pi_is_in_no_target_map() -> None:
+def test_only_herdr_maps_pi_and_targets_stay_harnesses() -> None:
     for name, pair in pi.POSTINSTALL_HOOKS.items():
         if pair.targets is None:
             continue
-        assert "pi" not in pair.targets, name
+        assert ("pi" in pair.targets) == (name == "herdr-integration"), name
         assert set(pair.targets) <= set(pi.HARNESS_PRESENCE), name
 
 
@@ -426,28 +426,139 @@ _TEALDEER = "tealdeer-cache"
 _TLDR_NOTE = "fetching the tldr page cache — tldr --update"
 
 
-def test_herdr_registers_and_unregisters_per_host() -> None:
+_STATUS_ALL_NEW = "claude: not installed (/x)\ncursor: not installed (/x)\npi: not installed (/x)\n"
+# src/cli/integration.rs parse_integration_target, herdr v0.9.5, read 2026-11-12
+_HERDR_V095_TARGETS = {
+    *("pi", "omp", "claude", "codex", "copilot", "devin", "droid", "kimi", "opencode", "kilo"),
+    *("hermes", "qodercli", "qwen", "letta", "cursor", "mastracode", "antigravity-cli", "grok"),
+}
+
+
+def test_herdr_targets_are_shared_hosts() -> None:
+    targets = pi.POSTINSTALL_HOOKS[_HERDR].targets
+    assert targets is not None
+    assert set(targets) == {
+        "claude",
+        "codex",
+        "opencode",
+        "cursor",
+        "pi",
+        "copilot",
+        "kilo",
+        "kimi",
+        "qwen",
+        "devin",
+        "grok",
+        "hermes",
+        "factory-droid",
+    }
+    assert set(targets) <= set(HARNESS_MARKER_DIRS)
+    assert set(targets.values()) <= _HERDR_V095_TARGETS
+    assert targets["factory-droid"] == "droid"
+    assert {"antigravity", "gemini-cli"}.isdisjoint(targets)
+    assert {"pi", "copilot"} <= set(pi.HOST_CATALOG_IDS)
+
+
+def test_herdr_registers_and_unregisters_per_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_herdr(monkeypatch, status=_STATUS_ALL_NEW)
     method = Method(kind="github_release", params={"bin_dir": "/b"})
     calls: list[list[str]] = []
-    outcome = pi.run_postinstall(
-        _HERDR, method, lambda cmd: calls.append(cmd), frozenset({"cursor", "claude", "pi"})
-    )
-    assert outcome == (("claude", "cursor"), None)
+    hosts = frozenset({"cursor", "claude", "pi"})
+    outcome = pi.run_postinstall(_HERDR, method, lambda cmd: calls.append(cmd), hosts)
+    assert outcome == (("claude", "cursor", "pi"), None)
     assert calls == [
         ["/b/herdr", "integration", "install", "claude"],
         ["/b/herdr", "integration", "install", "cursor"],
+        ["/b/herdr", "integration", "install", "pi"],
     ]
-    assert pi.unregister_argvs(_HERDR, "/b/herdr", ("cursor", "claude")) == (
+    assert pi.unregister_argvs(_HERDR, "/b/herdr", ("pi", "cursor", "claude")) == (
         ("/b/herdr", "integration", "uninstall", "claude"),
         ("/b/herdr", "integration", "uninstall", "cursor"),
+        ("/b/herdr", "integration", "uninstall", "pi"),
     )
 
     def cursor_fails(cmd: list[str]) -> None:
         if cmd[-1] == "cursor":
             raise CommandError(cmd, 1, detail="boom")
 
-    failed = pi.run_postinstall(_HERDR, method, cursor_fails, frozenset({"cursor", "claude", "pi"}))
-    assert failed == (("claude",), "cursor: boom")
+    failed = pi.run_postinstall(_HERDR, method, cursor_fails, hosts)
+    assert failed == (("claude", "pi"), "cursor: boom")
+
+
+def test_current_hosts_are_left_out_of_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = (
+        "claude: current (v10) (/x)\nopencode: needs repair (v13) (/x)\npi: not installed (/x)\n"
+    )
+    _fake_herdr(monkeypatch, status=status)
+    method = Method(kind="github_release", params={"bin_dir": "/b"})
+    calls: list[list[str]] = []
+    registered, warning = pi.run_postinstall(
+        _HERDR, method, lambda cmd: calls.append(cmd), frozenset({"claude", "opencode", "pi"})
+    )
+    assert registered == ("opencode", "pi")
+    assert calls == [
+        ["/b/herdr", "integration", "install", "opencode"],
+        ["/b/herdr", "integration", "install", "pi"],
+    ]
+    assert warning is not None
+    assert "claude" in warning
+    assert "yours" in warning
+
+
+@pytest.mark.parametrize("unreadable", [None, "no recognisable line\n"], ids=["none", "garbage"])
+def test_unreadable_status_registers_nothing(
+    monkeypatch: pytest.MonkeyPatch, unreadable: str | None
+) -> None:
+    _fake_herdr(monkeypatch, status=unreadable)
+    calls: list[list[str]] = []
+    registered, warning = pi.run_postinstall(
+        _HERDR,
+        Method(kind="github_release", params={"bin_dir": "/b"}),
+        calls.append,
+        frozenset({"claude"}),
+    )
+    assert (registered, calls) == ((), [])
+    assert warning is not None
+    assert "status" in warning
+
+
+def test_herdr_query_reads_output_whatever_the_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcomes: list[object] = [
+        "ok\n",
+        CommandError(["herdr"], 1, stdout="partial\n"),
+        CommandError(["herdr"], 127),
+        CommandError(["herdr"], 124, detail="timed out after 20s"),
+    ]
+
+    def fake_run_query(argv: list[str]) -> str:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, CommandError):
+            raise outcome
+        return str(outcome)
+
+    monkeypatch.setattr(pi, "run_query", fake_run_query)
+    assert [pi.herdr_query(["herdr", "x"]) for _ in range(4)] == ["ok\n", "partial\n", None, None]
+
+
+def test_one_host_failure_keeps_the_others(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = "opencode: not installed (/x)\npi: not installed (/x)\n"
+    _fake_herdr(monkeypatch, status=status)
+
+    def pi_fails(cmd: list[str]) -> None:
+        if cmd[-1] == "pi":
+            raise CommandError(cmd, 1, detail="boom")
+
+    registered, warning = pi.run_postinstall(
+        _HERDR,
+        Method(kind="github_release", params={"bin_dir": "/b"}),
+        pi_fails,
+        frozenset({"opencode", "pi"}),
+    )
+    assert registered == ("opencode",)
+    assert warning == "pi: boom"
+    assert pi.unregister_argvs(_HERDR, "/b/herdr", registered) == (
+        ("/b/herdr", "integration", "uninstall", "opencode"),
+    )
 
 
 def test_tealdeer_fetches_its_cache_after_install() -> None:
@@ -525,7 +636,7 @@ def _herdr_tool() -> Tool:
 
 def _fake_herdr(
     monkeypatch: pytest.MonkeyPatch,
-    status: str = "claude: not installed (/x)\n",
+    status: str | None = "claude: not installed (/x)\n",
     plugins: str = _NO_PLUGINS,
 ) -> list[list[str]]:
     """Replace the read-only herdr probe: `integration status` and `plugin list` answer from
@@ -568,15 +679,12 @@ def test_herdr_installs_registers_and_removes_end_to_end(
     def pinned_workdir(prefix: str) -> str:
         return str(workdir)
 
-    def only_python3(name: str) -> str | None:
-        return "/usr/bin/python3" if name == "python3" else None
-
     monkeypatch.setattr(engine_mod, "is_installed", not_installed)
     monkeypatch.setattr(engine_mod, "release_resolver", release_resolver)
     monkeypatch.setattr(engine_mod.download.tempfile, "mkdtemp", pinned_workdir)
     calls, runner = fixture_runner(workdir, {asset: payload})
     monkeypatch.setattr(pi, "present_hosts", lambda: frozenset({"claude"}))
-    monkeypatch.setattr(pi.shutil, "which", only_python3)
+    monkeypatch.setattr(pi, "has_python3", lambda: True)
     _fake_herdr(monkeypatch)
 
     outcome = install_tool(

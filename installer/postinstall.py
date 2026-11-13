@@ -12,7 +12,9 @@ registers for the present, supported hosts its receipt does not record yet, and
 records what it registered in `receipt.hooks`, so removal can undo exactly that.
 """
 
+import json
 import os
+import re
 import shutil
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -33,6 +35,8 @@ HOST_CATALOG_IDS: dict[str, str] = {
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor-agent",
+    "pi": "pi",
+    "copilot": "copilot",
 }
 
 
@@ -194,12 +198,25 @@ def _codegraph_unregister(binary: str, harnesses: tuple[str, ...]) -> tuple[tupl
     return ((binary, "uninstall", "--target", csv, "--location", "global", "--yes", "--keep-cli"),)
 
 
-# herdr's own target ids (herdr 0.9.3: `herdr integration install <TARGET>`).
+# herdr's own target ids, keyed by harness id: every host that is both in HARNESS_MARKER_DIRS and
+# in herdr v0.9.5's `parse_integration_target` list (src/cli/integration.rs, read 2026-11-12: pi,
+# omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta,
+# cursor, mastracode, antigravity-cli, grok). antigravity and gemini-cli are left out: both would
+# have to map to the ambiguous `antigravity-cli`. The order is the order hosts register in.
 _HERDR_TARGETS: Mapping[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor",
+    "pi": "pi",
+    "copilot": "copilot",
+    "kilo": "kilo",
+    "kimi": "kimi",
+    "qwen": "qwen",
+    "devin": "devin",
+    "grok": "grok",
+    "hermes": "hermes",
+    "factory-droid": "droid",
 }
 
 # herdr's workspace separator and current indicator (24 D-12): the user's own plugin, pinned to a
@@ -222,6 +239,58 @@ def _run_herdr_query(argv: list[str]) -> str | None:
 
 # Replaceable like executors.launch_puppeteer: tests never launch the real herdr.
 herdr_query: Callable[[list[str]], str | None] = _run_herdr_query
+
+
+# `herdr integration status` prints one line per target, e.g. `claude: current (v10) (<path>)`,
+# `opencode: needs repair (v13) (...)`, `letta (experimental): not installed (...)`.
+_STATUS_LINE = re.compile(
+    r"^(?P<target>\S+?)(?: \(experimental\))?: (?P<state>not installed|current|needs repair)\b",
+    re.MULTILINE,
+)
+
+
+def has_python3() -> bool:
+    """Whether python3 resolves: every command of the sidebar plugin is `python3 mark.py`.
+    Module-level so tests replace it."""
+    return shutil.which("python3") is not None
+
+
+def _herdr_status(
+    binary: str, probe: Callable[[list[str]], str | None]
+) -> Mapping[str, str] | None:
+    """Target -> state from the read-only `herdr integration status`, None when unreadable."""
+    output = probe([binary, "integration", "status"])
+    if output is None:
+        return None
+    states = {match["target"]: match["state"] for match in _STATUS_LINE.finditer(output)}
+    return states or None
+
+
+def _plugin_listed(binary: str, probe: Callable[[list[str]], str | None]) -> bool | None:
+    """Whether the sidebar plugin is installed, from `herdr plugin list --json` (shape read from
+    herdr v0.9.5 src/api/schema: result.plugins[].plugin_id); None when unreadable."""
+    output = probe([binary, "plugin", "list", "--json", "--plugin", _SIDEBAR_PLUGIN])
+    if output is None:
+        return None
+    try:
+        plugins = json.loads(output)["result"]["plugins"]
+        return any(plugin["plugin_id"] == _SIDEBAR_PLUGIN for plugin in plugins)
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _herdr_settled(binary: str, probe: Callable[[list[str]], str | None]) -> frozenset[str]:
+    """The ids herdr's own status reports settled: a `current` integration, and the sidebar when
+    its plugin is already listed or python3 is absent. An unreadable probe settles nothing."""
+    status = _herdr_status(binary, probe)
+    settled = {
+        harness
+        for harness, target in _HERDR_TARGETS.items()
+        if status is not None and status.get(target) == "current"
+    }
+    if not has_python3() or _plugin_listed(binary, probe):
+        settled.add(_SIDEBAR_ID)
+    return frozenset(settled)
 
 
 def _herdr_sidebar(binary: str, runner: Runner) -> tuple[bool, str | None]:
@@ -251,8 +320,24 @@ def _herdr_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) 
     binary = _resolve_binary(method, "herdr")
     done: list[str] = []
     failures: list[str] = []
-    for harness in harnesses:
-        if harness == _SIDEBAR_ID:
+    hosts = [harness for harness in harnesses if harness != _SIDEBAR_ID]
+    # A status that returns nothing registers nothing: running install over a possibly current
+    # host would make this installer claim the user's own setup (24 D-27).
+    status: Mapping[str, str] = {}
+    if hosts:
+        read = _herdr_status(binary, herdr_query)
+        if read is None:
+            failures.append("herdr integration status was unreadable; no integration registered")
+            hosts = []
+        else:
+            status = read
+    for harness in hosts:
+        state = status.get(_HERDR_TARGETS[harness])
+        if state == "current":
+            failures.append(f"{harness}: already set up by you; left yours")
+            continue
+        if state is None:
+            failures.append(f"{harness}: not listed by herdr's status; not registered")
             continue
         try:
             runner([binary, "integration", "install", _HERDR_TARGETS[harness]])
@@ -320,6 +405,7 @@ POSTINSTALL_HOOKS: dict[str, HookPair] = {
         register=_herdr_register,
         unregister=_herdr_unregister,
         standalone={_SIDEBAR_ID: _SIDEBAR_SOURCE},
+        settled=_herdr_settled,
     ),
     "tealdeer-cache": HookPair(targets=None, register=_tealdeer_cache),
 }
