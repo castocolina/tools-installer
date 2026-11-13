@@ -610,6 +610,15 @@ cmd_pass1() {
     die "unknown pass1 option: $1"
   fi
 
+  # A chunked run installs a subset, so the rerun (always --all) could never match it: pass2
+  # refuses while this marker exists.
+  ensure_phase_dir
+  if [[ -n "$categories" ]]; then
+    printf '%s\n' "$categories" >"$PHASE_DIR/pass1-chunked.txt"
+  else
+    rm -f "$PHASE_DIR/pass1-chunked.txt"
+  fi
+
   local tmp all_runs
   tmp="$(mktemp)"
   all_runs="$(mktemp)"
@@ -683,7 +692,8 @@ cmd_pass1() {
   list_blocked_rows "$all_runs"
 
   if install_step_ok "$setup_status"; then
-    if [[ "$ACC_INSTALLED" -eq 0 ]]; then
+    # Misconfigured means nothing was available at all; a re-run of a good pass 1 skips everything.
+    if [[ "$((ACC_INSTALLED + ACC_SKIPPED + ACC_MANUAL))" -eq 0 ]]; then
       printf 'TRACER_DISTRO_MISCONFIGURED distro=%s\n' "$DISTRO"
       rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
       return 1
@@ -1000,7 +1010,9 @@ for agent, groups in s.TUNING_GROUPS.items():
             holds = s.same_value(s.lookup(doc, key.path), key.value)
             if not holds or (group, key.path) not in recorded:
                 print(\"M\", agent, \".\".join(key.path))
-Path(\".e2e-tuned-agents.json\").write_text(json.dumps({\"agents\": checked, \"created\": created}), encoding=\"utf-8\")
+herdr = receipts.read(\"herdr\")
+herdr_hosts = list(herdr.hooks.get(\"herdr-integration\", ())) if herdr else []
+Path(\".e2e-tuned-agents.json\").write_text(json.dumps({\"agents\": checked, \"created\": created, \"herdr_hosts\": herdr_hosts}), encoding=\"utf-8\")
 for agent in checked:
     print(\"A\", agent)
 print(\"K\", count)
@@ -1086,9 +1098,12 @@ for agent in agents:
         residue = json.dumps(doc, sort_keys=True, separators=(\",\", \":\"), default=str)
         # herdr integration uninstall leaves empty containers (and codex a hooks feature flag) in a
         # file we created: that is its residue, not ours, unless a herdr marker is still in the text.
+        # Only an agent herdr recorded as a host may carry it, and every use prints an R line.
         if agent == \"codex\" and doc == {\"features\": {\"hooks\": True}}:
             print(\"R\", agent, \"features.hooks\")
-        elif not (doc and not pruned(doc) and \"herdr-agent-state\" not in text):
+        elif doc and not pruned(doc) and \"herdr-agent-state\" not in text and agent in tuned.get(\"herdr_hosts\", []):
+            print(\"R\", agent, \"empty-containers\")
+        else:
             print(\"F\", agent, residue[:200])
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)
@@ -1132,6 +1147,18 @@ herdr_sidebar_keys() {
   printf '%s\n' ui.sidebar.agents.rows ui.sidebar.agents.row_gap ui.sidebar.spaces.rows
 }
 
+# `herdr plugin list --json` output on stdin -> `listed`, `absent` or `unreadable`, read the way
+# installer/postinstall.py::_plugin_listed does (result.plugins[].plugin_id). Anything that is not
+# that JSON shape, an error echoing the plugin id included, is `unreadable`, never `listed`.
+herdr_plugin_state() {
+  python3 -c 'import json, sys
+try:
+    plugins = json.load(sys.stdin)["result"]["plugins"]
+    print("listed" if any(p["plugin_id"] == sys.argv[1] for p in plugins) else "absent")
+except (ValueError, KeyError, TypeError):
+    print("unreadable")' "$HERDR_PLUGIN_ID"
+}
+
 # `herdr integration status` text on stdin -> `target|state` lines. The command always exits 0
 # (herdr v0.9.5 src/cli/integration.rs), and an experimental target reads `letta (experimental): ...`.
 herdr_status_parse() {
@@ -1157,19 +1184,20 @@ herdr_status_clean() {
 }
 
 # Fact lines on stdin from herdr_probe_installed: `H <hook id>`, `N` (no receipt), `S <status line>`,
-# `Y <plugin list output>`, `C <sidebar key present>`, `DS <default_shell value>`, `E <ledger entry>`,
+# `Y <plugin list --json output>`, `P <present harness> <herdr target>`, `C <sidebar key present>`, `DS <default_shell value>`, `E <ledger entry>`,
 # `W <skill path>` and the closing `D`. No zsh is installed in the distro containers, so herdr must
 # have written neither a default_shell key nor a default-shell ledger entry (D-08b, R1-19).
 herdr_installed_verdict() {
-  local line hosts="" sidebar=0 no_receipt=0 done=0 plugin=0 failed=0 shell=""
-  local keys_seen=" " status="" parsed host state key rest
+  local line hosts="" sidebar=0 no_receipt=0 done=0 plugin="" failed=0 shell=""
+  local keys_seen=" " status="" parsed host state key rest present=""
   while IFS= read -r line; do
     case "$line" in
       N) no_receipt=1 ;;
       "H sidebar-markers") sidebar=1 ;;
       "H "*) hosts="${hosts:+$hosts,}${line#H }" ;;
       "S "*) status+="${line#S }"$'\n' ;;
-      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "Y "*) plugin="$(printf '%s' "${line#Y }" | herdr_plugin_state)" ;;
+      "P "*) present+="${line#P }"$'\n' ;;
       "C "*) keys_seen+="${line#C } " ;;
       "DS "*) shell="${line#DS }" ;;
       "E default-shell "*)
@@ -1210,10 +1238,30 @@ herdr_installed_verdict() {
       failed=1
     fi
   done
-  if [[ "$plugin" -eq 0 ]]; then
-    printf 'TRACER_HERDR_PLUGIN_MISSING\n'
-    failed=1
-  fi
+  # Every present host the installer decides on (`P <harness> <herdr target>`) must be recorded,
+  # unless herdr already reads it `current` (the user's own setup, left alone). A target herdr does
+  # not list at all is not registered by the installer either.
+  local harness
+  while read -r harness host; do
+    [[ -n "$harness" ]] || continue
+    [[ ",$hosts," == *",$harness,"* ]] && continue
+    state="$(printf '%s\n' "$parsed" | awk -F'|' -v target="$host" '$1 == target { print $2; exit }')"
+    if [[ -n "$state" && "$state" != "current" ]]; then
+      printf 'TRACER_HERDR_HOST_NOT_RECORDED host=%s state=%s\n' "$harness" "$state"
+      failed=1
+    fi
+  done <<<"$present"
+  case "$plugin" in
+    listed) ;;
+    unreadable)
+      printf 'TRACER_HERDR_PLUGIN_UNREADABLE\n'
+      failed=1
+      ;;
+    *)
+      printf 'TRACER_HERDR_PLUGIN_MISSING\n'
+      failed=1
+      ;;
+  esac
   while IFS= read -r key; do
     if [[ "$keys_seen" != *" $key "* ]]; then
       printf 'TRACER_HERDR_KEY_MISSING key=%s\n' "$key"
@@ -1237,8 +1285,10 @@ herdr_probe_installed() {
   printf -v workspace '%q' "$TESTER_WORKSPACE"
   py='import json, sys, tomllib
 from pathlib import Path
-from installer import receipts
+from installer import postinstall, receipts
 home = Path.home()
+for harness in sorted(postinstall.present_hosts() & postinstall._HERDR_TARGETS.keys()):
+    print("P " + harness + " " + postinstall._HERDR_TARGETS[harness])
 receipt = receipts.read("herdr")
 if receipt is None:
     print("N")
@@ -1268,7 +1318,7 @@ herdr=\"\$HOME/.local/bin/herdr\"
 if [ -x \"\$herdr\" ]; then
   cp \"\$herdr\" ${HERDR_PROBE_COPY}
   { \"\$herdr\" integration status 2>&1 || true; } | sed 's/^/S /'
-  printf 'Y %s\\n' \"\$({ \"\$herdr\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+  printf 'Y %s\\n' \"\$({ \"\$herdr\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>/dev/null || true; } | tr '\\n' ' ')\"
 fi
 for d in .claude/skills .agents/skills .codex/skills .cursor/skills .copilot/skills .config/opencode/skills; do
   if [ -d \"\$HOME/\$d\" ]; then find \"\$HOME/\$d\" -maxdepth 1 -iname '*herdr*' -print | sed 's/^/W /'; fi
@@ -1284,11 +1334,11 @@ echo D
 
 # Fact lines on stdin from herdr_probe_after: `S`, `Y`, `K <ledger key still in config.toml>`, `D`.
 herdr_removed_verdict() {
-  local line status="" plugin=0 done=0 failed=0 key
+  local line status="" plugin="" done=0 failed=0 key
   while IFS= read -r line; do
     case "$line" in
       "S "*) status+="${line#S }"$'\n' ;;
-      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "Y "*) plugin="$(printf '%s' "${line#Y }" | herdr_plugin_state)" ;;
       "K "*)
         key="${line#K }"
         printf 'TRACER_HERDR_KEY_LEFT key=%s\n' "$key"
@@ -1302,10 +1352,17 @@ herdr_removed_verdict() {
     return 1
   fi
   printf '%s' "$status" | herdr_status_clean || failed=1
-  if [[ "$plugin" -eq 1 ]]; then
-    printf 'TRACER_HERDR_PLUGIN_LEFT\n'
-    failed=1
-  fi
+  case "$plugin" in
+    absent) ;;
+    listed)
+      printf 'TRACER_HERDR_PLUGIN_LEFT\n'
+      failed=1
+      ;;
+    *)
+      printf 'TRACER_HERDR_PLUGIN_UNREADABLE\n'
+      failed=1
+      ;;
+  esac
   [[ "$failed" -eq 0 ]] || return 1
   printf 'TRACER_HERDR_STATUS_CLEAN_OK\nTRACER_HERDR_REVERT_OK\n'
 }
@@ -1339,7 +1396,7 @@ eval \"\$(${BREW_BIN} shellenv)\"
 probe=${HERDR_PROBE_COPY}
 if [ -x \"\$probe\" ]; then
   { \"\$probe\" integration status 2>&1 || true; } | sed 's/^/S /'
-  printf 'Y %s\\n' \"\$({ \"\$probe\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+  printf 'Y %s\\n' \"\$({ \"\$probe\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>/dev/null || true; } | tr '\\n' ' ')\"
 fi
 cd ${workspace}
 uv run --isolated --no-dev python -c $(printf '%q' "$py") ${keys}
@@ -1368,6 +1425,8 @@ run_pass2_step() {
 cmd_pass2() {
   container_running || die "container $CONTAINER_NAME is not running"
   ensure_phase_dir
+  [[ ! -f "$PHASE_DIR/pass1-chunked.txt" ]] \
+    || die "pass2 reruns --all and the last pass1 was chunked (--categories $(cat "$PHASE_DIR/pass1-chunked.txt")); run a full pass1 first"
   local log="$PHASE_DIR/pass2-transcript.log"
   : > "$log"
 
@@ -1480,9 +1539,12 @@ cmd_pass2() {
 
 cmd_all() {
   # Never leave the container behind, pass or fail (pass2 also removes it on success).
-  trap 'ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
+  # A failing pass2 ends the shell through set -e, so the trap also prints its transcript (the reason).
+  PASS2_STARTED=0
+  trap 'rc=$?; if [[ "$rc" -ne 0 && "$PASS2_STARTED" -eq 1 ]]; then cat "$PHASE_DIR/pass2-transcript.log" || true; fi; ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
   cmd_bootstrap --replace
   cmd_pass1 | tee "$PHASE_DIR/pass1-transcript.log"
+  PASS2_STARTED=1
   cmd_pass2
   cat "$PHASE_DIR/pass2-transcript.log"
 }
@@ -1515,10 +1577,11 @@ nested_teardown() {
   printf 'TRACER_NESTED_TEARDOWN_OK\n'
 }
 
-# $1 names the step, $2 is the failing command's output; only its first non-empty line is reported.
+# $1 names the step, $2 is the failing command's output; the first line naming an `Error` is
+# reported, else the last non-empty line (the first one is usually a pull progress line).
 nested_infeasible() {
   local detail
-  detail="$(printf '%s\n' "$2" | sed -n '/./{p;q;}')"
+  detail="$(printf '%s\n' "$2" | awk '/Error/ && e == "" { e = $0 } NF { l = $0 } END { print (e != "" ? e : l) }')"
   printf 'TRACER_NESTED_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
 }
 
@@ -1542,15 +1605,24 @@ nested_probe_podman() {
     nested_infeasible podman-info "$out"
     return 0
   fi
-  if ! out="$(exec_tester "podman run --rm ${NESTED_PROBE_IMAGE} true && podman rmi ${NESTED_PROBE_IMAGE}" 2>&1)"; then
+  # The image is FROM scratch with one binary: run its default command, no `true`. It is removed
+  # whatever the run's outcome, so a later build never reads it as a leftover.
+  if ! out="$(exec_tester "rc=0; podman run --rm ${NESTED_PROBE_IMAGE} || rc=\$?; podman rmi -f ${NESTED_PROBE_IMAGE} >/dev/null 2>&1 || true; exit \$rc" 2>&1)"; then
     nested_infeasible podman-run "$out"
     return 0
   fi
   printf 'TRACER_NESTED_PODMAN_OK\n'
 }
 
+# Whether $1 reads as one of the environment errors a rootless nested podman raises when it cannot
+# create the box: the image's containers.conf UTS-namespace hostname (24-08 nested run #2) and
+# user-namespace permission failures. Anything else is the product's.
+nested_environment_error() {
+  grep -qiE 'cannot set hostname when running in the host UTS namespace|operation not permitted|newuidmap|cannot set up namespace' <<<"$1"
+}
+
 # $1 is the install transcript. Returns 0 when Alacritty installed, 2 (infeasible: the box could
-# not be created) or 1 (a product failure, or no Alacritty row at all).
+# not be created for a known environment reason) or 1 (a product failure, or no Alacritty row at all).
 nested_classify_alacritty() {
   local row word detail full
   row="$(sed -nE 's/^[^ ]+ +alacritty +(installed|failed|checksum mismatch|crashed|dependency failed|not attempted|blocked|manual|skipped|updated|repaired|reconfigured|reinstalled)( — (.*))?$/\1|\3/p' "$1" | tail -n 1)"
@@ -1566,7 +1638,7 @@ nested_classify_alacritty() {
       # The Summary row wraps a long reason over several lines; the unwrapped `<mark> alacritty
       # failed: ...` line after it carries the whole command (24-08 nested run #2).
       full="$(sed -nE 's/^[^ ]+ alacritty failed: (.*)$/\1/p' "$1" | tail -n 1)"
-      if [[ "$detail" == *"distrobox create"* || "$full" == *"distrobox create"* ]]; then
+      if [[ "$detail $full" == *"distrobox create"* ]] && nested_environment_error "$detail $full"; then
         nested_infeasible distrobox-create "${full:-$detail}"
         return 2
       fi
@@ -1618,7 +1690,7 @@ if desktop-file-validate \"\$HOME/.local/share/applications/Alacritty.desktop\" 
 if infocmp -A \"\$HOME/.terminfo\" alacritty >/dev/null 2>&1; then echo 'T1 ok'; else echo 'T1 fail'; fi
 if env -u TERMINFO -u TERMINFO_DIRS infocmp alacritty >/dev/null 2>&1; then echo 'T2 ok'; else echo 'T2 fail'; fi
 podman ps -a -q | sed 's/^/C /'
-podman images -q | sed 's/^/M /'
+podman images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk -v probe=${NESTED_PROBE_IMAGE} '\$1 != probe { print \"M \" \$2 }'
 echo D
 ")" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
   while IFS= read -r line; do
@@ -1747,7 +1819,7 @@ nested_uninstall_run() {
 nested_uninstall_ok() {
   local out line paths left=0 done=0
   paths="$(nested_alacritty_paths | paste -sd' ' -)"
-  out="$(exec_tester "cd ~ && for p in ${paths} .terminfo/a; do if [ -e \"\$p\" ] || [ -L \"\$p\" ]; then echo \"L \$p\"; fi; done; echo D")" \
+  out="$(exec_tester "cd ~ && for p in ${paths}; do if [ -e \"\$p\" ] || [ -L \"\$p\" ]; then echo \"L \$p\"; fi; done; echo D")" \
     || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
   while IFS= read -r line; do
     case "$line" in

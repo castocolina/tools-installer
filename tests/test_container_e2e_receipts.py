@@ -1360,6 +1360,7 @@ def test_settings_probe_installed_persists_the_checked_agents(
     assert home.run("settings_probe_installed").returncode == 0
     persisted = json.loads((home.workspace / ".e2e-tuned-agents.json").read_text(encoding="utf-8"))
     assert sorted(persisted["agents"]) == sorted(_REQUIRED_TUNED)
+    assert persisted["herdr_hosts"] == []  # no herdr receipt in this scratch home
     # Each tuned file was absent before the tuning, so the ledger lists it as installer-created.
     assert persisted["created"] == {
         agent: [str(agent_settings.settings_file(agent, home=home.scratch, platform_os="linux"))]
@@ -1853,11 +1854,59 @@ def test_blocked_rows_are_listed_once_with_their_reason(tmp_path: Path) -> None:
     assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
 
 
-def test_a_pass_that_installs_nothing_is_misconfigured(tmp_path: Path) -> None:
-    result = _run(_pass1_script(tmp_path, "Summary — 3 skipped\n", "cmd_pass1"), tmp_path)
+def _pass2_refusal_script() -> str:
+    return (
+        'PHASE_DIR="$SCRATCH/phase"\n'
+        + _harness("die", "ensure_phase_dir", "cmd_pass2")
+        + "\ncontainer_running() { return 0; }\n"
+        "herdr_probe_installed() { echo PROBED; return 1; }\n"
+        "cmd_pass2\n"
+    )
+
+
+def test_pass2_refuses_after_a_chunked_pass1(tmp_path: Path) -> None:
+    """E7: a chunked pass1 installs a subset, so pass2's --all rerun would always differ."""
+    chunked = _run(
+        _pass1_script(tmp_path, "Summary — 2 installed\n", "cmd_pass1 --categories a,b"), tmp_path
+    )
+    assert chunked.returncode == 0, chunked.stdout + chunked.stderr
+    refused = _run(_pass2_refusal_script(), tmp_path)
+    assert refused.returncode != 0
+    assert "last pass1 was chunked (--categories a,b)" in refused.stderr
+    assert not (tmp_path / "phase" / "pass2-transcript.log").exists()
+    # A later full pass1 lifts the refusal.
+    full = _run(_pass1_script(tmp_path, "Summary — 2 installed\n", "cmd_pass1"), tmp_path)
+    assert full.returncode == 0, full.stdout + full.stderr
+    _run(_pass2_refusal_script(), tmp_path)
+    assert "PROBED" in (tmp_path / "phase" / "pass2-transcript.log").read_text(encoding="utf-8")
+
+
+def test_cmd_all_prints_the_transcript_of_a_failing_pass2(tmp_path: Path) -> None:
+    """E8: set -e ends cmd_all at the failing pass2, which used to skip its transcript."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    stages = (
+        _STAGE_STUBS + 'cmd_pass2() { echo "TRACER_RERUN_UNEXPECTED why" > '
+        '"$PHASE_DIR/pass2-transcript.log"; return 1; }\n'
+    )
+    result = _run(_distro_harness() + "\n" + stages + "main all\n", scratch)
+    assert result.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED why" in result.stdout
+
+
+def test_a_pass_with_nothing_available_is_misconfigured(tmp_path: Path) -> None:
+    result = _run(_pass1_script(tmp_path, "Summary — 3 blocked\n", "cmd_pass1"), tmp_path)
     assert result.returncode != 0
     assert "TRACER_DISTRO_MISCONFIGURED distro=debian" in result.stdout
     assert "TRACER_CLEAN_INSTALL_OK" not in result.stdout
+
+
+def test_a_rerun_pass1_that_skips_everything_is_not_misconfigured(tmp_path: Path) -> None:
+    """E6: the fix-and-rerun-pass1 loop finds everything already installed, so all rows skip."""
+    result = _run(_pass1_script(tmp_path, "Summary — 3 skipped\n", "cmd_pass1"), tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TRACER_DISTRO_MISCONFIGURED" not in result.stdout
+    assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
 
 
 def test_rerun_gate_is_wired_into_pass2() -> None:
@@ -1886,6 +1935,7 @@ def _herdr_script(*extra: str) -> str:
     names = (
         "ensure_phase_dir",
         "herdr_sidebar_keys",
+        "herdr_plugin_state",
         "herdr_status_parse",
         "herdr_status_clean",
         "herdr_installed_verdict",
@@ -1944,12 +1994,14 @@ def _facts(*lines: str, done: bool = True) -> str:
     return "\n".join([*lines, *(["D"] if done else [])]) + "\n"
 
 
+_PLUGIN_JSON = '{"result": {"plugins": [{"plugin_id": "herdr-setup.markers"}]}}'
+_PLUGIN_LISTED = f"Y {_PLUGIN_JSON}"
 _GOOD_FACTS = (
     "H claude",
     "H sidebar-markers",
     "S claude: current (v10) (/x)",
     "S pi: not installed",
-    'Y [{"id": "herdr-setup.markers"}]',
+    _PLUGIN_LISTED,
     "C ui.sidebar.agents.rows",
     "C ui.sidebar.agents.row_gap",
     "C ui.sidebar.spaces.rows",
@@ -1986,6 +2038,20 @@ def test_herdr_installed_probe_requires_every_piece(tmp_path: Path) -> None:
         ),
         "no-status-line": (drop("S claude"), "TRACER_HERDR_NOT_CURRENT target=claude"),
         "no-plugin": (drop("Y "), "TRACER_HERDR_PLUGIN_MISSING"),
+        "plugin-absent": (
+            (*drop("Y "), 'Y {"result": {"plugins": []}}'),
+            "TRACER_HERDR_PLUGIN_MISSING",
+        ),
+        # E3: an error echoing the plugin id is unreadable, never listed.
+        "plugin-error-echo": (
+            (*drop("Y "), "Y error: no plugin herdr-setup.markers"),
+            "TRACER_HERDR_PLUGIN_UNREADABLE",
+        ),
+        # E5: a present host that is neither recorded nor already current is missed.
+        "present-unrecorded": (
+            (*_GOOD_FACTS, "P pi pi"),
+            "TRACER_HERDR_HOST_NOT_RECORDED host=pi state=not installed",
+        ),
         "no-key": (
             drop("C ui.sidebar.spaces.rows"),
             "TRACER_HERDR_KEY_MISSING key=ui.sidebar.spaces.rows",
@@ -2002,6 +2068,12 @@ def test_herdr_installed_probe_requires_every_piece(tmp_path: Path) -> None:
         assert not any(
             line.startswith("TRACER_HERDR_INSTALLED_OK") for line in result.stdout.splitlines()
         )
+    # A present host that is recorded, or that the user already set up (`current`), is fine.
+    covered = _verdict(
+        tmp_path / "covered",
+        _facts(*_GOOD_FACTS, "P claude claude", "S codex: current (v1) (/z)", "P codex codex"),
+    )
+    assert covered.returncode == 0, covered.stdout
     cut = _verdict(tmp_path / "cut", _facts(*_GOOD_FACTS, done=False))
     assert cut.returncode != 0
     assert "TRACER_HERDR_PROBE_FAILED" in cut.stdout
@@ -2047,7 +2119,7 @@ def _herdr_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, status_exit:
         '  "integration status")\n'
         '    printf "claude: current (v10) (/x)\\npi: not installed (/y)\\n"\n'
         f"    exit {status_exit} ;;\n"
-        '  "plugin list") printf \'[{"id": "herdr-setup.markers"}]\\n\' ;;\n'
+        f"  \"plugin list\") printf '%s\\n' '{_PLUGIN_JSON}' ;;\n"
         "esac\n",
         encoding="utf-8",
     )
@@ -2100,6 +2172,19 @@ def test_herdr_reload_failure_is_not_a_probe_failure(
     assert (scratch / "herdr-probe").exists()
 
 
+def test_herdr_probe_reports_present_hosts_the_receipt_lacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E5: pi is present, herdr lists it `not installed`, and the receipt never recorded it."""
+    scratch = _herdr_home(tmp_path, monkeypatch)
+    (scratch / ".pi").mkdir()
+    result = _run(_herdr_probe_script(tmp_path, "herdr_probe_installed"), scratch)
+    assert result.returncode != 0
+    assert (
+        "TRACER_HERDR_HOST_NOT_RECORDED host=pi state=not installed" in result.stdout.splitlines()
+    )
+
+
 def test_herdr_probe_after_proves_status_plugin_and_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2117,7 +2202,7 @@ def test_herdr_probe_after_proves_status_plugin_and_keys(
     (scratch / ".config" / "herdr" / "config.toml").write_text("onboarding = false\n")
     (scratch / "herdr-probe").write_text(
         '#!/bin/sh\ncase "$1 $2" in\n  "integration status") echo "claude: not installed (/x)" ;;\n'
-        '  "plugin list") echo "[]" ;;\nesac\n',
+        '  "plugin list") echo \'{"result": {"plugins": []}}\' ;;\nesac\n',
         encoding="utf-8",
     )
     clean = _run(after, scratch)
@@ -2139,6 +2224,7 @@ def _revert_with_file(
     text: str,
     *,
     created: bool,
+    herdr_hosts: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     from installer import agent_settings
 
@@ -2147,7 +2233,13 @@ def _revert_with_file(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     (home.workspace / ".e2e-tuned-agents.json").write_text(
-        json.dumps({"agents": [agent], "created": {agent: [str(path)] if created else []}}),
+        json.dumps(
+            {
+                "agents": [agent],
+                "created": {agent: [str(path)] if created else []},
+                "herdr_hosts": list(herdr_hosts),
+            }
+        ),
         encoding="utf-8",
     )
     return home.run("settings_probe_revert")
@@ -2158,12 +2250,25 @@ def test_settings_revert_tolerates_herdr_residue_only_in_created_files(
 ) -> None:
     """R1-22: empty containers and codex's `features.hooks` are herdr's residue, if we made it."""
     empty = _revert_with_file(
-        tmp_path / "empty", monkeypatch, "claude", '{"hooks": {}}', created=True
+        tmp_path / "empty",
+        monkeypatch,
+        "claude",
+        '{"hooks": {}}',
+        created=True,
+        herdr_hosts=("claude",),
     )
     assert empty.returncode == 0, empty.stdout + empty.stderr
     assert empty.stdout.splitlines() == [
-        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['claude'])}"
+        "TRACER_HERDR_RESIDUE agent=claude key=empty-containers",
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['claude'])}",
     ]
+
+    # E4: an agent herdr never recorded as a host gets no exemption for empty containers.
+    not_herdr = _revert_with_file(
+        tmp_path / "not-herdr", monkeypatch, "claude", '{"hooks": {}}', created=True
+    )
+    assert not_herdr.returncode != 0
+    assert not_herdr.stdout.startswith("TRACER_SETTINGS_FILE_LEFT agent=claude")
 
     marked = _revert_with_file(
         tmp_path / "marked", monkeypatch, "claude", '{"herdr-agent-state": {}}', created=True
@@ -2470,6 +2575,66 @@ def test_nested_infeasible_is_distinct(tmp_path: Path) -> None:
     ]
 
 
+def test_nested_probe_runs_the_default_command_and_always_removes_its_image(
+    tmp_path: Path,
+) -> None:
+    """E1: the hello image is FROM scratch (no `true`); a failed run must not leave it behind."""
+    calls = tmp_path / "podman.log"
+    for name, run_exit in (("ok", 0), ("fail", 1)):
+        scratch = tmp_path / name
+        scratch.mkdir()
+        bins = _stub_bin(
+            scratch / "bin",
+            {
+                "podman": f'echo "$@" >> {shlex.quote(str(calls))}\n'
+                f'case "$1" in run) echo "Trying to pull..."; exit {run_exit};; esac'
+            },
+        )
+        script = _nested_script(
+            "nested_probe_podman",
+            real=("nested_probe_podman",),
+            stubs='exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        )
+        result = _run(script, scratch, path=f"{bins}:/usr/bin:/bin")
+        assert result.returncode == 0, result.stdout + result.stderr
+        want = "TRACER_NESTED_PODMAN_OK" if run_exit == 0 else "TRACER_NESTED_INFEASIBLE"
+        assert result.stdout.startswith(want), result.stdout
+    logged = calls.read_text(encoding="utf-8").splitlines()
+    assert logged.count("run --rm quay.io/podman/hello:latest") == 2  # no command, no `true`
+    assert logged.count("rmi -f quay.io/podman/hello:latest") == 2  # removed on both outcomes
+
+
+def test_nested_image_check_ignores_the_probe_image(tmp_path: Path) -> None:
+    """E1: only an image other than the probe's counts as left behind."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    bins = _stub_bin(
+        scratch / "bin",
+        {
+            "podman": 'case "$1" in images) echo "quay.io/podman/hello:latest aaa";'
+            ' echo "docker.io/library/fedora:44 bbb";; esac',
+            "desktop-file-validate": "exit 0",
+            "infocmp": "exit 0",
+        },
+    )
+    script = _nested_script(
+        "nested_artifacts_ok",
+        real=("nested_artifacts_ok",),
+        stubs="\n".join(
+            [
+                f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+                _assign("TESTER_WORKSPACE", str(scratch)),
+                _assign("BREW_BIN", str(_brew_stub(scratch))),
+                'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+                _uv_stub(),
+            ]
+        ),
+    )
+    result = _run(script, scratch, path=f"{bins}:/usr/bin:/bin")
+    assert "TRACER_NESTED_IMAGE_LEFT id=bbb" in result.stdout.splitlines()
+    assert "id=aaa" not in result.stdout
+
+
 def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
     def classify(name: str, row: str) -> subprocess.CompletedProcess[str]:
         scratch = tmp_path / name
@@ -2478,29 +2643,44 @@ def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
         fixture.write_text(f"Install plan — 1 install\n○ alacritty  will install\n{row}\n")
         script = _nested_script(
             f"nested_classify_alacritty {shlex.quote(str(fixture))}",
-            real=("nested_classify_alacritty", "nested_infeasible"),
+            real=("nested_classify_alacritty", "nested_environment_error", "nested_infeasible"),
         )
         return _run(script, scratch)
 
     done = classify("done", "✓ alacritty  installed")
     assert done.returncode == 0, done.stdout
-    cannot = classify("cannot", "✖ alacritty  failed — distrobox create: cannot reach the engine")
+    hostname = "Error: invalid config provided: cannot set hostname when running in the host UTS"
+    cannot = classify("cannot", f"✖ alacritty  failed — distrobox create: {hostname} namespace")
     assert cannot.returncode == 2
     assert cannot.stdout.splitlines() == [
-        "TRACER_NESTED_INFEASIBLE step=distrobox-create "
-        "detail=distrobox create: cannot reach the engine"
+        f"TRACER_NESTED_INFEASIBLE step=distrobox-create detail=distrobox create: {hostname} "
+        "namespace"
     ]
+    # E2: a failed create without a known environment error is the product's failure.
+    argv = classify("argv", "✖ alacritty  failed — distrobox create: unknown flag: --bogus")
+    assert argv.returncode == 1
+    assert argv.stdout.splitlines() == [
+        "TRACER_NESTED_BUILD_FAILED detail=failed — distrobox create: unknown flag: --bogus"
+    ]
+    for name, text in (
+        ("perm", "distrobox create: Operation not permitted"),
+        ("uidmap", "distrobox create: cannot find newuidmap"),
+        ("ns", "distrobox create: cannot set up namespace"),
+    ):
+        assert classify(name, f"✖ alacritty  failed — {text}").returncode == 2, name
     wrapped = classify(
         "wrapped",
         "✖ alacritty  failed — command failed (125): timeout 900 env\n"
         "             XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box\n"
         "✖ alacritty failed: command failed (125): timeout 900 env XDG_CACHE_HOME=/tmp/c "
-        "distrobox create --yes --name box",
+        "distrobox create --yes --name box: cannot set hostname when running in the host UTS "
+        "namespace",
     )
     assert wrapped.returncode == 2, wrapped.stdout  # 24-08 nested run #2: the row wraps
     assert wrapped.stdout.splitlines() == [
         "TRACER_NESTED_INFEASIBLE step=distrobox-create detail=command failed (125): timeout 900 "
-        "env XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box"
+        "env XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box: cannot set hostname when "
+        "running in the host UTS namespace"
     ]
     broken = classify("broken", "✖ alacritty  failed — cargo build: exit 101")
     assert broken.returncode == 1
@@ -2512,7 +2692,7 @@ def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
         _nested_script(
             'printf "Summary — 1 installed\\n" > "$SCRATCH/none.txt"; '
             'nested_classify_alacritty "$SCRATCH/none.txt"',
-            real=("nested_classify_alacritty", "nested_infeasible"),
+            real=("nested_classify_alacritty", "nested_environment_error", "nested_infeasible"),
         ),
         tmp_path / "absent",
     )
@@ -2570,6 +2750,24 @@ def test_nested_uninstall_check(tmp_path: Path) -> None:
         "TRACER_NESTED_UNINSTALL_LEFT path=.terminfo/a",
         "TRACER_NESTED_UNINSTALL_LEFT path=.local/bin/alacritty",
     ]
+
+
+def test_nested_uninstall_check_looks_at_the_recorded_files_only(tmp_path: Path) -> None:
+    """E9: a surviving `.terminfo/a` directory is not a recorded path."""
+    scratch = tmp_path / "home"
+    (scratch / ".terminfo" / "a").mkdir(parents=True)
+    script = _nested_script(
+        "nested_uninstall_ok",
+        real=("nested_uninstall_ok",),
+        stubs='exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+    )
+    clean = _run(script, scratch)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_NESTED_UNINSTALL_OK"]
+    (scratch / ".terminfo" / "a" / "alacritty").touch()
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == ["TRACER_NESTED_UNINSTALL_LEFT path=.terminfo/a/alacritty"]
 
 
 def test_nested_is_wired_into_main_and_usage() -> None:
