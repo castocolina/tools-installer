@@ -226,6 +226,7 @@ _SIDEBAR_ID = "sidebar-markers"
 _SIDEBAR_SOURCE = "castocolina/herdr-setup/plugins/workspace-here"
 _SIDEBAR_REF = "2b5ca2aedf06a5a988a5087da22e65b469ffc84d"
 _SIDEBAR_PLUGIN = "herdr-setup.markers"
+_ROW_TOKENS = '{ token = "$rule", dim = true } and { token = "$here", bold = true }'
 
 
 def _run_herdr_query(argv: list[str]) -> str | None:
@@ -294,7 +295,17 @@ def _herdr_settled(binary: str, probe: Callable[[list[str]], str | None]) -> fro
 
 
 def _herdr_sidebar(binary: str, runner: Runner) -> tuple[bool, str | None]:
-    """Install the pinned sidebar plugin, write its rows, reload. (recorded, warning)."""
+    """Install the pinned sidebar plugin, write its rows, reload. (recorded, warning).
+
+    Nothing is written or recorded without python3, when the plugin is already the user's, when
+    its list cannot be read, or when its install fails."""
+    if not has_python3():
+        return False, "sidebar markers: the plugin needs python3 (python3 mark.py); not set up"
+    listed = _plugin_listed(binary, herdr_query)
+    if listed is None:
+        return False, "sidebar markers: could not read herdr's plugin list; not set up"
+    if listed:
+        return False, f"sidebar markers: you already have {_SIDEBAR_PLUGIN}; left yours"
     try:
         runner([binary, "plugin", "install", "--ref", _SIDEBAR_REF, "--yes", _SIDEBAR_SOURCE])
     except CommandError as exc:
@@ -307,11 +318,14 @@ def _herdr_sidebar(binary: str, runner: Runner) -> tuple[bool, str | None]:
     )
     if written.refused is not None:
         notes.append(f"sidebar rows not written: {written.refused.splitlines()[0]}")
-    elif any(key.kind == "wrote" for key in written.keys):
-        try:
-            runner([binary, "server", "reload-config"])
-        except CommandError as exc:
-            notes.append(f"herdr reload-config failed ({command_error_line(exc)}); restart herdr")
+    else:
+        if any(key.kind == "set_by_you" and key.key.endswith(".rows") for key in written.keys):
+            notes.append(f"your sidebar rows are kept; add {_ROW_TOKENS} to them by hand")
+        if any(key.kind == "wrote" for key in written.keys):
+            try:
+                runner([binary, "server", "reload-config"])
+            except CommandError as exc:
+                notes.append(f"reload-config failed ({command_error_line(exc)}); restart herdr")
     return True, "; ".join(notes) or None
 
 

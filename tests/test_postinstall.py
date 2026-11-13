@@ -741,3 +741,93 @@ def test_standalone_targets_are_not_hosts() -> None:
 def test_host_labels_never_names_a_standalone_target() -> None:
     assert pi.host_labels(("claude", "sidebar-markers")) == "claude"
     assert pi.host_labels(("sidebar-markers",)) == ""
+
+
+_SIDEBAR_ONLY = frozenset({"sidebar-markers"})
+_PLUGIN_LISTED = (
+    '{"id": "cli:plugin", "result": {"type": "plugin_list", "plugins": '
+    '[{"plugin_id": "herdr-setup.markers"}]}}'
+)
+
+
+def _sidebar_run(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    python3: bool = True,
+    plugins: str = _NO_PLUGINS,
+    fail: str | None = None,
+) -> tuple[pi.HookOutcome, list[list[str]], Path]:
+    """Run the sidebar step in the scratch HOME; `fail` names the herdr verb whose call raises."""
+    monkeypatch.delenv("HERDR_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(pi, "has_python3", lambda: python3)
+    _fake_herdr(monkeypatch, plugins=plugins)
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        if fail is not None and fail in cmd:
+            raise CommandError(cmd, 1, detail=f"{fail} failed")
+
+    outcome = pi.run_postinstall(
+        _HERDR, Method(kind="github_release", params={"bin_dir": "/b"}), runner, _SIDEBAR_ONLY
+    )
+    return outcome, calls, Path.home() / ".config" / "herdr" / "config.toml"
+
+
+def test_sidebar_needs_python3(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, python3=False)
+    assert registered == ()
+    assert calls == []
+    assert not config.exists()
+    assert warning is not None
+    assert "needs python3" in warning
+
+
+def test_user_plugin_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, plugins=_PLUGIN_LISTED)
+    assert registered == ()
+    assert calls == []
+    assert not config.exists()
+    assert warning is not None
+    assert "herdr-setup.markers" in warning
+    assert "yours" in warning
+
+
+def test_unreadable_plugin_list_sets_nothing_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, plugins="not json")
+    assert (registered, calls) == ((), [])
+    assert not config.exists()
+    assert warning is not None
+    assert "plugin list" in warning
+
+
+def test_failed_plugin_install_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), _calls, config = _sidebar_run(monkeypatch, fail="plugin")
+    assert registered == ()
+    assert not config.exists()
+    assert warning == "sidebar markers: plugin failed"
+
+
+def test_user_rows_are_kept_and_the_tokens_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Path.home() / ".config" / "herdr" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[ui.sidebar.agents]\nrows = [["agent"]]\n', encoding="utf-8")
+    (registered, warning), _calls, _config = _sidebar_run(monkeypatch)
+    sidebar = tomllib.loads(config.read_text(encoding="utf-8"))["ui"]["sidebar"]
+    assert registered == ("sidebar-markers",)
+    assert sidebar["agents"]["rows"] == [["agent"]]
+    assert sidebar["agents"]["row_gap"] == 1
+    assert set(sidebar["spaces"]) == {"rows"}
+    assert warning is not None
+    assert '{ token = "$rule", dim = true }' in warning
+    assert '{ token = "$here", bold = true }' in warning
+
+
+def test_reload_failure_is_a_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    (registered, warning), calls, config = _sidebar_run(monkeypatch, fail="reload-config")
+    assert registered == ("sidebar-markers",)
+    assert calls[-1] == ["/b/herdr", "server", "reload-config"]
+    assert "sidebar" in config.read_text(encoding="utf-8")
+    assert warning is not None
+    assert "reload-config failed" in warning
