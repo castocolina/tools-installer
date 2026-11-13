@@ -46,7 +46,7 @@
     {
       "number": "23.2",
       "name": "Install-time tuning",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "24",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 9 of 15 · 13% · executing"
+    "reason": "Phase 10 of 15 · 20% · executing"
   },
-  "updated_at": "2026-11-08T06:02:37.387Z"
+  "updated_at": "2026-11-13T03:53:56.846Z"
 }

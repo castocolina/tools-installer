@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: "23.2"
-current_phase_name: Install-time tuning instead of Policies knobs
+current_phase: 24
+current_phase_name: onboarding-through-the-skill-and-e2e
 status: executing
-stopped_at: Phase 23.1 complete; Phase 23.2 planned (8 plans), cross-AI review cycle 1
-last_updated: "2026-11-08T06:02:37.379Z"
-last_activity: 2026-11-07
-last_activity_desc: Phase 23.1 complete, transitioned to Phase 17
-state_head: 55c50af7f236b11bff81f2548076bd1ff1d8029b
+stopped_at: Phase 23.2 complete, ready to verify Phase 17
+last_updated: "2026-11-13T03:53:56.837Z"
+last_activity: 2026-11-13
+last_activity_desc: Phase 24 execution started
+state_head: 619e2460886d1099a3cf8b2b87cec3e1eaa76f28
 progress:
   total_phases: 15
-  completed_phases: 2
-  total_plans: 210
+  completed_phases: 3
+  total_plans: 211
   completed_plans: 202
-  percent: 13
+  percent: 20
 ---
 
 # Project State
@@ -25,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 23 — Configuration as a lifecycle step
+**Current focus:** Phase 24 — onboarding-through-the-skill-and-e2e
 
 ## Current Position
 
-Phase: 23.2 (Install-time tuning instead of Policies knobs) — READY TO EXECUTE
-Plan: 21
-Status: Ready to execute
-Last activity: 2026-11-07 — Phase 23.1 complete, transitioned to Phase 17
+Phase: 24 (onboarding-through-the-skill-and-e2e) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 24
+Last activity: 2026-11-13 — Phase 24 execution started
 
-Progress: [█░░░░░░░░░] 13%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [█░░░░░░░░░] 13%
 |-------|-------|-------|----------|
 | 20 | 31 | - | - |
 | 23.1 | 18 | - | - |
+| 23.2 | 8 | - | - |
 
 *Updated after each plan completion*
 
@@ -108,7 +109,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-11-07T23:47:58.922Z
-Stopped at: Phase 23.1 complete; Phase 23.2 planned (8 plans), cross-AI review cycle 1
+Stopped at: Phase 23.2 complete, ready to verify Phase 17
 Resume file: .planning/phases/23.2-install-time-tuning-instead-of-policies-knobs/23.2-01-PLAN.md
 
 ## Deferred Verification

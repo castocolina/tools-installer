@@ -120,13 +120,13 @@
 
 ### Install-time tuning
 
-- [ ] **TUNE-01**: Installing claude, codex, opencode, cursor-agent or copilot applies the agent tuning at once, with no question: commit/PR co-authoring off wherever a documented key exists, and the auto-approve/bypass keys of CONF-08 (plus copilot's documented equivalent); each key is written only when absent and reverted on removal. This replaces the Phase 23 run options and their Policies rows [user decision 2026-11-07: "Always, no question"]
-- [ ] **TUNE-02**: Installing zsh / Oh-My-Zsh applies the plugins and the default theme at install, with no question and no Policies knob; starship keeps `ZSH_THEME=""` symmetric [user request 2026-11-07]
-- [ ] **TUNE-03**: Policies keeps only settings that are not part of an initial install; every current Policies row is reviewed and install tuning moves to its tool's postinstall, with the outcome of each row recorded [user request 2026-11-07]
-- [ ] **TUNE-04**: The tool-onboarding skill states the rule: a new requirement is install-time tuning in the tool's postinstall unless it lies outside any install, and it never becomes a Policies knob by default [user request 2026-11-07]
-- [ ] **TUNE-05**: While a step runs without output, the run log shows a live indicator (spinner and elapsed time) and writes a timestamped "still running (Ns)" line at least every 10 s instead of a static `waiting for output` [UAT feedback 2026-11-07]
-- [ ] **TUNE-06**: The catalog offers GitHub Copilot CLI (`copilot`) as a user-tier agent, onboarded through the tool-onboarding skill (brew cask `copilot-cli` on macOS and Linux, or npm `@github/copilot`), with detection of a hand-installed copy, removal through its manager, and TUNE-01 tuning: `defaultPermissionMode = "allow-all"` and `includeCoAuthoredBy = false` in `$COPILOT_HOME/settings.json` (default `~/.copilot`) [user request 2026-11-07; keys verified with copilot 1.0.105 in a scratch `COPILOT_HOME`] *(amended 2026-11-07, 23.2 D-20: macOS brew cask `copilot-cli`; Linux `github_release`, the checksummed `copilot-linux-{x64,arm64}.tar.gz` verified against `SHA256SUMS.txt`; an ownership-only Linux cask so a hand-installed linuxbrew cask reads present; no npm method, because a tool-level `requires` would pull pnpm into the macOS plan and the npm package states no Node floor)*
-- [ ] **TUNE-07**: A dependency present at its declared install path but missing from the session PATH (for example pnpm installed by an earlier run in the same terminal) is runnable by the tool that needs it in the same session, and a present-but-unreachable dependency is never reported as "install pnpm" [real-TTY UAT F-1 2026-11-07]
+- [x] **TUNE-01**: Installing claude, codex, opencode, cursor-agent or copilot applies the agent tuning at once, with no question: commit/PR co-authoring off wherever a documented key exists, and the auto-approve/bypass keys of CONF-08 (plus copilot's documented equivalent); each key is written only when absent and reverted on removal. This replaces the Phase 23 run options and their Policies rows [user decision 2026-11-07: "Always, no question"]
+- [x] **TUNE-02**: Installing zsh / Oh-My-Zsh applies the plugins and the default theme at install, with no question and no Policies knob; starship keeps `ZSH_THEME=""` symmetric [user request 2026-11-07]
+- [x] **TUNE-03**: Policies keeps only settings that are not part of an initial install; every current Policies row is reviewed and install tuning moves to its tool's postinstall, with the outcome of each row recorded [user request 2026-11-07]
+- [x] **TUNE-04**: The tool-onboarding skill states the rule: a new requirement is install-time tuning in the tool's postinstall unless it lies outside any install, and it never becomes a Policies knob by default [user request 2026-11-07]
+- [x] **TUNE-05**: While a step runs without output, the run log shows a live indicator (spinner and elapsed time) and writes a timestamped "still running (Ns)" line at least every 10 s instead of a static `waiting for output` [UAT feedback 2026-11-07]
+- [x] **TUNE-06**: The catalog offers GitHub Copilot CLI (`copilot`) as a user-tier agent, onboarded through the tool-onboarding skill (brew cask `copilot-cli` on macOS and Linux, or npm `@github/copilot`), with detection of a hand-installed copy, removal through its manager, and TUNE-01 tuning: `defaultPermissionMode = "allow-all"` and `includeCoAuthoredBy = false` in `$COPILOT_HOME/settings.json` (default `~/.copilot`) [user request 2026-11-07; keys verified with copilot 1.0.105 in a scratch `COPILOT_HOME`] *(amended 2026-11-07, 23.2 D-20: macOS brew cask `copilot-cli`; Linux `github_release`, the checksummed `copilot-linux-{x64,arm64}.tar.gz` verified against `SHA256SUMS.txt`; an ownership-only Linux cask so a hand-installed linuxbrew cask reads present; no npm method, because a tool-level `requires` would pull pnpm into the macOS plan and the npm package states no Node floor)*
+- [x] **TUNE-07**: A dependency present at its declared install path but missing from the session PATH (for example pnpm installed by an earlier run in the same terminal) is runnable by the tool that needs it in the same session, and a present-but-unreachable dependency is never reported as "install pnpm" [real-TTY UAT F-1 2026-11-07]
 
 ### Schedules
 
@@ -260,13 +260,13 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | HOST-03 | Phase 23.1 | Complete |
 | HOST-04 | Phase 23.1 | Complete |
 | HOST-05 | Phase 23.1 | Complete |
-| TUNE-01 | Phase 23.2 | Pending |
-| TUNE-02 | Phase 23.2 | Pending |
-| TUNE-03 | Phase 23.2 | Pending |
-| TUNE-04 | Phase 23.2 | Pending |
-| TUNE-05 | Phase 23.2 | Pending |
-| TUNE-06 | Phase 23.2 | Pending |
-| TUNE-07 | Phase 23.2 | Pending |
+| TUNE-01 | Phase 23.2 | Complete |
+| TUNE-02 | Phase 23.2 | Complete |
+| TUNE-03 | Phase 23.2 | Complete |
+| TUNE-04 | Phase 23.2 | Complete |
+| TUNE-05 | Phase 23.2 | Complete |
+| TUNE-06 | Phase 23.2 | Complete |
+| TUNE-07 | Phase 23.2 | Complete |
 | SCHED-01 | Phase 24.2 | Pending |
 | SCHED-02 | Phase 24.2 | Pending |
 | SCHED-03 | Phase 24.2 | Pending |
