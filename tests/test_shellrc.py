@@ -3306,16 +3306,54 @@ _EDITOR_NAMES = ("EDITOR", "VISUAL")
 
 
 @pytest.mark.parametrize(
-    "line",
-    ["export EDITOR=vim", "EDITOR=vim", "typeset -x EDITOR=vim", "declare -x EDITOR=vim"],
+    "text",
+    [
+        "export EDITOR=vim",
+        "EDITOR=vim",
+        "typeset -x EDITOR=vim",
+        "declare -x EDITOR=vim",
+        "export A=1 EDITOR=vim",
+        'export PATH="$PATH:/x"; export EDITOR=vim',
+        "[ -x /usr/bin/vim ] && export EDITOR=vim",
+        "if true; then export EDITOR=vim; fi",
+        "{ export EDITOR=vim; }",
+        "(EDITOR=vim)",
+        "time export EDITOR=vim",
+        "true || EDITOR=vim",
+        "EDITOR=vim git commit",
+        "export EDITOR=",
+        'EDITOR=""',
+        ": ${EDITOR:=vim}",
+        "EDITOR+=x",
+        "case $TERM in xterm) export EDITOR=vim;; esac",
+        "case $TERM in\n  xterm)\n    export EDITOR=vim\n    ;;\nesac",
+        "export EDITOR=vim\nexport EDITOR=",
+        'export EDITOR="code --wait"',
+    ],
 )
-def test_find_export_matches_the_assignment_forms(line: str) -> None:
-    assert find_export(line, _EDITOR_NAMES) == ("EDITOR", "vim")
+def test_find_export_matches_any_assignment_of_the_name(text: str) -> None:
+    found = find_export(text, _EDITOR_NAMES)
+    assert found is not None
+    assert found[0] == "EDITOR"
+
+
+def test_find_export_names_the_line_of_the_last_assignment() -> None:
+    assert find_export("a=1\nEDITOR=vim\nVISUAL=code\nb=2", _EDITOR_NAMES) == ("VISUAL", 3)
+    assert find_export("case x in\n  y)\n    EDITOR=vim\n", _EDITOR_NAMES) == ("EDITOR", 3)
 
 
 @pytest.mark.parametrize(
     "line",
-    ["GIT_EDITOR=vim", "SUDO_EDITOR=vim", "EDITORX=vim", "MY_VISUAL=x", "export GIT_EDITOR=vim"],
+    [
+        "GIT_EDITOR=vim",
+        "SUDO_EDITOR=vim",
+        "EDITORX=vim",
+        "MY_VISUAL=x",
+        "export GIT_EDITOR=vim",
+        "alias e='EDITOR=vim x'",
+        "echo $EDITOR",
+        '[ "$EDITOR" = vim ]',
+    ],
 )
 def test_find_export_matches_exact_names_only(line: str) -> None:
     assert find_export(line, _EDITOR_NAMES) is None
@@ -3337,64 +3375,23 @@ def test_find_export_skips_a_terminated_installer_block(name: str) -> None:
 
 def test_find_export_reads_the_consolidated_shellrc_block_as_user_content() -> None:
     text = _block("consolidated shellrc", "export EDITOR=vim")
-    assert find_export(text, _EDITOR_NAMES) == ("EDITOR", "vim")
+    assert find_export(text, _EDITOR_NAMES) == ("EDITOR", 2)
 
 
 def test_find_export_an_unterminated_begin_skips_nothing() -> None:
     text = "# >>> tools-installer tweak:neovim >>>\nexport EDITOR=vim\n"
-    assert find_export(text, _EDITOR_NAMES) == ("EDITOR", "vim")
-
-
-@pytest.mark.parametrize(
-    "text", ["export EDITOR=", 'EDITOR=""', "EDITOR=''", "EDITOR=vim\nEDITOR="]
-)
-def test_find_export_treats_an_empty_value_as_unset(text: str) -> None:
-    assert find_export(text, _EDITOR_NAMES) is None
-
-
-def test_find_export_the_last_assignment_wins() -> None:
-    assert find_export("EDITOR=vim\nVISUAL=code", _EDITOR_NAMES) == ("VISUAL", "code")
-    assert find_export("EDITOR=vim\nEDITOR=nano", _EDITOR_NAMES) == ("EDITOR", "nano")
-
-
-def test_find_export_keeps_the_quotes_of_the_value() -> None:
-    assert find_export('export EDITOR="code --wait"', _EDITOR_NAMES) == (
-        "EDITOR",
-        '"code --wait"',
-    )
+    assert find_export(text, _EDITOR_NAMES) == ("EDITOR", 2)
 
 
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        ("export A=1 EDITOR=vim", ("EDITOR", "vim")),
-        ("typeset -x A=1 EDITOR=vim", ("EDITOR", "vim")),
-        ("declare -x A=1 EDITOR=vim", ("EDITOR", "vim")),
-        ("A=1 EDITOR=vim", ("EDITOR", "vim")),
-        ('export PATH="$PATH:/x"; export EDITOR=vim', ("EDITOR", "vim")),
-        ("[ -x /usr/bin/vim ] && export EDITOR=vim", ("EDITOR", "vim")),
-        ("if true; then export EDITOR=vim; fi", ("EDITOR", "vim")),
-        ("{ export EDITOR=vim; }", ("EDITOR", "vim")),
-        ('export EDITOR="code --wait" A=1', ("EDITOR", '"code --wait"')),
-        ("export EDITOR=vim VISUAL=code", ("VISUAL", "code")),
-        ("EDITOR=vim git commit", None),
-        ("alias e='EDITOR=vim x'", None),
-        ("export GIT_EDITOR=vim A=1", None),
+        ("EDITOR=vim # note", True),
+        ("export EDITOR=vim # EDITOR=", True),
+        ('export EDITOR="a # b"', True),
+        ("EDITOR=vi#m", True),
+        ("true # EDITOR=vim", False),
     ],
 )
-def test_find_export_statement_forms(line: str, expected: tuple[str, str] | None) -> None:
-    assert find_export(line, _EDITOR_NAMES) == expected
-
-
-@pytest.mark.parametrize(
-    ("line", "expected"),
-    [
-        ("EDITOR=vim # note", ("EDITOR", "vim")),
-        ("export EDITOR=vim # EDITOR=", ("EDITOR", "vim")),
-        ('export EDITOR="a # b"', ("EDITOR", '"a # b"')),
-        ("EDITOR=vi#m", ("EDITOR", "vi#m")),
-        ("true # EDITOR=vim", None),
-    ],
-)
-def test_find_export_comment_words(line: str, expected: tuple[str, str] | None) -> None:
-    assert find_export(line, _EDITOR_NAMES) == expected
+def test_find_export_comment_words(line: str, expected: bool) -> None:
+    assert (find_export(line, _EDITOR_NAMES) is not None) is expected

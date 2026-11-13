@@ -386,7 +386,7 @@ def test_neovim_keeps_your_editor() -> None:
     home = Path.home()
     (home / ".zshrc").write_text("export EDITOR=vim\n")
     lines = run_post_install(_shell_init_tool("neovim"), _mutable(), None).lines
-    assert lines == ("Kept your EDITOR=vim (the neovim shell init was not written).",)
+    assert lines == ("Kept your EDITOR (~/.zshrc:1; the neovim shell init was not written).",)
     assert not (home / ".myshellrc").exists()
     assert shell_init_record(home / ".myshellrc") is None
 
@@ -402,7 +402,12 @@ def _no_neovim_block() -> bool:
     ) is None
 
 
-_KEPT_VIM = ("Kept your EDITOR=vim (the neovim shell init was not written).",)
+_KEPT = re.compile(r"Kept your EDITOR \(~/[^:]+:\d+; the neovim shell init was not written\)\.")
+
+
+def _assert_kept_vim(lines: tuple[str, ...]) -> None:
+    assert len(lines) == 1
+    assert _KEPT.fullmatch(lines[0]), lines
 
 
 def _zdotdir_in(monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -428,13 +433,13 @@ def test_user_export_reads_every_startup_file(where: str, monkeypatch: pytest.Mo
     }[where]
     target.parent.mkdir(exist_ok=True)
     target.write_text("export EDITOR=vim\n")
-    assert _neovim_lines() == _KEPT_VIM
+    _assert_kept_vim(_neovim_lines())
     assert _no_neovim_block()
 
 
 def test_user_export_survives_non_utf8_bytes() -> None:
     (Path.home() / ".zshrc").write_bytes(b"# \xff\nexport EDITOR=vim\n")
-    assert _neovim_lines() == _KEPT_VIM
+    _assert_kept_vim(_neovim_lines())
 
 
 def test_user_export_skips_missing_and_non_regular_files() -> None:
@@ -483,21 +488,41 @@ def test_user_export_fails_closed_on_an_unreadable_file() -> None:
 
 def test_neovim_keeps_an_editor_set_in_a_multi_assignment_export() -> None:
     (Path.home() / ".bashrc").write_text("export LANG=C.UTF-8 EDITOR=vim\n")
-    assert _neovim_lines() == _KEPT_VIM
+    _assert_kept_vim(_neovim_lines())
     assert _no_neovim_block()
 
 
 def test_neovim_keeps_your_visual() -> None:
     (Path.home() / ".zshrc").write_text("export VISUAL=code\n")
-    assert _neovim_lines() == ("Kept your VISUAL=code (the neovim shell init was not written).",)
+    assert _neovim_lines() == (
+        "Kept your VISUAL (~/.zshrc:1; the neovim shell init was not written).",
+    )
     assert _no_neovim_block()
 
 
-def test_neovim_kept_value_is_sanitized() -> None:
-    (Path.home() / ".zshrc").write_text("export EDITOR=v\x1bim\n")
+def test_neovim_kept_line_names_the_file_not_the_value() -> None:
+    (Path.home() / ".zshrc").write_text("export EDITOR=$(command -v v\x1bim)\n")
     lines = _neovim_lines()
-    assert lines == _KEPT_VIM
+    assert lines == ("Kept your EDITOR (~/.zshrc:1; the neovim shell init was not written).",)
     assert "\x1b" not in lines[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "case $TERM in\n  xterm)\n    export EDITOR=vim\n    ;;\nesac\n",
+        "case $TERM in xterm) EDITOR=vim;; esac\n",
+        "time export EDITOR=vim\n",
+        "true && export EDITOR=vim\n",
+        "export EDITOR=vim\nexport EDITOR=\n",
+    ],
+)
+def test_neovim_keeps_an_editor_set_anywhere_in_a_statement(text: str) -> None:
+    (Path.home() / ".zshrc").write_text(text)
+    lines = _neovim_lines()
+    assert len(lines) == 1
+    assert lines[0].startswith("Kept your EDITOR (~/.zshrc:")
+    assert _no_neovim_block()
 
 
 def test_neovim_ignores_an_environment_editor(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -484,11 +484,9 @@ def user_export(names: tuple[str, ...], tool_id: str) -> str | None:
             )
         found = find_export(data.decode("utf-8", errors="replace"), names)
         if found is not None:
-            name, value = found
-            return (
-                f"Kept your {name}={sanitize_log_line(value)} "
-                f"(the {tool_id} shell init was not written)."
-            )
+            name, line = found
+            where = sanitize_log_line(f"{display_path(path)}:{line}")
+            return f"Kept your {name} ({where}; the {tool_id} shell init was not written)."
     return None
 
 

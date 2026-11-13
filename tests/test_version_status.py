@@ -6506,7 +6506,7 @@ def test_forced_reconfigure_with_your_editor_writes_nothing(tmp_path: Path) -> N
     before = _myshellrc().read_bytes()
     outcome = _forced_reconfigure(_shell_tool("neovim"))
     assert outcome.result == "done"
-    assert "Kept your EDITOR=vim" in outcome.detail
+    assert "Kept your EDITOR (~/.bashrc:1;" in outcome.detail
     assert _myshellrc().read_bytes() == before
 
 
