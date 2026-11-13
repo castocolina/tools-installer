@@ -1048,13 +1048,13 @@ def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environmen
     assert policy.id == "daemon:prune-tmpdir"
 
 
-def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
+def test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_point(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """apply_daemon_default's ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
+    """apply_schedule_defaults' ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
     #14): only the default/no-flag path (_run_interactive_wizard's own call
     site -- the genuine, normal interactive `make setup` wizard flow) ever
-    wires a real daemon_default callback into UnifiedApp. `--doctor`
+    wires a real schedule_defaults callback into UnifiedApp. `--doctor`
     (read-only, Makefile:19), `--uninstall`, and `--guard`'s interactive
     Policies view must never auto-apply -- proven against _capture_app's
     own CAPTURED kwargs, not merely that an injected callback was never
@@ -1071,25 +1071,21 @@ def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
     doctor_kwargs, uninstall_kwargs, policies_kwargs, default_kwargs = seen
 
     for kwargs in (doctor_kwargs, uninstall_kwargs, policies_kwargs):
-        assert kwargs.get("daemon_default") is None
-        assert kwargs.get("daemon_default_policy_id") is None
+        assert kwargs.get("schedule_defaults") is None
 
-    assert callable(default_kwargs["daemon_default"])
-    assert default_kwargs["daemon_default_policy_id"] == "daemon:prune-tmpdir"
+    assert callable(default_kwargs["schedule_defaults"])
 
 
-def test_daemon_default_is_wired_on_linux_when_systemd_is_available(
+def test_schedule_defaults_are_wired_on_linux_when_systemd_is_available(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """D-01a's Linux half, pinned at the composition root: the on-by-default
-    wiring fires from the genuine interactive wizard entry point on Linux
-    too, once systemd is available -- mirrors
-    test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point's
-    macOS-default coverage, and its own daemon_default_policy_id is the
-    Linux id, not the macOS one."""
+    """D-01a's Linux half, pinned at the composition root: the reconcile wiring fires from the
+    genuine interactive wizard entry point on a Linux platform (a `fedora` key) too -- mirrors
+    test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_point's
+    macOS-default coverage."""
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
-    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     monkeypatch.setattr(setup, "detect", lambda: linux)
     seen = _capture_app(monkeypatch)
 
@@ -1098,10 +1094,8 @@ def test_daemon_default_is_wired_on_linux_when_systemd_is_available(
 
     assert len(seen) == 2
     uninstall_kwargs, wizard_kwargs = seen
-    assert uninstall_kwargs.get("daemon_default") is None
-    assert uninstall_kwargs.get("daemon_default_policy_id") is None
-    assert callable(wizard_kwargs["daemon_default"])
-    assert wizard_kwargs["daemon_default_policy_id"] == "daemon:prune-tmp-linux"
+    assert uninstall_kwargs.get("schedule_defaults") is None
+    assert callable(wizard_kwargs["schedule_defaults"])
 
 
 def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
@@ -2491,14 +2485,14 @@ def test_headless_all_never_constructs_unified_app(monkeypatch: pytest.MonkeyPat
     assert rendered == []
 
 
-def test_interactive_app_is_built_with_execute_and_daemon_default(
+def test_interactive_app_is_built_with_execute_and_schedule_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     assert seen[0]["execute"] is not None
-    assert callable(seen[0]["daemon_default"])
+    assert callable(seen[0]["schedule_defaults"])
 
 
 def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text(
@@ -2848,7 +2842,7 @@ def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing
 # showing an owner the mutation path re-resolves as unknown a moment later.
 
 
-def test_build_app_arms_the_collector_only_when_it_wires_the_daemon_default(
+def test_build_app_arms_the_collector_only_when_it_wires_the_schedule_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from installer.schedules import ScheduleDefaultWarnings
@@ -2859,14 +2853,14 @@ def test_build_app_arms_the_collector_only_when_it_wires_the_daemon_default(
     setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
-        apply_daemon_default=True,
-        daemon_default_warnings=armed,
+        apply_schedule_defaults=True,
+        schedule_default_warnings=armed,
     )
     setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
-        apply_daemon_default=False,
-        daemon_default_warnings=unarmed,
+        apply_schedule_defaults=False,
+        schedule_default_warnings=unarmed,
     )
     assert armed.wait(0.05)[1] is False
     messages, completed = unarmed.wait(5)
@@ -2894,7 +2888,7 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
             collector.finish()
 
     def fake_build(*_args: object, **kwargs: object) -> _Aborting:
-        handed = kwargs["daemon_default_warnings"]
+        handed = kwargs["schedule_default_warnings"]
         assert isinstance(handed, ScheduleDefaultWarnings)
         assert handed is collector
         handed.arm()

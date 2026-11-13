@@ -28,6 +28,7 @@ from installer.policy import (
     tweak_policy,
 )
 from installer.tweaks import BUNDLES, TweakBundle, shell_init_bundle, tweak_present
+from installer.ui_common import VIEW_BY_NAME
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
     LinkModeScreen,
@@ -1478,3 +1479,52 @@ async def test_retired_alias_rows_show_only_the_generic_detail(
         assert "dangerously-bypass-approvals" not in detail
         assert "--model gpt-5.6-sol-high" not in detail
         assert "--auto" not in detail
+
+
+async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SPEC R9, UI-SPEC section 9: the tmp cleanup left Policies. The view lists no such row,
+    its footer names no `t` or `l` action, and pressing either on every row opens no modal and
+    changes no row. (The BINDINGS entries go with 24.2-12.)"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc = tmp_path / ".myshellrc"
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    ban = ban_policy(
+        shim_dir=bin_dir,
+        apply_rc_paths=[rc],
+        remove_rc_paths=[rc],
+        path_value=str(bin_dir),
+        which=lambda _name: None,
+    )
+    tweak = tweak_policy(_countdown(), rc_path=rc, bin_dir=bin_dir, installed_tools={"uv": True})
+    app = UnifiedApp(
+        [_tool()],
+        {"search": ""},
+        report=DoctorReport(missing=(), broken=(), duplicated=()),
+        guard_state=lambda: (guard_status(bin_dir), None),
+        fix_preview="",
+        fix=lambda: None,
+        uninstall=UninstallInputs(
+            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
+        ),
+        policies=PolicyInputs(policies=[ban, tweak]),
+        initial_view="policies",
+    )
+    actions = VIEW_BY_NAME["policies"].actions
+    assert "set time" not in actions
+    assert "view log" not in actions
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        table = screen.query_one(DataTable[Any])
+        assert not [key for key in table.rows if "tmp" in str(key.value)]
+        before = dict(screen.active_state)
+        for row in range(len(screen.active_state)):
+            table.move_cursor(row=row)
+            for key in ("t", "l"):
+                await pilot.press(key)
+                await pilot.pause()
+                assert app.screen is screen
+        assert screen.active_state == before
+        assert screen.status.text == ""

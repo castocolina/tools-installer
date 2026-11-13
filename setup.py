@@ -71,7 +71,6 @@ from installer.policy import (
     cache_redirect_policy,
     daemon_policy,
     desktop_shell_policy,
-    ensure_daemon_default,
     linux_daemon_policy,
     tweak_policy,
 )
@@ -539,7 +538,7 @@ def _build_daemon_policy(
     on a Linux host that has `systemctl` (D-01b), and None on a Linux host
     without it -- ROADMAP SC#2's "invisible/inert on Linux" is deliberately
     SUPERSEDED by this phase (D-01a): the Linux row is on by default from the
-    interactive wizard's own `apply_daemon_default` allowlist, exactly like
+    interactive wizard's own `apply_schedule_defaults` allowlist, exactly like
     macOS.
 
     `which` defaults to None rather than being bound directly to
@@ -858,11 +857,11 @@ def _build_app(
     *,
     initial_view: str = BASE_VIEW,
     link_mode: str = "centralized",
-    apply_daemon_default: bool = False,
+    apply_schedule_defaults: bool = False,
     unattended: bool = False,
     settings: SettingsStore | None = None,
     prompt_link_mode: bool = False,
-    daemon_default_warnings: ScheduleDefaultWarnings | None = None,
+    schedule_default_warnings: ScheduleDefaultWarnings | None = None,
     disk_pressure: Callable[..., DiskPressure] | None = None,
     timer_cache: systemd_daemon.TimerStateCache | None = None,
     competing: Callable[..., tuple[systemd_daemon.CompetingUnit, ...]] | None = None,
@@ -1102,45 +1101,39 @@ def _build_app(
         return pnpm_globals.reinstall_node_globals(packages, policy=policy)
 
     # An ALLOWLIST, not the initial_view != "uninstall" blocklist that would
-    # wrongly auto-apply for "doctor"/"policies" too (11-REVIEWS.md cycle 2
+    # wrongly reconcile for "doctor"/"policies" too (11-REVIEWS.md cycle 2
     # finding #14) -- make doctor is documented read-only (Makefile:19), and
     # --guard/--unguard's interactive branch must not silently register a
-    # background deletion LaunchAgent either. Only _run_interactive_wizard's
-    # own call site (the genuine, normal interactive make setup wizard flow)
-    # passes apply_daemon_default=True. The daemon Policy object itself is
-    # still appended to policy_inputs.policies above regardless of this flag,
-    # so it remains visible/toggleable from every entry point -- only the
-    # ON-BY-DEFAULT CALLBACK is gated here.
-    daemon_default = None
-    daemon_default_policy_id = None
-    if daemon is not None and apply_daemon_default:
-        daemon_policy_instance = daemon
-        if daemon_default_warnings is not None:
-            daemon_default_warnings.arm()
+    # background timer either. Only _run_interactive_wizard's own call site
+    # (the genuine, normal interactive make setup wizard flow) passes
+    # apply_schedule_defaults=True; the Schedules view itself is visible from
+    # every entry point.
+    schedule_defaults: Callable[[], schedules.ReconcileReport] | None = None
+    if apply_schedule_defaults:
+        if schedule_default_warnings is not None:
+            schedule_default_warnings.arm()
+        # A live probe, never the launch snapshot: the reconcile after an install run must see
+        # the tool that run just put on PATH.
+        by_id = {tool.id: tool for tool in tools}
+        reconcile_ctx = _schedule_context(
+            platform, lambda tool_id: tool_id in by_id and is_installed(by_id[tool_id])
+        )
+        told: set[str] = set()
 
-        def daemon_default() -> bool:
-            # Closes over daemon_policy_instance, never the module-level
-            # daemon_default local re-bound by this very assignment, and
-            # never re-constructs a second daemon_policy: the SAME instance
-            # already appended to policy_inputs.policies above.
+        def schedule_defaults() -> schedules.ReconcileReport:
             # finish() is unconditional for the same reason the worker's own
-            # finally always posts: an exception outside
-            # ensure_daemon_default's caught tuple must still signal, or the
+            # finally always posts: an exception must still signal, or the
             # console waits the full timeout for a signal that never comes.
             try:
-                return ensure_daemon_default(
-                    daemon_policy_instance,
-                    on_warning=(
-                        daemon_default_warnings.append
-                        if daemon_default_warnings is not None
-                        else None
-                    ),
-                )
+                report = schedules.ensure_schedule_defaults(reconcile_ctx)
+                for warning in report.warnings:
+                    if schedule_default_warnings is not None and warning not in told:
+                        told.add(warning)
+                        schedule_default_warnings.append(warning)
+                return report
             finally:
-                if daemon_default_warnings is not None:
-                    daemon_default_warnings.finish()
-
-        daemon_default_policy_id = daemon.id
+                if schedule_default_warnings is not None:
+                    schedule_default_warnings.finish()
 
     # D-12: _build_app builds ExecuteInputs itself, so no route (current or
     # future) can build an app that cannot execute an accepted selection.
@@ -1177,8 +1170,7 @@ def _build_app(
         reinstall_globals=_reinstall_globals,
         unavailable=unavailable,
         initial_view=initial_view,
-        daemon_default=daemon_default,
-        daemon_default_policy_id=daemon_default_policy_id,
+        schedule_defaults=schedule_defaults,
         version_refresh=version_refresh,
         updates=updates,
         execute=execute,
@@ -1259,19 +1251,19 @@ def _run_interactive_wizard(
 ) -> int:
     warnings = ScheduleDefaultWarnings()
     with _stdin_on_tty():
-        # Only the genuine interactive wizard flow auto-applies the daemon
-        # default (allowlist at the _build_app call site). _build_app builds
+        # Only the genuine interactive wizard flow reconciles the schedule
+        # defaults (allowlist at the _build_app call site). _build_app builds
         # execute and the one shared timer cache / disk-pressure probe itself
         # (D-12), so the wizard passes no cache, probe or execute.
         app = _build_app(
             tools,
             platform,
             link_mode=settings.link_mode,
-            apply_daemon_default=True,
+            apply_schedule_defaults=True,
             unattended=options.yes,
             settings=settings,
             prompt_link_mode=prompt_link_mode,
-            daemon_default_warnings=warnings,
+            schedule_default_warnings=warnings,
         )
         app.run()
     # BEFORE the abort return: an aborted wizard is still a run whose

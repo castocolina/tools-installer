@@ -8,17 +8,40 @@ import io
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rich.console import Console
+from textual.widgets import DataTable
 
 import setup
-from installer import policy, runlock, schedules
+from installer import daemon, policy, runlock, schedules
+from installer.diskusage import DiskPressure
+from installer.enums import DaemonState, MutationHolder
+from installer.execute_screen import InstallRunFinished
+from installer.guidance import disk_pressure_guidance
 from installer.model import Tool
 from installer.platform import Platform
-from installer.schedules import ReconcileReport, ScheduleContext, ScheduleDefaultWarnings
+from installer.schedules import (
+    ReconcileReport,
+    ScheduleContext,
+    ScheduleDefaultWarnings,
+    ScheduleRecord,
+    update_state,
+)
 from installer.session import Disposition, PlanRow, RowOutcome
-from tests.test_schedules_engine import CLAUDE_BASENAME, Env, make_env
+from installer.ui_common import BASE_VIEW
+from installer.wizard_app import SchedulesScreen, UnifiedApp
+from tests import test_setup
+from tests.screen_family import settle
+from tests.state_doubles import FrozenStateService
+from tests.test_schedules_engine import (
+    CLAUDE_BASENAME,
+    TMP_BASENAME,
+    Env,
+    make_env,
+    seed_legacy_tmp,
+)
 from tests.test_schedules_lifecycle import unit_files
 
 TURNED_ON = (
@@ -148,3 +171,139 @@ def test_schedule_default_warnings_moved() -> None:
     assert armed.wait(0.01) == (("note",), False)
     armed.finish()
     assert armed.wait(0.01) == (("note",), True)
+
+
+# -- the TUI reconciles at mount and after each install run --------------------------------
+
+
+def _tui_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    env: Env,
+    present: set[str],
+    *,
+    initial_view: str = BASE_VIEW,
+) -> UnifiedApp:
+    """The real `_build_app` on a scratch HOME, wired to `env`'s fake schedule seams."""
+    sandbox: Callable[[pytest.MonkeyPatch, Path], None] = vars(test_setup)["_sandbox"]
+    bind_refresh: Callable[..., object] = vars(test_setup)["_bind_refresh"]
+    sandbox(monkeypatch, tmp_path)
+    make_env_home = env.home  # make_env pointed HOME at its own scratch dir; keep that
+    monkeypatch.setenv("HOME", str(make_env_home))
+    bind_refresh(monkeypatch, FrozenStateService)
+
+    def schedule_context(_platform: Platform, _present: Callable[[str], bool]) -> ScheduleContext:
+        return replace(env.ctx, present=present.__contains__)
+
+    monkeypatch.setattr(setup, "_schedule_context", schedule_context)
+    return setup._build_app(  # pyright: ignore[reportPrivateUsage]
+        [], FEDORA, initial_view=initial_view, apply_schedule_defaults=True
+    )
+
+
+async def test_mount_reconcile_turns_undecided_schedules_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, present=frozenset())
+    app = _tui_app(monkeypatch, tmp_path, env, {"claude"})
+    holders: list[object] = []
+    real = schedules.ensure_schedule_defaults
+
+    def watching(ctx: ScheduleContext) -> ReconcileReport:
+        holders.append(app.mutation_holder)
+        return real(ctx)
+
+    monkeypatch.setattr(schedules, "ensure_schedule_defaults", watching)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        assert app.view(BASE_VIEW).status.text == TURNED_ON
+        assert len(unit_files(env.ctx, CLAUDE_BASENAME)) == 3
+        assert not app.mutation_in_flight
+    assert holders == [MutationHolder.SCHEDULE_DEFAULTS]
+    assert MutationHolder.SCHEDULE_DEFAULTS == "A schedule setup"
+    assert "DAEMON_DEFAULT" not in MutationHolder.__members__
+
+
+async def test_the_mount_reconcile_releases_the_lock_when_it_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, present=frozenset())
+    app = _tui_app(monkeypatch, tmp_path, env, {"claude"})
+
+    def boom(_ctx: ScheduleContext) -> ReconcileReport:
+        raise RuntimeError("the reconcile broke")
+
+    monkeypatch.setattr(schedules, "ensure_schedule_defaults", boom)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        assert not app.mutation_in_flight
+        assert app.view(BASE_VIEW).status.text == ""
+
+
+async def test_install_run_then_reconcile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SPEC edge R3: a tool the run installs gets its update schedule in the same session."""
+    env = make_env(tmp_path, monkeypatch, present=frozenset())
+    present: set[str] = set()
+    app = _tui_app(monkeypatch, tmp_path, env, present)
+    opencode = "tools-installer-schedule-update-opencode"
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        assert not unit_files(env.ctx, opencode)
+        present.add("opencode")  # the fake run put it on PATH
+        done = RowOutcome(PlanRow("opencode", Disposition.INSTALL, ""), "done")
+        app.post_message(InstallRunFinished([done], None, "", ""))
+        await settle(app, pilot)
+        assert len(unit_files(env.ctx, opencode)) == 3
+        assert not app.mutation_in_flight
+
+
+async def test_an_on_daemon_stays_on_across_the_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC R9 / T-24.2-43: today's live tmp units are rewritten in place with one restart and
+    never disabled or stopped; Schedules row 1 then toggles those very units."""
+    env = make_env(tmp_path, monkeypatch, present=frozenset())
+    old = seed_legacy_tmp(env)
+    off = ScheduleRecord(False, 6, "00:00", ())
+    update_state(
+        env.ctx.state_path,
+        lambda state: replace(state, records={**state.records, "cache-cleanup": off}),
+    )
+    app = _tui_app(monkeypatch, tmp_path, env, set(), initial_view="schedules")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        assert env.run.text() == [
+            "daemon-reload",
+            f"enable {TMP_BASENAME}.timer",
+            f"restart {TMP_BASENAME}.timer",
+        ]  # no disable or stop: the running timer is never off, even for a moment
+        service = env.ctx.unit_dir / f"{TMP_BASENAME}.service"
+        assert service.read_bytes() != old[service]
+        assert not (env.ctx.legacy_bin_dir / daemon.WRAPPER_COMMAND).exists()
+        screen = app.screen
+        assert isinstance(screen, SchedulesScreen)
+        table = screen.query_one(DataTable[Any])
+        assert table.get_cell("tmp-cleanup", "state").plain == "● [on]"
+
+        table.move_cursor(row=0)
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert table.get_cell("tmp-cleanup", "state").plain == "○ [off]"
+        assert not unit_files(env.ctx, TMP_BASENAME)
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert table.get_cell("tmp-cleanup", "state").plain == "● [on]"
+        assert len(unit_files(env.ctx, TMP_BASENAME)) == 3
+
+
+def test_disk_pressure_points_at_schedules() -> None:
+    """R1-17: the Doctor's next step names the Schedules tmp cleanup row, not the Policies one."""
+    pressure = DiskPressure(
+        home_free_percent=5.0,
+        tmp_used_percent=10.0,
+        daemon=DaemonState.INACTIVE,
+        tmp_threshold=True,
+    )
+    [item] = disk_pressure_guidance(pressure)
+    assert item.next_step.startswith("Turn on tmp cleanup in `make setup`'s Schedules view; a ")
+    assert "Policies" not in item.next_step

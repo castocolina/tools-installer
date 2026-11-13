@@ -19,7 +19,7 @@ from installer.catalog_tui import CatalogScreen, RefreshRequested, health_cell
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
-from installer.enums import DaemonState, Severity
+from installer.enums import DaemonState, MutationHolder, Severity
 from installer.execute_screen import (
     ExecuteInputs,
     ExecuteScreen,
@@ -50,12 +50,12 @@ from installer.policy import (
     PolicyResult,
     daemon_policy,
     ensure_daemon_default,
-    omz_plugins_policy,
 )
 from installer.post_install import ConfirmSensitiveAction
 from installer.rcclean import PathWriterLine
 from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError, Runner
+from installer.schedules import ReconcileReport
 from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingUnit, TimerStateCache
@@ -86,6 +86,7 @@ from installer.wizard_app import (
     PoliciesScreen,
     PolicyInputs,
     RefreshPublished,
+    SchedulesScreen,
     TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
@@ -291,8 +292,7 @@ def _app(
     globals_preview: Callable[[NodeGlobalsReport], str] | None = None,
     reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
     initial_view: str = BASE_VIEW,
-    daemon_default: Callable[[], bool] | None = None,
-    daemon_default_policy_id: str | None = None,
+    schedule_defaults: Callable[[], ReconcileReport] | None = None,
     execute: ExecuteInputs | None = None,
     prompt_link_mode: bool = False,
     terminal_sync: Callable[[], str | None] | None = None,
@@ -323,8 +323,7 @@ def _app(
         globals_preview=globals_preview,
         reinstall_globals=reinstall_globals,
         initial_view=initial_view,
-        daemon_default=daemon_default,
-        daemon_default_policy_id=daemon_default_policy_id,
+        schedule_defaults=schedule_defaults,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
         terminal_sync=terminal_sync,
@@ -2666,12 +2665,11 @@ async def test_doctor_rereads_callable_fix_preview_on_enter_view() -> None:
         assert "first preview text" not in body
 
 
-async def test_first_run_picker_is_the_last_modal_even_with_a_daemon_default() -> None:
+async def test_first_run_picker_is_the_last_modal_even_with_schedule_defaults() -> None:
     app = _app(
         policies=_policy_inputs(link_mode=lambda: "centralized", set_link_mode=lambda _mode: None),
         prompt_link_mode=True,
-        daemon_default=lambda: True,
-        daemon_default_policy_id="daemon",
+        schedule_defaults=ReconcileReport,
     )
     async with app.run_test(size=(100, 30)):
         assert isinstance(app.screen, LinkModeScreen)
@@ -4069,7 +4067,7 @@ async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_pat
         assert body.index("mmdc: ") > body.index(disk_item.title)
 
 
-async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_row() -> None:
+async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_schedules_row() -> None:
     app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
@@ -4081,12 +4079,15 @@ async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_policies_r
             if item.title == console_item.title
         ]
         assert tui_item.next_step != console_item.next_step
-        assert "Policies view" in tui_item.next_step
-        assert "Background tmpdir cleanup" in tui_item.next_step
+        assert tui_item.next_step.startswith(
+            "Open the Schedules view and turn on the tmp cleanup row;"
+        )
+        assert "Schedules view" in tui_item.next_step
+        assert "tmp cleanup row" in tui_item.next_step
         assert "make setup" not in tui_item.next_step
         assert tui_item == replace(console_item, next_step=tui_item.next_step)
         body = _doctor_body(app)
-        assert "make setup`'s Policies view" not in body
+        assert "make setup`'s Schedules view" not in body
 
 
 async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
@@ -4103,7 +4104,7 @@ async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
             for item in app.screen._tui_guidance()  # pyright: ignore[reportPrivateUsage]
             if item.title == console_item.title
         ]
-        assert "Policies view" in tui_item.next_step
+        assert "Schedules view" in tui_item.next_step
         assert "prune-tmp-linux.sh --apply" in tui_item.next_step
         assert "prune-user-tmpdir.sh" not in tui_item.next_step
 
@@ -4446,8 +4447,7 @@ def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
         "reinstall_globals",
         "unavailable",
         "initial_view",
-        "daemon_default",
-        "daemon_default_policy_id",
+        "schedule_defaults",
         "version_refresh",
         "updates",
         "execute",
@@ -4624,7 +4624,7 @@ def test_collector_finish_from_another_thread_unblocks_the_waiter() -> None:
     assert observed == [(("taken over",), True)]
 
 
-def test_daemon_default_closure_finishes_when_apply_raises_runtime_error() -> None:
+def test_the_collector_closure_finishes_when_apply_raises_runtime_error() -> None:
     from installer.policy import ensure_daemon_default
     from installer.schedules import ScheduleDefaultWarnings
 
@@ -4636,14 +4636,14 @@ def test_daemon_default_closure_finishes_when_apply_raises_runtime_error() -> No
 
     policy = _fake_policy(apply=boom, decided=lambda: False)
 
-    def daemon_default() -> bool:
+    def closure() -> bool:
         try:
             return ensure_daemon_default(policy, on_warning=collector.append)
         finally:
             collector.finish()
 
     with pytest.raises(RuntimeError):
-        daemon_default()
+        closure()
     messages, completed = collector.wait(0.05)
     assert messages == ()
     assert completed is True
@@ -4689,10 +4689,11 @@ def _daemon_app(
     tmp_path: Path,
     *,
     policy: Policy,
-    daemon_default: Callable[[], bool] | None,
+    schedule_defaults: Callable[[], ReconcileReport] | None = None,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _d: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
     cases: Sequence[_Case] = (),
+    initial_view: str = "policies",
 ) -> UnifiedApp:
     service = frozen_service(Path.home())
     service.publish([state for _tool_of, state in cases])
@@ -4706,101 +4707,88 @@ def _daemon_app(
         uninstall=_uninstall_inputs(remove=remove, tweak_ids=tweak_ids),
         policies=PolicyInputs(policies=[policy]),
         version_refresh=service,
-        initial_view="policies",
-        daemon_default=daemon_default,
-        daemon_default_policy_id=policy.id,
+        initial_view=initial_view,
+        schedule_defaults=schedule_defaults,
     )
 
 
-_DAEMON_REFUSAL = "A daemon apply is running; wait for it to finish. Navigation still works."
+_SCHEDULE_SETUP_REFUSAL = (
+    "A schedule setup is running; wait for it to finish. Navigation still works."
+)
 _TOGGLE_REFUSAL = "A policy toggle is running; wait for it to finish. Navigation still works."
+_TURNED_ON_TMP = "Turned on schedules: tmp cleanup. Change them in Schedules."
 
 
-async def test_on_by_default_auto_applies_on_a_fresh_undecided_machine(tmp_path: Path) -> None:
-    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    policy = _daemon_policy(tmp_path)
+def _turned_on_tmp() -> ReconcileReport:
+    return ReconcileReport(turned_on=("tmp-cleanup",))
+
+
+async def test_schedule_defaults_run_at_mount_and_say_what_they_did(tmp_path: Path) -> None:
+    calls: list[bool] = []
+
+    def reconcile() -> ReconcileReport:
+        calls.append(threading.current_thread() is threading.main_thread())
+        return _turned_on_tmp()
+
+    app = _daemon_app(tmp_path, policy=_daemon_policy(tmp_path), schedule_defaults=reconcile)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, PoliciesScreen)
+        assert screen.status.text == _TURNED_ON_TMP
+        assert not app.mutation_in_flight
+    assert calls == [False]  # once, off the event loop
+
+
+async def test_a_reconcile_that_did_nothing_says_nothing(tmp_path: Path) -> None:
     app = _daemon_app(
-        tmp_path,
-        policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy),
+        tmp_path, policy=_daemon_policy(tmp_path), schedule_defaults=lambda: ReconcileReport()
     )
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
-        assert plist_path.exists()
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
+        assert screen.status.text == ""
         assert not app.mutation_in_flight
 
 
-async def test_on_by_default_does_not_reenable_an_explicitly_disabled_daemon(
-    tmp_path: Path,
-) -> None:
-    state_path = tmp_path / ".myshellrc"
-    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    daemon.record_decided(state_path)
-    policy = _daemon_policy(tmp_path)
-    app = _daemon_app(
-        tmp_path,
-        policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy),
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await settle(app, pilot)
-        assert not plist_path.exists()
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is False
-
-
-async def test_on_by_default_never_records_a_decision_on_a_failed_apply(tmp_path: Path) -> None:
-    state_path = tmp_path / ".myshellrc"
-    policy = _daemon_policy(tmp_path, run=_FakeDaemonRun(fail=True))
-    app = _daemon_app(
-        tmp_path,
-        policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy),
-    )
+async def test_reconcile_warnings_reach_the_first_status(tmp_path: Path) -> None:
+    report = ReconcileReport(turned_on=("tmp-cleanup",), warnings=("another timer is running",))
+    app = _daemon_app(tmp_path, policy=_daemon_policy(tmp_path), schedule_defaults=lambda: report)
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is False
-        assert daemon.decided(state_path) is False
+        assert screen.status.text == f"{_TURNED_ON_TMP} · another timer is running"
         assert not app.mutation_in_flight
 
 
-async def test_manual_toggle_of_the_daemon_is_refused_while_the_worker_is_in_flight(
+async def test_manual_toggle_is_refused_while_the_schedule_setup_is_in_flight(
     tmp_path: Path,
 ) -> None:
     fake_run = _FakeDaemonRun()
     policy = _daemon_policy(tmp_path, run=fake_run)
     release = threading.Event()
 
-    def gated_daemon_default() -> bool:
+    def gated() -> ReconcileReport:
         assert release.wait(timeout=30)
-        return ensure_daemon_default(policy)
+        return ReconcileReport()
 
-    app = _daemon_app(
-        tmp_path,
-        policy=policy,
-        daemon_default=gated_daemon_default,
-    )
+    app = _daemon_app(tmp_path, policy=policy, schedule_defaults=gated)
     try:
         async with app.run_test(size=(100, 30)) as pilot:
-            # Hold the on-by-default worker open until the test has proven the
-            # refusal; on a slow runner it could otherwise finish before the
-            # first assertion and "in flight" becomes a race (CI run 38656028040).
+            # Hold the worker open until the test has proven the refusal; on a slow
+            # runner it could otherwise finish first and "in flight" becomes a race.
             assert app.mutation_in_flight
+            assert app.mutation_holder is MutationHolder.SCHEDULE_DEFAULTS
             await pilot.press("space")
             screen = app.screen
             assert isinstance(screen, PoliciesScreen)
-            assert screen.status.text == _DAEMON_REFUSAL
+            assert screen.status.text == _SCHEDULE_SETUP_REFUSAL
             release.set()
             await settle(app, pilot)
-            assert screen.active_state["daemon:prune-tmpdir"] is True
-            bootstrap_calls = [c for c in fake_run.calls if c[:2] == ["launchctl", "bootstrap"]]
-            assert len(bootstrap_calls) == 1
+            assert not app.mutation_in_flight
+            assert fake_run.calls == []
     finally:
         release.set()
 
@@ -4817,7 +4805,7 @@ async def test_manual_daemon_toggle_runs_off_the_event_loop(tmp_path: Path) -> N
         fake_run(cmd)
 
     policy = _daemon_policy(tmp_path, run=run)
-    app = _daemon_app(tmp_path, policy=policy, daemon_default=None)
+    app = _daemon_app(tmp_path, policy=policy)
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
@@ -4845,7 +4833,7 @@ async def test_a_second_toggle_is_refused_while_a_daemon_toggle_is_in_flight(
         apply=slow_apply,
         is_active=lambda: bool(applies),  # the pass the toggle requests re-reads the real state
     )
-    app = _daemon_app(tmp_path, policy=policy, daemon_default=None)
+    app = _daemon_app(tmp_path, policy=policy)
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
@@ -4859,32 +4847,36 @@ async def test_a_second_toggle_is_refused_while_a_daemon_toggle_is_in_flight(
         assert screen.active_state["daemon:prune-tmpdir"] is True
 
 
-async def test_daemon_default_resolves_the_row_state_off_the_event_loop(tmp_path: Path) -> None:
-    """WR-02: the apply's own finally just invalidated the timer cache, so
-    resolving is_active() in the completion handler always spawned systemctl
-    on the event loop."""
-    seen: list[bool] = []
-    base = _daemon_policy(tmp_path)
+async def test_the_reconcile_repaints_the_schedules_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reconcile changes the rows Schedules shows, so its completion re-reads them."""
+    repaints: list[int] = []
+    original = SchedulesScreen.state_refreshed
 
-    def is_active() -> bool:
-        seen.append(threading.current_thread() is threading.main_thread())
-        return True
+    def counting(self: SchedulesScreen) -> None:
+        repaints.append(1)
+        original(self)
 
-    # A state_cache marks the policy whose probe may spawn systemctl: the
-    # entry render leaves it to a worker, so every read here is off the loop.
-    policy = replace(
-        base,
-        active=False,
-        is_active=is_active,
-        state_cache=TimerStateCache(lambda: DaemonState.INACTIVE),
+    monkeypatch.setattr(SchedulesScreen, "state_refreshed", counting)
+    release = threading.Event()
+
+    def gated() -> ReconcileReport:
+        assert release.wait(timeout=30)
+        return _turned_on_tmp()
+
+    app = _daemon_app(
+        tmp_path, policy=_daemon_policy(tmp_path), schedule_defaults=gated, initial_view="schedules"
     )
-    app = _daemon_app(tmp_path, policy=policy, daemon_default=lambda: True)
-    async with app.run_test(size=(100, 30)) as pilot:
-        await settle(app, pilot)
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
-        assert seen and not any(seen)
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            before = len(repaints)
+            release.set()
+            await settle(app, pilot)
+            assert len(repaints) > before
+            assert app.view("schedules").status.text == _TURNED_ON_TMP
+    finally:
+        release.set()
 
 
 async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Path) -> None:
@@ -4911,11 +4903,11 @@ async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Pat
 
     release = threading.Event()
 
-    def slow_daemon_default() -> bool:
+    def slow_schedule_defaults() -> ReconcileReport:
         release.wait(timeout=5)
-        return ensure_daemon_default(policy)
+        return ReconcileReport()
 
-    app = _daemon_app(tmp_path, policy=policy, daemon_default=slow_daemon_default)
+    app = _daemon_app(tmp_path, policy=policy, schedule_defaults=slow_schedule_defaults)
     async with app.run_test(size=(100, 30)) as pilot:
         assert app.mutation_in_flight
         screen = app.screen
@@ -4925,52 +4917,42 @@ async def test_reschedule_is_refused_while_the_worker_is_in_flight(tmp_path: Pat
         # test_t_and_m_are_refused_at_their_mutation_point.
         await pilot.press("t")
         assert app.screen is screen
-        assert screen.status.text == _DAEMON_REFUSAL
+        assert screen.status.text == _SCHEDULE_SETUP_REFUSAL
         plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
         assert plist_path.read_bytes() == seed_bytes  # untouched by the refused reschedule
         release.set()
         await settle(app, pilot)
 
 
-async def test_on_by_default_leaves_an_already_active_daemon_active(tmp_path: Path) -> None:
-    """The decided-AND-active case: refresh_daemon_state must resolve via the
-    policy's own is_active(), never the worker's applied=False boolean
-    directly, or an ordinary already-on second run would flip to OFF."""
-    state_path = tmp_path / ".myshellrc"
-    seed = _daemon_policy(tmp_path)
-    seed.apply()
-    assert daemon.decided(state_path) is True
-    # A second daemon_policy instance, freshly constructed against the SAME
-    # on-disk plist: active=True is baked in at construction time.
-    policy = _daemon_policy(tmp_path)
-    assert policy.active is True
-    app = _daemon_app(
-        tmp_path,
-        policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy),
-    )
+async def test_schedule_defaults_run_once_per_launch(tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    def reconcile() -> ReconcileReport:
+        calls.append(1)
+        return ReconcileReport()
+
+    app = _daemon_app(tmp_path, policy=_daemon_policy(tmp_path), schedule_defaults=reconcile)
     async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
         await settle(app, pilot)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
+        await pilot.press("1")
+        await settle(app, pilot)
+    assert calls == [1]
 
 
-async def test_daemon_default_lock_clears_even_on_an_unexpected_exception(
+async def test_schedule_defaults_lock_clears_even_on_an_unexpected_exception(
     tmp_path: Path,
 ) -> None:
-    def boom() -> bool:
-        raise RuntimeError("boom, outside ensure_daemon_default's own except tuple")
+    def boom() -> ReconcileReport:
+        raise RuntimeError("boom, outside the reconcile's own error handling")
 
     policy = _daemon_policy(tmp_path)
-    app = _daemon_app(tmp_path, policy=policy, daemon_default=boom)
+    app = _daemon_app(tmp_path, policy=policy, schedule_defaults=boom)
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
         assert not app.mutation_in_flight
 
 
-async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight(
+async def test_uninstall_removal_is_refused_while_the_schedule_setup_is_in_flight(
     tmp_path: Path,
 ) -> None:
     """The race guard blocks on the app lock alone -- never on
@@ -4979,20 +4961,19 @@ async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight
     #12)."""
     policy = _daemon_policy(tmp_path)
     captured: list[UninstallDecision] = []
-    # A release-gated callable, not the real ensure_daemon_default: the guard
-    # must hold across this whole multi-keypress sequence, and a real
-    # (near-instant) fake-run apply could otherwise settle before the last
+    # A release-gated callable: the guard must hold across this whole multi-keypress
+    # sequence, and a near-instant reconcile could otherwise settle before the last
     # keypress lands, making the race window this test targets flaky.
     release = threading.Event()
 
-    def slow_daemon_default() -> bool:
+    def slow_schedule_defaults() -> ReconcileReport:
         release.wait(timeout=5)
-        return False
+        return ReconcileReport()
 
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=slow_daemon_default,
+        schedule_defaults=slow_schedule_defaults,
         remove=_recorder(captured, SweepResult()),
         tweak_ids=("tweak:countdown",),  # an unrelated, real tweak -- no daemon id present yet
     )
@@ -5013,7 +4994,7 @@ async def test_uninstall_removal_is_refused_while_the_daemon_worker_is_in_flight
         await pilot.press("enter")
         assert captured == []
         assert screen.applied is False
-        assert screen.status.text == _DAEMON_REFUSAL
+        assert screen.status.text == _SCHEDULE_SETUP_REFUSAL
         release.set()
         await settle(app, pilot)
 
@@ -5032,14 +5013,14 @@ async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_
     captured: list[UninstallDecision] = []
     release = threading.Event()
 
-    def slow_daemon_default() -> bool:
+    def slow_schedule_defaults() -> ReconcileReport:
         release.wait(timeout=5)
-        return False
+        return ReconcileReport()
 
     app = _daemon_app(
         tmp_path,
         policy=policy,
-        daemon_default=slow_daemon_default,
+        schedule_defaults=slow_schedule_defaults,
         remove=_recorder(captured, SweepResult()),
         tweak_ids=(),  # no other tweaks: the daemon row never appears at all
         cases=[_removable_row(_tool("rg"), [tmp_path / "rg-artifact"])],
@@ -5057,34 +5038,9 @@ async def test_uninstall_removal_is_refused_while_in_flight_even_with_no_tweaks_
         await pilot.press("enter")
         assert captured == []
         assert screen.applied is False
-        assert screen.status.text == _DAEMON_REFUSAL
+        assert screen.status.text == _SCHEDULE_SETUP_REFUSAL
         release.set()
         await settle(app, pilot)
-
-
-async def test_on_by_default_treats_an_existing_installation_as_fresh(tmp_path: Path) -> None:
-    """A pre-existing installation (other managed blocks present) with no
-    daemon 'decided' marker yet is treated identically to a genuinely fresh
-    HOME -- CONTEXT.md's own D-01 decision, documented and locked in
-    (11-REVIEWS.md cycle 3 finding #16)."""
-    state_path = tmp_path / ".myshellrc"
-    zshrc = tmp_path / ".zshrc"
-    zshrc.write_text("plugins=(git)\nsource $ZSH/oh-my-zsh.sh\n")
-    omz_plugins_policy(zshrc_path=zshrc, state_path=state_path, present=True).apply()
-    assert daemon.decided(state_path) is False  # a pre-existing install, no daemon marker yet
-    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    policy = _daemon_policy(tmp_path)
-    app = _daemon_app(
-        tmp_path,
-        policy=policy,
-        daemon_default=lambda: ensure_daemon_default(policy),
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await settle(app, pilot)
-        assert plist_path.exists()
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
 
 
 def _codegraph() -> Tool:
