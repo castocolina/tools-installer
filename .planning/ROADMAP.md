@@ -563,7 +563,7 @@ Plans:
   3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
-**Plans**: 10/13 plans executed
+**Plans**: 11/13 plans executed
 
 Plans:
 **Wave 1**
@@ -585,7 +585,7 @@ Plans:
 - [x] 24.2-10-PLAN.md — Container e2e harness: Fedora 44 systemd target, per-built-in runs, busy, calendar, one catch-up, direct fallback (host-tested only) (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 24.2-11-PLAN.md — Handover switch: Policies drops the daemon row, four reconcile points, uninstall and removal through schedules, headless run lock (wave 5)
+- [x] 24.2-11-PLAN.md — Handover switch: Policies drops the daemon row, four reconcile points, uninstall and removal through schedules, headless run lock (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 24.2-12-PLAN.md — Handover delete: daemon policies, job-state machinery, `TimePickerScreen` (F10), old runner; tests migrated with a ledger (wave 6)
@@ -652,7 +652,7 @@ Plans:
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
-| 24.2 Schedules view | 10/13 | In Progress | - |
+| 24.2 Schedules view | 11/13 | In Progress | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
