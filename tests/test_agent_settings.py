@@ -1461,6 +1461,181 @@ def test_herdr_sidebar_keys_round_trip_byte_identical() -> None:
     assert read_ledger("herdr") is None
 
 
+ZSH = "/home/linuxbrew/.linuxbrew/bin/zsh"
+DEFAULT_SHELL: tuple[str, ...] = ("terminal", "default_shell")
+
+
+def _default_shell(text: str) -> object:
+    terminal = tomllib.loads(text).get("terminal", {})
+    return terminal.get("default_shell")
+
+
+def _apply_shell(value: str = ZSH) -> FileResult:
+    return agent_settings.apply_value(
+        "herdr", "default-shell", value, home=Path.home(), platform_os="linux", environ={}
+    )
+
+
+def test_default_shell_written_under_existing_terminal_table() -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+
+    applied = _apply_shell()
+
+    assert applied.refused is None
+    assert [(k.key, k.kind) for k in applied.keys] == [("terminal.default_shell", "wrote")]
+    text = config.read_text(encoding="utf-8")
+    assert text.count("[terminal]") == 1
+    assert f'default_shell = "{ZSH}"\n' in text
+    assert _default_shell(text) == ZSH
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert [(e.setting, e.key_path, e.value) for e in ledger.entries] == [
+        ("default-shell", DEFAULT_SHELL, ZSH)
+    ]
+
+
+def test_default_shell_creates_the_terminal_table() -> None:
+    config = _herdr_file()
+    original = '[ui]\nagent_panel_sort = "spaces"\n'
+    config.write_text(original, encoding="utf-8")
+
+    assert _apply_shell().refused is None
+
+    text = config.read_text(encoding="utf-8")
+    assert text.count("[terminal]") == 1
+    assert _default_shell(text) == ZSH
+
+    results = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert [r.refused for r in results] == [None]
+    assert config.read_text(encoding="utf-8") == original
+    assert read_ledger("herdr") is None
+
+
+def test_default_shell_user_value_is_kept() -> None:
+    config = _herdr_file()
+    mine = '[terminal]\ndefault_shell = "/bin/fish"\n'
+    config.write_text(mine, encoding="utf-8")
+
+    other = _apply_shell()
+
+    assert [(k.key, k.kind) for k in other.keys] == [("terminal.default_shell", "set_by_you")]
+    assert config.read_text(encoding="utf-8") == mine
+    assert read_ledger("herdr") is None
+
+    config.write_text(f'[terminal]\ndefault_shell = "{ZSH}"\n', encoding="utf-8")
+    same = _apply_shell()
+
+    assert [(k.key, k.kind) for k in same.keys] == [("terminal.default_shell", "already")]
+    assert read_ledger("herdr") is None
+
+
+def test_dynamic_key_revert_keeps_a_changed_value() -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    assert _apply_shell().refused is None
+    written = config.read_text(encoding="utf-8")
+    edited = written.replace(ZSH, "/bin/fish")
+    config.write_text(edited, encoding="utf-8")
+
+    (changed,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert [(k.key, k.kind) for k in changed.keys] == [("terminal.default_shell", "kept_changed")]
+    assert config.read_text(encoding="utf-8") == edited
+
+    config.write_text(HERDR_CONFIG, encoding="utf-8")  # the kept key left the ledger
+    assert _apply_shell().refused is None
+    (removed,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert [(k.key, k.kind) for k in removed.keys] == [("terminal.default_shell", "removed")]
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+
+def test_revert_group_touches_only_its_group() -> None:
+    home = Path.home()
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    assert apply_setting("herdr", "sidebar", home=home, platform_os="linux", environ={}).keys
+    assert _apply_shell().refused is None
+
+    (result,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=home, platform_os="linux", environ={}
+    )
+
+    assert result.refused is None
+    text = config.read_text(encoding="utf-8")
+    assert _default_shell(text) is None
+    assert tomllib.loads(text)["ui"]["sidebar"]["agents"]["row_gap"] == 1
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert {e.setting for e in ledger.entries} == {"sidebar"}
+
+
+def test_tampered_dynamic_ledger_removes_nothing() -> None:
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    entry = ConfigWrite(
+        "default-shell", str(config), ("terminal", "shell_mode"), "auto", 'shell_mode = "auto"\n'
+    )
+    write_ledger(ConfigLedger("herdr", entries=(entry,)))
+
+    (result,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+
+    assert result.refused is None and result.keys == ()
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert ledger.entries == (entry,)
+
+
+def test_revert_agent_removes_the_dynamic_default_shell() -> None:
+    home = Path.home()
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+    assert _apply_shell().refused is None
+
+    (removed,) = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert [(k.key, k.kind) for k in removed.keys] == [("terminal.default_shell", "removed")]
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+    assert _apply_shell().refused is None
+    edited = config.read_text(encoding="utf-8").replace(ZSH, "/bin/fish")
+    config.write_text(edited, encoding="utf-8")
+
+    (kept,) = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert [(k.key, k.kind) for k in kept.keys] == [("terminal.default_shell", "kept_changed")]
+    assert config.read_text(encoding="utf-8") == edited
+
+
+def test_setting_keys_of_a_dynamic_group_is_empty() -> None:
+    home = Path.home()
+    _herdr_file().write_text(HERDR_CONFIG, encoding="utf-8")
+
+    assert agent_settings.DYNAMIC_KEYS == {("herdr", "default-shell"): (DEFAULT_SHELL,)}
+    assert agent_settings.setting_keys("herdr", "default-shell", "linux") == ()
+    facts = agent_settings.setting_facts(
+        "herdr", "default-shell", home=home, platform_os="linux", environ={}
+    )
+    assert facts.absent == ()
+    with pytest.raises(ValueError, match="not a dynamic setting"):
+        agent_settings.apply_value(
+            "herdr", "sidebar", "x", home=home, platform_os="linux", environ={}
+        )
+
+
 def test_herdr_is_a_config_agent_without_tuning() -> None:
     assert "herdr" in receipts.CONFIG_AGENTS
     assert agent_settings.AGENT_FORMATS["herdr"] == "toml"

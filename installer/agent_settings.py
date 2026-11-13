@@ -682,6 +682,12 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
 }
 
 
+# Keys whose value only the caller knows at run time (24 D-08b): `apply_value` writes it, the
+# ledger entry records it, and a revert takes the recorded value as the one to match.
+DYNAMIC_KEYS: Final[dict[tuple[str, str], tuple[KeyPath, ...]]] = {
+    ("herdr", "default-shell"): (("terminal", "default_shell"),),
+}
+
 # The groups an install writes per tool: explicit because `vscode-lean` is built by
 # `_vscode_lean`, not stored in `_KEYS`.
 TUNING_GROUPS: Final[dict[str, tuple[str, ...]]] = {
@@ -909,6 +915,31 @@ def _apply_once(
     return FileResult(agent, setting, path, fmt, keys=step.keys)
 
 
+def _apply_keys(
+    agent: str,
+    setting: str,
+    keys: tuple[SettingKey, ...],
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None,
+    skip_recorded: bool,
+) -> FileResult:
+    fmt = _format(agent)
+    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
+    conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
+    if conflict is not None:
+        return FileResult(agent, setting, path, fmt, refused=conflict)
+    for _attempt in range(2):
+        try:
+            return _apply_once(
+                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded
+            )
+        except SettingsChanged:
+            continue
+    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
+
+
 def apply_setting(
     agent: str,
     setting: str,
@@ -923,20 +954,41 @@ def apply_setting(
     `skip_recorded` also leaves a key the ledger records (RECONFIGURE: a recorded key the
     user deleted is their choice); an install or reinstall passes False and rewrites it.
     """
-    fmt = _format(agent)
-    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
-    conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
-    if conflict is not None:
-        return FileResult(agent, setting, path, fmt, refused=conflict)
-    keys = setting_keys(agent, setting, platform_os)
-    for _attempt in range(2):
-        try:
-            return _apply_once(
-                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded
-            )
-        except SettingsChanged:
-            continue
-    return FileResult(agent, setting, path, fmt, refused=CHANGED_WHILE_WRITING)
+    return _apply_keys(
+        agent,
+        setting,
+        setting_keys(agent, setting, platform_os),
+        home=home,
+        platform_os=platform_os,
+        environ=environ,
+        skip_recorded=skip_recorded,
+    )
+
+
+def apply_value(
+    agent: str,
+    setting: str,
+    value: object,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> FileResult:
+    """Write a dynamic setting's one key with the caller's value, absent-only like
+    `apply_setting`; the ledger entry records that value, and a revert removes the key
+    only while it still holds it."""
+    if (agent, setting) not in DYNAMIC_KEYS:
+        raise ValueError(f"{agent} {setting} is not a dynamic setting")
+    (path,) = DYNAMIC_KEYS[(agent, setting)]
+    return _apply_keys(
+        agent,
+        setting,
+        (SettingKey(path, value),),
+        home=home,
+        platform_os=platform_os,
+        environ=environ,
+        skip_recorded=False,
+    )
 
 
 def _revert_pass(
@@ -1022,6 +1074,15 @@ def _revert_once(
         ledger = _ledger(agent)
     except LedgerUntrusted as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
+    if (agent, setting) in DYNAMIC_KEYS:
+        # The ledger is user-writable JSON: only the allow-listed key paths enter the table.
+        table = {
+            entry.key_path: SettingKey(entry.key_path, entry.value)
+            for entry in ledger.entries
+            if entry.setting == setting
+            and entry.file == file
+            and entry.key_path in DYNAMIC_KEYS[(agent, setting)]
+        }
     mine = tuple(
         entry
         for entry in ledger.entries
@@ -1107,7 +1168,7 @@ def _revert_file(
     return FileResult(agent, setting, Path(file), fmt, refused=CHANGED_WHILE_WRITING)
 
 
-def _revert_results(
+def revert_group(
     agent: str,
     setting: str,
     *,
@@ -1228,7 +1289,7 @@ def revert_agent(
     return tuple(
         result
         for setting in settings
-        for result in _revert_results(
+        for result in revert_group(
             agent, setting, home=home, platform_os=platform_os, environ=environ
         )
     )
