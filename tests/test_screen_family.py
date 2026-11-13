@@ -1603,7 +1603,6 @@ async def test_the_lock_is_released_when_the_update_crashes(tmp_path: Path):
 
 # -- 21-15: the job toggle and the schedule setup hold the same lock --
 
-_TOGGLE_REFUSAL = "A policy toggle is running; wait for it to finish. Navigation still works."
 _SCHEDULE_SETUP_REFUSAL = (
     "A schedule setup is running; wait for it to finish. Navigation still works."
 )
@@ -1614,12 +1613,10 @@ def _policy_result() -> PolicyResult:
 
 
 def _policy(
-    tmp_path: Path,
     policy_id: str,
     *,
     active: bool = False,
     apply: Callable[[], PolicyResult] = _policy_result,
-    background: bool = False,
 ) -> Policy:
     return Policy(
         id=policy_id,
@@ -1628,7 +1625,6 @@ def _policy(
         active=active,
         apply=apply,
         remove=_policy_result,
-        log_path=tmp_path / f"{policy_id}.log" if background else None,
     )
 
 
@@ -1691,42 +1687,11 @@ def _held_schedule_defaults(release: threading.Event) -> Callable[[], ReconcileR
     return reconcile
 
 
-async def test_a_background_job_toggle_holds_the_lock(tmp_path: Path):
-    release = threading.Event()
-
-    def held_apply() -> PolicyResult:
-        if not release.wait(timeout=10):
-            raise TimeoutError("the toggle was never released")
-        return _policy_result()
-
-    remover = HeldRemover(SweepResult(removed=("fd",)))
-    app, _service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job", apply=held_apply, background=True)], remover
-    )
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            await pilot.press("space")
-            assert app.mutation_in_flight
-            await app.show_view("uninstall")
-            await _confirm_removal(app, pilot, "fd")
-            status = app.view("uninstall").status
-            assert (status.text, status.severity) == (_TOGGLE_REFUSAL, Severity.WARN)
-            assert remover.calls == []
-            release.set()
-            await settle(app, pilot)
-            assert not app.mutation_in_flight
-            # C-28: the result lands on the view the user is looking at.
-            assert app.view("uninstall").status.text.startswith("job enabled.")
-        finally:
-            release.set()
-
-
 async def test_the_schedule_setup_holds_the_lock_from_construction(tmp_path: Path):
     release = threading.Event()
     app, _service = _policy_app(
         tmp_path,
-        [_policy(tmp_path, "daemon")],
+        [_policy("daemon")],
         HeldRemover(),
         schedule_defaults=_held_schedule_defaults(release),
     )
@@ -1751,7 +1716,7 @@ async def test_any_toggle_is_refused_while_the_schedule_setup_runs(tmp_path: Pat
 
     app, _service = _policy_app(
         tmp_path,
-        [_policy(tmp_path, "daemon"), _policy(tmp_path, "other", apply=other_apply)],
+        [_policy("daemon"), _policy("other", apply=other_apply)],
         HeldRemover(),
         schedule_defaults=_held_schedule_defaults(release),
     )
@@ -1773,7 +1738,7 @@ async def test_a_schedule_setup_with_nothing_to_report_releases_the_lock(tmp_pat
     remover = HeldRemover(SweepResult(removed=("fd",)))
     remover.release.set()
     app, _service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job")], remover, schedule_defaults=ReconcileReport
+        tmp_path, [_policy("job")], remover, schedule_defaults=ReconcileReport
     )
     assert app.mutation_in_flight
     async with app.run_test(size=(120, 30)) as pilot:
@@ -1793,7 +1758,7 @@ async def test_late_doctor_and_schedule_results_render_nothing_during_shutdown(
     remover = HeldRemover(SweepResult(removed=("fd",)))
     app, _service = _policy_app(
         tmp_path,
-        [_policy(tmp_path, "job")],
+        [_policy("job")],
         remover,
         schedule_defaults=ReconcileReport,
     )
@@ -1819,7 +1784,7 @@ async def test_m_is_refused_at_its_mutation_point(tmp_path: Path):
     """A mutation that starts while the link-mode picker is open is refused at the pick."""
     modes: list[str] = []
     app, _service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job", active=True)], HeldRemover(), set_link_mode=modes.append
+        tmp_path, [_policy("job", active=True)], HeldRemover(), set_link_mode=modes.append
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -1837,7 +1802,7 @@ async def test_m_is_refused_before_its_picker(tmp_path: Path):
     """C-17: while a mutation runs, m refuses at once on Policies; no picker opens first."""
     app, _service = _policy_app(
         tmp_path,
-        [_policy(tmp_path, "job", active=True)],
+        [_policy("job", active=True)],
         HeldRemover(),
         set_link_mode=lambda _mode: None,
     )
@@ -1865,7 +1830,7 @@ async def test_the_schedule_setup_repaints_a_visible_uninstall(tmp_path: Path):
     states = [absent_state(_tool("rg")), absent_state(_tool("fd"))]
     app, service = _policy_app(
         tmp_path,
-        [_policy(tmp_path, "job")],
+        [_policy("job")],
         HeldRemover(),
         schedule_defaults=reconcile,
         tweak_ids=lambda: tuple(tweaks),
@@ -1939,8 +1904,8 @@ def _matrix_app(
     return _policy_app(
         tmp_path,
         [
-            _policy(tmp_path, "plain", apply=_tag(calls, "plain")),
-            _policy(tmp_path, "job", apply=_tag(calls, "job"), background=True),
+            _policy("plain", apply=_tag(calls, "plain")),
+            _policy("job", apply=_tag(calls, "job")),
         ],
         remover,
         set_link_mode=lambda mode: calls.append("mode"),
@@ -2152,7 +2117,6 @@ _NOUNS = {
     MutationHolder.UPDATE: _UPDATE_REFUSAL,
     MutationHolder.GLOBALS_REINSTALL: _REINSTALL_REFUSAL,
     MutationHolder.SCHEDULE_DEFAULTS: _SCHEDULE_SETUP_REFUSAL,
-    MutationHolder.POLICY_TOGGLE: _TOGGLE_REFUSAL,
     MutationHolder.SCHEDULE_CHANGE: (
         "A schedule change is running; wait for it to finish. Navigation still works."
     ),
@@ -2282,7 +2246,7 @@ async def test_a_failed_policy_read_does_not_overwrite_another_status(tmp_path: 
     def is_active() -> bool:
         raise OSError("the systemd user manager could not be reached")
 
-    policy = replace(_policy(tmp_path, "tweak"), is_active=is_active)
+    policy = replace(_policy("tweak"), is_active=is_active)
     app, _service = _policy_app(tmp_path, [policy], HeldRemover())
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -2305,7 +2269,7 @@ async def test_an_undecodable_policy_read_shows_the_error(tmp_path: Path):
             raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
         return True
 
-    policy = replace(_policy(tmp_path, "tweak"), is_active=is_active)
+    policy = replace(_policy("tweak"), is_active=is_active)
     app, _service = _policy_app(tmp_path, [policy], HeldRemover())
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -2324,7 +2288,7 @@ async def test_an_undecodable_policy_read_shows_the_error(tmp_path: Path):
 
 
 async def test_a_toggle_requests_one_pass(tmp_path: Path):
-    app, service = _policy_app(tmp_path, [_policy(tmp_path, "plain")], HeldRemover())
+    app, service = _policy_app(tmp_path, [_policy("plain")], HeldRemover())
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         before = service.passes
@@ -2334,37 +2298,11 @@ async def test_a_toggle_requests_one_pass(tmp_path: Path):
         assert _state_text(app, "plain") == "● [on]"
 
 
-async def test_a_job_toggle_requests_one_pass_after_it_lands(tmp_path: Path):
-    release = threading.Event()
-
-    def held_apply() -> PolicyResult:
-        if not release.wait(timeout=10):
-            raise TimeoutError("the toggle was never released")
-        return _policy_result()
-
-    app, service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job", apply=held_apply, background=True)], HeldRemover()
-    )
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            before = service.passes
-            await pilot.press("space")
-            await pilot.pause()
-            assert app.mutation_in_flight
-            assert service.passes == before
-            release.set()
-            await settle(app, pilot)
-            assert service.passes == before + 1
-        finally:
-            release.set()
-
-
 async def test_a_failed_toggle_still_requests_a_pass(tmp_path: Path):
     def denied() -> PolicyResult:
         raise OSError("denied")
 
-    app, service = _policy_app(tmp_path, [_policy(tmp_path, "plain", apply=denied)], HeldRemover())
+    app, service = _policy_app(tmp_path, [_policy("plain", apply=denied)], HeldRemover())
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         before = service.passes
@@ -3144,16 +3082,16 @@ def matrix_app(
         return () if state is not None and state.health is Health.OK else ("w-system",)
 
     policies = [
-        _policy(tmp_path, "plain"),
+        _policy("plain"),
         replace(
-            _policy(tmp_path, "tweak"),
+            _policy("tweak"),
             requires=("w-system",),
             missing_requires=("w-system",),
             missing_requires_now=missing_now,
         ),
     ]
     if job_apply is not None:
-        policies.append(_policy(tmp_path, "job", apply=job_apply, background=True))
+        policies.append(_policy("job", apply=job_apply))
     updates = ScriptedUpdates(
         {f"up-{tier}": UpdateOutcome(f"up-{tier}", "updated", "brew") for tier in _TIER_WITNESS}
     )
@@ -3327,36 +3265,25 @@ async def test_a_held_mutation_repaints_a_view_navigated_to_before_it_finishes(t
             remover.release.set()
 
 
-async def test_a_visible_uninstall_repaints_its_environment_rows_on_publish(tmp_path: Path):
-    release = threading.Event()
+async def test_the_uninstall_rows_follow_a_completed_policy_toggle(tmp_path: Path):
     bans = ["pip"]
 
     def clear_the_ban() -> PolicyResult:
-        if not release.wait(timeout=10):
-            raise TimeoutError("the toggle was never released")
         bans.clear()
         return _policy_result()
 
     seams = matrix_app(tmp_path, bans=bans, job_apply=clear_the_ban)
     app = seams.app
     async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            await _open_view(app, pilot, "policies")
-            _cursor(app, "policies", "job")
-            await pilot.press("space")
-            assert app.mutation_in_flight
-            await _open_view(app, pilot, "uninstall")
-            screen = app.screen
-            assert screen is app.view("uninstall")
-            assert "#ban" in _row_keys(app)
-            release.set()
-            await settle(app, pilot)
-            assert app.screen is screen
-            assert "#ban" not in _row_keys(app)
-            assert "wait for it to finish" not in app.view("uninstall").status.text
-        finally:
-            release.set()
+        await settle(app, pilot)
+        await _open_view(app, pilot, "uninstall")
+        assert "#ban" in _row_keys(app)
+        await _open_view(app, pilot, "policies")
+        _cursor(app, "policies", "job")
+        await pilot.press("space")
+        await settle(app, pilot)
+        await _open_view(app, pilot, "uninstall")
+        assert "#ban" not in _row_keys(app)
 
 
 # -- 21-21: the replaced forks stay deleted --
@@ -3507,58 +3434,3 @@ async def test_a_removal_failure_shown_elsewhere_names_uninstall(
             assert expected in app.catalog.status_text.splitlines()
         finally:
             remover.release.set()
-
-
-async def test_a_failed_job_toggle_shown_elsewhere_names_policies(tmp_path: Path):
-    """C-28 follow-up: a toggle failure that lands on another view says where
-    space retries it."""
-    release = threading.Event()
-
-    def held_denied() -> PolicyResult:
-        if not release.wait(timeout=10):
-            raise TimeoutError("the toggle was never released")
-        raise OSError("denied")
-
-    app, _service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job", apply=held_denied, background=True)], HeldRemover()
-    )
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            await pilot.press("space")
-            assert app.mutation_in_flight
-            await app.show_view("system")
-            release.set()
-            await settle(app, pilot)
-            assert app.catalog.status_text == (
-                "Policy change failed: denied. Check permissions, then open Policies and"
-                " press space."
-            )
-        finally:
-            release.set()
-
-
-async def test_a_job_toggle_result_lands_on_the_visible_view(tmp_path: Path):
-    release = threading.Event()
-
-    def held_apply() -> PolicyResult:
-        if not release.wait(timeout=10):
-            raise TimeoutError("the toggle was never released")
-        return _policy_result()
-
-    app, _service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job", apply=held_apply, background=True)], HeldRemover()
-    )
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            await pilot.press("space")
-            assert app.mutation_in_flight
-            await app.show_view("system")
-            release.set()
-            await settle(app, pilot)
-            assert app.catalog.status_text.startswith("job enabled.")
-            await app.show_view("policies")
-            assert not app.view("policies").status.text.startswith("job enabled.")
-        finally:
-            release.set()

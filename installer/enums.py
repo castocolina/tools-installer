@@ -114,7 +114,6 @@ class MutationHolder(StrEnum):
 
     REMOVAL = "A removal"
     UPDATE = "An update"
-    POLICY_TOGGLE = "A policy toggle"
     SCHEDULE_DEFAULTS = "A schedule setup"
     GLOBALS_REINSTALL = "A pnpm reinstall"
     INSTALL_RUN = "An install run"

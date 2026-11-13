@@ -96,7 +96,7 @@ async def test_begin_mutation_reports_a_lost_race(tmp_path: Path) -> None:
 
 def test_begin_mutation_ignores_the_lock_for_in_app_holders(tmp_path: Path) -> None:
     lock = MutationLock()
-    assert lock.begin_mutation(MutationHolder.POLICY_TOGGLE) is True
+    assert lock.begin_mutation(MutationHolder.SCHEDULE_DEFAULTS) is True
     assert not runlock.run_lock_path().exists()
     lock.end_mutation()
     assert lock.begin_mutation(MutationHolder.SCHEDULE_CHANGE) is True
@@ -244,7 +244,7 @@ async def test_toggles_never_take_the_run_lock(tmp_path: Path) -> None:
 
     app, _service = _FAMILY["_policy_app"](
         tmp_path,
-        [_FAMILY["_policy"](tmp_path, "job", apply=apply)],
+        [_FAMILY["_policy"]("job", apply=apply)],
         HeldRemover(),
     )
     scheduled = _scheduled_run()

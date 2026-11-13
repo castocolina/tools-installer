@@ -206,7 +206,6 @@ def _fake_policy(
     active: bool = False,
     apply: Callable[[], PolicyResult] = _ok_result,
     remove: Callable[[], PolicyResult] = _ok_result,
-    log_path: Path | None = None,
 ) -> Policy:
     return Policy(
         id=id,
@@ -215,7 +214,6 @@ def _fake_policy(
         active=active,
         apply=apply,
         remove=remove,
-        log_path=log_path,
     )
 
 
@@ -2131,9 +2129,8 @@ async def test_policy_with_hard_requires_false_still_enables_when_requires_missi
 
 
 async def test_existing_policies_render_byte_identical_effect_and_detail() -> None:
-    """log_path is None for every existing policy: the Effect-column cell and
-    _policy_detail's own output must be byte-identical before and after this
-    task's changes (11-03-PLAN.md's own regression requirement)."""
+    """Every shell-config policy: the Effect-column cell and _policy_detail's own
+    output must stay byte-identical (11-03-PLAN.md's own regression requirement)."""
     ban = _fake_policy(active=False)
     docker = Policy(
         id="tweak:docker",
@@ -4075,7 +4072,6 @@ def _reconcile_app(
 _SCHEDULE_SETUP_REFUSAL = (
     "A schedule setup is running; wait for it to finish. Navigation still works."
 )
-_TOGGLE_REFUSAL = "A policy toggle is running; wait for it to finish. Navigation still works."
 _TURNED_ON_TMP = "Turned on schedules: tmp cleanup. Change them in Schedules."
 
 
@@ -4155,56 +4151,6 @@ async def test_manual_toggle_is_refused_while_the_schedule_setup_is_in_flight(
             assert applies == []
     finally:
         release.set()
-
-
-async def test_a_background_toggle_runs_off_the_event_loop(tmp_path: Path) -> None:
-    """WR-02: a slow apply issues manager mutations; on the event loop a wedged manager froze
-    the UI for the whole sequence."""
-    threads: list[bool] = []
-
-    def apply() -> PolicyResult:
-        threads.append(threading.current_thread() is threading.main_thread())
-        return _ok_result()
-
-    policy = _fake_policy(apply=apply, log_path=tmp_path / "job.log")
-    app = _reconcile_app(tmp_path, policy=policy)
-    async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")
-        await settle(app, pilot)
-        assert screen.active_state["ban"] is True
-        assert "enabled" in screen.status.text
-        assert threads == [False]
-
-
-async def test_a_second_toggle_is_refused_while_a_background_toggle_is_in_flight(
-    tmp_path: Path,
-) -> None:
-    release = threading.Event()
-    applies: list[str] = []
-
-    def slow_apply() -> PolicyResult:
-        release.wait(timeout=5)
-        applies.append("apply")
-        return _ok_result()
-
-    policy = replace(
-        _fake_policy(apply=slow_apply, log_path=tmp_path / "job.log"),
-        is_active=lambda: bool(applies),  # the pass the toggle requests re-reads the real state
-    )
-    app = _reconcile_app(tmp_path, policy=policy)
-    async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")
-        assert app.mutation_in_flight
-        await pilot.press("space")
-        assert screen.status.text == _TOGGLE_REFUSAL
-        release.set()
-        await settle(app, pilot)
-        assert applies == ["apply"]
-        assert screen.active_state["ban"] is True
 
 
 async def test_the_reconcile_repaints_the_schedules_view(

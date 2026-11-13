@@ -297,23 +297,6 @@ class DiskPressureProbed(Message):
     """
 
 
-class PolicyToggled(Message):
-    """A scheduled-job toggle finished on its thread worker (WR-02).
-
-    `was_active` is the row state the toggle started from; `result` is None
-    exactly when run_live reported `error`.
-    """
-
-    def __init__(
-        self, policy_id: str, was_active: bool, result: PolicyResult | None, error: str | None
-    ) -> None:
-        self.policy_id = policy_id
-        self.was_active = was_active
-        self.result = result
-        self.error = error
-        super().__init__()
-
-
 @dataclass(frozen=True)
 class ScheduleChange:
     """One user change to a schedule: the verb and the values it carries."""
@@ -2255,9 +2238,7 @@ class PoliciesScreen(AppScreen):
         table.add_column("Requires", key="requires")
         table.add_column("Effect", key="effect")
         for policy in self._policies:
-            effect_kind = policy.effect_kind or (
-                "scheduled job" if policy.log_path is not None else "shell config"
-            )
+            effect_kind = policy.effect_kind or "shell config"
             table.add_row(
                 Text(""),
                 Text(policy.label, style="bold yellow"),
@@ -2502,37 +2483,8 @@ class PoliciesScreen(AppScreen):
             self._set_detail(policy)
             return
         action = policy.remove if active else policy.apply
-        if policy.log_path is not None:
-            # WR-02: a scheduled job's apply/remove issues unbounded
-            # launchctl/systemctl mutations, plus (Linux) the bounded
-            # competing-mechanism probes -- seconds of frozen UI on a wedged
-            # user manager. It runs on a thread worker through the same
-            # run_live, and the outcome comes back as PolicyToggled.
-            self.app.begin_mutation(MutationHolder.POLICY_TOGGLE)
-            self.status.set(f"Applying {policy.label}...", "warn")
-            self._toggle_policy_worker(policy, active, action)
-            return
         result, self.error = run_live(action)
         self._finish_toggle(policy, active, result)
-
-    @work(thread=True, exclusive=True, group="policy-toggle", exit_on_error=False)
-    def _toggle_policy_worker(
-        self, policy: Policy, active: bool, action: Callable[[], PolicyResult]
-    ) -> None:
-        result: PolicyResult | None = None
-        error: str | None = "the policy change did not complete"
-        try:
-            result, error = run_live(action)
-        finally:
-            self.post_message(PolicyToggled(policy.id, active, result, error))
-
-    def on_policy_toggled(self, message: PolicyToggled) -> None:
-        self.app.end_mutation()
-        policy = next((item for item in self._policies if item.id == message.policy_id), None)
-        if policy is None:
-            return
-        self.error = message.error
-        self._finish_toggle(policy, message.was_active, message.result)
 
     def _finish_toggle(self, policy: Policy, active: bool, result: PolicyResult | None) -> None:
         if result is None:
