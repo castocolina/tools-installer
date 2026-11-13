@@ -608,6 +608,7 @@ _TERMINAL_ROWS: dict[str, tuple[str, str]] = {
     "wezterm": ("wezterm", "WezTerm"),
     "konsole": ("zsh", "Konsole"),
     "alacritty": ("alacritty", "Alacritty"),
+    "herdr": ("herdr", "herdr"),
 }
 
 

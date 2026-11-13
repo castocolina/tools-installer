@@ -6553,3 +6553,27 @@ def test_partial_warning_is_a_reason_not_a_note(tmp_path: Path) -> None:
     assert kitty.health is Health.OK
     assert "terminal shell not checked: kitty: unsupported shape" in kitty.reasons
     assert not any(partial in reason for reason in kitty.reasons)
+
+
+def test_herdr_drift_lands_on_its_own_row(tmp_path: Path) -> None:
+    present = frozenset({"herdr"})
+    states = _settled_states(
+        _drift_service(tmp_path, _drifted("herdr"), present=present), [_terminal_tool("herdr")]
+    )
+    herdr = states["herdr"]
+    assert herdr.health is Health.MISCONFIGURED
+    assert herdr.reasons[0] == "herdr does not start zsh"
+    assert herdr.unconfigured == (
+        ConfigStep("point herdr at zsh", "terminal_sync", report="herdr now starts zsh"),
+    )
+
+
+def test_herdr_partial_warning_reads_as_a_reason(tmp_path: Path) -> None:
+    warning = "herdr: partial: you already set terminal.default_shell"
+    states = _settled_states(
+        _drift_service(tmp_path, _warned(warning), present=frozenset({"herdr"})),
+        [_terminal_tool("herdr")],
+    )
+    assert states["herdr"].health is Health.MISCONFIGURED
+    assert states["herdr"].reasons[0] == warning
+    assert states["herdr"].unconfigured == ()

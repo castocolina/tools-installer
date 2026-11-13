@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import hashlib
 import importlib
 import inspect
 import io
@@ -39,6 +40,7 @@ from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import UnavailableReason
+from installer.run import run_captured
 from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
 from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshellrc
@@ -928,6 +930,7 @@ def test_build_app_wires_one_terminal_sync_closure(
         "platform": platform,
         "lookup": postinstall.which_with_brew,
         "strip_only": False,
+        "runner": run_captured,
     }
 
 
@@ -1839,6 +1842,7 @@ def test_build_app_wires_the_shared_terminal_closure_into_update_service(
         "platform": platform,
         "lookup": postinstall.which_with_brew,
         "strip_only": False,
+        "runner": run_captured,
     }
 
 
@@ -4846,3 +4850,148 @@ def test_no_run_option_or_settings_policy_symbols_remain() -> None:
         for match in found.finditer(text)
     ]
     assert leftovers == []
+
+
+def test_sync_terminals_passes_a_runner_and_drift_does_not(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """herdr's reload runs through the real captured runner on the follow-up; the refresh pass
+    is a dry run that has no runner to reload with (D-16, T-19-47)."""
+    _sandbox(monkeypatch, tmp_path)
+    platform = _platform()
+    calls: list[dict[str, object]] = []
+
+    def sync(**kwargs: object) -> TerminalShellResult:
+        calls.append(kwargs)
+        return TerminalShellResult()
+
+    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    setup._sync_terminals(platform)  # pyright: ignore[reportPrivateUsage]
+    refresh = setup._build_services([], platform)[0]  # pyright: ignore[reportPrivateUsage]
+    drift = refresh._terminal_drift  # pyright: ignore[reportPrivateUsage]
+    assert drift is not None
+    drift(platform)
+
+    assert calls[0]["runner"] is run_captured
+    assert calls[1]["write"] is False
+    assert "runner" not in calls[1]
+
+
+_ZSH_PATH = "/usr/bin/zsh"
+_ALACRITTY_PATH = "/usr/bin/alacritty"
+
+
+def _alacritty_update_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Run `UpdateService.run` with the real post-run terminal follow-up on a scratch HOME that
+    already holds the user's keys plus both owned regions; return the alacritty config dir."""
+    from installer.post_install import run_post_install
+
+    _sandbox(monkeypatch, tmp_path)
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    monkeypatch.setattr(
+        setup, "which_with_brew", {"zsh": _ZSH_PATH, "alacritty": _ALACRITTY_PATH}.get
+    )
+    config = tmp_path / ".config" / "alacritty" / "alacritty.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[font]\nsize = 12\n")
+    tool = Tool(
+        id="alacritty",
+        name="Alacritty",
+        category="terminal",
+        cmd="alacritty",
+        methods=(Method(kind="dnf", params={"package": "alacritty"}),),
+        post_install=("apply_terminal_tuning",),
+    )
+    run_post_install(tool, platform)
+    setup._sync_terminals(platform)  # pyright: ignore[reportPrivateUsage]
+    return config.parent
+
+
+def _run_update(monkeypatch: pytest.MonkeyPatch) -> UpdateOutcome:
+    from installer import update as update_module
+
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    stub = Tool(
+        id="stub",
+        name="stub",
+        category="search",
+        cmd="stub",
+        methods=(Method(kind="dnf", params={"package": "stub"}),),
+    )
+    owned = ManagerOwnership(
+        tool_id="stub",
+        owner="dnf",
+        method=None,
+        package="stub",
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+
+    def updated(target: UpdateTarget, **_kwargs: object) -> UpdateOutcome:
+        return UpdateOutcome(tool_id=target.tool.id, status="updated", owner="dnf")
+
+    monkeypatch.setattr(update_module, "perform_update", updated)
+    service = UpdateService(
+        platform=platform,
+        managed_packages=lambda: (),
+        replay_globals=lambda packages: tuple(packages),
+        reresolve_ownership=lambda _tool: owned,
+        terminal_follow_up=lambda: setup._sync_terminals(  # pyright: ignore[reportPrivateUsage]
+            platform, report_changes=True
+        ),
+    )
+    return service.run(UpdateTarget(tool=stub, ownership=owned))
+
+
+def _alacritty_digests(directory: Path) -> dict[str, str]:
+    return {
+        str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_update_route_keeps_intact_alacritty_regions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SPEC R4 as amended 2026-11-13 (R2-12): with intact regions the `u` follow-up changes no
+    byte under ~/.config/alacritty."""
+    directory = _alacritty_update_route(monkeypatch, tmp_path)
+    before = _alacritty_digests(directory)
+
+    outcome = _run_update(monkeypatch)
+
+    assert outcome.status == "updated"
+    assert _alacritty_digests(directory) == before
+
+
+def test_update_route_repairs_only_a_drifted_alacritty_shell_region(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    directory = _alacritty_update_route(monkeypatch, tmp_path)
+    config = directory / "alacritty.toml"
+    intact = config.read_text()
+    shell = re.search(
+        r"# >>> tools-installer terminal-shell alacritty >>>\n.*?"
+        r"# <<< tools-installer terminal-shell alacritty <<<\n",
+        intact,
+        re.DOTALL,
+    )
+    assert shell is not None
+    config.write_text(intact.replace(shell.group(0), ""))
+    keys_before = re.search(r"# >>> [^\n]*alacritty-keys >>>.*?<<<\n", intact, re.DOTALL)
+    assert keys_before is not None
+
+    outcome = _run_update(monkeypatch)
+
+    assert outcome.status == "updated"
+    repaired = config.read_text()
+    assert shell.group(0) in repaired
+    assert keys_before.group(0) in repaired
+    assert repaired.replace(shell.group(0), "") == intact.replace(shell.group(0), "")
+    assert repaired.startswith("[font]\nsize = 12\n")

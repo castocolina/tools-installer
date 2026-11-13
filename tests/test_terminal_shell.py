@@ -17,6 +17,8 @@ import pytest
 from installer import terminal_shell
 from installer.model import Tool, load_tools
 from installer.platform import Platform
+from installer.receipts import read_ledger
+from installer.run import CommandError
 from installer.terminal_shell import (
     TerminalShellError,
     sync_message,
@@ -1359,3 +1361,156 @@ def test_alacritty_is_created_in_the_first_existing_location_or_the_xdg_one() ->
     text = flat.read_text()
     assert text.startswith("# >>> tools-installer terminal-shell alacritty >>>")
     assert _outside_regions(text) == ""
+
+
+# ---------------------------------------------------------------------------
+# herdr (24 D-08b, D-22): terminal.default_shell follows zsh, then the server reloads.
+# ---------------------------------------------------------------------------
+
+_HERDR = "/usr/bin/herdr"
+_HERDR_LOOKUP = _lookup(zsh=_ZSH, herdr=_HERDR)
+
+
+def _herdr_toml() -> Path:
+    return Path.home() / ".config" / "herdr" / "config.toml"
+
+
+def _sync_herdr(
+    *,
+    lookup: Callable[[str], str | None] = _HERDR_LOOKUP,
+    write: bool = True,
+    runner: Callable[[list[str]], None] | None = None,
+):
+    return sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=_platform(),
+        lookup=lookup,
+        write=write,
+        runner=runner,
+    )
+
+
+def _ledgered_settings() -> list[str]:
+    ledger = read_ledger("herdr")
+    return [entry.setting for entry in ledger.entries] if ledger else []
+
+
+def test_herdr_default_shell_written_and_reloaded() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n')
+    calls: list[list[str]] = []
+
+    result = _sync_herdr(runner=calls.append)
+
+    assert tomllib.loads(config.read_text())["terminal"] == {
+        "shell_mode": "auto",
+        "default_shell": _ZSH,
+    }
+    assert _ledgered_settings() == ["default-shell"]
+    assert calls == [[_HERDR, "server", "reload-config"]]
+    assert "herdr" in result.configured and "herdr" in result.drifted
+    assert ("herdr", config) in result.paths
+
+    settled = config.read_bytes()
+    _sync_herdr(runner=calls.append)
+    assert config.read_bytes() == settled
+    assert len(calls) == 1
+
+
+def test_herdr_reload_failure_is_a_note() -> None:
+    config = _herdr_toml()
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1)
+
+    result = _sync_herdr(runner=failing)
+
+    assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == _ZSH
+    assert any(w.startswith("herdr: reload-config failed") for w in result.warnings)
+    assert "herdr" in result.configured
+
+
+def test_herdr_user_default_shell_is_kept() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    calls: list[list[str]] = []
+
+    same = f'[terminal]\ndefault_shell = "{_ZSH}"\n'
+    config.write_text(same)
+    result = _sync_herdr(runner=calls.append)
+    assert config.read_text() == same
+    assert _ledgered_settings() == []
+    assert result.warnings == () and "herdr" in result.configured
+    assert "herdr" not in result.drifted
+
+    other = '[terminal]\ndefault_shell = "/bin/fish"\n'
+    config.write_text(other)
+    result = _sync_herdr(runner=calls.append)
+    assert config.read_text() == other
+    assert result.warnings == ("herdr: partial: you already set terminal.default_shell",)
+    assert "herdr" not in result.configured
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [_lookup(zsh=_ZSH), _lookup(herdr=_HERDR)],
+    ids=["no-herdr", "no-zsh"],
+)
+def test_herdr_nothing_without_zsh_or_herdr(lookup: Callable[[str], str | None]) -> None:
+    calls: list[list[str]] = []
+
+    result = _sync_herdr(lookup=lookup, runner=calls.append)
+
+    assert not _herdr_toml().exists()
+    assert calls == []
+    assert "herdr" not in result.configured
+
+
+def test_herdr_dry_run_reports_drift_without_reloading() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n')
+    before = config.read_bytes()
+    calls: list[list[str]] = []
+
+    result = _sync_herdr(write=False, runner=calls.append)
+
+    assert "herdr" in result.drifted
+    assert config.read_bytes() == before
+    assert calls == []
+    assert _ledgered_settings() == []
+
+    config.write_text('[terminal]\ndefault_shell = "/bin/fish"\n')
+    kept = _sync_herdr(write=False)
+    assert "herdr" not in kept.drifted
+    assert kept.warnings == ("herdr: partial: you already set terminal.default_shell",)
+
+    config.write_text("[terminal\n")
+    broken = _sync_herdr(write=False)
+    assert broken.warnings and broken.warnings[0].startswith("herdr: ")
+    assert "herdr" not in broken.drifted
+
+
+def test_zsh_gone_reverts_only_the_ledgered_default_shell() -> None:
+    from installer.agent_settings import apply_setting
+
+    config = _herdr_toml()
+    apply_setting("herdr", "sidebar", home=Path.home(), platform_os="fedora", environ=os.environ)
+    _sync_herdr()
+    assert set(_ledgered_settings()) == {"default-shell", "sidebar"}  # sidebar: one per key
+
+    result = _sync_herdr(lookup=_lookup(herdr=_HERDR))
+
+    assert "herdr" in result.reverted
+    assert "default_shell" not in tomllib.loads(config.read_text()).get("terminal", {})
+    assert "ui" in tomllib.loads(config.read_text())  # the sidebar keys stay
+    assert set(_ledgered_settings()) == {"sidebar"}
+
+    _sync_herdr()
+    config.write_text(config.read_text().replace(_ZSH, "/bin/fish"))
+    kept = _sync_herdr(lookup=_lookup(herdr=_HERDR))
+    assert "herdr" not in kept.reverted
+    assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == "/bin/fish"

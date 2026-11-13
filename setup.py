@@ -666,6 +666,7 @@ def _sync_terminals(
         platform=platform,
         lookup=which_with_brew,
         strip_only=strip_only,
+        runner=run_captured,  # herdr's reload; captured, so it never prints into the TUI
     )
     return sync_message(result, report_changes=report_changes)
 

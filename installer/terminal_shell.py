@@ -15,11 +15,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from installer.agent_settings import read_settings, write_if_unchanged
+from installer.agent_settings import (
+    ABSENT,
+    apply_value,
+    parse_settings,
+    read_settings,
+    revert_group,
+    same_value,
+    settings_file,
+    write_if_unchanged,
+)
+from installer.agent_settings import lookup as settings_lookup
 from installer.atomic import FileSnapshot, atomic_write_text, read_capped
 from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
+from installer.run import CommandError, Runner
 from installer.shellrc import apply_block, strip_block
 
 Lookup = Callable[[str], str | None]
@@ -672,7 +683,95 @@ def strip_alacritty(home: Path, environ: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(warnings)
 
 
-def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> TerminalShellResult:
+# ---------------------------------------------------------------------------
+# herdr (24 D-08b, D-22): `terminal.default_shell` follows zsh. Written absent-only through the
+# ledgered settings writer, so a user's own value is never overwritten and the key is reverted
+# only while it still holds the path written; the running server is asked to reload it.
+# ---------------------------------------------------------------------------
+
+HERDR = "herdr"
+_HERDR_SHELL_KEY = ("terminal", "default_shell")
+_HERDR_PARTIAL = "herdr: partial: you already set terminal.default_shell"
+
+
+def _herdr_reload(herdr_path: str, runner: Runner | None) -> tuple[str, ...]:
+    """Ask the running server to re-read its config; a failure is a note, never a failure."""
+    if runner is None:
+        return ()
+    try:
+        runner([herdr_path, "server", "reload-config"])
+    except (CommandError, OSError) as exc:
+        return (f"herdr: reload-config failed ({_first_line(exc)}); new panes read it on restart",)
+    return ()
+
+
+def _herdr_check(path: Path, zsh_path: str) -> tuple[bool, bool, tuple[str, ...]]:
+    """The dry run: (configured, drifted, warnings) from the config as it is now."""
+    try:
+        snapshot = read_settings(path)
+        text = snapshot.data.decode("utf-8") if snapshot is not None else ""
+        document = parse_settings(text, "toml")
+    except (OSError, ValueError) as exc:  # UnicodeDecodeError and SettingsParseError
+        return False, False, (f"herdr: {_first_line(exc)}",)
+    current = settings_lookup(document, _HERDR_SHELL_KEY)
+    if current is ABSENT:
+        return True, True, ()
+    if same_value(current, zsh_path):
+        return True, False, ()
+    return False, False, (_HERDR_PARTIAL,)
+
+
+def _sync_herdr(
+    home: Path,
+    environ: Mapping[str, str],
+    platform: Platform,
+    zsh_path: str,
+    herdr_path: str,
+    *,
+    write: bool,
+    runner: Runner | None,
+) -> tuple[bool, bool, tuple[str, ...]]:
+    """Point herdr at zsh. Returns (configured, drifted, warnings)."""
+    path = settings_file(HERDR, home=home, platform_os=platform.os, environ=environ)
+    if not write:
+        return _herdr_check(path, zsh_path)
+    try:
+        result = apply_value(
+            HERDR,
+            "default-shell",
+            zsh_path,
+            home=home,
+            platform_os=platform.os,
+            environ=environ,
+        )
+    except OSError as exc:
+        return False, False, (f"herdr: {_first_line(exc)}",)
+    if result.refused is not None:
+        return False, False, (f"herdr: {result.refused.splitlines()[0]}",)
+    kinds = {key.kind for key in result.keys}
+    if "set_by_you" in kinds:
+        return False, False, (_HERDR_PARTIAL,)
+    wrote = "wrote" in kinds
+    return True, wrote, _herdr_reload(herdr_path, runner) if wrote else ()
+
+
+def _revert_herdr(home: Path, environ: Mapping[str, str], platform: Platform) -> tuple[bool, str]:
+    """Remove the ledgered key while it still holds the written path. Returns (removed, warning);
+    the reload is skipped here: panes already open keep the shell they started with."""
+    try:
+        results = revert_group(
+            HERDR, "default-shell", home=home, platform_os=platform.os, environ=environ
+        )
+    except OSError as exc:
+        return False, f"herdr: {_first_line(exc)}"
+    removed = any(key.kind == "removed" for result in results for key in result.keys)
+    refused = next((result.refused for result in results if result.refused), None)
+    return removed, f"herdr: {refused.splitlines()[0]}" if refused else ""
+
+
+def _revert_terminal_shells(
+    *, home: Path, environ: Mapping[str, str], platform: Platform
+) -> TerminalShellResult:
     """Remove only complete terminal regions created by this synchronizer."""
     reverted: list[str] = []
     zshenv_changed, zshenv_warning = _edit_zshenv(home, environ, None, write=True)
@@ -699,6 +798,11 @@ def _revert_terminal_shells(*, home: Path, environ: Mapping[str, str]) -> Termin
             reverted.append("alacritty")
     except OSError as exc:
         warnings.append(f"alacritty: {_first_line(exc)}")
+    herdr_removed, herdr_warning = _revert_herdr(home, environ, platform)
+    if herdr_removed:
+        reverted.append("herdr")
+    if herdr_warning:
+        warnings.append(herdr_warning)
     return TerminalShellResult(
         reverted=tuple(reverted), skipped=("zsh unavailable",), warnings=tuple(warnings)
     )
@@ -712,6 +816,7 @@ def sync_terminal_shells(
     lookup: Lookup,
     write: bool = True,
     strip_only: bool = False,
+    runner: Runner | None = None,
 ) -> TerminalShellResult:
     """Synchronize zsh into detected Linux terminal emulators and the .zshenv zsh reads.
 
@@ -721,7 +826,8 @@ def sync_terminal_shells(
     run (D-16, L-19-05): it reports `drifted` and writes, creates, renames and
     deletes nothing -- no revert, no .zshrc repair, no terminal config. `strip_only`
     is the uninstall form: it only strips the owned regions once zsh is gone and
-    never writes or creates one while zsh is still present (CR-09).
+    never writes or creates one while zsh is still present (CR-09). `runner` runs herdr's
+    `server reload-config` after its `default_shell` was written; a dry run never reloads.
     """
     if platform.os == "macos":
         return TerminalShellResult(skipped=("macos",))
@@ -730,7 +836,7 @@ def sync_terminal_shells(
     if zsh_path is None:
         if not write:
             return TerminalShellResult(skipped=("zsh unavailable",))
-        return _revert_terminal_shells(home=home, environ=environ)
+        return _revert_terminal_shells(home=home, environ=environ, platform=platform)
     if strip_only:
         return TerminalShellResult(skipped=("zsh present",), zsh=zsh_path)
 
@@ -821,6 +927,19 @@ def sync_terminal_shells(
         if shell_drifted:
             drifted.append("alacritty")
         warnings.extend(shell_warnings)
+    herdr_path = _safe_executable(lookup(HERDR))
+    if herdr_path is not None:
+        has_default, default_drifted, default_warnings = _sync_herdr(
+            home, environ, platform, zsh_path, herdr_path, write=write, runner=runner
+        )
+        if has_default:
+            configured.append(HERDR)
+            paths.append(
+                (HERDR, settings_file(HERDR, home=home, platform_os=platform.os, environ=environ))
+            )
+        if default_drifted:
+            drifted.append(HERDR)
+        warnings.extend(default_warnings)
     return TerminalShellResult(
         configured=tuple(configured),
         skipped=tuple(skipped),
