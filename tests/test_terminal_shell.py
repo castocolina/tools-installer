@@ -6,12 +6,14 @@ import shlex
 import shutil
 import subprocess
 import threading
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
 import pytest
 
+from installer.model import Tool, load_tools
 from installer.platform import Platform
 from installer.terminal_shell import (
     TerminalShellError,
@@ -19,6 +21,8 @@ from installer.terminal_shell import (
     sync_terminal_shells,
     terminal_sync_warning,
 )
+
+REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
 class _SyncArgs(TypedDict):
@@ -1097,3 +1101,82 @@ def test_a_post_run_sync_that_writes_reports_the_shell_lines(tmp_path: Path) -> 
     assert "Shell: kitty now starts zsh" in message
     assert sync_message(first) is None
     assert sync_message(again, report_changes=True) is None
+
+
+# ---------------------------------------------------------------------------
+# Alacritty (24 D-08, D-23): the `alacritty` shell region and the `alacritty-keys` region.
+# ---------------------------------------------------------------------------
+
+_ZSH = "/usr/bin/zsh"
+_ALACRITTY_LOOKUP = _lookup(zsh=_ZSH, alacritty="/usr/bin/alacritty")
+
+
+def _alacritty_tool() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "alacritty")
+
+
+def _alacritty_toml() -> Path:
+    return Path.home() / ".config" / "alacritty" / "alacritty.toml"
+
+
+def _alacritty_record() -> Path:
+    return Path.home() / ".local" / "share" / "tools-installer" / "terminal-tuning-alacritty"
+
+
+def _sync_alacritty(*, write: bool = True, lookup: Callable[[str], str | None] | None = None):
+    return sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=_platform(),
+        lookup=lookup or _ALACRITTY_LOOKUP,
+        write=write,
+    )
+
+
+def _remove_alacritty(tmp_path: Path) -> None:
+    from installer import app as app_module
+
+    app_module._after_removal(  # pyright: ignore[reportPrivateUsage]
+        _alacritty_tool(),
+        bundles=(),
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        extra_policies=(),
+        platform_os="fedora",
+    )
+
+
+def test_alacritty_install_writes_both_regions_and_removal_strips_them(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("[font]\nsize = 12\n")
+
+    run_post_install(_alacritty_tool(), _platform())
+    keys_only = tomllib.loads(config.read_text())
+    assert [(b["key"], b["mods"]) for b in keys_only["keyboard"]["bindings"]] == [
+        ("Left", "Alt"),
+        ("Right", "Alt"),
+        ("K", "Control|Shift"),
+    ]
+    assert keys_only["keyboard"]["bindings"][0]["chars"] == "\x1bb"
+    assert keys_only["keyboard"]["bindings"][1]["chars"] == "\x1bf"
+    assert keys_only["keyboard"]["bindings"][2]["action"] == "ClearHistory"
+    assert _alacritty_record().is_file()
+
+    result = _sync_alacritty()
+    document = tomllib.loads(config.read_text())
+    assert document["terminal"]["shell"] == {"program": _ZSH, "args": ["-l"]}
+    assert document["env"] == {"SHELL": _ZSH}
+    assert document["font"] == {"size": 12}
+    assert "alacritty" in result.configured
+    assert ("alacritty", config) in result.paths
+
+    settled = config.read_bytes()
+    _sync_alacritty()
+    assert config.read_bytes() == settled
+
+    _remove_alacritty(tmp_path)
+    assert config.read_text() == "[font]\nsize = 12\n"
+    assert not _alacritty_record().exists()

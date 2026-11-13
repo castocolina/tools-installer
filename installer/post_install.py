@@ -60,6 +60,7 @@ from installer.omz import (
 from installer.platform import Platform
 from installer.policy import tweak_policy
 from installer.sanitize import sanitize_log_line
+from installer.terminal_shell import apply_alacritty_keys
 from installer.tweaks import record_shell_init, shell_init_bundle, shell_init_record
 
 ConfirmSensitiveAction = Callable[[str, str], bool]
@@ -269,6 +270,23 @@ def _apply_agent_tuning(
     return _tune_agent(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
+def _tune_terminal(*, skip_recorded: bool) -> PostInstallOutput:
+    """Alacritty's keybindings region (24 D-23). A refusal is one line and `refused`."""
+    lines, refused = apply_alacritty_keys(Path.home(), os.environ, skip_recorded=skip_recorded)
+    if refused is not None:
+        return PostInstallOutput((f"Alacritty keys not changed: {refused}",), refused=refused)
+    return PostInstallOutput(lines)
+
+
+def _apply_terminal_tuning(
+    tool: Tool,
+    platform: Platform,
+    confirm: ConfirmSensitiveAction | None,
+) -> PostInstallOutput:
+    del tool, platform, confirm
+    return _tune_terminal(skip_recorded=False)  # install and reinstall rewrite
+
+
 def _show_lean_tips(
     tool: Tool,
     platform: Platform,
@@ -285,6 +303,7 @@ POST_INSTALL_HOOKS: dict[str, PostInstallAction] = {
     "set_omz_plugins": _set_omz_plugins,
     "show_lean_tips": _show_lean_tips,
     "apply_agent_tuning": _apply_agent_tuning,
+    "apply_terminal_tuning": _apply_terminal_tuning,
 }
 
 
@@ -307,6 +326,10 @@ def apply_install_tuning(
             refused = refused or produced.refused
         elif name == "source_shell_init":
             lines.extend(_tune_shell_init(tool, platform, skip_recorded=skip_recorded))
+        elif name == "apply_terminal_tuning":
+            produced = _tune_terminal(skip_recorded=skip_recorded)
+            lines.extend(produced.lines)
+            refused = refused or produced.refused
     return PostInstallOutput(tuple(lines), tuple(settings), refused=refused)
 
 

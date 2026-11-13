@@ -2939,7 +2939,7 @@ app = "WezTerm.app"
 # terminfo goes to ~/.terminfo because ncurses and Alacritty do not search
 # ~/.local/share/terminfo (24 D-07 amendment). The native methods stay for
 # mutable hosts without distrobox and podman. ~/.config/alacritty is the
-# user's and is never touched by the install.
+# user's; only the two owned regions of alacritty.toml are ever written (24 D-08, D-23).
 [[tool]]
 id = "alacritty"
 name = "Alacritty"
@@ -2952,6 +2952,7 @@ verified = 2026-11-08
 desc = "Cross-platform OpenGL terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 config_paths = ["~/.config/alacritty"]
+post_install = ["apply_terminal_tuning"]
 [[tool.method]]
 kind = "cargo_distrobox"
 os = ["debian", "fedora", "arch"]

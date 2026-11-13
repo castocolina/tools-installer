@@ -134,6 +134,7 @@ POST_INSTALL_ACTIONS = (
     "set_omz_plugins",
     "show_lean_tips",
     "apply_agent_tuning",
+    "apply_terminal_tuning",
 )
 # Empty since 23.2 D-13: no action asks. The loader field `default_enabled_sensitive_actions`
 # stays (D-14) and now rejects any value; Phase 24.1 decides its fate.
