@@ -12,6 +12,7 @@ import pytest
 import installer.engine as engine
 from installer import receipts
 from installer.app import UninstallDecision, perform_uninstall
+from installer.download import ExecContext, resolve_target
 from installer.enums import InstallStatus
 from installer.model import Tool, load_tools
 from installer.platform import Platform
@@ -144,3 +145,94 @@ def test_neovim_installs_and_uninstalls_through_the_shipped_entry(
     assert not link.is_symlink()
     assert receipts.read("neovim") is None
     assert init.read_bytes() == SEED_INIT
+
+
+def _comment_above_neovim() -> str:
+    """The contiguous comment block directly above neovim's `[[tool]]` header."""
+    head = REGISTRY.read_text(encoding="utf-8").split('[[tool]]\nid = "neovim"')[0]
+    return head.rsplit("\n\n", 1)[-1]
+
+
+def test_neovim_entry_facts() -> None:
+    tool = neovim_tool()
+    assert (tool.name, tool.category, tool.cmd, tool.tier, tool.audience, tool.priority) == (
+        "Neovim",
+        "editor",
+        "nvim",
+        "user",
+        "human",
+        "P2",
+    )
+    assert tool.config_paths == ("~/.config/nvim",)
+    assert tool.owner_probes == ("rpm-ostree", "dnf", "apt", "pacman")
+    assert tool.requires == ()
+    assert tool.postinstall is None
+    assert [method.kind for method in tool.methods] == [
+        "github_release",
+        "github_release",
+        "brew",
+        "dnf",
+        "apt",
+        "pacman",
+    ]
+    for method in tool.methods[:2]:
+        assert method.params["repo"] == "neovim/neovim"
+        assert method.params["member"] == "bin/nvim"
+        assert method.params["strip"] == 1
+        assert "checksum" not in method.params
+    comment = _comment_above_neovim()
+    for fact in ("# Verified", "v0.12.6", "checksum", "AppImage"):
+        assert fact in comment, fact
+
+
+@pytest.mark.parametrize(
+    ("platform", "kinds"),
+    [
+        (
+            Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+            ["github_release", "dnf", "brew"],
+        ),
+        (
+            Platform(os="debian", arch="amd64", immutable=False, has_brew=True),
+            ["github_release", "apt", "brew"],
+        ),
+        (
+            Platform(os="arch", arch="amd64", immutable=False, has_brew=True),
+            ["github_release", "pacman", "brew"],
+        ),
+        (BAZZITE, ["github_release", "brew"]),
+        (
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0"),
+            ["github_release", "brew"],
+        ),
+    ],
+    ids=["fedora-mutable", "debian", "arch", "bazzite-immutable", "macos-arm64"],
+)
+def test_neovim_resolved_method_order(platform: Platform, kinds: list[str]) -> None:
+    assert [method.kind for method in resolve_methods(neovim_tool(), platform)] == kinds
+
+
+@pytest.mark.parametrize(
+    ("os_name", "arch", "asset"),
+    [
+        ("debian", "amd64", "nvim-linux-x86_64.tar.gz"),
+        ("fedora", "arm64", "nvim-linux-arm64.tar.gz"),
+        ("macos", "amd64", "nvim-macos-x86_64.tar.gz"),
+        ("macos", "arm64", "nvim-macos-arm64.tar.gz"),
+    ],
+)
+def test_neovim_asset_resolves_for_every_os_arch(os_name: str, arch: str, asset: str) -> None:
+    platform = Platform(os=os_name, arch=arch, immutable=False, has_brew=False, os_version="26.0")
+    method = resolve_methods(neovim_tool(), platform)[0]
+    assert method.kind == "github_release"
+    ctx = ExecContext(
+        runner=lambda _cmd: None,
+        platform=platform,
+        resolve_release=lambda _repo: Release(TAG, {asset: DIGEST}),
+    )
+    target = resolve_target(method, ctx)
+    assert target.asset == asset
+    assert target.url == f"https://github.com/neovim/neovim/releases/download/{TAG}/{asset}"
+    assert target.member == "bin/nvim"
+    assert target.sha256 == DIGEST
+    assert target.unverified_reason is None

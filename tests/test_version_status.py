@@ -121,6 +121,7 @@ from tests.state_doubles import (
     plan_state,
 )
 from tests.test_download import fixture_runner
+from tests.test_neovim import neovim_tool
 from tests.test_registry import REGISTRY
 
 _MANAGED = Path("/tmp/tools-installer-bin")
@@ -3738,6 +3739,34 @@ def test_sd_reads_current_when_its_receipt_proves_the_release(
     assert state.version.installed == "1.0.0"
     assert state.health is Health.OK
     rows = build_plan(["yq"], [_yq()], service.state_of, _LINUX, reinstall=frozenset())
+    assert [(row.disposition, row.reason) for row in rows] == [
+        (Disposition.SKIP, "already current")
+    ]
+
+
+def test_neovim_reads_ok_when_its_receipt_proves_the_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """24.1-01 (SPEC R2): a receipt-proven neovim opt tree reads OK and is already current."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    neovim = neovim_tool()
+    method = next(m for m in neovim.methods if m.kind == "github_release")
+    binary = tmp_path / ".local" / "opt" / "nvim" / "bin" / "nvim"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\necho 'NVIM v0.12.6'\n", encoding="utf-8")
+    binary.chmod(0o755)
+    (bin_dir / "nvim").symlink_to(binary)
+    assert receipts.record(
+        neovim, method, package=None, smoke=None, default_bin_dir=bin_dir, release="v0.12.6"
+    )
+    service = _receipt_service(
+        tmp_path, bin_dir, resolve_tag=lambda _repo: "v0.12.6", probe="0.12.6"
+    )
+    state = _settled(service, neovim)
+    assert state.version is not None
+    assert state.version.outdated is False
+    assert state.health is Health.OK
+    rows = build_plan(["neovim"], [neovim], service.state_of, _LINUX, reinstall=frozenset())
     assert [(row.disposition, row.reason) for row in rows] == [
         (Disposition.SKIP, "already current")
     ]
