@@ -699,6 +699,8 @@ class SweepResult:
     settings_kept: tuple[str, ...] = ()
     # Tools whose shell-init bundle went off with their removal (D-11).
     shell_init_off: tuple[str, ...] = ()
+    # What the removal hook told about a gone tool's schedule timer (24.2 F3), already worded.
+    schedule_lines: tuple[str, ...] = ()
 
 
 def policy_owned(policy: Policy) -> bool:

@@ -493,9 +493,9 @@ def _disk_pressure_next_step(pressure: DiskPressure) -> str:
         # plan 15.7-06 rewrites it (by its own new prefix match, distinct
         # from the existing "Run `make fix`"/"Run `make setup`" prefixes
         # DoctorScreen._tui_guidance already recognises) into a "go to the
-        # Policies view" TUI instruction.
+        # Schedules view" TUI instruction (24.2: the tmp cleanup is a Schedules row).
         return (
-            "Enable the background cleanup policy in `make setup`'s Policies view; a "
+            "Turn on tmp cleanup in `make setup`'s Schedules view; a "
             f"one-off `{command}` run clears space immediately in the meantime."
         )
     if pressure.daemon is DaemonState.UNAVAILABLE:

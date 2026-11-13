@@ -38,11 +38,13 @@ from installer import cursor_shim, daemon, env_redirect, receipts, runlock, sche
 from installer.agent_settings import ledger_summary
 from installer.app import (
     UninstallDecision,
+    has_schedule_id,
     path_writer_lines_for,
     pnpm_removal_packages,
     removal_change_lines,
     removal_result_lines,
     removal_runs_line,
+    schedule_phrase,
     settings_change_lines,
     unregister_runs_line,
 )
@@ -161,6 +163,9 @@ class UninstallInputs:
     # completed removal always leaves terminal shell configuration in sync
     # (or safely reverted when zsh itself was just removed).
     terminal_sync: Callable[[], str | None] | None = None
+    # The platform key (`Platform.os`), which words the timer sentence on the tweaks row; only
+    # "macos" is compared, every other key is Linux.
+    platform_os: str = ""
 
 
 # The composition root's disk probe (D-03): callable with no arguments, plus
@@ -232,7 +237,7 @@ _GLOBALS_UNREADABLE_PREVIEW = _GLOBALS_UNKNOWN_COUNT
 # INACTIVE daemon, and its TUI form. Only INACTIVE starts with this prefix:
 # the UNAVAILABLE wording (D-03c) names no row, because on that host there is
 # no row to enable, so it is deliberately never rewritten into one.
-_DISK_PRESSURE_ENABLE_PREFIX = "Enable the background cleanup policy"
+_DISK_PRESSURE_ENABLE_PREFIX = "Turn on tmp cleanup"
 _POST_APPLY_REWRITES = (
     (
         f"{SAFE_FIX_ENTER_HINT}, then open a new terminal",
@@ -245,7 +250,7 @@ _POST_APPLY_REWRITES = (
 # (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
 # the whole sentence here would re-introduce a second, platform-blind copy of
 # that command.
-_DISK_PRESSURE_TUI_PREFIX = "Open the Policies view and turn on the Background tmpdir cleanup row;"
+_DISK_PRESSURE_TUI_PREFIX = "Open the Schedules view and turn on the tmp cleanup row;"
 
 
 class GlobalsReinstalled(Message):
@@ -1119,17 +1124,6 @@ _REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 _REMOVAL_QUIT_CUT = "Quit before the removal finished; some files may remain."
 
 
-def _has_daemon_id(ids: tuple[str, ...]) -> bool:
-    """True when any id in ids is the background daemon's own namespaced id.
-
-    Mirrors `installer.app._has_daemon_id` exactly: a tiny, named predicate
-    rather than an inline generator expression repeated at every daemon-aware
-    copy call site (preview row + success summary), keeping both byte-for-byte
-    consistent with each other and with the CLI's own equivalent wording.
-    """
-    return any(policy_id.startswith("daemon:") for policy_id in ids)
-
-
 def config_split(
     flagged: Sequence[Tool],
     catalog: Sequence[Tool],
@@ -1275,6 +1269,7 @@ class UninstallScreen(AppScreen):
         self._startup_error: str | None = env_error
         self._remove = inputs.remove
         self._terminal_sync = inputs.terminal_sync
+        self._platform_os = inputs.platform_os
         self.applied = False
         self.error: str | None = None
         # tool id -> its last `remove_failed` outcome; kept across navigation and
@@ -1456,26 +1451,25 @@ class UninstallScreen(AppScreen):
         )
 
     def _tweak_entry(self) -> _UninstallEntry:
-        # Byte-identical to today when no daemon: id is among the offered ids
-        # (Linux, or the daemon never enabled) -- the label/detail only name
-        # the background job when one is actually present.
-        has_daemon = _has_daemon_id(self._tweak_ids)
-        linux_daemon = any(policy_id == "daemon:prune-tmp-linux" for policy_id in self._tweak_ids)
+        # Byte-identical to today when no schedule: id is among the offered ids -- the
+        # label/detail only name the background jobs when one is actually present.
+        has_schedule = has_schedule_id(self._tweak_ids)
         has_redirect = any(policy_id.startswith("cache-redirect:") for policy_id in self._tweak_ids)
-        label = "shell tweaks + background jobs" if has_daemon else "shell tweaks"
+        label = "shell tweaks + background jobs" if has_schedule else "shell tweaks"
         detail = (
             "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
             "the managed helper executables, and the Oh-My-Zsh plugin names "
             "this installer added to .zshrc (never ones you added yourself)"
         )
-        if linux_daemon:
+        if has_schedule and self._platform_os == "macos":
             detail += (
-                " — and unregisters the systemd user timer (its unit files and wrapper executable)"
+                " — and unregisters the background maintenance LaunchAgents"
+                " (their plists, the runner and the schedule state)"
             )
-        elif has_daemon:
+        elif has_schedule:
             detail += (
-                " — and unregisters the background maintenance LaunchAgent"
-                " (its plist and wrapper executable)"
+                " — and unregisters the systemd user timers (their unit files, the runner and"
+                " the schedule state)"
             )
         if has_redirect:
             detail += "; the environment cache redirect is removed too"
@@ -1961,23 +1955,19 @@ class UninstallScreen(AppScreen):
             # From the sweep's own result, never from the row's snapshot: the
             # snapshot describes what was offered, not what came off.
             if swept.swept:
-                # Byte-identical to today when no daemon: id is among what was
+                # Byte-identical to today when no schedule: id is among what was
                 # actually swept. When one is present, name it explicitly and
-                # append the shell-reload hint only if a real, non-daemon
-                # tweak was ALSO swept -- a LaunchAgent needs no shell reload
+                # append the shell-reload hint only if a real, non-schedule
+                # tweak was ALSO swept -- a timer needs no shell reload
                 # at all (11-REVIEWS.md cycle 2 finding #19).
-                has_daemon = _has_daemon_id(swept.swept)
-                linux_daemon = "daemon:prune-tmp-linux" in swept.swept
+                phrase = schedule_phrase(swept.swept)
+                has_schedule = bool(phrase)
                 has_redirect = any(sid.startswith("cache-redirect:") for sid in swept.swept)
-                has_other = any(not sid.startswith("daemon:") for sid in swept.swept)
-                prefix = (
-                    "shell tweaks and the background maintenance job"
-                    if has_daemon
-                    else "shell tweaks"
-                )
-                if linux_daemon and has_redirect:
+                has_other = any(not sid.startswith("schedule:") for sid in swept.swept)
+                prefix = f"shell tweaks and {phrase}" if has_schedule else "shell tweaks"
+                if has_schedule and self._platform_os != "macos" and has_redirect:
                     reload_hint = " — log out and back in so the environment redirect is dropped."
-                elif not has_daemon or has_other:
+                elif not has_schedule or has_other:
                     reload_hint = " — open a new shell so functions and aliases refresh."
                 else:
                     reload_hint = "."
@@ -2630,7 +2620,7 @@ class PoliciesScreen(AppScreen):
             if schedule is not None:
                 hour, minute = schedule
                 lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
-        if _has_daemon_id((policy.id,)):
+        if policy.id.startswith("daemon:"):  # the old Policies row; 24.2-12 deletes this branch
             usage = _temp_usage_line(self._disk_pressure)
             if usage is not None:
                 lines.append(usage)
@@ -3953,9 +3943,9 @@ MUTATION_REFUSAL = "{holder} is running; wait for it to finish. Navigation still
 SCHEDULED_RUN_REFUSAL = MUTATION_REFUSAL.format(holder="A scheduled run")
 
 
-class DaemonDefaultApplied(Message):
-    """The threaded on-by-default auto-apply worker finished; `applied` is
-    whether apply() actually ran (True) or was a no-op/failure (False).
+class ScheduleDefaultsApplied(Message):
+    """The threaded schedule-defaults reconcile finished; `report` is what it did (an empty
+    report when it did nothing or raised).
 
     Posted unconditionally from UnifiedApp's own worker, in a finally block,
     regardless of outcome -- mirroring GlobalsAudited/GlobalsReinstalled's same
@@ -3963,12 +3953,8 @@ class DaemonDefaultApplied(Message):
     may only be touched from the app's own thread.
     """
 
-    def __init__(self, policy_id: str | None, applied: bool, live: bool | None = None) -> None:
-        self.policy_id = policy_id
-        self.applied = applied
-        # The policy's own is_active() answer, resolved on the worker thread
-        # (WR-02), or None when there was none to resolve.
-        self.live = live
+    def __init__(self, report: schedules.ReconcileReport) -> None:
+        self.report = report
         super().__init__()
 
 
@@ -4102,8 +4088,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
         unavailable: Mapping[str, bool | UnavailableReason] | None = None,
         initial_view: str = BASE_VIEW,
-        daemon_default: Callable[[], bool] | None = None,
-        daemon_default_policy_id: str | None = None,
+        schedule_defaults: Callable[[], schedules.ReconcileReport] | None = None,
         version_refresh: VersionRefreshService | None = None,
         updates: UpdateService | None = None,
         execute: ExecuteInputs | None = None,
@@ -4118,8 +4103,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._set_link_mode = policies.set_link_mode
         self._read_link_mode = policies.link_mode
         self._link_mode_prompted = False
-        # A first-run pick made while the launch daemon apply held the lock;
-        # on_daemon_default_applied moves it (C-18).
+        # A first-run pick made while the launch schedule setup held the lock;
+        # on_schedule_defaults_applied moves it (C-18).
         self._deferred_link_mode: str | None = None
         # The exit code answers "did everything this session asked for succeed":
         # the latest outcome per tool id wins, so a cancel followed by a retry
@@ -4245,14 +4230,13 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._initial_view = initial_view
         # "" is the root sentinel: on_mount's show_view is never an early return.
         self.current_view = ""
-        self._daemon_default = daemon_default
-        self._daemon_default_policy_id = daemon_default_policy_id
-        # Held from construction whenever a real auto-apply callback was wired,
+        self._schedule_defaults = schedule_defaults
+        # Held from construction whenever a real reconcile callback was wired,
         # so there is no window between __init__ and the worker starting in
         # on_mount where a mutation could slip in (11-REVIEWS.md cycle 2
-        # finding #15). on_daemon_default_applied releases it.
-        if self._daemon_default is not None:
-            self.begin_mutation(MutationHolder.DAEMON_DEFAULT)
+        # finding #15). on_schedule_defaults_applied releases it.
+        if self._schedule_defaults is not None:
+            self.begin_mutation(MutationHolder.SCHEDULE_DEFAULTS)
         # True once a quit waits on a running removal: no follow-up pass then.
         self.quitting = False
 
@@ -4272,10 +4256,10 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         for name, screen in self._views.items():
             self.install_screen(screen, name)
         await self.show_view(self._initial_view)
-        if self._daemon_default is not None:
-            self._apply_daemon_default_worker()
+        if self._schedule_defaults is not None:
+            self._apply_schedule_defaults_worker()
         # Last in on_mount so a first-run user answers exactly one question;
-        # the daemon worker's completion status lands behind this picker, not
+        # the schedule worker's completion status lands behind this picker, not
         # on top of it.
         if (
             self._prompt_link_mode
@@ -4403,64 +4387,63 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     # exit_on_error=False (Textual's own worker.py defaults this True, which
     # calls App._handle_exception -- crashing the whole app -- on any
-    # exception a threaded worker raises): an exception outside
-    # ensure_daemon_default's own except (OSError, CommandError) tuple must
+    # exception a threaded worker raises): an exception from the reconcile must
     # still leave a usable, running app (the finally block below already
-    # guarantees the in-flight flag clears); Worker.state/.error still record
+    # guarantees the lock releases); Worker.state/.error still record
     # it for diagnosis, this only suppresses the exit-the-app side effect.
-    @work(thread=True, exclusive=True, group="daemon-default", exit_on_error=False)
-    def _apply_daemon_default_worker(self) -> None:
-        """Auto-apply the daemon's on-by-default policy off the event loop.
+    @work(thread=True, exclusive=True, group="schedule-defaults", exit_on_error=False)
+    def _apply_schedule_defaults_worker(self) -> None:
+        """Turn on the schedules nobody has decided about, off the event loop.
 
         Mirrors DoctorScreen._audit_globals_worker/_reinstall_globals_worker's
         own thread-worker + post_message shape, for the identical reason: a
-        real launchctl bootstrap call (run_captured's underlying
+        real systemctl or launchctl call (run_captured's underlying
         subprocess.run has no timeout) must never freeze frame rendering or
         keypress handling. The body is wrapped in try/finally so the
         completion message is ALWAYS posted -- regardless of whether
-        self._daemon_default() returns normally or raises ANYTHING, including
-        an exception outside ensure_daemon_default's own
-        except (OSError, CommandError) tuple -- so the app mutation lock the
-        constructor took can never stay held (11-REVIEWS.md cycle 3 finding
-        #15). The post carries the policy id, or None when none was wired, so
-        the take and the release are paired on the same condition. An
-        exception raised inside the try still propagates normally after the
-        finally runs and is recorded on the Worker itself (state=ERROR,
-        .error); exit_on_error=False is what keeps that from also crashing
-        the app, so this fix only ever ADDS the guaranteed message post, it
-        never swallows or hides a genuine bug.
+        self._schedule_defaults() returns normally or raises ANYTHING -- so the
+        app mutation lock the constructor (or the install run's end) took can
+        never stay held (11-REVIEWS.md cycle 3 finding #15). An exception
+        raised inside the try still propagates normally after the finally runs
+        and is recorded on the Worker itself (state=ERROR, .error);
+        exit_on_error=False is what keeps that from also crashing the app, so
+        this only ever ADDS the guaranteed message post, it never swallows or
+        hides a genuine bug.
         """
-        applied = False
-        live: bool | None = None
+        report = schedules.ReconcileReport()
         try:
-            if self._daemon_default is not None:
-                applied = self._daemon_default()
-            # Resolved HERE, on the worker thread, never in the handler: the
-            # apply's own finally just invalidated the timer cache, so this
-            # read is guaranteed to spawn `systemctl --user is-active` (WR-02).
-            policies_screen = self._views.get("policies")
-            if self._daemon_default_policy_id is not None and isinstance(
-                policies_screen, PoliciesScreen
-            ):
-                live = policies_screen.live_state(self._daemon_default_policy_id)
+            if self._schedule_defaults is not None:
+                report = self._schedule_defaults()
         finally:
-            self.post_message(DaemonDefaultApplied(self._daemon_default_policy_id, applied, live))
+            self.post_message(ScheduleDefaultsApplied(report))
 
-    def on_daemon_default_applied(self, message: DaemonDefaultApplied) -> None:
+    def on_schedule_defaults_applied(self, message: ScheduleDefaultsApplied) -> None:
         # Released FIRST, unconditionally: the worker posts this on every
         # outcome, so a crash never leaves the lock held.
         self.end_mutation()
-        policies_screen = self._views.get("policies")
-        if message.policy_id is not None and isinstance(policies_screen, PoliciesScreen):
-            policies_screen.refresh_daemon_state(message.policy_id, message.applied, message.live)
-        # The apply changes the environment rows a visible view shows (the
-        # daemon's tweaks row on Uninstall), so repaint it without a pass.
-        # Policies is skipped: refresh_daemon_state already wrote its row.
-        if self._visible_app_screen() is not policies_screen:
+        lines = schedules.reconcile_lines(message.report)
+        if lines:
+            severity = "warn" if any(kind == "warn" for _text, kind in lines) else "ok"
+            self._announce_startup_line(" · ".join(text for text, _kind in lines), severity)
+        # The reconcile changes the rows Schedules shows and the tweak rows the
+        # Uninstall view lists: repaint whichever view is up, without a pass.
+        schedules_screen = self._views.get("schedules")
+        if isinstance(schedules_screen, SchedulesScreen) and schedules_screen.is_mounted:
+            schedules_screen.state_refreshed()
+        if self._visible_app_screen() is not schedules_screen:
             self._render_published()
         value, self._deferred_link_mode = self._deferred_link_mode, None
         if value is not None:
             self._move_first_link_mode(value, self._views.get(self.current_view, self.catalog))
+
+    def _announce_startup_line(self, text: str, severity: Severity | str) -> None:
+        """The reconcile's lines ride the startup-warning path: over an empty status of the
+        visible view, else queued for the next view that becomes visible (T-15.6-13)."""
+        screen = self._visible_app_screen()
+        if screen is None or screen.status.text:
+            self._pending_warnings.append(text)
+            return
+        screen.status.set(text, severity)
 
     @property
     def catalog(self) -> CatalogScreen:
@@ -4707,6 +4690,11 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
     def on_install_run_finished(self, message: InstallRunFinished) -> None:
         self.end_mutation()
         self.run_in_flight = False
+        # SPEC edge R3: a tool this run just installed gets its update schedule in the same
+        # session. Taken after the run's own end_mutation, released by the worker's message.
+        if self._schedule_defaults is not None:
+            self.begin_mutation(MutationHolder.SCHEDULE_DEFAULTS)
+            self._apply_schedule_defaults_worker()
         # Every mutation this app performs calls invalidate
         # (installer/version_status.py:26-30's own invariant); the install
         # path was the one mutation that skipped it, so a tool the run just

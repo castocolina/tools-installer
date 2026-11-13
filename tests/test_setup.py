@@ -517,7 +517,7 @@ def _capture_app(
     monkeypatch.setattr(setup, "UnifiedApp", _App)
     # The stand-in never runs the daemon-default worker that finishes the armed
     # collector, so main would otherwise sit out the full 5 s wait every test.
-    monkeypatch.setattr(setup, "DAEMON_DEFAULT_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(setup, "SCHEDULE_DEFAULT_WAIT_SECONDS", 0.01)
     return seen
 
 
@@ -593,6 +593,14 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     monkeypatch.setattr("installer.settings.default_settings_path", lambda: settings_path)
     monkeypatch.setattr(setup, "default_settings_path", lambda: settings_path, raising=False)
+
+
+def _plant_schedule_state(home: Path) -> None:
+    """A schedule state file under the scratch HOME: the one footprint a sweep adapter reports."""
+    from installer import schedules
+
+    schedules.save_state(schedules.default_state_path(), schedules.ScheduleState())
+    assert (home / ".local" / "state" / "tools-installer" / "schedules.json").exists()
 
 
 def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
@@ -785,7 +793,6 @@ _KEPT_POLICY_IDS = {
         "tweak:docker",
         "tweak:countdown",
         "tweak:apt-upgrade",
-        "daemon:prune-tmp-linux",
         "cache-redirect:bun",
         "desktop-shell",
     ],
@@ -793,27 +800,18 @@ _KEPT_POLICY_IDS = {
         "ban",
         "tweak:docker",
         "tweak:countdown",
-        "daemon:prune-tmpdir",
         "cache-redirect:bun",
     ],
 }
 
 
-def _no_daemon(*_args: object, **_kwargs: object) -> None:
-    return None
-
-
-def _policy_ids(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str, *, daemon: bool = True
-) -> list[str]:
+def _policy_ids(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str) -> list[str]:
     """The ids `setup.main(["--uninstall"])` hands the Policies view on `platform_os`."""
     _sandbox(monkeypatch, tmp_path)
     if platform_os != "macos":
         linux = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=False)
         monkeypatch.setattr(setup, "detect", lambda: linux)
         monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
-    if not daemon:
-        monkeypatch.setattr(setup, "_build_daemon_policy", _no_daemon)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
     policies = seen[0]["policies"]
@@ -825,20 +823,17 @@ def _policy_ids(
 def test_policies_list_keeps_only_the_kept_ids(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str
 ) -> None:
-    """SPEC R7: exactly the rows outside any install, in their current order, ids compared
-    as exact strings (so a `tweak:` shell tool does not hide behind the kept `tweak:docker`)."""
+    """SPEC R7, R9: exactly the rows outside any install and outside Schedules, in their
+    current order, ids compared as exact strings (so a `tweak:` shell tool does not hide
+    behind the kept `tweak:docker`). The tmp cleanup moved to Schedules; the bun cache redirect
+    stays (D-23)."""
     ids = _policy_ids(monkeypatch, tmp_path, platform_os)
     assert ids == _KEPT_POLICY_IDS[platform_os]
-    assert not any(i.startswith(("agent:", "vscode:")) or i == "omz-plugins" for i in ids)
+    assert not any(
+        i.startswith(("agent:", "vscode:", "daemon:")) or i == "omz-plugins" for i in ids
+    )
+    assert "cache-redirect:bun" in ids
     assert not {f"tweak:{tool}" for tool in SHELL_INIT_TOOLS} & set(ids)
-
-
-@pytest.mark.parametrize("platform_os", ["fedora", "macos"])
-def test_policies_list_without_the_daemon_is_the_rest(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform_os: str
-) -> None:
-    ids = _policy_ids(monkeypatch, tmp_path, platform_os, daemon=False)
-    assert ids == [i for i in _KEPT_POLICY_IDS[platform_os] if not i.startswith("daemon:")]
 
 
 def test_uninstall_still_sweeps_shell_init_and_omz(
@@ -960,12 +955,11 @@ def test_daemon_policy_is_absent_on_linux_without_systemd(
     assert not any(policy.id.startswith("daemon:") for policy in policies.policies)
 
 
-def test_daemon_policy_is_present_on_linux_with_systemd(
+def test_no_daemon_row_in_policies_on_linux_with_systemd(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """D-01a: on a debian platform whose lookup resolves systemctl, exactly
-    one daemon:-prefixed policy reaches PolicyInputs, and its id is the
-    Linux one -- not the macOS `daemon:prune-tmpdir` id."""
+    """SPEC R9, D-23: on a debian platform whose lookup resolves systemctl, no daemon:-prefixed
+    policy reaches PolicyInputs; the tmp cleanup is a Schedules row."""
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
@@ -974,8 +968,7 @@ def test_daemon_policy_is_present_on_linux_with_systemd(
     assert setup.main(["--uninstall"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    daemon_ids = [policy.id for policy in policies.policies if policy.id.startswith("daemon:")]
-    assert daemon_ids == ["daemon:prune-tmp-linux"]
+    assert not [policy.id for policy in policies.policies if policy.id.startswith("daemon:")]
 
 
 def test_build_daemon_policy_returns_none_off_macos_only_when_systemctl_is_unresolvable() -> None:
@@ -1063,13 +1056,13 @@ def test_build_daemon_policy_is_fail_closed_not_fail_hidden_for_a_bad_environmen
     assert policy.id == "daemon:prune-tmpdir"
 
 
-def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
+def test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_point(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """apply_daemon_default's ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
+    """apply_schedule_defaults' ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
     #14): only the default/no-flag path (_run_interactive_wizard's own call
     site -- the genuine, normal interactive `make setup` wizard flow) ever
-    wires a real daemon_default callback into UnifiedApp. `--doctor`
+    wires a real schedule_defaults callback into UnifiedApp. `--doctor`
     (read-only, Makefile:19), `--uninstall`, and `--guard`'s interactive
     Policies view must never auto-apply -- proven against _capture_app's
     own CAPTURED kwargs, not merely that an injected callback was never
@@ -1086,25 +1079,21 @@ def test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point(
     doctor_kwargs, uninstall_kwargs, policies_kwargs, default_kwargs = seen
 
     for kwargs in (doctor_kwargs, uninstall_kwargs, policies_kwargs):
-        assert kwargs.get("daemon_default") is None
-        assert kwargs.get("daemon_default_policy_id") is None
+        assert kwargs.get("schedule_defaults") is None
 
-    assert callable(default_kwargs["daemon_default"])
-    assert default_kwargs["daemon_default_policy_id"] == "daemon:prune-tmpdir"
+    assert callable(default_kwargs["schedule_defaults"])
 
 
-def test_daemon_default_is_wired_on_linux_when_systemd_is_available(
+def test_schedule_defaults_are_wired_on_linux_when_systemd_is_available(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """D-01a's Linux half, pinned at the composition root: the on-by-default
-    wiring fires from the genuine interactive wizard entry point on Linux
-    too, once systemd is available -- mirrors
-    test_daemon_default_is_wired_only_for_the_genuine_setup_wizard_entry_point's
-    macOS-default coverage, and its own daemon_default_policy_id is the
-    Linux id, not the macOS one."""
+    """D-01a's Linux half, pinned at the composition root: the reconcile wiring fires from the
+    genuine interactive wizard entry point on a Linux platform (a `fedora` key) too -- mirrors
+    test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_point's
+    macOS-default coverage."""
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup.shutil, "which", _systemctl_and_uv)
-    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     monkeypatch.setattr(setup, "detect", lambda: linux)
     seen = _capture_app(monkeypatch)
 
@@ -1113,10 +1102,8 @@ def test_daemon_default_is_wired_on_linux_when_systemd_is_available(
 
     assert len(seen) == 2
     uninstall_kwargs, wizard_kwargs = seen
-    assert uninstall_kwargs.get("daemon_default") is None
-    assert uninstall_kwargs.get("daemon_default_policy_id") is None
-    assert callable(wizard_kwargs["daemon_default"])
-    assert wizard_kwargs["daemon_default_policy_id"] == "daemon:prune-tmp-linux"
+    assert uninstall_kwargs.get("schedule_defaults") is None
+    assert callable(wizard_kwargs["schedule_defaults"])
 
 
 def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
@@ -1402,14 +1389,13 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
         importlib.reload(setup)
 
 
-def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
+def test_the_non_interactive_uninstall_cli_forwards_the_schedule_adapters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """setup.main(["--uninstall", "--yes"])'s non-interactive path constructs
-    and forwards a real (non-None) daemon_policy into run_uninstall on macOS
-    -- the CLI teardown sweep, per _build_daemon_policy's own single, shared
-    construction point."""
+    """setup.main(["--uninstall", "--yes"])'s non-interactive path forwards no daemon policy and
+    one `schedule:` adapter per owned schedule into run_uninstall, with the removal hook bound."""
     _sandbox(monkeypatch, tmp_path)
+    _plant_schedule_state(tmp_path)
     forwarded: list[dict[str, object]] = []
 
     def fake_run_uninstall(
@@ -1421,9 +1407,10 @@ def test_the_non_interactive_uninstall_cli_forwards_a_real_daemon_policy(
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
 
     assert setup.main(["--uninstall", "--yes"]) == 0
-    daemon_policy_obj = forwarded[0]["daemon_policy"]
-    assert isinstance(daemon_policy_obj, Policy)
-    assert daemon_policy_obj.id == "daemon:prune-tmpdir"
+    assert forwarded[0]["daemon_policy"] is None
+    extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
+    assert [p.id for p in extras if p.id.startswith("schedule:")] == ["schedule:state"]
+    assert callable(forwarded[0]["schedule_removed"])
 
 
 def test_both_removers_bind_run_captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1461,13 +1448,13 @@ def test_a_failed_cli_removal_exits_non_zero(
     assert setup.main(["--uninstall", "--yes"]) == 1
 
 
-def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
+def test_the_interactive_uninstall_view_forwards_the_schedule_adapters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """_do_uninstall's own daemon_policy kwarg must be the SAME object (by
-    identity) already appended to PolicyInputs.policies -- never a second,
-    independently-constructed daemon_policy."""
+    """_do_uninstall sweeps every schedule through its adapter in `extra_policies` and binds the
+    removal hook; it forwards no daemon policy any more (24.2-11 Task 3, D-23)."""
     _sandbox(monkeypatch, tmp_path)
+    _plant_schedule_state(tmp_path)
     seen = _capture_app(monkeypatch)
     forwarded: list[dict[str, object]] = []
 
@@ -1478,10 +1465,6 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
     monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
 
     assert setup.main(["--uninstall"]) == 0
-    policies = seen[0]["policies"]
-    assert isinstance(policies, PolicyInputs)
-    daemon_in_list = next(p for p in policies.policies if p.id == "daemon:prune-tmpdir")
-
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
@@ -1489,7 +1472,10 @@ def test_the_interactive_uninstall_view_forwards_the_same_daemon_instance(
             tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
         )
     )
-    assert forwarded[0]["daemon_policy"] is daemon_in_list
+    assert forwarded[0]["daemon_policy"] is None
+    extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
+    assert [p.id for p in extras if p.id.startswith("schedule:")] == ["schedule:state"]
+    assert callable(forwarded[0]["schedule_removed"])
     # The TUI remover runs its child on run_captured too (review R2-04).
     from installer.run import run_captured
 
@@ -2509,14 +2495,14 @@ def test_headless_all_never_constructs_unified_app(monkeypatch: pytest.MonkeyPat
     assert rendered == []
 
 
-def test_interactive_app_is_built_with_execute_and_daemon_default(
+def test_interactive_app_is_built_with_execute_and_schedule_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     assert seen[0]["execute"] is not None
-    assert callable(seen[0]["daemon_default"])
+    assert callable(seen[0]["schedule_defaults"])
 
 
 def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text(
@@ -2866,25 +2852,25 @@ def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing
 # showing an owner the mutation path re-resolves as unknown a moment later.
 
 
-def test_build_app_arms_the_collector_only_when_it_wires_the_daemon_default(
+def test_build_app_arms_the_collector_only_when_it_wires_the_schedule_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
     _sandbox(monkeypatch, tmp_path)
-    armed = DaemonDefaultWarnings()
-    unarmed = DaemonDefaultWarnings()
+    armed = ScheduleDefaultWarnings()
+    unarmed = ScheduleDefaultWarnings()
     setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
-        apply_daemon_default=True,
-        daemon_default_warnings=armed,
+        apply_schedule_defaults=True,
+        schedule_default_warnings=armed,
     )
     setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
-        apply_daemon_default=False,
-        daemon_default_warnings=unarmed,
+        apply_schedule_defaults=False,
+        schedule_default_warnings=unarmed,
     )
     assert armed.wait(0.05)[1] is False
     messages, completed = unarmed.wait(5)
@@ -2895,12 +2881,12 @@ def test_build_app_arms_the_collector_only_when_it_wires_the_daemon_default(
 def test_interactive_wizard_prints_warnings_before_the_abort_return(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
 
     class _Aborting:
         outcomes = None
@@ -2912,14 +2898,14 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
             collector.finish()
 
     def fake_build(*_args: object, **kwargs: object) -> _Aborting:
-        handed = kwargs["daemon_default_warnings"]
-        assert isinstance(handed, DaemonDefaultWarnings)
+        handed = kwargs["schedule_default_warnings"]
+        assert isinstance(handed, ScheduleDefaultWarnings)
         assert handed is collector
         handed.arm()
         return _Aborting()
 
     monkeypatch.setattr(setup, "_build_app", fake_build)
-    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: collector)
+    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: collector)
     assert setup.main([]) == 0
     text = buffer.getvalue()
     warning_at = text.index("another timer is still running")
@@ -2930,7 +2916,7 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
 def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_when_empty(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
@@ -2944,7 +2930,7 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
 
     monkeypatch.setattr(setup, "clean_rc_duplicates", no_duplicates)
     monkeypatch.setattr(setup, "collect_bin_dirs", no_bins)
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
 
     class _Done:
         run_in_flight = False
@@ -2960,13 +2946,13 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
         return _Done()
 
     monkeypatch.setattr(setup, "_build_app", fake_build)
-    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: collector)
+    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: collector)
     assert setup.main([]) == 0
     assert "taken over" in buffer.getvalue()
     assert "Aborted." not in buffer.getvalue()
 
     quiet = io.StringIO()
-    empty = DaemonDefaultWarnings()
+    empty = ScheduleDefaultWarnings()
     monkeypatch.setattr(setup, "Console", lambda: Console(file=quiet, width=120, no_color=True))
 
     class _Quiet:
@@ -2981,7 +2967,7 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
         return _Quiet()
 
     monkeypatch.setattr(setup, "_build_app", quiet_build)
-    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: empty)
+    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: empty)
     assert setup.main([]) == 0
     assert quiet.getvalue() == ""
 
@@ -2989,12 +2975,12 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
 def test_interactive_wizard_labels_a_timed_out_background_apply(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from installer.policy import DAEMON_DEFAULT_WAIT_SECONDS, DaemonDefaultWarnings
+    from installer.schedules import SCHEDULE_DEFAULT_WAIT_SECONDS, ScheduleDefaultWarnings
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
 
     class _Aborting:
         outcomes = None
@@ -3009,13 +2995,13 @@ def test_interactive_wizard_labels_a_timed_out_background_apply(
         return _Aborting()
 
     monkeypatch.setattr(setup, "_build_app", fake_build)
-    monkeypatch.setattr(setup, "DaemonDefaultWarnings", lambda: collector)
-    monkeypatch.setattr(setup, "DAEMON_DEFAULT_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: collector)
+    monkeypatch.setattr(setup, "SCHEDULE_DEFAULT_WAIT_SECONDS", 0.01)
     assert setup.main([]) == 0
     text = buffer.getvalue()
     assert "partial" in text
     assert "had not finished" in text
-    assert DAEMON_DEFAULT_WAIT_SECONDS > 0
+    assert SCHEDULE_DEFAULT_WAIT_SECONDS > 0
 
 
 def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
@@ -3445,7 +3431,7 @@ def test_interactive_wizard_hands_one_probe_to_execute_and_policy_inputs(
     assert built == [marker]
 
 
-def test_interactive_wizard_shares_one_cache_with_the_daemon_policy(
+def test_interactive_wizard_builds_one_timer_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
@@ -3466,12 +3452,8 @@ def test_interactive_wizard_shares_one_cache_with_the_daemon_policy(
         return cache
 
     monkeypatch.setattr(setup, "_timer_state_cache", fake_cache)
-    seen = _capture_app(monkeypatch)
+    _capture_app(monkeypatch)
     assert setup.main([]) == 0
-    policies = seen[0]["policies"]
-    assert isinstance(policies, PolicyInputs)
-    daemon = next(policy for policy in policies.policies if policy.id.startswith("daemon:"))
-    assert daemon.state_cache is cache
     assert calls == [cache]
 
 
@@ -3537,12 +3519,8 @@ def test_build_app_omitted_arguments_still_share_one_cache(
     setup._build_app([], _linux_platform())  # pyright: ignore[reportPrivateUsage]
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    daemon = next(policy for policy in policies.policies if policy.id.startswith("daemon:"))
     probe = policies.disk_pressure
     assert callable(probe)
-    active = daemon.is_active
-    assert active is not None
-    assert active() is False
     pressure = probe()
     assert isinstance(pressure, DiskPressure)
     assert pressure.daemon is DaemonState.INACTIVE

@@ -14,6 +14,7 @@ import plistlib
 import re
 import shutil
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -1134,9 +1135,18 @@ class _Removal:
     kept: tuple[ReceiptArtifact, ...]  # recorded files someone changed, so left in place
 
 
-def _tmp_decided(ctx: ScheduleContext) -> bool:
+def _tmp_decided(ctx: ScheduleContext, *, unreadable: bool = True) -> bool:
+    """Whether tmp cleanup's decided marker is in `~/.myshellrc`.
+
+    A rc file that cannot be read answers `unreadable`: the reconcile must not turn the row on
+    over a decision it cannot see (True), and the sweep must not touch a marker it cannot prove
+    (False, `_state_leftovers`).
+    """
     reader = daemon.decided if ctx.platform_os == "macos" else systemd_daemon.decided
-    return reader(ctx.myshellrc_path)
+    try:
+        return reader(ctx.myshellrc_path)
+    except (OSError, UnicodeDecodeError):
+        return unreadable
 
 
 def _remove_timer(
@@ -1528,6 +1538,42 @@ def reconcile_lines(report: ReconcileReport) -> tuple[tuple[str, Literal["ok", "
     return tuple(lines)
 
 
+# A wedged or never-dispatched worker costs this delay, never a hang.
+SCHEDULE_DEFAULT_WAIT_SECONDS = 5.0
+
+
+class ScheduleDefaultWarnings:
+    """Collects warnings from the on-by-default apply and says when it finished.
+
+    The schedule defaults run on a Textual thread worker that ``app.run()`` does
+    not join. Without this event the competing-mechanism disclosure is printed
+    only when that worker happens to finish before the CLI's next line, and the
+    ``summary is None`` abort branch returns before any later print at all.
+    ``wait`` returns immediately, with completion True, when the collector was
+    never armed, so a run with no auto-apply pays nothing.
+    """
+
+    def __init__(self) -> None:
+        self._messages: list[str] = []
+        self._armed = False
+        self._finished = threading.Event()
+
+    def append(self, message: str) -> None:
+        self._messages.append(message)
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def finish(self) -> None:
+        self._finished.set()
+
+    def wait(self, timeout: float) -> tuple[tuple[str, ...], bool]:
+        if not self._armed:
+            return (), True
+        completed = self._finished.wait(timeout)
+        return tuple(self._messages), completed
+
+
 # --- The uninstall sweep: one adapter per schedule with anything of ours on disk (24.2-08) ----
 
 
@@ -1552,7 +1598,9 @@ def _state_artifacts(ctx: ScheduleContext) -> tuple[Path, ...]:
 
 
 def _state_leftovers(ctx: ScheduleContext) -> bool:
-    return any(_exists(path) for path in _state_artifacts(ctx)) or _tmp_decided(ctx)
+    return any(_exists(path) for path in _state_artifacts(ctx)) or _tmp_decided(
+        ctx, unreadable=False
+    )
 
 
 def _footprint(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -> bool:

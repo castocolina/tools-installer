@@ -508,15 +508,25 @@ def run_guard(
     return True
 
 
-def _has_daemon_id(ids: tuple[str, ...]) -> bool:
-    """True when any id in ids is the background daemon's own namespaced id.
+def has_schedule_id(ids: tuple[str, ...]) -> bool:
+    """True when any id in ids is a schedule adapter's own namespaced id (`schedule:<id>`).
 
-    A tiny, named predicate rather than an inline generator expression
-    repeated at every daemon-aware copy call site (preview + success, CLI and
-    TUI): naming it once makes the "daemon:-prefixed id" condition legible
-    and keeps every call site byte-for-byte consistent with the others.
+    A tiny, named predicate rather than an inline generator expression repeated at every
+    schedule-aware copy call site (preview + success, CLI and TUI): naming it once keeps the
+    condition legible and every call site consistent with the others.
     """
-    return any(policy_id.startswith("daemon:") for policy_id in ids)
+    return any(policy_id.startswith("schedule:") for policy_id in ids)
+
+
+def schedule_phrase(ids: tuple[str, ...]) -> str:
+    """What the tweak copy calls the schedules among `ids`, true for one id or several ('' if none).
+
+    `schedule:state` is the leftover state and logs, never a timer, so it is not counted as one.
+    """
+    timers = sum(1 for i in ids if i.startswith("schedule:") and i != "schedule:state")
+    if timers:
+        return "the background maintenance job" + ("s" if timers > 1 else "")
+    return "the schedule state and logs" if has_schedule_id(ids) else ""
 
 
 @dataclass(frozen=True)
@@ -687,9 +697,11 @@ def _after_removal(
     myshellrc_path: Path,
     extra_policies: tuple[Policy, ...],
     platform_os: str,
+    schedule_removed: Callable[[str], tuple[str, ...]] | None = None,
 ) -> SweepResult:
-    """What a successful removal takes with it: its settings keys, its shell-init bundle, and the
-    desktop SHELL row when zsh goes (T-23-62). Nothing else of the tweak sweep is touched."""
+    """What a successful removal takes with it: its settings keys, its shell-init bundle, the
+    desktop SHELL row when zsh goes (T-23-62), and the timers that target it (24.2 F3). Nothing
+    else of the tweak sweep is touched."""
     parts: list[SweepResult] = []
     if tool.id in receipts.CONFIG_AGENTS:
         # herdr declares config_paths: its keys revert here, before `_config_step` can delete the
@@ -707,6 +719,8 @@ def _after_removal(
     if tool.id == "zsh" and platform_os != "macos":
         owned = [p for p in extra_policies if p.id == "desktop-shell" and policy_owned(p)]
         parts.append(sweep_policies(owned))
+    if schedule_removed is not None:
+        parts.append(SweepResult(schedule_lines=schedule_removed(tool.id)))
     return _merge(parts)
 
 
@@ -719,6 +733,7 @@ def _merge(results: Sequence[SweepResult]) -> SweepResult:
         settings_reverted=tuple(x for r in results for x in r.settings_reverted),
         settings_kept=tuple(x for r in results for x in r.settings_kept),
         shell_init_off=tuple(x for r in results for x in r.shell_init_off),
+        schedule_lines=tuple(x for r in results for x in r.schedule_lines),
     )
 
 
@@ -732,6 +747,7 @@ def removal_result_lines(result: SweepResult) -> tuple[str, ...]:
         lines.append(f"Kept settings you changed since this installer wrote them: {kept}.")
     if result.shell_init_off:
         lines.append(f"Shell init turned off for {', '.join(result.shell_init_off)}.")
+    lines.extend(result.schedule_lines)
     return tuple(lines)
 
 
@@ -865,6 +881,7 @@ def run_uninstall(
     extra_policies: tuple[Policy, ...],
     runner: Runner,
     platform_os: str = HOST_SETTINGS_OS,
+    schedule_removed: Callable[[str], tuple[str, ...]] | None = None,
 ) -> tuple[list[Path], tuple[str, ...]]:
     """Preview each tool's removal, confirm, then remove the tools in dependency order,
     the PATH block, any pip/npm-ban artifacts (shims + alias blocks), and still-enabled
@@ -980,10 +997,10 @@ def run_uninstall(
     if shimmed:
         console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:
-        # Byte-identical to today when no daemon: id is among the offered ids
-        # (Linux, or the daemon never enabled) — the tail is appended only
-        # when one is present.
-        tail = " and the background maintenance job" if _has_daemon_id(tweaks) else ""
+        # Byte-identical to today when no schedule: id is among the offered ids —
+        # the tail is appended only when one is present.
+        phrase = schedule_phrase(tweaks)
+        tail = f" and {phrase}" if phrase else ""
         console.print(f"These shell tweaks{tail} will also be disabled ({', '.join(tweaks)}).")
         # Name the plugins and the file: .zshrc is the one file in the sweep the
         # installer does not own, so "omz-plugins" alone is not enough for the
@@ -1059,6 +1076,7 @@ def run_uninstall(
                     myshellrc_path=myshellrc_path,
                     extra_policies=extra_policies,
                     platform_os=platform_os,
+                    schedule_removed=schedule_removed,
                 )
             )
             if labels := host_labels(outcome.unregistered):
@@ -1093,12 +1111,9 @@ def run_uninstall(
     swept = sweep_policies([policy for policy in policies if policy.id not in done.swept])
     if swept.swept:
         # Byte-identical to today ("Shell tweaks disabled: ...") when no
-        # daemon: id is among what the sweep actually swept.
-        prefix = (
-            "Shell tweaks and the background maintenance job"
-            if _has_daemon_id(swept.swept)
-            else "Shell tweaks"
-        )
+        # schedule: id is among what the sweep actually swept.
+        phrase = schedule_phrase(swept.swept)
+        prefix = f"Shell tweaks and {phrase}" if phrase else "Shell tweaks"
         console.print(f"{prefix} disabled: {', '.join(swept.swept)}.")
     if swept.failed:
         console.print(
@@ -1218,6 +1233,7 @@ def perform_uninstall(
     runner: Runner,
     catalog: Sequence[Tool],
     platform_os: str = HOST_SETTINGS_OS,
+    schedule_removed: Callable[[str], tuple[str, ...]] | None = None,
 ) -> SweepResult:
     """Apply exactly the levers the view chose, composing the existing core
     removers. `catalog` is the whole registry (review R1-15): a config path is shared with
@@ -1284,6 +1300,7 @@ def perform_uninstall(
                     myshellrc_path=myshellrc_path,
                     extra_policies=extra_policies,
                     platform_os=platform_os,
+                    schedule_removed=schedule_removed,
                 )
             )
         else:

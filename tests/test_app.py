@@ -17,7 +17,7 @@ from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState
 from installer.model import Method, Tool
 from installer.platform import Platform
-from installer.policy import Policy, daemon_policy
+from installer.policy import Policy, PolicyResult, daemon_policy
 from installer.post_install import ConfirmSensitiveAction
 from installer.render import display_order
 from installer.run import CommandError, Runner
@@ -2989,37 +2989,79 @@ def _daemon_for_uninstall(
     return policy, state_path
 
 
-def test_run_uninstall_forwards_daemon_policy_into_the_sweep_and_clears_the_marker(
+def _schedule_policy(removed: list[str], policy_id: str = "schedule:tmp-cleanup") -> Policy:
+    """A stand-in for one `schedule:<id>` adapter: owned until its remove runs."""
+
+    def remove() -> PolicyResult:
+        removed.append(policy_id)
+        return PolicyResult(layers=(), reload_hint=None, warning=None)
+
+    return Policy(
+        id=policy_id,
+        label=policy_id,
+        description="",
+        active=False,
+        apply=remove,
+        remove=remove,
+        owned=lambda: policy_id not in removed,
+    )
+
+
+def test_run_uninstall_sweeps_a_schedule_policy_and_names_the_background_job(
     tmp_path: Path,
 ) -> None:
-    from installer import daemon
     from installer.app import run_uninstall
 
-    daemon_policy_obj, state_path = _daemon_for_uninstall(tmp_path)
-    daemon_policy_obj.apply()
-    plist_path = tmp_path / "LaunchAgents" / "com.tools-installer.prune-tmpdir.plist"
-    assert plist_path.exists()
-    assert daemon.decided(state_path) is True
-
+    removed: list[str] = []
     console, buf = _console()
     run_uninstall(
         [],
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
-        myshellrc_path=state_path,
+        myshellrc_path=tmp_path / ".myshellrc",
         rc_paths=[],
         confirm=lambda _m: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
-        daemon_policy=daemon_policy_obj,
-        extra_policies=(),
+        daemon_policy=None,
+        extra_policies=(_schedule_policy(removed),),
         runner=_no_removal_runner,
     )
-    assert not plist_path.exists()
-    assert daemon.decided(state_path) is False
+    assert removed == ["schedule:tmp-cleanup"]
     out = buf.getvalue()
-    assert "background maintenance job" in out
-    assert "daemon:prune-tmpdir" in out
+    assert "These shell tweaks and the background maintenance job will also be disabled" in out
+    assert "Shell tweaks and the background maintenance job disabled: schedule:tmp-cleanup." in out
+
+
+def test_run_uninstall_copy_is_plural_for_several_schedules_and_names_state_alone(
+    tmp_path: Path,
+) -> None:
+    from installer.app import run_uninstall
+
+    def run(*ids: str) -> str:
+        removed: list[str] = []
+        console, buf = _console()
+        run_uninstall(
+            [],
+            console,
+            default_bin_dir=tmp_path / ".local" / "bin",
+            myshellrc_path=tmp_path / ".myshellrc",
+            rc_paths=[],
+            confirm=lambda _m: True,
+            bundles=(),
+            zshrc_path=tmp_path / ".zshrc",
+            daemon_policy=None,
+            extra_policies=tuple(_schedule_policy(removed, policy_id) for policy_id in ids),
+            runner=_no_removal_runner,
+        )
+        return buf.getvalue()
+
+    several = run("schedule:tmp-cleanup", "schedule:update-claude")
+    assert "These shell tweaks and the background maintenance jobs will also be disabled" in several
+    assert "Shell tweaks and the background maintenance jobs disabled:" in several
+    state_only = run("schedule:state")
+    assert "These shell tweaks and the schedule state and logs will also be disabled" in state_only
+    assert "background maintenance job" not in state_only
 
 
 def test_run_uninstall_requires_daemon_policy() -> None:
@@ -3216,31 +3258,30 @@ def test_perform_uninstall_requires_daemon_policy() -> None:
         )
 
 
-def test_run_uninstall_preview_names_the_background_job_when_the_daemon_is_active(
+def test_run_uninstall_preview_names_the_background_job_when_a_schedule_is_owned(
     tmp_path: Path,
 ) -> None:
     from installer.app import run_uninstall
 
-    daemon_policy_obj, state_path = _daemon_for_uninstall(tmp_path)
-    daemon_policy_obj.apply()
-
+    removed: list[str] = []
     console, buf = _console()
     run_uninstall(
         [],
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
-        myshellrc_path=state_path,
+        myshellrc_path=tmp_path / ".myshellrc",
         rc_paths=[],
         confirm=lambda _m: False,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
-        daemon_policy=daemon_policy_obj,
-        extra_policies=(),
+        daemon_policy=None,
+        extra_policies=(_schedule_policy(removed),),
         runner=_no_removal_runner,
     )
     out = buf.getvalue()
     assert "background maintenance job" in out
     assert "These shell tweaks will also be disabled" not in out  # byte-identical-when-absent proof
+    assert removed == []
 
 
 def test_run_uninstall_preview_stays_byte_identical_when_the_daemon_is_absent(

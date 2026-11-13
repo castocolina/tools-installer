@@ -31,6 +31,7 @@ from installer import (
     env_redirect,
     pnpm_globals,
     post_install,
+    runlock,
     schedules,
     systemd_daemon,
 )
@@ -65,14 +66,11 @@ from installer.model import Tool, load_categories, load_tools
 from installer.ownership import read_inventory
 from installer.platform import Platform, detect
 from installer.policy import (
-    DAEMON_DEFAULT_WAIT_SECONDS,
-    DaemonDefaultWarnings,
     Policy,
     ban_policy,
     cache_redirect_policy,
     daemon_policy,
     desktop_shell_policy,
-    ensure_daemon_default,
     linux_daemon_policy,
     tweak_policy,
 )
@@ -90,6 +88,7 @@ from installer.run import (
     run_git_isolated,
 )
 from installer.schedule_run import RunDeps, run_schedule
+from installer.schedules import SCHEDULE_DEFAULT_WAIT_SECONDS, ScheduleDefaultWarnings
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -539,7 +538,7 @@ def _build_daemon_policy(
     on a Linux host that has `systemctl` (D-01b), and None on a Linux host
     without it -- ROADMAP SC#2's "invisible/inert on Linux" is deliberately
     SUPERSEDED by this phase (D-01a): the Linux row is on by default from the
-    interactive wizard's own `apply_daemon_default` allowlist, exactly like
+    interactive wizard's own `apply_schedule_defaults` allowlist, exactly like
     macOS.
 
     `which` defaults to None rather than being bound directly to
@@ -829,17 +828,46 @@ def _print_repairs(
         console.print(text, markup=False, soft_wrap=True)
 
 
+def _schedule_context(
+    platform: Platform, present: Callable[[str], bool]
+) -> schedules.ScheduleContext:
+    """The one context builder: the view, the reconciles and the sweep share these seams."""
+    return schedules.context_for(
+        platform.os,
+        checkout=Path(__file__).resolve().parent,
+        which=shutil.which,
+        present=present,
+        read_models=cursor_shim.read_models,
+    )
+
+
+def _schedule_removed_lines(ctx: schedules.ScheduleContext, tool_id: str) -> tuple[str, ...]:
+    """A removed tool takes its timers with it and says so (D-09 amended by F3)."""
+    report = schedules.after_target_removed(ctx, tool_id)
+    return tuple(text for text, _severity in schedules.reconcile_lines(report))
+
+
+def _reconcile_headless(
+    console: Console, tools: list[Tool], platform: Platform, refresh: VersionRefreshService
+) -> None:
+    """Turn on the schedules nobody has decided about, after an install run (SPEC R3)."""
+    launch = {tool.id: is_installed(tool) for tool in tools}
+    ctx = _schedule_context(platform, refresh.installed_or(launch))
+    for text, _severity in schedules.reconcile_lines(schedules.ensure_schedule_defaults(ctx)):
+        console.print(text, markup=False, soft_wrap=True)
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
     *,
     initial_view: str = BASE_VIEW,
     link_mode: str = "centralized",
-    apply_daemon_default: bool = False,
+    apply_schedule_defaults: bool = False,
     unattended: bool = False,
     settings: SettingsStore | None = None,
     prompt_link_mode: bool = False,
-    daemon_default_warnings: DaemonDefaultWarnings | None = None,
+    schedule_default_warnings: ScheduleDefaultWarnings | None = None,
     disk_pressure: Callable[..., DiskPressure] | None = None,
     timer_cache: systemd_daemon.TimerStateCache | None = None,
     competing: Callable[..., tuple[systemd_daemon.CompetingUnit, ...]] | None = None,
@@ -892,14 +920,14 @@ def _build_app(
     # below -- this is a reordering and nothing else.
     version_refresh, updates, policy, _install = _build_services(tools, platform)
 
-    # Constructed once, here, and shared: the Policies list below, the
-    # on-by-default auto-apply closure, and the Uninstall teardown closures
-    # (all wired further down) must never each build their own independent
-    # daemon_policy instance -- all three need to read and act on the exact
-    # same object.
-    daemon = _build_daemon_policy(
-        platform, version_refresh.installed_or(installed), timer_cache=timer_cache
-    )
+    # One context for the Schedules view, the reconciles and the uninstall sweep (24.2-11).
+    installed_now = version_refresh.installed_or(installed)
+    schedule_ctx = _schedule_context(platform, installed_now)
+
+    def _uninstall_extras() -> tuple[Policy, ...]:
+        # Read when a sweep starts, before any removal runs, so each adapter is built from what
+        # is on disk now (R1-19); the idempotent adapters tolerate a timer a removal took first.
+        return (*redirects, *desktop, *schedules.sweep_adapters(schedule_ctx))
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
         # Runs live inside the UninstallScreen. rc_paths is the standard set so the
@@ -913,9 +941,10 @@ def _build_app(
             rc_paths=_RC_PATHS,
             bundles=BUNDLES,
             zshrc_path=_ZSHRC,
-            daemon_policy=daemon,
-            extra_policies=(*redirects, *desktop),
+            daemon_policy=None,
+            extra_policies=_uninstall_extras(),
             catalog=tools,
+            schedule_removed=lambda tool_id: _schedule_removed_lines(schedule_ctx, tool_id),
         )
 
     def _ban_apply_rc_paths() -> list[Path]:
@@ -967,11 +996,12 @@ def _build_app(
             rc_path=_MYSHELLRC,
             bin_dir=_DEFAULT_BIN_DIR,
             zshrc_path=_ZSHRC,
-            daemon_policy=daemon,
-            extra_policies=(*redirects, *desktop),
+            daemon_policy=None,
+            extra_policies=_uninstall_extras(),
         ),
         terminal_sync=_uninstall_terminals,
         retired=lambda: scan_retired(catalog_ids).tools,
+        platform_os=platform.os,
     )
 
     # A legacy alias block is stripped at every launch and its notice rides the startup
@@ -1001,7 +1031,6 @@ def _build_app(
                 for bundle in bundles
                 if bundle.id not in SHELL_INIT_TOOLS
             ),
-            *((daemon,) if daemon is not None else ()),
             *redirects,
             *desktop,
         ],
@@ -1011,14 +1040,8 @@ def _build_app(
         competing=competing,
     )
 
-    installed_now = version_refresh.installed_or(installed)
     schedule_inputs = ScheduleInputs(
-        context=schedules.context_for(
-            platform.os,
-            checkout=Path(__file__).resolve().parent,
-            present=installed_now,
-            read_models=cursor_shim.read_models,
-        ),
+        context=schedule_ctx,
         present=installed_now,
         disk_pressure=disk_pressure,
         competing=competing,
@@ -1085,45 +1108,39 @@ def _build_app(
         return pnpm_globals.reinstall_node_globals(packages, policy=policy)
 
     # An ALLOWLIST, not the initial_view != "uninstall" blocklist that would
-    # wrongly auto-apply for "doctor"/"policies" too (11-REVIEWS.md cycle 2
+    # wrongly reconcile for "doctor"/"policies" too (11-REVIEWS.md cycle 2
     # finding #14) -- make doctor is documented read-only (Makefile:19), and
     # --guard/--unguard's interactive branch must not silently register a
-    # background deletion LaunchAgent either. Only _run_interactive_wizard's
-    # own call site (the genuine, normal interactive make setup wizard flow)
-    # passes apply_daemon_default=True. The daemon Policy object itself is
-    # still appended to policy_inputs.policies above regardless of this flag,
-    # so it remains visible/toggleable from every entry point -- only the
-    # ON-BY-DEFAULT CALLBACK is gated here.
-    daemon_default = None
-    daemon_default_policy_id = None
-    if daemon is not None and apply_daemon_default:
-        daemon_policy_instance = daemon
-        if daemon_default_warnings is not None:
-            daemon_default_warnings.arm()
+    # background timer either. Only _run_interactive_wizard's own call site
+    # (the genuine, normal interactive make setup wizard flow) passes
+    # apply_schedule_defaults=True; the Schedules view itself is visible from
+    # every entry point.
+    schedule_defaults: Callable[[], schedules.ReconcileReport] | None = None
+    if apply_schedule_defaults:
+        if schedule_default_warnings is not None:
+            schedule_default_warnings.arm()
+        # A live probe, never the launch snapshot: the reconcile after an install run must see
+        # the tool that run just put on PATH.
+        by_id = {tool.id: tool for tool in tools}
+        reconcile_ctx = _schedule_context(
+            platform, lambda tool_id: tool_id in by_id and is_installed(by_id[tool_id])
+        )
+        told: set[str] = set()
 
-        def daemon_default() -> bool:
-            # Closes over daemon_policy_instance, never the module-level
-            # daemon_default local re-bound by this very assignment, and
-            # never re-constructs a second daemon_policy: the SAME instance
-            # already appended to policy_inputs.policies above.
+        def schedule_defaults() -> schedules.ReconcileReport:
             # finish() is unconditional for the same reason the worker's own
-            # finally always posts: an exception outside
-            # ensure_daemon_default's caught tuple must still signal, or the
+            # finally always posts: an exception must still signal, or the
             # console waits the full timeout for a signal that never comes.
             try:
-                return ensure_daemon_default(
-                    daemon_policy_instance,
-                    on_warning=(
-                        daemon_default_warnings.append
-                        if daemon_default_warnings is not None
-                        else None
-                    ),
-                )
+                report = schedules.ensure_schedule_defaults(reconcile_ctx)
+                for warning in report.warnings:
+                    if schedule_default_warnings is not None and warning not in told:
+                        told.add(warning)
+                        schedule_default_warnings.append(warning)
+                return report
             finally:
-                if daemon_default_warnings is not None:
-                    daemon_default_warnings.finish()
-
-        daemon_default_policy_id = daemon.id
+                if schedule_default_warnings is not None:
+                    schedule_default_warnings.finish()
 
     # D-12: _build_app builds ExecuteInputs itself, so no route (current or
     # future) can build an app that cannot execute an accepted selection.
@@ -1160,8 +1177,7 @@ def _build_app(
         reinstall_globals=_reinstall_globals,
         unavailable=unavailable,
         initial_view=initial_view,
-        daemon_default=daemon_default,
-        daemon_default_policy_id=daemon_default_policy_id,
+        schedule_defaults=schedule_defaults,
         version_refresh=version_refresh,
         updates=updates,
         execute=execute,
@@ -1240,21 +1256,21 @@ def _run_interactive_wizard(
     settings: SettingsStore,
     prompt_link_mode: bool,
 ) -> int:
-    warnings = DaemonDefaultWarnings()
+    warnings = ScheduleDefaultWarnings()
     with _stdin_on_tty():
-        # Only the genuine interactive wizard flow auto-applies the daemon
-        # default (allowlist at the _build_app call site). _build_app builds
+        # Only the genuine interactive wizard flow reconciles the schedule
+        # defaults (allowlist at the _build_app call site). _build_app builds
         # execute and the one shared timer cache / disk-pressure probe itself
         # (D-12), so the wizard passes no cache, probe or execute.
         app = _build_app(
             tools,
             platform,
             link_mode=settings.link_mode,
-            apply_daemon_default=True,
+            apply_schedule_defaults=True,
             unattended=options.yes,
             settings=settings,
             prompt_link_mode=prompt_link_mode,
-            daemon_default_warnings=warnings,
+            schedule_default_warnings=warnings,
         )
         app.run()
     # BEFORE the abort return: an aborted wizard is still a run whose
@@ -1262,7 +1278,7 @@ def _run_interactive_wizard(
     # app.run() does not join the thread worker, so this waits on the
     # collector the closure finishes, bounded so a wedged worker delays
     # rather than hangs.
-    messages, completed = warnings.wait(DAEMON_DEFAULT_WAIT_SECONDS)
+    messages, completed = warnings.wait(SCHEDULE_DEFAULT_WAIT_SECONDS)
     for message in messages:
         console.print(message)
     if not completed:
@@ -1388,12 +1404,25 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
             )
             app.run()
         return _session_exit_code(app)
+    # D-12: the teardown shares one hold of the run lock with nothing else; a scheduled run
+    # that holds it finishes first.
+    run_lock = runlock.try_acquire(runlock.run_lock_path(), runlock.INSTALLER_JOB)
+    if run_lock is None:
+        console.print(runlock.BUSY_MESSAGE, markup=False, soft_wrap=True)
+        return 1
+    try:
+        return _teardown_cli(console, platform, assume_yes=assume_yes)
+    finally:
+        run_lock.release()
+
+
+def _teardown_cli(console: Console, platform: Platform, *, assume_yes: bool) -> int:
     confirm = (lambda _message: True) if assume_yes else ask_confirm
     tools = load_tools(_REGISTRY)
-    # Mirrors _build_app's own installed computation, so the non-interactive
-    # CLI teardown path gates fd/rg-aware daemon construction on the SAME
-    # real-installed-status map the interactive path would use.
+    # Mirrors _build_app's own installed computation, the real-installed-status map the
+    # interactive path would use.
     installed = {tool.id: is_installed(tool) for tool in tools}
+    schedule_ctx = _schedule_context(platform, lambda tool_id: installed.get(tool_id, False))
     legacy, repairs = _launch_repairs()
     notice = legacy.uninstall_line()
     if notice is not None:
@@ -1402,7 +1431,7 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         console.print(text, markup=False, soft_wrap=True)
     for text, _severity in _warnings_only(repairs):
         console.print(text, markup=False, soft_wrap=True)
-    # Retired receipts join the teardown only; `installed` and the daemon policy stay catalog-only.
+    # Retired receipts join the teardown only; `installed` stays catalog-only.
     scan = scan_retired(frozenset(tool.id for tool in tools))
     for text in scan.warnings:
         console.print(text, markup=False, soft_wrap=True)
@@ -1418,8 +1447,13 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
         # total (see _build_app).
         bundles=BUNDLES,
         zshrc_path=_ZSHRC,
-        daemon_policy=_build_daemon_policy(platform, installed),
-        extra_policies=(*_cache_redirect_policies(platform), *_desktop_shell_policies(platform)),
+        daemon_policy=None,
+        extra_policies=(
+            *_cache_redirect_policies(platform),
+            *_desktop_shell_policies(platform),
+            *schedules.sweep_adapters(schedule_ctx),
+        ),
+        schedule_removed=lambda tool_id: _schedule_removed_lines(schedule_ctx, tool_id),
     )
     # D-01/15.6-06 Task 2: absent zsh reverts only owned terminal
     # configuration (sync_terminal_shells' own no-zsh branch), so a teardown
@@ -1571,19 +1605,28 @@ def main(argv: list[str]) -> int:
     post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
     post_install.use_git_runner(run_git_isolated)
     refresh, updates, _, install = _build_services(tools, platform)
-    outcomes = run_wizard(
-        tools,
-        prompter,
-        console,
-        options,
-        refresh=refresh,
-        updates=updates,
-        install=install,
-        terminal_sync=lambda: _sync_terminals(platform),
-        on_mismatch=_ask_mismatch,
-    )
-    if outcomes is None:
-        return 0
+    # D-12: the install run and the reconcile that follows it share one hold of the run lock.
+    run_lock = runlock.try_acquire(runlock.run_lock_path(), runlock.INSTALLER_JOB)
+    if run_lock is None:
+        console.print(runlock.BUSY_MESSAGE, markup=False, soft_wrap=True)
+        return 1
+    try:
+        outcomes = run_wizard(
+            tools,
+            prompter,
+            console,
+            options,
+            refresh=refresh,
+            updates=updates,
+            install=install,
+            terminal_sync=lambda: _sync_terminals(platform),
+            on_mismatch=_ask_mismatch,
+        )
+        if outcomes is None:
+            return 0
+        _reconcile_headless(console, tools, platform, refresh)
+    finally:
+        run_lock.release()
     path_error: str | None = None
     verify_error: str | None = None
     if ran_anything(outcomes):

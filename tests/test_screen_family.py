@@ -25,6 +25,7 @@ from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCan
 from installer.platform import Platform
 from installer.pnpm_globals import PNPM_SPLIT_GROUP, NodeGlobal, NodeGlobalsReport
 from installer.policy import Policy, PolicyLayer, PolicyResult
+from installer.schedules import ReconcileReport
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.systemd_daemon import DaemonState, TimerStateCache
 from installer.ui_common import AppScreen
@@ -37,7 +38,6 @@ from installer.version_status import (
     VersionStatus,
 )
 from installer.wizard_app import (
-    DaemonDefaultApplied,
     DiskPressureProbed,
     DoctorScreen,
     GlobalsReinstalled,
@@ -47,6 +47,7 @@ from installer.wizard_app import (
     NavScreen,
     PolicyInputs,
     RefreshPublished,
+    ScheduleDefaultsApplied,
     TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
@@ -103,7 +104,7 @@ def _family_app(
     fix: Callable[[], None] = lambda: None,
     reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
     prompt_link_mode: bool = False,
-    daemon_default: Callable[[], bool] | None = None,
+    schedule_defaults: Callable[[], ReconcileReport] | None = None,
 ) -> UnifiedApp:
     return app_cls(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
@@ -128,7 +129,7 @@ def _family_app(
         updates=updates,
         execute=execute,
         prompt_link_mode=prompt_link_mode,
-        daemon_default=daemon_default,
+        schedule_defaults=schedule_defaults,
     )
 
 
@@ -1602,10 +1603,12 @@ async def test_the_lock_is_released_when_the_update_crashes(tmp_path: Path):
         assert len(updates.targets) == 2
 
 
-# -- 21-15: the job toggle and the on-by-default daemon hold the same lock --
+# -- 21-15: the job toggle and the schedule setup hold the same lock --
 
 _TOGGLE_REFUSAL = "A policy toggle is running; wait for it to finish. Navigation still works."
-_DAEMON_REFUSAL = "A daemon apply is running; wait for it to finish. Navigation still works."
+_SCHEDULE_SETUP_REFUSAL = (
+    "A schedule setup is running; wait for it to finish. Navigation still works."
+)
 
 
 def _policy_result() -> PolicyResult:
@@ -1638,8 +1641,7 @@ def _policy_app(
     policies: list[Policy],
     remover: HeldRemover,
     *,
-    daemon_default: Callable[[], bool] | None = None,
-    daemon_default_policy_id: str | None = None,
+    schedule_defaults: Callable[[], ReconcileReport] | None = None,
     set_link_mode: Callable[[str], None] | None = None,
     tweak_ids: Callable[[], tuple[str, ...]] = lambda: (),
     states: Sequence[Any] | None = None,
@@ -1674,8 +1676,7 @@ def _policy_app(
         ),
         initial_view="policies",
         version_refresh=service,
-        daemon_default=daemon_default,
-        daemon_default_policy_id=daemon_default_policy_id,
+        schedule_defaults=schedule_defaults,
     )
     return app, service
 
@@ -1685,13 +1686,13 @@ def _policy_cursor(app: UnifiedApp, policy_id: str) -> None:
     table.move_cursor(row=table.get_row_index(policy_id))
 
 
-def _held_daemon_default(release: threading.Event) -> Callable[[], bool]:
-    def apply() -> bool:
+def _held_schedule_defaults(release: threading.Event) -> Callable[[], ReconcileReport]:
+    def reconcile() -> ReconcileReport:
         if not release.wait(timeout=10):
-            raise TimeoutError("the daemon default was never released")
-        return True
+            raise TimeoutError("the schedule setup was never released")
+        return ReconcileReport()
 
-    return apply
+    return reconcile
 
 
 async def test_a_background_job_toggle_holds_the_lock(tmp_path: Path):
@@ -1725,14 +1726,13 @@ async def test_a_background_job_toggle_holds_the_lock(tmp_path: Path):
             release.set()
 
 
-async def test_the_daemon_default_holds_the_lock_from_construction(tmp_path: Path):
+async def test_the_schedule_setup_holds_the_lock_from_construction(tmp_path: Path):
     release = threading.Event()
     app, _service = _policy_app(
         tmp_path,
         [_policy(tmp_path, "daemon")],
         HeldRemover(),
-        daemon_default=_held_daemon_default(release),
-        daemon_default_policy_id="daemon",
+        schedule_defaults=_held_schedule_defaults(release),
     )
     assert app.mutation_in_flight
     async with app.run_test(size=(120, 30)) as pilot:
@@ -1745,7 +1745,7 @@ async def test_the_daemon_default_holds_the_lock_from_construction(tmp_path: Pat
             release.set()
 
 
-async def test_any_toggle_is_refused_while_the_daemon_default_applies(tmp_path: Path):
+async def test_any_toggle_is_refused_while_the_schedule_setup_runs(tmp_path: Path):
     release = threading.Event()
     applied: list[str] = []
 
@@ -1757,8 +1757,7 @@ async def test_any_toggle_is_refused_while_the_daemon_default_applies(tmp_path: 
         tmp_path,
         [_policy(tmp_path, "daemon"), _policy(tmp_path, "other", apply=other_apply)],
         HeldRemover(),
-        daemon_default=_held_daemon_default(release),
-        daemon_default_policy_id="daemon",
+        schedule_defaults=_held_schedule_defaults(release),
     )
     async with app.run_test(size=(120, 30)) as pilot:
         try:
@@ -1766,7 +1765,7 @@ async def test_any_toggle_is_refused_while_the_daemon_default_applies(tmp_path: 
             _policy_cursor(app, "other")
             await pilot.press("space")
             status = app.view("policies").status
-            assert (status.text, status.severity) == (_DAEMON_REFUSAL, Severity.WARN)
+            assert (status.text, status.severity) == (_SCHEDULE_SETUP_REFUSAL, Severity.WARN)
             assert applied == []
             release.set()
             await wait_until(pilot, lambda: not app.mutation_in_flight)
@@ -1774,11 +1773,11 @@ async def test_any_toggle_is_refused_while_the_daemon_default_applies(tmp_path: 
             release.set()
 
 
-async def test_a_daemon_default_without_a_policy_id_releases_the_lock(tmp_path: Path):
+async def test_a_schedule_setup_with_nothing_to_report_releases_the_lock(tmp_path: Path):
     remover = HeldRemover(SweepResult(removed=("fd",)))
     remover.release.set()
     app, _service = _policy_app(
-        tmp_path, [_policy(tmp_path, "job")], remover, daemon_default=lambda: True
+        tmp_path, [_policy(tmp_path, "job")], remover, schedule_defaults=ReconcileReport
     )
     assert app.mutation_in_flight
     async with app.run_test(size=(120, 30)) as pilot:
@@ -1790,7 +1789,7 @@ async def test_a_daemon_default_without_a_policy_id_releases_the_lock(tmp_path: 
         assert len(remover.calls) == 1
 
 
-async def test_late_doctor_and_daemon_results_render_nothing_during_shutdown(
+async def test_late_doctor_and_schedule_results_render_nothing_during_shutdown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """The 765c0e5 shape: run_test's teardown stops the app before it prunes the
@@ -1800,8 +1799,7 @@ async def test_late_doctor_and_daemon_results_render_nothing_during_shutdown(
         tmp_path,
         [_policy(tmp_path, "job")],
         remover,
-        daemon_default=lambda: True,
-        daemon_default_policy_id="job",
+        schedule_defaults=ReconcileReport,
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -1816,7 +1814,9 @@ async def test_late_doctor_and_daemon_results_render_nothing_during_shutdown(
             patch.setattr(UnifiedApp, "is_running", property(lambda _self: False))
             doctor.on_globals_reinstalled(GlobalsReinstalled(None))
             doctor.on_disk_pressure_probed(DiskPressureProbed())
-            app.on_daemon_default_applied(DaemonDefaultApplied("job", True, True))
+            app.on_schedule_defaults_applied(
+                ScheduleDefaultsApplied(ReconcileReport(turned_on=("tmp-cleanup",)))
+            )
 
 
 async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
@@ -1875,22 +1875,22 @@ async def test_t_and_m_are_refused_before_their_picker(tmp_path: Path, key: str)
         app.end_mutation()
 
 
-async def test_the_daemon_default_apply_repaints_a_visible_uninstall(tmp_path: Path):
+async def test_the_schedule_setup_repaints_a_visible_uninstall(tmp_path: Path):
     release = threading.Event()
     tweaks: list[str] = []
 
-    def daemon_default() -> bool:
+    def reconcile() -> ReconcileReport:
         if not release.wait(timeout=10):
-            raise TimeoutError("the daemon default was never released")
-        tweaks.append("daemon:prune-tmp-linux")
-        return True
+            raise TimeoutError("the schedule setup was never released")
+        tweaks.append("schedule:tmp-cleanup")
+        return ReconcileReport()
 
     states = [absent_state(_tool("rg")), absent_state(_tool("fd"))]
     app, service = _policy_app(
         tmp_path,
         [_policy(tmp_path, "job")],
         HeldRemover(),
-        daemon_default=daemon_default,
+        schedule_defaults=reconcile,
         tweak_ids=lambda: tuple(tweaks),
         states=states,
     )
@@ -1913,7 +1913,7 @@ async def test_the_daemon_default_apply_repaints_a_visible_uninstall(tmp_path: P
             assert app.screen is screen
             cells = " ".join(str(cell) for cell in table.get_row("#tweaks"))
             assert "shell tweaks + background jobs" in cells
-            assert "daemon:prune-tmp-linux" in cells
+            assert "schedule:tmp-cleanup" in cells
             assert service.passes == before
             assert screen.status.text == ""
         finally:
@@ -2187,7 +2187,7 @@ _NOUNS = {
     MutationHolder.INSTALL_RUN: _INSTALL_REFUSAL,
     MutationHolder.UPDATE: _UPDATE_REFUSAL,
     MutationHolder.GLOBALS_REINSTALL: _REINSTALL_REFUSAL,
-    MutationHolder.DAEMON_DEFAULT: _DAEMON_REFUSAL,
+    MutationHolder.SCHEDULE_DEFAULTS: _SCHEDULE_SETUP_REFUSAL,
     MutationHolder.POLICY_TOGGLE: _TOGGLE_REFUSAL,
     MutationHolder.SCHEDULE_CHANGE: (
         "A schedule change is running; wait for it to finish. Navigation still works."
@@ -2557,7 +2557,7 @@ async def test_a_failed_toggle_still_requests_a_pass(tmp_path: Path):
         assert service.passes == before + 1
 
 
-@pytest.mark.parametrize("mutation", ["toggle", "daemon_default"])
+@pytest.mark.parametrize("mutation", ["toggle", "schedule_defaults"])
 async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
 ):
@@ -2575,17 +2575,17 @@ async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
         mutate()
         return _policy_result()
 
-    def held_default() -> bool:
+    def held_default() -> ReconcileReport:
         mutate()
-        return True
+        return ReconcileReport()
 
     policy = replace(
         _job_policy(tmp_path, probe), apply=held_apply, log_path=tmp_path / "jobstate.log"
     )
     kwargs: dict[str, Any] = {}
     service = held_service(tmp_path, [])
-    if mutation == "daemon_default":
-        kwargs = {"daemon_default": held_default, "daemon_default_policy_id": "jobstate"}
+    if mutation == "schedule_defaults":
+        kwargs = {"schedule_defaults": held_default}
     else:
         service.release.set()
     app, _ = _policy_app(tmp_path, [policy], HeldRemover(), service=service, **kwargs)
@@ -2621,18 +2621,18 @@ async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
             service.release.set()
 
 
-async def test_an_unresolved_daemon_apply_still_supersedes_an_in_flight_job_read(
+async def test_a_schedule_setup_still_supersedes_an_in_flight_job_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # T-21-52: the apply's own live read fails (None), so the row keeps its
-    # state; a read begun before the apply must still not repaint its answer.
+    # T-21-52: a read begun before the schedule setup finished must not repaint
+    # its (stale) answer over the repaint the setup's completion asked for.
     probe = _ArmedProbe(first=True, later=False)
     release_mutation = threading.Event()
 
-    def held_default() -> bool:
+    def held_default() -> ReconcileReport:
         if not release_mutation.wait(timeout=10):
             raise TimeoutError("the mutation was never released")
-        return True
+        return ReconcileReport()
 
     service = held_service(tmp_path, [])
     app, _ = _policy_app(
@@ -2640,18 +2640,12 @@ async def test_an_unresolved_daemon_apply_still_supersedes_an_in_flight_job_read
         [_job_policy(tmp_path, probe)],
         HeldRemover(),
         service=service,
-        daemon_default=held_default,
-        daemon_default_policy_id="jobstate",
+        schedule_defaults=held_default,
     )
     async with app.run_test(size=(120, 30)) as pilot:
         try:
             await wait_until(pilot, lambda: _state_text(app, "jobstate") == "○ [off]")
             screen = app.view("policies")
-
-            def unresolved(_policy_id: str) -> bool | None:
-                return None
-
-            monkeypatch.setattr(screen, "live_state", unresolved)
             spy = _SpiedReads(screen, monkeypatch)
             probe.armed = True
             await app.show_view("system")
@@ -3298,10 +3292,10 @@ async def test_a_failed_first_run_pick_keeps_the_error():
         assert "PREVIEW-centralized" in str(_doctor_text(app))
 
 
-async def test_a_first_run_link_pick_waits_for_the_daemon_default(
+async def test_a_first_run_link_pick_waits_for_the_schedule_setup(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """C-18: the launch daemon apply and a link-mode move both rewrite
+    """C-18: the launch schedule setup and a link-mode move both rewrite
     ~/.myshellrc. A pick made while the apply holds the lock is kept and moved
     once the apply is done, never beside it."""
     release = threading.Event()
@@ -3325,7 +3319,7 @@ async def test_a_first_run_link_pick_waits_for_the_daemon_default(
         prompt_link_mode=True,
         fix_preview=lambda: f"PREVIEW-{mode['v']}",
         policies=PolicyInputs(policies=[], link_mode=lambda: mode["v"], set_link_mode=setter),
-        daemon_default=_held_daemon_default(release),
+        schedule_defaults=_held_schedule_defaults(release),
     )
     async with app.run_test(size=(120, 30)) as pilot:
         try:
@@ -3683,6 +3677,17 @@ _REPLACED_FORKS = [
     "_DAEMON_DEFAULT_IN_FLIGHT_MESSAGE",
     "_rows_of",
     "_live_state",
+    # 24.2-11: the daemon default became the schedule reconcile.
+    "DaemonDefaultApplied",
+    "on_daemon_default_applied",
+    "_apply_daemon_default_worker",
+    "DaemonDefaultWarnings",
+    "DAEMON_DEFAULT_WAIT_SECONDS",
+    "DAEMON_DEFAULT",
+    "daemon_default",
+    "apply_daemon_default",
+    "daemon_default_warnings",
+    "daemon_default_policy_id",
 ]
 
 

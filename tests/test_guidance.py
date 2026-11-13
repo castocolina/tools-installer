@@ -570,10 +570,11 @@ def test_disk_pressure_guidance_unavailable_next_step_never_offers_to_enable_a_r
     assert "setup" not in item.next_step.lower()
 
 
-def test_disk_pressure_guidance_inactive_next_step_points_at_enabling_the_policy() -> None:
+def test_disk_pressure_guidance_inactive_next_step_points_at_the_schedules_row() -> None:
     pressure = _pressure(home_free_percent=9.5, tmp_used_percent=None, daemon=DaemonState.INACTIVE)
     item = disk_pressure_guidance(pressure)[0]
-    assert "enable" in item.next_step.lower()
+    assert item.next_step.startswith("Turn on tmp cleanup")
+    assert "Schedules view" in item.next_step
     assert "prune-tmp-linux.sh" in item.next_step
 
 
