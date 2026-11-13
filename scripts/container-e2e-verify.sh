@@ -41,6 +41,10 @@ BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
 # herdr's plugin id (24-07) and where its probe keeps a copy of the binary for the after-uninstall check.
 HERDR_PLUGIN_ID=herdr-setup.markers
 HERDR_PROBE_COPY=/tmp/herdr-probe
+# The kickstart.nvim commit and the no-LSP patch the installer applies to it; 24.1-03 owns both
+# values (its test checks they agree with the Python constants). The patch path is workspace-relative.
+NVIM_STARTER_PIN=8e35dbedb7966e3a95e1f26f9fc1179ab6c68db4
+NVIM_STARTER_PATCH=installer/patches/kickstart-no-lsp.patch
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1405,6 +1409,120 @@ echo D
   printf '%s\n' "$out" | herdr_removed_verdict
 }
 
+# neovim (ONB-08). The container answers with one prefixed fact line each (see nvim_probe_installed)
+# and the verdicts are decided here, so a host test can drive them with fixture lines. Facts on stdin:
+# `V <nvim --version first line>`, `R <$VIMRUNTIME>`, `T <receipt artifact type> <HOME-relative path>`,
+# `N` (no receipt), `E <EDITOR> <VISUAL>`, `B <tweak block count>`, `G <starter HEAD>`,
+# `A ok|fail` (the patch reverse-applies) and the closing `D`.
+nvim_installed_verdict() {
+  local line version="" runtime="" has_dir=0 has_link=0 no_receipt=0 editor="" bundle=0
+  local head="" patch="" done=0 failed=0
+  while IFS= read -r line; do
+    case "$line" in
+      "V NVIM v"*) version="${line#V NVIM }" ;;
+      "R "*) runtime="${line#R }" ;;
+      "T dir .local/opt/nvim") has_dir=1 ;;
+      "T link .local/bin/nvim") has_link=1 ;;
+      N) no_receipt=1 ;;
+      "E "*) read -r editor <<<"${line#E }" || true ;;
+      "B "*) bundle="${line#B }" ;;
+      "G "*) head="${line#G }" ;;
+      "A "*) patch="${line#A }" ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NVIM_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -z "$version" ]]; then
+    printf 'TRACER_NVIM_VERSION_MISSING\n'
+    failed=1
+  fi
+  if [[ "$runtime" != "$TESTER_HOME/.local/opt/nvim/"* ]]; then
+    printf 'TRACER_NVIM_RUNTIME_OUTSIDE runtime=%s\n' "$runtime"
+    failed=1
+  fi
+  if [[ "$no_receipt" -eq 1 || "$has_dir" -eq 0 || "$has_link" -eq 0 ]]; then
+    printf 'TRACER_NVIM_RECEIPT_INCOMPLETE\n'
+    failed=1
+  fi
+  if [[ "$editor" != "nvim nvim" ]]; then
+    printf 'TRACER_NVIM_EDITOR_MISMATCH found=%s\n' "$editor"
+    failed=1
+  fi
+  if [[ "$bundle" != 1 ]]; then
+    printf 'TRACER_NVIM_BUNDLE_MISSING count=%s\n' "$bundle"
+    failed=1
+  fi
+  if [[ -z "$head" ]]; then
+    printf 'TRACER_NVIM_STARTER_MISSING\n'
+    failed=1
+  else
+    if [[ "$head" != "$NVIM_STARTER_PIN" ]]; then
+      printf 'TRACER_NVIM_STARTER_PIN_MISMATCH head=%s\n' "$head"
+      failed=1
+    fi
+    if [[ "$patch" != ok ]]; then
+      printf 'TRACER_NVIM_STARTER_UNPATCHED\n'
+      failed=1
+    fi
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NVIM_INSTALLED_OK version=%s head=%s\n' "$version" "${head:0:7}"
+}
+
+# After pass 1, before the rerun: gather neovim's facts as the tester and decide. nvim's own runs
+# keep their XDG dirs in a scratch dir, so the probe leaves nothing in the tester's HOME; the new
+# bash with EDITOR and VISUAL unset proves the value comes from the rc chain (no zsh in these
+# containers, D-20 refined).
+nvim_probe_installed() {
+  local py body pre out
+  py='from pathlib import Path
+from installer import receipts
+home = Path.home()
+receipt = receipts.read("neovim")
+if receipt is None:
+    print("N")
+else:
+    for artifact in receipt.artifacts:
+        path = artifact.path
+        print("T " + artifact.type + " " + str(path.relative_to(home) if path.is_relative_to(home) else path))
+'
+  IFS= read -r -d '' body <<'EOF' || true
+set -euo pipefail
+eval "$("$brew" shellenv)"
+nvim="$HOME/.local/bin/nvim"
+if [ -x "$nvim" ]; then
+  t="$(mktemp -d)"
+  export XDG_STATE_HOME="$t/state" XDG_DATA_HOME="$t/data" XDG_CACHE_HOME="$t/cache"
+  v="$({ "$nvim" --version </dev/null 2>/dev/null || true; } | sed -n 1p)"
+  r="$("$nvim" --clean --headless -c 'lua io.stdout:write(vim.env.VIMRUNTIME)' -c 'qa!' </dev/null 2>/dev/null || true)"
+  unset XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
+  rm -rf "$t"
+  if [ -n "$v" ]; then printf 'V %s\n' "$v"; fi
+  printf 'R %s\n' "$r"
+fi
+e="$(env -u EDITOR -u VISUAL bash -ic 'printf "%s %s" "${EDITOR-}" "${VISUAL-}"' </dev/null 2>/dev/null || true)"
+printf 'E %s\n' "$e"
+b="$(grep -cFx '# >>> tools-installer tweak:neovim >>>' "$HOME/.myshellrc" 2>/dev/null || true)"
+printf 'B %s\n' "${b:-0}"
+cfg="$HOME/.config/nvim"
+if [ -d "$cfg/.git" ]; then
+  g="$(git -C "$cfg" rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$g" ]; then printf 'G %s\n' "$g"; fi
+  if git -C "$cfg" apply --reverse --check "$workspace/$patch" >/dev/null 2>&1; then echo 'A ok'; else echo 'A fail'; fi
+fi
+cd "$workspace"
+uv run --isolated --no-dev python -c "$py"
+echo D
+EOF
+  printf -v pre 'brew=%q\nworkspace=%q\npatch=%q\npy=%q\n' \
+    "$BREW_BIN" "$TESTER_WORKSPACE" "$NVIM_STARTER_PATCH" "$py"
+  out="$(exec_tester "$pre$body")" || { printf 'TRACER_NVIM_PROBE_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | nvim_installed_verdict
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -1432,6 +1550,10 @@ cmd_pass2() {
 
   # Pass 1 left herdr installed: prove its integrations, plugin and sidebar keys before the rerun.
   if ! herdr_probe_installed >> "$log"; then
+    return 1
+  fi
+  # ... and neovim: its binary, runtime, receipt, editor block and the pinned patched starter.
+  if ! nvim_probe_installed >> "$log"; then
     return 1
   fi
 

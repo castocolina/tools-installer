@@ -2876,3 +2876,199 @@ def test_nested_gathers_run_for_real_over_a_scratch_home(
     reverted = _run(base + "\nnested_herdr_revert_ok\n", scratch, path=env_path)
     assert reverted.returncode == 0, reverted.stdout + reverted.stderr
     assert reverted.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_OK"]
+
+
+# --- neovim (24.1-04) --------------------------------------------------------------------
+
+_NVIM_PIN = "8e35dbedb7966e3a95e1f26f9fc1179ab6c68db4"
+_NVIM_GOOD_FACTS = (
+    "V NVIM v0.12.6",
+    "R /home/tester/.local/opt/nvim/share/nvim/runtime",
+    "T dir .local/opt/nvim",
+    "T link .local/bin/nvim",
+    "E nvim nvim",
+    "B 1",
+    f"G {_NVIM_PIN}",
+    "A ok",
+)
+
+
+def _nvim_script(names: Sequence[str], *extra: str) -> str:
+    """The neovim verdicts and probes, extracted as committed, with `extra` shell after them."""
+    text = _script_text()
+    parts = [
+        f"TESTER_HOME={_constant('TESTER_HOME', text)}",
+        f"NVIM_STARTER_PIN={_constant('NVIM_STARTER_PIN', text)}",
+        f"NVIM_STARTER_PATCH={_constant('NVIM_STARTER_PATCH', text)}",
+        *(_function(name, text) for name in names),
+        *extra,
+    ]
+    return "\n".join(parts)
+
+
+def _nvim_verdict(tmp_path: Path, facts: str, verdict: str) -> subprocess.CompletedProcess[str]:
+    fixture = tmp_path / "facts.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(facts, encoding="utf-8")
+    return _run(_nvim_script([verdict]) + f'\n{verdict} < "{fixture}"\n', tmp_path)
+
+
+def test_nvim_installed_verdict_requires_every_piece(tmp_path: Path) -> None:
+    verdict = "nvim_installed_verdict"
+    ok = _nvim_verdict(tmp_path / "ok", _facts(*_NVIM_GOOD_FACTS), verdict)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_INSTALLED_OK version=v0.12.6 head=8e35dbe"]
+
+    def drop(*prefixes: str) -> tuple[str, ...]:
+        return tuple(line for line in _NVIM_GOOD_FACTS if not line.startswith(prefixes))
+
+    cases = {
+        "no-version": (drop("V "), "TRACER_NVIM_VERSION_MISSING"),
+        "runtime-outside": (
+            (*drop("R "), "R /usr/share/nvim/runtime"),
+            "TRACER_NVIM_RUNTIME_OUTSIDE runtime=/usr/share/nvim/runtime",
+        ),
+        "no-dir": (drop("T dir"), "TRACER_NVIM_RECEIPT_INCOMPLETE"),
+        "no-link": (drop("T link"), "TRACER_NVIM_RECEIPT_INCOMPLETE"),
+        "no-receipt": ((*drop("T "), "N"), "TRACER_NVIM_RECEIPT_INCOMPLETE"),
+        "editor": ((*drop("E "), "E vim "), "TRACER_NVIM_EDITOR_MISMATCH found=vim"),
+        "no-block": ((*drop("B "), "B 0"), "TRACER_NVIM_BUNDLE_MISSING count=0"),
+        "two-blocks": ((*drop("B "), "B 2"), "TRACER_NVIM_BUNDLE_MISSING count=2"),
+        "no-starter": (drop("G ", "A "), "TRACER_NVIM_STARTER_MISSING"),
+        "pin": (
+            (*drop("G "), "G " + "a" * 40),
+            f"TRACER_NVIM_STARTER_PIN_MISMATCH head={'a' * 40}",
+        ),
+        "unpatched": ((*drop("A "), "A fail"), "TRACER_NVIM_STARTER_UNPATCHED"),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _nvim_verdict(tmp_path / name, _facts(*lines), verdict)
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert not any(
+            line.startswith("TRACER_NVIM_INSTALLED_OK") for line in result.stdout.splitlines()
+        ), name
+    cut = _nvim_verdict(tmp_path / "cut", _facts(*_NVIM_GOOD_FACTS, done=False), verdict)
+    assert cut.returncode != 0
+    assert cut.stdout.splitlines() == ["TRACER_NVIM_PROBE_FAILED"]
+
+
+def _nvim_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, installed: bool = True) -> Path:
+    """A scratch HOME as pass 1 leaves it (or, with installed=False, as the uninstall does)."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    (scratch / ".local" / "bin").mkdir(parents=True)
+    (scratch / ".config" / "nvim").mkdir(parents=True)
+    (scratch / ".config" / "nvim" / "init.lua").write_text("-- starter\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    block = (
+        "# >>> tools-installer tweak:neovim >>>\n"
+        "export EDITOR=nvim\nexport VISUAL=nvim\n"
+        "# <<< tools-installer tweak:neovim <<<\n"
+    )
+    (scratch / ".myshellrc").write_text(block if installed else "", encoding="utf-8")
+    (scratch / ".bashrc").write_text("[ -f ~/.myshellrc ] && . ~/.myshellrc\n", encoding="utf-8")
+    if not installed:
+        return scratch
+    (scratch / ".local" / "opt" / "nvim" / "share" / "nvim" / "runtime").mkdir(parents=True)
+    nvim = scratch / ".local" / "bin" / "nvim"
+    nvim.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *--version*) printf "NVIM v0.12.6\\nBuild type: Release\\n" ;;\n'
+        '  *"--clean --headless"*) printf "%s" "$HOME/.local/opt/nvim/share/nvim/runtime" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    nvim.chmod(0o755)
+    (scratch / ".config" / "nvim" / ".git").mkdir()
+    opt = scratch / ".local" / "opt" / "nvim"
+    receipts.write(
+        Receipt(
+            tool="neovim",
+            at="2026-11-12T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=(
+                ReceiptArtifact(
+                    path=opt, type="dir", sha256="b" * 64, size=1, mtime_ns=1, key="bin/nvim"
+                ),
+                ReceiptArtifact(path=nvim, type="link", target=str(opt)),
+            ),
+            smoke=None,
+            hooks={},
+        )
+    )
+    return scratch
+
+
+def _nvim_probe_script(tmp_path: Path, scratch: Path, names: Sequence[str], call: str) -> str:
+    """The probes over the scratch HOME: stub brew, the uv stub, and TMPDIR kept off the host."""
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir(exist_ok=True)
+    return _nvim_script(
+        names,
+        f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+        f"export TMPDIR={shlex.quote(str(tmpdir))}",
+        _assign("TESTER_HOME", str(scratch)),
+        _assign("TESTER_WORKSPACE", str(tmp_path)),
+        _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+        'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        _uv_stub(),
+        call,
+    )
+
+
+def _nvim_bins(directory: Path, git_body: str) -> str:
+    """A PATH whose git is a stub; bash is linked in so macOS's /usr/bin:/bin still resolves."""
+    bins = _stub_bin(directory / "bin", {"git": git_body})
+    if not (bins / "bash").exists():
+        (bins / "bash").symlink_to(_bash())
+    return f"{bins}:/usr/bin:/bin"
+
+
+_NVIM_GIT_OK = (
+    'case "$*" in\n'
+    f"  *rev-parse*) echo {_NVIM_PIN} ;;\n"
+    '  *"apply --reverse --check"*) exit 0 ;;\n'
+    "esac"
+)
+
+
+def test_nvim_installed_gather_runs_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell and python the probe sends to the container run, with stub programs."""
+    scratch = _nvim_home(tmp_path, monkeypatch)
+    names = ("nvim_installed_verdict", "nvim_probe_installed")
+    script = _nvim_probe_script(tmp_path, scratch, names, "nvim_probe_installed")
+    path = _nvim_bins(tmp_path, _NVIM_GIT_OK)
+    ok = _run(script, scratch, path=path)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_INSTALLED_OK version=v0.12.6 head=8e35dbe"]
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+    (scratch / ".myshellrc").write_text("", encoding="utf-8")
+    no_block = _run(script, scratch, path=path)
+    assert no_block.returncode != 0
+    assert "TRACER_NVIM_BUNDLE_MISSING count=0" in no_block.stdout.splitlines()
+    assert "TRACER_NVIM_EDITOR_MISMATCH found=" in no_block.stdout.splitlines()
+
+    unpatched = _nvim_bins(tmp_path / "other", _NVIM_GIT_OK.replace("exit 0", "exit 1"))
+    result = _run(script, scratch, path=unpatched)
+    assert "TRACER_NVIM_STARTER_UNPATCHED" in result.stdout.splitlines()
+
+
+def test_nvim_probes_are_wired_into_pass2() -> None:
+    pass2 = _function("cmd_pass2")
+    first_run = pass2.index('run_pass2_step "--all --yes"')
+    assert pass2.index("herdr_probe_installed") < pass2.index("nvim_probe_installed") < first_run
+
+
+def test_the_allowlist_holds_the_nvim_log_dir() -> None:
+    lines = (ROOT / "scripts" / "e2e-residue-allowlist.txt").read_text(encoding="utf-8")
+    entries = [line for line in lines.splitlines() if line.startswith(".local/state/nvim  # ")]
+    assert len(entries) == 1
