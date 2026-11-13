@@ -613,7 +613,7 @@ class CatalogScreen(AppScreen):
             return
         # Before every informational refusal: while a mutation runs, the holder's
         # template wins over a row's own copy (pending, broken, current, unknown).
-        if self.app.refuse_if_mutating(self):
+        if self.app.refuse_if_mutating(self, cross_process=True):
             return
         state = self._state(tool)
         if state is None or state.health is Health.CHECKING:
@@ -659,11 +659,14 @@ class CatalogScreen(AppScreen):
             self.status.set(f"cannot update {tool_id}: {PINNED_DETAIL}", "warn")
             self.post_message(RefreshRequested())
             return
+        # Before the update service latches: a lost run-lock race must leave nothing held.
+        if not self.app.begin_mutation(MutationHolder.UPDATE, screen=self):
+            return
         # A bare guard: every holder of the update service also holds the app
         # lock, which refuse_if_mutating above already turned away.
         if not self._updates.begin(tool_id):
+            self.app.end_mutation()
             return
-        self.app.begin_mutation(MutationHolder.UPDATE)
         self.status.set(f"updating {tool_id}…", "ok")
         # The state's ownership gates the keypress; UpdateService.run still
         # re-resolves it before mutating (T-19-46).

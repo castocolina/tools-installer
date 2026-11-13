@@ -118,3 +118,4 @@ class MutationHolder(StrEnum):
     DAEMON_DEFAULT = "A daemon apply"
     GLOBALS_REINSTALL = "A pnpm reinstall"
     INSTALL_RUN = "An install run"
+    SCHEDULE_CHANGE = "A schedule change"
