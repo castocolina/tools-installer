@@ -453,6 +453,8 @@ def _update_installer_owned(
         )
         return ()
     if method.kind == "cargo_distrobox":
+        if not (platform.has_distrobox and platform.has_podman):
+            raise UpdateError(f"rebuilding {tool_id} from source needs distrobox and podman")
         # D-04: the newer tag is rebuilt in a fresh box; its ExecutorError reaches perform_update.
         return cargo_distrobox.install(
             method,

@@ -2360,3 +2360,25 @@ def test_interrupted_rebuild_keeps_the_old_binary() -> None:
 
     assert interrupted.steps() == ["create", "clone", "build", "rm", "rmi"]
     assert _old_install_bytes() == before
+
+
+@pytest.mark.usefixtures("scratch_build")
+def test_receipt_backed_alacritty_stays_owned_without_distrobox_and_names_the_prerequisite() -> (
+    None
+):
+    _install_v017()
+    tool = alacritty_tool()
+    bare = replace(immutable_with_tools(), has_distrobox=False, has_podman=False)
+    target = _alacritty_target(tool, bare, host_paths()[0])
+    assert target.ownership.owner == "installer"
+    assert target.ownership.method is not None
+    assert target.ownership.method.kind == "cargo_distrobox"
+
+    runner = _TaggedBox("v0.18.0")
+    outcome = update.perform_update(
+        target, platform=bare, runner=runner, resolve_tag=lambda _repo: "v0.18.0"
+    )
+
+    assert outcome.status == "failed"
+    assert "needs distrobox and podman" in outcome.detail
+    assert runner.calls == []
