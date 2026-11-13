@@ -1499,3 +1499,84 @@ def test_render_rejects_bad_input_before_writing(tmp_path: Path) -> None:
     assert sorted(path.name for path in unit_dir.iterdir()) == sorted(
         [service_path.name, timer_path.name]
     )
+
+
+def _fail(cmd: list[str]) -> None:
+    raise CommandError(cmd, 1)
+
+
+def test_teardown_verbs_take_a_basename(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "unit"
+    timer = f"{_SCHEDULE_BASENAME}.timer"
+
+    recorder = _RecordingRun()
+    assert systemd_daemon.bootout(
+        unit_dir, basename=_SCHEDULE_BASENAME, run=recorder, read_output=_ScriptedReadOutput()
+    )
+    assert recorder.calls == [["systemctl", "--user", "disable", "--now", timer]]
+
+    probe = _ScriptedReadOutput("inactive")
+    assert (
+        systemd_daemon.bootout(unit_dir, basename=_SCHEDULE_BASENAME, run=_fail, read_output=probe)
+        is True
+    )
+    assert probe.calls == [["systemctl", "--user", "is-active", timer]]
+
+    probe = _ScriptedReadOutput("active")
+    assert systemd_daemon.probe_timer_state(basename=_SCHEDULE_BASENAME, read_output=probe) is (
+        DaemonState.ACTIVE
+    )
+    assert probe.calls == [["systemctl", "--user", "is-active", timer]]
+
+    _write_units_present(unit_dir)
+    systemd_daemon.write_unit_pair(
+        unit_dir,
+        basename=_SCHEDULE_BASENAME,
+        service_text=_schedule_service(),
+        timer_text=_schedule_timer(),
+    )
+    state_probe = _ScriptedReadOutput("active")
+    assert systemd_daemon.timer_state(
+        unit_dir, basename=_SCHEDULE_BASENAME, read_output=state_probe
+    ) is (DaemonState.ACTIVE)
+    assert state_probe.calls == [["systemctl", "--user", "is-active", timer]]
+    systemd_daemon.remove_units(unit_dir, basename=_SCHEDULE_BASENAME)
+    assert systemd_daemon.units_present(unit_dir) is True
+    assert systemd_daemon.units_present(unit_dir, basename=_SCHEDULE_BASENAME) is False
+    other = _ScriptedReadOutput("active")
+    assert systemd_daemon.timer_state(unit_dir, basename=_SCHEDULE_BASENAME, read_output=other) is (
+        DaemonState.INACTIVE
+    )
+    assert other.calls == []
+
+
+def test_clean_timer_state() -> None:
+    recorder = _RecordingRun()
+    systemd_daemon.clean_timer_state(basename=_SCHEDULE_BASENAME, run=recorder)
+    assert recorder.calls == [
+        ["systemctl", "--user", "clean", "--what=state", f"{_SCHEDULE_BASENAME}.timer"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ("running\n", True),
+        ("degraded\n", True),
+        ("starting\n", True),
+        ("initializing\n", True),
+        ("maintenance\n", True),
+        ("", False),
+        ("offline\n", False),
+        ("stopping\n", False),
+        ("unknown\n", False),
+    ],
+)
+def test_user_manager_reachable(stdout: str, expected: bool) -> None:
+    read_output = _ScriptedReadOutput(stdout)
+    assert systemd_daemon.user_manager_reachable(read_output=read_output) is expected
+    assert read_output.calls == [["systemctl", "--user", "is-system-running"]]
+
+
+def test_user_manager_reachable_reads_a_timeout_as_unreachable() -> None:
+    assert systemd_daemon.user_manager_reachable(read_output=_RaisingReadOutput()) is False

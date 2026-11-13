@@ -66,6 +66,7 @@ __all__ = [
     "WRAPPER_COMMAND",
     "bootout",
     "bootstrap",
+    "clean_timer_state",
     "clear_decided",
     "daemon_reload",
     "decided",
@@ -91,6 +92,7 @@ __all__ = [
     "timer_state",
     "unit_paths",
     "units_present",
+    "user_manager_reachable",
     "user_scope_failure_warning",
     "user_unit_dir",
     "wants_link_path",
@@ -494,11 +496,42 @@ def query_systemctl(cmd: list[str]) -> str:
     return run_query(cmd, timeout=SYSTEMCTL_QUERY_TIMEOUT, accept_codes=(0, 1, 3, 4))
 
 
+def clean_timer_state(*, basename: str, run: Runner = run_captured) -> None:
+    """`systemctl --user clean --what=state <timer>` -- drop the Persistent= stamp.
+
+    `man systemd.timer` says to use this command before uninstalling a timer
+    unit: without it the stamp survives and a later timer of the same name fires
+    a catch-up for a schedule that is gone or re-timed. The caller runs it while
+    the unit is still loaded.
+    """
+    run(["systemctl", "--user", "clean", "--what=state", f"{basename}.timer"])
+
+
+_REACHABLE_ANSWERS = frozenset({"initializing", "starting", "running", "degraded", "maintenance"})
+
+
+def user_manager_reachable(*, read_output: OutputRunner = query_systemctl) -> bool:
+    """Whether a systemd user manager answers `is-system-running`.
+
+    Live-verified: an unreachable bus prints NOTHING on stdout and exits 1, so
+    the answer keys on the stdout word, never on the exit code. Only
+    initializing, starting, running, degraded and maintenance read reachable;
+    empty output, offline, stopping, unknown or a timeout read unreachable.
+    """
+    try:
+        output = read_output(["systemctl", "--user", "is-system-running"])
+    except (CommandError, OSError):
+        return False
+    return output.strip() in _REACHABLE_ANSWERS
+
+
 _ACTIVE_ANSWERS = frozenset({"active", "activating", "reloading"})
 _INACTIVE_ANSWERS = frozenset({"inactive", "failed", "deactivating"})
 
 
-def probe_timer_state(*, read_output: OutputRunner = query_systemctl) -> DaemonState:
+def probe_timer_state(
+    *, basename: str = UNIT_BASENAME, read_output: OutputRunner = query_systemctl
+) -> DaemonState:
     """The ONE place in this phase that decides what "running" means.
 
     Runs a read-only `systemctl --user is-active <timer>` and maps its
@@ -507,7 +540,7 @@ def probe_timer_state(*, read_output: OutputRunner = query_systemctl) -> DaemonS
     query -> UNAVAILABLE.
     """
     try:
-        output = read_output(["systemctl", "--user", "is-active", TIMER_NAME])
+        output = read_output(["systemctl", "--user", "is-active", f"{basename}.timer"])
     except (CommandError, OSError):
         return DaemonState.UNAVAILABLE
     answer = output.strip()
@@ -518,16 +551,18 @@ def probe_timer_state(*, read_output: OutputRunner = query_systemctl) -> DaemonS
     return DaemonState.UNAVAILABLE
 
 
-def timer_state(unit_dir: Path, *, read_output: OutputRunner = query_systemctl) -> DaemonState:
+def timer_state(
+    unit_dir: Path, *, basename: str = UNIT_BASENAME, read_output: OutputRunner = query_systemctl
+) -> DaemonState:
     """What the Policy binds. Presence is a NECESSARY condition, never a
     sufficient one -- that ordering is the whole D-01c fix: files present +
     timer disabled now reads INACTIVE (the exact case the old
     presence-only predicate got wrong), while files absent short-circuits to
     INACTIVE for free, issuing zero argv.
     """
-    if not units_present(unit_dir):
+    if not units_present(unit_dir, basename=basename):
         return DaemonState.INACTIVE
-    return probe_timer_state(read_output=read_output)
+    return probe_timer_state(basename=basename, read_output=read_output)
 
 
 _Probed = TypeVar("_Probed")
@@ -627,6 +662,7 @@ class TimerStateCache(_ProbeCache[DaemonState]):
 def bootout(
     unit_dir: Path,
     *,
+    basename: str = UNIT_BASENAME,
     run: Runner = run_captured,
     read_output: OutputRunner = query_systemctl,
 ) -> bool:
@@ -658,9 +694,9 @@ def bootout(
     T-15.7-39).
     """
     try:
-        run(["systemctl", "--user", "disable", "--now", TIMER_NAME])
+        run(["systemctl", "--user", "disable", "--now", f"{basename}.timer"])
     except CommandError:
-        state = probe_timer_state(read_output=read_output)
+        state = probe_timer_state(basename=basename, read_output=read_output)
         if state is DaemonState.ACTIVE:
             raise
         return state is DaemonState.INACTIVE
