@@ -5,6 +5,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -1682,3 +1683,22 @@ def test_starter_accepts_an_xdg_config_home_that_resolves_to_dot_config(
 
     assert len(fake.calls) == 5
     assert (config / "nvim" / "init.lua").is_file()
+
+
+def test_starter_sweeps_stale_temp_dirs_of_a_killed_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch)
+    config = Path.home() / ".config"
+    stale = config / ".nvim-starter.dead"
+    fresh = config / ".nvim-starter.live"
+    other = config / ".nvim-other.old"
+    for directory in (stale, fresh, other):
+        (directory / ".git").mkdir(parents=True)
+    day_ago = time.time() - 24 * 60 * 60
+    os.utime(stale, (day_ago, day_ago))
+    os.utime(other, (day_ago, day_ago))
+
+    assert _starter()[0].startswith("Starter: kickstart.nvim")
+
+    assert not stale.exists()
+    assert fresh.exists()
+    assert other.exists()

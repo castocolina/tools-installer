@@ -41,6 +41,7 @@ import os
 import shlex
 import shutil
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -217,6 +218,22 @@ def _absent_or_empty(path: Path) -> bool:
         return False
 
 
+_TEMP_PREFIX = ".nvim-starter."
+# Longer than a run can last (five git steps, 600 s each), so a live run's directory is safe.
+_STALE_AFTER_SECONDS = 2 * 60 * 60
+
+
+def _sweep_stale_temp_dirs(config_dir: Path) -> None:
+    """Remove the starter's own temp directories a killed run left behind."""
+    cutoff = time.time() - _STALE_AFTER_SECONDS
+    try:
+        for entry in config_dir.glob(f"{_TEMP_PREFIX}*"):
+            if entry.is_dir() and not entry.is_symlink() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+    except OSError:
+        return  # a sweep that cannot read the directory is not worth failing the install
+
+
 def _clone_nvim_starter(
     tool: Tool,
     platform: Platform,
@@ -241,7 +258,8 @@ def _clone_nvim_starter(
     tmp: Path | None = None
     try:
         config_dir.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix=".nvim-starter.", dir=config_dir))
+        _sweep_stale_temp_dirs(config_dir)
+        tmp = Path(tempfile.mkdtemp(prefix=_TEMP_PREFIX, dir=config_dir))
         work = str(tmp)
         patch = str(_KICKSTART_PATCH)
         _git(["git", "clone", "--quiet", "--no-checkout", "--", _KICKSTART_URL, work])
