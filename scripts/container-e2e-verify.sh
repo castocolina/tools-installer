@@ -92,6 +92,16 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           TRACER_NESTED_PODMAN_OK / _BUILD_OK / _UNINSTALL_OK /
                           _HERDR_SHELL_OK / _HERDR_REVERT_OK / _TEARDOWN_OK, or
                           TRACER_NESTED_INFEASIBLE step=... when nested podman cannot run.
+  schedules [--direct] [--keep-image]
+                          Orchestrator only: a disposable Fedora 44 container with systemd as
+                          PID 1 and the tester's user manager. The installer's own engine writes
+                          the Schedules units, each built-in runs once through its runner, a held
+                          lock is skipped, a calendar slot fires and a missed one catches up once,
+                          then the units and stamps are turned off. Prints TRACER_SCHEDULE_*
+                          verdicts, or TRACER_SCHEDULES_INFEASIBLE step=... when the box cannot
+                          start. --direct is the fallback for a host without systemd containers:
+                          a plain container that runs each job's command without units.
+                          --keep-image keeps the built image.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -2200,6 +2210,453 @@ cmd_nested() {
   return "$failed"
 }
 
+# --- schedules target (24.2-10, D-26): orchestrator only -----------------------------------------
+# A disposable Fedora 44 container with systemd as PID 1 and the tester's user manager: the real
+# engine writes the units (through tests/e2e_schedules_driver.py), each built-in runs once through
+# its installed runner, and the log lines and Last cells are read back. Every systemctl, loginctl and
+# flock runs inside the container through exec_root or exec_tester, never on the host.
+SCHEDULES_BASE_IMAGE=registry.fedoraproject.org/fedora:44
+SCHEDULES_IMAGE=localhost/tools-installer-e2e-schedules:44
+SCHEDULES_CONTAINER_NAME=tools-installer-e2e-schedules
+# The Linux log and run lock, relative to the tester's HOME (D-11, D-12).
+SCHEDULES_LOG_REL=.local/state/tools-installer/schedules.log
+SCHEDULES_LOCK_REL=.local/state/tools-installer/run.lock
+# One poll per second: at most two minutes for systemd to boot, one for the session bus.
+SCHEDULES_POLL_STEP=1
+SCHEDULES_BOOT_ATTEMPTS=120
+SCHEDULES_BUS_ATTEMPTS=60
+# The calendar check polls every 5 s for 200 s; the catch-up check waits 75 s.
+SCHEDULES_CALENDAR_STEP=5
+SCHEDULES_CALENDAR_ATTEMPTS=40
+SCHEDULES_CATCHUP_WAIT=75
+# The tester's uid (set by schedules_start) and the --keep-image flag.
+SCHEDULES_UID=
+SCHEDULES_KEEP_IMAGE=0
+
+schedules_containerfile() {
+  printf 'FROM %s\n' "$SCHEDULES_BASE_IMAGE"
+  printf 'RUN dnf install -y systemd procps-ng util-linux curl tar git python3 which && dnf clean all\n'
+  printf 'CMD ["/sbin/init"]\n'
+}
+
+# $1 names the step, $2 is the failing step's output: the first line naming an error is reported,
+# else the last non-empty one. Exits 2: the box could not be built, an environment fact, not a
+# product failure (plan 24.2-13 treats it as such, R1-24).
+schedules_infeasible() {
+  local detail
+  detail="$(printf '%s\n' "$2" | awk '/rror|nknown|ailed/ && e == "" { e = $0 } NF { l = $0 } END { print (e != "" ? e : l) }')"
+  printf 'TRACER_SCHEDULES_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
+  exit 2
+}
+
+# $1 is an attempt count, the rest a command: success as soon as it succeeds, failure when the
+# attempts run out.
+schedules_wait() {
+  local attempts="$1" i
+  shift
+  for ((i = 0; i < attempts; i++)); do
+    if "$@"; then
+      return 0
+    fi
+    sleep "$SCHEDULES_POLL_STEP"
+  done
+  return 1
+}
+
+# A container reads `degraded` once booted (a unit of the base image fails), which is normal.
+schedules_booted() {
+  local state
+  state="$(exec_root systemctl is-system-running 2>/dev/null || true)"
+  [[ "$state" == running || "$state" == degraded ]]
+}
+
+schedules_bus_ready() {
+  exec_root test -S "/run/user/${SCHEDULES_UID}/bus"
+}
+
+# The tester user (the only account the harness needs: no sudo, no Homebrew) and its uid.
+schedules_create_tester() {
+  local out
+  if ! out="$(exec_root useradd -m -s /bin/bash "$TESTER_USER" 2>&1)"; then
+    schedules_infeasible useradd "$out"
+  fi
+  if ! SCHEDULES_UID="$(exec_root id -u "$TESTER_USER" 2>&1)"; then
+    schedules_infeasible uid "$SCHEDULES_UID"
+  fi
+}
+
+# Every step's failure, not only a timeout, is infeasible with its own step name, so a runtime
+# that rejects --systemd=always reads as environmental (R1-24).
+schedules_start() {
+  local out dir state
+  ct rm -f "$SCHEDULES_CONTAINER_NAME" >/dev/null 2>&1 || true
+  dir="$(mktemp -d)"
+  schedules_containerfile >"$dir/Containerfile"
+  if ! out="$(ct build -t "$SCHEDULES_IMAGE" -f "$dir/Containerfile" "$dir" 2>&1)"; then
+    rm -rf "$dir"
+    schedules_infeasible build "$out"
+  fi
+  rm -rf "$dir"
+  if ! out="$(ct run -d --name "$SCHEDULES_CONTAINER_NAME" --systemd=always "$SCHEDULES_IMAGE" 2>&1)"; then
+    schedules_infeasible run "$out"
+  fi
+  if ! schedules_wait "$SCHEDULES_BOOT_ATTEMPTS" schedules_booted; then
+    state="$(exec_root systemctl is-system-running 2>&1 || true)"
+    schedules_infeasible boot "systemd in the container reads '${state}', not running or degraded"
+  fi
+  schedules_create_tester
+  if ! out="$(exec_root loginctl enable-linger "$TESTER_USER" 2>&1)"; then
+    schedules_infeasible linger "$out"
+  fi
+  if ! schedules_wait "$SCHEDULES_BUS_ATTEMPTS" schedules_bus_ready; then
+    schedules_infeasible bus "no session bus appeared at /run/user/${SCHEDULES_UID}/bus"
+  fi
+}
+
+# $1 is a command string for the tester's login shell, run in the workspace with that user's
+# session bus (the user manager started by enable-linger) and ~/.local/bin first on PATH.
+schedules_tester() {
+  local workspace prefix
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  # shellcheck disable=SC2016 # the single-quoted part expands in the tester's shell
+  prefix='case ":${PATH-}:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin${PATH:+:$PATH}";; esac'
+  exec_tester "export XDG_RUNTIME_DIR=/run/user/${SCHEDULES_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${SCHEDULES_UID}/bus
+${prefix}
+cd ${workspace}
+$1"
+}
+
+# The in-container driver over the real engine: `schedules_driver on cache-cleanup`.
+schedules_driver() {
+  local args
+  printf -v args '%q ' "$@"
+  schedules_tester "uv run --isolated --no-dev python -m tests.e2e_schedules_driver ${args}"
+}
+
+# The tester's schedules.log, or nothing when no run has written one yet.
+schedules_fetch_log() {
+  schedules_tester "cat \"\$HOME/${SCHEDULES_LOG_REL}\" 2>/dev/null || true"
+}
+
+# $1 is a copy of schedules.log, $2 a schedule id: that id's newest run must hold a start line and
+# a result line after it (ok, skipped or failed). A `skipped: busy` line is a run of its own and
+# never counts as the result of an earlier start.
+schedules_run_verdict() {
+  local result
+  result="$(awk -v id="$2" '
+    $2 == id && $3 == "start" { started = 1; result = ""; line = ""; next }
+    $2 == id && started && $3 ~ /^(ok|skipped|failed):$/ {
+      result = substr($3, 1, length($3) - 1); line = $0; started = 0
+    }
+    END { print result "|" line }
+  ' "$1")"
+  case "${result%%|*}" in
+    ok | skipped)
+      printf 'TRACER_SCHEDULE_RUN_OK id=%s result=%s\n' "$2" "${result%%|*}"
+      ;;
+    failed)
+      printf 'TRACER_SCHEDULE_RUN_FAILED id=%s line=%s\n' "$2" "${result#*|}"
+      return 1
+      ;;
+    *)
+      printf 'TRACER_SCHEDULE_RUN_MISSING id=%s\n' "$2"
+      return 1
+      ;;
+  esac
+}
+
+# $1 is the driver's `cells` output, $2 a schedule id: its Last cell must read as a run, not `never`.
+schedules_cell_verdict() {
+  local cell
+  cell="$(awk -v id="$2" '$1 == "CELL" && $2 == id { sub(/^CELL [^ ]+ /, ""); c = $0 } END { print c }' "$1")"
+  if [[ -z "$cell" || "$cell" == never ]]; then
+    printf 'TRACER_SCHEDULE_CELL_NEVER id=%s\n' "$2"
+    return 1
+  fi
+  printf 'TRACER_SCHEDULE_CELL_OK id=%s cell=%s\n' "$2" "$cell"
+}
+
+# The log and cell verdicts of schedule $1 after a run.
+schedules_verdicts() {
+  local log cells out rc=0
+  log="$(mktemp)"
+  cells="$(mktemp)"
+  schedules_fetch_log >"$log" || rc=1
+  out="$(schedules_run_verdict "$log" "$1")" || rc=1
+  printf '%s\n' "$out"
+  schedules_driver cells >"$cells" || rc=1
+  out="$(schedules_cell_verdict "$cells" "$1")" || rc=1
+  printf '%s\n' "$out"
+  rm -f "$log" "$cells"
+  return "$rc"
+}
+
+# The unit's last 50 journal lines as `SCHEDULE_JOURNAL <unit> <line>`: a product failure stays
+# diagnosable after the teardown. $1 is a full unit name, suffix included.
+schedules_journal() {
+  schedules_tester "journalctl --user -u $1 -n 50 --no-pager" 2>&1 | sed "s/^/SCHEDULE_JOURNAL $1 /" || true
+}
+
+# Runs schedule $1 once through its installed unit $2: the service, the way its timer starts it.
+schedules_run_one() {
+  schedules_tester "systemctl --user start $2.service" || true # the log and the cell are the verdict
+  if ! schedules_verdicts "$1"; then
+    schedules_journal "$2.service"
+    return 1
+  fi
+}
+
+# A stub `claude` makes the claude update row available.
+schedules_plant_claude() {
+  # shellcheck disable=SC2016 # $HOME expands in the tester's shell
+  schedules_tester 'mkdir -p "$HOME/.local/bin" && printf "#!/bin/sh\necho claude 1.0.0\n" > "$HOME/.local/bin/claude" && chmod 0755 "$HOME/.local/bin/claude"'
+}
+
+# Every available built-in once: tmp cleanup, cache cleanup and the claude update (its run may
+# read `ok` or `skipped` when no owner is known, F9).
+schedules_run_all() {
+  local pair id rc=0
+  schedules_plant_claude || return 1
+  for pair in tmp-cleanup:tools-installer-prune-tmp \
+    cache-cleanup:tools-installer-schedule-cache-cleanup \
+    update-claude:tools-installer-schedule-update-claude; do
+    id="${pair%%:*}"
+    schedules_driver on "$id" || {
+      rc=1
+      continue
+    }
+    schedules_run_one "$id" "${pair#*:}" || rc=1
+  done
+  return "$rc"
+}
+
+# The number of start lines cache cleanup has in the tester's log.
+schedules_start_count() {
+  schedules_fetch_log | grep -c ' cache-cleanup start$' || true
+}
+
+# A held run lock makes a started cache cleanup log `skipped: busy`. The holder is a detached
+# `flock -n <run.lock> sleep 60` as the tester, killed whatever the verdict.
+schedules_busy_check() {
+  local log last rc=0
+  schedules_tester "mkdir -p \"\$HOME/.local/state/tools-installer\"
+setsid -f flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" sleep 60 </dev/null >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" true || break; sleep 0.5; done" || true
+  schedules_tester "systemctl --user start tools-installer-schedule-cache-cleanup.service" || true
+  log="$(mktemp)"
+  schedules_fetch_log >"$log" || true
+  last="$(awk '$2 == "cache-cleanup" { l = $0 } END { print l }' "$log")"
+  rm -f "$log"
+  # shellcheck disable=SC2016 # $(id -u) expands in the tester's shell
+  schedules_tester 'pkill -u "$(id -u)" -x sleep || true' || true
+  if [[ "$last" == *"skipped: busy" ]]; then
+    printf 'TRACER_SCHEDULE_BUSY_OK\n'
+  else
+    printf 'TRACER_SCHEDULE_BUSY_MISSING last=%s\n' "$last"
+    rc=1
+  fi
+  return "$rc"
+}
+
+# $1 is HH:MM, $2 a number of minutes: the clock time that far ahead, wrapped at midnight.
+schedules_plus_minutes() {
+  local total
+  total=$(((10#${1%%:*} * 60 + 10#${1##*:} + $2) % 1440))
+  printf '%02d:%02d\n' $((total / 60)) $((total % 60))
+}
+
+# A calendar timer fires for real: a 1 s accuracy drop-in (systemd's default is a minute), cache
+# cleanup re-timed to start two minutes ahead of the container's clock, then a poll for the new
+# start line.
+schedules_calendar_check() {
+  local now target before attempt
+  local dropin="\$HOME/.config/systemd/user/tools-installer-schedule-cache-cleanup.timer.d"
+  schedules_tester "mkdir -p \"${dropin}\" && printf '[Timer]\nAccuracySec=1s\n' > \"${dropin}/e2e-accuracy.conf\" && systemctl --user daemon-reload" || return 1
+  now="$(schedules_tester 'date +%H:%M' | tail -n 1)" || return 1
+  if [[ ! "$now" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
+    printf 'TRACER_SCHEDULE_CALENDAR_MISSING clock=%s\n' "$now"
+    return 1
+  fi
+  target="$(schedules_plus_minutes "$now" 2)"
+  before="$(schedules_start_count)"
+  schedules_driver retime cache-cleanup 24 "$target" || return 1
+  for ((attempt = 0; attempt < SCHEDULES_CALENDAR_ATTEMPTS; attempt++)); do
+    if [[ "$(schedules_start_count)" -gt "$before" ]]; then
+      printf 'TRACER_SCHEDULE_CALENDAR_OK\n'
+      return 0
+    fi
+    sleep "$SCHEDULES_CALENDAR_STEP"
+  done
+  printf 'TRACER_SCHEDULE_CALENDAR_MISSING target=%s\n' "$target"
+  schedules_journal tools-installer-schedule-cache-cleanup.timer
+  return 1
+}
+
+# A missed slot catches up exactly once: the timer is stopped, its Persistent= stamp aged two
+# days, the timer started, and the new start lines counted after the wait.
+schedules_catchup_check() {
+  local before runs
+  local timer=tools-installer-schedule-cache-cleanup.timer
+  local stamp="\$HOME/.local/share/systemd/timers/stamp-tools-installer-schedule-cache-cleanup.timer"
+  schedules_tester "systemctl --user stop ${timer}" || true
+  if ! schedules_tester "test -e \"${stamp}\""; then
+    printf 'TRACER_SCHEDULE_STAMP_MISSING\n'
+    return 1
+  fi
+  schedules_tester "touch -d '2 days ago' \"${stamp}\"" || return 1
+  before="$(schedules_start_count)"
+  schedules_tester "systemctl --user start ${timer}" || true
+  sleep "$SCHEDULES_CATCHUP_WAIT"
+  runs=$(($(schedules_start_count) - before))
+  if [[ "$runs" -eq 1 ]]; then
+    printf 'TRACER_SCHEDULE_CATCHUP_OK runs=1\n'
+    return 0
+  fi
+  printf 'TRACER_SCHEDULE_CATCHUP_COUNT runs=%s\n' "$runs"
+  schedules_journal "$timer"
+  return 1
+}
+
+# Informational (RESEARCH A2): whether a plain daemon-reload plus restart keeps the timer's stamp.
+schedules_stamp_observation() {
+  local before after
+  local timer=tools-installer-schedule-cache-cleanup.timer
+  local stamp="\$HOME/.local/share/systemd/timers/stamp-tools-installer-schedule-cache-cleanup.timer"
+  before="$(schedules_tester "stat -c %Y \"${stamp}\" 2>/dev/null || echo none" | tail -n 1)" || true
+  schedules_tester "systemctl --user daemon-reload && systemctl --user restart ${timer}" || true
+  after="$(schedules_tester "stat -c %Y \"${stamp}\" 2>/dev/null || echo none" | tail -n 1)" || true
+  printf 'SCHEDULE_STAMP_MTIME before=%s after=%s\n' "$before" "$after"
+  if [[ "$before" != none && "$after" != none ]]; then
+    printf 'SCHEDULE_STAMP_KEPT=yes\n'
+  else
+    printf 'SCHEDULE_STAMP_KEPT=no\n'
+  fi
+}
+
+# EXIT trap: the container and, unless --keep-image, the image go on every outcome; both removals
+# tolerate absence.
+schedules_teardown() {
+  ct rm -f "$SCHEDULES_CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [[ "$SCHEDULES_KEEP_IMAGE" -ne 1 ]]; then
+    ct rmi "$SCHEDULES_IMAGE" >/dev/null 2>&1 || true
+  fi
+  printf 'TRACER_SCHEDULES_TEARDOWN_OK\n'
+}
+
+# Every schedule the run turned on goes off through the engine: no unit file, no Persistent=
+# stamp and no timer may remain. The calendar check's accuracy drop-in is the harness's own file
+# and goes first.
+schedules_off_check() {
+  local id out line left=0 done=0
+  schedules_tester "rm -rf \"\$HOME/.config/systemd/user/tools-installer-schedule-cache-cleanup.timer.d\"" || true
+  for id in tmp-cleanup cache-cleanup update-claude; do
+    schedules_driver off "$id" || left=1
+  done
+  # shellcheck disable=SC2016 # $HOME and $f expand in the tester's shell
+  out="$(schedules_tester 'cd "$HOME"
+for f in .config/systemd/user/tools-installer-schedule-* .config/systemd/user/tools-installer-prune-tmp* \
+  .config/systemd/user/timers.target.wants/tools-installer-* \
+  .local/share/systemd/timers/stamp-tools-installer-schedule-*; do
+  if [ -e "$f" ] || [ -L "$f" ]; then echo "F $f"; fi
+done
+systemctl --user list-timers --all --no-legend 2>/dev/null | grep -E "tools-installer-(schedule-|prune-tmp)" | sed "s/^/T /" || true
+echo D')" || true
+  while IFS= read -r line; do
+    case "$line" in
+      "F "*) printf 'TRACER_SCHEDULE_OFF_LEFT path=%s\n' "${line#F }"; left=1 ;;
+      "T "*) printf 'TRACER_SCHEDULE_OFF_LEFT timer=%s\n' "${line#T }"; left=1 ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_SCHEDULE_OFF_PROBE_FAILED\n'
+    return 1
+  fi
+  [[ "$left" -eq 0 ]] || return 1
+  printf 'TRACER_SCHEDULE_OFF_OK\n'
+}
+
+# --direct (D-26's fallback, for a host that cannot run systemd in a container): a plain
+# container with no units. It copies the runner and the prune scripts where the engine would, then
+# runs each job the way the driver's `argv` prints it and checks the same log lines and cells.
+schedules_install_assets() {
+  # shellcheck disable=SC2016 # $HOME and $d expand in the tester's shell
+  schedules_tester 'd="$HOME/.local/share/tools-installer/schedules"
+mkdir -p "$d/lib" "$HOME/.local/state/tools-installer"
+cp installer/helper_assets/schedule_runner.py "$d/runner.py"
+cp scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh "$d/"
+cp scripts/lib/prune-tmp-common.sh "$d/lib/"
+chmod 0755 "$d/runner.py" "$d"/*.sh "$d/lib/prune-tmp-common.sh"'
+}
+
+schedules_direct() {
+  local out id cmd line rc=0
+  local -a argv
+  ct rm -f "$SCHEDULES_CONTAINER_NAME" >/dev/null 2>&1 || true
+  if ! out="$(ct run -d --name "$SCHEDULES_CONTAINER_NAME" "$IMAGE_FEDORA" sleep infinity 2>&1)"; then
+    schedules_infeasible run "$out"
+  fi
+  if ! out="$(exec_root dnf install -y util-linux curl tar git python3 which procps-ng 2>&1)"; then
+    schedules_infeasible dnf "$out"
+  fi
+  schedules_create_tester
+  copy_workspace
+  bootstrap_uv
+  write_tester_path
+  sync_workspace
+  schedules_install_assets
+  schedules_plant_claude
+  for id in tmp-cleanup cache-cleanup update-claude; do
+    argv=()
+    while IFS= read -r line; do argv+=("$line"); done < <(schedules_driver argv "$id")
+    printf -v cmd '%q ' ${argv[@]+"${argv[@]}"}
+    schedules_tester "${cmd% }" || true # the log and the cell are the verdict
+    schedules_verdicts "$id" || rc=1
+  done
+  printf 'SCHEDULES_GAP=no-systemd units,calendar,catch-up not exercised\n'
+  if [[ "$rc" -eq 0 ]]; then
+    printf 'TRACER_SCHEDULES_DIRECT_OK\n'
+  fi
+  return "$rc"
+}
+
+cmd_schedules() {
+  local direct=0 failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --direct) direct=1 ;;
+      --keep-image) SCHEDULES_KEEP_IMAGE=1 ;;
+      *) die "unknown schedules option: $1" ;;
+    esac
+    shift
+  done
+  CONTAINER_NAME="$SCHEDULES_CONTAINER_NAME"
+  TESTER_HOME="/home/$TESTER_USER"
+  TESTER_WORKSPACE="$TESTER_HOME/workspace"
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-schedules"
+  # No Homebrew in this box: a no-op stands in so the tester helpers' shellenv evals expand to nothing.
+  BREW_BIN=/bin/true
+  trap schedules_teardown EXIT
+  ensure_phase_dir
+  if [[ "$direct" -eq 1 ]]; then
+    schedules_direct
+    return
+  fi
+  schedules_start
+  copy_workspace
+  bootstrap_uv
+  write_tester_path
+  sync_workspace
+  # Every verdict is collected so one transcript shows them all; turning off runs last.
+  schedules_run_all || failed=1
+  schedules_busy_check || failed=1
+  schedules_calendar_check || failed=1
+  schedules_catchup_check || failed=1
+  schedules_stamp_observation
+  schedules_off_check || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -2229,6 +2686,7 @@ main() {
     resync) cmd_resync "$@" ;;
     all) cmd_all "$@" ;;
     nested) cmd_nested "$@" ;;
+    schedules) cmd_schedules "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
