@@ -221,6 +221,7 @@ def test_turn_on_then_off_leaves_nothing_behind(env: Env) -> None:
     argv = [
         str(env.uv),
         "run",
+        "--no-cache",
         "--no-project",
         "--script",
         str(ctx.data_dir / "runner.py"),
@@ -737,6 +738,7 @@ def test_tmp_cleanup_is_adopted_in_place(env: Env) -> None:
     argv = [
         str(env.uv),
         "run",
+        "--no-cache",
         "--no-project",
         "--script",
         str(ctx.data_dir / "runner.py"),

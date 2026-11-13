@@ -352,6 +352,7 @@ def test_macos_adoption_keeps_the_daily_time(
                 "ProgramArguments": [
                     str(lab.env.uv),
                     "run",
+                    "--no-cache",
                     "--no-project",
                     "--script",
                     str(wrapper),

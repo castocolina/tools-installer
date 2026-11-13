@@ -813,9 +813,12 @@ def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]
             else ["--minutes", str(systemd_daemon.DEFAULT_AGE_MINUTES)]
         )
         tail = ["--", "--apply", *amount]
+    # --no-cache: `uv run` holds the uv cache lock while the runner runs, and the cache job's
+    # `uv cache prune` would wait on it until UV_LOCK_TIMEOUT. The runner is stdlib only.
     return [
         str(uv),
         "run",
+        "--no-cache",
         "--no-project",
         "--script",
         str(ctx.data_dir / RUNNER_NAME),
