@@ -1061,11 +1061,8 @@ def run_uninstall(
                     platform_os=platform_os,
                 )
             )
-            if outcome.unregistered:
-                console.print(
-                    f"Unregistered from agent hosts: {host_labels(outcome.unregistered)}.",
-                    markup=False,
-                )
+            if labels := host_labels(outcome.unregistered):
+                console.print(f"Unregistered from agent hosts: {labels}.", markup=False)
             if outcome.detail:
                 console.print(f"{tool.id}: {outcome.detail}", markup=False, soft_wrap=True)
             else:

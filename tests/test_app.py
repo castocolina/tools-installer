@@ -6256,9 +6256,10 @@ def test_the_cli_uninstall_lists_only_keys_still_holding_our_value(
     assert "  ~/.codex/config.toml: approval_policy\n" in buf.getvalue()
 
 
-def test_no_config_agent_declares_config_paths() -> None:
-    """R1-58, R1-59: the guard the per-tool revert's shortcut relies on. When a settings agent
-    starts declaring config_paths, the removal must revert before it deletes."""
+def test_herdr_is_the_only_config_agent_declaring_config_paths() -> None:
+    """R1-16: herdr declares config_paths (24-07). Its per-tool removal reverts herdr's keys in
+    `_after_removal` before `_config_step` can delete the file, and the TUI route then drops the
+    remaining ledger after the delete. Any other settings agent declaring paths needs the same."""
     from installer import receipts
     from installer.model import load_tools
 
@@ -6268,7 +6269,7 @@ def test_no_config_agent_declares_config_paths() -> None:
         for tool in load_tools(registry)
         if tool.id in receipts.CONFIG_AGENTS and tool.config_paths
     ]
-    assert declared == []
+    assert declared == ["herdr"]
 
 
 def test_removing_zsh_sweeps_the_desktop_shell_file(

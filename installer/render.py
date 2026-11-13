@@ -426,13 +426,13 @@ def render_hook_lines(outcomes: Sequence[RowOutcome], console: Console) -> None:
     """Print the Agent-host hooks section: each install's registrations and the sweep's hosts."""
     lines: list[str] = []
     for outcome in outcomes:
-        if outcome.install is not None and outcome.install.hooks:
-            labels = host_labels(outcome.install.hooks)
+        if outcome.install is not None and (labels := host_labels(outcome.install.hooks)):
             lines.append(f"{outcome.row.tool_id}: registered for {labels}")
             lines.extend(_claude_extras(outcome.row.tool_id, outcome.install.hooks))
         for tool_id, hosts in outcome.resynced:
-            lines.append(f"{tool_id}: registered for {host_labels(hosts)} (new host)")
-            lines.extend(_claude_extras(tool_id, hosts))
+            if labels := host_labels(hosts):
+                lines.append(f"{tool_id}: registered for {labels} (new host)")
+                lines.extend(_claude_extras(tool_id, hosts))
     if not lines:
         return
     console.print("Agent-host hooks", style="bold", markup=False, highlight=False)

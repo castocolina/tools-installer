@@ -1676,3 +1676,16 @@ def test_changed_while_writing_line_points_to_reconfigure() -> None:
         "  changed while being written; nothing written. "
         "Reconfigure or reinstall the tool to retry."
     ) in _settings_text([outcome])
+
+
+def test_hook_lines_skip_a_sidebar_only_registration() -> None:
+    """R1-06: herdr's sidebar markers are not an agent host, so no `registered for` line."""
+    sidebar_only = RowOutcome(
+        PlanRow("herdr", Disposition.INSTALL, "not installed"),
+        "done",
+        install=InstallOutcome("herdr", InstallStatus.INSTALLED, hooks=("sidebar-markers",)),
+        resynced=(("herdr", ("sidebar-markers",)),),
+    )
+    console, buf = _console()
+    render_hook_lines([sidebar_only], console)
+    assert buf.getvalue() == ""
