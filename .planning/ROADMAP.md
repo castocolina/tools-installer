@@ -502,7 +502,7 @@ Plans:
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
   5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
 
-**Plans**: 4/9 plans executed
+**Plans**: 6/9 plans executed
 
 Plans:
 **Wave 1**
@@ -512,8 +512,8 @@ Plans:
 - [x] 24-04-PLAN.md — Container harness: `--distro` table, rerun gate, exclusion listing, herdr probes, nested-podman target (host-tested only) (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 24-05-PLAN.md — Alacritty update by rebuild; config dir untouched (wave 2)
-- [ ] 24-06-PLAN.md — Terminal sync: Alacritty shell region and keybinding install tuning, herdr `default_shell` with reload (wave 2)
+- [x] 24-05-PLAN.md — Alacritty update by rebuild; config dir untouched (wave 2)
+- [x] 24-06-PLAN.md — Terminal sync: Alacritty shell region and keybinding install tuning, herdr `default_shell` with reload (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 24-07-PLAN.md — herdr entry, integrations for every shared host (user-owned rule), sidebar markers plugin, uninstall order (wave 3)
@@ -608,7 +608,7 @@ Plans:
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
-| 24. Onboarding through the skill and e2e | 4/9 | In Progress | - |
+| 24. Onboarding through the skill and e2e | 6/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 0/TBD | Not started | - |
 | 24.2 Schedules view | 0/TBD | Not started | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
