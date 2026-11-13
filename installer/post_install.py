@@ -38,8 +38,10 @@ root injects with `use_git_runner`; with no runner wired it refuses (24.1 D-15, 
 """
 
 import os
+import shlex
 import shutil
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -66,11 +68,14 @@ from installer.platform import Platform
 from installer.policy import tweak_policy
 from installer.run import CommandError, OutputRunner, command_error_line
 from installer.sanitize import sanitize_log_line
+from installer.status import command_stub_reason
 from installer.terminal_shell import apply_alacritty_keys
 from installer.tweaks import (
+    forget_shell_init,
     record_shell_init,
     shell_init_bundle,
     shell_init_record,
+    strip_tweak_block,
     user_export,
 )
 
@@ -188,8 +193,19 @@ def _by_hand() -> tuple[str, ...]:
         "To add it by hand:",
         f"git clone {_KICKSTART_URL} {_NVIM_STARTER_TARGET}",
         f"git -C {_NVIM_STARTER_TARGET} checkout -B master {_KICKSTART_PIN}",
-        f"git -C {_NVIM_STARTER_TARGET} apply {_KICKSTART_PATCH}",
+        f"git -C {_NVIM_STARTER_TARGET} apply {shlex.quote(str(_KICKSTART_PATCH))}",
     )
+
+
+# The line the patch adds to init.lua: what tells the installer's starter from the user's config.
+_STARTER_MARKER = "tools-installer: no language servers"
+
+
+def _holds_starter(target: Path) -> bool:
+    try:
+        return _STARTER_MARKER in (target / "init.lua").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def _absent_or_empty(path: Path) -> bool:
@@ -202,25 +218,48 @@ def _absent_or_empty(path: Path) -> bool:
         return False
 
 
+_TEMP_PREFIX = ".nvim-starter."
+# Longer than a run can last (five git steps, 600 s each), so a live run's directory is safe.
+_STALE_AFTER_SECONDS = 2 * 60 * 60
+
+
+def _sweep_stale_temp_dirs(config_dir: Path) -> None:
+    """Remove the starter's own temp directories a killed run left behind."""
+    cutoff = time.time() - _STALE_AFTER_SECONDS
+    try:
+        for entry in config_dir.glob(f"{_TEMP_PREFIX}*"):
+            if entry.is_dir() and not entry.is_symlink() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+    except OSError:
+        return  # a sweep that cannot read the directory is not worth failing the install
+
+
 def _clone_nvim_starter(
     tool: Tool,
     platform: Platform,
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
-    del tool, platform, confirm
+    del tool, confirm
     home = Path.home()
     config_dir = home / ".config"
     target = config_dir / "nvim"
-    if xdg_config_base(home, os.environ) != config_dir:
+    if xdg_config_base(home, os.environ).resolve() != config_dir.resolve():
         return ("Starter not added: XDG_CONFIG_HOME points elsewhere than ~/.config (left as is).",)
     if not _absent_or_empty(target):
+        if _holds_starter(target):
+            return (f"Starter already in {_NVIM_STARTER_TARGET} (left as is).",)
         return (f"Starter not added: {_NVIM_STARTER_TARGET} is yours (left as is).",)
     if shutil.which("git") is None:
         return ("Starter not added: git is not installed.", *_by_hand())
+    # On macOS without the Command Line Tools the system git is a stub that opens an install dialog.
+    stub = command_stub_reason("git", darwin=platform.os == "macos")
+    if stub is not None:
+        return (f"Starter not added: {sanitize_log_line(stub)}.", *_by_hand())
     tmp: Path | None = None
     try:
         config_dir.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix=".nvim-starter.", dir=config_dir))
+        _sweep_stale_temp_dirs(config_dir)
+        tmp = Path(tempfile.mkdtemp(prefix=_TEMP_PREFIX, dir=config_dir))
         work = str(tmp)
         patch = str(_KICKSTART_PATCH)
         _git(["git", "clone", "--quiet", "--no-checkout", "--", _KICKSTART_URL, work])
@@ -274,12 +313,17 @@ def _tune_shell_init(tool: Tool, platform: Platform, *, skip_recorded: bool) -> 
     if bundle is None or (bundle.platforms and platform.os not in bundle.platforms):
         return ()
     rc_path = Path.home() / ".myshellrc"
+    yielded = user_export(bundle.yields_to, tool.id) if bundle.yields_to else None
+    if yielded is not None:
+        # The user's own export wins: nothing written, recorded or pending. A block written
+        # before they added it would still override an export in an earlier-read file, so it goes
+        # (an unreadable startup file proves nothing, so then it stays).
+        if yielded.kept:
+            strip_tweak_block(tool.id, rc_path)
+            forget_shell_init(rc_path, tool.id)
+        return (yielded.line,)
     if skip_recorded and tool.id in (shell_init_record(rc_path) or ()):
         return ()
-    if bundle.yields_to:
-        yielded = user_export(bundle.yields_to, tool.id)
-        if yielded is not None:  # the user's own export wins: nothing written, recorded or pending
-            return (yielded,)
     tweak_policy(
         bundle,
         rc_path=rc_path,
@@ -417,6 +461,11 @@ def _show_nvim_hints(
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
     del tool, platform, confirm
+    target = Path.home() / ".config" / "nvim"
+    # The hints say Neovim runs no language server: true of the starter or of no config, not of
+    # a config of the user's own.
+    if not _absent_or_empty(target) and not _holds_starter(target):
+        return ()
     return _NVIM_HINTS
 
 

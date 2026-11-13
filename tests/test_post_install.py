@@ -1,11 +1,13 @@
 import errno
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -386,7 +388,7 @@ def test_neovim_keeps_your_editor() -> None:
     home = Path.home()
     (home / ".zshrc").write_text("export EDITOR=vim\n")
     lines = run_post_install(_shell_init_tool("neovim"), _mutable(), None).lines
-    assert lines == ("Kept your EDITOR=vim (the neovim shell init was not written).",)
+    assert lines == ("Kept your EDITOR (~/.zshrc:1; the neovim shell init was not written).",)
     assert not (home / ".myshellrc").exists()
     assert shell_init_record(home / ".myshellrc") is None
 
@@ -402,7 +404,12 @@ def _no_neovim_block() -> bool:
     ) is None
 
 
-_KEPT_VIM = ("Kept your EDITOR=vim (the neovim shell init was not written).",)
+_KEPT = re.compile(r"Kept your EDITOR \(~/[^:]+:\d+; the neovim shell init was not written\)\.")
+
+
+def _assert_kept_vim(lines: tuple[str, ...]) -> None:
+    assert len(lines) == 1
+    assert _KEPT.fullmatch(lines[0]), lines
 
 
 def _zdotdir_in(monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -428,13 +435,13 @@ def test_user_export_reads_every_startup_file(where: str, monkeypatch: pytest.Mo
     }[where]
     target.parent.mkdir(exist_ok=True)
     target.write_text("export EDITOR=vim\n")
-    assert _neovim_lines() == _KEPT_VIM
+    _assert_kept_vim(_neovim_lines())
     assert _no_neovim_block()
 
 
 def test_user_export_survives_non_utf8_bytes() -> None:
     (Path.home() / ".zshrc").write_bytes(b"# \xff\nexport EDITOR=vim\n")
-    assert _neovim_lines() == _KEPT_VIM
+    _assert_kept_vim(_neovim_lines())
 
 
 def test_user_export_skips_missing_and_non_regular_files() -> None:
@@ -443,6 +450,44 @@ def test_user_export_skips_missing_and_non_regular_files() -> None:
     os.mkfifo(home / ".bashrc")
     assert _neovim_lines() == ("Shell init on: open a new terminal to use it.",)
     assert "tweak:neovim" in (home / ".myshellrc").read_text()
+
+
+def _write_neovim_block_then(export_in: str) -> Path:
+    home = Path.home()
+    _neovim_lines()  # the installer writes its block and record
+    rc = home / ".myshellrc"
+    assert shell_init_record(rc) == ("neovim",)
+    rc.write_text("export KEEP=1\n" + rc.read_text())
+    (home / export_in).write_text("export EDITOR=vim\n")
+    return rc
+
+
+@pytest.mark.parametrize("shell_file", [".zshrc", ".zshenv", ".profile"])
+def test_neovim_yield_strips_the_block_it_wrote_earlier(shell_file: str) -> None:
+    rc = _write_neovim_block_then(shell_file)
+    lines = _neovim_lines()
+    assert len(lines) == 1
+    assert lines[0].startswith("Kept your EDITOR (")
+    assert "tweak:neovim" not in rc.read_text()
+    assert "export KEEP=1" in rc.read_text()
+    assert shell_init_record(rc) is None
+
+
+def test_neovim_reconfigure_with_a_recorded_block_also_strips_it() -> None:
+    rc = _write_neovim_block_then(".zshrc")
+    output = apply_install_tuning(_shell_init_tool("neovim"), _mutable(), skip_recorded=True)
+    assert output.lines[0].startswith("Kept your EDITOR (")
+    assert "tweak:neovim" not in rc.read_text()
+    assert shell_init_record(rc) is None
+
+
+def test_neovim_unreadable_startup_file_keeps_the_block() -> None:
+    home = Path.home()
+    _neovim_lines()
+    (home / ".zshrc").write_bytes(b"#" * ((1 << 20) + 1))
+    assert _neovim_lines()[0].startswith("Could not read ~/.zshrc")
+    assert "tweak:neovim" in (home / ".myshellrc").read_text()
+    assert shell_init_record(home / ".myshellrc") == ("neovim",)
 
 
 def test_user_export_fails_closed_on_an_oversized_file() -> None:
@@ -483,21 +528,41 @@ def test_user_export_fails_closed_on_an_unreadable_file() -> None:
 
 def test_neovim_keeps_an_editor_set_in_a_multi_assignment_export() -> None:
     (Path.home() / ".bashrc").write_text("export LANG=C.UTF-8 EDITOR=vim\n")
-    assert _neovim_lines() == _KEPT_VIM
+    _assert_kept_vim(_neovim_lines())
     assert _no_neovim_block()
 
 
 def test_neovim_keeps_your_visual() -> None:
     (Path.home() / ".zshrc").write_text("export VISUAL=code\n")
-    assert _neovim_lines() == ("Kept your VISUAL=code (the neovim shell init was not written).",)
+    assert _neovim_lines() == (
+        "Kept your VISUAL (~/.zshrc:1; the neovim shell init was not written).",
+    )
     assert _no_neovim_block()
 
 
-def test_neovim_kept_value_is_sanitized() -> None:
-    (Path.home() / ".zshrc").write_text("export EDITOR=v\x1bim\n")
+def test_neovim_kept_line_names_the_file_not_the_value() -> None:
+    (Path.home() / ".zshrc").write_text("export EDITOR=$(command -v v\x1bim)\n")
     lines = _neovim_lines()
-    assert lines == _KEPT_VIM
+    assert lines == ("Kept your EDITOR (~/.zshrc:1; the neovim shell init was not written).",)
     assert "\x1b" not in lines[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "case $TERM in\n  xterm)\n    export EDITOR=vim\n    ;;\nesac\n",
+        "case $TERM in xterm) EDITOR=vim;; esac\n",
+        "time export EDITOR=vim\n",
+        "true && export EDITOR=vim\n",
+        "export EDITOR=vim\nexport EDITOR=\n",
+    ],
+)
+def test_neovim_keeps_an_editor_set_anywhere_in_a_statement(text: str) -> None:
+    (Path.home() / ".zshrc").write_text(text)
+    lines = _neovim_lines()
+    assert len(lines) == 1
+    assert lines[0].startswith("Kept your EDITOR (~/.zshrc:")
+    assert _no_neovim_block()
 
 
 def test_neovim_ignores_an_environment_editor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1312,7 +1377,7 @@ def _by_hand_lines() -> tuple[str, ...]:
         _BY_HAND_HEAD,
         f"git clone {_STARTER_URL} ~/.config/nvim",
         f"git -C ~/.config/nvim checkout -B master {_kickstart_pin()}",
-        f"git -C ~/.config/nvim apply {_kickstart_patch()}",
+        f"git -C ~/.config/nvim apply {shlex.quote(str(_kickstart_patch()))}",
     )
 
 
@@ -1413,6 +1478,30 @@ def test_starter_without_git_says_how(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert fake.calls == []
     assert not (Path.home() / ".config" / "nvim").exists()
+
+
+def test_starter_refuses_the_macos_git_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = use_fake_git(monkeypatch)
+    probed: list[Sequence[str]] = []
+
+    def no_command_line_tools(argv: Sequence[str]) -> bool:
+        probed.append(argv)
+        return False
+
+    monkeypatch.setattr("installer.status._default_stub_probe", no_command_line_tools)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    lines = run_post_install(_tool(post_install=("clone_nvim_starter",)), macos).lines
+
+    assert lines == (
+        "Starter not added: /usr/bin/git is the macOS stub; the real tool is missing "
+        "(/usr/bin/xcode-select -p failed).",
+        *_by_hand_lines(),
+    )
+    assert probed == [("/usr/bin/xcode-select", "-p")]
+    assert fake.calls == []
+    assert not (Path.home() / ".config" / "nvim").exists()
+    assert _no_temp_dir()
 
 
 @pytest.mark.parametrize("step", ["clone", "checkout", "rev-parse", "apply-check", "apply"])
@@ -1552,5 +1641,64 @@ def test_neovim_hints_print_with_your_own_config(monkeypatch: pytest.MonkeyPatch
 
     output = run_post_install(_shipped_neovim(), _mutable())
 
-    assert output.lines == (_SHELL_INIT_LINE, _YOURS_LINE, *_HINT_LINES)
+    assert output.lines == (_SHELL_INIT_LINE, _YOURS_LINE)
     assert fake.calls == []
+
+
+def test_a_reinstall_over_the_installers_starter_does_not_call_it_yours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = use_fake_git(monkeypatch)
+    run_post_install(_shipped_neovim(), _mutable())
+    fake.calls.clear()
+
+    output = run_post_install(_shipped_neovim(), _mutable())
+
+    assert output.lines == (
+        _SHELL_INIT_LINE,
+        "Starter already in ~/.config/nvim (left as is).",
+        *_HINT_LINES,
+    )
+    assert fake.calls == []
+
+
+def test_the_by_hand_patch_path_is_quoted(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch, present=False)
+    monkeypatch.setitem(vars(post_install), "_KICKSTART_PATCH", Path("/opt/my tools/a.patch"))
+
+    assert _starter()[-1] == "git -C ~/.config/nvim apply '/opt/my tools/a.patch'"
+
+
+def test_starter_accepts_an_xdg_config_home_that_resolves_to_dot_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = use_fake_git(monkeypatch)
+    config = Path.home() / ".config"
+    config.mkdir()
+    alias = Path.home() / "var-home-style-alias"
+    alias.symlink_to(config)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(alias))
+
+    assert _starter()[0].startswith("Starter: kickstart.nvim")
+
+    assert len(fake.calls) == 5
+    assert (config / "nvim" / "init.lua").is_file()
+
+
+def test_starter_sweeps_stale_temp_dirs_of_a_killed_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch)
+    config = Path.home() / ".config"
+    stale = config / ".nvim-starter.dead"
+    fresh = config / ".nvim-starter.live"
+    other = config / ".nvim-other.old"
+    for directory in (stale, fresh, other):
+        (directory / ".git").mkdir(parents=True)
+    day_ago = time.time() - 24 * 60 * 60
+    os.utime(stale, (day_ago, day_ago))
+    os.utime(other, (day_ago, day_ago))
+
+    assert _starter()[0].startswith("Starter: kickstart.nvim")
+
+    assert not stale.exists()
+    assert fresh.exists()
+    assert other.exists()

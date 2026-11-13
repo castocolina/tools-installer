@@ -163,6 +163,23 @@ def run_output(
     return run_output_with_stderr(cmd, timeout=timeout, env=env)[0]
 
 
+_GIT_INHERITED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_ASKPASS", "SSH_ASKPASS")
+# No hooks, no autocrlf: the user's global git config must not change what the child writes.
+_GIT_ISOLATION = ["-c", "core.hooksPath=/dev/null", "-c", "core.autocrlf=false"]
+
+
+def run_git_isolated(argv: list[str]) -> str:
+    """Run a `git ...` argv the user's own git state cannot steer, bounded and never prompting.
+
+    The child loses the repository variables and askpass helpers it would inherit, never asks
+    for a credential (an `insteadOf` rewrite to SSH would otherwise wait on a GUI), and runs
+    with no hooks and `core.autocrlf` off.
+    """
+    env = {key: value for key, value in os.environ.items() if key not in _GIT_INHERITED}
+    env.update(GIT_TERMINAL_PROMPT="0", SSH_ASKPASS_REQUIRE="never")
+    return run_output([argv[0], *_GIT_ISOLATION, *argv[1:]], timeout=600, env=env)
+
+
 def run_captured(cmd: list[str], *, timeout: float | None = None) -> None:
     """Runner that keeps the child's stdio out of the caller's terminal.
 

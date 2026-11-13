@@ -12,6 +12,7 @@ sourcing covers it with no extra wiring.
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
+from typing import NamedTuple
 
 from installer.atomic import atomic_write_text, read_capped
 from installer.locations import display_path, path_scan_rc_paths
@@ -458,7 +459,15 @@ def applicable_bundles(platform: Platform) -> tuple[TweakBundle, ...]:
     return tuple(b for b in BUNDLES if not b.platforms or platform.os in b.platforms)
 
 
-def user_export(names: tuple[str, ...], tool_id: str) -> str | None:
+class Yield(NamedTuple):
+    """Why a bundle is not written: `line` says so; `kept` is True when the user sets the name
+    (the block is then theirs to override), False when a startup file could not be read."""
+
+    line: str
+    kept: bool
+
+
+def user_export(names: tuple[str, ...], tool_id: str) -> Yield | None:
     """Read-only: why `tool_id`'s bundle is not written (the user exports one of `names`, or a
     startup file cannot be read), or None when it may be written. Never reads the environment."""
     if not names:
@@ -478,16 +487,19 @@ def user_export(names: tuple[str, ...], tool_id: str) -> str | None:
         if data is None:
             if not reason:  # a directory or a FIFO is not a startup file
                 continue
-            return sanitize_log_line(
-                f"Could not read {display_path(path)} ({reason}), "
-                f"so the {tool_id} shell init was not written."
+            return Yield(
+                sanitize_log_line(
+                    f"Could not read {display_path(path)} ({reason}), "
+                    f"so the {tool_id} shell init was not written."
+                ),
+                kept=False,
             )
         found = find_export(data.decode("utf-8", errors="replace"), names)
         if found is not None:
-            name, value = found
-            return (
-                f"Kept your {name}={sanitize_log_line(value)} "
-                f"(the {tool_id} shell init was not written)."
+            name, line = found
+            where = sanitize_log_line(f"{display_path(path)}:{line}")
+            return Yield(
+                f"Kept your {name} ({where}; the {tool_id} shell init was not written).", kept=True
             )
     return None
 

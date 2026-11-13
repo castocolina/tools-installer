@@ -72,7 +72,7 @@ from installer.prompt import CallbackPrompter
 from installer.receipts import scan_retired
 from installer.render import render_troubleshooting
 from installer.resolve import unavailable_reason
-from installer.run import OutputRunner, Runner, apply_child_env, run_captured, run_output
+from installer.run import OutputRunner, Runner, apply_child_env, run_captured, run_git_isolated
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -768,11 +768,6 @@ def _build_services(
     return version_refresh, updates, policy, _install
 
 
-def _run_git(argv: list[str]) -> str:
-    # The starter's git never prompts and never hangs a worker.
-    return run_output(argv, timeout=600, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-
-
 def _split_sourced_from(link_mode: str) -> tuple[Path, ...]:
     """The rc files that source ~/.myshellrc under `link_mode`: split mode only."""
     if link_mode != "split":
@@ -914,7 +909,7 @@ def _build_app(
 
     # An install-time shell-init yes is sourced the same way a tweak is (D-11).
     post_install.use_shell_init_sourcing(_tweak_ensure_sourced_from)
-    post_install.use_git_runner(_run_git)
+    post_install.use_git_runner(run_git_isolated)
     redirects = _cache_redirect_policies(platform, ensure_sourced_from=_tweak_ensure_sourced_from)
     desktop = _desktop_shell_policies(platform)
 
@@ -1506,7 +1501,7 @@ def main(argv: list[str]) -> int:
         )
     _print_repairs(console, *_launch_repairs())
     post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
-    post_install.use_git_runner(_run_git)
+    post_install.use_git_runner(run_git_isolated)
     refresh, updates, _, install = _build_services(tools, platform)
     outcomes = run_wizard(
         tools,
