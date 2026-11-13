@@ -175,6 +175,7 @@ class UpdateOutcome:
     postinstall_warning: str | None = None
     replayed_globals: tuple[str, ...] = ()
     cleanup_warnings: tuple[str, ...] = ()
+    receipt_warning: str | None = None
 
 
 def resolve_update_argv(target: UpdateTarget, *, greedy: bool = False) -> list[str] | None:
@@ -357,6 +358,7 @@ def _perform(
     method = ownership.method
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
+    receipt_warning: str | None = None
     detail = ""
     resolve_release, resolved_tags = capturing_resolver(release_resolver(resolve_tag))
     # R1-05: snapshot before the owner branch runs anything, so the receipt
@@ -417,8 +419,8 @@ def _perform(
                     release=resolved_tags[-1] if resolved_tags else None,
                 )
             except OSError as exc:
-                note = f"install receipt not written: {exc}"
-                detail = f"{detail}; {note}" if detail else note
+                receipt_warning = f"install receipt not written: {exc}"
+                detail = f"{detail}; {receipt_warning}" if detail else receipt_warning
     warning = _run_postinstall(target, method, runner, postinstall)
     return UpdateOutcome(
         tool_id=target.tool.id,
@@ -427,6 +429,7 @@ def _perform(
         detail=detail,
         postinstall_warning=warning,
         cleanup_warnings=cleanup_warnings,
+        receipt_warning=receipt_warning,
     )
 
 

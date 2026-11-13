@@ -32,10 +32,14 @@ class RunDeps:
     context: schedules.ScheduleContext | None
 
 
+def _first_line(text: str) -> str:
+    """The first non-empty line of `text`, sanitized and bounded; empty when there is none."""
+    lines = (line.strip() for line in sanitize_log_line(text).splitlines())
+    return next((line for line in lines if line), "")[:_REASON_LIMIT]
+
+
 def _reason(error: Exception) -> str:
-    """The first non-empty line of the error, sanitized and bounded."""
-    lines = (line.strip() for line in sanitize_log_line(str(error)).splitlines())
-    return next((line for line in lines if line), "")[:_REASON_LIMIT] or type(error).__name__
+    return _first_line(str(error)) or type(error).__name__
 
 
 def _update(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
@@ -53,7 +57,10 @@ def _update(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
         )
     except (UpdateError, CommandError, OSError) as error:
         return f"failed: {_reason(error)}", 1
-    return schedules.update_result_line(outcome, before, after)
+    line, code = schedules.update_result_line(outcome, before, after)
+    if outcome.receipt_warning:
+        line += f"; warning: {_first_line(outcome.receipt_warning)}"
+    return line, code
 
 
 def _agent_resolves(agent: Path) -> bool:

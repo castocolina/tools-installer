@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import setup
-from installer import cli, cursor_shim, runlock, schedules
+from installer import cli, cursor_shim, receipts, runlock, schedules
 from installer.guards import REDIRECT_SENTINEL
 from installer.helper_assets import schedule_runner
 from installer.model import Tool, load_tools
@@ -148,6 +148,20 @@ def test_run_schedule_updates_claude_once(tmp_path: Path, monkeypatch: pytest.Mo
         0,
     )
     assert recorder.calls == [[str(leaf), "update"]]
+
+
+def test_a_failed_receipt_write_shows_on_the_result_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps, _recorder, _leaf = _claude(tmp_path, monkeypatch, "1.0", "1.1")
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(receipts, "record", refuse)
+    line, code = run_schedule("update-claude", deps, parent_holds_lock=True)
+    assert code == 0
+    assert line == "ok: updated 1.0 → 1.1; warning: install receipt not written: disk full"
 
 
 def test_up_to_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
