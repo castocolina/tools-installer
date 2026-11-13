@@ -269,7 +269,7 @@ def test_codex_toml_round_trip_inserts_before_the_first_table() -> None:
     with pytest.raises(SettingsEditRefused):
         insert_key(CODEX_CONFIG, "toml", ("a b",), "x")
     with pytest.raises(SettingsEditRefused):
-        insert_key(CODEX_CONFIG, "toml", ("count",), 3)
+        insert_key(CODEX_CONFIG, "toml", ("count",), 3.5)
     with pytest.raises(SettingsEditRefused):
         replace_value(CODEX_CONFIG, "toml", ("model",), "o3")
 
@@ -1402,3 +1402,72 @@ def test_a_malformed_created_dirs_field_makes_the_ledger_untrusted(bad: object) 
     path.write_text(json.dumps(data), encoding="utf-8")
 
     assert read_ledger("claude") is None
+
+
+HERDR_CONFIG = (
+    "# herdr settings\n"
+    "onboarding = false\n"
+    "\n"
+    "[terminal]\n"
+    'shell_mode = "auto"\n'
+    "\n"
+    "[ui]\n"
+    'agent_panel_sort = "spaces"\n'
+)
+HERDR_AGENT_ROWS: list[object] = [
+    [{"token": "$rule", "dim": True}],
+    ["state_icon", "workspace", "tab", {"token": "$here", "bold": True}],
+    ["agent"],
+]
+HERDR_SPACES_ROWS: list[object] = [["state_icon", "workspace", {"token": "$here", "bold": True}]]
+
+
+def _herdr_file() -> Path:
+    path = Path.home() / ".config" / "herdr" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_herdr_sidebar_keys_round_trip_byte_identical() -> None:
+    home = Path.home()
+    config = _herdr_file()
+    config.write_text(HERDR_CONFIG, encoding="utf-8")
+
+    applied = apply_setting("herdr", "sidebar", home=home, platform_os="linux", environ={})
+
+    assert applied.refused is None
+    assert [(k.key, k.kind) for k in applied.keys] == [
+        ("ui.sidebar.agents.rows", "wrote"),
+        ("ui.sidebar.agents.row_gap", "wrote"),
+        ("ui.sidebar.spaces.rows", "wrote"),
+    ]
+    text = config.read_text(encoding="utf-8")
+    sidebar = tomllib.loads(text)["ui"]["sidebar"]
+    assert sidebar["agents"] == {"rows": HERDR_AGENT_ROWS, "row_gap": 1}
+    assert sidebar["spaces"] == {"rows": HERDR_SPACES_ROWS}
+    assert all(line in text for line in HERDR_CONFIG.splitlines())
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert [(e.setting, e.key_path) for e in ledger.entries] == [
+        ("sidebar", ("ui", "sidebar", "agents", "rows")),
+        ("sidebar", ("ui", "sidebar", "agents", "row_gap")),
+        ("sidebar", ("ui", "sidebar", "spaces", "rows")),
+    ]
+
+    results = revert_agent("herdr", home=home, platform_os="linux", environ={})
+
+    assert [r.refused for r in results] == [None]
+    assert config.read_text(encoding="utf-8") == HERDR_CONFIG
+    assert read_ledger("herdr") is None
+
+
+def test_herdr_is_a_config_agent_without_tuning() -> None:
+    assert "herdr" in receipts.CONFIG_AGENTS
+    assert agent_settings.AGENT_FORMATS["herdr"] == "toml"
+    assert "herdr" not in agent_settings.TUNING_GROUPS
+    keys = agent_settings.setting_keys("herdr", "sidebar", "linux")
+    assert [(k.path, k.value) for k in keys] == [
+        (("ui", "sidebar", "agents", "rows"), HERDR_AGENT_ROWS),
+        (("ui", "sidebar", "agents", "row_gap"), 1),
+        (("ui", "sidebar", "spaces", "rows"), HERDR_SPACES_ROWS),
+    ]
