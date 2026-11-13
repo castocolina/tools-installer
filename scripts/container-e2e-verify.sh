@@ -41,6 +41,10 @@ BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
 # herdr's plugin id (24-07) and where its probe keeps a copy of the binary for the after-uninstall check.
 HERDR_PLUGIN_ID=herdr-setup.markers
 HERDR_PROBE_COPY=/tmp/herdr-probe
+# The kickstart.nvim commit and the no-LSP patch the installer applies to it; 24.1-03 owns both
+# values (its test checks they agree with the Python constants). The patch path is workspace-relative.
+NVIM_STARTER_PIN=8e35dbedb7966e3a95e1f26f9fc1179ab6c68db4
+NVIM_STARTER_PATCH=installer/patches/kickstart-no-lsp.patch
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -73,6 +77,11 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           TRACER_REINSTALL_OK, TRACER_GSD_ABSENT_OK, TRACER_HOOKS_*, TRACER_SETTINGS_*
                           per step into pass2-transcript.log (appended, in order).
                           Tears the container down (rm -f) once all three succeed.
+  nvim-lsp                Orchestrator only, after pass1 on an already-bootstrapped
+                          container: open a Python, Lua, TypeScript, Go and Java file in
+                          the installer's own neovim starter and measure zero language
+                          servers (no client, no server process, an empty Mason). Prints
+                          TRACER_NVIM_LSP_OK. `all` runs it on fedora between pass1 and pass2.
   all                     bootstrap --replace, pass1, pass2, then remove the
                           container whatever the outcome (what `make e2e` runs).
   nested                  Orchestrator only, a time-boxed spike: start a disposable
@@ -1405,6 +1414,303 @@ echo D
   printf '%s\n' "$out" | herdr_removed_verdict
 }
 
+# neovim (ONB-08). The container answers with one prefixed fact line each (see nvim_probe_installed)
+# and the verdicts are decided here, so a host test can drive them with fixture lines. Facts on stdin:
+# `V <nvim --version first line>`, `R <$VIMRUNTIME>`, `T <receipt artifact type> <HOME-relative path>`,
+# `N` (no receipt), `E <EDITOR> <VISUAL>`, `B <tweak block count>`, `G <starter HEAD>`,
+# `A ok|fail` (the patch reverse-applies) and the closing `D`.
+nvim_installed_verdict() {
+  local line version="" runtime="" has_dir=0 has_link=0 no_receipt=0 editor="" bundle=0
+  local head="" patch="" done=0 failed=0
+  while IFS= read -r line; do
+    case "$line" in
+      "V NVIM v"*) version="${line#V NVIM }" ;;
+      "R "*) runtime="${line#R }" ;;
+      "T dir .local/opt/nvim") has_dir=1 ;;
+      "T link .local/bin/nvim") has_link=1 ;;
+      N) no_receipt=1 ;;
+      "E "*) read -r editor <<<"${line#E }" || true ;;
+      "B "*) bundle="${line#B }" ;;
+      "G "*) head="${line#G }" ;;
+      "A "*) patch="${line#A }" ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NVIM_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -z "$version" ]]; then
+    printf 'TRACER_NVIM_VERSION_MISSING\n'
+    failed=1
+  fi
+  if [[ "$runtime" != "$TESTER_HOME/.local/opt/nvim/"* ]]; then
+    printf 'TRACER_NVIM_RUNTIME_OUTSIDE runtime=%s\n' "$runtime"
+    failed=1
+  fi
+  if [[ "$no_receipt" -eq 1 || "$has_dir" -eq 0 || "$has_link" -eq 0 ]]; then
+    printf 'TRACER_NVIM_RECEIPT_INCOMPLETE\n'
+    failed=1
+  fi
+  if [[ "$editor" != "nvim nvim" ]]; then
+    printf 'TRACER_NVIM_EDITOR_MISMATCH found=%s\n' "$editor"
+    failed=1
+  fi
+  if [[ "$bundle" != 1 ]]; then
+    printf 'TRACER_NVIM_BUNDLE_MISSING count=%s\n' "$bundle"
+    failed=1
+  fi
+  if [[ -z "$head" ]]; then
+    printf 'TRACER_NVIM_STARTER_MISSING\n'
+    failed=1
+  else
+    if [[ "$head" != "$NVIM_STARTER_PIN" ]]; then
+      printf 'TRACER_NVIM_STARTER_PIN_MISMATCH head=%s\n' "$head"
+      failed=1
+    fi
+    if [[ "$patch" != ok ]]; then
+      printf 'TRACER_NVIM_STARTER_UNPATCHED\n'
+      failed=1
+    fi
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NVIM_INSTALLED_OK version=%s head=%s\n' "$version" "${head:0:7}"
+}
+
+# After pass 1, before the rerun: gather neovim's facts as the tester and decide. nvim's own runs
+# keep their XDG dirs in a scratch dir, so the probe leaves nothing in the tester's HOME; the new
+# bash with EDITOR and VISUAL unset proves the value comes from the rc chain (no zsh in these
+# containers, D-20 refined).
+nvim_probe_installed() {
+  local py body pre out
+  py='from pathlib import Path
+from installer import receipts
+home = Path.home()
+receipt = receipts.read("neovim")
+if receipt is None:
+    print("N")
+else:
+    for artifact in receipt.artifacts:
+        path = artifact.path
+        print("T " + artifact.type + " " + str(path.relative_to(home) if path.is_relative_to(home) else path))
+'
+  IFS= read -r -d '' body <<'EOF' || true
+set -euo pipefail
+eval "$("$brew" shellenv)"
+nvim="$HOME/.local/bin/nvim"
+if [ -x "$nvim" ]; then
+  t="$(mktemp -d)"
+  export XDG_STATE_HOME="$t/state" XDG_DATA_HOME="$t/data" XDG_CACHE_HOME="$t/cache"
+  v="$({ "$nvim" --version </dev/null 2>/dev/null || true; } | sed -n 1p)"
+  r="$("$nvim" --clean --headless -c 'lua io.stdout:write(vim.env.VIMRUNTIME)' -c 'qa!' </dev/null 2>/dev/null || true)"
+  unset XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
+  rm -rf "$t"
+  if [ -n "$v" ]; then printf 'V %s\n' "$v"; fi
+  printf 'R %s\n' "$r"
+fi
+e="$(env -u EDITOR -u VISUAL bash -ic 'printf "%s %s" "${EDITOR-}" "${VISUAL-}"' </dev/null 2>/dev/null || true)"
+printf 'E %s\n' "$e"
+b="$(grep -cFx '# >>> tools-installer tweak:neovim >>>' "$HOME/.myshellrc" 2>/dev/null || true)"
+printf 'B %s\n' "${b:-0}"
+cfg="$HOME/.config/nvim"
+if [ -d "$cfg/.git" ]; then
+  g="$(git -C "$cfg" rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$g" ]; then printf 'G %s\n' "$g"; fi
+  if git -C "$cfg" apply --reverse --check "$workspace/$patch" >/dev/null 2>&1; then echo 'A ok'; else echo 'A fail'; fi
+fi
+cd "$workspace"
+uv run --isolated --no-dev python -c "$py"
+echo D
+EOF
+  printf -v pre 'brew=%q\nworkspace=%q\npatch=%q\npy=%q\n' \
+    "$BREW_BIN" "$TESTER_WORKSPACE" "$NVIM_STARTER_PATCH" "$py"
+  out="$(exec_tester "$pre$body")" || { printf 'TRACER_NVIM_PROBE_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | nvim_installed_verdict
+}
+
+# Fact lines on stdin from nvim_probe_after: `L` (the link or a file is still at ~/.local/bin/nvim),
+# `O` (~/.local/opt/nvim is still there), `N` (the receipt file is still there), `B <tweak block
+# count>`, `K` (the user's ~/.config/nvim/init.lua is kept) and the closing `D`.
+nvim_removed_verdict() {
+  local line link=0 tree=0 receipt=0 bundle=0 kept=0 done=0 failed=0
+  while IFS= read -r line; do
+    case "$line" in
+      L) link=1 ;;
+      O) tree=1 ;;
+      N) receipt=1 ;;
+      "B "*) bundle="${line#B }" ;;
+      K) kept=1 ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NVIM_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ "$link" -eq 1 ]]; then
+    printf 'TRACER_NVIM_LINK_LEFT\n'
+    failed=1
+  fi
+  if [[ "$tree" -eq 1 ]]; then
+    printf 'TRACER_NVIM_TREE_LEFT\n'
+    failed=1
+  fi
+  if [[ "$receipt" -eq 1 ]]; then
+    printf 'TRACER_NVIM_RECEIPT_LEFT\n'
+    failed=1
+  fi
+  if [[ "$bundle" != 0 ]]; then
+    printf 'TRACER_NVIM_BUNDLE_LEFT count=%s\n' "$bundle"
+    failed=1
+  fi
+  if [[ "$kept" -eq 0 ]]; then
+    printf 'TRACER_NVIM_CONFIG_GONE\n'
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NVIM_REMOVED_OK\n'
+}
+
+# After the full uninstall: neovim's link, opt tree, receipt and EDITOR block are gone, and the
+# user's ~/.config/nvim is kept (SPEC R3, D-20). The receipt path is a $HOME-relative literal, the
+# way assert_receipt_removed writes it, and mirrors installer/receipts.py::default_receipts_dir.
+nvim_probe_after() {
+  local body out
+  IFS= read -r -d '' body <<'EOF' || true
+set -euo pipefail
+if [ -e "$HOME/.local/bin/nvim" ] || [ -L "$HOME/.local/bin/nvim" ]; then echo L; fi
+if [ -e "$HOME/.local/opt/nvim" ] || [ -L "$HOME/.local/opt/nvim" ]; then echo O; fi
+if [ -e "$HOME/.local/state/tools-installer/receipts/neovim.json" ]; then echo N; fi
+b="$(grep -cFx '# >>> tools-installer tweak:neovim >>>' "$HOME/.myshellrc" 2>/dev/null || true)"
+printf 'B %s\n' "${b:-0}"
+if [ -f "$HOME/.config/nvim/init.lua" ]; then echo K; fi
+echo D
+EOF
+  out="$(exec_tester "$body")" || { printf 'TRACER_NVIM_PROBE_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | nvim_removed_verdict
+}
+
+# neovim's zero-LSP check (ONB-10, D-12/D-13), run by the orchestrator on Fedora. Lines on stdin from
+# cmd_nvim_lsp: the marker `NVIM_LSP clients=.. mason_entries=.. filetypes=.. lspconfig=.. mason=..`
+# (printed by scripts/nvim-lsp-check.lua), `PROC <cmdline>`, `NVIM_LSP_NO_NVIM`, `NVIM_LSP_NO_STARTER`
+# and `NVIM_LSP_DONE` (both launches exited 0). Every other line is ignored, stderr noise and the
+# `NVIM_LSP_STDERR` evidence lines included: the marker counts only on a line that starts with it.
+nvim_lsp_verdict() {
+  local line part marker=0 clients="" entries="" filetypes="" lspconfig="" mason="" procs="" cmd
+  local no_nvim=0 no_starter=0 done=0 failed=0
+  local -a parts
+  while IFS= read -r line; do
+    case "$line" in
+      "NVIM_LSP clients="*)
+        marker=1
+        read -ra parts <<<"${line#NVIM_LSP }"
+        for part in ${parts[@]+"${parts[@]}"}; do
+          case "$part" in
+            clients=*) clients="${part#clients=}" ;;
+            mason_entries=*) entries="${part#mason_entries=}" ;;
+            filetypes=*) filetypes="${part#filetypes=}" ;;
+            lspconfig=*) lspconfig="${part#lspconfig=}" ;;
+            mason=*) mason="${part#mason=}" ;;
+          esac
+        done
+        ;;
+      "PROC "*) procs+="${line#PROC }"$'\n' ;;
+      NVIM_LSP_NO_NVIM) no_nvim=1 ;;
+      NVIM_LSP_NO_STARTER) no_starter=1 ;;
+      NVIM_LSP_DONE) done=1 ;;
+    esac
+  done
+  if [[ "$no_nvim" -eq 1 ]]; then
+    printf 'TRACER_NVIM_LSP_NO_NVIM\n'
+    return 1
+  fi
+  if [[ "$no_starter" -eq 1 ]]; then
+    printf 'TRACER_NVIM_LSP_NO_STARTER\n'
+    return 1
+  fi
+  if [[ "$marker" -eq 0 || "$done" -eq 0 ]]; then
+    printf 'TRACER_NVIM_LSP_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ "$clients" != 0 ]]; then
+    printf 'TRACER_NVIM_LSP_CLIENTS count=%s\n' "$clients"
+    failed=1
+  fi
+  while IFS= read -r cmd; do
+    [[ -n "$cmd" ]] || continue
+    printf 'TRACER_NVIM_LSP_SERVER_PROCESS cmd=%s\n' "$cmd"
+    failed=1
+  done <<<"$procs"
+  if [[ "$entries" != 0 ]]; then
+    printf 'TRACER_NVIM_MASON_NOT_EMPTY entries=%s\n' "$entries"
+    failed=1
+  fi
+  if [[ "$filetypes" != python,lua,typescript,go,java ]]; then
+    printf 'TRACER_NVIM_LSP_FILETYPES found=%s\n' "$filetypes"
+    failed=1
+  fi
+  if [[ "$lspconfig" != 1 || "$mason" != 1 ]]; then
+    printf 'TRACER_NVIM_LSP_PLUGINS_MISSING lspconfig=%s mason=%s\n' "$lspconfig" "$mason"
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NVIM_LSP_OK clients=%s mason_entries=%s\n' "$clients" "$entries"
+}
+
+# Orchestrator only, on an already-bootstrapped container after pass 1: act on the tree the
+# installer produced. Both nvim launches run with XDG data, state and cache in a mktemp dir outside
+# HOME (so the leftover check never sees them), and each is bounded by `timeout` with stdin from
+# /dev/null. An EXIT trap in the gather prints each launch's exit status and stderr tail as
+# `NVIM_LSP_STDERR <launch>: ...` evidence and removes the dir, however the gather ends (R2-03).
+# The evidence is forwarded to this command's own stdout, which `all` tees into the transcript
+# (R2-02); stderr never decides the verdict (treesitter's noise is expected, Pitfall 7).
+cmd_nvim_lsp() {
+  container_running || die "container $CONTAINER_NAME is not running"
+  local body pre out status=0
+  IFS= read -r -d '' body <<'EOF' || true
+set -euo pipefail
+nvim="$HOME/.local/bin/nvim"
+if [ ! -x "$nvim" ]; then echo NVIM_LSP_NO_NVIM; exit 0; fi
+if [ ! -f "$HOME/.config/nvim/init.lua" ]; then echo NVIM_LSP_NO_STARTER; exit 0; fi
+t="$(mktemp -d)"
+fl='not run'
+ck='not run'
+evidence() {
+  local launch status
+  for launch in first-launch check; do
+    if [ "$launch" = first-launch ]; then status="$fl"; else status="$ck"; fi
+    printf 'NVIM_LSP_STDERR %s: exit status %s\n' "$launch" "$status"
+    if [ -f "$t/$launch.err" ]; then
+      tail -n 20 "$t/$launch.err" | sed "s/^/NVIM_LSP_STDERR $launch: /"
+    fi
+  done
+  rm -rf "$t"
+  }
+trap evidence EXIT
+export XDG_DATA_HOME="$t/data" XDG_STATE_HOME="$t/state" XDG_CACHE_HOME="$t/cache"
+mkdir "$t/files"
+cd "$t/files"
+printf 'x = 1\n' > a.py
+printf 'local x = 1\n' > a.lua
+printf 'const x = 1\n' > a.ts
+printf 'package main\n' > a.go
+printf 'class A {}\n' > A.java
+fl=0
+timeout 300 "$nvim" --headless +qa 2>"$t/first-launch.err" </dev/null || fl=$?
+ck=0
+timeout 180 "$nvim" --headless -c "luafile $workspace/scripts/nvim-lsp-check.lua" 2>"$t/check.err" </dev/null || ck=$?
+if [ "$fl" -eq 0 ] && [ "$ck" -eq 0 ]; then echo NVIM_LSP_DONE; fi
+EOF
+  printf -v pre 'workspace=%q\n' "$TESTER_WORKSPACE"
+  out="$(exec_tester "$pre$body")" || status=$?
+  printf '%s\n' "$out" | sed -n '/^NVIM_LSP_STDERR /p'
+  if [[ "$status" -ne 0 ]]; then
+    printf 'TRACER_NVIM_LSP_PROBE_FAILED\n'
+    return 1
+  fi
+  printf '%s\n' "$out" | nvim_lsp_verdict
+}
+
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
 # output to $log, accumulate summary counts (a no-op for --uninstall, which
 # prints no Summary — line), and report whether it was clean/explained.
@@ -1432,6 +1738,10 @@ cmd_pass2() {
 
   # Pass 1 left herdr installed: prove its integrations, plugin and sidebar keys before the rerun.
   if ! herdr_probe_installed >> "$log"; then
+    return 1
+  fi
+  # ... and neovim: its binary, runtime, receipt, editor block and the pinned patched starter.
+  if ! nvim_probe_installed >> "$log"; then
     return 1
   fi
 
@@ -1503,6 +1813,9 @@ cmd_pass2() {
   if ! herdr_probe_after >> "$log"; then
     return 1
   fi
+  if ! nvim_probe_after >> "$log"; then
+    return 1
+  fi
   if ! assert_gsd_absent uninstall >> "$log"; then
     return 1
   fi
@@ -1544,9 +1857,19 @@ cmd_all() {
   trap 'rc=$?; if [[ "$rc" -ne 0 && "$PASS2_STARTED" -eq 1 ]]; then cat "$PHASE_DIR/pass2-transcript.log" || true; fi; ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
   cmd_bootstrap --replace
   cmd_pass1 | tee "$PHASE_DIR/pass1-transcript.log"
+  # A failed zero-LSP check still lets pass 2 run, so one run gives both pieces of evidence.
+  local lsp_failed=0
+  if [[ "$DISTRO" == fedora ]]; then
+    cmd_nvim_lsp | tee "$PHASE_DIR/nvim-lsp-transcript.log" || lsp_failed=1
+  fi
   PASS2_STARTED=1
   cmd_pass2
   cat "$PHASE_DIR/pass2-transcript.log"
+  PASS2_STARTED=0
+  if [[ "$lsp_failed" -ne 0 ]]; then
+    printf 'TRACER_NVIM_LSP_FAILED_EARLIER\n'
+    return 1
+  fi
 }
 
 # --- nested target (D-18, D-29): orchestrator only, a time-boxed spike --------------------------
@@ -1891,6 +2214,7 @@ main() {
     bootstrap) cmd_bootstrap "$@" ;;
     pass1) cmd_pass1 "$@" ;;
     pass2) cmd_pass2 "$@" ;;
+    nvim-lsp) cmd_nvim_lsp "$@" ;;
     resync) cmd_resync "$@" ;;
     all) cmd_all "$@" ;;
     nested) cmd_nested "$@" ;;

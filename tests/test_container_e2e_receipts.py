@@ -1589,6 +1589,7 @@ _STAGE_STUBS = (
     '"$PHASE_DIR"; }\n'
     'cmd_bootstrap() { report BOOT; mkdir -p "$PHASE_DIR"; }\n'
     "cmd_pass1() { report PASS1; }\n"
+    "cmd_nvim_lsp() { report NVIM_LSP; }\n"
     'cmd_pass2() { report PASS2; printf "p2\\n" > "$PHASE_DIR/pass2-transcript.log"; }\n'
 )
 
@@ -2876,3 +2877,464 @@ def test_nested_gathers_run_for_real_over_a_scratch_home(
     reverted = _run(base + "\nnested_herdr_revert_ok\n", scratch, path=env_path)
     assert reverted.returncode == 0, reverted.stdout + reverted.stderr
     assert reverted.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_OK"]
+
+
+# --- neovim (24.1-04) --------------------------------------------------------------------
+
+_NVIM_PIN = "8e35dbedb7966e3a95e1f26f9fc1179ab6c68db4"
+_NVIM_GOOD_FACTS = (
+    "V NVIM v0.12.6",
+    "R /home/tester/.local/opt/nvim/share/nvim/runtime",
+    "T dir .local/opt/nvim",
+    "T link .local/bin/nvim",
+    "E nvim nvim",
+    "B 1",
+    f"G {_NVIM_PIN}",
+    "A ok",
+)
+
+
+def _nvim_script(names: Sequence[str], *extra: str) -> str:
+    """The neovim verdicts and probes, extracted as committed, with `extra` shell after them."""
+    text = _script_text()
+    parts = [
+        f"TESTER_HOME={_constant('TESTER_HOME', text)}",
+        f"NVIM_STARTER_PIN={_constant('NVIM_STARTER_PIN', text)}",
+        f"NVIM_STARTER_PATCH={_constant('NVIM_STARTER_PATCH', text)}",
+        *(_function(name, text) for name in names),
+        *extra,
+    ]
+    return "\n".join(parts)
+
+
+def _nvim_verdict(tmp_path: Path, facts: str, verdict: str) -> subprocess.CompletedProcess[str]:
+    fixture = tmp_path / "facts.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(facts, encoding="utf-8")
+    return _run(_nvim_script([verdict]) + f'\n{verdict} < "{fixture}"\n', tmp_path)
+
+
+def test_nvim_installed_verdict_requires_every_piece(tmp_path: Path) -> None:
+    verdict = "nvim_installed_verdict"
+    ok = _nvim_verdict(tmp_path / "ok", _facts(*_NVIM_GOOD_FACTS), verdict)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_INSTALLED_OK version=v0.12.6 head=8e35dbe"]
+
+    def drop(*prefixes: str) -> tuple[str, ...]:
+        return tuple(line for line in _NVIM_GOOD_FACTS if not line.startswith(prefixes))
+
+    cases = {
+        "no-version": (drop("V "), "TRACER_NVIM_VERSION_MISSING"),
+        "runtime-outside": (
+            (*drop("R "), "R /usr/share/nvim/runtime"),
+            "TRACER_NVIM_RUNTIME_OUTSIDE runtime=/usr/share/nvim/runtime",
+        ),
+        "no-dir": (drop("T dir"), "TRACER_NVIM_RECEIPT_INCOMPLETE"),
+        "no-link": (drop("T link"), "TRACER_NVIM_RECEIPT_INCOMPLETE"),
+        "no-receipt": ((*drop("T "), "N"), "TRACER_NVIM_RECEIPT_INCOMPLETE"),
+        "editor": ((*drop("E "), "E vim "), "TRACER_NVIM_EDITOR_MISMATCH found=vim"),
+        "no-block": ((*drop("B "), "B 0"), "TRACER_NVIM_BUNDLE_MISSING count=0"),
+        "two-blocks": ((*drop("B "), "B 2"), "TRACER_NVIM_BUNDLE_MISSING count=2"),
+        "no-starter": (drop("G ", "A "), "TRACER_NVIM_STARTER_MISSING"),
+        "pin": (
+            (*drop("G "), "G " + "a" * 40),
+            f"TRACER_NVIM_STARTER_PIN_MISMATCH head={'a' * 40}",
+        ),
+        "unpatched": ((*drop("A "), "A fail"), "TRACER_NVIM_STARTER_UNPATCHED"),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _nvim_verdict(tmp_path / name, _facts(*lines), verdict)
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert not any(
+            line.startswith("TRACER_NVIM_INSTALLED_OK") for line in result.stdout.splitlines()
+        ), name
+    cut = _nvim_verdict(tmp_path / "cut", _facts(*_NVIM_GOOD_FACTS, done=False), verdict)
+    assert cut.returncode != 0
+    assert cut.stdout.splitlines() == ["TRACER_NVIM_PROBE_FAILED"]
+
+
+def _nvim_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, installed: bool = True) -> Path:
+    """A scratch HOME as pass 1 leaves it (or, with installed=False, as the uninstall does)."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    (scratch / ".local" / "bin").mkdir(parents=True)
+    (scratch / ".config" / "nvim").mkdir(parents=True)
+    (scratch / ".config" / "nvim" / "init.lua").write_text("-- starter\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    block = (
+        "# >>> tools-installer tweak:neovim >>>\n"
+        "export EDITOR=nvim\nexport VISUAL=nvim\n"
+        "# <<< tools-installer tweak:neovim <<<\n"
+    )
+    (scratch / ".myshellrc").write_text(block if installed else "", encoding="utf-8")
+    (scratch / ".bashrc").write_text("[ -f ~/.myshellrc ] && . ~/.myshellrc\n", encoding="utf-8")
+    if not installed:
+        return scratch
+    (scratch / ".local" / "opt" / "nvim" / "share" / "nvim" / "runtime").mkdir(parents=True)
+    nvim = scratch / ".local" / "bin" / "nvim"
+    nvim.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *--version*) printf "NVIM v0.12.6\\nBuild type: Release\\n" ;;\n'
+        '  *"--clean --headless"*) printf "%s" "$HOME/.local/opt/nvim/share/nvim/runtime" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    nvim.chmod(0o755)
+    (scratch / ".config" / "nvim" / ".git").mkdir()
+    opt = scratch / ".local" / "opt" / "nvim"
+    receipts.write(
+        Receipt(
+            tool="neovim",
+            at="2026-11-12T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=(
+                ReceiptArtifact(
+                    path=opt, type="dir", sha256="b" * 64, size=1, mtime_ns=1, key="bin/nvim"
+                ),
+                ReceiptArtifact(path=nvim, type="link", target=str(opt)),
+            ),
+            smoke=None,
+            hooks={},
+        )
+    )
+    return scratch
+
+
+def _nvim_probe_script(tmp_path: Path, scratch: Path, names: Sequence[str], call: str) -> str:
+    """The probes over the scratch HOME: stub brew, the uv stub, and TMPDIR kept off the host."""
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir(exist_ok=True)
+    return _nvim_script(
+        names,
+        f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+        f"export TMPDIR={shlex.quote(str(tmpdir))}",
+        _assign("TESTER_HOME", str(scratch)),
+        _assign("TESTER_WORKSPACE", str(tmp_path)),
+        _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+        'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        _uv_stub(),
+        call,
+    )
+
+
+def _nvim_bins(directory: Path, git_body: str) -> str:
+    """A PATH whose git is a stub; bash is linked in so macOS's /usr/bin:/bin still resolves."""
+    bins = _stub_bin(directory / "bin", {"git": git_body})
+    if not (bins / "bash").exists():
+        (bins / "bash").symlink_to(_bash())
+    return f"{bins}:/usr/bin:/bin"
+
+
+_NVIM_GIT_OK = (
+    'case "$*" in\n'
+    f"  *rev-parse*) echo {_NVIM_PIN} ;;\n"
+    '  *"apply --reverse --check"*) exit 0 ;;\n'
+    "esac"
+)
+
+
+def test_nvim_installed_gather_runs_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell and python the probe sends to the container run, with stub programs."""
+    scratch = _nvim_home(tmp_path, monkeypatch)
+    names = ("nvim_installed_verdict", "nvim_probe_installed")
+    script = _nvim_probe_script(tmp_path, scratch, names, "nvim_probe_installed")
+    path = _nvim_bins(tmp_path, _NVIM_GIT_OK)
+    ok = _run(script, scratch, path=path)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_INSTALLED_OK version=v0.12.6 head=8e35dbe"]
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+    (scratch / ".myshellrc").write_text("", encoding="utf-8")
+    no_block = _run(script, scratch, path=path)
+    assert no_block.returncode != 0
+    assert "TRACER_NVIM_BUNDLE_MISSING count=0" in no_block.stdout.splitlines()
+    assert "TRACER_NVIM_EDITOR_MISMATCH found=" in no_block.stdout.splitlines()
+
+    unpatched = _nvim_bins(tmp_path / "other", _NVIM_GIT_OK.replace("exit 0", "exit 1"))
+    result = _run(script, scratch, path=unpatched)
+    assert "TRACER_NVIM_STARTER_UNPATCHED" in result.stdout.splitlines()
+
+
+def test_nvim_probes_are_wired_into_pass2() -> None:
+    pass2 = _function("cmd_pass2")
+    first_run = pass2.index('run_pass2_step "--all --yes"')
+    assert pass2.index("herdr_probe_installed") < pass2.index("nvim_probe_installed") < first_run
+
+
+def test_the_allowlist_holds_the_nvim_log_dir() -> None:
+    lines = (ROOT / "scripts" / "e2e-residue-allowlist.txt").read_text(encoding="utf-8")
+    entries = [line for line in lines.splitlines() if line.startswith(".local/state/nvim  # ")]
+    assert len(entries) == 1
+
+
+def test_nvim_removed_verdict(tmp_path: Path) -> None:
+    verdict = "nvim_removed_verdict"
+    ok = _nvim_verdict(tmp_path / "ok", _facts("B 0", "K"), verdict)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_REMOVED_OK"]
+    cases = {
+        "link": (("L", "B 0", "K"), "TRACER_NVIM_LINK_LEFT"),
+        "tree": (("O", "B 0", "K"), "TRACER_NVIM_TREE_LEFT"),
+        "receipt": (("N", "B 0", "K"), "TRACER_NVIM_RECEIPT_LEFT"),
+        "block": (("B 1", "K"), "TRACER_NVIM_BUNDLE_LEFT count=1"),
+        "config": (("B 0",), "TRACER_NVIM_CONFIG_GONE"),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _nvim_verdict(tmp_path / name, _facts(*lines), verdict)
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert "TRACER_NVIM_REMOVED_OK" not in result.stdout.splitlines(), name
+    cut = _nvim_verdict(tmp_path / "cut", _facts("B 0", "K", done=False), verdict)
+    assert cut.returncode != 0
+    assert cut.stdout.splitlines() == ["TRACER_NVIM_PROBE_FAILED"]
+
+
+def test_nvim_removed_gather_runs_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch = _nvim_home(tmp_path, monkeypatch, installed=False)
+    names = ("nvim_removed_verdict", "nvim_probe_after")
+    script = _nvim_probe_script(tmp_path, scratch, names, "nvim_probe_after")
+    ok = _run(script, scratch)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_REMOVED_OK"]
+
+    (scratch / ".local" / "bin" / "nvim").symlink_to(scratch / ".local" / "opt" / "nvim")
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert "TRACER_NVIM_LINK_LEFT" in left.stdout.splitlines()
+
+
+def test_nvim_probe_after_names_the_module_receipt_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The receipt the gather looks for is the receipts module's own file for neovim."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    relative = default_receipts_dir().relative_to(tmp_path)
+    assert f"$HOME/{relative}/neovim.json" in _function("nvim_probe_after")
+
+
+def test_nvim_probe_after_is_wired_after_the_herdr_probe() -> None:
+    pass2 = _function("cmd_pass2")
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("herdr_probe_after") < pass2.index("nvim_probe_after") < reinstall
+
+
+_LSP_MARKER = (
+    "NVIM_LSP clients=0 mason_entries=0 filetypes=python,lua,typescript,go,java lspconfig=1 mason=1"
+)
+
+
+def test_nvim_lsp_verdict(tmp_path: Path) -> None:
+    verdict = "nvim_lsp_verdict"
+    ok = _nvim_verdict(tmp_path / "ok", _LSP_MARKER + "\nNVIM_LSP_DONE\n", verdict)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NVIM_LSP_OK clients=0 mason_entries=0"]
+
+    def swap(old: str, new: str) -> str:
+        return _LSP_MARKER.replace(old, new)
+
+    cases = {
+        "clients": (
+            (swap("clients=0", "clients=2"), "NVIM_LSP_DONE"),
+            "TRACER_NVIM_LSP_CLIENTS count=2",
+        ),
+        "process": (
+            (_LSP_MARKER, "PROC /x/lua-language-server", "NVIM_LSP_DONE"),
+            "TRACER_NVIM_LSP_SERVER_PROCESS cmd=/x/lua-language-server",
+        ),
+        "mason": (
+            (swap("mason_entries=0", "mason_entries=1"), "NVIM_LSP_DONE"),
+            "TRACER_NVIM_MASON_NOT_EMPTY entries=1",
+        ),
+        "filetypes": (
+            (swap("python,lua", "python,"), "NVIM_LSP_DONE"),
+            "TRACER_NVIM_LSP_FILETYPES found=python,,typescript,go,java",
+        ),
+        "plugins": (
+            (swap("lspconfig=1", "lspconfig=0"), "NVIM_LSP_DONE"),
+            "TRACER_NVIM_LSP_PLUGINS_MISSING lspconfig=0 mason=1",
+        ),
+        "no-nvim": (("NVIM_LSP_NO_NVIM",), "TRACER_NVIM_LSP_NO_NVIM"),
+        "no-starter": (("NVIM_LSP_NO_STARTER",), "TRACER_NVIM_LSP_NO_STARTER"),
+        "no-marker": (("NVIM_LSP_DONE",), "TRACER_NVIM_LSP_PROBE_FAILED"),
+        "no-done": ((_LSP_MARKER,), "TRACER_NVIM_LSP_PROBE_FAILED"),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _nvim_verdict(tmp_path / name, "\n".join(lines) + "\n", verdict)
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert not any(
+            line.startswith("TRACER_NVIM_LSP_OK") for line in result.stdout.splitlines()
+        ), name
+
+    # R1-08: stderr noise and the evidence lines never decide the verdict, even when they quote
+    # a marker.
+    noisy = "\n".join(
+        [
+            "Error: ENOENT: no such file or directory: tree-sitter",
+            "NVIM_LSP_STDERR first-launch: exit status 0",
+            "NVIM_LSP_STDERR check: NVIM_LSP clients=2 mason_entries=0 lspconfig=0 mason=0",
+            "NVIM_LSP_STDERR check: PROC /x/gopls",
+            _LSP_MARKER,
+            "NVIM_LSP_DONE",
+        ]
+    )
+    result = _nvim_verdict(tmp_path / "noisy", noisy + "\n", verdict)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.splitlines() == ["TRACER_NVIM_LSP_OK clients=0 mason_entries=0"]
+
+
+def _nvim_lsp_stub(tmp_path: Path, fail: str = "") -> str:
+    """A stub nvim: the first launch writes a stderr line, the luafile launch prints the marker.
+
+    `fail` names the launch (first-launch or check) that writes `boom <launch>` and exits 3.
+    It records where each launch ran and the XDG dirs it was given."""
+    boom = "echo 'boom {}' >&2; exit 3"
+    check_fail = boom.format("check") if fail == "check" else ""
+    first_fail = boom.format("first-launch") if fail == "first-launch" else ""
+    first_line = "" if fail == "first-launch" else "echo 'stub first launch line' >&2"
+    log = shlex.quote(str(tmp_path / "nvim-calls"))
+    return (
+        'echo "$PWD|$XDG_DATA_HOME|$XDG_STATE_HOME|$XDG_CACHE_HOME|'
+        f'$(ls "$PWD" | tr "\\n" " ")" >> {log}\n'
+        'case "$*" in\n'
+        f"  *luafile*)\n    printf '%s\\n' '{_LSP_MARKER}'\n    {check_fail}\n    ;;\n"
+        f"  *)\n    {first_line}\n    {first_fail}\n    ;;\n"
+        "esac"
+    )
+
+
+def _nvim_lsp_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: str = ""
+) -> subprocess.CompletedProcess[str]:
+    """cmd_nvim_lsp over a scratch HOME with a stub nvim and a stub timeout (R1-05)."""
+    scratch = _nvim_home(tmp_path, monkeypatch, installed=False)
+    nvim = scratch / ".local" / "bin" / "nvim"
+    nvim.write_text("#!/bin/sh\n" + _nvim_lsp_stub(tmp_path, fail) + "\n", encoding="utf-8")
+    nvim.chmod(0o755)
+    durations = shlex.quote(str(tmp_path / "durations"))
+    bins = _stub_bin(tmp_path / "bin", {"timeout": f'echo "$1" >> {durations}\nshift\nexec "$@"'})
+    (bins / "bash").symlink_to(_bash())
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    script = _nvim_script(
+        ("die", "nvim_lsp_verdict", "cmd_nvim_lsp"),
+        f"export TMPDIR={shlex.quote(str(tmpdir))}",
+        _assign("TESTER_WORKSPACE", str(tmp_path)),
+        "container_running() { return 0; }",
+        'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        "cmd_nvim_lsp",
+    )
+    return _run(script, scratch, path=f"{bins}:/usr/bin:/bin")
+
+
+def test_nvim_lsp_gather_runs_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _nvim_lsp_run(tmp_path, monkeypatch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = result.stdout.splitlines()
+    assert "TRACER_NVIM_LSP_OK clients=0 mason_entries=0" in lines
+    # R2-02: the evidence is on the command's own stdout, the stream cmd_all tees.
+    assert "NVIM_LSP_STDERR first-launch: exit status 0" in lines
+    assert "NVIM_LSP_STDERR first-launch: stub first launch line" in lines
+    assert "NVIM_LSP_STDERR check: exit status 0" in lines
+    assert (tmp_path / "durations").read_text(encoding="utf-8").split() == ["300", "180"]
+    assert list((tmp_path / "tmp").iterdir()) == []
+    runs = (tmp_path / "nvim-calls").read_text(encoding="utf-8").splitlines()
+    assert len(runs) == 2
+    for run in runs:
+        cwd, data, state, cache, files = run.split("|")
+        assert cwd.endswith("/files")
+        assert Path(cwd).parent == Path(data).parent == Path(state).parent == Path(cache).parent
+        assert not Path(data).is_relative_to(tmp_path / "home")
+        assert sorted(files.split()) == ["A.java", "a.go", "a.lua", "a.py", "a.ts"]
+
+
+@pytest.mark.parametrize("launch", ["first-launch", "check"])
+def test_nvim_lsp_gather_keeps_its_evidence_when_a_launch_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch: str
+) -> None:
+    """R2-03: a failed launch still flushes its status and stderr, and the temp dir is removed."""
+    result = _nvim_lsp_run(tmp_path, monkeypatch, fail=launch)
+    lines = result.stdout.splitlines()
+    assert f"NVIM_LSP_STDERR {launch}: exit status 3" in lines
+    assert f"NVIM_LSP_STDERR {launch}: boom {launch}" in lines
+    if launch == "first-launch":
+        assert "NVIM_LSP_STDERR check: exit status 0" in lines
+    assert result.returncode != 0
+    assert "TRACER_NVIM_LSP_PROBE_FAILED" in lines
+    assert not any(line.startswith("TRACER_NVIM_LSP_OK") for line in lines)
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_nvim_lsp_check_lua_measures_inside_nvim() -> None:
+    text = (ROOT / "scripts" / "nvim-lsp-check.lua").read_text(encoding="utf-8")
+    for needle in (
+        "VimEnter",
+        "vim.v.vim_did_enter",
+        "vim.wait(8000",
+        "vim.lsp.get_clients()",
+        "stdpath('data')",
+        "/mason/packages",
+        "/site/pack/core/opt/",
+        "/proc",
+        "'a.py'",
+        "'a.lua'",
+        "'a.ts'",
+        "'a.go'",
+        "'A.java'",
+        "NVIM_LSP clients=",
+        "qa!",
+    ):
+        assert needle in text, needle
+
+
+def test_nvim_lsp_is_wired_into_main_usage_and_cmd_all() -> None:
+    assert "nvim-lsp) cmd_nvim_lsp" in _function("main")
+    assert "nvim-lsp" in _function("usage")
+    cmd_all = _function("cmd_all")
+    pass1 = cmd_all.index("cmd_pass1")
+    fedora = cmd_all.index("fedora")
+    assert pass1 < fedora < cmd_all.index("cmd_nvim_lsp") < cmd_all.index("cmd_pass2")
+
+
+def test_all_runs_nvim_lsp_only_on_fedora(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    (tmp_path / "d").mkdir()
+    (tmp_path / "f").mkdir()
+
+    fedora = _run(_distro_harness() + "\n" + _STAGE_STUBS + "main all\n", scratch)
+    assert fedora.returncode == 0, fedora.stdout + fedora.stderr
+    order = [line.split()[0] for line in fedora.stdout.splitlines() if line.split()[0].isupper()]
+    assert order[:4] == ["BOOT", "PASS1", "NVIM_LSP", "PASS2"]
+    assert (
+        scratch / "repo" / ".e2e-artifacts" / "container-fedora" / "nvim-lsp-transcript.log"
+    ).exists()
+
+    debian = _run(
+        _distro_harness() + "\n" + _STAGE_STUBS + "main all --distro debian\n", tmp_path / "d"
+    )
+    assert debian.returncode == 0, debian.stdout + debian.stderr
+    assert "NVIM_LSP" not in debian.stdout
+
+    failing = _run(
+        _distro_harness()
+        + "\n"
+        + _STAGE_STUBS
+        + "cmd_nvim_lsp() { report NVIM_LSP; return 1; }\nmain all\n",
+        tmp_path / "f",
+    )
+    assert failing.returncode != 0
+    assert "PASS2 fedora" in failing.stdout
+    assert "TRACER_NVIM_LSP_FAILED_EARLIER" in failing.stdout.splitlines()
