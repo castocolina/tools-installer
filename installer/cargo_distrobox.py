@@ -79,13 +79,15 @@ class _Run:
         self.tmp = tmp
 
     def step(self, seconds: int, argv: list[str]) -> None:
-        # XDG_CACHE_HOME keeps `distrobox enter`'s FIFO out of the real ~/.cache.
+        # XDG_CACHE_HOME keeps `distrobox enter`'s FIFO out of the real ~/.cache; the manager is
+        # pinned because the image accounting and `rmi` below are podman's, whatever the user runs.
         prefix = [
             "timeout",
             "--kill-after=10",
             str(seconds),
             "env",
             f"XDG_CACHE_HOME={self.tmp / 'cache'}",
+            "DBX_CONTAINER_MANAGER=podman",
         ]
         self._ctx.runner([*prefix, *argv])
 
@@ -174,21 +176,23 @@ def _swap(staged: list[tuple[Path, Path]]) -> None:
     try:
         for new, host in staged:
             old = staged_sibling(host, OLD_SUFFIX) if os.path.lexists(host) else None
+            # recorded first so an interrupt right after the move is undone. shortcut: a stale
+            # `.old` from an earlier failed rollback would be restored too (it was reported).
+            done.append((host, old))
             if old is not None:
                 os.replace(host, old)
-            done.append((host, old))
             os.replace(new, host)
-    except OSError as exc:
+    except BaseException as exc:
         stuck: list[str] = []
         for host, old in reversed(done):
             try:
-                if old is not None:
-                    os.replace(old, host)
-                else:
+                if old is None:
                     host.unlink(missing_ok=True)
+                elif os.path.lexists(old):
+                    os.replace(old, host)
             except OSError:
                 stuck.append(str(old or host))
-        if stuck:
+        if stuck and isinstance(exc, Exception):
             raise ExecutorError(
                 f"swap failed ({exc}); rollback failed; prior files are at {', '.join(stuck)}"
             ) from exc
@@ -219,6 +223,8 @@ def _cleanup(run: _Run, name: str, image: str, *, pulled: bool) -> list[str]:
                 )
     finally:
         shutil.rmtree(run.tmp, ignore_errors=True)
+    if run.tmp.exists():  # `distrobox rm --rm-home` leaves the --home dir (1.8.2.5)
+        notes.append(f"could not remove {run.tmp}; remove it yourself")
     return notes
 
 
@@ -242,7 +248,7 @@ def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
     tmp = Path(tempfile.mkdtemp(prefix="tools-installer-cargo-", dir=RUN_ROOT))
     run = _Run(ctx, name, tmp)
     staged: list[tuple[Path, Path]] = []
-    failure: CommandError | OSError | DesktopEntryError | None = None
+    failure: CommandError | OSError | DesktopEntryError | ExecutorError | None = None
     cleanup_notes: list[str] = []
     try:
         (tmp / "terminfo").mkdir()
@@ -250,12 +256,16 @@ def install(method: Method, ctx: ExecContext) -> tuple[str, ...]:
         _build(run, method, name, tag)
         _stage(method, tmp, staged, notes)
         _swap(staged)
-    except (CommandError, OSError, DesktopEntryError) as exc:
+    except (CommandError, OSError, DesktopEntryError, ExecutorError) as exc:
         failure = exc
     finally:
+        leftovers: list[str] = []
         for new, _host in staged:
-            new.unlink(missing_ok=True)
-        cleanup_notes = _cleanup(run, name, image, pulled=pulled)
+            try:
+                new.unlink(missing_ok=True)
+            except OSError:
+                leftovers.append(f"could not remove {new}; delete it yourself")
+        cleanup_notes = [*leftovers, *_cleanup(run, name, image, pulled=pulled)]
     if failure is not None:
         line = (
             command_error_line(failure)
