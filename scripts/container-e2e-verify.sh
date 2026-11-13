@@ -2218,12 +2218,17 @@ cmd_nested() {
 SCHEDULES_BASE_IMAGE=registry.fedoraproject.org/fedora:44
 SCHEDULES_IMAGE=localhost/tools-installer-e2e-schedules:44
 SCHEDULES_CONTAINER_NAME=tools-installer-e2e-schedules
-# The Linux log, relative to the tester's HOME (D-11).
+# The Linux log and run lock, relative to the tester's HOME (D-11, D-12).
 SCHEDULES_LOG_REL=.local/state/tools-installer/schedules.log
+SCHEDULES_LOCK_REL=.local/state/tools-installer/run.lock
 # One poll per second: at most two minutes for systemd to boot, one for the session bus.
 SCHEDULES_POLL_STEP=1
 SCHEDULES_BOOT_ATTEMPTS=120
 SCHEDULES_BUS_ATTEMPTS=60
+# The calendar check polls every 5 s for 200 s; the catch-up check waits 75 s.
+SCHEDULES_CALENDAR_STEP=5
+SCHEDULES_CALENDAR_ATTEMPTS=40
+SCHEDULES_CATCHUP_WAIT=75
 # The tester's uid (set by schedules_start) and the --keep-image flag.
 SCHEDULES_UID=
 SCHEDULES_KEEP_IMAGE=0
@@ -2380,10 +2385,141 @@ schedules_verdicts() {
   return "$rc"
 }
 
+# The unit's last 50 journal lines as `SCHEDULE_JOURNAL <unit> <line>`: a product failure stays
+# diagnosable after the teardown. $1 is a full unit name, suffix included.
+schedules_journal() {
+  schedules_tester "journalctl --user -u $1 -n 50 --no-pager" 2>&1 | sed "s/^/SCHEDULE_JOURNAL $1 /" || true
+}
+
 # Runs schedule $1 once through its installed unit $2: the service, the way its timer starts it.
 schedules_run_one() {
   schedules_tester "systemctl --user start $2.service" || true # the log and the cell are the verdict
-  schedules_verdicts "$1"
+  if ! schedules_verdicts "$1"; then
+    schedules_journal "$2.service"
+    return 1
+  fi
+}
+
+# Every available built-in once: tmp cleanup, cache cleanup and the claude update (a stub `claude`
+# makes that row available; its run may read `ok` or `skipped` when no owner is known, F9).
+schedules_run_all() {
+  local pair id rc=0
+  # shellcheck disable=SC2016 # $HOME expands in the tester's shell
+  schedules_tester 'mkdir -p "$HOME/.local/bin" && printf "#!/bin/sh\necho claude 1.0.0\n" > "$HOME/.local/bin/claude" && chmod 0755 "$HOME/.local/bin/claude"' || return 1
+  for pair in tmp-cleanup:tools-installer-prune-tmp \
+    cache-cleanup:tools-installer-schedule-cache-cleanup \
+    update-claude:tools-installer-schedule-update-claude; do
+    id="${pair%%:*}"
+    schedules_driver on "$id" || {
+      rc=1
+      continue
+    }
+    schedules_run_one "$id" "${pair#*:}" || rc=1
+  done
+  return "$rc"
+}
+
+# The number of start lines cache cleanup has in the tester's log.
+schedules_start_count() {
+  schedules_fetch_log | grep -c ' cache-cleanup start$' || true
+}
+
+# A held run lock makes a started cache cleanup log `skipped: busy`. The holder is a detached
+# `flock -n <run.lock> sleep 60` as the tester, killed whatever the verdict.
+schedules_busy_check() {
+  local log last rc=0
+  schedules_tester "mkdir -p \"\$HOME/.local/state/tools-installer\"
+setsid -f flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" sleep 60 </dev/null >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" true || break; sleep 0.5; done" || true
+  schedules_tester "systemctl --user start tools-installer-schedule-cache-cleanup.service" || true
+  log="$(mktemp)"
+  schedules_fetch_log >"$log" || true
+  last="$(awk '$2 == "cache-cleanup" { l = $0 } END { print l }' "$log")"
+  rm -f "$log"
+  # shellcheck disable=SC2016 # $(id -u) expands in the tester's shell
+  schedules_tester 'pkill -u "$(id -u)" -x sleep || true' || true
+  if [[ "$last" == *"skipped: busy" ]]; then
+    printf 'TRACER_SCHEDULE_BUSY_OK\n'
+  else
+    printf 'TRACER_SCHEDULE_BUSY_MISSING last=%s\n' "$last"
+    rc=1
+  fi
+  return "$rc"
+}
+
+# $1 is HH:MM, $2 a number of minutes: the clock time that far ahead, wrapped at midnight.
+schedules_plus_minutes() {
+  local total
+  total=$(((10#${1%%:*} * 60 + 10#${1##*:} + $2) % 1440))
+  printf '%02d:%02d\n' $((total / 60)) $((total % 60))
+}
+
+# A calendar timer fires for real: a 1 s accuracy drop-in (systemd's default is a minute), cache
+# cleanup re-timed to start two minutes ahead of the container's clock, then a poll for the new
+# start line.
+schedules_calendar_check() {
+  local now target before attempt
+  local dropin="\$HOME/.config/systemd/user/tools-installer-schedule-cache-cleanup.timer.d"
+  schedules_tester "mkdir -p \"${dropin}\" && printf '[Timer]\nAccuracySec=1s\n' > \"${dropin}/e2e-accuracy.conf\" && systemctl --user daemon-reload" || return 1
+  now="$(schedules_tester 'date +%H:%M' | tail -n 1)" || return 1
+  if [[ ! "$now" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
+    printf 'TRACER_SCHEDULE_CALENDAR_MISSING clock=%s\n' "$now"
+    return 1
+  fi
+  target="$(schedules_plus_minutes "$now" 2)"
+  before="$(schedules_start_count)"
+  schedules_driver retime cache-cleanup 24 "$target" || return 1
+  for ((attempt = 0; attempt < SCHEDULES_CALENDAR_ATTEMPTS; attempt++)); do
+    if [[ "$(schedules_start_count)" -gt "$before" ]]; then
+      printf 'TRACER_SCHEDULE_CALENDAR_OK\n'
+      return 0
+    fi
+    sleep "$SCHEDULES_CALENDAR_STEP"
+  done
+  printf 'TRACER_SCHEDULE_CALENDAR_MISSING target=%s\n' "$target"
+  schedules_journal tools-installer-schedule-cache-cleanup.timer
+  return 1
+}
+
+# A missed slot catches up exactly once: the timer is stopped, its Persistent= stamp aged two
+# days, the timer started, and the new start lines counted after the wait.
+schedules_catchup_check() {
+  local before runs
+  local timer=tools-installer-schedule-cache-cleanup.timer
+  local stamp="\$HOME/.local/share/systemd/timers/stamp-tools-installer-schedule-cache-cleanup.timer"
+  schedules_tester "systemctl --user stop ${timer}" || true
+  if ! schedules_tester "test -e \"${stamp}\""; then
+    printf 'TRACER_SCHEDULE_STAMP_MISSING\n'
+    return 1
+  fi
+  schedules_tester "touch -d '2 days ago' \"${stamp}\"" || return 1
+  before="$(schedules_start_count)"
+  schedules_tester "systemctl --user start ${timer}" || true
+  sleep "$SCHEDULES_CATCHUP_WAIT"
+  runs=$(($(schedules_start_count) - before))
+  if [[ "$runs" -eq 1 ]]; then
+    printf 'TRACER_SCHEDULE_CATCHUP_OK runs=1\n'
+    return 0
+  fi
+  printf 'TRACER_SCHEDULE_CATCHUP_COUNT runs=%s\n' "$runs"
+  schedules_journal "$timer"
+  return 1
+}
+
+# Informational (RESEARCH A2): whether a plain daemon-reload plus restart keeps the timer's stamp.
+schedules_stamp_observation() {
+  local before after
+  local timer=tools-installer-schedule-cache-cleanup.timer
+  local stamp="\$HOME/.local/share/systemd/timers/stamp-tools-installer-schedule-cache-cleanup.timer"
+  before="$(schedules_tester "stat -c %Y \"${stamp}\" 2>/dev/null || echo none" | tail -n 1)" || true
+  schedules_tester "systemctl --user daemon-reload && systemctl --user restart ${timer}" || true
+  after="$(schedules_tester "stat -c %Y \"${stamp}\" 2>/dev/null || echo none" | tail -n 1)" || true
+  printf 'SCHEDULE_STAMP_MTIME before=%s after=%s\n' "$before" "$after"
+  if [[ "$before" != none && "$after" != none ]]; then
+    printf 'SCHEDULE_STAMP_KEPT=yes\n'
+  else
+    printf 'SCHEDULE_STAMP_KEPT=no\n'
+  fi
 }
 
 # EXIT trap: the container and, unless --keep-image, the image go on every outcome; both removals
@@ -2411,8 +2547,12 @@ cmd_schedules() {
   bootstrap_uv
   write_tester_path
   sync_workspace
-  schedules_driver on cache-cleanup || failed=1
-  schedules_run_one cache-cleanup tools-installer-schedule-cache-cleanup || failed=1
+  # Every verdict is collected so one transcript shows them all.
+  schedules_run_all || failed=1
+  schedules_busy_check || failed=1
+  schedules_calendar_check || failed=1
+  schedules_catchup_check || failed=1
+  schedules_stamp_observation
   return "$failed"
 }
 

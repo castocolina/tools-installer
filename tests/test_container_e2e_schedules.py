@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import schedules
+from installer import runlock, schedules
 from installer.schedules import ApplyReport, ScheduleContext
 from tests import e2e_schedules_driver as driver
 
@@ -30,6 +30,7 @@ _CONSTANTS = (
     "SCHEDULES_IMAGE",
     "SCHEDULES_CONTAINER_NAME",
     "SCHEDULES_LOG_REL",
+    "SCHEDULES_LOCK_REL",
     "TESTER_USER",
     "TESTER_HOME",
     "TESTER_WORKSPACE",
@@ -432,3 +433,239 @@ def test_the_container_is_never_privileged() -> None:
     start = _function("schedules_start")
     assert "--systemd=always" in start
     assert "--privileged" not in start
+
+
+# --- Task 2: every built-in, busy, calendar, catch-up and the stamp --------------------------
+
+_TIMER_BASENAME = "tools-installer-schedule-cache-cleanup"
+_BUILTINS = (
+    ("tmp-cleanup", "tools-installer-prune-tmp"),
+    ("cache-cleanup", _TIMER_BASENAME),
+    ("update-claude", "tools-installer-schedule-update-claude"),
+)
+
+# Stubs of the tester seams: every command is recorded on one line, the schedules.log copy comes
+# from $SCRATCH/log and the driver prints $SCRATCH/cells for `cells`. Cases hook in through the
+# files and variables they write.
+_TESTER_STUBS = r"""
+schedules_tester() {
+  printf 'tester %s\n' "${1//$'\n'/ ; }" >> "$CALLS"
+  case "$1" in
+    "date +%H:%M") echo "$CLOCK" ;;
+    *"journalctl --user"*) printf 'journal line one\njournal line two\n' ;;
+    *"test -e"*) [ "${STAMP:-1}" = 1 ]; return ;;
+    *"stat -c"*) head -n 1 "$SCRATCH/mtimes"; sed -i 1d "$SCRATCH/mtimes" ;;
+    *"touch -d"*) : ;;
+    "systemctl --user start "*".timer") for _ in $(seq "${TIMER_RUNS:-0}"); do
+      echo "2026-11-13T10:00:00+00:00 cache-cleanup start" >> "$SCRATCH/log"; done ;;
+  esac
+  return 0
+}
+schedules_driver() {
+  printf 'driver %s\n' "$*" >> "$CALLS"
+  case "$1" in
+    cells) cat "$SCRATCH/cells" ;;
+    retime) if [ "${FIRES:-0}" = 1 ]; then
+      echo "2026-11-13T10:02:00+00:00 cache-cleanup start" >> "$SCRATCH/log"; fi ;;
+  esac
+}
+schedules_fetch_log() { cat "$SCRATCH/log"; }
+"""
+
+
+def _seed(scratch: Path, *, log: str = "", cells: str = "", mtimes: str = "") -> None:
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "log").write_text(log, encoding="utf-8")
+    (scratch / "cells").write_text(cells, encoding="utf-8")
+    (scratch / "mtimes").write_text(mtimes, encoding="utf-8")
+
+
+def _builtin_log(claude_result: str) -> str:
+    stamp = "2026-11-13T10:00:00+00:00"
+    return "".join(
+        f"{stamp} {schedule_id} start\n{stamp} {schedule_id} {result}\n"
+        for schedule_id, result in (
+            ("tmp-cleanup", "ok: ran"),
+            ("cache-cleanup", "ok: nothing to prune"),
+            ("update-claude", claude_result),
+        )
+    )
+
+
+@pytest.mark.parametrize("claude_result", ["ok: up to date", "skipped: no owner for claude"])
+def test_each_builtin_runs_once(tmp_path: Path, claude_result: str) -> None:
+    scratch = tmp_path / "home"
+    cells = "".join(f"CELL {schedule_id} ✓ 10:00\n" for schedule_id, _unit in _BUILTINS)
+    _seed(scratch, log=_builtin_log(claude_result), cells=cells)
+    script = _script(
+        "schedules_journal",
+        "schedules_verdicts",
+        "schedules_run_verdict",
+        "schedules_cell_verdict",
+        "schedules_run_one",
+        "schedules_run_all",
+        stubs=_TESTER_STUBS,
+    )
+    result = _run(script + "\nschedules_run_all\n", scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(scratch)
+    assert "claude" in calls[0]
+    assert "chmod" in calls[0]
+    expected: list[str] = []
+    for schedule_id, unit in _BUILTINS:
+        expected += [f"driver on {schedule_id}", f"tester systemctl --user start {unit}.service"]
+    assert [call for call in calls if "driver on" in call or "start tools" in call] == expected
+    word = "skipped" if claude_result.startswith("skipped") else "ok"
+    for schedule_id, _unit in _BUILTINS:
+        assert f"TRACER_SCHEDULE_CELL_OK id={schedule_id} cell=✓ 10:00" in result.stdout
+    assert "TRACER_SCHEDULE_RUN_OK id=update-claude result=" + word in result.stdout
+
+
+def test_a_failing_run_prints_the_unit_journal(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    _seed(scratch, log="", cells="CELL cache-cleanup never\n")
+    script = _script(
+        "schedules_journal",
+        "schedules_verdicts",
+        "schedules_run_verdict",
+        "schedules_cell_verdict",
+        "schedules_run_one",
+        stubs=_TESTER_STUBS,
+    )
+    result = _run(script + f"\nschedules_run_one cache-cleanup {_TIMER_BASENAME}\n", scratch)
+    assert result.returncode == 1
+    assert "TRACER_SCHEDULE_RUN_MISSING id=cache-cleanup" in result.stdout
+    assert "TRACER_SCHEDULE_CELL_NEVER id=cache-cleanup" in result.stdout
+    prefix = f"SCHEDULE_JOURNAL {_TIMER_BASENAME}.service "
+    assert f"{prefix}journal line one" in result.stdout
+    assert f"{prefix}journal line two" in result.stdout
+    assert any(
+        f"journalctl --user -u {_TIMER_BASENAME}.service -n 50 --no-pager" in call
+        for call in _calls(scratch)
+    )
+
+
+def test_lock_path_matches_the_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert runlock.run_lock_path() == tmp_path / _constant("SCHEDULES_LOCK_REL")
+
+
+@pytest.mark.parametrize(
+    ("last", "expected", "code"),
+    [
+        ("cache-cleanup skipped: busy", "TRACER_SCHEDULE_BUSY_OK", 0),
+        ("cache-cleanup ok: nothing", "TRACER_SCHEDULE_BUSY_MISSING", 1),
+    ],
+)
+def test_busy_verdict(tmp_path: Path, last: str, expected: str, code: int) -> None:
+    scratch = tmp_path / "home"
+    _seed(
+        scratch,
+        log=f"2026-11-13T10:00:00+00:00 cache-cleanup start\n2026-11-13T10:00:01+00:00 {last}\n",
+    )
+    script = _script("schedules_journal", "schedules_busy_check", stubs=_TESTER_STUBS)
+    result = _run(script + "\nschedules_busy_check\n", scratch)
+    assert result.returncode == code, result.stdout + result.stderr
+    assert expected in result.stdout
+    calls = _calls(scratch)
+    holder = next(i for i, call in enumerate(calls) if "flock -n" in call and "sleep 60" in call)
+    start = next(i for i, call in enumerate(calls) if f"start {_TIMER_BASENAME}.service" in call)
+    kill = next(i for i, call in enumerate(calls) if "pkill" in call)
+    assert holder < start < kill
+    assert "run.lock" in calls[holder]
+
+
+@pytest.mark.parametrize(
+    ("clock", "target"),
+    [("10:00", "10:02"), ("23:59", "00:01"), ("00:00", "00:02"), ("22:58", "23:00")],
+)
+def test_plus_minutes_wraps_at_midnight(tmp_path: Path, clock: str, target: str) -> None:
+    script = _script("schedules_plus_minutes") + f"\nschedules_plus_minutes {clock} 2\n"
+    result = _run(script, tmp_path / "home")
+    assert result.stdout.strip() == target
+
+
+@pytest.mark.parametrize(
+    ("fires", "expected", "code"), [("1", "CALENDAR_OK", 0), ("0", "CALENDAR_MISSING", 1)]
+)
+def test_calendar_trigger(tmp_path: Path, fires: str, expected: str, code: int) -> None:
+    scratch = tmp_path / "home"
+    _seed(scratch)
+    script = _script(
+        "schedules_journal",
+        "schedules_plus_minutes",
+        "schedules_start_count",
+        "schedules_calendar_check",
+        variables={"CLOCK": "23:59", "FIRES": fires},
+        stubs="SCHEDULES_CALENDAR_ATTEMPTS=2 SCHEDULES_CALENDAR_STEP=0\n" + _TESTER_STUBS,
+    )
+    result = _run(script + "\nschedules_calendar_check\n", scratch)
+    assert result.returncode == code, result.stdout + result.stderr
+    assert f"TRACER_SCHEDULE_{expected}" in result.stdout
+    calls = _calls(scratch)
+    assert "driver retime cache-cleanup 24 00:01" in calls
+    dropin = next(call for call in calls if "AccuracySec=1s" in call)
+    assert f"{_TIMER_BASENAME}.timer.d" in dropin
+    assert "e2e-accuracy.conf" in dropin
+    assert "[Timer]" in dropin
+    # The drop-in is in place before the timer is re-timed.
+    assert calls.index(dropin) < calls.index("driver retime cache-cleanup 24 00:01")
+    if code:
+        assert f"SCHEDULE_JOURNAL {_TIMER_BASENAME}.timer journal line one" in result.stdout
+
+
+def _catchup(tmp_path: Path, *, runs: int, stamp: bool) -> subprocess.CompletedProcess[str]:
+    scratch = tmp_path / "home"
+    _seed(scratch, log="2026-11-13T09:00:00+00:00 cache-cleanup start\n")
+    script = _script(
+        "schedules_journal",
+        "schedules_start_count",
+        "schedules_catchup_check",
+        variables={"TIMER_RUNS": str(runs), "STAMP": "1" if stamp else "0"},
+        stubs="SCHEDULES_CATCHUP_WAIT=0\n" + _TESTER_STUBS,
+    )
+    return _run(script + "\nschedules_catchup_check\n", scratch)
+
+
+def test_catchup_counts_one_run(tmp_path: Path) -> None:
+    result = _catchup(tmp_path, runs=1, stamp=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TRACER_SCHEDULE_CATCHUP_OK runs=1" in result.stdout
+    calls = _calls(tmp_path / "home")
+    stop = next(i for i, call in enumerate(calls) if "stop" in call and ".timer" in call)
+    age = next(i for i, call in enumerate(calls) if "touch -d '2 days ago'" in call)
+    start = next(
+        i for i, call in enumerate(calls) if call.endswith(f"start {_TIMER_BASENAME}.timer")
+    )
+    assert stop < age < start
+    assert f"stamp-{_TIMER_BASENAME}.timer" in calls[age]
+
+
+@pytest.mark.parametrize("runs", [0, 2])
+def test_catchup_with_another_count_fails(tmp_path: Path, runs: int) -> None:
+    result = _catchup(tmp_path, runs=runs, stamp=True)
+    assert result.returncode == 1
+    assert f"TRACER_SCHEDULE_CATCHUP_COUNT runs={runs}" in result.stdout
+    assert f"SCHEDULE_JOURNAL {_TIMER_BASENAME}.timer journal line one" in result.stdout
+
+
+def test_catchup_without_a_stamp(tmp_path: Path) -> None:
+    result = _catchup(tmp_path, runs=1, stamp=False)
+    assert result.returncode == 1
+    assert "TRACER_SCHEDULE_STAMP_MISSING" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("mtimes", "kept"), [("100\n200\n", "yes"), ("100\nnone\n", "no"), ("none\nnone\n", "no")]
+)
+def test_stamp_observation(tmp_path: Path, mtimes: str, kept: str) -> None:
+    scratch = tmp_path / "home"
+    _seed(scratch, mtimes=mtimes)
+    script = _script("schedules_stamp_observation", stubs=_TESTER_STUBS)
+    result = _run(script + "\nschedules_stamp_observation\n", scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"SCHEDULE_STAMP_KEPT={kept}" in result.stdout
+    calls = _calls(scratch)
+    assert any(
+        "daemon-reload" in call and f"restart {_TIMER_BASENAME}.timer" in call for call in calls
+    )
