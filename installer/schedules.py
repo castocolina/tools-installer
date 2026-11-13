@@ -10,11 +10,12 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import plistlib
 import re
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -25,6 +26,7 @@ from installer import cursor_shim, daemon, receipts, runlock, systemd_daemon, un
 from installer.atomic import atomic_write_bytes, atomic_write_text, read_capped
 from installer.locations import ensure_dir
 from installer.ownership import NATIVE_OWNERS, OS_PACKAGE_OWNER
+from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.receipts import ReceiptArtifact
 from installer.run import CommandError, OutputRunner, Runner, run_captured
 from installer.sanitize import sanitize_log_line
@@ -854,16 +856,10 @@ def _refuse_symlinks(paths: tuple[Path, ...], record: ScheduleRecord) -> None:
             raise OSError(f"{path} is a symlink that tools-installer did not create")
 
 
-def _apply_linux(
-    ctx: ScheduleContext,
-    schedule: Schedule,
-    record: ScheduleRecord,
-    uv: Path,
-    *,
-    timer_only: bool,
-    clean_stamp: bool,
-) -> None:
-    """Write the unit files, then register; roll back on failure (linux_daemon_policy._apply)."""
+def _linux_texts(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord, uv: Path
+) -> tuple[str, str]:
+    """The (service, timer) text this checkout would write for `schedule` now."""
     basename = basename_for(schedule.id)
     service_text = systemd_daemon.render_exec_service(
         argv=runner_argv(ctx, schedule, uv),
@@ -880,6 +876,34 @@ def _apply_linux(
             basename=basename,
         )
     )
+    return service_text, timer_text
+
+
+def _macos_plist(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord, uv: Path
+) -> dict[str, object]:
+    return daemon.render_agent_plist(
+        label=label_for(schedule.id),
+        program_arguments=runner_argv(ctx, schedule, uv),
+        environment=_unit_environment(ctx),
+        calendar=calendar_dicts(_calendar_grid(schedule, record)),
+        stdout_path=ctx.launchd_log_path,
+        stderr_path=ctx.launchd_log_path,
+    )
+
+
+def _apply_linux(
+    ctx: ScheduleContext,
+    schedule: Schedule,
+    record: ScheduleRecord,
+    uv: Path,
+    *,
+    timer_only: bool,
+    clean_stamp: bool,
+) -> None:
+    """Write the unit files, then register; roll back on failure (linux_daemon_policy._apply)."""
+    basename = basename_for(schedule.id)
+    service_text, timer_text = _linux_texts(ctx, schedule, record, uv)
     service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
     written = (timer_path,) if timer_only else (service_path, timer_path)
     _refuse_symlinks(written, record)
@@ -927,14 +951,7 @@ def _apply_macos(
     """Write the plist, then register; roll back on failure (daemon_policy._apply)."""
     label = label_for(schedule.id)
     plist_path = _plist_path(ctx, schedule.id)
-    plist = daemon.render_agent_plist(
-        label=label,
-        program_arguments=runner_argv(ctx, schedule, uv),
-        environment=_unit_environment(ctx),
-        calendar=calendar_dicts(_calendar_grid(schedule, record)),
-        stdout_path=ctx.launchd_log_path,
-        stderr_path=ctx.launchd_log_path,
-    )
+    plist = _macos_plist(ctx, schedule, record, uv)
     _refuse_symlinks((plist_path,), record)
     # launchd needs StandardOutPath to resolve at registration (R1-06). A rollback leaves the
     # empty file; the last sweep deletes it.
@@ -1111,8 +1128,31 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     return ApplyReport(True, upcoming, shim_report, tuple(warnings))
 
 
-def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
-    """Disable first, then delete exactly the recorded files, then record the decision off."""
+@dataclass(frozen=True)
+class _Removal:
+    warnings: tuple[str, ...]
+    kept: tuple[ReceiptArtifact, ...]  # recorded files someone changed, so left in place
+
+
+def _tmp_decided(ctx: ScheduleContext) -> bool:
+    reader = daemon.decided if ctx.platform_os == "macos" else systemd_daemon.decided
+    return reader(ctx.myshellrc_path)
+
+
+def _remove_timer(
+    ctx: ScheduleContext,
+    schedule_id: str,
+    *,
+    keep_decision: bool,
+    restore_cursor_link: bool = True,
+    forget: bool = False,
+) -> _Removal:
+    """Disable first, then delete exactly the recorded files; the core of every removal.
+
+    `keep_decision` leaves `decided` as it is (a gone target waits for its reinstall), else it
+    becomes off; `forget` drops the record altogether once nothing was kept (the uninstall).
+    The tmp cleanup marker and the legacy wrapper belong to the callers.
+    """
     schedule = schedule_by_id(schedule_id)
     macos = ctx.platform_os == "macos"
     basename, label = basename_for(schedule_id), label_for(schedule_id)
@@ -1132,8 +1172,7 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
             with contextlib.suppress(CommandError, OSError):
                 systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
     kept = _delete_recorded(record.files)
-    tmp = schedule.kind is JobKind.TMP_CLEANUP
-    if tmp and not record.files:  # units adopted by name, never recorded
+    if schedule.kind is JobKind.TMP_CLEANUP and not record.files:  # adopted by name, never recorded
         if macos:
             _plist_path(ctx, schedule_id).unlink(missing_ok=True)
         else:
@@ -1141,21 +1180,22 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     if reached and not macos:
         with contextlib.suppress(CommandError):
             systemd_daemon.daemon_reload(run=ctx.run)
-    if tmp:
-        _remove_legacy_wrapper(ctx, warnings)
-        _record_tmp_decision(ctx, warnings)
 
     def change(current: ScheduleState) -> ScheduleState:
         status = current.cursor_shim
         if schedule_id == _CURSOR_ID:
-            link, agent = cursor_shim.shim_paths(ctx.home)
-            try:  # under the state lock, so a run in flight cannot undo this off (R1-08)
-                cursor_shim.restore_link(link=link, agent=agent)
-            except OSError as exc:
-                warnings.append(f"Could not restore the cursor-agent link: {_error_line(exc)}.")
+            if restore_cursor_link:
+                link, agent = cursor_shim.shim_paths(ctx.home)
+                try:  # under the state lock, so a run in flight cannot undo this off (R1-08)
+                    cursor_shim.restore_link(link=link, agent=agent)
+                except OSError as exc:
+                    warnings.append(f"Could not restore the cursor-agent link: {_error_line(exc)}.")
             status = None
-        updated = replace(record_for(current, schedule_id), decided=False, files=kept)
+        stored = record_for(current, schedule_id)
+        updated = replace(stored, decided=stored.decided if keep_decision else False, files=kept)
         records = {**current.records, schedule_id: updated}
+        if forget and not kept:
+            del records[schedule_id]
         shared = current.shared
         if shared and not _on_schedules(
             ctx, replace(current, records=records), exclude=schedule_id
@@ -1169,9 +1209,22 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
         return replace(current, records=records, shared=shared, cursor_shim=status)
 
     update_state(ctx.state_path, change)
-    if kept:
-        names = ", ".join(str(artifact.path) for artifact in kept)
-        raise OSError(f"kept, changed since it was written: {names}")
+    return _Removal(tuple(warnings), kept)
+
+
+def _kept_message(kept: tuple[ReceiptArtifact, ...]) -> str:
+    return f"kept, changed since it was written: {', '.join(str(a.path) for a in kept)}"
+
+
+def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
+    """Disable first, then delete exactly the recorded files, then record the decision off."""
+    removal = _remove_timer(ctx, schedule_id, keep_decision=False)
+    warnings = list(removal.warnings)
+    if schedule_by_id(schedule_id).kind is JobKind.TMP_CLEANUP:
+        _remove_legacy_wrapper(ctx, warnings)
+        _record_tmp_decision(ctx, warnings)
+    if removal.kept:
+        raise OSError(_kept_message(removal.kept))
     return ApplyReport(True, None, None, tuple(warnings))
 
 
@@ -1261,3 +1314,360 @@ def row_state(
         on_by_name = schedule.kind is JobKind.TMP_CLEANUP and _tmp_unit_present(ctx)
         return RowState("on" if on_by_name else "off")
     return RowState("on" if all(receipts.matches(a) for a in record.files) else "drift")
+
+
+# --- The lifecycle: the default-on reconcile (24.2-08) -------------------------------------
+
+
+@dataclass(frozen=True)
+class ReconcileReport:
+    turned_on: tuple[str, ...] = ()
+    removed: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+STICKY_DAMAGE_WARNING: Final = (
+    "schedules.json was damaged; nothing turns on until you change a schedule."
+)
+
+
+def reconcile_lock_path(state_path: Path) -> Path:
+    """One lock per reconcile pass. Order: run lock, then this, then the state lock."""
+    return state_path.with_name("schedules.reconcile.lock")
+
+
+def _decision_moved(ctx: ScheduleContext, schedule: Schedule, seen: ScheduleRecord) -> bool:
+    """Whether another process decided this row since the pass read it (R3-11)."""
+    with runlock.hold(state_lock_path(ctx.state_path)):
+        now = record_for(load_state(ctx.state_path).state, schedule.id).decided
+    tmp_marked = schedule.kind is JobKind.TMP_CLEANUP and _tmp_decided(ctx)
+    return now != seen.decided or tmp_marked
+
+
+def _turn_on_default(
+    ctx: ScheduleContext,
+    schedule: Schedule,
+    seen: ScheduleRecord,
+    turned: list[str],
+    warnings: list[str],
+) -> None:
+    if _decision_moved(ctx, schedule, seen):
+        return
+    try:
+        applied = turn_on(ctx, schedule.id)
+    except (OSError, CommandError) as exc:
+        warnings.append(f"Could not turn on {schedule.label}: {_error_line(exc)}.")
+        return
+    turned.append(schedule.id)
+    warnings.extend(applied.warnings)
+
+
+def _row_action(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord
+) -> Literal["turn-on", "refresh", "none"]:
+    """The truth table of a row whose target is here (D-09); a decided off is never touched."""
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        # The marker is tmp cleanup's decision; a marker with no units is the user's off.
+        if not _tmp_decided(ctx) and record.decided is None:
+            return "turn-on"
+        on = bool(record.files) or _tmp_unit_present(ctx)
+        return "refresh" if on and record.decided is not False else "none"
+    if record.decided is None:
+        return "turn-on"
+    if record.decided is False:
+        return "none"
+    return "refresh" if record.files else "turn-on"  # no files: a reinstall
+
+
+def _seed_legacy_start(ctx: ScheduleContext, schedule: Schedule) -> None:
+    """Adopting macOS's old plist keeps its daily time: seed the record's start from it (D-08)."""
+    if ctx.platform_os != "macos" or schedule.kind is not JobKind.TMP_CLEANUP:
+        return
+    record = record_for(load_state(ctx.state_path).state, schedule.id)
+    slot = daemon.read_schedule(_plist_path(ctx, schedule.id)) if not record.files else None
+    if slot is None or f"{slot[0]:02d}:{slot[1]:02d}" == record.start:
+        return
+    start = f"{slot[0]:02d}:{slot[1]:02d}"
+
+    def change(current: ScheduleState) -> ScheduleState:
+        seeded = replace(record_for(current, schedule.id), start=start)
+        return replace(current, records={**current.records, schedule.id: seeded})
+
+    update_state(ctx.state_path, change)
+
+
+def _is_stale(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -> bool:
+    """Ours but not what this checkout would write now; a drifted or foreign file is not stale."""
+    record = record_for(state, schedule.id)
+    if record.files:
+        if not all(receipts.matches(artifact) for artifact in record.files):
+            return False
+    elif not (schedule.kind is JobKind.TMP_CLEANUP and _tmp_unit_present(ctx)):
+        return False
+    try:
+        uv = _resolve_uv(ctx)
+        if ctx.platform_os == "macos":
+            wanted = {
+                _plist_path(ctx, schedule.id): plistlib.dumps(
+                    _macos_plist(ctx, schedule, record, uv)
+                )
+            }
+        else:
+            service_text, timer_text = _linux_texts(ctx, schedule, record, uv)
+            service_path, timer_path = systemd_daemon.unit_paths(
+                ctx.unit_dir, basename=basename_for(schedule.id)
+            )
+            wanted = {
+                service_path: service_text.encode("utf-8"),
+                timer_path: timer_text.encode("utf-8"),
+            }
+        return any(path.read_bytes() != text for path, text in wanted.items())
+    except OSError:  # no uv, or an unreadable unit: nothing to refresh from here
+        return False
+
+
+def _refresh_in_place(ctx: ScheduleContext, schedule: Schedule, warnings: list[str]) -> None:
+    """Rewrite stale units and restart once, never off and on; adopts the old tmp units too."""
+    _seed_legacy_start(ctx, schedule)
+    if not _is_stale(ctx, load_state(ctx.state_path).state, schedule):
+        return
+    try:
+        applied = turn_on(ctx, schedule.id)
+    except (OSError, CommandError) as exc:
+        warnings.append(f"Could not refresh {schedule.label}: {_error_line(exc)}.")
+        return
+    warnings.extend(applied.warnings)
+
+
+def _drop_gone_target(
+    ctx: ScheduleContext, schedule: Schedule, warnings: list[str], *, always_shim: bool = False
+) -> bool:
+    """Remove a gone target's timer files and keep its decision; True when files went."""
+    record = record_for(load_state(ctx.state_path).state, schedule.id)
+    if schedule.id == _CURSOR_ID and (record.files or always_shim):
+        link, _agent = cursor_shim.shim_paths(ctx.home)
+        try:
+            cursor_shim.remove_shim(link)
+        except OSError as exc:
+            warnings.append(f"Could not remove the cursor-agent shim: {_error_line(exc)}.")
+    if not record.files:
+        return False
+    try:
+        removal = _remove_timer(ctx, schedule.id, keep_decision=True, restore_cursor_link=False)
+    except (OSError, CommandError) as exc:
+        warnings.append(f"Could not remove the {schedule.label} timer: {_error_line(exc)}.")
+        return False
+    warnings.extend(removal.warnings)
+    if removal.kept:
+        warnings.append(
+            f"Could not remove the {schedule.label} timer; {_kept_message(removal.kept)}."
+        )
+        return False
+    return True
+
+
+def _reconcile_pass(ctx: ScheduleContext) -> ReconcileReport:
+    loaded = load_state(ctx.state_path)
+    damaged = loaded.damaged or loaded.warning is not None
+    turned: list[str] = []
+    removed: list[str] = []
+    warnings: list[str] = [loaded.warning or STICKY_DAMAGE_WARNING] if damaged else []
+    for schedule in SCHEDULES:
+        record = record_for(load_state(ctx.state_path).state, schedule.id)
+        if schedule.kind is JobKind.UPDATE and not ctx.present(schedule.target or ""):
+            if _drop_gone_target(ctx, schedule, warnings):
+                removed.append(schedule.id)
+            continue
+        if damaged:  # R1-09: a state that cannot be trusted never turns a row on
+            continue
+        action = _row_action(ctx, schedule, record)
+        if action == "turn-on":
+            _turn_on_default(ctx, schedule, record, turned, warnings)
+        elif action == "refresh":
+            _refresh_in_place(ctx, schedule, warnings)
+    return ReconcileReport(tuple(turned), tuple(removed), tuple(warnings))
+
+
+def ensure_schedule_defaults(ctx: ScheduleContext) -> ReconcileReport:
+    """Turn on every available schedule nobody has decided about; never undo a user's off."""
+    if not manager_reachable(ctx):
+        return ReconcileReport()
+    # Held for the whole pass (R1-13), never around a `turn_on`'s own state-lock writes.
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _reconcile_pass(ctx)
+
+
+def after_target_removed(ctx: ScheduleContext, tool_id: str) -> ReconcileReport:
+    """A removed tool takes its timer files with it and leaves its decision for a reinstall.
+
+    It needs no reachable manager: the files of a removed tool must go (D-09 amended by F3).
+    """
+    removed: list[str] = []
+    warnings: list[str] = []
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        for schedule in SCHEDULES:
+            if schedule.target == tool_id and _drop_gone_target(
+                ctx, schedule, warnings, always_shim=True
+            ):
+                removed.append(schedule.id)
+    return ReconcileReport((), tuple(removed), tuple(warnings))
+
+
+def reconcile_lines(report: ReconcileReport) -> tuple[tuple[str, Literal["ok", "warn"]], ...]:
+    """The pass's lines (UI-SPEC section 8): what was turned on, what went, then each warning."""
+    lines: list[tuple[str, Literal["ok", "warn"]]] = []
+    if report.turned_on:
+        labels = ", ".join(schedule_by_id(schedule_id).label for schedule_id in report.turned_on)
+        lines.append((f"Turned on schedules: {labels}. Change them in Schedules.", "ok"))
+    for schedule_id in report.removed:
+        schedule = schedule_by_id(schedule_id)
+        lines.append(
+            (f"Removed the {schedule.label} timer because {schedule.target} is gone.", "ok")
+        )
+    lines.extend((warning, "warn") for warning in report.warnings)
+    return tuple(lines)
+
+
+# --- The uninstall sweep: one adapter per schedule with anything of ours on disk (24.2-08) ----
+
+
+def _exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _legacy_log_path(ctx: ScheduleContext) -> Path:
+    """The old tmp cleanup's `prune-daemon.log`, beside the schedule log on both OSes."""
+    return ctx.log_path.with_name("prune-daemon.log")
+
+
+def _state_artifacts(ctx: ScheduleContext) -> tuple[Path, ...]:
+    # The lock files stay: deleting one another process holds would let a third lock a new inode.
+    return (
+        ctx.state_path,
+        damaged_path(ctx.state_path),
+        ctx.log_path,
+        ctx.launchd_log_path,
+        _legacy_log_path(ctx),
+    )
+
+
+def _state_leftovers(ctx: ScheduleContext) -> bool:
+    return any(_exists(path) for path in _state_artifacts(ctx)) or _tmp_decided(ctx)
+
+
+def _footprint(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -> bool:
+    """Whether anything of this schedule is on disk; file reads only."""
+    if any(_exists(Path(artifact.path)) for artifact in record_for(state, schedule.id).files):
+        return True
+    if schedule.kind is not JobKind.TMP_CLEANUP:
+        return False
+    if daemon.wrapper_present(ctx.legacy_bin_dir):
+        return True
+    if ctx.platform_os == "macos":
+        return _exists(_plist_path(ctx, schedule.id))
+    return systemd_daemon.footprint_present(ctx.unit_dir)
+
+
+def _forget(ctx: ScheduleContext, schedule_id: str) -> None:
+    def change(current: ScheduleState) -> ScheduleState:
+        records = {key: value for key, value in current.records.items() if key != schedule_id}
+        return replace(current, records=records)
+
+    update_state(ctx.state_path, change)
+
+
+def _cleanup_if_last(ctx: ScheduleContext) -> None:
+    """With no schedule left, delete the shared scripts, the state, the logs and tmp's marker."""
+    state = load_state(ctx.state_path).state
+    if any(_footprint(ctx, state, schedule) for schedule in SCHEDULES):
+        return
+    kept = _delete_recorded(state.shared)
+    if kept:
+        raise OSError(f"kept, changed since it was copied: {', '.join(str(a.path) for a in kept)}")
+    _prune_data_dirs(ctx)
+    _clear_tmp_decided(ctx)
+    for path in _state_artifacts(ctx):
+        path.unlink(missing_ok=True)
+
+
+def _clear_tmp_decided(ctx: ScheduleContext) -> None:
+    clearer = daemon.clear_decided if ctx.platform_os == "macos" else systemd_daemon.clear_decided
+    clearer(ctx.myshellrc_path)
+
+
+def _sweep_result(layer: str, detail: str, warnings: Iterable[str]) -> PolicyResult:
+    return PolicyResult((PolicyLayer(layer, detail),), None, "; ".join(warnings) or None)
+
+
+def _sweep_schedule(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
+    """The full removal of one schedule; idempotent, and it raises OSError naming what it kept."""
+    state = load_state(ctx.state_path).state
+    warnings: list[str] = []
+    refused: list[str] = []
+    if _footprint(ctx, state, schedule):
+        removal = _remove_timer(ctx, schedule.id, keep_decision=False, forget=True)
+        warnings.extend(removal.warnings)
+        refused.extend(str(artifact.path) for artifact in removal.kept)
+    elif schedule.id in state.records:
+        _forget(ctx, schedule.id)
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        try:
+            daemon.remove_wrapper(ctx.legacy_bin_dir)  # sentinel-checked
+            _legacy_log_path(ctx).unlink(missing_ok=True)
+        except OSError as exc:
+            refused.append(str(exc))
+    if refused:
+        raise OSError(f"kept: {', '.join(refused)}")  # tmp's marker stays while a unit remains
+    if schedule.kind is JobKind.TMP_CLEANUP:
+        _clear_tmp_decided(ctx)
+    _cleanup_if_last(ctx)
+    return _sweep_result(schedule.label, "removed", warnings)
+
+
+def _turn_on_result(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
+    report = turn_on(ctx, schedule.id)
+    return _sweep_result(schedule.label, "on", report.warnings)
+
+
+def _schedule_policy(ctx: ScheduleContext, schedule: Schedule) -> Policy:
+    return Policy(
+        id=f"schedule:{schedule.id}",
+        label=schedule.label,
+        description=f"the {schedule.label} timer, its unit files and its scripts",
+        active=True,
+        apply=lambda: _turn_on_result(ctx, schedule),
+        remove=lambda: _sweep_schedule(ctx, schedule),
+        owned=lambda: _footprint(ctx, load_state(ctx.state_path).state, schedule),
+    )
+
+
+def _state_policy(ctx: ScheduleContext) -> Policy:
+    def clean() -> PolicyResult:
+        _cleanup_if_last(ctx)
+        return _sweep_result("state", "removed", ())
+
+    return Policy(
+        id="schedule:state",
+        label="Schedules state and logs",
+        description="removes schedules.json and the schedule logs",
+        active=True,
+        apply=lambda: PolicyResult((), None, None, changed=False),
+        remove=clean,
+        owned=lambda: _state_leftovers(ctx),
+    )
+
+
+def sweep_adapters(ctx: ScheduleContext) -> tuple[Policy, ...]:
+    """One uninstall policy per schedule with a footprint, in table order (D-23, SPEC R5).
+
+    With no schedule on but state files left behind, a single `schedule:state` policy removes
+    them (R1-12)."""
+    state = load_state(ctx.state_path).state
+    owned = tuple(
+        _schedule_policy(ctx, schedule)
+        for schedule in SCHEDULES
+        if _footprint(ctx, state, schedule)
+    )
+    if owned or not _state_leftovers(ctx):
+        return owned
+    return (_state_policy(ctx),)
