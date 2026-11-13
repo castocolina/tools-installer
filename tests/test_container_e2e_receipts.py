@@ -1887,6 +1887,7 @@ def _herdr_script(*extra: str) -> str:
     names = (
         "ensure_phase_dir",
         "herdr_sidebar_keys",
+        "herdr_plugin_state",
         "herdr_status_parse",
         "herdr_status_clean",
         "herdr_installed_verdict",
@@ -1945,12 +1946,14 @@ def _facts(*lines: str, done: bool = True) -> str:
     return "\n".join([*lines, *(["D"] if done else [])]) + "\n"
 
 
+_PLUGIN_JSON = '{"result": {"plugins": [{"plugin_id": "herdr-setup.markers"}]}}'
+_PLUGIN_LISTED = f"Y {_PLUGIN_JSON}"
 _GOOD_FACTS = (
     "H claude",
     "H sidebar-markers",
     "S claude: current (v10) (/x)",
     "S pi: not installed",
-    'Y [{"id": "herdr-setup.markers"}]',
+    _PLUGIN_LISTED,
     "C ui.sidebar.agents.rows",
     "C ui.sidebar.agents.row_gap",
     "C ui.sidebar.spaces.rows",
@@ -1987,6 +1990,20 @@ def test_herdr_installed_probe_requires_every_piece(tmp_path: Path) -> None:
         ),
         "no-status-line": (drop("S claude"), "TRACER_HERDR_NOT_CURRENT target=claude"),
         "no-plugin": (drop("Y "), "TRACER_HERDR_PLUGIN_MISSING"),
+        "plugin-absent": (
+            (*drop("Y "), 'Y {"result": {"plugins": []}}'),
+            "TRACER_HERDR_PLUGIN_MISSING",
+        ),
+        # E3: an error echoing the plugin id is unreadable, never listed.
+        "plugin-error-echo": (
+            (*drop("Y "), "Y error: no plugin herdr-setup.markers"),
+            "TRACER_HERDR_PLUGIN_UNREADABLE",
+        ),
+        # E5: a present host that is neither recorded nor already current is missed.
+        "present-unrecorded": (
+            (*_GOOD_FACTS, "P pi pi"),
+            "TRACER_HERDR_HOST_NOT_RECORDED host=pi state=not installed",
+        ),
         "no-key": (
             drop("C ui.sidebar.spaces.rows"),
             "TRACER_HERDR_KEY_MISSING key=ui.sidebar.spaces.rows",
@@ -2003,6 +2020,12 @@ def test_herdr_installed_probe_requires_every_piece(tmp_path: Path) -> None:
         assert not any(
             line.startswith("TRACER_HERDR_INSTALLED_OK") for line in result.stdout.splitlines()
         )
+    # A present host that is recorded, or that the user already set up (`current`), is fine.
+    covered = _verdict(
+        tmp_path / "covered",
+        _facts(*_GOOD_FACTS, "P claude claude", "S codex: current (v1) (/z)", "P codex codex"),
+    )
+    assert covered.returncode == 0, covered.stdout
     cut = _verdict(tmp_path / "cut", _facts(*_GOOD_FACTS, done=False))
     assert cut.returncode != 0
     assert "TRACER_HERDR_PROBE_FAILED" in cut.stdout
@@ -2048,7 +2071,7 @@ def _herdr_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, status_exit:
         '  "integration status")\n'
         '    printf "claude: current (v10) (/x)\\npi: not installed (/y)\\n"\n'
         f"    exit {status_exit} ;;\n"
-        '  "plugin list") printf \'[{"id": "herdr-setup.markers"}]\\n\' ;;\n'
+        f"  \"plugin list\") printf '%s\\n' '{_PLUGIN_JSON}' ;;\n"
         "esac\n",
         encoding="utf-8",
     )
@@ -2101,6 +2124,19 @@ def test_herdr_reload_failure_is_not_a_probe_failure(
     assert (scratch / "herdr-probe").exists()
 
 
+def test_herdr_probe_reports_present_hosts_the_receipt_lacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E5: pi is present, herdr lists it `not installed`, and the receipt never recorded it."""
+    scratch = _herdr_home(tmp_path, monkeypatch)
+    (scratch / ".pi").mkdir()
+    result = _run(_herdr_probe_script(tmp_path, "herdr_probe_installed"), scratch)
+    assert result.returncode != 0
+    assert (
+        "TRACER_HERDR_HOST_NOT_RECORDED host=pi state=not installed" in result.stdout.splitlines()
+    )
+
+
 def test_herdr_probe_after_proves_status_plugin_and_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2118,7 +2154,7 @@ def test_herdr_probe_after_proves_status_plugin_and_keys(
     (scratch / ".config" / "herdr" / "config.toml").write_text("onboarding = false\n")
     (scratch / "herdr-probe").write_text(
         '#!/bin/sh\ncase "$1 $2" in\n  "integration status") echo "claude: not installed (/x)" ;;\n'
-        '  "plugin list") echo "[]" ;;\nesac\n',
+        '  "plugin list") echo \'{"result": {"plugins": []}}\' ;;\nesac\n',
         encoding="utf-8",
     )
     clean = _run(after, scratch)

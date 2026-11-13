@@ -1137,6 +1137,18 @@ herdr_sidebar_keys() {
   printf '%s\n' ui.sidebar.agents.rows ui.sidebar.agents.row_gap ui.sidebar.spaces.rows
 }
 
+# `herdr plugin list --json` output on stdin -> `listed`, `absent` or `unreadable`, read the way
+# installer/postinstall.py::_plugin_listed does (result.plugins[].plugin_id). Anything that is not
+# that JSON shape, an error echoing the plugin id included, is `unreadable`, never `listed`.
+herdr_plugin_state() {
+  python3 -c 'import json, sys
+try:
+    plugins = json.load(sys.stdin)["result"]["plugins"]
+    print("listed" if any(p["plugin_id"] == sys.argv[1] for p in plugins) else "absent")
+except (ValueError, KeyError, TypeError):
+    print("unreadable")' "$HERDR_PLUGIN_ID"
+}
+
 # `herdr integration status` text on stdin -> `target|state` lines. The command always exits 0
 # (herdr v0.9.5 src/cli/integration.rs), and an experimental target reads `letta (experimental): ...`.
 herdr_status_parse() {
@@ -1162,19 +1174,20 @@ herdr_status_clean() {
 }
 
 # Fact lines on stdin from herdr_probe_installed: `H <hook id>`, `N` (no receipt), `S <status line>`,
-# `Y <plugin list output>`, `C <sidebar key present>`, `DS <default_shell value>`, `E <ledger entry>`,
+# `Y <plugin list --json output>`, `P <present harness> <herdr target>`, `C <sidebar key present>`, `DS <default_shell value>`, `E <ledger entry>`,
 # `W <skill path>` and the closing `D`. No zsh is installed in the distro containers, so herdr must
 # have written neither a default_shell key nor a default-shell ledger entry (D-08b, R1-19).
 herdr_installed_verdict() {
-  local line hosts="" sidebar=0 no_receipt=0 done=0 plugin=0 failed=0 shell=""
-  local keys_seen=" " status="" parsed host state key rest
+  local line hosts="" sidebar=0 no_receipt=0 done=0 plugin="" failed=0 shell=""
+  local keys_seen=" " status="" parsed host state key rest present=""
   while IFS= read -r line; do
     case "$line" in
       N) no_receipt=1 ;;
       "H sidebar-markers") sidebar=1 ;;
       "H "*) hosts="${hosts:+$hosts,}${line#H }" ;;
       "S "*) status+="${line#S }"$'\n' ;;
-      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "Y "*) plugin="$(printf '%s' "${line#Y }" | herdr_plugin_state)" ;;
+      "P "*) present+="${line#P }"$'\n' ;;
       "C "*) keys_seen+="${line#C } " ;;
       "DS "*) shell="${line#DS }" ;;
       "E default-shell "*)
@@ -1215,10 +1228,30 @@ herdr_installed_verdict() {
       failed=1
     fi
   done
-  if [[ "$plugin" -eq 0 ]]; then
-    printf 'TRACER_HERDR_PLUGIN_MISSING\n'
-    failed=1
-  fi
+  # Every present host the installer decides on (`P <harness> <herdr target>`) must be recorded,
+  # unless herdr already reads it `current` (the user's own setup, left alone). A target herdr does
+  # not list at all is not registered by the installer either.
+  local harness
+  while read -r harness host; do
+    [[ -n "$harness" ]] || continue
+    [[ ",$hosts," == *",$harness,"* ]] && continue
+    state="$(printf '%s\n' "$parsed" | awk -F'|' -v target="$host" '$1 == target { print $2; exit }')"
+    if [[ -n "$state" && "$state" != "current" ]]; then
+      printf 'TRACER_HERDR_HOST_NOT_RECORDED host=%s state=%s\n' "$harness" "$state"
+      failed=1
+    fi
+  done <<<"$present"
+  case "$plugin" in
+    listed) ;;
+    unreadable)
+      printf 'TRACER_HERDR_PLUGIN_UNREADABLE\n'
+      failed=1
+      ;;
+    *)
+      printf 'TRACER_HERDR_PLUGIN_MISSING\n'
+      failed=1
+      ;;
+  esac
   while IFS= read -r key; do
     if [[ "$keys_seen" != *" $key "* ]]; then
       printf 'TRACER_HERDR_KEY_MISSING key=%s\n' "$key"
@@ -1242,8 +1275,10 @@ herdr_probe_installed() {
   printf -v workspace '%q' "$TESTER_WORKSPACE"
   py='import json, sys, tomllib
 from pathlib import Path
-from installer import receipts
+from installer import postinstall, receipts
 home = Path.home()
+for harness in sorted(postinstall.present_hosts() & postinstall._HERDR_TARGETS.keys()):
+    print("P " + harness + " " + postinstall._HERDR_TARGETS[harness])
 receipt = receipts.read("herdr")
 if receipt is None:
     print("N")
@@ -1273,7 +1308,7 @@ herdr=\"\$HOME/.local/bin/herdr\"
 if [ -x \"\$herdr\" ]; then
   cp \"\$herdr\" ${HERDR_PROBE_COPY}
   { \"\$herdr\" integration status 2>&1 || true; } | sed 's/^/S /'
-  printf 'Y %s\\n' \"\$({ \"\$herdr\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+  printf 'Y %s\\n' \"\$({ \"\$herdr\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>/dev/null || true; } | tr '\\n' ' ')\"
 fi
 for d in .claude/skills .agents/skills .codex/skills .cursor/skills .copilot/skills .config/opencode/skills; do
   if [ -d \"\$HOME/\$d\" ]; then find \"\$HOME/\$d\" -maxdepth 1 -iname '*herdr*' -print | sed 's/^/W /'; fi
@@ -1289,11 +1324,11 @@ echo D
 
 # Fact lines on stdin from herdr_probe_after: `S`, `Y`, `K <ledger key still in config.toml>`, `D`.
 herdr_removed_verdict() {
-  local line status="" plugin=0 done=0 failed=0 key
+  local line status="" plugin="" done=0 failed=0 key
   while IFS= read -r line; do
     case "$line" in
       "S "*) status+="${line#S }"$'\n' ;;
-      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "Y "*) plugin="$(printf '%s' "${line#Y }" | herdr_plugin_state)" ;;
       "K "*)
         key="${line#K }"
         printf 'TRACER_HERDR_KEY_LEFT key=%s\n' "$key"
@@ -1307,10 +1342,17 @@ herdr_removed_verdict() {
     return 1
   fi
   printf '%s' "$status" | herdr_status_clean || failed=1
-  if [[ "$plugin" -eq 1 ]]; then
-    printf 'TRACER_HERDR_PLUGIN_LEFT\n'
-    failed=1
-  fi
+  case "$plugin" in
+    absent) ;;
+    listed)
+      printf 'TRACER_HERDR_PLUGIN_LEFT\n'
+      failed=1
+      ;;
+    *)
+      printf 'TRACER_HERDR_PLUGIN_UNREADABLE\n'
+      failed=1
+      ;;
+  esac
   [[ "$failed" -eq 0 ]] || return 1
   printf 'TRACER_HERDR_STATUS_CLEAN_OK\nTRACER_HERDR_REVERT_OK\n'
 }
@@ -1344,7 +1386,7 @@ eval \"\$(${BREW_BIN} shellenv)\"
 probe=${HERDR_PROBE_COPY}
 if [ -x \"\$probe\" ]; then
   { \"\$probe\" integration status 2>&1 || true; } | sed 's/^/S /'
-  printf 'Y %s\\n' \"\$({ \"\$probe\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+  printf 'Y %s\\n' \"\$({ \"\$probe\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>/dev/null || true; } | tr '\\n' ' ')\"
 fi
 cd ${workspace}
 uv run --isolated --no-dev python -c $(printf '%q' "$py") ${keys}
