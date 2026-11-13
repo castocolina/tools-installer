@@ -10,15 +10,20 @@ user's own and is never touched.
 
 from __future__ import annotations
 
+import os
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-from installer import atomic, daemon, schedules
+from installer import atomic, daemon, run, schedules
 from installer.atomic import read_capped
 
 SHIM_SENTINEL: Final = "# tools-installer-helper: cursor-agent-shim"
 _SENTINEL_WINDOW: Final = 4096
+_MODEL_LINE_RE: Final = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]{0,127}) - ")
+_LIST_MODELS_TIMEOUT: Final = 40
 
 ShimWrite = Literal["written", "unchanged", "kept-foreign"]
 ModelCheck = Literal["listed", "not-listed", "unverified"]
@@ -99,3 +104,40 @@ def refresh_shim(
         return ShimReport("unchanged", check, model)
     atomic.atomic_replace_entry(link, text, mode=0o755)
     return ShimReport("written", check, model)
+
+
+def restore_link(*, link: Path, agent: Path) -> bool:
+    """Turn our shim back into a symlink to `agent`'s target; a foreign regular file stays."""
+    if not (link.is_symlink() or is_our_shim(link)):
+        return False
+    atomic.replace_symlink(link, os.readlink(agent))
+    return True
+
+
+def remove_shim(link: Path) -> bool:
+    """Delete `link` only when it is our shim; True when it was removed."""
+    if not is_our_shim(link):
+        return False
+    link.unlink()
+    return True
+
+
+def parse_models(stdout: str) -> tuple[str, ...]:
+    """The ids of `<id> - <label>` lines; the header, the tip and blank lines carry none."""
+    matches = (_MODEL_LINE_RE.match(line.replace("\u200b", "")) for line in stdout.splitlines())
+    return tuple(match.group(1) for match in matches if match)
+
+
+def _run_list_models(cmd: list[str]) -> str:
+    return run.run_output(cmd, timeout=_LIST_MODELS_TIMEOUT)  # stdin closed, new session
+
+
+def read_models(
+    agent: Path, *, run_output: Callable[[list[str]], str] = _run_list_models
+) -> tuple[str, ...] | None:
+    """`cursor-agent --list-models` ids, or None when the list cannot be read (D-20)."""
+    try:
+        models = parse_models(run_output([str(agent), "--list-models"]))
+    except (run.CommandError, OSError):
+        return None
+    return models or None
