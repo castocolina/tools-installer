@@ -230,6 +230,7 @@ _PRE_15_3_HUMAN_TOOLS = {
 _POST_15_3_HUMAN_TOOLS = {
     "alacritty",
     "copilot",
+    "neovim",  # Phase 24.1
 }
 
 
@@ -251,7 +252,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 50,  # Phase 24 adds herdr, unzip and zip (audience both)
         "ai": 8,
-        "human": 27,
+        "human": 28,  # Phase 24.1 adds neovim (audience human)
     }
 
 
@@ -1125,7 +1126,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 85  # Phase 24 adds the herdr, unzip and zip rows
+    assert len(tools) == 86  # Phase 24 adds the herdr, unzip and zip rows; Phase 24.1 adds neovim
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1180,7 +1181,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 28,  # Phase 24 adds unzip and zip (SDKMAN prerequisites)
         "ai": 9,
-        "user": 48,  # Phase 24 adds herdr (tier user)
+        "user": 49,  # Phase 24 adds herdr (tier user); Phase 24.1 adds neovim (tier user)
     }
 
 
@@ -2122,10 +2123,10 @@ def test_tealdeer_declares_its_cache_in_config_paths() -> None:
 
 
 def test_native_package_manager_rows_declare_their_owner_probes() -> None:
-    # D-05: exactly the thirteen rows that can be installed through a native
+    # D-05: exactly the fourteen rows that can be installed through a native
     # OS package manager (or, for opencode/wezterm, pacman alone) declare
     # owner_probes so detect_owner can actually answer for them.
-    # rpm-ostree is listed FIRST on the nine dnf/apt/pacman-capable rows: on
+    # rpm-ostree is listed FIRST on the twelve dnf/apt/pacman-capable rows: on
     # an ostree host the rpm database still answers `rpm -q`, so probing dnf
     # first would attribute a package the user explicitly layered to the
     # wrong mechanism -- see install_ownership.py's _rpm_ostree docstring.
@@ -2143,6 +2144,7 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
         "podman": full,
         "kitty": full,
         "alacritty": full,
+        "neovim": full,
         "opencode": ("pacman",),
         "wezterm": ("pacman",),
     }

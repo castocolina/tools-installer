@@ -2606,6 +2606,68 @@ member = "sublime_text/sublime_text"
 bin_name = "subl"
 archive = "xz"
 
+# Verified 2026-11-13: the latest release is v0.12.6 (published 2026-10-09), read live with
+# `gh api repos/neovim/neovim/releases/latest`; RESEARCH first recorded it on 2026-10-13. The four
+# install assets are nvim-linux-x86_64.tar.gz, nvim-linux-arm64.tar.gz, nvim-macos-x86_64.tar.gz and
+# nvim-macos-arm64.tar.gz. Each unpacks to one top directory (nvim-<os>-<arch>/) holding bin, lib and
+# share, so `strip = 1` puts bin/nvim at the root of the staged tree and $VIMRUNTIME resolves inside
+# the tree. The tree goes to ~/.local/opt/nvim and the link to ~/.local/bin/nvim.
+# No checksum file is published (every release asset was enumerated), so each tarball is verified by
+# the sha256 digest the GitHub API returns for it, as herdr's are; no `checksum` key is declared.
+# AppImage and Windows assets are left out (SPEC R1).
+# The brew formula `neovim` (0.12.6) has no Intel macOS bottle and builds from source there.
+# Native packages are handoffs only (22 D-12). Fedora 44 and Arch ship 0.12.6, while Fedora 43 (0.11.6)
+# and Debian 13 (0.10.4) predate `vim.pack`, so the kickstart starter cannot run there, and post-install
+# never runs after a MANUAL handoff.
+# The resolver ranks release, then the native handoff, then brew on mutable Linux; on immutable Fedora
+# and macOS it ranks release, then brew.
+# Removal is receipt-proven: the opt tree and the link. ~/.config/nvim is kept unless "delete config
+# too" is chosen. A file dropped inside the opt tree goes with the tree, as on an update (24.1 D-03
+# refined 2026-11-13, needs confirmation).
+# No `requires`: the starter checks for git itself (24.1 D-17 amended 2026-11-13, needs confirmation).
+# Customizations offered and how they were answered: an EDITOR/VISUAL line as install tuning that
+# yields to a user export (D-14, needs confirmation); a pinned no-LSP kickstart starter, placed only
+# into an absent or empty ~/.config/nvim (D-15, needs confirmation); the `:!pre-commit run --files %`
+# and `:lsp enable <name>` hints (D-19).
+[[tool]]
+id = "neovim"
+name = "Neovim"
+category = "editor"
+cmd = "nvim"
+priority = "P2"
+audience = "human"
+tier = "user"
+verified = 2026-11-13
+desc = "Vim-based modal text editor for the terminal"
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+config_paths = ["~/.config/nvim"]
+[[tool.method]]
+kind = "github_release"
+os = ["debian", "arch", "fedora"]
+repo = "neovim/neovim"
+asset = "nvim-linux-{arch.suffix}.tar.gz"
+member = "bin/nvim"
+strip = 1
+[[tool.method]]
+kind = "github_release"
+os = ["macos"]
+repo = "neovim/neovim"
+asset = "nvim-macos-{arch.suffix}.tar.gz"
+member = "bin/nvim"
+strip = 1
+[[tool.method]]
+kind = "brew"
+formula = "neovim"
+[[tool.method]]
+kind = "dnf"
+package = "neovim"
+[[tool.method]]
+kind = "apt"
+package = "neovim"
+[[tool.method]]
+kind = "pacman"
+package = "neovim"
+
 # Install-method decision (2026-09-05, this phase's research): mmdc stays on
 # pnpm (`kind = "node"`). Homebrew is rejected because upstream mermaid-cli's
 # own README states that install path is "no longer supported", and GitHub
