@@ -1831,3 +1831,37 @@ def test_herdr_is_a_config_agent_without_tuning() -> None:
         (("ui", "sidebar", "agents", "row_gap"), 1),
         (("ui", "sidebar", "spaces", "rows"), HERDR_SPACES_ROWS),
     ]
+
+
+NEW_ZSH = "/usr/bin/zsh"
+
+
+@pytest.mark.parametrize("seed", [HERDR_CONFIG, ""], ids=["existing-table", "created-table"])
+def test_default_shell_recorded_as_ours_follows_a_changed_zsh_path(seed: str) -> None:
+    config = _herdr_file()
+    config.write_text(seed, encoding="utf-8")
+    assert _apply_shell().refused is None
+
+    moved = _apply_shell(NEW_ZSH)
+
+    assert [(k.key, k.kind) for k in moved.keys] == [("terminal.default_shell", "replaced_ours")]
+    assert _default_shell(config.read_text(encoding="utf-8")) == NEW_ZSH
+    ledger = read_ledger("herdr")
+    assert ledger is not None
+    assert [e.value for e in ledger.entries if e.setting == "default-shell"] == [NEW_ZSH]
+
+    (removed,) = agent_settings.revert_group(
+        "herdr", "default-shell", home=Path.home(), platform_os="linux", environ={}
+    )
+    assert [(k.key, k.kind) for k in removed.keys] == [("terminal.default_shell", "removed")]
+    assert _default_shell(config.read_text(encoding="utf-8")) is None
+
+
+def test_default_shell_not_in_the_ledger_stays_the_users_when_zsh_moves() -> None:
+    config = _herdr_file()
+    config.write_text('[terminal]\ndefault_shell = "/bin/fish"\n', encoding="utf-8")
+
+    result = _apply_shell(NEW_ZSH)
+
+    assert [(k.key, k.kind) for k in result.keys] == [("terminal.default_shell", "set_by_you")]
+    assert _default_shell(config.read_text(encoding="utf-8")) == "/bin/fish"

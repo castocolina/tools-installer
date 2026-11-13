@@ -1570,3 +1570,22 @@ def test_alacritty_file_the_user_created_empty_is_kept(tmp_path: Path) -> None:
 
     _remove_alacritty(tmp_path)
     assert _alacritty_toml().read_text() == ""
+
+
+def test_herdr_default_shell_follows_a_moved_zsh_and_reloads() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n')
+    calls: list[list[str]] = []
+    _sync_herdr(runner=calls.append)
+    moved = _lookup(zsh="/opt/zsh/bin/zsh", herdr=_HERDR)
+
+    dry = _sync_herdr(lookup=moved, write=False)
+    assert "herdr" in dry.drifted and dry.warnings == ()
+
+    result = _sync_herdr(lookup=moved, runner=calls.append)
+
+    assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == "/opt/zsh/bin/zsh"
+    assert result.warnings == () and "herdr" in result.drifted
+    assert len(calls) == 2
+    assert _ledgered_settings() == ["default-shell"]

@@ -402,21 +402,27 @@ def _insert_toml(text: str, doc: dict[str, object], key_path: KeyPath, value: ob
     raise SettingsEditRefused("no place for a top-level key")
 
 
-def _toml_remove(text: str, key_path: KeyPath, fragment: str | None) -> str:
-    """The recorded fragment when it occurs once, else the key's own line inside its table."""
+def _toml_leaf_line(lines: list[str], key_path: KeyPath) -> int:
+    """The index of the key's own line inside its table."""
     table, key = _toml_key(key_path)
-    if fragment is not None and text.count(fragment) == 1:
-        return text.replace(fragment, "", 1)
     dotted = ".".join(table)
     in_table = not table
-    lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines):
         if line.lstrip().startswith("["):
             header = _TOML_HEADER.fullmatch(line.rstrip("\r\n"))
             in_table = bool(table) and header is not None and header[1] == dotted
         elif in_table and re.match(rf"\s*{re.escape(key)}\s*=", line):
-            return "".join(lines[:index] + lines[index + 1 :])
+            return index
     raise SettingsEditRefused(f"{'.'.join(key_path)} has no line to remove")
+
+
+def _toml_remove(text: str, key_path: KeyPath, fragment: str | None) -> str:
+    """The recorded fragment when it occurs once, else the key's own line inside its table."""
+    if fragment is not None and text.count(fragment) == 1:
+        return text.replace(fragment, "", 1)
+    lines = text.splitlines(keepends=True)
+    index = _toml_leaf_line(lines, key_path)
+    return "".join(lines[:index] + lines[index + 1 :])
 
 
 def _toml_removal(
@@ -520,6 +526,28 @@ def replace_value(text: str, fmt: SettingsFormat, key_path: KeyPath, new: object
     return _guarded(new_text, fmt, _edited(doc, key_path, new))
 
 
+def _value_text(fmt: SettingsFormat, value: object) -> str:
+    return _toml_value(value) if fmt == "toml" else _dump(value)
+
+
+def swap_recorded(
+    text: str, fmt: SettingsFormat, key_path: KeyPath, old: object, new: object
+) -> str:
+    """Replace a value the installer wrote with another. A TOML edit touches only the key's own
+    line (a comment after the value stays); the result is re-parsed against the expected
+    document."""
+    if fmt != "toml":
+        return replace_value(text, fmt, key_path, new)
+    doc = parse_settings(text, fmt)
+    lines = text.splitlines(keepends=True)
+    index = _toml_leaf_line(lines, key_path)
+    before, after = _toml_value(old), _toml_value(new)
+    if lines[index].count(before) != 1:
+        raise SettingsEditRefused(f"{'.'.join(key_path)} line is not the one written")
+    lines[index] = lines[index].replace(before, after, 1)
+    return _guarded("".join(lines), fmt, _edited(doc, key_path, new))
+
+
 def new_file_text(fmt: SettingsFormat) -> str:
     """Content of a settings file the installer creates: an empty object, or empty TOML."""
     return "" if fmt == "toml" else "{}\n"
@@ -579,7 +607,9 @@ def _remove_created_dirs(dirs: tuple[str, ...], home: Path) -> tuple[str, ...]:
     return tuple(reversed(left))
 
 
-KeyKind = Literal["wrote", "set_by_you", "already", "replaced_default", "removed", "kept_changed"]
+KeyKind = Literal[
+    "wrote", "set_by_you", "already", "replaced_default", "replaced_ours", "removed", "kept_changed"
+]
 AGENT_FORMATS: Final[dict[str, SettingsFormat]] = {
     "claude": "json",
     "codex": "toml",
@@ -803,8 +833,11 @@ def _apply_pass(
     file: str,
     keys: tuple[SettingKey, ...],
     skip: frozenset[KeyPath] = frozenset(),
+    ours: Mapping[KeyPath, ConfigWrite] | None = None,
 ) -> _Pass:
-    """`skip` keys are left alone: no result, no write and no ledger change for them."""
+    """`skip` keys are left alone: no result, no write and no ledger change for them. `ours` holds
+    the ledger entries of this setting and file: a key still holding the recorded value is ours
+    and takes the new value."""
     results: list[KeyResult] = []
     writes: list[ConfigWrite] = []
     dropped: list[KeyPath] = []
@@ -835,6 +868,18 @@ def _apply_pass(
                 ConfigWrite(setting, file, key.path, key.value, "", replaced_default=True)
             )
             results.append(KeyResult(name, "replaced_default", _dump(key.cli_default)))
+        elif (old := (ours or {}).get(key.path)) is not None and same_value(current, old.value):
+            try:
+                text = swap_recorded(text, fmt, key.path, old.value, key.value)
+            except SettingsEditRefused:
+                results.append(KeyResult(name, "set_by_you", _dump(current)))
+                dropped.append(key.path)
+                continue
+            fragment = old.fragment.replace(
+                _value_text(fmt, old.value), _value_text(fmt, key.value), 1
+            )
+            writes.append(replace(old, value=key.value, fragment=fragment))
+            results.append(KeyResult(name, "replaced_ours", _dump(current)))
         else:
             results.append(KeyResult(name, "set_by_you", _dump(current)))
             dropped.append(key.path)
@@ -875,7 +920,12 @@ def _apply_once(
             for entry in ledger.entries
             if skip_recorded and entry.setting == setting and entry.file == file
         )
-        step = _apply_pass(text, fmt, setting, file, keys, recorded)
+        ours = {
+            entry.key_path: entry
+            for entry in ledger.entries
+            if entry.setting == setting and entry.file == file
+        }
+        step = _apply_pass(text, fmt, setting, file, keys, recorded, ours)
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     entries = _kept_entries(ledger.entries, setting, file, step)

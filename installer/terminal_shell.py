@@ -30,6 +30,7 @@ from installer.atomic import FileSnapshot, atomic_write_text, read_capped
 from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
+from installer.receipts import read_ledger
 from installer.run import CommandError, Runner
 from installer.shellrc import apply_block, strip_block
 
@@ -767,6 +768,14 @@ def _herdr_check(path: Path, zsh_path: str) -> tuple[bool, bool, tuple[str, ...]
         return True, True, ()
     if same_value(current, zsh_path):
         return True, False, ()
+    ledger = read_ledger(
+        HERDR
+    )  # a value the ledger records as ours follows zsh (the apply swaps it)
+    if ledger is not None and any(
+        entry.setting == "default-shell" and same_value(current, entry.value)
+        for entry in ledger.entries
+    ):
+        return True, True, ()
     return False, False, (_HERDR_PARTIAL,)
 
 
@@ -800,7 +809,7 @@ def _sync_herdr(
     kinds = {key.kind for key in result.keys}
     if "set_by_you" in kinds:
         return False, False, (_HERDR_PARTIAL,)
-    wrote = "wrote" in kinds
+    wrote = bool(kinds & {"wrote", "replaced_ours"})
     return True, wrote, _herdr_reload(herdr_path, runner) if wrote else ()
 
 
