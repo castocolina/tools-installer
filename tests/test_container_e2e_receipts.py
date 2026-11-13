@@ -1854,6 +1854,46 @@ def test_blocked_rows_are_listed_once_with_their_reason(tmp_path: Path) -> None:
     assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
 
 
+def _pass2_refusal_script() -> str:
+    return (
+        'PHASE_DIR="$SCRATCH/phase"\n'
+        + _harness("die", "ensure_phase_dir", "cmd_pass2")
+        + "\ncontainer_running() { return 0; }\n"
+        "herdr_probe_installed() { echo PROBED; return 1; }\n"
+        "cmd_pass2\n"
+    )
+
+
+def test_pass2_refuses_after_a_chunked_pass1(tmp_path: Path) -> None:
+    """E7: a chunked pass1 installs a subset, so pass2's --all rerun would always differ."""
+    chunked = _run(
+        _pass1_script(tmp_path, "Summary — 2 installed\n", "cmd_pass1 --categories a,b"), tmp_path
+    )
+    assert chunked.returncode == 0, chunked.stdout + chunked.stderr
+    refused = _run(_pass2_refusal_script(), tmp_path)
+    assert refused.returncode != 0
+    assert "last pass1 was chunked (--categories a,b)" in refused.stderr
+    assert not (tmp_path / "phase" / "pass2-transcript.log").exists()
+    # A later full pass1 lifts the refusal.
+    full = _run(_pass1_script(tmp_path, "Summary — 2 installed\n", "cmd_pass1"), tmp_path)
+    assert full.returncode == 0, full.stdout + full.stderr
+    _run(_pass2_refusal_script(), tmp_path)
+    assert "PROBED" in (tmp_path / "phase" / "pass2-transcript.log").read_text(encoding="utf-8")
+
+
+def test_cmd_all_prints_the_transcript_of_a_failing_pass2(tmp_path: Path) -> None:
+    """E8: set -e ends cmd_all at the failing pass2, which used to skip its transcript."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    stages = (
+        _STAGE_STUBS + 'cmd_pass2() { echo "TRACER_RERUN_UNEXPECTED why" > '
+        '"$PHASE_DIR/pass2-transcript.log"; return 1; }\n'
+    )
+    result = _run(_distro_harness() + "\n" + stages + "main all\n", scratch)
+    assert result.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED why" in result.stdout
+
+
 def test_a_pass_with_nothing_available_is_misconfigured(tmp_path: Path) -> None:
     result = _run(_pass1_script(tmp_path, "Summary — 3 blocked\n", "cmd_pass1"), tmp_path)
     assert result.returncode != 0

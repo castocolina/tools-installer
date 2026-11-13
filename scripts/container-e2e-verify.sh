@@ -610,6 +610,15 @@ cmd_pass1() {
     die "unknown pass1 option: $1"
   fi
 
+  # A chunked run installs a subset, so the rerun (always --all) could never match it: pass2
+  # refuses while this marker exists.
+  ensure_phase_dir
+  if [[ -n "$categories" ]]; then
+    printf '%s\n' "$categories" >"$PHASE_DIR/pass1-chunked.txt"
+  else
+    rm -f "$PHASE_DIR/pass1-chunked.txt"
+  fi
+
   local tmp all_runs
   tmp="$(mktemp)"
   all_runs="$(mktemp)"
@@ -1416,6 +1425,8 @@ run_pass2_step() {
 cmd_pass2() {
   container_running || die "container $CONTAINER_NAME is not running"
   ensure_phase_dir
+  [[ ! -f "$PHASE_DIR/pass1-chunked.txt" ]] \
+    || die "pass2 reruns --all and the last pass1 was chunked (--categories $(cat "$PHASE_DIR/pass1-chunked.txt")); run a full pass1 first"
   local log="$PHASE_DIR/pass2-transcript.log"
   : > "$log"
 
@@ -1528,9 +1539,12 @@ cmd_pass2() {
 
 cmd_all() {
   # Never leave the container behind, pass or fail (pass2 also removes it on success).
-  trap 'ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
+  # A failing pass2 ends the shell through set -e, so the trap also prints its transcript (the reason).
+  PASS2_STARTED=0
+  trap 'rc=$?; if [[ "$rc" -ne 0 && "$PASS2_STARTED" -eq 1 ]]; then cat "$PHASE_DIR/pass2-transcript.log" || true; fi; ct rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
   cmd_bootstrap --replace
   cmd_pass1 | tee "$PHASE_DIR/pass1-transcript.log"
+  PASS2_STARTED=1
   cmd_pass2
   cat "$PHASE_DIR/pass2-transcript.log"
 }
