@@ -563,7 +563,35 @@ Plans:
   3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
-**Plans**: TBD (run /gsd-plan-phase 24.2)
+**Plans**: 13 plans
+
+Plans:
+**Wave 1**
+- [ ] 24.2-01-PLAN.md — Core: the closed table, slot grid, validators (F6), lock-protected `schedules.json`, run lock, log reader and Last cell, clean unit PATH (F4), total update result table (F7) (wave 1)
+- [ ] 24.2-02-PLAN.md — Stdlib schedule runner: run lock, start and result lines, log cap under a log lock (F5), tmp/cache/update jobs (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 24.2-03-PLAN.md — cursor-agent shim: entry-replacing atomic write (F1), dispatch, restore, removal, model list, receipt re-fingerprint (D-19) (wave 2)
+- [ ] 24.2-04-PLAN.md — Unit and plist writers: names, `OnCalendar` + `Persistent`, calendar arrays, stamp clean, user-manager probe (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 24.2-05-PLAN.md — Toggle engine: on, off, re-time, model, shared assets by refcount (F2), tmp units adopted by name, rollback, row state (wave 3)
+- [ ] 24.2-06-PLAN.md — `--run-schedule` headless update, Pi host-setup replay (D-16), copilot cask path (F9), runner contract tests (wave 3)
+- [ ] 24.2-07-PLAN.md — The run lock in the TUI: install, update, removal and pnpm reinstall refuse during a scheduled run (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 24.2-08-PLAN.md — Lifecycle: default-on reconcile, in-place refresh and adoption, after-removal hook (F3), uninstall-sweep adapters (wave 4)
+- [ ] 24.2-09-PLAN.md — The Schedules view: VIEWS row 7, cells, detail, 30 s refresh, time and model modals, seven-tab header (wave 4)
+- [ ] 24.2-10-PLAN.md — Container e2e harness: Fedora 44 systemd target, per-built-in runs, busy, calendar, one catch-up, direct fallback (host-tested only) (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 24.2-11-PLAN.md — Handover switch: Policies drops the daemon row, four reconcile points, uninstall and removal through schedules, headless run lock (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 24.2-12-PLAN.md — Handover delete: daemon policies, job-state machinery, `TimePickerScreen` (F10), old runner; tests migrated with a ledger (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+- [ ] 24.2-13-PLAN.md — Phase gate: merged-tree gates, orchestrator systemd-container e2e, confirmations carried to the user (wave 7)
 
 ### Phase 24.3: Catalog audit skill (INSERTED)
 
@@ -624,7 +652,7 @@ Plans:
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
-| 24.2 Schedules view | 0/TBD | Not started | - |
+| 24.2 Schedules view | 0/13 | Not started | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
