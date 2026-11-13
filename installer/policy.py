@@ -119,7 +119,6 @@ class Policy:
     requires: tuple[str, ...] = ()
     missing_requires: tuple[str, ...] = ()
     hard_requires: bool = True
-    log_path: Path | None = None
     is_active: Callable[[], bool] | None = None
     missing_requires_now: Callable[[], tuple[str, ...]] | None = None
     # New optional fields are APPENDED, never inserted: Policy is frozen and a
