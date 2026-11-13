@@ -44,8 +44,8 @@ _TMP_TIMEOUT = 600
 _MANAGER_TIMEOUT = 1200
 _UPDATE_TIMEOUT = 1800
 _RESULT_PREFIXES = ("ok:", "skipped:", "failed:")
-# Source: installer/guards.py SHIM_SENTINEL (this file cannot import it).
-_SHIM_SENTINEL = b"# tools-installer-ban-shim"
+# Source: installer/guards.py SHIM_SENTINEL and REDIRECT_SENTINEL (this file cannot import it).
+_SHIM_SENTINELS = (b"# tools-installer-ban-shim", b"# tools-installer-redirect-shim")
 # Each manager's own prune command, in the UI's target order.
 _MANAGERS = (
     ("uv", ("cache", "prune")),
@@ -245,7 +245,11 @@ def _update(run_id: str, installer: str, uv: str) -> str:
 
 
 def _resolve(name: str, path_value: str) -> str | None:
-    """The first real `name` on PATH: absolute entries only, never the ban shim."""
+    """The first real `name` on PATH: absolute entries only, never the installer's own shim.
+
+    Like `guards.real_binary`: the sentinel, not the directory, marks a shim, so a real binary
+    that lives in the managed bin dir stays resolvable.
+    """
     for entry in path_value.split(os.pathsep):
         candidate = Path(entry) / name
         if not (candidate.is_absolute() and candidate.is_file() and os.access(candidate, os.X_OK)):
@@ -255,7 +259,7 @@ def _resolve(name: str, path_value: str) -> str | None:
                 head = handle.read(4096)
         except OSError:
             continue
-        if _SHIM_SENTINEL not in head:
+        if not any(sentinel in head for sentinel in _SHIM_SENTINELS):
             return str(candidate)
     return None
 

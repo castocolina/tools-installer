@@ -214,6 +214,7 @@ def test_runner_never_imports_the_installer_package() -> None:
 # --- cache-cleanup ----------------------------------------------------------
 
 _SHIM_LINE = "# tools-installer-ban-shim"
+_REDIRECT_LINE = "# tools-installer-redirect-shim"
 
 
 def _texts(lines: list[str], run_id: str = "cache-cleanup") -> list[str]:
@@ -301,6 +302,20 @@ def test_npm_skips_the_ban_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     code, lines = _run(tmp_path, "cache-cleanup")
     assert code == 0
     assert _texts(lines)[-1] == "ok: nothing to clean"
+
+
+@pytest.mark.parametrize("name", ["npm", "pnpm"])
+def test_managers_skip_the_redirect_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    shim_dir = tmp_path / "shim"
+    real_dir = tmp_path / "real"
+    _script(shim_dir, name, f"{_REDIRECT_LINE}\nexit 127")
+    _recorder(real_dir, name)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{real_dir}")
+    code, _lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert (real_dir / f"{name}.argv").exists()
 
 
 def test_cache_cleanup_ignores_a_relative_path_entry(
