@@ -1695,3 +1695,26 @@ def test_retiming_a_drift_row_never_records_a_modified_service_as_ours(env: Env)
     assert receipts.matches(by_path[timer], rehash=True)
     claude = schedule_by_id("update-claude")
     assert row_state(ctx, state, claude, manager=True, present=ctx.present) == RowState("drift")
+
+
+def test_a_failed_registration_re_records_the_shared_files_it_rewrote(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    new_runner = tmp_path / "new_runner.py"
+    new_runner.write_bytes((ctx.data_dir / "runner.py").read_bytes() + b"# a fix\n")
+    original = vars(schedules)["_shared_pairs"]
+
+    def refreshed(context: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
+        return ((new_runner, context.data_dir / "runner.py"), *original(context)[1:])
+
+    monkeypatch.setitem(vars(schedules), "_shared_pairs", refreshed)
+    env.run.arm(frozenset({("restart", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(ctx, "update-opencode")
+
+    assert (ctx.data_dir / "runner.py").read_bytes() == new_runner.read_bytes()
+    shared = load_state(ctx.state_path).state.shared
+    assert shared
+    assert all(receipts.matches(a, rehash=True) for a in shared)

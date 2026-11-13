@@ -1107,6 +1107,21 @@ def _take_over_competitors(ctx: ScheduleContext) -> tuple[str, ...]:
     return tuple(sentence for sentence in sentences if sentence)
 
 
+def _rerecord_shared(ctx: ScheduleContext, assets: tuple[ReceiptArtifact, ...]) -> None:
+    """After a failed registration, re-record the recorded shared files this call rewrote (F16).
+
+    Only entries already recorded are replaced: a file this call created was just deleted, and
+    one it merely adopted was never recorded."""
+    fresh = {Path(artifact.path): artifact for artifact in assets}
+
+    def change(current: ScheduleState) -> ScheduleState:
+        shared = tuple(fresh.get(Path(item.path), item) for item in current.shared)
+        return replace(current, shared=shared)
+
+    with contextlib.suppress(OSError):  # the registration error is the one to report
+        update_state(ctx.state_path, change)
+
+
 def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     """Write the shared assets, then the unit, register it, and record every file (D-02)."""
     schedule = schedule_by_id(schedule_id)
@@ -1123,6 +1138,7 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
                 with contextlib.suppress(OSError):
                     path.unlink(missing_ok=True)
             _prune_data_dirs(ctx)
+        _rerecord_shared(ctx, assets)
         raise
     files = _fingerprint_unit(ctx, schedule)
     warnings: list[str] = []
