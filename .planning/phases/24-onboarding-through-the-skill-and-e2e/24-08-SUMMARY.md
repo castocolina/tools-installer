@@ -188,3 +188,18 @@ None. Task 1 adds one Markdown file and runs no container, no host installer com
 - FOUND: .planning/phases/24-onboarding-through-the-skill-and-e2e/24-UAT.md
 - FOUND commit: 24eaa92 (ancestor of HEAD)
 - `make validate` exit 0, `make test` exit 0 (6293 passed, 6 skipped) on the tree with the UAT
+
+## Post-review re-run (orchestrator, 2026-11-13, tree 46207b9 = code-review fixes merged)
+
+Sequential, no container left afterwards (`POST_PS: no e2e containers`):
+- nested: EXIT=0 in 66 s — `TRACER_NESTED_PODMAN_OK` (the E1 probe fix: inner rootless podman runs),
+  `TRACER_NESTED_INFEASIBLE step=distrobox-create` (podman's "cannot set hostname when running in the
+  host UTS namespace", read from its own `Error:` line, f484ea9), `TRACER_NESTED_HERDR_SHELL_OK`,
+  `TRACER_NESTED_UNINSTALL_OK`, `TRACER_NESTED_HERDR_REVERT_OK`, `TRACER_NESTED_TEARDOWN_OK`.
+  The orchestrator confirmed the limit by hand in a disposable `quay.io/podman/stable` container
+  (see 24-REVIEW.md, "Nested feasibility"): UAT test 6 stays REQUIRED.
+- fedora: EXIT=0, 670 s; `TRACER_CLEAN_INSTALL_OK installed=68`, `TRACER_RERUN_OK installed=0 updated=0`,
+  `TRACER_REINSTALL_OK installed=62`; every listed tracer present.
+- debian: EXIT=0, 546 s; `installed=61`, rerun `installed=0 updated=0`, reinstall 61; mmdc and puppeteer
+  BLOCKED once each by the Node floor; sdkman and the JVM tools BLOCKED (needs unzip/zip).
+- arch: EXIT=0, 487 s; `installed=60`, rerun `installed=0 updated=0`, reinstall 60.
