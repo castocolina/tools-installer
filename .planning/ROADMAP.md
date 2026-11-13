@@ -563,7 +563,7 @@ Plans:
   3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
-**Plans**: 2/13 plans executed
+**Plans**: 4/13 plans executed
 
 Plans:
 **Wave 1**
@@ -571,8 +571,8 @@ Plans:
 - [x] 24.2-02-PLAN.md — Stdlib schedule runner: run lock, start and result lines, log cap under a log lock (F5), tmp/cache/update jobs (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 24.2-03-PLAN.md — cursor-agent shim: entry-replacing atomic write (F1), dispatch, restore, removal, model list, receipt re-fingerprint (D-19) (wave 2)
-- [ ] 24.2-04-PLAN.md — Unit and plist writers: names, `OnCalendar` + `Persistent`, calendar arrays, stamp clean, user-manager probe (wave 2)
+- [x] 24.2-03-PLAN.md — cursor-agent shim: entry-replacing atomic write (F1), dispatch, restore, removal, model list, receipt re-fingerprint (D-19) (wave 2)
+- [x] 24.2-04-PLAN.md — Unit and plist writers: names, `OnCalendar` + `Persistent`, calendar arrays, stamp clean, user-manager probe (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 24.2-05-PLAN.md — Toggle engine: on, off, re-time, model, shared assets by refcount (F2), tmp units adopted by name, rollback, row state (wave 3)
@@ -652,7 +652,7 @@ Plans:
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
-| 24.2 Schedules view | 2/13 | In Progress | - |
+| 24.2 Schedules view | 4/13 | In Progress | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
