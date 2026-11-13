@@ -1577,10 +1577,11 @@ nested_teardown() {
   printf 'TRACER_NESTED_TEARDOWN_OK\n'
 }
 
-# $1 names the step, $2 is the failing command's output; only its first non-empty line is reported.
+# $1 names the step, $2 is the failing command's output; the first line naming an `Error` is
+# reported, else the last non-empty line (the first one is usually a pull progress line).
 nested_infeasible() {
   local detail
-  detail="$(printf '%s\n' "$2" | sed -n '/./{p;q;}')"
+  detail="$(printf '%s\n' "$2" | awk '/Error/ && e == "" { e = $0 } NF { l = $0 } END { print (e != "" ? e : l) }')"
   printf 'TRACER_NESTED_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
 }
 
@@ -1604,15 +1605,24 @@ nested_probe_podman() {
     nested_infeasible podman-info "$out"
     return 0
   fi
-  if ! out="$(exec_tester "podman run --rm ${NESTED_PROBE_IMAGE} true && podman rmi ${NESTED_PROBE_IMAGE}" 2>&1)"; then
+  # The image is FROM scratch with one binary: run its default command, no `true`. It is removed
+  # whatever the run's outcome, so a later build never reads it as a leftover.
+  if ! out="$(exec_tester "rc=0; podman run --rm ${NESTED_PROBE_IMAGE} || rc=\$?; podman rmi -f ${NESTED_PROBE_IMAGE} >/dev/null 2>&1 || true; exit \$rc" 2>&1)"; then
     nested_infeasible podman-run "$out"
     return 0
   fi
   printf 'TRACER_NESTED_PODMAN_OK\n'
 }
 
+# Whether $1 reads as one of the environment errors a rootless nested podman raises when it cannot
+# create the box: the image's containers.conf UTS-namespace hostname (24-08 nested run #2) and
+# user-namespace permission failures. Anything else is the product's.
+nested_environment_error() {
+  grep -qiE 'cannot set hostname when running in the host UTS namespace|operation not permitted|newuidmap|cannot set up namespace' <<<"$1"
+}
+
 # $1 is the install transcript. Returns 0 when Alacritty installed, 2 (infeasible: the box could
-# not be created) or 1 (a product failure, or no Alacritty row at all).
+# not be created for a known environment reason) or 1 (a product failure, or no Alacritty row at all).
 nested_classify_alacritty() {
   local row word detail full
   row="$(sed -nE 's/^[^ ]+ +alacritty +(installed|failed|checksum mismatch|crashed|dependency failed|not attempted|blocked|manual|skipped|updated|repaired|reconfigured|reinstalled)( — (.*))?$/\1|\3/p' "$1" | tail -n 1)"
@@ -1628,7 +1638,7 @@ nested_classify_alacritty() {
       # The Summary row wraps a long reason over several lines; the unwrapped `<mark> alacritty
       # failed: ...` line after it carries the whole command (24-08 nested run #2).
       full="$(sed -nE 's/^[^ ]+ alacritty failed: (.*)$/\1/p' "$1" | tail -n 1)"
-      if [[ "$detail" == *"distrobox create"* || "$full" == *"distrobox create"* ]]; then
+      if [[ "$detail $full" == *"distrobox create"* ]] && nested_environment_error "$detail $full"; then
         nested_infeasible distrobox-create "${full:-$detail}"
         return 2
       fi
@@ -1680,7 +1690,7 @@ if desktop-file-validate \"\$HOME/.local/share/applications/Alacritty.desktop\" 
 if infocmp -A \"\$HOME/.terminfo\" alacritty >/dev/null 2>&1; then echo 'T1 ok'; else echo 'T1 fail'; fi
 if env -u TERMINFO -u TERMINFO_DIRS infocmp alacritty >/dev/null 2>&1; then echo 'T2 ok'; else echo 'T2 fail'; fi
 podman ps -a -q | sed 's/^/C /'
-podman images -q | sed 's/^/M /'
+podman images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk -v probe=${NESTED_PROBE_IMAGE} '\$1 != probe { print \"M \" \$2 }'
 echo D
 ")" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
   while IFS= read -r line; do
@@ -1809,7 +1819,7 @@ nested_uninstall_run() {
 nested_uninstall_ok() {
   local out line paths left=0 done=0
   paths="$(nested_alacritty_paths | paste -sd' ' -)"
-  out="$(exec_tester "cd ~ && for p in ${paths} .terminfo/a; do if [ -e \"\$p\" ] || [ -L \"\$p\" ]; then echo \"L \$p\"; fi; done; echo D")" \
+  out="$(exec_tester "cd ~ && for p in ${paths}; do if [ -e \"\$p\" ] || [ -L \"\$p\" ]; then echo \"L \$p\"; fi; done; echo D")" \
     || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
   while IFS= read -r line; do
     case "$line" in

@@ -2575,6 +2575,66 @@ def test_nested_infeasible_is_distinct(tmp_path: Path) -> None:
     ]
 
 
+def test_nested_probe_runs_the_default_command_and_always_removes_its_image(
+    tmp_path: Path,
+) -> None:
+    """E1: the hello image is FROM scratch (no `true`); a failed run must not leave it behind."""
+    calls = tmp_path / "podman.log"
+    for name, run_exit in (("ok", 0), ("fail", 1)):
+        scratch = tmp_path / name
+        scratch.mkdir()
+        bins = _stub_bin(
+            scratch / "bin",
+            {
+                "podman": f'echo "$@" >> {shlex.quote(str(calls))}\n'
+                f'case "$1" in run) echo "Trying to pull..."; exit {run_exit};; esac'
+            },
+        )
+        script = _nested_script(
+            "nested_probe_podman",
+            real=("nested_probe_podman",),
+            stubs='exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        )
+        result = _run(script, scratch, path=f"{bins}:/usr/bin:/bin")
+        assert result.returncode == 0, result.stdout + result.stderr
+        want = "TRACER_NESTED_PODMAN_OK" if run_exit == 0 else "TRACER_NESTED_INFEASIBLE"
+        assert result.stdout.startswith(want), result.stdout
+    logged = calls.read_text(encoding="utf-8").splitlines()
+    assert logged.count("run --rm quay.io/podman/hello:latest") == 2  # no command, no `true`
+    assert logged.count("rmi -f quay.io/podman/hello:latest") == 2  # removed on both outcomes
+
+
+def test_nested_image_check_ignores_the_probe_image(tmp_path: Path) -> None:
+    """E1: only an image other than the probe's counts as left behind."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    bins = _stub_bin(
+        scratch / "bin",
+        {
+            "podman": 'case "$1" in images) echo "quay.io/podman/hello:latest aaa";'
+            ' echo "docker.io/library/fedora:44 bbb";; esac',
+            "desktop-file-validate": "exit 0",
+            "infocmp": "exit 0",
+        },
+    )
+    script = _nested_script(
+        "nested_artifacts_ok",
+        real=("nested_artifacts_ok",),
+        stubs="\n".join(
+            [
+                f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+                _assign("TESTER_WORKSPACE", str(scratch)),
+                _assign("BREW_BIN", str(_brew_stub(scratch))),
+                'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+                _uv_stub(),
+            ]
+        ),
+    )
+    result = _run(script, scratch, path=f"{bins}:/usr/bin:/bin")
+    assert "TRACER_NESTED_IMAGE_LEFT id=bbb" in result.stdout.splitlines()
+    assert "id=aaa" not in result.stdout
+
+
 def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
     def classify(name: str, row: str) -> subprocess.CompletedProcess[str]:
         scratch = tmp_path / name
@@ -2583,29 +2643,44 @@ def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
         fixture.write_text(f"Install plan — 1 install\n○ alacritty  will install\n{row}\n")
         script = _nested_script(
             f"nested_classify_alacritty {shlex.quote(str(fixture))}",
-            real=("nested_classify_alacritty", "nested_infeasible"),
+            real=("nested_classify_alacritty", "nested_environment_error", "nested_infeasible"),
         )
         return _run(script, scratch)
 
     done = classify("done", "✓ alacritty  installed")
     assert done.returncode == 0, done.stdout
-    cannot = classify("cannot", "✖ alacritty  failed — distrobox create: cannot reach the engine")
+    hostname = "Error: invalid config provided: cannot set hostname when running in the host UTS"
+    cannot = classify("cannot", f"✖ alacritty  failed — distrobox create: {hostname} namespace")
     assert cannot.returncode == 2
     assert cannot.stdout.splitlines() == [
-        "TRACER_NESTED_INFEASIBLE step=distrobox-create "
-        "detail=distrobox create: cannot reach the engine"
+        f"TRACER_NESTED_INFEASIBLE step=distrobox-create detail=distrobox create: {hostname} "
+        "namespace"
     ]
+    # E2: a failed create without a known environment error is the product's failure.
+    argv = classify("argv", "✖ alacritty  failed — distrobox create: unknown flag: --bogus")
+    assert argv.returncode == 1
+    assert argv.stdout.splitlines() == [
+        "TRACER_NESTED_BUILD_FAILED detail=failed — distrobox create: unknown flag: --bogus"
+    ]
+    for name, text in (
+        ("perm", "distrobox create: Operation not permitted"),
+        ("uidmap", "distrobox create: cannot find newuidmap"),
+        ("ns", "distrobox create: cannot set up namespace"),
+    ):
+        assert classify(name, f"✖ alacritty  failed — {text}").returncode == 2, name
     wrapped = classify(
         "wrapped",
         "✖ alacritty  failed — command failed (125): timeout 900 env\n"
         "             XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box\n"
         "✖ alacritty failed: command failed (125): timeout 900 env XDG_CACHE_HOME=/tmp/c "
-        "distrobox create --yes --name box",
+        "distrobox create --yes --name box: cannot set hostname when running in the host UTS "
+        "namespace",
     )
     assert wrapped.returncode == 2, wrapped.stdout  # 24-08 nested run #2: the row wraps
     assert wrapped.stdout.splitlines() == [
         "TRACER_NESTED_INFEASIBLE step=distrobox-create detail=command failed (125): timeout 900 "
-        "env XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box"
+        "env XDG_CACHE_HOME=/tmp/c distrobox create --yes --name box: cannot set hostname when "
+        "running in the host UTS namespace"
     ]
     broken = classify("broken", "✖ alacritty  failed — cargo build: exit 101")
     assert broken.returncode == 1
@@ -2617,7 +2692,7 @@ def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
         _nested_script(
             'printf "Summary — 1 installed\\n" > "$SCRATCH/none.txt"; '
             'nested_classify_alacritty "$SCRATCH/none.txt"',
-            real=("nested_classify_alacritty", "nested_infeasible"),
+            real=("nested_classify_alacritty", "nested_environment_error", "nested_infeasible"),
         ),
         tmp_path / "absent",
     )
@@ -2675,6 +2750,24 @@ def test_nested_uninstall_check(tmp_path: Path) -> None:
         "TRACER_NESTED_UNINSTALL_LEFT path=.terminfo/a",
         "TRACER_NESTED_UNINSTALL_LEFT path=.local/bin/alacritty",
     ]
+
+
+def test_nested_uninstall_check_looks_at_the_recorded_files_only(tmp_path: Path) -> None:
+    """E9: a surviving `.terminfo/a` directory is not a recorded path."""
+    scratch = tmp_path / "home"
+    (scratch / ".terminfo" / "a").mkdir(parents=True)
+    script = _nested_script(
+        "nested_uninstall_ok",
+        real=("nested_uninstall_ok",),
+        stubs='exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+    )
+    clean = _run(script, scratch)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_NESTED_UNINSTALL_OK"]
+    (scratch / ".terminfo" / "a" / "alacritty").touch()
+    left = _run(script, scratch)
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == ["TRACER_NESTED_UNINSTALL_LEFT path=.terminfo/a/alacritty"]
 
 
 def test_nested_is_wired_into_main_and_usage() -> None:
