@@ -194,3 +194,62 @@ CYCLE_SUMMARY: current_high=4 current_actionable=14
 - **Not verified.** The Debian shell fix, the curl retry flags on real hosts, the nested podman target, whether the real `u` follow-up changes an Alacritty region in practice, and herdr 0.9.5 behavior beyond the copied `integration.rs`/`plugin.rs` were not exercised (orchestrator checkpoints in 24-08). `dataclass` handling of the `HookPair.standalone` default (an immutable mapping default) was not run; the executor will meet it immediately.
 - **Checked and found sound.** The cycle-1 HIGH fixes in the plans (engine failure contract, node probe, Debian `-s /bin/bash`, the `test_makefile.py` guard, standalone map, registry pins, Alacritty pins); the 24-09 download-then-run semantics and digest-preserving capture; the zsh removal from the distro tables; wave and `depends_on` order for waves 1 to 5; host safety (no executor task runs podman, distrobox, the installer or the harness; container runs stay orchestrator checkpoints).
 - **Host safety of this run.** No make target, installer, podman or distrobox command was run; tools launched were opencode (the lanes), ripgrep, read-only git, `.venv/bin/python` on a scratch TOML document, and `gsd-tools drift-guard`.
+
+## Cycle 3 — reviewed at HEAD 33e0418
+
+Cycle 3 (the last) checks the plan revision of `33e0418` (made from the cycle-2 section above) and its rebase on 23.2 commit `eb893c0`: were R2-01..R2-18 implemented correctly, what did the round-2 revision and the rebase introduce, and only MEDIUM/LOW items that are actionable inside the plans were raised. SPEC R4 and CONTEXT D-04 carry the dated 2026-11-13 amendments for R2-12.
+
+### Lane run facts
+
+Raw output is under `.planning/phases/24-onboarding-through-the-skill-and-e2e/.review-diagnostics/` in `20261113T0314..-plan-review-cycle3/` and the first attempt's sibling directory (gitignored). opencode was launched directly (stdin `/dev/null`, `timeout 2700`), three lanes from the start.
+
+- First attempt on referee-one (probe OK): all three lanes died after a few tool calls with `Combo has no executable targets` (rc 1, no review). Not counted.
+- Failover: referee-one failed its re-probe, referee-two answered, and all three lanes were re-run on `router-env/my-referee-two`: `lane-a` (24-01, 24-02, 24-03) rc 0, 10.1 KB; `lane-b` (24-04, 24-05, 24-09) rc 0, 10.6 KB; `lane-c` (24-06, 24-07, 24-08) rc 0, 10.8 KB. Every lane wrote a full review.
+- One reviewer model in effect, so the single-reviewer consensus gate is skipped. The lanes raised no HIGH; this agent re-checked each cited premise against source (below) and hunted for a HIGH of its own.
+- After the lanes: `~/.claude/gsd-core` and `~/.claude/.gsd-source` are absent; `git status --short` shows only the pre-existing untracked files; no lane process of ours is running (opencode processes of another session exist and were not touched).
+
+### Condensed lane review
+
+**lane-a (24-01, 24-02, 24-03).** R2-01 IMPLEMENTED (the pinned mixed-rejection test moves to two non-`os` rejections, and the old fixture gets a second assertion for its new single-category reason), R2-09 IMPLEMENTED (`meets_minimum("22.12.0-rc.1", "22.12.0")` is False, confirmed with repo code), R2-02 IMPLEMENTED (ancestor walk in `remove_key`'s TOML branch, deepest first, stopping at a present or non-empty ancestor), R2-05 IMPLEMENTED (`DYNAMIC_KEYS` allowlist plus a tampered-ledger test), R2-06, R2-07, R2-08 IMPLEMENTED. The `eb893c0` rebase does not conflict with 24-02 (`_holds_no_setting` deletes a created TOML file only when blank, which the herdr created-file test needs). New: two LOWs.
+
+**lane-b (24-04, 24-05, 24-09).** R2-10 IMPLEMENTED (eight-count rerun gate that never consults `dependency_failures_explained`), R2-12 (24-05 half) IMPLEMENTED as a deliberate split (rebuild proof here, route tests in 24-06), R2-03 IMPLEMENTED (`file_runner` runs the script as `bash <file>`; the `executors.shell_path` patch seam exists), R2-11 IMPLEMENTED (`seen.clear()` per attempt), R2-18 IMPLEMENTED; the `eb893c0` residue rebase in 24-04 is correct. New: three LOWs.
+
+**lane-c (24-06, 24-07, 24-08).** R2-04 IMPLEMENTED, R2-12 (24-06 half) IMPLEMENTED (SPEC R4, the prohibition row and D-04 amended; two route tests drive the real follow-up), R2-13 IMPLEMENTED, R2-14 IMPLEMENTED (ledger dropped only when every recorded file is gone), the `eb893c0` heads-up IMPLEMENTED (24-07 Task 3 no longer edits `removal_order`; the sort at `app.py:601` keys on `postinstall`), R2-15, R2-16, R2-17 IMPLEMENTED. New: two LOWs.
+
+### Source-grounded adjudication
+
+All lane premises were re-checked against HEAD. Confirmed: `_empty_tree` recurses only into dicts (`agent_settings.py:886-888`), so a created JSON file left as `{"hooks": {"SessionStart": []}}` is not deleted by the product and only 24-04's probe rule tolerates it; `_revert_file` (`agent_settings.py:994-1012`) reads no ledger today while `_revert_results` and `_revert_once` handle `LedgerUntrusted`; `tests/test_update.py:652` (`test_installer_owned_update_passes_the_release_resolver`) records the resolver handed to the update, which 24-09 now wraps; 24-03's RED step says "add the four tests" while its behavior block lists six; 24-08 line 164 routes `TRACER_SETTINGS_*` only to 24-07 or 24-04 although the `F` line now fires on residue the revert itself left. The `app.py` line anchors in 24-07's context are dated `c043bd1` already (the shortcut comment is now at `:694-695`), so that lane item is REJECTED as a change.
+
+This agent also re-derived, against source, the parts of the round-2 fixes that could still fail execution, and found none: the sandbox refusals (`tests/sandbox.py:360-364, 389-390`) do not apply to `bash <file>` under tmp_path (`_check_file`, `:187-199`); the `PATH=` export the production script starts with is replaced by the patched `executors.shell_path`, so fakes on that dir are what the script runs; for the herdr sidebar revert the ancestor walk gives the expected `{'agent_panel_sort': 'spaces'}` after the last created table goes, and an explicit user `[ui.sidebar]` header parses as present and is kept; `meets_minimum` and `_perform`'s single call site match the plan text. No HIGH was found.
+
+### Source-grounding pass (`plan_review.source_grounding`, authority `grep`)
+
+`drift-guard authority --raw` printed `intel`. Tally over the backticked symbols of the nine plans' `<context>` and actions, excluding "Artifacts this phase produces": **VERIFIED 566, NEW 219, UNCHECKABLE 81, MISSING 0, AMBIGUOUS 0**. The seventeen names the script first listed as unresolved are this phase's own new names (`RUN_ROOT`, `HERDR_CONFIG_PATH`, `DISTRO`, `TESTER_HOME`, `TESTER_USER`, `nested_herdr_shell_ok`, `file_runner`, `capturing_resolver`, the `update_route` test-name stem) or upstream herdr/Rust, config-key and output-token names (`terminal.shell_mode`, `integration_status`, `plugin_list`, `parse_integration_target`, `_MISCONFIGURED`, `_UNEXPECTED`).
+
+### Fact-drift pass (advisory)
+
+`drift-guard phase-status --phase 24`: `lag` (STATE `Ready to execute`, ROADMAP `Not started`; STATE.md is the authority). Wave and `depends_on` order unchanged and sound (waves 1 to 5; 24-09 wave 4 after 01, 05, 07; 24-08 wave 5 after all nine). SPEC R4, its prohibition row and CONTEXT D-04 now agree with 24-05 and 24-06. The only drift left is cosmetic: dated line anchors in 24-07's context block predate `eb893c0`.
+
+## Cycle 3 Consensus Summary
+
+Every cycle-2 finding R2-01..R2-18 is IMPLEMENTED in the plans as required (R2-12 through the dated SPEC/CONTEXT amendment plus the 24-06 route tests, as decided by the planner). Nothing from earlier cycles remains unresolved. New items, all LOW and each a one-line plan edit:
+
+| ID | Plan(s) | Severity | Source | Verdict | Required plan change |
+|----|---------|----------|--------|--------|----------------------|
+| R3-01 | 24-04 (Task 2) | LOW | lane-b N-04-1 | CONFIRMED | Reword the "backstop" sentence in the D-28 rebased rule: `agent_settings._empty_tree` ignores lists, so the product deletes a created JSON file left with empty objects only; the probe rule is the only guard for empty arrays, and the full rule stays. |
+| R3-02 | 24-04 (Task 2) | LOW | lane-b N-04-2 | CONFIRMED | Add `git show eb893c0 -- scripts/container-e2e-verify.sh` to Task 2's `read_first` (the `F <agent> <residue>` line it parses comes from that commit) and refresh the context note for `settings_probe_revert`. |
+| R3-03 | 24-09 (Task 2) | LOW | lane-b N-09-1 | PARTIAL | Name `tests/test_update.py::test_installer_owned_update_passes_the_release_resolver` (`:652`, it records what `release_resolver` was handed) in Task 2's behavior block as a test that changes with `_update_installer_owned`'s `resolve_tag` to `resolve_release` signature change (no test calls `_update_installer_owned` directly). |
+| R3-04 | 24-02 (Task 2) | LOW | lane-a NEW-A1 | CONFIRMED | Build the dynamic revert table inside `_revert_once` (where `LedgerUntrusted` is handled), or wrap the fresh ledger read in `_revert_file`, so a ledger that turns untrusted between reads cannot raise uncaught on the full-uninstall path. |
+| R3-05 | 24-03 (Task 1) | LOW | lane-a NEW-A2 | CONFIRMED | Change the RED step's "add the four tests" to "add the six tests" (the behavior block lists six since round 2). |
+| R3-06 | 24-08 (Task 3) | LOW | lane-c C3-01 | CONFIRMED | Route `TRACER_SETTINGS_FILE_LEFT` residue to 24-02 as well when the `agent_settings` revert (`_revert_once`, `_holds_no_setting`) left the residue, beside 24-07 (order) and 24-04 (probe misread). |
+| R3-07 | 24-07 (context) | LOW | lane-c C3-02 | REJECTED | The context block's `app.py` line numbers are already labelled "from c043bd1" and every anchor is also named by symbol; no change needed. |
+
+CYCLE_SUMMARY: current_high=0 current_actionable=6
+
+## Cycle 3 Verification coverage
+
+- **Lane coverage.** All nine plans were read by a lane (24-01..24-03 lane-a, 24-04, 24-05, 24-09 lane-b, 24-06..24-08 lane-c) against the cycle-2 findings and the source; the first attempt on referee-one produced no review and was re-run on referee-two.
+- **Adjudicated against source.** Every cited premise behind the six actionable items and the rejected one was re-checked at `33e0418` (`agent_settings.py`, `app.py`, `tests/test_update.py`, the plans' own text). The R2-03 and R2-02 fixes were re-derived against `tests/sandbox.py` and the guard's key-set comparison rather than taken from the plans' ledgers. This agent found no HIGH of its own; the lanes raised none.
+- **Not verified.** Container behavior (Debian and Arch images, nested podman, curl retry flags on real hosts), herdr 0.9.5 beyond the copied `integration.rs` and `plugin.rs`, and the `HookPair.standalone` default under `dataclass` were not exercised; they are orchestrator checkpoints in 24-08 or surface at the first executor RED.
+- **Checked and found sound.** The cycle-2 fixes in the plans (resolver pin, nested-TOML ancestor walk, `DYNAMIC_KEYS` allowlist, node prerelease, skill gates, rerun gate, file-runner tracer, per-attempt release capture, record-time release validation, `test_model` tuple, update-route tests and SPEC/CONTEXT amendments, 24-07 ledger drop, 24-08 blocked outcome and UAT ledger path); the `eb893c0` rebase of 24-07 and 24-04; wave and `depends_on` order for waves 1 to 5; host safety (no executor task runs podman, distrobox, the installer or the harness; container runs stay orchestrator checkpoints).
+- **Host safety of this run.** No make target, installer, podman or distrobox command was run; the tools launched were opencode (the lanes), ripgrep, read-only git, and `gsd-tools drift-guard`.
