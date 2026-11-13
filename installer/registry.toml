@@ -1876,6 +1876,68 @@ archive = "zip"
 kind = "brew"
 formula = "deno"
 
+# Verified 2026-11-13: SDKMAN's own installer (get.sdkman.io, sdkman.io/install "Prerequisites")
+# stops with "Looking for unzip... Not found" and exit 1 when zip or unzip is missing; the
+# Phase 24 debian:13 e2e hit it, and java/gradle/maven/groovy/springbootcli then read
+# "dependency failed". zip and unzip are modelled like zsh/git: a system-tier prerequisite,
+# owner_probes so a distro-owned copy is recognised, a package per native manager (names
+# identical on Fedora, Debian and Arch: `zip`, `unzip`) plus the Homebrew formulas of the same
+# names (`brew info --json=v2 unzip zip`: unzip 6.0, zip 3.0). The native method outranks brew
+# (installer/resolve.py _RANK), so a Debian/Fedora/Arch host gets the exact sudo handoff and
+# sdkman reads "blocked: needs unzip" until the user runs it; macOS and immutable hosts
+# resolve through brew. Both ship with the macOS base system, so is_installed (cmd on PATH)
+# keeps them out of the plan there. No vendor installer, so no `paths`/`remove`: removal
+# derives from the manager (L1).
+[[tool]]
+id = "unzip"
+name = "Unzip"
+category = "dev"
+cmd = "unzip"
+priority = "P1"
+audience = "both"
+tier = "system"
+verified = 2026-11-13
+desc = "Extracts .zip archives; SDKMAN's installer refuses to run without it."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+[[tool.method]]
+kind = "dnf"
+package = "unzip"
+[[tool.method]]
+kind = "apt"
+package = "unzip"
+[[tool.method]]
+kind = "pacman"
+package = "unzip"
+[[tool.method]]
+kind = "brew"
+formula = "unzip"
+
+# Verified 2026-11-13: the zip half of SDKMAN's prerequisite pair; see the unzip entry above for
+# the evidence, package names and method precedence.
+[[tool]]
+id = "zip"
+name = "Zip"
+category = "dev"
+cmd = "zip"
+priority = "P1"
+audience = "both"
+tier = "system"
+verified = 2026-11-13
+desc = "Creates .zip archives; SDKMAN's installer refuses to run without it."
+owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+[[tool.method]]
+kind = "dnf"
+package = "zip"
+[[tool.method]]
+kind = "apt"
+package = "zip"
+[[tool.method]]
+kind = "pacman"
+package = "zip"
+[[tool.method]]
+kind = "brew"
+formula = "zip"
+
 # Verified 2026-09-06 (Tier-3 container, colima+docker, ubuntu:24.04; SDKMAN
 # script 5.23.0 / native 0.7.34 — see 06-01-SUMMARY.md for the verbatim
 # transcript): on a clean bootstrap performed by this project's own installer,
@@ -1901,8 +1963,10 @@ cmd = "sdkman-init.sh"
 priority = "P1"
 audience = "both"
 tier = "system"
-verified = 2026-11-04
+verified = 2026-11-13
 desc = "User-space manager for Java and JVM tools; after sourcing sdkman-init.sh it exposes the sdk shell function."
+# Verified 2026-11-13: requires unzip and zip, declared as catalog tools (see the unzip entry).
+requires = ["unzip", "zip"]
 [[tool.method]]
 kind = "script"
 url = "https://get.sdkman.io?ci=true"
