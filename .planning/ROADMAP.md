@@ -567,7 +567,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 24.2-01-PLAN.md — Core: the closed table, slot grid, validators (F6), lock-protected `schedules.json`, run lock, log reader and Last cell, clean unit PATH (F4), total update result table (F7) (wave 1)
+- [ ] 24.2-01-PLAN.md — Core: the closed table, slot grid, validators (F6), lock-protected `schedules.json`, the shared `ScheduleContext`/`context_for`, run lock, log reader and Last cell, clean unit PATH (F4), total update result table (F7) (wave 1)
 - [ ] 24.2-02-PLAN.md — Stdlib schedule runner: run lock, start and result lines, log cap under a log lock (F5), tmp/cache/update jobs (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
