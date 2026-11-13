@@ -100,7 +100,7 @@ class ChecksumMismatchScreen(ModalScreen[str | None]):
 
     Letter-prefixed ListItem ids (`opt-retry`) because a raw value like a
     leading-digit id is an invalid Textual identifier — the same convention
-    TimePickerScreen uses.
+    LinkModeScreen uses.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [

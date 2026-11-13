@@ -27,7 +27,7 @@ from installer.pnpm_globals import PNPM_SPLIT_GROUP, NodeGlobal, NodeGlobalsRepo
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.schedules import ReconcileReport
 from installer.session import Disposition, PlanRow, RowOutcome
-from installer.systemd_daemon import DaemonState, TimerStateCache
+from installer.systemd_daemon import DaemonState
 from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, plan_removal, remove_paths
 from installer.update import UpdateOutcome
@@ -41,14 +41,12 @@ from installer.wizard_app import (
     DiskPressureProbed,
     DoctorScreen,
     GlobalsReinstalled,
-    JobStatesRead,
     LinkModeScreen,
     MutationLock,
     NavScreen,
     PolicyInputs,
     RefreshPublished,
     ScheduleDefaultsApplied,
-    TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
@@ -1622,7 +1620,6 @@ def _policy(
     active: bool = False,
     apply: Callable[[], PolicyResult] = _policy_result,
     background: bool = False,
-    set_schedule: Callable[[int, int], PolicyResult] | None = None,
 ) -> Policy:
     return Policy(
         id=policy_id,
@@ -1632,7 +1629,6 @@ def _policy(
         apply=apply,
         remove=_policy_result,
         log_path=tmp_path / f"{policy_id}.log" if background else None,
-        set_schedule=set_schedule,
     )
 
 
@@ -1819,32 +1815,15 @@ async def test_late_doctor_and_schedule_results_render_nothing_during_shutdown(
             )
 
 
-async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
-    """A mutation that starts while a picker is open is refused at the pick."""
-    scheduled: list[tuple[int, int]] = []
+async def test_m_is_refused_at_its_mutation_point(tmp_path: Path):
+    """A mutation that starts while the link-mode picker is open is refused at the pick."""
     modes: list[str] = []
-
-    def set_schedule(hour: int, minute: int) -> PolicyResult:
-        scheduled.append((hour, minute))
-        return _policy_result()
-
     app, _service = _policy_app(
-        tmp_path,
-        [_policy(tmp_path, "job", active=True, set_schedule=set_schedule)],
-        HeldRemover(),
-        set_link_mode=modes.append,
+        tmp_path, [_policy(tmp_path, "job", active=True)], HeldRemover(), set_link_mode=modes.append
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         status = app.view("policies").status
-        await pilot.press("t")
-        assert isinstance(app.screen, TimePickerScreen)
-        app.begin_mutation(MutationHolder.REMOVAL)
-        await pilot.press("down", "down", "down", "enter")
-        assert (status.text, status.severity) == (_REFUSAL, Severity.WARN)
-        assert scheduled == []
-        app.end_mutation()
-        status.clear()
         await pilot.press("m")
         assert isinstance(app.screen, LinkModeScreen)
         app.begin_mutation(MutationHolder.REMOVAL)
@@ -1854,20 +1833,18 @@ async def test_t_and_m_are_refused_at_their_mutation_point(tmp_path: Path):
         app.end_mutation()
 
 
-@pytest.mark.parametrize("key", ["t", "m"])
-async def test_t_and_m_are_refused_before_their_picker(tmp_path: Path, key: str):
-    """C-17: while a mutation runs, t and m refuse at once on Policies; no
-    picker opens first."""
+async def test_m_is_refused_before_its_picker(tmp_path: Path):
+    """C-17: while a mutation runs, m refuses at once on Policies; no picker opens first."""
     app, _service = _policy_app(
         tmp_path,
-        [_policy(tmp_path, "job", active=True, set_schedule=lambda _h, _m: _policy_result())],
+        [_policy(tmp_path, "job", active=True)],
         HeldRemover(),
         set_link_mode=lambda _mode: None,
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         app.begin_mutation(MutationHolder.UPDATE)
-        await pilot.press(key)
+        await pilot.press("m")
         await pilot.pause()
         assert app.screen is app.view("policies")
         status = app.view("policies").status
@@ -1950,11 +1927,6 @@ def _tag(calls: list[str], tag: str) -> Callable[[], PolicyResult]:
 def _matrix_app(
     tmp_path: Path, remover: HeldRemover, calls: list[str]
 ) -> tuple[UnifiedApp, FrozenStateService]:
-    def schedule(hour: int, minute: int) -> PolicyResult:
-        del hour, minute
-        calls.append("schedule")
-        return _policy_result()
-
     def reinstall(packages: Sequence[str]) -> tuple[str, ...]:
         del packages
         calls.append("reinstall")
@@ -1969,7 +1941,6 @@ def _matrix_app(
         [
             _policy(tmp_path, "plain", apply=_tag(calls, "plain")),
             _policy(tmp_path, "job", apply=_tag(calls, "job"), background=True),
-            _policy(tmp_path, "sched", active=True, set_schedule=schedule),
         ],
         remover,
         set_link_mode=lambda mode: calls.append("mode"),
@@ -2006,12 +1977,6 @@ async def _press_policy(policy_id: str, app: UnifiedApp, pilot: Any, _again: boo
     await pilot.press("space")
 
 
-async def _press_t(app: UnifiedApp, pilot: Any, _again: bool) -> None:
-    await _open_view(app, pilot, "policies")
-    _policy_cursor(app, "sched")
-    await pilot.press("t", "down", "down", "down", "enter")
-
-
 async def _press_m(app: UnifiedApp, pilot: Any, _again: bool) -> None:
     await _open_view(app, pilot, "policies")
     await pilot.press("m", "down", "enter")
@@ -2023,7 +1988,6 @@ _MATRIX: dict[str, tuple[str, str, Callable[[UnifiedApp, Any, bool], Any]]] = {
     "doctor_r": ("doctor", "reinstall", lambda a, p, n: _press_doctor("r", a, p, n)),
     "policy_plain": ("policies", "plain", lambda a, p, n: _press_policy("plain", a, p, n)),
     "policy_job": ("policies", "job", lambda a, p, n: _press_policy("job", a, p, n)),
-    "t": ("policies", "schedule", _press_t),
     "m": ("policies", "mode", _press_m),
 }
 
@@ -2307,68 +2271,18 @@ async def test_doctor_early_returns_end_with_a_pinned_pass_count(tmp_path: Path,
         await settle(app, pilot)
 
 
-# -- 21-18: the systemd-backed state is read on a worker, never on the event loop --
-
-
-def _job_policy(
-    tmp_path: Path, is_active: Callable[[], bool], owned: Callable[[], bool] | None = None
-) -> Policy:
-    cache = TimerStateCache(lambda: DaemonState.INACTIVE)
-    base = _policy(tmp_path, "jobstate")
-    return replace(base, is_active=is_active, owned=owned, state_cache=cache)
-
-
 def _state_text(app: UnifiedApp, policy_id: str) -> str:
     return app.view("policies").query_one(DataTable[Any]).get_cell(policy_id, "state").plain
 
 
-async def test_the_job_state_is_read_off_the_event_loop(tmp_path: Path):
-    threads: list[threading.Thread] = []
-
-    def is_active() -> bool:
-        threads.append(threading.current_thread())
-        return True
-
-    def owned() -> bool:
-        threads.append(threading.current_thread())
-        return True
-
-    app, _service = _policy_app(tmp_path, [_job_policy(tmp_path, is_active, owned)], HeldRemover())
-    async with app.run_test(size=(120, 30)) as pilot:
-        await settle(app, pilot)
-        assert len(threads) >= 2
-        assert threading.main_thread() not in threads
-        assert _state_text(app, "jobstate") == "● [on]"
-
-
-async def test_an_unreadable_job_state_shows_the_error(tmp_path: Path):
-    def is_active() -> bool:
-        raise OSError("systemd user manager not reachable")
-
-    app, _service = _policy_app(tmp_path, [_job_policy(tmp_path, is_active)], HeldRemover())
-    async with app.run_test(size=(120, 30)) as pilot:
-        await settle(app, pilot)
-        status = app.view("policies").status
-        assert _state_text(app, "jobstate") == ""
-        assert (status.text, status.severity) == (
-            "Could not read the policy state: systemd user manager not reachable.",
-            Severity.ERROR,
-        )
-
-
-@pytest.mark.parametrize("kind", ["job", "sync"])
-async def test_a_failed_policy_read_does_not_overwrite_another_status(tmp_path: Path, kind: str):
+async def test_a_failed_policy_read_does_not_overwrite_another_status(tmp_path: Path):
     """RR-03: a read that keeps failing (no user bus) shows its error over an
     empty status or its own earlier error, never over another writer's result."""
 
     def is_active() -> bool:
         raise OSError("the systemd user manager could not be reached")
 
-    policy = (
-        _job_policy(tmp_path, is_active)
-        if kind == "job"
-        else replace(_policy(tmp_path, "tweak"), is_active=is_active)
-    )
+    policy = replace(_policy(tmp_path, "tweak"), is_active=is_active)
     app, _service = _policy_app(tmp_path, [policy], HeldRemover())
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -2404,99 +2318,6 @@ async def test_an_undecodable_policy_read_shows_the_error(tmp_path: Path):
         assert _state_text(app, "tweak") == ""
         assert status.text.startswith("Could not read the policy state:")
         assert status.severity is Severity.ERROR
-
-
-class _SpiedReads:
-    """Records every JobStatesRead a PoliciesScreen posts, then forwards it."""
-
-    def __init__(self, screen: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        self.seen: list[JobStatesRead] = []
-        forward = screen.post_message
-
-        def spy(message: Any) -> bool:
-            if isinstance(message, JobStatesRead):
-                self.seen.append(message)
-            return cast(bool, forward(message))
-
-        monkeypatch.setattr(screen, "post_message", spy)
-
-
-class _ArmedProbe:
-    """is_active: the armed call holds on `release` and answers `first`; others answer `later`."""
-
-    def __init__(self, first: bool, later: bool) -> None:
-        self.first, self.later = first, later
-        self.calls = 0
-        self.armed = False
-        self.held = threading.Event()
-        self.release = threading.Event()
-        self._lock = threading.Lock()
-
-    def __call__(self) -> bool:
-        with self._lock:
-            hold = self.armed
-            self.armed = False
-            self.calls += 1
-        if not hold:
-            return self.later
-        self.held.set()
-        if not self.release.wait(timeout=10):
-            raise TimeoutError("the job read was never released")
-        return self.first
-
-
-async def test_a_superseded_job_state_read_is_discarded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    probe = _ArmedProbe(first=True, later=False)
-    probe.armed = True
-    app, _service = _policy_app(tmp_path, [_job_policy(tmp_path, probe)], HeldRemover())
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await wait_until(pilot, probe.held.is_set)
-            spy = _SpiedReads(app.view("policies"), monkeypatch)
-            await app.show_view("system")
-            await app.show_view("policies")
-            await settle(app, pilot)
-            assert _state_text(app, "jobstate") == "○ [off]"
-            before = len(spy.seen)
-            probe.release.set()
-            await wait_until(pilot, lambda: len(spy.seen) > before)
-            await pilot.pause()
-            await settle(app, pilot)
-            assert _state_text(app, "jobstate") == "○ [off]"
-            assert app.view("policies").status.text == ""
-        finally:
-            probe.release.set()
-
-
-async def test_a_publish_keeps_the_job_row_while_it_is_re_read(tmp_path: Path):
-    """C-21: a publish re-reads the job row on the worker but keeps its last
-    answer meanwhile; only an entry blanks it until the read answers."""
-    probe = _ArmedProbe(first=True, later=True)
-    app, service = _policy_app(tmp_path, [_job_policy(tmp_path, probe)], HeldRemover())
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await settle(app, pilot)
-            assert _state_text(app, "jobstate") == "● [on]"
-            probe.armed = True
-            before = service.passes
-            app.request_refresh()
-            await wait_until(pilot, probe.held.is_set)
-            await wait_until(pilot, lambda: service.passes == before + 1)
-            await pilot.pause()
-            assert _state_text(app, "jobstate") == "● [on]"
-            probe.release.set()
-            await settle(app, pilot)
-            probe.held.clear()
-            probe.release.clear()
-            probe.armed = True
-            await app.show_view("system")
-            await app.show_view("policies")
-            await wait_until(pilot, probe.held.is_set)
-            assert _state_text(app, "jobstate") == ""
-        finally:
-            probe.release.set()
 
 
 # -- 21-18: a toggle ends with one pass; a mutation completion supersedes older reads --
@@ -2555,114 +2376,6 @@ async def test_a_failed_toggle_still_requests_a_pass(tmp_path: Path):
             Severity.ERROR,
         )
         assert service.passes == before + 1
-
-
-@pytest.mark.parametrize("mutation", ["toggle", "schedule_defaults"])
-async def test_a_mutation_completion_supersedes_an_in_flight_job_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
-):
-    # Reads answer OFF until the mutation lands, then ON; the armed read starts
-    # before the mutation completes and answers OFF after it did.
-    probe = _ArmedProbe(first=False, later=False)
-    release_mutation = threading.Event()
-
-    def mutate() -> None:
-        if not release_mutation.wait(timeout=10):
-            raise TimeoutError("the mutation was never released")
-        probe.later = True
-
-    def held_apply() -> PolicyResult:
-        mutate()
-        return _policy_result()
-
-    def held_default() -> ReconcileReport:
-        mutate()
-        return ReconcileReport()
-
-    policy = replace(
-        _job_policy(tmp_path, probe), apply=held_apply, log_path=tmp_path / "jobstate.log"
-    )
-    kwargs: dict[str, Any] = {}
-    service = held_service(tmp_path, [])
-    if mutation == "schedule_defaults":
-        kwargs = {"schedule_defaults": held_default}
-    else:
-        service.release.set()
-    app, _ = _policy_app(tmp_path, [policy], HeldRemover(), service=service, **kwargs)
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await wait_until(pilot, lambda: _state_text(app, "jobstate") == "○ [off]")
-            if mutation == "toggle":
-                await settle(app, pilot)
-                service.release.clear()  # the toggle's follow-up pass stays unpublished
-            spy = _SpiedReads(app.view("policies"), monkeypatch)
-            if mutation == "toggle":
-                await pilot.press("space")
-                await wait_until(pilot, lambda: app.mutation_in_flight)
-            probe.armed = True
-            await app.show_view("system")
-            await app.show_view("policies")
-            await wait_until(pilot, probe.held.is_set)
-            release_mutation.set()
-            await wait_until(pilot, lambda: not app.mutation_in_flight)
-            await wait_until(pilot, lambda: _state_text(app, "jobstate") == "● [on]")
-            probe.release.set()
-            await wait_until(
-                pilot, lambda: any(m.states == {"jobstate": (False, False)} for m in spy.seen)
-            )
-            await pilot.pause()
-            assert _state_text(app, "jobstate") == "● [on]"
-            service.release.set()
-            await settle(app, pilot)
-            assert _state_text(app, "jobstate") == "● [on]"
-        finally:
-            release_mutation.set()
-            probe.release.set()
-            service.release.set()
-
-
-async def test_a_schedule_setup_still_supersedes_an_in_flight_job_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    # T-21-52: a read begun before the schedule setup finished must not repaint
-    # its (stale) answer over the repaint the setup's completion asked for.
-    probe = _ArmedProbe(first=True, later=False)
-    release_mutation = threading.Event()
-
-    def held_default() -> ReconcileReport:
-        if not release_mutation.wait(timeout=10):
-            raise TimeoutError("the mutation was never released")
-        return ReconcileReport()
-
-    service = held_service(tmp_path, [])
-    app, _ = _policy_app(
-        tmp_path,
-        [_job_policy(tmp_path, probe)],
-        HeldRemover(),
-        service=service,
-        schedule_defaults=held_default,
-    )
-    async with app.run_test(size=(120, 30)) as pilot:
-        try:
-            await wait_until(pilot, lambda: _state_text(app, "jobstate") == "○ [off]")
-            screen = app.view("policies")
-            spy = _SpiedReads(screen, monkeypatch)
-            probe.armed = True
-            await app.show_view("system")
-            await app.show_view("policies")
-            await wait_until(pilot, probe.held.is_set)
-            release_mutation.set()
-            await wait_until(pilot, lambda: not app.mutation_in_flight)
-            probe.release.set()
-            await wait_until(
-                pilot, lambda: any(m.states == {"jobstate": (True, False)} for m in spy.seen)
-            )
-            await pilot.pause()
-            assert _state_text(app, "jobstate") == "○ [off]"
-        finally:
-            release_mutation.set()
-            probe.release.set()
-            service.release.set()
 
 
 # -- Doctor joins the screen family (plan 21-19) --

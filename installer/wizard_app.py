@@ -188,7 +188,7 @@ class PolicyInputs:
     apply/remove closures. The composition root builds these from the pure core.
 
     `disk_pressure` is the ONE seam the route's single probe travels through:
-    UnifiedApp hands it to both DoctorScreen and PoliciesScreen, so no second
+    UnifiedApp hands it to the Doctor and the Schedules view, so no second
     field or UnifiedApp parameter carries the same closure."""
 
     policies: list[Policy]
@@ -196,7 +196,7 @@ class PolicyInputs:
     set_link_mode: Callable[[str], None] | None = None
     disk_pressure: DiskPressureProbe | None = None
     # WR-10: the same seam reasoning as disk_pressure -- one closure, both
-    # the Doctor's durable disclosure and the Policies row's detail line.
+    # the Doctor's durable disclosure and the Schedules detail line.
     competing: CompetingProbe | None = None
 
 
@@ -212,10 +212,6 @@ class ScheduleInputs:
     competing: CompetingProbe | None = None
     now: Callable[[], datetime] = datetime.now
 
-
-# The l log-view toggle's tail length — a plain, bounded slice of the raw log,
-# never a re-parse into structured blocks (that is last_run_summary's own job).
-_LOG_TAIL_LINES = 20
 
 _NOTHING_TO_REINSTALL = "Nothing to reinstall — pnpm manages no globals here."
 # Distinct from _NOTHING_TO_REINSTALL on purpose: an unanswered `pnpm list -g`
@@ -299,35 +295,6 @@ class DiskPressureProbed(Message):
     TimerStateCache off the event loop, and the render path then reads the
     fresh answer through the non-blocking peek.
     """
-
-
-class CompetingProbed(Message):
-    """The Policies screen's competing-mechanism warm-up worker finished.
-
-    Carries nothing: the worker only fills the shared memo, and the detail
-    line then reads it through the non-blocking peek (WR-10).
-    """
-
-
-class JobStatesRead(Message):
-    """The Policies screen's threaded read of the systemd-backed rows finished.
-
-    `states` maps a policy id to (active, owned) for every row that read
-    cleanly; a row the worker could not read is absent. `generation` is the
-    read this answers: the handler drops any other, so a slow older read
-    finishing last cannot repaint a stale cell.
-    """
-
-    def __init__(
-        self,
-        generation: int,
-        states: dict[str, tuple[bool, bool]],
-        error: str | None,
-    ) -> None:
-        self.generation = generation
-        self.states = states
-        self.error = error
-        super().__init__()
 
 
 class PolicyToggled(Message):
@@ -2207,7 +2174,6 @@ def _read_failure(error: str) -> str:
 _DRIFT_DETAIL = (
     "Drift: this installer enabled it, but it is not active now. space applies it again."
 )
-_JOB_READ_INCOMPLETE = "the job state read did not complete"
 
 
 def _read_active_owned(policy: Policy) -> tuple[tuple[bool, bool] | None, str | None]:
@@ -2246,8 +2212,6 @@ class PoliciesScreen(AppScreen):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("space", "toggle_policy", "toggle policy", show=True, priority=True),
-        Binding("l", "toggle_log", "view log", show=True),
-        Binding("t", "pick_time", "set time", show=True),
         Binding("m", "pick_link_mode", "link mode", show=True),
     ]
     DEFAULT_CSS = """
@@ -2265,9 +2229,6 @@ class PoliciesScreen(AppScreen):
         self._policies = inputs.policies
         self._link_mode = inputs.link_mode
         self._set_link_mode = inputs.set_link_mode
-        # The SAME closure UnifiedApp hands the Doctor: one field, two screens.
-        self._disk_pressure = inputs.disk_pressure
-        self._competing = inputs.competing
         self.active_state: dict[str, bool] = {
             policy.id: policy.active for policy in inputs.policies
         }
@@ -2275,21 +2236,11 @@ class PoliciesScreen(AppScreen):
         self._drift: set[str] = set()
         # Settings rows whose keys all hold our values with no record: nothing to write.
         self._yours: set[str] = set()
-        # Bumped by every render and mutation completion that supersedes a
-        # job-state read in flight; JobStatesRead carries the one it began with.
-        self._job_state_generation = 0
         # Each policy's prerequisites as last read; no entry means not (yet) readable.
         self._missing: dict[str, tuple[str, ...]] = {}
         self._read_error: str | None = None
         self.error: str | None = None
         self.detail_text = ""
-        # True while the one-shot competing-mechanism warm-up worker runs.
-        self.competing_probing = False
-        # Explicit, not left to on_data_table_row_highlighted's own reset as the
-        # sole assignment point: an AttributeError would otherwise be reachable
-        # if action_toggle_log ever ran before any row-highlight event has fired
-        # (11-REVIEWS.md cycle 2 finding #12).
-        self._log_view: bool = False
 
     def compose_body(self) -> ComposeResult:
         yield Static("", id="link-mode-line")
@@ -2315,26 +2266,6 @@ class PoliciesScreen(AppScreen):
                 key=policy.id,
             )
         table.focus()
-        if self._competing is not None:
-            self.competing_probing = True
-            self._probe_competing_worker()
-
-    @work(thread=True, exclusive=True, group="policies-competing", exit_on_error=False)
-    def _probe_competing_worker(self) -> None:
-        """Warm the competing-mechanism memo off the event loop (WR-02/WR-10),
-        then ask for a repaint so the detail line appears."""
-        try:
-            probe = self._competing
-            if probe is not None:
-                with contextlib.suppress(OSError, ValueError, CommandError):
-                    probe()
-        finally:
-            self.post_message(CompetingProbed())
-
-    def on_competing_probed(self, _message: CompetingProbed) -> None:
-        self.competing_probing = False
-        if self.is_mounted:
-            self._set_detail(self._highlighted_policy())
 
     def _refresh_link_mode_line(self) -> None:
         line = self.query_one("#link-mode-line", Static)
@@ -2344,19 +2275,13 @@ class PoliciesScreen(AppScreen):
         line.update(f"PATH link mode: {self._link_mode()}  (press m to change)")
 
     def enter_view(self) -> None:
-        """An entry blanks the job rows until their worker read answers: the
-        last answer is from a previous visit. A publish keeps it (C-21)."""
-        for policy in self._policies:
-            if policy.state_cache is not None:
-                self._record_state(policy.id, None)
         self.state_refreshed()
 
     def state_refreshed(self) -> None:
         """Render every row from a fresh read of the machine (D-04, D-12).
 
         `enter_view` calls this on every entry and the app calls it on every
-        publish while Policies is on top. A job row keeps its last answer while
-        the worker re-reads it.
+        publish while Policies is on top.
         """
         if not self.is_mounted:
             return
@@ -2368,7 +2293,6 @@ class PoliciesScreen(AppScreen):
             table.update_cell(policy.id, "requires", self._requires_cell(policy), update_width=True)
         self._set_detail(self._highlighted_policy())
         self._refresh_link_mode_line()
-        self._start_job_state_read()
         if errors:
             self._show_read_error(errors[0])
         elif self._read_error is not None:
@@ -2378,15 +2302,15 @@ class PoliciesScreen(AppScreen):
     def _read_live_state(self, policy: Policy) -> str | None:
         """Re-read one policy's state; the error text when the read failed.
 
-        A state_cache policy is read on a worker (21-18); one without
-        is_active keeps the state its last toggle left. A failed read drops the
-        remembered answer: the row is never painted from a previous read.
+        A policy without is_active keeps the state its last toggle left. A failed
+        read drops the remembered answer: the row is never painted from a
+        previous read.
         """
         if policy.state is not None:
             state, error = run_live(policy.state)
             self._record_settings_state(policy.id, state)
             return error
-        if policy.is_active is None or policy.state_cache is not None:
+        if policy.is_active is None:
             return None
         read, error = _read_active_owned(policy)
         self._record_state(policy.id, read)
@@ -2414,47 +2338,6 @@ class PoliciesScreen(AppScreen):
             self._drift.add(policy_id)
         else:
             self._drift.discard(policy_id)
-
-    def _start_job_state_read(self) -> None:
-        """Supersede any job-state read in flight and start a fresh one."""
-        self._job_state_generation += 1
-        if any(policy.state_cache is not None for policy in self._policies):
-            self._read_job_states_worker(self._job_state_generation)
-
-    @work(thread=True, exclusive=True, group="policies-job-state", exit_on_error=False)
-    def _read_job_states_worker(self, generation: int) -> None:
-        """Read the systemd-backed rows off the event loop (WR-02)."""
-        states: dict[str, tuple[bool, bool]] = {}
-        error: str | None = _JOB_READ_INCOMPLETE
-        try:
-            errors: list[str] = []
-            for policy in self._policies:
-                if policy.state_cache is None:
-                    continue
-                read, failure = _read_active_owned(policy)
-                if read is not None:
-                    states[policy.id] = read
-                if failure is not None:
-                    errors.append(failure)
-            error = errors[0] if errors else None
-        finally:
-            self.post_message(JobStatesRead(generation, states, error))
-
-    def on_job_states_read(self, message: JobStatesRead) -> None:
-        if message.generation != self._job_state_generation:
-            return
-        if not self.is_mounted or not self.app.is_running:
-            return
-        table = self.query_one(DataTable[Any])
-        for policy in self._policies:
-            if policy.state_cache is not None:
-                self._record_state(policy.id, message.states.get(policy.id))
-                table.update_cell(
-                    policy.id, "state", self._state_cell(policy.id), update_width=True
-                )
-        self._set_detail(self._highlighted_policy())
-        if message.error is not None:
-            self._show_read_error(message.error)
 
     def _show_read_error(self, error: str) -> None:
         """Over an empty status or this screen's own earlier error only: another
@@ -2545,23 +2428,6 @@ class PoliciesScreen(AppScreen):
                 "Reads ON only once this installer has enabled it, so a"
                 " plugins=(git docker) you wrote by hand shows OFF and is left alone.",
             ),
-            "daemon:prune-tmpdir": (
-                "Runs scripts/prune-user-tmpdir.sh once a day via a macOS LaunchAgent,"
-                " deleting orphaned agent-runtime temp files.",
-                "Degrades gracefully without fd/rg — the script falls back to its own"
-                " find/grep search, just slower.",
-                "Disabling only unregisters the LaunchAgent: it never touches your temp"
-                " files directly, only through the unchanged script's own dry-run/apply"
-                " modes while the LaunchAgent is registered.",
-                "Press t to set the daily run time; press l to view the run log.",
-            ),
-            "daemon:prune-tmp-linux": (
-                "Deletes orphaned Bun runtime-cache files from the OS temp dir, every ten minutes.",
-                _LINGER_SENTENCE,
-                "Disabling only unregisters the timer and its unit files: it never deletes"
-                " temp files directly.",
-                "The daily time picker does not apply to this row.",
-            ),
             "cache-redirect:bun": (
                 f"Sets {env_redirect.BUN_CACHE_REDIRECT.variable} so Bun's transpiler cache"
                 " lands in ~/.cache/bun instead of the OS temp dir.",
@@ -2599,117 +2465,15 @@ class PoliciesScreen(AppScreen):
                 " enabling this Policy also wires that sourcing into your rc files"
                 " automatically, so it still works after your next new shell."
             )
-        # Both calls are already total/never-raising in installer/daemon.py itself
-        # (11-01's own mechanism-tier fix); this is a SECOND, independent guard
-        # directly around these two call sites, on the NORMAL render path (mount,
-        # row-highlight), not only the `l` toggle's own read — belt-and-suspenders
-        # against a future regression in that guarantee or an unanticipated
-        # malformed-input shape (11-REVIEWS.md cycle 2 finding #10).
-        if policy.log_path is not None:
-            try:
-                summary = daemon.last_run_summary(policy.log_path)
-            except (OSError, ValueError, UnicodeDecodeError):
-                summary = None
-            if summary is not None:
-                lines.append(summary)
-        if policy.set_schedule is not None and policy.read_schedule is not None:
-            try:
-                schedule = policy.read_schedule()
-            except (OSError, ValueError, UnicodeDecodeError):
-                schedule = None
-            if schedule is not None:
-                hour, minute = schedule
-                lines.append(f"scheduled daily at {hour:02d}:{minute:02d}")
-        if policy.id.startswith("daemon:"):  # the old Policies row; 24.2-12 deletes this branch
-            usage = _temp_usage_line(self._disk_pressure)
-            if usage is not None:
-                lines.append(usage)
-            competing = _competing_line(self._competing)
-            if competing is not None:
-                lines.append(competing)
         return "\n".join(lines)
 
     def _set_detail(self, policy: Policy | None) -> None:
-        if policy is not None and self._log_view and policy.log_path is not None:
-            self.detail_text = self._log_tail(policy.log_path)
-        else:
-            self.detail_text = "" if policy is None else self._policy_detail(policy)
+        self.detail_text = "" if policy is None else self._policy_detail(policy)
         self.query_one("#policy-detail", Static).update(Text(self.detail_text))
 
-    def _log_tail(self, log_path: Path, *, lines: int = _LOG_TAIL_LINES) -> str:
-        try:
-            text = log_path.read_text()
-        except FileNotFoundError:
-            return "log file does not exist yet"
-        except (OSError, UnicodeDecodeError) as exc:
-            return f"log could not be read: {exc}"
-        return "\n".join(text.splitlines()[-lines:])
-
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        # Navigating away from a log-view row and back must always start from
-        # the normal detail view, never a stale log left toggled on from
-        # whatever row was highlighted before.
-        self._log_view = False
         policy = next((item for item in self._policies if item.id == event.row_key.value), None)
         self._set_detail(policy)
-
-    def action_toggle_log(self) -> None:
-        policy = self._highlighted_policy()
-        if policy is None or policy.log_path is None:
-            return
-        self._log_view = not self._log_view
-        self._set_detail(policy)
-
-    def live_state(self, policy_id: str) -> bool | None:
-        """The matching Policy's own is_active() answer, or None when there is
-        no such policy or it binds no is_active closure.
-
-        Touches no widget, so a thread worker may call it -- and only a worker
-        should: for the Linux daemon it may spawn a bounded
-        `systemctl --user is-active` (WR-02). A failed read is None too: the
-        caller then keeps the row as it is.
-        """
-        policy = next((p for p in self._policies if p.id == policy_id), None)
-        if policy is None or policy.is_active is None:
-            return None
-        return run_live(policy.is_active)[0]
-
-    def refresh_daemon_state(self, policy_id: str, applied: bool, live: bool | None) -> None:
-        """Explicit UI refresh after an on-by-default worker run completes.
-
-        `live` is the policy's own is_active() answer, resolved by the worker
-        through live_state() BEFORE it posted (WR-02: this runs on the event
-        loop, which must never probe systemd). It wins over `applied` --
-        `applied=False` means only "no apply() call was made this run", which
-        is equally true whether the policy is already ACTIVE-and-decided or
-        already DISABLED-and-decided; conflating the two would incorrectly
-        flip an already-on daemon's row to OFF on every ordinary second run
-        (11-REVIEWS.md cycle 3 finding #11). `applied` is used only for a
-        policy with no is_active closure; a policy that has one but whose
-        answer the worker could not resolve keeps its row as it is.
-        An unchanged value still supersedes every older job-state read: one
-        that began before this apply must not repaint its pre-apply answer.
-        """
-        policy = next((p for p in self._policies if p.id == policy_id), None)
-        if policy is None:
-            return
-        resolved = applied if policy.is_active is None else live
-        if resolved is not None:
-            self.active_state[policy_id] = resolved
-            if resolved:
-                self._drift.discard(policy_id)
-        if self.is_mounted and self.app.is_running:
-            if resolved is not None:
-                self.query_one(DataTable[Any]).update_cell(
-                    policy_id, "state", self._state_cell(policy_id)
-                )
-                highlighted = self._highlighted_policy()
-                if highlighted is not None and highlighted.id == policy_id:
-                    self._set_detail(highlighted)
-            # Every completion supersedes older reads, even an unresolved one (T-21-52).
-            self._start_job_state_read()
-        else:
-            self._job_state_generation += 1
 
     def action_toggle_policy(self) -> None:
         policy = self._highlighted_policy()
@@ -2771,8 +2535,6 @@ class PoliciesScreen(AppScreen):
         self._finish_toggle(policy, message.was_active, message.result)
 
     def _finish_toggle(self, policy: Policy, active: bool, result: PolicyResult | None) -> None:
-        # A read begun before this completion must not repaint its older answer.
-        self._job_state_generation += 1
         if result is None:
             self.app.show_result(
                 self,
@@ -2815,62 +2577,6 @@ class PoliciesScreen(AppScreen):
             parts.append(result.warning)
         return multiline_summary(parts)
 
-    def action_pick_time(self) -> None:
-        policy = self._highlighted_policy()
-        if policy is None or policy.set_schedule is None:
-            return
-        # Refuse before the picker; _time_picked checks again, because a
-        # mutation can start while the picker is open.
-        if self.app.refuse_if_mutating(self):
-            return
-        active = self.active_state.get(policy.id)
-        if active is None:
-            self._refuse_unreadable()
-            return
-        if not active:
-            self.status.set(
-                "Enable this policy first, then press t to set its schedule.",
-                "warn",
-            )
-            self._set_detail(policy)
-            return
-        self.app.push_screen(TimePickerScreen(), self._time_picked(policy, policy.set_schedule))
-
-    def _time_picked(
-        self, policy: Policy, set_schedule: Callable[[int, int], PolicyResult]
-    ) -> Callable[[str | None], None]:
-        # A closure supplying the mutation and the messages, never its own
-        # try/except OSError — set_schedule is called through run_live below,
-        # exactly like action_toggle_policy already calls apply/remove
-        # (.claude/architecture.md rule 3), never directly from this callback.
-        # set_schedule is threaded in as its own parameter (not re-read from
-        # policy inside the closure) so there is no reachable path where it
-        # could be None here — action_pick_time already confirmed it isn't,
-        # once, before this closure is ever built.
-        def picked(value: str | None) -> None:
-            if value is None:
-                return
-            # Checked HERE, at the actual mutation point, not only when the
-            # picker was opened: the picker can stay on screen for as long as
-            # the user takes to choose a time, and any worker mutation (the
-            # on-by-default daemon apply, a removal, an update) can start
-            # during that window (post-implementation review finding CR-02).
-            if self.app.refuse_if_mutating(self):
-                return
-            hour_text, minute_text = value.split(":")
-            hour, minute = int(hour_text), int(minute_text)
-            result, error = run_live(lambda: set_schedule(hour, minute))
-            if result is None:
-                self.status.set(
-                    f"Policy change failed: {error}. Check permissions, then press t.",
-                    "error",
-                )
-                return
-            self.status.set(self._summary(policy, "rescheduled", result), "ok")
-            self._set_detail(policy)
-
-        return picked
-
     def action_pick_link_mode(self) -> None:
         if self._set_link_mode is None:
             self.status.set(
@@ -2878,7 +2584,7 @@ class PoliciesScreen(AppScreen):
                 "warn",
             )
             return
-        if self.app.refuse_if_mutating(self):  # before the picker, as t does
+        if self.app.refuse_if_mutating(self):  # before the picker
             return
         self.app.push_screen(LinkModeScreen(), self._link_mode_picked)
 
@@ -2892,7 +2598,7 @@ class PoliciesScreen(AppScreen):
         setter = self._set_link_mode
         if setter is None:
             return
-        # At the mutation point, like the time picker: the modal can outlive a
+        # At the mutation point: the modal can outlive a
         # mutation that started after it opened.
         if self.app.refuse_if_mutating(self):
             return
@@ -3085,13 +2791,17 @@ class SchedulesScreen(AppScreen):
 
     @work(thread=True, exclusive=True, group="schedule-probe", exit_on_error=False)
     def _probe_worker(self) -> None:
-        """Ask whether a user timer manager exists, off the event loop (D-24)."""
+        """Ask whether a user timer manager exists, off the event loop (D-24), and warm the
+        competing-mechanism memo the tmp row's detail line only peeks at (WR-02/WR-10)."""
         reachable = False
         try:
             ctx = self._ctx
             if ctx is not None:
                 answer, _error = run_live(lambda: schedules.manager_reachable(ctx))
                 reachable = bool(answer)
+            if self._inputs.competing is not None:
+                with contextlib.suppress(OSError, ValueError, CommandError):
+                    self._inputs.competing()
         finally:
             self.post_message(ScheduleManagerProbed(reachable))
 
@@ -3644,42 +3354,6 @@ class NavScreen(ModalScreen[str | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.dismiss(event.item.id)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class TimePickerScreen(ModalScreen[str | None]):
-    """Quantized 30-minute time-of-day picker: dismisses with an "HH:MM"
-    string, or None on escape/cancel. Structurally mirrors NavScreen's
-    ModalScreen[str | None] + ListView/ListItem shape, except every widget id
-    is letter-prefixed and colon-free ("time-HH-MM") since a raw "HH:MM" id
-    (e.g. "03:30") is an invalid Textual identifier — it begins with a digit
-    and contains ":" — while the DISPLAY text stays the plain "HH:MM" string.
-    """
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "cancel", "close", show=False),
-    ]
-    DEFAULT_CSS = """
-    TimePickerScreen { align: center middle; }
-    TimePickerScreen > ListView { width: 20; height: 20; border: round $accent; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield ListView(
-            *[
-                ListItem(Label(f"{hour:02d}:{minute:02d}"), id=f"time-{hour:02d}-{minute:02d}")
-                for hour in range(24)
-                for minute in (0, 30)
-            ]
-        )
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        item_id = event.item.id
-        if item_id is None:  # unreachable: every item above is constructed with one
-            return
-        self.dismiss(item_id.removeprefix("time-").replace("-", ":"))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

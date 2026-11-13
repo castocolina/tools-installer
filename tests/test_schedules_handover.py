@@ -37,6 +37,7 @@ from installer.schedules import (
     update_state,
 )
 from installer.session import Disposition, PlanRow, RowOutcome
+from installer.systemd_daemon import CompetingUnit
 from installer.systemd_daemon import decided as systemd_decided
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult
@@ -187,6 +188,11 @@ def test_schedule_default_warnings_moved() -> None:
 # -- the TUI reconciles at mount and after each install run --------------------------------
 
 
+def no_competitors(*, blocking: bool = True) -> tuple[CompetingUnit, ...]:
+    del blocking
+    return ()
+
+
 def _tui_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -208,7 +214,11 @@ def _tui_app(
 
     monkeypatch.setattr(setup, "_schedule_context", schedule_context)
     return setup._build_app(  # pyright: ignore[reportPrivateUsage]
-        [], FEDORA, initial_view=initial_view, apply_schedule_defaults=True
+        [],
+        FEDORA,
+        initial_view=initial_view,
+        apply_schedule_defaults=True,
+        competing=no_competitors,  # the Schedules view warms this probe; never the host's
     )
 
 

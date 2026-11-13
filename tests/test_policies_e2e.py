@@ -4,13 +4,13 @@ enable and vanish on disable while the real $HOME is never touched. Saves SVG
 screenshots for agent inspection."""
 
 import os
-import plistlib
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from textual.binding import Binding
 from textual.widgets import DataTable
 
 from installer import systemd_daemon
@@ -28,13 +28,12 @@ from installer.policy import (
     tweak_policy,
 )
 from installer.tweaks import BUNDLES, TweakBundle, shell_init_bundle, tweak_present
-from installer.ui_common import VIEW_BY_NAME
+from installer.ui_common import VIEW_BY_NAME, FooterBar
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
     LinkModeScreen,
     PoliciesScreen,
     PolicyInputs,
-    TimePickerScreen,
     UnifiedApp,
     UninstallInputs,
 )
@@ -664,43 +663,6 @@ async def test_daemon_policy_toggles_on_despite_missing_fd_and_rg_with_recommend
         assert not plist_path.exists()
 
 
-async def test_daemon_policy_time_picker_rewrites_the_real_plist_and_updates_detail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A real daemon_policy, enabled via space, then rescheduled via t: the
-    picked slot must actually rewrite the real, tmp_path-scoped plist file's
-    StartCalendarInterval -- read back via plistlib, never a mock -- and the
-    detail panel must immediately show the matching schedule line. Then a
-    fabricated log file (written directly, not by actually running the
-    wrapper) proves l shows the real file's content."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    app, plist_path, log_path = _daemon_app(Path.home(), installed_tools={"fd": True, "rg": True})
-    async with app.run_test(size=(100, 30)) as pilot:
-        screen = app.screen
-        assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")  # enable the daemon so t becomes reachable
-        await settle(app, pilot)
-        assert screen.active_state["daemon:prune-tmpdir"] is True
-
-        await pilot.press("t")
-        assert isinstance(app.screen, TimePickerScreen)
-        # ListView starts on 00:00 (index 0); step to 01:30 (index 3).
-        await pilot.press("down", "down", "down", "enter")
-        await pilot.pause()
-        assert isinstance(app.screen, PoliciesScreen)
-
-        data = plistlib.loads(plist_path.read_bytes())
-        interval = data["StartCalendarInterval"]
-        assert (interval["Hour"], interval["Minute"]) == (1, 30)
-        assert "scheduled daily at 01:30" in screen.detail_text
-
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("=== 2026-09-01T03:00:00+00:00 ===\ndeleted: 2\n\n")
-        await pilot.press("l")
-        assert "=== 2026-09-01T03:00:00+00:00 ===" in screen.detail_text
-        assert "deleted: 2" in screen.detail_text
-
-
 async def test_policies_screen_link_mode_change_moves_active_policies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1315,35 +1277,6 @@ async def test_a_failed_requirements_read_blanks_requires_and_detail(tmp_path: P
         assert screen.status.text == ""
 
 
-async def test_t_on_an_unreadable_policy_opens_no_picker(tmp_path: Path) -> None:
-    scheduled: list[tuple[int, int]] = []
-
-    def set_schedule(hour: int, minute: int) -> PolicyResult:
-        scheduled.append((hour, minute))
-        return PolicyResult(layers=(), reload_hint=None, warning=None)
-
-    read = _Read(True, OSError("denied"))
-    job = _fake_policy("job", [], is_active=read, set_schedule=set_schedule)
-    service = frozen_service(tmp_path)
-    app = _live_app([job], service=service)
-    async with app.run_test(size=(120, 30)) as pilot:
-        await settle(app, pilot)
-        read.fail = True
-        await _reenter(app)
-        await settle(app, pilot)
-        before = service.passes
-        await pilot.press("t")
-        await settle(app, pilot)
-        screen = app.view("policies")
-        assert app.screen is screen
-        assert scheduled == []
-        assert (screen.status.text, screen.status.severity) == (
-            f"{_READ_ERROR}denied.",
-            Severity.ERROR,
-        )
-        assert service.passes == before + 1
-
-
 async def test_policies_with_no_policy_draws_its_empty_copy(tmp_path: Path) -> None:
     app = _live_app([], service=frozen_service(tmp_path))
     async with app.run_test(size=(120, 30)) as pilot:
@@ -1484,7 +1417,7 @@ async def test_retired_alias_rows_show_only_the_generic_detail(
 async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SPEC R9, UI-SPEC section 9: the tmp cleanup left Policies. The view lists no such row,
     its footer names no `t` or `l` action, and pressing either on every row opens no modal and
-    changes no row. (The BINDINGS entries go with 24.2-12.)"""
+    changes no row."""
     monkeypatch.setenv("HOME", str(tmp_path))
     rc = tmp_path / ".myshellrc"
     bin_dir = tmp_path / ".local" / "bin"
@@ -1528,3 +1461,11 @@ async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.Monke
                 assert app.screen is screen
         assert screen.active_state == before
         assert screen.status.text == ""
+
+
+def test_policies_bindings_have_no_time_or_log_keys() -> None:
+    """UI-SPEC section 9: the Policies screen binds `space` and `m` only; its footer names no
+    time or log action."""
+    keys = {binding.key for binding in PoliciesScreen.BINDINGS if isinstance(binding, Binding)}
+    assert keys == {"space", "m"}
+    assert FooterBar("policies").render_text().plain.startswith("space toggle | m link mode   │")

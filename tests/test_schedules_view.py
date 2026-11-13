@@ -23,11 +23,11 @@ from textual.widgets import DataTable, Input, Label, OptionList, Select, Static
 from installer import runlock, schedules, wizard_app
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
-from installer.enums import DaemonState
+from installer.enums import DaemonState, Severity
 from installer.guards import guard_status
 from installer.model import Method, Tool
 from installer.schedules import SCHEDULES
-from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
+from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, TimerStateCache
 from installer.ui_common import GLOBAL_NAV, VIEWS, FooterBar, WayfindingTab
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
@@ -274,6 +274,52 @@ async def test_cells_from_state_and_log(tmp_path: Path, monkeypatch: pytest.Monk
         assert cell(app, "update-claude", "next") == "17:30"
         await move_to(pilot, screen, "update-claude")
         assert "times: 01:30, 09:30, 17:30 (local)" in screen.detail_text.splitlines()
+
+
+async def test_a_log_that_is_not_utf8_still_renders_its_last_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    ctx = env.ctx
+    ctx.log_path.parent.mkdir(parents=True, exist_ok=True)
+    ctx.log_path.write_bytes(
+        b"\xff\xfe junk\n2026-11-13T12:00:04 update-claude ok: up to date\n\xff\n"
+    )
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = await open_schedules(app, pilot)
+        assert cell(app, "update-claude", "last") == "\u2713 12:00"
+        await move_to(pilot, screen, "update-claude")
+        assert any(line.startswith("last: ") for line in screen.detail_text.splitlines())
+        assert screen.status.text == ""
+
+
+async def test_an_unreadable_log_blanks_the_last_cells_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    env.ctx.log_path.mkdir(parents=True)  # a directory where the log should be
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = await open_schedules(app, pilot)
+        assert {cell(app, sid, "last") for sid in IDS} == {"\u2026"}
+        await move_to(pilot, screen, "update-claude")
+        assert "last: could not be read" in screen.detail_text
+        assert screen.status.text.startswith("Could not read the schedule log: ")
+        assert screen.status.severity == Severity.ERROR
+
+
+async def test_the_linux_tmp_detail_discloses_the_login_session_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    linux = (await row_details(tmp_path / "linux", monkeypatch))["tmp-cleanup"]
+    text = "\n".join(linux)
+    assert "The timer runs while you are logged in." in text
+    assert "loginctl enable-linger $USER" in text
+    assert "does not run that" in text
+    assert "system-wide setting for the whole account" in text
+    mac = (await row_details(tmp_path / "mac", monkeypatch, os_key="macos"))["tmp-cleanup"]
+    assert "enable-linger" not in "\n".join(mac)
 
 
 async def test_tmp_next_is_a_dash_before_its_first_run(
@@ -770,6 +816,41 @@ async def test_time_modal_on_an_off_row_only_saves(
         assert cell(app, "update-claude", "state") == "○ [off]"
 
 
+_UPDATE_REFUSAL = "An update is running; wait for it to finish. Navigation still works."
+_REMOVAL_REFUSAL = "A removal is running; wait for it to finish. Navigation still works."
+
+
+async def test_e_is_refused_before_the_modal_and_again_at_the_pick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C-17 / CR-02: a running mutation refuses `e` at once, and a mutation that starts while
+    the modal is open refuses at the pick; the timer is not rewritten either way."""
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    schedules.turn_on(env.ctx, "update-claude")
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-claude")
+        before = timer_of(env).read_bytes()
+
+        app.begin_mutation(wizard_app.MutationHolder.UPDATE)
+        await pilot.press("e")
+        await pilot.pause()
+        assert app.screen is screen
+        assert (screen.status.text, screen.status.severity) == (_UPDATE_REFUSAL, Severity.WARN)
+        app.end_mutation()
+        screen.status.clear()
+
+        modal = await open_time_modal(app, pilot, screen)
+        app.begin_mutation(wizard_app.MutationHolder.REMOVAL)
+        modal.query_one(Select[int]).value = 8
+        await type_and_submit(pilot, modal, "01:30")
+        assert app.screen is screen
+        assert (screen.status.text, screen.status.severity) == (_REMOVAL_REFUSAL, Severity.WARN)
+        assert timer_of(env).read_bytes() == before
+        app.end_mutation()
+
+
 async def test_tmp_cleanup_time_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
     app = make_app(env, monkeypatch)
@@ -1032,3 +1113,239 @@ async def test_modals_fit_80x20(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         for child in box.children:
             if child.display:  # the loading label is gone once the list lands
                 assert box.region.contains_region(child.region), child
+
+
+# --- The tmp row's live lines: temp usage and the system-wide competitor (D-21) ----------------
+
+
+def pressure(*, home_free: float | None = 50.0, tmp_used: float | None = 10.0) -> DiskPressure:
+    return DiskPressure(
+        home_free_percent=home_free,
+        tmp_used_percent=tmp_used,
+        daemon=DaemonState.INACTIVE,
+        tmp_threshold=True,
+    )
+
+
+def usage_probe(
+    read: DiskPressure | Callable[[], DiskPressure], calls: list[bool] | None = None
+) -> Callable[..., DiskPressure]:
+    """A disk probe with the production call shape; `calls` records every `blocking` keyword."""
+
+    def probe(*, blocking: bool = True) -> DiskPressure:
+        if calls is not None:
+            calls.append(blocking)
+        return read() if callable(read) else read
+
+    return probe
+
+
+async def row_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    os_key: str = "fedora",
+    disk_pressure: Callable[..., DiskPressure] | None = None,
+    competing: Callable[..., tuple[CompetingUnit, ...]] | None = None,
+) -> dict[str, list[str]]:
+    """Every row's detail lines, driven through the row-highlight render path."""
+    env = make_env(tmp_path, monkeypatch, os_key=os_key, present=EVERYTHING)
+    app = make_app(env, monkeypatch, disk_pressure=disk_pressure, competing=competing)
+    details: dict[str, list[str]] = {}
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = await open_schedules(app, pilot)
+        for schedule_id in IDS:
+            await move_to(pilot, screen, schedule_id)
+            details[schedule_id] = screen.detail_text.splitlines()
+    return details
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+async def test_tmp_detail_states_the_temp_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    details = await row_details(
+        tmp_path, monkeypatch, os_key=os_key, disk_pressure=usage_probe(pressure(tmp_used=42.25))
+    )
+    assert "Current temp-directory usage: 42.2%" in details["tmp-cleanup"]
+    others = [lines for key, lines in details.items() if key != "tmp-cleanup"]
+    assert all("temp-directory" not in line for lines in others for line in lines)
+    assert all("home filesystem" not in line for lines in others for line in lines)
+
+
+async def test_the_temp_usage_line_is_absent_without_a_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details = await row_details(tmp_path, monkeypatch)
+    assert not [line for line in details["tmp-cleanup"] if "usage" in line or "free space" in line]
+
+
+@pytest.mark.parametrize("error", [OSError("statvfs failed"), ValueError("bad reading")])
+async def test_the_temp_usage_line_survives_a_failing_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def broken() -> DiskPressure:
+        raise error
+
+    details = await row_details(tmp_path, monkeypatch, disk_pressure=usage_probe(broken))
+    assert "The timer runs while you are logged in." in "\n".join(details["tmp-cleanup"])
+    assert not [line for line in details["tmp-cleanup"] if "temp-directory" in line]
+
+
+async def test_the_macos_row_reports_tmpdir_usage_never_the_home_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Deliberately different numbers, so substituting the home filesystem's free space for the
+    # temp usage cannot pass.
+    probe = usage_probe(pressure(home_free=81.0, tmp_used=12.5))
+    text = "\n".join(
+        (await row_details(tmp_path, monkeypatch, os_key="macos", disk_pressure=probe))[
+            "tmp-cleanup"
+        ]
+    )
+    assert "Current temp-directory usage: 12.5%" in text
+    assert "81.0" not in text
+    assert "19.0" not in text
+
+
+async def test_an_unreadable_temp_mount_falls_back_to_the_labelled_home_free_space(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = usage_probe(pressure(home_free=33.3, tmp_used=None))
+    lines = (await row_details(tmp_path, monkeypatch, disk_pressure=probe))["tmp-cleanup"]
+    assert "Current home filesystem free space: 33.3%" in lines
+    assert not [line for line in lines if "temp-directory" in line]
+
+
+async def test_no_usage_line_when_neither_mount_was_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = usage_probe(pressure(home_free=None, tmp_used=None))
+    lines = (await row_details(tmp_path, monkeypatch, disk_pressure=probe))["tmp-cleanup"]
+    assert not [line for line in lines if "temp-directory" in line or "home filesystem" in line]
+
+
+async def test_row_highlight_only_ever_asks_for_the_non_blocking_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[bool] = []
+    await row_details(tmp_path, monkeypatch, disk_pressure=usage_probe(pressure(), calls))
+    assert calls
+    assert not any(calls)
+
+
+def cache_backed_probe(cache: TimerStateCache) -> Callable[..., DiskPressure]:
+    """The production verb split over a real TimerStateCache: read() when blocking, peek()
+    otherwise, a cold peek answering UNAVAILABLE."""
+
+    def probe(*, blocking: bool = True) -> DiskPressure:
+        state = cache.read() if blocking else cache.peek()
+        return DiskPressure(
+            home_free_percent=50.0,
+            tmp_used_percent=42.0,
+            daemon=DaemonState.UNAVAILABLE if state is None else state,
+            tmp_threshold=True,
+        )
+
+    return probe
+
+
+async def test_row_highlight_issues_zero_systemd_queries_in_every_cache_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queries: list[str] = []
+    now = [0.0]
+
+    def is_active() -> DaemonState:
+        queries.append("is-active")
+        return DaemonState.INACTIVE
+
+    cache = TimerStateCache(is_active, ttl=10.0, clock=lambda: now[0])
+    cache.read()
+    assert queries == ["is-active"]
+    queries.clear()
+    probe = cache_backed_probe(cache)
+    for step, prepare in enumerate(
+        (lambda: None, lambda: now.__setitem__(0, 10_000.0), cache.invalidate)
+    ):
+        prepare()  # warm memo, then a clock far past the TTL, then a memo just marked stale
+        details = await row_details(tmp_path / str(step), monkeypatch, disk_pressure=probe)
+        assert "Current temp-directory usage: 42.0%" in details["tmp-cleanup"]
+    assert queries == []
+
+
+async def test_a_truly_cold_cache_still_renders_the_temp_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queries: list[str] = []
+
+    def is_active() -> DaemonState:
+        queries.append("is-active")
+        return DaemonState.INACTIVE
+
+    details = await row_details(
+        tmp_path, monkeypatch, disk_pressure=cache_backed_probe(TimerStateCache(is_active))
+    )
+    assert "Current temp-directory usage: 42.0%" in details["tmp-cleanup"]
+    assert queries == []
+
+
+async def test_the_tmp_row_names_a_system_scope_competitor_after_its_warm_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-10: the Schedules view warms the competitor memo off the event loop, then repaints
+    the detail from the non-blocking peek."""
+    warmed = [False]
+    blocking_on_loop: list[bool] = []
+
+    def competing(*, blocking: bool = True) -> tuple[CompetingUnit, ...]:
+        units = (CompetingUnit("cleanup-bun-tmp-cache.timer", SCOPE_SYSTEM, "enabled"),)
+        if blocking:
+            blocking_on_loop.append(threading.current_thread() is threading.main_thread())
+            warmed[0] = True
+            return units
+        return units if warmed[0] else ()
+
+    details = await row_details(tmp_path, monkeypatch, competing=competing)
+    assert any(
+        line.startswith("Also installed system-wide: cleanup-bun-tmp-cache.timer")
+        and "root-owned" in line
+        for line in details["tmp-cleanup"]
+    )
+    assert blocking_on_loop == [False]
+
+
+async def test_the_manager_probe_runs_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    threads: list[threading.Thread] = []
+
+    def read_output(cmd: list[str]) -> str:
+        threads.append(threading.current_thread())
+        return env.output(cmd)
+
+    app = make_app(env, monkeypatch, context=replace(env.ctx, read_output=read_output))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await open_schedules(app, pilot)
+        assert threads
+        assert threading.main_thread() not in threads
+        assert cell(app, "update-claude", "state") == "○ [off]"
+
+
+async def test_a_log_error_keeps_its_line_and_never_overwrites_another_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR-03: an unreadable log shows its error over an empty status or its own earlier error,
+    never over another writer's result."""
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    env.ctx.log_path.mkdir(parents=True)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = await open_schedules(app, pilot)
+        assert screen.status.text.startswith("Could not read the schedule log:")
+        screen.state_refreshed()  # the error's own re-render keeps it
+        assert screen.status.text.startswith("Could not read the schedule log:")
+        screen.status.set("Link mode saved: split", "ok")
+        screen.state_refreshed()
+        assert screen.status.text == "Link mode saved: split"
