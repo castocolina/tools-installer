@@ -1185,18 +1185,24 @@ def _config_step(
     return tuple(dict.fromkeys(deleted)), tuple(warnings)
 
 
-def _drop_deleted_ledgers(config_deleted: Iterable[str]) -> None:
+def _drop_deleted_ledgers(config_deleted: Iterable[str]) -> tuple[str, ...]:
     """Drop the ledger of a settings agent whose config `_config_step` deleted, once every file
     the ledger records is gone (R1-16): nothing is left to revert, and the final revert would
     only refuse a missing file. `_config_step` lists a tool once any one of its paths is deleted,
-    so a ledger with a file still on disk is kept (R2-14)."""
+    so a ledger with a file still on disk is kept (R2-14). A ledger that cannot be written is a
+    warning: the rest of the uninstall goes on."""
+    warnings: list[str] = []
     for agent in receipts.CONFIG_AGENTS:
         ledger = receipts.read_ledger(agent) if agent in config_deleted else None
         if ledger is None:
             continue
         files = (*ledger.created_files, *(entry.file for entry in ledger.entries))
         if not any(os.path.lexists(file) for file in files):
-            receipts.write_ledger(receipts.ConfigLedger(agent))  # an empty ledger deletes its file
+            try:
+                receipts.write_ledger(receipts.ConfigLedger(agent))  # empty: deletes its file
+            except OSError as exc:
+                warnings.append(f"{agent}: could not drop its settings ledger ({exc})")
+    return tuple(warnings)
 
 
 def perform_uninstall(
@@ -1290,7 +1296,7 @@ def perform_uninstall(
     # Step 4 runs once, after every tool's removal (D-07). A tool whose removal failed or was
     # refused keeps its config, and a failed delete is a warning that never restores a receipt.
     config_deleted, config_warnings = _config_step(decision, catalog, removed)
-    _drop_deleted_ledgers(config_deleted)
+    config_warnings += _drop_deleted_ledgers(config_deleted)
     config_not_deleted = tuple(
         tool.id
         for tool in decision.tools

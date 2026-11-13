@@ -6900,6 +6900,34 @@ def test_deleting_herdr_config_drops_its_ledger(
     assert "missing" not in result.warnings[0]
 
 
+def test_a_ledger_that_cannot_be_dropped_is_a_warning_not_an_abort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M-10: a write_ledger OSError after the config delete must not abort the rest of uninstall."""
+    from installer import app as app_module
+    from installer import receipts
+
+    _claude, herdr, _claude_file, config = _herdr_with_claude(tmp_path, monkeypatch)
+    config_dir, state_dir = _herdr_config_dirs(tmp_path, config)
+    real_write = receipts.write_ledger
+
+    def failing(ledger: receipts.ConfigLedger) -> None:
+        if not ledger.entries and ledger.agent == "herdr" and not ledger.created_files:
+            raise OSError("read-only ledger dir")
+        real_write(ledger)
+
+    monkeypatch.setattr(app_module.receipts, "write_ledger", failing)
+    result = _apply(
+        _tui_decision([herdr], tmp_path, {"herdr": (config_dir, state_dir)}),
+        tmp_path,
+        runner=lambda _cmd: None,
+        catalog=[herdr],
+    )
+
+    assert result.config_deleted == ("herdr",)
+    assert any("read-only ledger dir" in warning for warning in result.warnings)
+
+
 def test_partial_herdr_config_deletion_keeps_its_ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
