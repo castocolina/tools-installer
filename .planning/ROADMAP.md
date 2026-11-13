@@ -628,7 +628,7 @@ Plans:
 - [ ] 24.3-10-PLAN.md — skill-judge rounds to >= 80.0 with first and final verdicts committed (orchestrator checkpoint) (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 24.3-11-PLAN.md — Phase gate: merged-tree gates, verify-registry green, orchestrator landing container check before the push, drift dispositions, 999.12 closed, confirmations (wave 6)
+- [ ] 24.3-11-PLAN.md — Phase gate: merged-tree gates, verify-registry green, the orchestrator's landing container check as the wave-5 gate, drift dispositions, 999.12 closed, confirmations (wave 6)
 
 ### Phase 25: Lean
 
