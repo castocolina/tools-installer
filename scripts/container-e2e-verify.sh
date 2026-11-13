@@ -2221,6 +2221,7 @@ SCHEDULES_CONTAINER_NAME=tools-installer-e2e-schedules
 # The Linux log and run lock, relative to the tester's HOME (D-11, D-12).
 SCHEDULES_LOG_REL=.local/state/tools-installer/schedules.log
 SCHEDULES_LOCK_REL=.local/state/tools-installer/run.lock
+SCHEDULES_HOLDER_UNIT=tools-installer-e2e-runlock-holder
 # One poll per second: at most two minutes for systemd to boot, one for the session bus.
 SCHEDULES_POLL_STEP=1
 SCHEDULES_BOOT_ATTEMPTS=120
@@ -2439,16 +2440,17 @@ schedules_start_count() {
 # `flock -n <run.lock> sleep 60` as the tester, killed whatever the verdict.
 schedules_busy_check() {
   local log last rc=0
+  # The holder runs as a transient user unit: a background process started inside `su -` did
+  # not outlive the exec session, so the runner took the lock it was meant to find held.
   schedules_tester "mkdir -p \"\$HOME/.local/state/tools-installer\"
-setsid -f flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" sleep 60 </dev/null >/dev/null 2>&1
+systemd-run --user --quiet --unit=${SCHEDULES_HOLDER_UNIT} flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" sleep 60
 for _ in 1 2 3 4 5 6 7 8 9 10; do flock -n \"\$HOME/${SCHEDULES_LOCK_REL}\" true || break; sleep 0.5; done" || true
   schedules_tester "systemctl --user start tools-installer-schedule-cache-cleanup.service" || true
   log="$(mktemp)"
   schedules_fetch_log >"$log" || true
   last="$(awk '$2 == "cache-cleanup" { l = $0 } END { print l }' "$log")"
   rm -f "$log"
-  # shellcheck disable=SC2016 # $(id -u) expands in the tester's shell
-  schedules_tester 'pkill -u "$(id -u)" -x sleep || true' || true
+  schedules_tester "systemctl --user stop ${SCHEDULES_HOLDER_UNIT} || true" || true
   if [[ "$last" == *"skipped: busy" ]]; then
     printf 'TRACER_SCHEDULE_BUSY_OK\n'
   else

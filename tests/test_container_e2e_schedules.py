@@ -31,6 +31,7 @@ _CONSTANTS = (
     "SCHEDULES_CONTAINER_NAME",
     "SCHEDULES_LOG_REL",
     "SCHEDULES_LOCK_REL",
+    "SCHEDULES_HOLDER_UNIT",
     "IMAGE_FEDORA",
     "TESTER_USER",
     "TESTER_HOME",
@@ -574,11 +575,15 @@ def test_busy_verdict(tmp_path: Path, last: str, expected: str, code: int) -> No
     assert result.returncode == code, result.stdout + result.stderr
     assert expected in result.stdout
     calls = _calls(scratch)
-    holder = next(i for i, call in enumerate(calls) if "flock -n" in call and "sleep 60" in call)
+    holder = next(i for i, call in enumerate(calls) if "systemd-run --user" in call)
     start = next(i for i, call in enumerate(calls) if f"start {_TIMER_BASENAME}.service" in call)
-    kill = next(i for i, call in enumerate(calls) if "pkill" in call)
-    assert holder < start < kill
+    stop = next(
+        i for i, call in enumerate(calls) if "stop tools-installer-e2e-runlock-holder" in call
+    )
+    assert holder < start < stop
     assert "run.lock" in calls[holder]
+    assert "flock -n" in calls[holder]
+    assert "sleep 60" in calls[holder]
 
 
 @pytest.mark.parametrize(
