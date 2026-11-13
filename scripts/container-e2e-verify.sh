@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# container-e2e-verify.sh — Fedora-family container harness for D-04 / D-05.
+# container-e2e-verify.sh — container harness for D-04 / D-05, on Fedora, Debian or Arch.
 #
 # Bootstrap one long-lived named container (non-root, sudo-capable, Homebrew
 # + uv) and run Pass 1: a clean install of the full registry.toml catalog
 # through `uv run --isolated --no-dev setup.py --all --yes`, then Pass 2 (rerun, uninstall,
 # reinstall). `make e2e` runs `all`: every step, then removes the container.
+# `--distro fedora|debian|arch` picks the table entry (fedora when absent); each distro
+# runs in its own container `tools-installer-e2e-<distro>` with its own artifact dir
+# `.e2e-artifacts/container-<distro>`, so a run never touches another distro's container.
 #
 # First line of real logic sources scripts/detect-container-runtime.sh; a
 # non-zero detection exit is propagated immediately. Never fall back to the
@@ -12,28 +15,45 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="tools-installer-e2e"
-IMAGE="fedora:latest"
+# One image per distro (the only per-distro constants besides the prerequisite lists below).
+IMAGE_FEDORA=fedora:latest
+IMAGE_DEBIAN=docker.io/library/debian:trixie
+IMAGE_ARCH=docker.io/library/archlinux:latest
 
 # The first registry tool whose first applicable method on Fedora amd64 is a
 # raw github_release (category data). A constant: never interpolated from input.
 RECEIPT_PROBE_TOOL=yq
 RECEIPT_PROBE_CATEGORY=data
-# The checkout run_setup_as_tester already cds into; the host test overrides it.
-TESTER_WORKSPACE=/home/tester/workspace
+# The user every tester helper runs as, its home and the checkout run_setup_as_tester cds into.
+# The nested target (cmd_nested) sets all three for the nested image's rootless user; the host
+# test overrides them too.
+TESTER_USER=tester
+TESTER_HOME=/home/tester
+TESTER_WORKSPACE=$TESTER_HOME/workspace
+# The nested-podman target (orchestrator only, D-18): image, outer container and its rootless user.
+NESTED_IMAGE=quay.io/podman/stable:latest
+NESTED_CONTAINER_NAME=tools-installer-e2e-nested
+NESTED_USER=podman
+# A tiny image the inner podman pulls, runs and removes to prove nested podman works.
+NESTED_PROBE_IMAGE=quay.io/podman/hello:latest
 # Homebrew binary evaluated by tester functions; host tests replace it with a stub.
 BREW_BIN=/home/linuxbrew/.linuxbrew/bin/brew
+# herdr's plugin id (24-07) and where its probe keeps a copy of the binary for the after-uninstall check.
+HERDR_PLUGIN_ID=herdr-setup.markers
+HERDR_PROBE_COPY=/tmp/herdr-probe
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-# Transcripts are run evidence, not source: .e2e-artifacts/ is gitignored.
-PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container"
 
 usage() {
   cat <<'EOF'
-Usage: container-e2e-verify.sh <command> [options]
+Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
 
-  bootstrap [--replace]   Create the named Fedora-family container, install
+  --distro NAME           Pick the distro table entry (default fedora): its image,
+                          container tools-installer-e2e-NAME and artifact dir
+                          .e2e-artifacts/container-NAME. Anywhere on the line.
+
+  bootstrap [--replace]   Create the named distro container, install
                           Homebrew-on-Linux prerequisites, create user tester,
                           bootstrap Homebrew + uv, uv sync. Prints
                           TRACER_HARNESS_READY_OK when ready.
@@ -55,6 +75,14 @@ Usage: container-e2e-verify.sh <command> [options]
                           Tears the container down (rm -f) once all three succeed.
   all                     bootstrap --replace, pass1, pass2, then remove the
                           container whatever the outcome (what `make e2e` runs).
+  nested                  Orchestrator only, a time-boxed spike: start a disposable
+                          quay.io/podman/stable container (--device /dev/fuse,
+                          label=disable, never privileged), install zsh there and run the
+                          terminal category as its rootless user for the one real Alacritty
+                          build and herdr's default_shell write. Prints
+                          TRACER_NESTED_PODMAN_OK / _BUILD_OK / _UNINSTALL_OK /
+                          _HERDR_SHELL_OK / _HERDR_REVERT_OK / _TEARDOWN_OK, or
+                          TRACER_NESTED_INFEASIBLE step=... when nested podman cannot run.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -66,6 +94,25 @@ die() {
   printf 'error: %s\n' "$1" >&2
   exit 1
 }
+
+# Selects the distro table entry: DISTRO, IMAGE, CONTAINER_NAME and PHASE_DIR. Transcripts are
+# run evidence, not source: .e2e-artifacts/ is gitignored. An unknown name exits 2 with the usage.
+select_distro() {
+  case "$1" in
+    fedora) IMAGE="$IMAGE_FEDORA" ;;
+    debian) IMAGE="$IMAGE_DEBIAN" ;;
+    arch) IMAGE="$IMAGE_ARCH" ;;
+    *)
+      printf 'error: unknown distro: %s (expected fedora, debian or arch)\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  DISTRO="$1"
+  CONTAINER_NAME="tools-installer-e2e-$1"
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-$1"
+}
+select_distro fedora
 
 # First line of real logic: detect. Non-zero exit propagates; never host-fallback.
 eval "$( "$SCRIPT_DIR/detect-container-runtime.sh" )"
@@ -82,7 +129,7 @@ exec_root() {
 # Login-shell as tester, never a TTY. $1 is the command string, expanded by
 # the container shell only (callers must single-quote or escape host $()).
 exec_tester() {
-  ct exec "$CONTAINER_NAME" su - tester -c "$1"
+  ct exec "$CONTAINER_NAME" su - "$TESTER_USER" -c "$1"
 }
 
 ensure_phase_dir() {
@@ -114,44 +161,73 @@ start_container() {
   ct run -d --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
 }
 
-record_fedora_release() {
+distro_release_record() {
   local release
-  release="$(exec_root cat /etc/fedora-release)"
-  printf 'FEDORA_RELEASE=%s\n' "$release"
+  case "$DISTRO" in
+    fedora) release="$(exec_root cat /etc/fedora-release)" ;;
+    debian) release="$(exec_root cat /etc/debian_version)" ;;
+    arch)
+      release="$(exec_root cat /etc/os-release | sed -n 's/^PRETTY_NAME=//p' | tr -d '"')"
+      ;;
+  esac
+  printf 'DISTRO_RELEASE=%s:%s\n' "$DISTRO" "$release"
 }
 
+# Homebrew-on-Linux documented prerequisites, plus sudo, git, python3 (the Plan 12.3-01
+# offline fallback so uv sync does not fetch python-build-standalone), nodejs and chromium.
+# Debian and Arch ship npm as its own package (Fedora's nodejs pulls it in), and vendor
+# install scripts may call npm/npx. No distro gets zsh: with it the terminal sync would
+# write a WezTerm region that outlives the full uninstall (nested target covers zsh).
 install_root_prereqs() {
-  # Homebrew-on-Linux documented prerequisites, plus python3 as the Plan
-  # 12.3-01 offline-fallback so uv sync does not fetch python-build-standalone.
-  exec_root dnf install -y \
-    @development-tools \
-    procps-ng curl file git tar which sudo ca-certificates python3 \
-    nodejs chromium
+  case "$DISTRO" in
+    fedora)
+      exec_root dnf install -y \
+        @development-tools \
+        procps-ng curl file git tar which sudo ca-certificates python3 \
+        nodejs chromium
+      ;;
+    debian)
+      exec_root apt-get update
+      exec_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential procps curl file git ca-certificates sudo python3 nodejs npm chromium
+      ;;
+    arch)
+      exec_root pacman -Syu --noconfirm --needed \
+        base-devel procps-ng curl file git sudo which tar python nodejs npm chromium
+      ;;
+  esac
 }
 
 create_tester() {
-  if exec_root id tester >/dev/null 2>&1; then
-    printf 'user tester already exists\n'
+  if exec_root id "$TESTER_USER" >/dev/null 2>&1; then
+    printf 'user %s already exists\n' "$TESTER_USER"
   else
-    exec_root useradd -m tester
+    # With the defaults this is `useradd -m -s /bin/bash tester`: -s /bin/bash on every distro,
+    # because Debian's useradd defaults to /bin/sh, where the probes' `[[`, pipefail and the
+    # ~/.bash_profile PATH wiring would fail.
+    exec_root useradd -m -s /bin/bash "$TESTER_USER"
   fi
-  exec_root bash -c 'printf "%s\n" "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester && chmod 440 /etc/sudoers.d/tester'
+  exec_root bash -c "printf \"%s\n\" \"${TESTER_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${TESTER_USER} && chmod 440 /etc/sudoers.d/${TESTER_USER}"
   exec_root mkdir -p /home/linuxbrew/.linuxbrew
-  exec_root chown -R tester:tester /home/linuxbrew
+  exec_root chown -R "${TESTER_USER}:${TESTER_USER}" /home/linuxbrew
 }
 
 # Stream the working tree git sees (tracked + untracked, never ignored) into
 # the workspace. Ignored caches (graphify-out/, .codegraph/, .venv/) hold
 # owner-only files tester cannot read, and they are not the product anyway.
 stream_worktree() {
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
   git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard \
     | while IFS= read -r -d '' f; do [[ -e "$REPO_ROOT/$f" ]] && printf '%s\0' "$f"; done \
     | tar -C "$REPO_ROOT" --null -T - -cf - \
-    | ct exec -i "$CONTAINER_NAME" su - tester -c 'mkdir -p /home/tester/workspace && tar -C /home/tester/workspace -xf -'
+    | ct exec -i "$CONTAINER_NAME" su - "$TESTER_USER" -c "mkdir -p ${workspace} && tar -C ${workspace} -xf -"
 }
 
 copy_workspace() {
-  exec_tester 'rm -rf /home/tester/workspace'
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  exec_tester "rm -rf ${workspace}"
   stream_worktree
 }
 
@@ -167,6 +243,7 @@ write_tester_path() {
   # run_setup_as_tester are one-shot command prefixes in processes nothing
   # re-sources and are deliberately left alone.
   # su - resets the environment, so hand over the selected brew as a host-expanded prefix.
+  # shellcheck disable=SC2016 # the single-quoted part expands in the tester's shell
   exec_tester "BREW_BIN=${BREW_BIN}; "'touch ~/.bash_profile
 if ! grep -q linuxbrew ~/.bash_profile 2>/dev/null; then
   printf "%s\n" "eval \"\$(${BREW_BIN} shellenv)\"" >> ~/.bash_profile
@@ -187,26 +264,36 @@ fi
 '
 }
 
-bootstrap_homebrew_and_uv() {
+bootstrap_uv() {
+  # shellcheck disable=SC2016 # $HOME expands in the tester's shell
   exec_tester 'set -euo pipefail
-if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-fi
 if [[ ! -x "$HOME/.local/bin/uv" ]] && ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 '
+}
+
+bootstrap_homebrew_and_uv() {
+  # shellcheck disable=SC2016 # $() expands in the tester's shell
+  exec_tester 'set -euo pipefail
+if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+'
+  bootstrap_uv
   write_tester_path
 }
 
 sync_workspace() {
-  exec_tester 'set -euo pipefail
-eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-export PATH="$HOME/.local/bin:$PATH"
-cd /home/tester/workspace
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+cd ${workspace}
 uv sync
-uv run --isolated --no-dev python -c "import installer"
-'
+uv run --isolated --no-dev python -c \"import installer\"
+"
 }
 
 print_harness_ready() {
@@ -222,7 +309,7 @@ cmd_bootstrap() {
   fi
   ensure_phase_dir
   start_container "$replace"
-  record_fedora_release
+  distro_release_record
   install_root_prereqs
   create_tester
   install_github_token
@@ -371,7 +458,8 @@ echo GSD_PROBE_DONE')"; then
 }
 
 run_setup_as_tester() {
-  local args="$1"
+  local args="$1" workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
   # COLUMNS is forced wide so Rich's non-tty Console (default width 80) does
   # not wrap ordinary transcript output. Outcome rows can still fold at the
   # renderer's 100-cell budget; accumulate_summaries joins their continuations.
@@ -382,7 +470,7 @@ export COLUMNS=2000
 # Container has no FUSE device; extract-and-run stands in for a desktop that mounts AppImages.
 export APPIMAGE_EXTRACT_AND_RUN=1
 if [[ -r \"\$HOME/.github-token\" ]]; then export GITHUB_TOKEN=\"\$(cat \"\$HOME/.github-token\")\"; fi
-cd /home/tester/workspace
+cd ${workspace}
 uv run --isolated --no-dev setup.py ${args}
 "
 }
@@ -394,7 +482,7 @@ install_github_token() {
   local token="${GITHUB_TOKEN:-}"
   [[ -n "$token" ]] || token="$(gh auth token 2>/dev/null || true)"
   [[ -n "$token" ]] || return 0
-  printf '%s' "$token" | ct exec -i "$CONTAINER_NAME" su - tester -c 'umask 077; cat > ~/.github-token'
+  printf '%s' "$token" | ct exec -i "$CONTAINER_NAME" su - "$TESTER_USER" -c 'umask 077; cat > ~/.github-token'
 }
 
 accumulate_summaries() {
@@ -408,6 +496,9 @@ accumulate_summaries() {
     ACC_SUMMARIES=$((ACC_SUMMARIES + 1))
     ACC_INSTALLED=$((ACC_INSTALLED + PARSE_INSTALLED))
     ACC_UPDATED=$((ACC_UPDATED + PARSE_UPDATED))
+    ACC_REPAIRED=$((ACC_REPAIRED + PARSE_REPAIRED))
+    ACC_RECONFIGURED=$((ACC_RECONFIGURED + PARSE_RECONFIGURED))
+    ACC_REINSTALLED=$((ACC_REINSTALLED + PARSE_REINSTALLED))
     ACC_SKIPPED=$((ACC_SKIPPED + PARSE_SKIPPED))
     ACC_FAILED=$((ACC_FAILED + PARSE_FAILED))
     ACC_DEP_FAILED=$((ACC_DEP_FAILED + PARSE_DEP_FAILED))
@@ -474,6 +565,41 @@ install_step_ok() {
   [[ "$setup_exit" -eq 1 && "$ACC_DEP_FAILED" -gt 0 ]]
 }
 
+# The rerun pass (SPEC R8, D-25) may report only skipped or blocked rows, plus the manual rows pass 1
+# already reported. Any installed, updated, repaired, reconfigured, reinstalled, failed, checksum
+# mismatch or dependency failed row fails it, even a dependency failure that pass 1's explained-
+# dependency rule would accept: that rule belongs to pass 1 and is never consulted here. Reads the
+# ACC_* counters and manual names of the rerun and the manual set pass 1 wrote to $PHASE_DIR.
+rerun_step_ok() {
+  local baseline="$PHASE_DIR/pass1-manual.txt" now added="" missing=""
+  now="$(mktemp)"
+  LC_ALL=C sort -u "$ACC_MANUAL_NAMES_FILE" >"$now"
+  if [[ -f "$baseline" ]]; then
+    added="$(LC_ALL=C comm -13 <(LC_ALL=C sort -u "$baseline") "$now" | paste -sd, -)"
+    missing="$(LC_ALL=C comm -23 <(LC_ALL=C sort -u "$baseline") "$now" | paste -sd, -)"
+  else
+    missing="pass1-manual.txt"
+  fi
+  rm -f "$now"
+  if [[ "$ACC_INSTALLED" -eq 0 && "$ACC_UPDATED" -eq 0 && "$ACC_REPAIRED" -eq 0 \
+    && "$ACC_RECONFIGURED" -eq 0 && "$ACC_REINSTALLED" -eq 0 && "$ACC_FAILED" -eq 0 \
+    && "$ACC_MISMATCHED" -eq 0 && "$ACC_DEP_FAILED" -eq 0 \
+    && -z "$added" && -z "$missing" ]]; then
+    return 0
+  fi
+  printf 'TRACER_RERUN_UNEXPECTED installed=%s updated=%s repaired=%s reconfigured=%s reinstalled=%s failed=%s mismatched=%s dependency_failed=%s manual_added=%s manual_missing=%s\n' \
+    "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_REPAIRED" "$ACC_RECONFIGURED" "$ACC_REINSTALLED" \
+    "$ACC_FAILED" "$ACC_MISMATCHED" "$ACC_DEP_FAILED" "$added" "$missing"
+  return 1
+}
+
+# One TRACER_DISTRO_BLOCKED line per tool id across the BLOCKED rows of a transcript (the plan row
+# and the outcome row of one tool print once; the first reason seen wins). Never fails the run.
+list_blocked_rows() {
+  sed -nE 's/^[^ ]+ +([^ ]+) +blocked — (.*)$/\1 \2/p' "$1" \
+    | awk -v distro="$DISTRO" '!seen[$1]++ { id = $1; sub(/^[^ ]+ /, ""); printf "TRACER_DISTRO_BLOCKED distro=%s tool=%s reason=%s\n", distro, id, $0 }'
+}
+
 cmd_pass1() {
   container_running || die "container $CONTAINER_NAME is not running"
   local categories=""
@@ -484,13 +610,17 @@ cmd_pass1() {
     die "unknown pass1 option: $1"
   fi
 
-  local tmp
+  local tmp all_runs
   tmp="$(mktemp)"
+  all_runs="$(mktemp)"
   ACC_DEP_LINES_FILE="$(mktemp)"
   ACC_MANUAL_NAMES_FILE="$(mktemp)"
 
   ACC_INSTALLED=0
   ACC_UPDATED=0
+  ACC_REPAIRED=0
+  ACC_RECONFIGURED=0
+  ACC_REINSTALLED=0
   ACC_SKIPPED=0
   ACC_FAILED=0
   ACC_DEP_FAILED=0
@@ -524,6 +654,7 @@ cmd_pass1() {
       local st=$?
       set -e
       cat "$tmp"
+      cat "$tmp" >>"$all_runs"
       accumulate_summaries "$tmp"
       if [[ "$st" -ne 0 && "$st" -ne 1 ]]; then
         setup_status="$st"
@@ -538,6 +669,7 @@ cmd_pass1() {
     setup_status=$?
     set -e
     cat "$tmp"
+    cat "$tmp" >>"$all_runs"
     accumulate_summaries "$tmp"
   fi
 
@@ -545,7 +677,17 @@ cmd_pass1() {
     "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_BLOCKED" "$ACC_MANUAL" \
     "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
 
+  # Pass 2's rerun may repeat exactly these manual handoffs and nothing else (rerun_step_ok).
+  ensure_phase_dir
+  LC_ALL=C sort -u "$ACC_MANUAL_NAMES_FILE" >"$PHASE_DIR/pass1-manual.txt"
+  list_blocked_rows "$all_runs"
+
   if install_step_ok "$setup_status"; then
+    if [[ "$ACC_INSTALLED" -eq 0 ]]; then
+      printf 'TRACER_DISTRO_MISCONFIGURED distro=%s\n' "$DISTRO"
+      rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+      return 1
+    fi
     if [[ "$ACC_DEP_FAILED" -gt 0 ]]; then
       printf 'TRACER_CLEAN_INSTALL_OK (dependency_failed=%s fully explained by manual handoffs — see outcome rows above) installed=%s updated=%s skipped=%s failed=%s blocked=%s manual=%s\n' \
         "$ACC_DEP_FAILED" "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL"
@@ -553,7 +695,7 @@ cmd_pass1() {
       printf 'TRACER_CLEAN_INSTALL_OK installed=%s updated=%s skipped=%s failed=%s blocked=%s manual=%s\n' \
         "$ACC_INSTALLED" "$ACC_UPDATED" "$ACC_SKIPPED" "$ACC_FAILED" "$ACC_BLOCKED" "$ACC_MANUAL"
     fi
-    rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+    rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     assert_receipt_present "$categories" || return 1
     assert_gsd_absent install || return 1
     return 0
@@ -561,14 +703,14 @@ cmd_pass1() {
   printf 'TRACER_CLEAN_INSTALL_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
     "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
     "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$setup_status"
-  rm -f "$tmp" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+  rm -f "$tmp" "$all_runs" "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
   return 1
 }
 
 # The tester's HOME-relative listing, workspace pruned, empty dirs skipped (shortcut: a surviving
 # empty must-clear or receipt dir goes unreported; list dirs to close it). `~` is expanded by the container shell.
 home_listing() {
-  local workspace="${TESTER_WORKSPACE#/home/tester/}"
+  local workspace="${TESTER_WORKSPACE#"$TESTER_HOME"/}"
   exec_tester 'cd ~ && find . -mindepth 1 \( -path "./'"$workspace"'" -prune \) -o \( -type d -empty \) -o -print | sed "s|^\./||" | LC_ALL=C sort'
 }
 
@@ -919,6 +1061,11 @@ home = Path.home()
 tuned = json.loads(Path(\".e2e-tuned-agents.json\").read_text(encoding=\"utf-8\"))
 agents = tuned[\"agents\"]
 count = 0
+def pruned(value):
+    if not isinstance(value, dict):
+        return value
+    kept = {k: pruned(v) for k, v in value.items()}
+    return {k: v for k, v in kept.items() if v not in ({}, [])}
 for agent in agents:
     path = s.settings_file(agent, home=home, platform_os=\"linux\", environ=os.environ)
     text = path.read_text(encoding=\"utf-8\") if path.exists() else \"\"
@@ -937,7 +1084,12 @@ for agent in agents:
     # created, unless the revert restored a CLI default into it (cursor-agent), which keeps it.
     if path.exists() and str(path) in tuned[\"created\"].get(agent, []) and not restored_any:
         residue = json.dumps(doc, sort_keys=True, separators=(\",\", \":\"), default=str)
-        print(\"F\", agent, residue[:200])
+        # herdr integration uninstall leaves empty containers (and codex a hooks feature flag) in a
+        # file we created: that is its residue, not ours, unless a herdr marker is still in the text.
+        if agent == \"codex\" and doc == {\"features\": {\"hooks\": True}}:
+            print(\"R\", agent, \"features.hooks\")
+        elif not (doc and not pruned(doc) and \"herdr-agent-state\" not in text):
+            print(\"F\", agent, residue[:200])
     if (receipts.config_ledger_dir() / (agent + \".json\")).exists():
         print(\"L\", agent)
 if \"copilot\" in agents:
@@ -959,6 +1111,10 @@ print(\"K\", count)
         printf 'TRACER_SETTINGS_FILE_LEFT agent=%s residue=%s\n' "${agent%% *}" "${agent#* }"
         failed=1
         ;;
+      "R "*)
+        agent="${line#R }"
+        printf 'TRACER_HERDR_RESIDUE agent=%s key=%s\n' "${agent%% *}" "${agent#* }"
+        ;;
       "L "*) printf 'TRACER_SETTINGS_LEDGER_LEFT agent=%s\n' "${line#L }"; failed=1 ;;
       "C "*) printf 'TRACER_COPILOT_LEFT path=%s\n' "${line#C }"; failed=1 ;;
       "K "*) keys="${line#K }" ;;
@@ -967,6 +1123,229 @@ print(\"K\", count)
   [[ "$failed" -eq 0 ]] || return 1
   [[ -n "$keys" ]] || { printf 'TRACER_SETTINGS_REVERT_PROBE_FAILED\n'; return 1; }
   printf 'TRACER_SETTINGS_REVERT_OK keys=%s\n' "$keys"
+}
+
+# herdr (ONB-01). The facts come from the container as one prefixed line each (see the two probes
+# below) and the verdicts are decided here, so a host test can drive them with fixture lines.
+# The three sidebar keys herdr's hook writes into its config.toml (24-02, the ledger group `sidebar`).
+herdr_sidebar_keys() {
+  printf '%s\n' ui.sidebar.agents.rows ui.sidebar.agents.row_gap ui.sidebar.spaces.rows
+}
+
+# `herdr integration status` text on stdin -> `target|state` lines. The command always exits 0
+# (herdr v0.9.5 src/cli/integration.rs), and an experimental target reads `letta (experimental): ...`.
+herdr_status_parse() {
+  sed -nE 's/^([^ :]+)( \(experimental\))?: (not installed|current|needs repair).*$/\1|\3/p'
+}
+
+# Raw status text on stdin: every target must read `not installed`. Prints one NOT_CURRENT line per
+# target that does not, or STATUS_UNREADABLE when nothing parsed.
+herdr_status_clean() {
+  local parsed line clean=0
+  parsed="$(herdr_status_parse)"
+  if [[ -z "$parsed" ]]; then
+    printf 'TRACER_HERDR_STATUS_UNREADABLE\n'
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "${line#*|}" != "not installed" ]]; then
+      printf 'TRACER_HERDR_NOT_CURRENT target=%s\n' "${line%%|*}"
+      clean=1
+    fi
+  done <<<"$parsed"
+  return "$clean"
+}
+
+# Fact lines on stdin from herdr_probe_installed: `H <hook id>`, `N` (no receipt), `S <status line>`,
+# `Y <plugin list output>`, `C <sidebar key present>`, `DS <default_shell value>`, `E <ledger entry>`,
+# `W <skill path>` and the closing `D`. No zsh is installed in the distro containers, so herdr must
+# have written neither a default_shell key nor a default-shell ledger entry (D-08b, R1-19).
+herdr_installed_verdict() {
+  local line hosts="" sidebar=0 no_receipt=0 done=0 plugin=0 failed=0 shell=""
+  local keys_seen=" " status="" parsed host state key rest
+  while IFS= read -r line; do
+    case "$line" in
+      N) no_receipt=1 ;;
+      "H sidebar-markers") sidebar=1 ;;
+      "H "*) hosts="${hosts:+$hosts,}${line#H }" ;;
+      "S "*) status+="${line#S }"$'\n' ;;
+      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "C "*) keys_seen+="${line#C } " ;;
+      "DS "*) shell="${line#DS }" ;;
+      "E default-shell "*)
+        rest="${line#E default-shell }"
+        [[ -n "$shell" ]] || shell="${rest#* }"
+        ;;
+      "W "*)
+        printf 'TRACER_HERDR_SKILL_FOUND path=%s\n' "${line#W }"
+        failed=1
+        ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_HERDR_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ "$no_receipt" -eq 1 ]]; then
+    printf 'TRACER_HERDR_NOT_RECORDED reason=no-receipt\n'
+    failed=1
+  else
+    if [[ "$sidebar" -eq 0 ]]; then
+      printf 'TRACER_HERDR_NOT_RECORDED reason=no-sidebar\n'
+      failed=1
+    fi
+    if [[ -z "$hosts" ]]; then
+      printf 'TRACER_HERDR_NOT_RECORDED reason=no-hosts\n'
+      failed=1
+    fi
+  fi
+  parsed="$(printf '%s' "$status" | herdr_status_parse)"
+  local -a host_list=()
+  IFS=',' read -ra host_list <<<"$hosts"
+  for host in ${host_list[@]+"${host_list[@]}"}; do
+    state="$(printf '%s\n' "$parsed" | awk -F'|' -v target="$host" '$1 == target { print $2; exit }')"
+    if [[ "$state" != "current" ]]; then
+      printf 'TRACER_HERDR_NOT_CURRENT target=%s\n' "$host"
+      failed=1
+    fi
+  done
+  if [[ "$plugin" -eq 0 ]]; then
+    printf 'TRACER_HERDR_PLUGIN_MISSING\n'
+    failed=1
+  fi
+  while IFS= read -r key; do
+    if [[ "$keys_seen" != *" $key "* ]]; then
+      printf 'TRACER_HERDR_KEY_MISSING key=%s\n' "$key"
+      failed=1
+    fi
+  done < <(herdr_sidebar_keys)
+  if [[ -n "$shell" ]]; then
+    printf 'TRACER_HERDR_SHELL_SET found=%s\n' "$shell"
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_HERDR_INSTALLED_OK hosts=%s\n' "$hosts"
+}
+
+# After pass 1, before the rerun: gather herdr's facts as the tester and decide. Output of every
+# herdr command is read whatever its exit code; a `herdr server reload-config` failure (no server
+# runs in a container) never reaches this probe. A copy of the binary and the ledger's key paths are
+# kept for herdr_probe_after, since the uninstall removes the binary and the ledger.
+herdr_probe_installed() {
+  local py out workspace keys
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='import json, sys, tomllib
+from pathlib import Path
+from installer import receipts
+home = Path.home()
+receipt = receipts.read("herdr")
+if receipt is None:
+    print("N")
+for host in (receipt.hooks.get("herdr-integration", ()) if receipt else ()):
+    print("H " + host)
+config = home / ".config" / "herdr" / "config.toml"
+doc = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+for dotted in sys.argv[1:]:
+    node = doc
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    if node is not None:
+        print("C " + dotted)
+terminal = doc.get("terminal")
+shell = terminal.get("default_shell") if isinstance(terminal, dict) else None
+if shell is not None:
+    print("DS " + str(shell))
+ledger = receipts.config_ledger_dir() / "herdr.json"
+if ledger.exists():
+    for entry in json.loads(ledger.read_text(encoding="utf-8")).get("entries", []):
+        print("E " + entry["setting"] + " " + ".".join(entry["key_path"]) + " " + json.dumps(entry["value"]))
+'
+  keys="$(herdr_sidebar_keys | paste -sd' ' -)"
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+herdr=\"\$HOME/.local/bin/herdr\"
+if [ -x \"\$herdr\" ]; then
+  cp \"\$herdr\" ${HERDR_PROBE_COPY}
+  { \"\$herdr\" integration status 2>&1 || true; } | sed 's/^/S /'
+  printf 'Y %s\\n' \"\$({ \"\$herdr\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+fi
+for d in .claude/skills .agents/skills .codex/skills .cursor/skills .copilot/skills .config/opencode/skills; do
+  if [ -d \"\$HOME/\$d\" ]; then find \"\$HOME/\$d\" -maxdepth 1 -iname '*herdr*' -print | sed 's/^/W /'; fi
+done
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py") ${keys}
+echo D
+")" || { printf 'TRACER_HERDR_PROBE_FAILED\n'; return 1; }
+  ensure_phase_dir
+  printf '%s\n' "$out" | sed -n 's/^E [^ ]* \([^ ]*\) .*$/\1/p' >"$PHASE_DIR/herdr-ledger-keys.txt"
+  printf '%s\n' "$out" | herdr_installed_verdict
+}
+
+# Fact lines on stdin from herdr_probe_after: `S`, `Y`, `K <ledger key still in config.toml>`, `D`.
+herdr_removed_verdict() {
+  local line status="" plugin=0 done=0 failed=0 key
+  while IFS= read -r line; do
+    case "$line" in
+      "S "*) status+="${line#S }"$'\n' ;;
+      "Y "*) if [[ "$line" == *"$HERDR_PLUGIN_ID"* ]]; then plugin=1; fi ;;
+      "K "*)
+        key="${line#K }"
+        printf 'TRACER_HERDR_KEY_LEFT key=%s\n' "$key"
+        failed=1
+        ;;
+      D) done=1 ;;
+    esac
+  done
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_HERDR_PROBE_FAILED\n'
+    return 1
+  fi
+  printf '%s' "$status" | herdr_status_clean || failed=1
+  if [[ "$plugin" -eq 1 ]]; then
+    printf 'TRACER_HERDR_PLUGIN_LEFT\n'
+    failed=1
+  fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_HERDR_STATUS_CLEAN_OK\nTRACER_HERDR_REVERT_OK\n'
+}
+
+# After the full uninstall: a copy of the binary (taken before it) must report every target
+# `not installed` and no plugin, and herdr's kept config.toml must hold none of the keys the ledger
+# recorded.
+herdr_probe_after() {
+  local py out workspace keys key_file="$PHASE_DIR/herdr-ledger-keys.txt"
+  if [[ ! -s "$key_file" ]]; then
+    printf 'TRACER_HERDR_REVERT_UNKNOWN\n'
+    return 1
+  fi
+  keys="$(paste -sd' ' - <"$key_file")"
+  # The keys were written by this harness's own probe from the ledger; refuse anything else.
+  [[ "$keys" =~ ^[A-Za-z0-9_.\ -]+$ ]] || { printf 'TRACER_HERDR_REVERT_UNKNOWN\n'; return 1; }
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='import sys, tomllib
+from pathlib import Path
+config = Path.home() / ".config" / "herdr" / "config.toml"
+doc = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+for dotted in sys.argv[1:]:
+    node = doc
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    if node is not None:
+        print("K " + dotted)
+'
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+probe=${HERDR_PROBE_COPY}
+if [ -x \"\$probe\" ]; then
+  { \"\$probe\" integration status 2>&1 || true; } | sed 's/^/S /'
+  printf 'Y %s\\n' \"\$({ \"\$probe\" plugin list --json --plugin ${HERDR_PLUGIN_ID} 2>&1 || true; } | tr '\\n' ' ')\"
+fi
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py") ${keys}
+echo D
+")" || { printf 'TRACER_HERDR_PROBE_FAILED\n'; return 1; }
+  printf '%s\n' "$out" | herdr_removed_verdict
 }
 
 # One --all --yes (or --uninstall --yes) step of pass2: run, append raw
@@ -992,8 +1371,14 @@ cmd_pass2() {
   local log="$PHASE_DIR/pass2-transcript.log"
   : > "$log"
 
+  # Pass 1 left herdr installed: prove its integrations, plugin and sidebar keys before the rerun.
+  if ! herdr_probe_installed >> "$log"; then
+    return 1
+  fi
+
   # Step 1: rerun — a second full install over already-installed state.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
+  ACC_REPAIRED=0; ACC_RECONFIGURED=0; ACC_REINSTALLED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
   ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0; ACC_POST_RUN_ERRORS=0
   ACC_DEP_LINES_FILE="$(mktemp)"
@@ -1007,6 +1392,10 @@ cmd_pass2() {
     printf 'TRACER_RERUN_INCOMPLETE failed=%s dependency_failed=%s mismatched=%s not_attempted=%s crashed=%s post_run_errors=%s summaries=%s runs=%s setup_exit=%s\n' \
       "$ACC_FAILED" "$ACC_DEP_FAILED" "$ACC_MISMATCHED" "$ACC_NOT_ATTEMPTED" "$ACC_CRASHED" \
       "$ACC_POST_RUN_ERRORS" "$ACC_SUMMARIES" "$ACC_RUNS" "$PASS2_STEP_STATUS" >> "$log"
+    rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
+    return 1
+  fi
+  if ! rerun_step_ok >> "$log"; then
     rm -f "$ACC_DEP_LINES_FILE" "$ACC_MANUAL_NAMES_FILE"
     return 1
   fi
@@ -1052,12 +1441,16 @@ cmd_pass2() {
   if ! settings_probe_revert >> "$log"; then
     return 1
   fi
+  if ! herdr_probe_after >> "$log"; then
+    return 1
+  fi
   if ! assert_gsd_absent uninstall >> "$log"; then
     return 1
   fi
 
   # Step 3: reinstall — catches state the uninstall sweep left stray.
   ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0; ACC_DEP_FAILED=0
+  ACC_REPAIRED=0; ACC_RECONFIGURED=0; ACC_REINSTALLED=0
   ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0
   ACC_RUNS=0; ACC_SUMMARIES=0; ACC_NOT_ATTEMPTED=0; ACC_CRASHED=0; ACC_POST_RUN_ERRORS=0
   ACC_DEP_LINES_FILE="$(mktemp)"
@@ -1094,7 +1487,323 @@ cmd_all() {
   cat "$PHASE_DIR/pass2-transcript.log"
 }
 
+# --- nested target (D-18, D-29): orchestrator only, a time-boxed spike --------------------------
+# One disposable quay.io/podman/stable container runs the installer as that image's rootless user
+# through the same tester helpers (the user, home and workspace are parameters), with zsh installed,
+# for the one real Alacritty build (distrobox + inner podman) and herdr's default_shell write.
+
+# The five HOME-relative paths Alacritty's receipt holds (24-01).
+nested_alacritty_paths() {
+  printf '%s\n' .local/bin/alacritty \
+    .local/share/applications/Alacritty.desktop \
+    .local/share/icons/hicolor/scalable/apps/Alacritty.svg \
+    .terminfo/a/alacritty \
+    .terminfo/a/alacritty-direct
+}
+
+nested_start() {
+  ct rm -f "$NESTED_CONTAINER_NAME" >/dev/null 2>&1 || true
+  # label=disable: SELinux on the host blocks the nested podman store otherwise; /dev/fuse is for
+  # fuse-overlayfs. Never privileged.
+  ct run -d --name "$NESTED_CONTAINER_NAME" --device /dev/fuse --security-opt label=disable \
+    "$NESTED_IMAGE" sleep infinity >/dev/null
+}
+
+# EXIT trap: the outer container goes on every outcome.
+nested_teardown() {
+  ct rm -f "$NESTED_CONTAINER_NAME" >/dev/null 2>&1 || true
+  printf 'TRACER_NESTED_TEARDOWN_OK\n'
+}
+
+# $1 names the step, $2 is the failing command's output; only its first non-empty line is reported.
+nested_infeasible() {
+  local detail
+  detail="$(printf '%s\n' "$2" | sed -n '/./{p;q;}')"
+  printf 'TRACER_NESTED_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
+}
+
+# Root installs the box's tools (curl and tar for the uv bootstrap and the workspace stream), the
+# workspace is streamed and uv bootstrapped for the nested user through the shared helpers.
+nested_prepare() {
+  exec_root dnf install -y distrobox desktop-file-utils ncurses git python3 zsh curl tar || return 1
+  install_github_token || return 1
+  copy_workspace || return 1
+  bootstrap_uv || return 1
+  write_tester_path || return 1
+  sync_workspace || return 1
+}
+
+# Inner podman works or it does not: either way the run goes on to the installer step.
+nested_probe_podman() {
+  local out
+  if ! out="$(exec_tester 'podman info >/dev/null' 2>&1)"; then
+    nested_infeasible podman-info "$out"
+    return 0
+  fi
+  if ! out="$(exec_tester "podman run --rm ${NESTED_PROBE_IMAGE} true && podman rmi ${NESTED_PROBE_IMAGE}" 2>&1)"; then
+    nested_infeasible podman-run "$out"
+    return 0
+  fi
+  printf 'TRACER_NESTED_PODMAN_OK\n'
+}
+
+# $1 is the install transcript. Returns 0 when Alacritty installed, 2 (infeasible: the box could
+# not be created) or 1 (a product failure, or no Alacritty row at all).
+nested_classify_alacritty() {
+  local row word detail
+  row="$(sed -nE 's/^[^ ]+ +alacritty +(installed|failed|checksum mismatch|crashed|dependency failed|not attempted|blocked|manual|skipped|updated|repaired|reconfigured|reinstalled)( — (.*))?$/\1|\3/p' "$1" | tail -n 1)"
+  if [[ -z "$row" ]]; then
+    printf 'TRACER_NESTED_BUILD_FAILED detail=no alacritty row in the install output\n'
+    return 1
+  fi
+  word="${row%%|*}"
+  detail="${row#*|}"
+  case "$word" in
+    installed) return 0 ;;
+    failed)
+      if [[ "$detail" == *"distrobox create"* ]]; then
+        nested_infeasible distrobox-create "$detail"
+        return 2
+      fi
+      ;;
+  esac
+  printf 'TRACER_NESTED_BUILD_FAILED detail=%s%s\n' "$word" "${detail:+ — $detail}"
+  return 1
+}
+
+# --categories is the production flag; the terminal category also installs kitty, WezTerm and
+# herdr, which is how herdr's default_shell write gets proven. Only the Alacritty and herdr rows
+# are judged; the others' outcomes are ignored here.
+nested_install() {
+  local tmp status=0 rc=0
+  tmp="$(mktemp)"
+  set +e
+  run_setup_as_tester "--categories terminal --yes" >"$tmp" 2>&1
+  status=$?
+  set -e
+  cat "$tmp"
+  cat "$tmp" >"$PHASE_DIR/nested-install.log"
+  nested_classify_alacritty "$tmp" || rc=$?
+  rm -f "$tmp"
+  if [[ "$status" -gt 1 && "$rc" -eq 0 ]]; then
+    printf 'TRACER_NESTED_BUILD_FAILED detail=setup exit %s\n' "$status"
+    rc=1
+  fi
+  return "$rc"
+}
+
+# After a real build: the receipt holds the five artifacts, the desktop entry validates, terminfo
+# resolves with and without TERMINFO set (SPEC R3), and the inner podman holds no container or image.
+nested_artifacts_ok() {
+  local py out workspace line failed=0 done=0 seen=" " path desktop="" t1="" t2=""
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='from pathlib import Path
+from installer import receipts
+home = Path.home()
+receipt = receipts.read("alacritty")
+for artifact in (receipt.artifacts if receipt else ()):
+    if artifact.path.is_relative_to(home):
+        print("P " + artifact.path.relative_to(home).as_posix())
+'
+  out="$(exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py")
+if desktop-file-validate \"\$HOME/.local/share/applications/Alacritty.desktop\" >/dev/null 2>&1; then echo 'V ok'; else echo 'V fail'; fi
+if infocmp -A \"\$HOME/.terminfo\" alacritty >/dev/null 2>&1; then echo 'T1 ok'; else echo 'T1 fail'; fi
+if env -u TERMINFO -u TERMINFO_DIRS infocmp alacritty >/dev/null 2>&1; then echo 'T2 ok'; else echo 'T2 fail'; fi
+podman ps -a -q | sed 's/^/C /'
+podman images -q | sed 's/^/M /'
+echo D
+")" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "P "*) seen+="${line#P } " ;;
+      "V "*) desktop="${line#V }" ;;
+      "T1 "*) t1="${line#T1 }" ;;
+      "T2 "*) t2="${line#T2 }" ;;
+      "C "*) printf 'TRACER_NESTED_CONTAINER_LEFT id=%s\n' "${line#C }"; failed=1 ;;
+      "M "*) printf 'TRACER_NESTED_IMAGE_LEFT id=%s\n' "${line#M }"; failed=1 ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  while IFS= read -r path; do
+    if [[ "$seen" != *" $path "* ]]; then
+      printf 'TRACER_NESTED_ARTIFACT_MISSING path=%s\n' "$path"
+      failed=1
+    fi
+  done < <(nested_alacritty_paths)
+  if [[ "$desktop" != ok ]]; then printf 'TRACER_NESTED_DESKTOP_INVALID\n'; failed=1; fi
+  if [[ "$t1" != ok ]]; then printf 'TRACER_NESTED_TERMINFO_FAILED step=infocmp-A\n'; failed=1; fi
+  if [[ "$t2" != ok ]]; then printf 'TRACER_NESTED_TERMINFO_FAILED step=infocmp-env\n'; failed=1; fi
+  [[ "$failed" -eq 0 ]] || return 1
+  printf 'TRACER_NESTED_BUILD_OK\n'
+}
+
+# herdr's config.toml default_shell, read as the nested user: `DS <value>` when the key is set,
+# `L <value>` per default-shell ledger entry, `W <path>` for the zsh the installer itself resolves.
+nested_herdr_facts() {
+  local py workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  py='import json, tomllib
+from pathlib import Path
+from installer import postinstall, receipts
+home = Path.home()
+config = home / ".config" / "herdr" / "config.toml"
+doc = tomllib.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+terminal = doc.get("terminal")
+shell = terminal.get("default_shell") if isinstance(terminal, dict) else None
+if shell is not None:
+    print("DS " + str(shell))
+ledger = receipts.config_ledger_dir() / "herdr.json"
+if ledger.exists():
+    for entry in json.loads(ledger.read_text(encoding="utf-8")).get("entries", []):
+        if entry["setting"] == "default-shell":
+            print("L " + str(entry["value"]))
+print("W " + (postinstall.which_with_brew("zsh") or ""))
+'
+  exec_tester "set -euo pipefail
+eval \"\$(${BREW_BIN} shellenv)\"
+cd ${workspace}
+uv run --isolated --no-dev python -c $(printf '%q' "$py")
+echo D
+"
+}
+
+# After the install: default_shell equals the zsh the installer resolves, and the ledger recorded it.
+nested_herdr_shell_ok() {
+  local out line shell=none ledger="" expected="" done=0
+  out="$(nested_herdr_facts)" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "DS "*) shell="${line#DS }" ;;
+      "L "*) ledger="${line#L }" ;;
+      "W "*) expected="${line#W }" ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -z "$expected" || "$shell" != "$expected" ]]; then
+    printf 'TRACER_NESTED_HERDR_SHELL_MISMATCH found=%s expected=%s\n' "$shell" "$expected"
+    return 1
+  fi
+  if [[ "$ledger" != "$expected" ]]; then
+    printf 'TRACER_NESTED_HERDR_SHELL_UNRECORDED expected=%s\n' "$expected"
+    return 1
+  fi
+  printf 'TRACER_NESTED_HERDR_SHELL_OK\n'
+}
+
+# After the uninstall: the key is gone from herdr's kept config.toml.
+nested_herdr_revert_ok() {
+  local out line shell="" done=0
+  out="$(nested_herdr_facts)" || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "DS "*) shell="${line#DS }" ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -n "$shell" ]]; then
+    printf 'TRACER_NESTED_HERDR_REVERT_LEFT found=%s\n' "$shell"
+    return 1
+  fi
+  printf 'TRACER_NESTED_HERDR_REVERT_OK\n'
+}
+
+nested_uninstall_run() {
+  local tmp status=0
+  tmp="$(mktemp)"
+  set +e
+  run_setup_as_tester "--uninstall --yes" >"$tmp" 2>&1
+  status=$?
+  set -e
+  cat "$tmp"
+  cat "$tmp" >"$PHASE_DIR/nested-uninstall.log"
+  rm -f "$tmp"
+  if [[ "$status" -ne 0 ]]; then
+    printf 'TRACER_NESTED_UNINSTALL_INCOMPLETE exit=%s\n' "$status"
+    return 1
+  fi
+}
+
+# None of the five paths and no ~/.terminfo/a may remain after the uninstall.
+nested_uninstall_ok() {
+  local out line paths left=0 done=0
+  paths="$(nested_alacritty_paths | paste -sd' ' -)"
+  out="$(exec_tester "cd ~ && for p in ${paths} .terminfo/a; do if [ -e \"\$p\" ] || [ -L \"\$p\" ]; then echo \"L \$p\"; fi; done; echo D")" \
+    || { printf 'TRACER_NESTED_PROBE_FAILED\n'; return 1; }
+  while IFS= read -r line; do
+    case "$line" in
+      "L "*) printf 'TRACER_NESTED_UNINSTALL_LEFT path=%s\n' "${line#L }"; left=1 ;;
+      D) done=1 ;;
+    esac
+  done <<<"$out"
+  if [[ "$done" -eq 0 ]]; then
+    printf 'TRACER_NESTED_PROBE_FAILED\n'
+    return 1
+  fi
+  [[ "$left" -eq 0 ]] || return 1
+  printf 'TRACER_NESTED_UNINSTALL_OK\n'
+}
+
+cmd_nested() {
+  CONTAINER_NAME="$NESTED_CONTAINER_NAME"
+  TESTER_USER="$NESTED_USER"
+  TESTER_HOME="/home/$NESTED_USER"
+  TESTER_WORKSPACE="$TESTER_HOME/workspace"
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-nested"
+  # No Homebrew in this box: a no-op stands in so the tester helpers' shellenv evals expand to nothing.
+  BREW_BIN=/bin/true
+  trap nested_teardown EXIT
+  ensure_phase_dir
+  local failed=0 build=0
+  nested_start || return 1
+  nested_prepare || return 1
+  nested_probe_podman
+  nested_install || build=$?
+  case "$build" in
+    0) nested_artifacts_ok || failed=1 ;;
+    2) ;; # infeasible: reported by nested_infeasible, not a product failure
+    *) failed=1 ;;
+  esac
+  nested_herdr_shell_ok || failed=1
+  nested_uninstall_run || failed=1
+  nested_uninstall_ok || failed=1
+  nested_herdr_revert_ok || failed=1
+  return "$failed"
+}
+
 main() {
+  local distro=fedora
+  local -a args=()
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--distro" ]]; then
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --distro needs a value\n' >&2
+        usage >&2
+        exit 2
+      fi
+      distro="$2"
+      shift 2
+    else
+      args+=("$1")
+      shift
+    fi
+  done
+  select_distro "$distro"
+  set -- ${args[@]+"${args[@]}"}
   local cmd="${1:-}"
   shift || true
   case "$cmd" in
@@ -1103,6 +1812,7 @@ main() {
     pass2) cmd_pass2 "$@" ;;
     resync) cmd_resync "$@" ;;
     all) cmd_all "$@" ;;
+    nested) cmd_nested "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

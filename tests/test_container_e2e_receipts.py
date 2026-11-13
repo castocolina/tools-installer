@@ -40,6 +40,8 @@ _FUNCTIONS = (
 _CONSTANTS = (
     "RECEIPT_PROBE_TOOL",
     "RECEIPT_PROBE_CATEGORY",
+    "TESTER_USER",
+    "TESTER_HOME",
     "TESTER_WORKSPACE",
     "BREW_BIN",
 )
@@ -148,6 +150,7 @@ def _summary_harness(*names: str) -> str:
         "ACC_INSTALLED=0; ACC_UPDATED=0; ACC_SKIPPED=0; ACC_FAILED=0\n"
         "ACC_DEP_FAILED=0; ACC_MISMATCHED=0; ACC_BLOCKED=0; ACC_MANUAL=0\n"
         "ACC_POST_RUN_ERRORS=0\n"
+        "ACC_REPAIRED=0; ACC_RECONFIGURED=0; ACC_REINSTALLED=0\n"
     )
     return "\n".join(parts)
 
@@ -673,7 +676,8 @@ def _uv_stub() -> str:
         '  while [[ $# -gt 0 && "$1" != python ]]; do shift; done\n'
         '  [[ "${1:-}" == python ]] || return 127\n'
         "  shift\n"
-        f'  exec {exe} "$@"\n'
+        # No exec: a probe that prints a closing marker after `uv run` must still reach it.
+        f'  {exe} "$@"\n'
         "}\n"
         "export -f uv\n"
     )
@@ -1507,3 +1511,1134 @@ def test_the_settings_probes_are_wired_around_the_uninstall_step() -> None:
     assert pass2.index("hook_probe_after") < pass2.index("settings_probe_revert") < reinstall
     assert "settings_probe_write" not in _script_text()
     assert "TESTER_WORKSPACE" in _function("settings_probe_installed")
+
+
+# --- Phase 24-04: one table, three distros ---------------------------------
+
+_DISTROS = ("fedora", "debian", "arch")
+_IMAGES = {
+    "fedora": "fedora:latest",
+    "debian": "docker.io/library/debian:trixie",
+    "arch": "docker.io/library/archlinux:latest",
+}
+_RELEASE_FIXTURES = {
+    "fedora": ("/etc/fedora-release", "Fedora release 44", "Fedora release 44"),
+    "debian": ("/etc/debian_version", "13.1", "13.1"),
+    "arch": ("/etc/os-release", 'NAME="Arch Linux"\nPRETTY_NAME="Arch Linux"', "Arch Linux"),
+}
+
+
+def _distro_stub_ct() -> str:
+    """A `ct` that records its argv and answers the release files with fixture text."""
+    answers = "\n".join(
+        f'    "exec $CONTAINER_NAME cat {path}") printf "%s\\n" {shlex.quote(text)} ;;'
+        for path, text, _expected in _RELEASE_FIXTURES.values()
+    )
+    return (
+        "ct() {\n"
+        '  printf "%s\\n" "$*" >> "$CALLS"\n'
+        '  case "$*" in\n'
+        f"{answers}\n"
+        '    "exec $CONTAINER_NAME id tester") return 1 ;;\n'
+        '    "ps "*) return 0 ;;\n'
+        "  esac\n"
+        "}\n"
+    )
+
+
+def _distro_harness() -> str:
+    """The distro table and the ct-bound functions, with `ct` recording and nothing else real."""
+    text = _script_text()
+    names = (
+        "usage",
+        "select_distro",
+        "exec_root",
+        "exec_tester",
+        "container_running",
+        "container_exists",
+        "start_container",
+        "distro_release_record",
+        "install_root_prereqs",
+        "create_tester",
+        "ensure_phase_dir",
+        "main",
+        "cmd_all",
+    )
+    parts = [
+        'REPO_ROOT="$SCRATCH/repo"',
+        *(f"IMAGE_{name.upper()}={_constant(f'IMAGE_{name.upper()}', text)}" for name in _DISTROS),
+        *(f"{name}={_constant(name, text)}" for name in ("TESTER_USER", "TESTER_HOME")),
+        'TESTER_WORKSPACE="$TESTER_HOME/workspace"',
+        _assign("BREW_BIN", "/nonexistent/brew"),
+        "set -euo pipefail",
+        *(_function(name, text) for name in names),
+        _distro_stub_ct(),
+        "select_distro fedora",
+    ]
+    return "\n".join(parts)
+
+
+def _calls(scratch: Path) -> list[str]:
+    path = scratch / "calls"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+_STAGE_STUBS = (
+    'report() { printf "%s %s %s %s %s\\n" "$1" "$DISTRO" "$IMAGE" "$CONTAINER_NAME" '
+    '"$PHASE_DIR"; }\n'
+    'cmd_bootstrap() { report BOOT; mkdir -p "$PHASE_DIR"; }\n'
+    "cmd_pass1() { report PASS1; }\n"
+    'cmd_pass2() { report PASS2; printf "p2\\n" > "$PHASE_DIR/pass2-transcript.log"; }\n'
+)
+
+
+def test_distro_is_threaded_through_every_command(tmp_path: Path) -> None:
+    """R1-20: `main all --distro debian` selects one table entry and every stage reads it."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + "\n" + _STAGE_STUBS + "main all --distro debian\n", scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    phase = str(scratch / "repo" / ".e2e-artifacts" / "container-debian")
+    for stage in ("BOOT", "PASS1", "PASS2"):
+        assert (
+            f"{stage} debian docker.io/library/debian:trixie tools-installer-e2e-debian {phase}"
+            in result.stdout
+        )
+
+    for distro in _DISTROS:
+        direct = tmp_path / f"direct-{distro}"
+        direct.mkdir()
+        script = (
+            _distro_harness() + f"\nselect_distro {distro}\nstart_container\ninstall_root_prereqs\n"
+            "create_tester\ndistro_release_record\n"
+        )
+        run = _run(script, direct)
+        assert run.returncode == 0, run.stdout + run.stderr
+        name = f"tools-installer-e2e-{distro}"
+        assert f"run -d --name {name} {_IMAGES[distro]} sleep infinity" in _calls(direct)
+        expected = _RELEASE_FIXTURES[distro][2]
+        assert f"DISTRO_RELEASE={distro}:{expected}" in run.stdout
+
+    debian_calls = _calls(tmp_path / "direct-debian")
+    assert any(
+        "env DEBIAN_FRONTEND=noninteractive apt-get install" in call and " npm" in call
+        for call in debian_calls
+    )
+    assert any(call.endswith("apt-get update") for call in debian_calls)
+    arch_calls = _calls(tmp_path / "direct-arch")
+    assert any("pacman -Syu --noconfirm --needed" in call and " npm" in call for call in arch_calls)
+    fedora_calls = _calls(tmp_path / "direct-fedora")
+    assert any("dnf install -y" in call for call in fedora_calls)
+
+
+def test_unknown_distro_exits_2(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + "\n" + _STAGE_STUBS + "main all --distro gentoo\n", scratch)
+    assert result.returncode == 2
+    assert "unknown distro: gentoo" in result.stderr
+    assert "Usage: container-e2e-verify.sh" in result.stderr
+    assert "BOOT" not in result.stdout
+
+
+def test_distro_artifact_dirs_differ(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _distro_harness() + (
+        '\nselect_distro debian; printf "%s\\n" "$PHASE_DIR"\n'
+        'select_distro fedora; printf "%s\\n" "$PHASE_DIR"\n'
+        'select_distro arch; printf "%s\\n" "$PHASE_DIR" "$CONTAINER_NAME"\n'
+    )
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stderr
+    debian, fedora, arch, arch_name = result.stdout.splitlines()
+    assert debian.endswith("/.e2e-artifacts/container-debian")
+    assert fedora.endswith("/.e2e-artifacts/container-fedora")
+    assert arch.endswith("/.e2e-artifacts/container-arch")
+    assert arch_name == "tools-installer-e2e-arch"
+    assert len({debian, fedora, arch}) == 3
+
+
+@pytest.mark.parametrize("distro", _DISTROS)
+def test_every_distro_prereq_line_names_the_shared_set(tmp_path: Path, distro: str) -> None:
+    """R1-19: the shared set on every distro, and never zsh."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + f"\nselect_distro {distro}\ninstall_root_prereqs\n", scratch)
+    assert result.returncode == 0, result.stderr
+    installed = " ".join(_calls(scratch)).split()
+    # Arch names Python's package `python`; the other two ship `python3`.
+    python = "python" if distro == "arch" else "python3"
+    for word in ("sudo", "git", python, "nodejs", "chromium", "curl", "file"):
+        assert word in installed, (distro, word)
+    assert "zsh" not in installed
+
+
+@pytest.mark.parametrize("distro", _DISTROS)
+def test_tester_is_created_with_bash(tmp_path: Path, distro: str) -> None:
+    """R1-03: Debian's useradd defaults to /bin/sh, where the probes' `[[` and pipefail fail."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_distro_harness() + f"\nselect_distro {distro}\ncreate_tester\n", scratch)
+    assert result.returncode == 0, result.stderr
+    assert f"exec tools-installer-e2e-{distro} useradd -m -s /bin/bash tester" in _calls(scratch)
+
+
+def test_harness_never_runs_setup_outside_a_container() -> None:
+    """Every `setup.py` invocation sits inside the one tester-exec helper, never on the host."""
+    text = _script_text()
+    runner = _function("run_setup_as_tester", text)
+    code = text.replace(_function("usage", text), "")
+    invoking = re.compile(r"\b(uv run|python3?)\b.*\bsetup\.py\b|\./setup\.py")
+    for line in code.splitlines():
+        if invoking.search(line) and not line.lstrip().startswith("#"):
+            assert line in runner, line
+
+
+# --- Phase 24-04 task 2: the rerun gate, the blocked listing, the herdr probes ----------
+
+_UNEXPECTED_KINDS = {
+    "installed": "installed",
+    "updated": "updated",
+    "repaired": "repaired",
+    "reconfigured": "reconfigured",
+    "reinstalled": "reinstalled",
+    "failed": "failed",
+    "mismatched": "checksum mismatch",
+    "dependency_failed": "dependency failed",
+}
+_MANUAL_PI = "○ pi  manual — see the setup steps in the log"
+_MANUAL_ZSH = "○ zsh  manual — you run: `sudo dnf install zsh`"
+
+
+def _rerun_harness() -> str:
+    names = (
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+        "rerun_step_ok",
+    )
+    return 'PHASE_DIR="$SCRATCH/phase"\n' + _summary_harness(*names)
+
+
+def _rerun(
+    scratch: Path, transcript: str, baseline: Sequence[str] | None, command: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    phase = scratch / "phase"
+    phase.mkdir(parents=True, exist_ok=True)
+    if baseline is not None:
+        _write_listing(phase / "pass1-manual.txt", baseline)
+    return _summary_run(
+        _rerun_harness(),
+        scratch,
+        transcript,
+        command or "accumulate_summaries $TRANSCRIPT; rerun_step_ok",
+    )
+
+
+def test_rerun_with_only_skipped_rows_passes(tmp_path: Path) -> None:
+    result = _rerun(tmp_path, "Summary — 5 skipped, 2 blocked\n", [])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TRACER_RERUN_UNEXPECTED" not in result.stdout
+
+
+def test_rerun_with_the_same_manual_set_passes(tmp_path: Path) -> None:
+    transcript = f"Summary — 5 skipped, 2 manual\n{_MANUAL_PI}\n{_MANUAL_ZSH}\n"
+    result = _rerun(tmp_path, transcript, ["pi", "zsh"])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_rerun_with_a_new_manual_row_fails(tmp_path: Path) -> None:
+    transcript = f"Summary — 5 skipped, 2 manual\n{_MANUAL_PI}\n{_MANUAL_ZSH}\n"
+    added = _rerun(tmp_path / "added", transcript, ["pi"])
+    assert added.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED" in added.stdout
+    assert "manual_added=zsh" in added.stdout
+    missing = _rerun(
+        tmp_path / "missing", f"Summary — 5 skipped, 1 manual\n{_MANUAL_PI}\n", ["pi", "zsh"]
+    )
+    assert missing.returncode != 0
+    assert "manual_missing=zsh" in missing.stdout
+
+
+def test_rerun_without_a_pass1_manual_baseline_fails(tmp_path: Path) -> None:
+    result = _rerun(tmp_path, "Summary — 5 skipped\n", None)
+    assert result.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED" in result.stdout
+
+
+@pytest.mark.parametrize("kind", sorted(_UNEXPECTED_KINDS))
+def test_rerun_with_an_unexpected_row_fails(tmp_path: Path, kind: str) -> None:
+    result = _rerun(tmp_path, f"Summary — 4 skipped, 1 {_UNEXPECTED_KINDS[kind]}\n", [])
+    assert result.returncode != 0
+    assert "TRACER_RERUN_UNEXPECTED" in result.stdout
+    assert f"{kind}=1" in result.stdout
+
+
+def test_rerun_with_an_explained_dependency_failure_fails(tmp_path: Path) -> None:
+    """R2-10: pass 1 would accept this transcript; the rerun must not."""
+    transcript = "\n".join(
+        (
+            "Summary — 5 skipped, 1 manual, 1 dependency failed",
+            "✖ mmdc  dependency failed — pi",
+            _MANUAL_PI,
+        )
+    )
+    both = "accumulate_summaries $TRANSCRIPT; install_step_ok 1"
+    assert _rerun(tmp_path / "gate", transcript, ["pi"], both).returncode == 0
+    result = _rerun(tmp_path / "rerun", transcript, ["pi"])
+    assert result.returncode != 0
+    assert "dependency_failed=1" in result.stdout
+    assert "TRACER_RERUN_UNEXPECTED" in result.stdout
+
+
+def _pass1_script(scratch: Path, transcript: str, call: str) -> str:
+    """cmd_pass1 with the container-bound helpers stubbed and a fixed transcript per run."""
+    fixture = scratch / "pass1-transcript.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(transcript, encoding="utf-8")
+    names = (
+        "parse_summary_line",
+        "accumulate_summaries",
+        "dependency_failures_explained",
+        "install_step_ok",
+        "list_blocked_rows",
+        "ensure_phase_dir",
+        "die",
+        "cmd_pass1",
+    )
+    stubs = (
+        "container_running() { return 0; }\n"
+        f"run_setup_as_tester() {{ cat {shlex.quote(str(fixture))}; }}\n"
+        "assert_receipt_present() { return 0; }\n"
+        "assert_gsd_absent() { return 0; }\n"
+    )
+    return (
+        'PHASE_DIR="$SCRATCH/phase"\nDISTRO=debian\n'
+        + _summary_harness(*names)
+        + "\n"
+        + stubs
+        + call
+        + "\n"
+    )
+
+
+def test_pass1_manual_set_is_persisted_sorted_unique(tmp_path: Path) -> None:
+    transcript = f"Summary — 2 installed, 2 manual\n{_MANUAL_ZSH}\n{_MANUAL_PI}\n"
+    result = _run(_pass1_script(tmp_path, transcript, "cmd_pass1 --categories a,b"), tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    saved = (tmp_path / "phase" / "pass1-manual.txt").read_text(encoding="utf-8")
+    assert saved == "pi\nzsh\n"
+
+
+def test_blocked_rows_are_listed_once_with_their_reason(tmp_path: Path) -> None:
+    """R1-23: a plan row and an outcome row for one tool print one line, and the step passes."""
+    rows = (
+        "✖ mmdc  blocked — needs Node 20 or newer",
+        "✖ puppeteer  blocked — needs Node 22 or newer",
+    )
+    transcript = "\n".join(
+        ("Install plan — 3 install, 2 blocked", *rows, "Summary — 3 installed, 2 blocked", *rows)
+    )
+    result = _run(_pass1_script(tmp_path, transcript, "cmd_pass1"), tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    listed = [
+        line for line in result.stdout.splitlines() if line.startswith("TRACER_DISTRO_BLOCKED")
+    ]
+    assert listed == [
+        "TRACER_DISTRO_BLOCKED distro=debian tool=mmdc reason=needs Node 20 or newer",
+        "TRACER_DISTRO_BLOCKED distro=debian tool=puppeteer reason=needs Node 22 or newer",
+    ]
+    assert "TRACER_CLEAN_INSTALL_OK" in result.stdout
+
+
+def test_a_pass_that_installs_nothing_is_misconfigured(tmp_path: Path) -> None:
+    result = _run(_pass1_script(tmp_path, "Summary — 3 skipped\n", "cmd_pass1"), tmp_path)
+    assert result.returncode != 0
+    assert "TRACER_DISTRO_MISCONFIGURED distro=debian" in result.stdout
+    assert "TRACER_CLEAN_INSTALL_OK" not in result.stdout
+
+
+def test_rerun_gate_is_wired_into_pass2() -> None:
+    pass2 = _function("cmd_pass2")
+    gate = pass2.index("install_step_ok ")
+    rerun = pass2.index("rerun_step_ok")
+    assert gate < rerun < pass2.index("TRACER_RERUN_OK")
+    assert "ACC_REPAIRED=0" in pass2
+    assert "ACC_REINSTALLED=0" in _function("cmd_pass1")
+
+
+def test_the_herdr_probes_are_wired_around_the_uninstall_step() -> None:
+    pass2 = _function("cmd_pass2")
+    first_run = pass2.index('run_pass2_step "--all --yes"')
+    uninstall = pass2.index('run_pass2_step "--uninstall --yes"')
+    reinstall = pass2.rindex('run_pass2_step "--all --yes"')
+    assert pass2.index("herdr_probe_installed") < first_run < uninstall
+    assert pass2.index("settings_probe_revert") < pass2.index("herdr_probe_after") < reinstall
+
+
+# --- herdr -------------------------------------------------------------------------------
+
+
+def _herdr_script(*extra: str) -> str:
+    text = _script_text()
+    names = (
+        "ensure_phase_dir",
+        "herdr_sidebar_keys",
+        "herdr_status_parse",
+        "herdr_status_clean",
+        "herdr_installed_verdict",
+        "herdr_removed_verdict",
+        "herdr_probe_installed",
+        "herdr_probe_after",
+    )
+    parts = [
+        f"HERDR_PLUGIN_ID={_constant('HERDR_PLUGIN_ID', text)}",
+        'HERDR_PROBE_COPY="$SCRATCH/herdr-probe"',
+        'PHASE_DIR="$SCRATCH/phase"',
+        *(_function(name, text) for name in names),
+        *extra,
+    ]
+    return "\n".join(parts)
+
+
+_STATUS_CLEAN = (
+    "claude: not installed (/x)\nletta (experimental): not installed (/y)\npi: not installed"
+)
+
+
+def test_herdr_status_parse(tmp_path: Path) -> None:
+    fixture = tmp_path / "status.txt"
+
+    def parse(text: str, command: str = "herdr_status_parse") -> subprocess.CompletedProcess[str]:
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+        fixture.write_text(text, encoding="utf-8")
+        return _run(
+            _herdr_script() + f'\n{command} < "{fixture}"\n', tmp_path, path="/usr/bin:/bin"
+        )
+
+    parsed = parse(_STATUS_CLEAN + "\n")
+    assert parsed.stdout.splitlines() == [
+        "claude|not installed",
+        "letta|not installed",
+        "pi|not installed",
+    ]
+    clean = parse(_STATUS_CLEAN + "\n", "herdr_status_clean")
+    assert clean.returncode == 0, clean.stdout
+    dirty = parse(
+        "claude: current (v10) (/x)\nopencode: needs repair (v13) (/y)\npi: not installed\n",
+        "herdr_status_clean",
+    )
+    assert dirty.returncode != 0
+    assert dirty.stdout.splitlines() == [
+        "TRACER_HERDR_NOT_CURRENT target=claude",
+        "TRACER_HERDR_NOT_CURRENT target=opencode",
+    ]
+    unreadable = parse("error: no server\n", "herdr_status_clean")
+    assert unreadable.returncode != 0
+    assert "TRACER_HERDR_STATUS_UNREADABLE" in unreadable.stdout
+
+
+def _facts(*lines: str, done: bool = True) -> str:
+    return "\n".join([*lines, *(["D"] if done else [])]) + "\n"
+
+
+_GOOD_FACTS = (
+    "H claude",
+    "H sidebar-markers",
+    "S claude: current (v10) (/x)",
+    "S pi: not installed",
+    'Y [{"id": "herdr-setup.markers"}]',
+    "C ui.sidebar.agents.rows",
+    "C ui.sidebar.agents.row_gap",
+    "C ui.sidebar.spaces.rows",
+    "E sidebar ui.sidebar.agents.rows []",
+)
+
+
+def _verdict(tmp_path: Path, facts: str) -> subprocess.CompletedProcess[str]:
+    fixture = tmp_path / "facts.txt"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text(facts, encoding="utf-8")
+    return _run(
+        _herdr_script() + f'\nherdr_installed_verdict < "{fixture}"\n',
+        tmp_path,
+        path="/usr/bin:/bin",
+    )
+
+
+def test_herdr_installed_probe_requires_every_piece(tmp_path: Path) -> None:
+    ok = _verdict(tmp_path / "ok", _facts(*_GOOD_FACTS))
+    assert ok.returncode == 0, ok.stdout
+    assert ok.stdout.splitlines() == ["TRACER_HERDR_INSTALLED_OK hosts=claude"]
+
+    def drop(prefix: str) -> tuple[str, ...]:
+        return tuple(line for line in _GOOD_FACTS if not line.startswith(prefix))
+
+    cases = {
+        "no-receipt": (("N",), "TRACER_HERDR_NOT_RECORDED reason=no-receipt"),
+        "no-sidebar": (drop("H sidebar"), "TRACER_HERDR_NOT_RECORDED reason=no-sidebar"),
+        "no-hosts": (drop("H claude"), "TRACER_HERDR_NOT_RECORDED reason=no-hosts"),
+        "not-current": (
+            (*drop("S claude"), "S claude: needs repair (v9) (/x)"),
+            "TRACER_HERDR_NOT_CURRENT target=claude",
+        ),
+        "no-status-line": (drop("S claude"), "TRACER_HERDR_NOT_CURRENT target=claude"),
+        "no-plugin": (drop("Y "), "TRACER_HERDR_PLUGIN_MISSING"),
+        "no-key": (
+            drop("C ui.sidebar.spaces.rows"),
+            "TRACER_HERDR_KEY_MISSING key=ui.sidebar.spaces.rows",
+        ),
+        "skill": (
+            (*_GOOD_FACTS, "W /home/tester/.claude/skills/herdr"),
+            "TRACER_HERDR_SKILL_FOUND path=/home/tester/.claude/skills/herdr",
+        ),
+    }
+    for name, (lines, expected) in cases.items():
+        result = _verdict(tmp_path / name, _facts(*lines))
+        assert result.returncode != 0, name
+        assert expected in result.stdout.splitlines(), (name, result.stdout)
+        assert not any(
+            line.startswith("TRACER_HERDR_INSTALLED_OK") for line in result.stdout.splitlines()
+        )
+    cut = _verdict(tmp_path / "cut", _facts(*_GOOD_FACTS, done=False))
+    assert cut.returncode != 0
+    assert "TRACER_HERDR_PROBE_FAILED" in cut.stdout
+
+
+def test_herdr_probe_expects_no_default_shell_without_zsh(tmp_path: Path) -> None:
+    """R1-19: these containers carry no zsh, so no default_shell may be written."""
+    for name, extra, found in (
+        ("config", "DS /usr/bin/zsh", "/usr/bin/zsh"),
+        ("ledger", 'E default-shell terminal.default_shell "/bin/zsh"', '"/bin/zsh"'),
+    ):
+        result = _verdict(tmp_path / name, _facts(*_GOOD_FACTS, extra))
+        assert result.returncode != 0
+        assert f"TRACER_HERDR_SHELL_SET found={found}" in result.stdout.splitlines()
+    assert _verdict(tmp_path / "none", _facts(*_GOOD_FACTS)).returncode == 0
+
+
+def _herdr_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, status_exit: int = 0) -> Path:
+    """A scratch HOME with a fake herdr, its receipt, ledger, plugin answer and config.toml."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    (scratch / "phase").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    receipts.write(
+        Receipt(
+            tool="herdr",
+            at="2026-11-12T12:00:00+00:00",
+            method=ReceiptMethod(kind="github_release", key="a" * 64),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"herdr-integration": ("claude", "sidebar-markers")},
+        )
+    )
+    binary = scratch / ".local" / "bin" / "herdr"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        '  "integration status")\n'
+        '    printf "claude: current (v10) (/x)\\npi: not installed (/y)\\n"\n'
+        f"    exit {status_exit} ;;\n"
+        '  "plugin list") printf \'[{"id": "herdr-setup.markers"}]\\n\' ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    config = scratch / ".config" / "herdr" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[ui.sidebar.agents]\nrows = [["agent"]]\nrow_gap = 1\n\n[ui.sidebar.spaces]\nrows = []\n',
+        encoding="utf-8",
+    )
+    ledger = receipts.config_ledger_dir() / "herdr.json"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    entries = [
+        {"setting": "sidebar", "key_path": ["ui", "sidebar", "agents", "rows"], "value": []},
+        {"setting": "sidebar", "key_path": ["ui", "sidebar", "agents", "row_gap"], "value": 1},
+        {"setting": "sidebar", "key_path": ["ui", "sidebar", "spaces", "rows"], "value": []},
+    ]
+    ledger.write_text(json.dumps({"v": 1, "agent": "herdr", "entries": entries}), encoding="utf-8")
+    return scratch
+
+
+def _herdr_probe_script(tmp_path: Path, call: str) -> str:
+    brew = tmp_path / "linuxbrew" / "bin" / "brew"
+    return _herdr_script(
+        f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+        _assign("TESTER_WORKSPACE", str(tmp_path)),
+        _assign("BREW_BIN", str(brew if brew.exists() else _brew_stub(tmp_path))),
+        'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+        _uv_stub(),
+        call,
+    )
+
+
+def test_herdr_reload_failure_is_not_a_probe_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-28: no herdr server runs in a container, and `integration status` may exit non-zero."""
+    scratch = _herdr_home(tmp_path, monkeypatch, status_exit=3)
+    log = scratch / "phase" / "pass1-transcript.log"
+    log.write_text("note: herdr server reload-config failed: no server running\n", encoding="utf-8")
+    result = _run(_herdr_probe_script(tmp_path, "herdr_probe_installed"), scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["TRACER_HERDR_INSTALLED_OK hosts=claude"]
+    keys = (scratch / "phase" / "herdr-ledger-keys.txt").read_text(encoding="utf-8").split()
+    assert keys == [
+        "ui.sidebar.agents.rows",
+        "ui.sidebar.agents.row_gap",
+        "ui.sidebar.spaces.rows",
+    ]
+    assert (scratch / "herdr-probe").exists()
+
+
+def test_herdr_probe_after_proves_status_plugin_and_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch = _herdr_home(tmp_path, monkeypatch)
+    assert _run(_herdr_probe_script(tmp_path, "herdr_probe_installed"), scratch).returncode == 0
+    after = _herdr_probe_script(tmp_path, "herdr_probe_after")
+    # The fake herdr still reports claude current and the plugin listed, and the keys remain.
+    dirty = _run(after, scratch)
+    assert dirty.returncode != 0
+    lines = dirty.stdout.splitlines()
+    assert "TRACER_HERDR_NOT_CURRENT target=claude" in lines
+    assert "TRACER_HERDR_PLUGIN_LEFT" in lines
+    assert "TRACER_HERDR_KEY_LEFT key=ui.sidebar.agents.row_gap" in lines
+    # After the uninstall: every target not installed, no plugin, config.toml without our keys.
+    (scratch / ".config" / "herdr" / "config.toml").write_text("onboarding = false\n")
+    (scratch / "herdr-probe").write_text(
+        '#!/bin/sh\ncase "$1 $2" in\n  "integration status") echo "claude: not installed (/x)" ;;\n'
+        '  "plugin list") echo "[]" ;;\nesac\n',
+        encoding="utf-8",
+    )
+    clean = _run(after, scratch)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == [
+        "TRACER_HERDR_STATUS_CLEAN_OK",
+        "TRACER_HERDR_REVERT_OK",
+    ]
+    (scratch / "phase" / "herdr-ledger-keys.txt").unlink()
+    unknown = _run(after, scratch)
+    assert unknown.returncode != 0
+    assert "TRACER_HERDR_REVERT_UNKNOWN" in unknown.stdout
+
+
+def _revert_with_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: str,
+    text: str,
+    *,
+    created: bool,
+) -> subprocess.CompletedProcess[str]:
+    from installer import agent_settings
+
+    home = _TunedHome(tmp_path, monkeypatch)
+    path = agent_settings.settings_file(agent, home=home.scratch, platform_os="linux")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    (home.workspace / ".e2e-tuned-agents.json").write_text(
+        json.dumps({"agents": [agent], "created": {agent: [str(path)] if created else []}}),
+        encoding="utf-8",
+    )
+    return home.run("settings_probe_revert")
+
+
+def test_settings_revert_tolerates_herdr_residue_only_in_created_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-22: empty containers and codex's `features.hooks` are herdr's residue, if we made it."""
+    empty = _revert_with_file(
+        tmp_path / "empty", monkeypatch, "claude", '{"hooks": {}}', created=True
+    )
+    assert empty.returncode == 0, empty.stdout + empty.stderr
+    assert empty.stdout.splitlines() == [
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['claude'])}"
+    ]
+
+    marked = _revert_with_file(
+        tmp_path / "marked", monkeypatch, "claude", '{"herdr-agent-state": {}}', created=True
+    )
+    assert marked.returncode != 0
+    assert marked.stdout.splitlines() == [
+        'TRACER_SETTINGS_FILE_LEFT agent=claude residue={"herdr-agent-state":{}}'
+    ]
+
+    codex = _revert_with_file(
+        tmp_path / "codex", monkeypatch, "codex", "[features]\nhooks = true\n", created=True
+    )
+    assert codex.returncode == 0, codex.stdout + codex.stderr
+    assert codex.stdout.splitlines() == [
+        "TRACER_HERDR_RESIDUE agent=codex key=features.hooks",
+        f"TRACER_SETTINGS_REVERT_OK keys={_tuned_keys(['codex'])}",
+    ]
+
+    other = _revert_with_file(
+        tmp_path / "other",
+        monkeypatch,
+        "codex",
+        '[features]\nhooks = true\nmore = "x"\n',
+        created=True,
+    )
+    assert other.returncode != 0
+    assert other.stdout.startswith("TRACER_SETTINGS_FILE_LEFT agent=codex")
+
+    foreign = _revert_with_file(
+        tmp_path / "foreign",
+        monkeypatch,
+        "claude",
+        '{"hooks": {"Stop": []}, "mine": 1}',
+        created=False,
+    )
+    assert foreign.returncode == 0, foreign.stdout + foreign.stderr
+
+
+# --- Phase 24-04 task 3: tester user parameters and the nested-podman target ----------------
+
+_TESTER_NAMES = ("exec_tester", "stream_worktree", "copy_workspace", "run_setup_as_tester")
+_NESTED_OVERRIDE = (
+    "TESTER_USER=podman\nTESTER_HOME=/home/podman\nTESTER_WORKSPACE=/home/podman/workspace\n"
+    "CONTAINER_NAME=tools-installer-e2e-nested\n"
+)
+
+
+def _tester_script(scratch: Path, override: str = "") -> str:
+    """The tester helpers over a recording `ct`; git and tar are stubbed (R1-20)."""
+    text = _script_text()
+    parts = [
+        _distro_harness(),
+        *(_function(name, text) for name in _TESTER_NAMES[1:]),
+        "git() { :; }",
+        "tar() { :; }",
+        override,
+    ]
+    return "\n".join(parts)
+
+
+def test_default_tester_argv_is_unchanged(tmp_path: Path) -> None:
+    """R1-21: with the defaults every recorded argv is today's; the nested user changes it."""
+    default = tmp_path / "default"
+    default.mkdir()
+    script = (
+        _tester_script(default) + "\nexec_tester x\nstream_worktree\nrun_setup_as_tester '--x'\n"
+    )
+    result = _run(script, default)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (default / "calls").read_text(encoding="utf-8")
+    assert "exec tools-installer-e2e-fedora su - tester -c x\n" in calls
+    assert (
+        "exec -i tools-installer-e2e-fedora su - tester -c "
+        "mkdir -p /home/tester/workspace && tar -C /home/tester/workspace -xf -\n"
+    ) in calls
+    assert "cd /home/tester/workspace\n" in calls
+
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    script = (
+        _tester_script(nested, _NESTED_OVERRIDE)
+        + "\nexec_tester x\nstream_worktree\nrun_setup_as_tester '--x'\n"
+    )
+    result = _run(script, nested)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (nested / "calls").read_text(encoding="utf-8")
+    assert "exec tools-installer-e2e-nested su - podman -c x\n" in calls
+    assert (
+        "exec -i tools-installer-e2e-nested su - podman -c "
+        "mkdir -p /home/podman/workspace && tar -C /home/podman/workspace -xf -\n"
+    ) in calls
+    assert "cd /home/podman/workspace\n" in calls
+    assert "/home/tester" not in calls
+
+
+def test_create_tester_follows_the_tester_user(tmp_path: Path) -> None:
+    """The sudoers file and the brew chown name the parameterized user; defaults are unchanged."""
+    default = tmp_path / "default"
+    default.mkdir()
+    run = _run(_tester_script(default) + "\ncreate_tester\n", default)
+    assert run.returncode == 0, run.stderr
+    calls = (default / "calls").read_text(encoding="utf-8")
+    assert "tester ALL=(ALL) NOPASSWD:ALL" in calls
+    assert "/etc/sudoers.d/tester && chmod 440 /etc/sudoers.d/tester" in calls
+    assert "chown -R tester:tester /home/linuxbrew" in calls
+
+
+_NESTED_CONSTANTS = ("NESTED_IMAGE", "NESTED_CONTAINER_NAME", "NESTED_USER", "NESTED_PROBE_IMAGE")
+_NESTED_STEPS = (
+    "nested_start",
+    "nested_prepare",
+    "nested_probe_podman",
+    "nested_install",
+    "nested_artifacts_ok",
+    "nested_herdr_shell_ok",
+    "nested_uninstall_run",
+    "nested_uninstall_ok",
+    "nested_herdr_revert_ok",
+)
+
+
+def _nested_script(call: str, *, real: Sequence[str] = (), stubs: str = "") -> str:
+    """cmd_nested's helpers over a recording `ct`; a step not named in `real` prints its name."""
+    text = _script_text()
+    names = (
+        "nested_teardown",
+        "nested_infeasible",
+        "nested_alacritty_paths",
+        "nested_herdr_facts",
+        "cmd_nested",
+        *real,
+    )
+    steps = "\n".join(
+        f'{name}() {{ printf "STEP {name}\\n"; }}' for name in _NESTED_STEPS if name not in real
+    )
+    parts = [
+        _distro_harness(),
+        *(f"{name}={_constant(name, text)}" for name in _NESTED_CONSTANTS),
+        *(_function(name, text) for name in dict.fromkeys(names)),
+        steps,
+        stubs,
+        call,
+    ]
+    return "\n".join(parts)
+
+
+def test_nested_outer_container_flags(tmp_path: Path) -> None:
+    """D-18: the outer box gets /dev/fuse and label=disable, never a privileged flag."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    result = _run(_nested_script("nested_start", real=("nested_start",)), scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_lines = [call for call in _calls(scratch) if call.startswith("run ")]
+    assert run_lines == [
+        "run -d --name tools-installer-e2e-nested --device /dev/fuse "
+        "--security-opt label=disable quay.io/podman/stable:latest sleep infinity"
+    ]
+    assert "privileged" not in " ".join(_calls(scratch))
+
+
+def test_nested_teardown_runs_on_failure(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _nested_script("cmd_nested || true", stubs="nested_install() { return 1; }")
+    result = _run(script, scratch)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "rm -f tools-installer-e2e-nested" in _calls(scratch)
+    assert "TRACER_NESTED_TEARDOWN_OK" in result.stdout
+    # The nested run is told apart from a distro run by its own container, user and artifact dir.
+    assert "STEP nested_start" in result.stdout
+
+
+def test_nested_cmd_fails_when_a_step_fails(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    script = _nested_script(
+        'rc=0; cmd_nested || rc=$?; printf "RC=%s\\n" "$rc"', stubs="nested_install() { return 1; }"
+    )
+    failing = _run(script, scratch)
+    assert "RC=1" in failing.stdout
+    assert "STEP nested_artifacts_ok" not in failing.stdout
+    passing = _run(
+        _nested_script('rc=0; cmd_nested || rc=$?; printf "RC=%s\\n" "$rc"'), tmp_path / "ok"
+    )
+    assert "RC=0" in passing.stdout
+    steps = [line for line in passing.stdout.splitlines() if line.startswith("STEP ")]
+    assert steps == [
+        "STEP nested_start",
+        "STEP nested_prepare",
+        "STEP nested_probe_podman",
+        "STEP nested_install",
+        "STEP nested_artifacts_ok",
+        "STEP nested_herdr_shell_ok",
+        "STEP nested_uninstall_run",
+        "STEP nested_uninstall_ok",
+        "STEP nested_herdr_revert_ok",
+    ]
+
+
+_ALACRITTY_PATHS = (
+    ".local/bin/alacritty",
+    ".local/share/applications/Alacritty.desktop",
+    ".local/share/icons/hicolor/scalable/apps/Alacritty.svg",
+    ".terminfo/a/alacritty",
+    ".terminfo/a/alacritty-direct",
+)
+_ARTIFACT_FACTS = (*(f"P {path}" for path in _ALACRITTY_PATHS), "V ok", "T1 ok", "T2 ok")
+
+
+def _fact_stub(*lines: str) -> str:
+    return _assign("FACTS", "\n".join(lines)) + '\nexec_tester() { printf "%s\\n" "$FACTS"; }\n'
+
+
+def test_nested_artifact_check(tmp_path: Path) -> None:
+    def check(name: str, *lines: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        script = _nested_script(
+            "nested_artifacts_ok", real=("nested_artifacts_ok",), stubs=_fact_stub(*lines, "D")
+        )
+        return _run(script, scratch)
+
+    ok = check("ok", *_ARTIFACT_FACTS)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NESTED_BUILD_OK"]
+    image = check("image", *_ARTIFACT_FACTS, "M sha256abc")
+    assert image.returncode != 0
+    assert image.stdout.splitlines() == ["TRACER_NESTED_IMAGE_LEFT id=sha256abc"]
+    box = check("box", *_ARTIFACT_FACTS, "C abc123")
+    assert box.returncode != 0
+    assert "TRACER_NESTED_CONTAINER_LEFT id=abc123" in box.stdout
+    leaf = check(
+        "leaf", *(fact for fact in _ARTIFACT_FACTS if not fact.endswith("alacritty-direct"))
+    )
+    assert leaf.returncode != 0
+    assert leaf.stdout.splitlines() == [
+        "TRACER_NESTED_ARTIFACT_MISSING path=.terminfo/a/alacritty-direct"
+    ]
+    for failing, expected in (
+        ("V fail", "TRACER_NESTED_DESKTOP_INVALID"),
+        ("T1 fail", "TRACER_NESTED_TERMINFO_FAILED step=infocmp-A"),
+        ("T2 fail", "TRACER_NESTED_TERMINFO_FAILED step=infocmp-env"),
+    ):
+        facts = tuple(f for f in _ARTIFACT_FACTS if f[:2] != failing[:2])
+        result = check(failing.replace(" ", "-"), *facts, failing)
+        assert result.returncode != 0
+        assert expected in result.stdout.splitlines()
+    cut = _run(
+        _nested_script(
+            "nested_artifacts_ok", real=("nested_artifacts_ok",), stubs=_fact_stub(*_ARTIFACT_FACTS)
+        ),
+        tmp_path / "cut",
+    )
+    assert cut.returncode != 0
+    assert "TRACER_NESTED_PROBE_FAILED" in cut.stdout
+
+
+def test_nested_infeasible_is_distinct(tmp_path: Path) -> None:
+    """An inner podman that cannot run is infeasibility, not a product failure; the run goes on."""
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    stubs = (
+        "exec_tester() { case \"$1\" in *'podman info'*) "
+        "printf 'Error: no newuidmap\\nsecond line\\n'; return 1 ;; esac; }\n"
+        'nested_install() { printf "INSTALLER_RAN\\n"; }\n'
+    )
+    script = _nested_script("cmd_nested || true", real=("nested_probe_podman",), stubs=stubs)
+    result = _run(script, scratch)
+    lines = result.stdout.splitlines()
+    assert "TRACER_NESTED_INFEASIBLE step=podman-info detail=Error: no newuidmap" in lines
+    assert not any("TRACER_NESTED_BUILD_FAILED" in line for line in lines)
+    assert "TRACER_NESTED_PODMAN_OK" not in lines
+    assert lines.index("INSTALLER_RAN") > lines.index(
+        "TRACER_NESTED_INFEASIBLE step=podman-info detail=Error: no newuidmap"
+    )
+    ok = _run(
+        _nested_script(
+            "nested_probe_podman",
+            real=("nested_probe_podman",),
+            stubs="exec_tester() { return 0; }\n",
+        ),
+        tmp_path / "ok",
+    )
+    assert ok.stdout.splitlines() == ["TRACER_NESTED_PODMAN_OK"]
+    run_step = _run(
+        _nested_script(
+            "nested_probe_podman",
+            real=("nested_probe_podman",),
+            stubs=(
+                "exec_tester() { case \"$1\" in *'podman run'*) "
+                "echo 'pull failed'; return 1;; esac; }\n"
+            ),
+        ),
+        tmp_path / "run",
+    )
+    assert run_step.stdout.splitlines() == [
+        "TRACER_NESTED_INFEASIBLE step=podman-run detail=pull failed"
+    ]
+
+
+def test_nested_alacritty_row_classification(tmp_path: Path) -> None:
+    def classify(name: str, row: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        fixture = scratch / "install.txt"
+        fixture.write_text(f"Install plan — 1 install\n○ alacritty  will install\n{row}\n")
+        script = _nested_script(
+            f"nested_classify_alacritty {shlex.quote(str(fixture))}",
+            real=("nested_classify_alacritty", "nested_infeasible"),
+        )
+        return _run(script, scratch)
+
+    done = classify("done", "✓ alacritty  installed")
+    assert done.returncode == 0, done.stdout
+    cannot = classify("cannot", "✖ alacritty  failed — distrobox create: cannot reach the engine")
+    assert cannot.returncode == 2
+    assert cannot.stdout.splitlines() == [
+        "TRACER_NESTED_INFEASIBLE step=distrobox-create "
+        "detail=distrobox create: cannot reach the engine"
+    ]
+    broken = classify("broken", "✖ alacritty  failed — cargo build: exit 101")
+    assert broken.returncode == 1
+    assert broken.stdout.splitlines() == [
+        "TRACER_NESTED_BUILD_FAILED detail=failed — cargo build: exit 101"
+    ]
+    (tmp_path / "absent").mkdir()
+    absent = _run(
+        _nested_script(
+            'printf "Summary — 1 installed\\n" > "$SCRATCH/none.txt"; '
+            'nested_classify_alacritty "$SCRATCH/none.txt"',
+            real=("nested_classify_alacritty", "nested_infeasible"),
+        ),
+        tmp_path / "absent",
+    )
+    assert absent.returncode == 1
+    assert "TRACER_NESTED_BUILD_FAILED" in absent.stdout
+
+
+def test_nested_herdr_shell_check(tmp_path: Path) -> None:
+    def check(name: str, call: str, *lines: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        real = ("nested_herdr_shell_ok", "nested_herdr_revert_ok")
+        return _run(_nested_script(call, real=real, stubs=_fact_stub(*lines, "D")), scratch)
+
+    good = ("DS /usr/bin/zsh", "L /usr/bin/zsh", "W /usr/bin/zsh")
+    ok = check("ok", "nested_herdr_shell_ok", *good)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert ok.stdout.splitlines() == ["TRACER_NESTED_HERDR_SHELL_OK"]
+    other = check("other", "nested_herdr_shell_ok", "DS /bin/fish", "L /bin/fish", "W /usr/bin/zsh")
+    assert other.returncode != 0
+    assert other.stdout.splitlines() == [
+        "TRACER_NESTED_HERDR_SHELL_MISMATCH found=/bin/fish expected=/usr/bin/zsh"
+    ]
+    unrecorded = check("unrecorded", "nested_herdr_shell_ok", "DS /usr/bin/zsh", "W /usr/bin/zsh")
+    assert unrecorded.returncode != 0
+    assert unrecorded.stdout.splitlines() == [
+        "TRACER_NESTED_HERDR_SHELL_UNRECORDED expected=/usr/bin/zsh"
+    ]
+    none = check("none", "nested_herdr_shell_ok", "W /usr/bin/zsh")
+    assert none.returncode != 0
+    assert "found=none expected=/usr/bin/zsh" in none.stdout
+    reverted = check("reverted", "nested_herdr_revert_ok")
+    assert reverted.returncode == 0
+    assert reverted.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_OK"]
+    kept = check("kept", "nested_herdr_revert_ok", "DS /usr/bin/zsh")
+    assert kept.returncode != 0
+    assert kept.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_LEFT found=/usr/bin/zsh"]
+
+
+def test_nested_uninstall_check(tmp_path: Path) -> None:
+    def check(name: str, *lines: str) -> subprocess.CompletedProcess[str]:
+        scratch = tmp_path / name
+        scratch.mkdir()
+        script = _nested_script(
+            "nested_uninstall_ok", real=("nested_uninstall_ok",), stubs=_fact_stub(*lines, "D")
+        )
+        return _run(script, scratch)
+
+    clean = check("clean")
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert clean.stdout.splitlines() == ["TRACER_NESTED_UNINSTALL_OK"]
+    left = check("left", "L .terminfo/a", "L .local/bin/alacritty")
+    assert left.returncode != 0
+    assert left.stdout.splitlines() == [
+        "TRACER_NESTED_UNINSTALL_LEFT path=.terminfo/a",
+        "TRACER_NESTED_UNINSTALL_LEFT path=.local/bin/alacritty",
+    ]
+
+
+def test_nested_is_wired_into_main_and_usage() -> None:
+    assert "nested) cmd_nested" in _function("main")
+    assert "nested" in _function("usage")
+    assert "--privileged" not in "\n".join(
+        line for line in _script_text().splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _stub_bin(directory: Path, bodies: dict[str, str]) -> Path:
+    """Executable shell stubs named after the container programs a probe runs."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, body in bodies.items():
+        stub = directory / name
+        stub.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        stub.chmod(0o755)
+    return directory
+
+
+def test_nested_gathers_run_for_real_over_a_scratch_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The python and shell the nested probes send to the container run, with stub programs."""
+    from installer import receipts
+    from installer.receipts import Receipt, ReceiptArtifact, ReceiptMethod
+
+    scratch = tmp_path / "home"
+    scratch.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: scratch)
+    monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
+    receipts.write(
+        Receipt(
+            tool="alacritty",
+            at="2026-11-12T12:00:00+00:00",
+            method=ReceiptMethod(kind="cargo_distrobox", key="a" * 64),
+            package=None,
+            artifacts=tuple(
+                ReceiptArtifact(path=scratch / path, type="leaf") for path in _ALACRITTY_PATHS
+            ),
+            smoke=None,
+            hooks={},
+        )
+    )
+    config = scratch / ".config" / "herdr" / "config.toml"
+    config.parent.mkdir(parents=True)
+    zsh_path = str(tmp_path / "bin" / "zsh")
+    config.write_text(f'[terminal]\ndefault_shell = "{zsh_path}"\n', encoding="utf-8")
+    ledger = receipts.config_ledger_dir() / "herdr.json"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"setting": "default-shell", "key_path": ["terminal", "default_shell"]}
+    ledger.write_text(
+        json.dumps({"v": 1, "agent": "herdr", "entries": [{**entry, "value": zsh_path}]}),
+        encoding="utf-8",
+    )
+    bins = _stub_bin(
+        tmp_path / "bin",
+        {
+            "desktop-file-validate": "exit 0",
+            "infocmp": "exit 0",
+            "podman": "exit 0",
+            "zsh": "exit 0",
+        },
+    )
+    (bins / "bash").symlink_to(_bash())
+    env_path = f"{bins}:/usr/bin:/bin"
+    base = _nested_script(
+        "",
+        real=("nested_artifacts_ok", "nested_herdr_shell_ok", "nested_herdr_revert_ok"),
+        stubs="\n".join(
+            [
+                f"export PYTHONPATH={shlex.quote(str(ROOT))}",
+                _assign("TESTER_WORKSPACE", str(tmp_path)),
+                _assign("BREW_BIN", str(_brew_stub(tmp_path))),
+                'exec_tester() { HOME="$SCRATCH" bash -c "$1"; }',
+                _uv_stub(),
+            ]
+        ),
+    )
+    artifacts = _run(base + "\nnested_artifacts_ok\n", scratch, path=env_path)
+    assert artifacts.returncode == 0, artifacts.stdout + artifacts.stderr
+    assert artifacts.stdout.splitlines() == ["TRACER_NESTED_BUILD_OK"]
+    # `which_with_brew("zsh")` answers the stub, which is also what the config and ledger hold.
+    shell = _run(base + "\nnested_herdr_shell_ok\n", scratch, path=env_path)
+    assert shell.returncode == 0, shell.stdout + shell.stderr
+    assert shell.stdout.splitlines() == ["TRACER_NESTED_HERDR_SHELL_OK"]
+    config.write_text("onboarding = false\n", encoding="utf-8")
+    reverted = _run(base + "\nnested_herdr_revert_ok\n", scratch, path=env_path)
+    assert reverted.returncode == 0, reverted.stdout + reverted.stderr
+    assert reverted.stdout.splitlines() == ["TRACER_NESTED_HERDR_REVERT_OK"]

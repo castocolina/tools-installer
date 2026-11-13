@@ -48,10 +48,10 @@ validate:  ## Lint, format-check, type-check, security, dead-code
 	# scripts/lib/prune-tmp-common.sh is a sourced-only library (15.7-07);
 	# -x follows the wrappers' `source` into it so shellcheck sees the real
 	# call graph instead of reporting an unfollowable SC1091.
-	uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh
+	uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh scripts/container-e2e-verify.sh
 
 test:  ## Run tests with coverage, in parallel (pytest-xdist)
 	uv run pytest -n auto --cov
 
-e2e:  ## Real install/uninstall in a disposable Fedora container (podman/docker, never the host)
-	scripts/container-e2e-verify.sh all
+e2e:  ## Real install/uninstall in a disposable container (ARGS="--distro debian"; podman/docker, never the host)
+	scripts/container-e2e-verify.sh all $(ARGS)

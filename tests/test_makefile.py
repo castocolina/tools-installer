@@ -112,15 +112,12 @@ def _invoked_names(line: str) -> list[str]:
 def test_gate_recipes_never_run_a_real_install() -> None:
     recipes = _recipes()
     for name in ("validate", "test"):
-        prereqs, lines = recipes[name]
+        _, lines = recipes[name]
         for line in lines:
             code = line.strip()
             if not code or code.startswith("#"):
                 continue
             assert not set(_invoked_names(code)) & _FORBIDDEN_RUNS, f"{name}: {code}"
-        text = "\n".join([*prereqs, *lines])
-        assert "container-e2e-verify.sh" not in text, name
-        assert not re.search(r"\be2e\b", text), name
 
 
 def test_e2e_script_refuses_without_a_container_runtime(tmp_path: Path) -> None:
@@ -149,3 +146,22 @@ def test_e2e_script_refuses_without_a_container_runtime(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
     assert "CONTAINER_TOOL unset after detection" in result.stderr
     assert not (repo / ".e2e-artifacts").exists()
+
+
+_E2E_SCRIPT = "scripts/container-e2e-verify.sh"
+
+
+def test_e2e_script_appears_in_gates_only_as_a_shellcheck_argument() -> None:
+    """R1-04: a lint argument is not a run; nothing else of the e2e reaches the gates."""
+    recipes = _recipes()
+    for name in ("validate", "test"):
+        prereqs, lines = recipes[name]
+        kept: list[str] = []
+        for line in lines:
+            if _E2E_SCRIPT in line:
+                assert _invoked_names(line) == ["shellcheck"], f"{name}: {line}"
+                line = line.replace(_E2E_SCRIPT, "")
+            kept.append(line)
+        text = "\n".join([*prereqs, *kept])
+        assert "container-e2e-verify.sh" not in text, name
+        assert not re.search(r"\be2e\b", text), name
