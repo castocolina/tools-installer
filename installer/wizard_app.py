@@ -18,9 +18,11 @@ import shlex
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -31,7 +33,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from installer import daemon, env_redirect, receipts, runlock
+from installer import daemon, env_redirect, receipts, runlock, schedules
 from installer.agent_settings import ledger_summary
 from installer.app import (
     UninstallDecision,
@@ -192,6 +194,19 @@ class PolicyInputs:
     competing: CompetingProbe | None = None
 
 
+@dataclass(frozen=True)
+class ScheduleInputs:
+    """What the Schedules view renders and acts on. A None `context` is a host with no
+    timer manager: every row reads unavailable and nothing is ever written. `disk_pressure`
+    and `competing` are the same seams the Policies tmp row used (D-21)."""
+
+    context: schedules.ScheduleContext | None
+    present: Callable[[str], bool] | None = None
+    disk_pressure: DiskPressureProbe | None = None
+    competing: CompetingProbe | None = None
+    now: Callable[[], datetime] = datetime.now
+
+
 # The l log-view toggle's tail length — a plain, bounded slice of the raw log,
 # never a re-parse into structured blocks (that is last_run_summary's own job).
 _LOG_TAIL_LINES = 20
@@ -323,6 +338,39 @@ class PolicyToggled(Message):
         self.was_active = was_active
         self.result = result
         self.error = error
+        super().__init__()
+
+
+@dataclass(frozen=True)
+class ScheduleChange:
+    """One user change to a schedule: the verb and the values it carries."""
+
+    schedule_id: str
+    verb: Literal["on", "off", "retime", "model"]
+    was_drift: bool = False
+    interval: int = 0
+    start: str = ""
+    model: str = ""
+
+
+class ScheduleChanged(Message):
+    """A schedule change finished on its thread worker; `report` is None exactly when
+    run_live reported `error`."""
+
+    def __init__(
+        self, change: ScheduleChange, report: schedules.ApplyReport | None, error: str | None
+    ) -> None:
+        self.change = change
+        self.report = report
+        self.error = error
+        super().__init__()
+
+
+class ScheduleManagerProbed(Message):
+    """The Schedules screen's threaded timer-manager probe finished."""
+
+    def __init__(self, reachable: bool) -> None:
+        self.reachable = reachable
         super().__init__()
 
 
@@ -2907,6 +2955,222 @@ def _link_mode_status(
     return "".join(parts), ("warn" if failed else "ok")
 
 
+_STILL_CHECKING = "Still checking for a user timer manager; try again in a moment."
+_SCHEDULE_COLUMNS = (
+    ("schedule", "Schedule", 13),
+    ("target", "Target", 12),
+    ("state", "State", 9),
+    ("every", "Every", 9),
+    ("next", "Next", 5),
+    ("last", "Last", 7),
+    ("script", "Script", 9),
+)
+_CACHE_MANAGERS = ("uv", "pnpm", "brew", "npm")
+_STATE_CELLS = {
+    "on": ("● [on]", "green"),
+    "off": ("○ [off]", "dim"),
+    "drift": ("! [drift]", "yellow"),
+    "n/a": ("– [n/a]", "dim"),
+    "unknown": ("…", ""),
+}
+
+
+def _fit(text: str, width: int, *, from_left: bool = False) -> str:
+    """`text` cut to `width` cells with an ellipsis, at the end (or the start with `from_left`)."""
+    if cell_len(text) <= width:
+        return text
+    kept = text
+    while kept and cell_len(kept) > width - 1:
+        kept = kept[1:] if from_left else kept[:-1]
+    return f"…{kept}" if from_left else f"{kept}…"
+
+
+def _sentence(text: str) -> str:
+    """The first line of `text` as one sentence with a single closing period."""
+    lines = sanitize_log_line(text).strip().splitlines()
+    return f"{(lines[0] if lines else 'unknown error').rstrip('.')}."
+
+
+class SchedulesScreen(AppScreen):
+    """The built-in schedules: state, timing and last result, toggled live (D-21).
+
+    `space` turns the highlighted schedule on or off now; every change runs on a thread
+    worker through `run_live` under the in-app mutation lock only, so a scheduled run in
+    flight is never touched (SPEC edge R5). Render reads files only; nothing here starts a
+    process except the probe and change workers.
+    """
+
+    if TYPE_CHECKING:
+
+        @property
+        def app(self) -> "UnifiedApp": ...
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("space", "toggle_schedule", "toggle schedule", show=True, priority=True),
+    ]
+    DEFAULT_CSS = """
+    SchedulesScreen DataTable { height: auto; max-height: 8; }
+    """
+
+    def __init__(self, inputs: ScheduleInputs) -> None:
+        super().__init__(view="schedules")
+        self._inputs = inputs
+        self._ctx = inputs.context
+        # None until the probe answers; a host with no context never probes.
+        self._manager: bool | None = None if inputs.context is not None else False
+        self._state = schedules.ScheduleState()
+
+    def compose_body(self) -> ComposeResult:
+        yield DataTable()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable[Any])
+        table.cursor_type = "row"
+        for key, label, width in _SCHEDULE_COLUMNS:
+            table.add_column(label, width=width, key=key)
+        for schedule in schedules.SCHEDULES:
+            table.add_row(*self._cells(schedule), key=schedule.id)
+        table.focus()
+
+    def enter_view(self) -> None:
+        if self._ctx is not None:
+            self._probe_worker()
+        self.state_refreshed()
+
+    @work(thread=True, exclusive=True, group="schedule-probe", exit_on_error=False)
+    def _probe_worker(self) -> None:
+        """Ask whether a user timer manager exists, off the event loop (D-24)."""
+        reachable = False
+        try:
+            ctx = self._ctx
+            if ctx is not None:
+                answer, _error = run_live(lambda: schedules.manager_reachable(ctx))
+                reachable = bool(answer)
+        finally:
+            self.post_message(ScheduleManagerProbed(reachable))
+
+    def on_schedule_manager_probed(self, message: ScheduleManagerProbed) -> None:
+        self._manager = message.reachable
+        self.state_refreshed()
+
+    def state_refreshed(self) -> None:
+        """Re-read the state file and repaint every row (files only, never a process)."""
+        ctx = self._ctx
+        if ctx is not None:
+            loaded, _error = run_live(lambda: schedules.load_state(ctx.state_path))
+            self._state = loaded.state if loaded is not None else schedules.ScheduleState()
+        if not self.is_mounted:
+            return
+        table = self.query_one(DataTable[Any])
+        for schedule in schedules.SCHEDULES:
+            for (column, _label, _width), text in zip(
+                _SCHEDULE_COLUMNS, self._cells(schedule), strict=True
+            ):
+                table.update_cell(schedule.id, column, text)
+
+    def _row_state(self, schedule: schedules.Schedule) -> schedules.RowState:
+        ctx = self._ctx
+        if ctx is None:
+            return schedules.RowState("n/a", schedules.NO_MANAGER_REASON)
+        return schedules.row_state(
+            ctx, self._state, schedule, manager=self._manager, present=self._inputs.present
+        )
+
+    def _cells(self, schedule: schedules.Schedule) -> list[Text]:
+        word, style = _STATE_CELLS[self._row_state(schedule).word]
+        job = "update" if schedule.kind is schedules.JobKind.UPDATE else schedule.label
+        return [
+            Text(_fit(job, 13), style="bold"),
+            Text(_fit(self._target(schedule), 12)),
+            Text(word, style=style),
+            Text(""),
+            Text(""),
+            Text(""),
+            Text(""),
+        ]
+
+    def _target(self, schedule: schedules.Schedule) -> str:
+        if schedule.kind is schedules.JobKind.UPDATE:
+            return schedule.target or ""
+        if schedule.kind is schedules.JobKind.TMP_CLEANUP:
+            return "$TMPDIR"
+        ctx = self._ctx
+        found = [name for name in _CACHE_MANAGERS if ctx is not None and ctx.which(name)]
+        return " ".join(found) or "none"
+
+    def _highlighted_schedule(self) -> schedules.Schedule | None:
+        key = highlighted_key(self.query_one(DataTable[Any]))
+        return next((item for item in schedules.SCHEDULES if item.id == key), None)
+
+    def action_toggle_schedule(self) -> None:
+        schedule = self._highlighted_schedule()
+        if schedule is None or self.app.refuse_if_mutating(self):
+            return
+        row = self._row_state(schedule)
+        if row.word == "unknown":
+            self.status.set(_STILL_CHECKING, "warn")
+            return
+        if row.word == "n/a":
+            self.status.set(f"Cannot turn on {schedule.label}: {row.reason}.", "warn")
+            return
+        verb: Literal["on", "off"] = "off" if row.word == "on" else "on"
+        self._start_change(ScheduleChange(schedule.id, verb, was_drift=row.word == "drift"))
+
+    def _start_change(self, change: ScheduleChange) -> None:
+        self.app.begin_mutation(MutationHolder.SCHEDULE_CHANGE)
+        self._change_worker(change)
+
+    @work(thread=True, exclusive=True, group="schedule-change", exit_on_error=False)
+    def _change_worker(self, change: ScheduleChange) -> None:
+        report: schedules.ApplyReport | None = None
+        error: str | None = "the schedule change did not complete"
+        try:
+            ctx = self._ctx
+            if ctx is None:  # unreachable: every action refuses an n/a row first
+                error = schedules.NO_MANAGER_REASON
+            elif change.verb == "on":
+                report, error = run_live(lambda: schedules.turn_on(ctx, change.schedule_id))
+            else:
+                report, error = run_live(lambda: schedules.turn_off(ctx, change.schedule_id))
+        finally:
+            self.post_message(ScheduleChanged(change, report, error))
+
+    def on_schedule_changed(self, message: ScheduleChanged) -> None:
+        self.app.end_mutation()
+        ctx = self._ctx
+        if ctx is not None and message.error is None:
+            # Acting here is the user's decision that ends the damaged-state guard (R2-11).
+            run_live(lambda: schedules.clear_damage(ctx.state_path))
+        self.state_refreshed()
+        text, severity = self._change_line(message)
+        self.app.show_result(self, text, severity)
+
+    def _next_text(self, schedule_id: str) -> str | None:
+        ctx = self._ctx
+        schedule = schedules.schedule_by_id(schedule_id)
+        if ctx is None or (
+            schedule.kind is schedules.JobKind.TMP_CLEANUP and ctx.platform_os != "macos"
+        ):
+            return None
+        record = schedules.record_for(self._state, schedule_id)
+        interval = 24 if schedule.kind is schedules.JobKind.TMP_CLEANUP else record.interval
+        grid = schedules.slots(interval, record.start)
+        return f"{schedules.next_run(grid, self._inputs.now()):%H:%M}"
+
+    def _change_line(self, message: ScheduleChanged) -> tuple[str, str]:
+        change, error = message.change, message.error
+        label = schedules.schedule_by_id(change.schedule_id).label
+        if error is not None:
+            verb = "turn off" if change.verb == "off" else "turn on"
+            return f"Could not {verb} {label}: {_sentence(error)}", "error"
+        if change.verb == "off":
+            return f"Turned off {label}; its timer files are removed.", "ok"
+        upcoming = self._next_text(change.schedule_id)
+        if change.was_drift:
+            return f"Rewrote the {label} timer files: next run at {upcoming}.", "ok"
+        return f"Turned on {label}: next run at {upcoming}.", "ok"
+
+
 class ConfirmGuardFile(ModalScreen[bool]):
     """Confirm one foreign rc file before rewriting its PATH lines in place.
 
@@ -3244,6 +3508,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         fix: Callable[[], None],
         uninstall: UninstallInputs,
         policies: PolicyInputs,
+        schedules: ScheduleInputs | None = None,
         node_globals: Callable[[], NodeGlobalsReport] | None = None,
         globals_preview: Callable[[NodeGlobalsReport], str] | None = None,
         reinstall_globals: Callable[[Sequence[str]], tuple[str, ...]] | None = None,
@@ -3386,6 +3651,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
                     uninstall, tools=self._tools, version_refresh=version_refresh
                 ),
                 "policies": PoliciesScreen(policies),
+                "schedules": SchedulesScreen(schedules or ScheduleInputs(context=None)),
             }
         )
         self._initial_view = initial_view

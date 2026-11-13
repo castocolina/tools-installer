@@ -57,7 +57,15 @@ from tests.state_doubles import (
 )
 from tests.test_registry import REGISTRY
 
-_KEY = {"system": "1", "user": "2", "ai": "3", "doctor": "4", "uninstall": "5", "policies": "6"}
+_KEY = {
+    "system": "1",
+    "user": "2",
+    "ai": "3",
+    "doctor": "4",
+    "uninstall": "5",
+    "policies": "6",
+    "schedules": "7",
+}
 _TIERS = ["system", "user", "ai"]
 
 

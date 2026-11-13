@@ -114,7 +114,7 @@ from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService, probed_version
 from installer.versions import TagResolver, probe_version_output, resolve_github_tag
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from installer.wizard_app import PolicyInputs, ScheduleInputs, UnifiedApp, UninstallInputs
 
 _REGISTRY = Path(__file__).parent / "installer" / "registry.toml"
 _DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -1011,6 +1011,19 @@ def _build_app(
         competing=competing,
     )
 
+    installed_now = version_refresh.installed_or(installed)
+    schedule_inputs = ScheduleInputs(
+        context=schedules.context_for(
+            platform.os,
+            checkout=Path(__file__).resolve().parent,
+            present=installed_now,
+            read_models=cursor_shim.read_models,
+        ),
+        present=installed_now,
+        disk_pressure=disk_pressure,
+        competing=competing,
+    )
+
     def _apply_fix() -> None:
         # Runs live inside the DoctorScreen. A quiet console keeps configure_path's
         # own prints from corrupting the running TUI; the screen renders its own
@@ -1141,6 +1154,7 @@ def _build_app(
         fix=_apply_fix,
         uninstall=uninstall_inputs,
         policies=policy_inputs,
+        schedules=schedule_inputs,
         node_globals=_node_globals_report,
         globals_preview=_globals_preview,
         reinstall_globals=_reinstall_globals,

@@ -149,7 +149,7 @@ def test_view_registry_is_complete_and_consistent() -> None:
     derive from the same table, so they can never drift apart."""
     from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER, VIEWS
 
-    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies", "schedules")
     assert set(VIEW_BY_NAME) == set(VIEW_ORDER)
     for view in VIEWS:
         assert view.label and view.palette and view.mode and view.glyph and view.hint
@@ -159,7 +159,7 @@ def test_view_registry_is_complete_and_consistent() -> None:
 def test_view_order_collapses_fix_into_doctor() -> None:
     from installer.ui_common import VIEW_BY_NAME, VIEW_ORDER
 
-    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies", "schedules")
     assert "fix" not in VIEW_BY_NAME
 
 
@@ -177,7 +177,7 @@ def test_doctor_view_advertises_audit_and_apply() -> None:
 def test_global_nav_names_every_view() -> None:
     from installer.ui_common import GLOBAL_NAV
 
-    assert GLOBAL_NAV == "1-6 views | ^p nav | esc back | q quit"
+    assert GLOBAL_NAV == "1-7 views | ^p nav | esc back | q quit"
 
 
 def test_footer_bar_shows_actions_then_global_nav() -> None:
@@ -186,9 +186,9 @@ def test_footer_bar_shows_actions_then_global_nav() -> None:
     text = FooterBar("system").render_text().plain
     assert "space toggle" in text and "enter install" in text
     assert "│" in text  # zone separator
-    assert "1-6 views" in text and "^p nav" in text and "q quit" in text
+    assert "1-7 views" in text and "^p nav" in text and "q quit" in text
     # the action zone is left of the separator; global nav is right of it
-    assert text.index("space toggle") < text.index("│") < text.index("1-6 views")
+    assert text.index("space toggle") < text.index("│") < text.index("1-7 views")
 
 
 def test_footer_bar_doctor_shows_apply_actions() -> None:
@@ -235,7 +235,7 @@ def test_tier_views_lead_the_nav_and_match_the_tier_enum() -> None:
     from installer.enums import Tier
     from installer.ui_common import BASE_VIEW, VIEW_BY_NAME, VIEW_ORDER
 
-    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies", "schedules")
     assert VIEW_ORDER[:3] == tuple(tier.value for tier in Tier)
     assert BASE_VIEW == "system"
     assert set(VIEW_BY_NAME) == set(VIEW_ORDER)

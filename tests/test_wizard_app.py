@@ -363,7 +363,7 @@ def test_default_palette_is_disabled() -> None:
 
 
 def test_view_order_lists_every_view() -> None:
-    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies")
+    assert VIEW_ORDER == ("system", "user", "ai", "doctor", "uninstall", "policies", "schedules")
 
 
 async def test_starts_on_the_system_view() -> None:
@@ -4440,6 +4440,7 @@ def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
         "fix",
         "uninstall",
         "policies",
+        "schedules",
         "node_globals",
         "globals_preview",
         "reinstall_globals",

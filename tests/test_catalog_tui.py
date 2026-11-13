@@ -4342,7 +4342,7 @@ async def test_empty_tier_shows_the_empty_copy() -> None:
         assert catalog.query_one(DataTable[Any]).row_count == 0
         detail = catalog.query_one("#browser-detail", Static)
         rows = ["".join(s.text for s in detail.render_line(y)).strip() for y in range(3)]
-        assert rows[:2] == ["No tools in the User tier.", "Press 1-6 or ^p to open another view."]
+        assert rows[:2] == ["No tools in the User tier.", "Press 1-7 or ^p to open another view."]
         legend = catalog.query_one("#browser-legend", Static)
         assert "✓ ok" in _painted_legend(legend)
 
