@@ -27,7 +27,13 @@ from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
 from installer.status import is_installed
 from installer.uninstall import MANAGER_UNINSTALL_ARGV
-from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
+from installer.versions import (
+    TagResolver,
+    VersionError,
+    capturing_resolver,
+    release_resolver,
+    resolve_github_tag,
+)
 
 Status = InstallStatus
 ChecksumPolicy = Literal["fail", "continue"]
@@ -219,11 +225,8 @@ def install_tool(
     if not methods:
         return InstallOutcome(tool.id, InstallStatus.NO_METHOD)
 
-    ctx = ExecContext(
-        runner=runner,
-        platform=platform,
-        resolve_release=release_resolver(resolve_tag),
-    )
+    resolve_release, resolved_tags = capturing_resolver(release_resolver(resolve_tag))
+    ctx = ExecContext(runner=runner, platform=platform, resolve_release=resolve_release)
     errors: list[Exception] = []
     leftovers: list[str] = []
     # Read at most once per call, and only when a manager method reaches the ladder.
@@ -278,6 +281,8 @@ def install_tool(
         previous = receipts.read(tool.id)
         already_there = _package_already_there(method, package, manager_inventory)
         path_before = os.environ.get("PATH", "")
+        # One context serves the whole ladder: only the method that succeeds may record a release.
+        resolved_tags.clear()
         try:
             verified, unverified_reason, handoff, notes = _perform(method, ctx)
             if handoff:
@@ -332,6 +337,7 @@ def install_tool(
                         package=package,
                         smoke="ok" if smoked_artifact or smoked else None,
                         preexisting=preexisting,
+                        release=resolved_tags[-1] if resolved_tags else None,
                     )
                 except OSError as exc:
                     leftovers.append(f"install receipt not written: {exc}")

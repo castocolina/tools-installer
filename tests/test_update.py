@@ -52,7 +52,13 @@ from installer.update import (
     update_refusal,
 )
 from installer.version_status import VersionRefreshService
-from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
+from installer.versions import (
+    ReleaseResolver,
+    TagResolver,
+    VersionError,
+    release_resolver,
+    resolve_github_tag,
+)
 from tests.state_doubles import plan_state
 from tests.test_cargo_distrobox import (
     FakeBox,
@@ -686,7 +692,10 @@ def test_installer_owned_update_passes_the_release_resolver(
     )
     tool = _tool("rg", method, cmd="rg")
 
+    handed: list[ReleaseResolver] = []
+
     def fake_update(method: Method, ctx: ExecContext) -> DownloadUpdateExecResult:
+        handed.append(ctx.resolve_release)
         return DownloadUpdateExecResult(verified=True)
 
     monkeypatch.setattr(update.download, "update_download", fake_update)
@@ -696,6 +705,7 @@ def test_installer_owned_update_passes_the_release_resolver(
 
     _perform(_target(tool, "installer", method=method), lambda _cmd: None, resolve_tag=tag)
     assert recorded == [tag]
+    assert [resolve(str(method.params["repo"])).tag for resolve in handed] == ["v15.1.0"]
 
 
 def test_installer_owned_update_rejects_a_wrong_api_digest(
@@ -1592,6 +1602,29 @@ def test_installer_owned_update_rewrites_the_receipt(
     assert after.artifacts[0].size == len(b"new-yq-bytes")
     assert _later(after.at, before.at)
     assert after.smoke is None
+
+
+def test_update_records_the_new_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tool, method, placed = _yq_with_old_bytes(tmp_path)
+    receipts.record(tool, method, package=None, smoke="ok", release="v1.1.0")
+
+    def fake_update(method: Method, ctx: ExecContext) -> DownloadUpdateExecResult:
+        assert ctx.resolve_release(str(method.params["repo"])).tag == "v1.2.0"
+        placed.write_bytes(b"new-yq-bytes")
+        return DownloadUpdateExecResult(verified=True, warnings=())
+
+    monkeypatch.setattr(update.download, "update_download", fake_update)
+
+    outcome = _perform(
+        _target(tool, "installer", method=method),
+        lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1.2.0",
+    )
+
+    assert outcome.status == "updated"
+    after = receipts.read("yq")
+    assert after is not None
+    assert after.release == "v1.2.0"
 
 
 def test_installer_owned_update_without_receipt_writes_one(

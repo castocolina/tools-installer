@@ -1750,6 +1750,18 @@ class VersionRefreshService:
                 entry=new_entry if new_entry is not None else entry,
                 platform=platform,
             )
+            # An unchanged fingerprint proves the bytes are the recorded release, and some
+            # binaries print a stale version (sd v1.1.0 prints 1.0.0), so the receipt decides.
+            if (
+                ownership.owner == "installer"
+                and receipt is not None
+                and receipt.release is not None
+                and not broken
+                and UNPROVEN_NOTE not in receipt_notes
+                and status.latest is not None
+                and (recorded := is_outdated(receipt.release, status.latest)) is not None
+            ):
+                status = replace(status, outdated=recorded)
             removable = removal_plan(tool, self._managed_bin_dir, hint=hint)
             if (
                 present

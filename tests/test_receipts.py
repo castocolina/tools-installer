@@ -1756,3 +1756,63 @@ def test_copilot_self_update_is_directory_drift_not_broken(
     binary.write_bytes(b"1.0.108 after copilot update")
     assert receipts.broken_drift(receipt, rehash=True) == ()
     assert [a.path for a in receipts.drifted(receipt)] == [opt]
+
+
+# --- Plan 24-09: the release a method placed -----------------------------------------------------
+
+
+def _record_yq(tmp_path: Path, release: str | None) -> Receipt | None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "yq").write_bytes(b"yq-bytes")
+    method = _raw_yq(bin_dir)
+    return receipts.record(
+        _record_tool("yq", method),
+        method,
+        package=None,
+        smoke="ok",
+        default_bin_dir=bin_dir,
+        release=release,
+    )
+
+
+def test_receipt_records_the_release(tmp_path: Path) -> None:
+    written = _record_yq(tmp_path, "v1.1.0")
+    assert written is not None
+    assert written.release == "v1.1.0"
+    loaded = receipts.read("yq")
+    assert loaded is not None
+    assert loaded.release == "v1.1.0"
+    assert json.loads(receipt_path("yq").read_text(encoding="utf-8"))["release"] == "v1.1.0"
+
+
+def test_receipt_without_release_is_unchanged(tmp_path: Path) -> None:
+    _record_yq(tmp_path, None)
+    assert "release" not in json.loads(receipt_path("yq").read_text(encoding="utf-8"))
+    loaded = receipts.read("yq")
+    assert loaded is not None
+    assert loaded.release is None
+
+
+@pytest.mark.parametrize("bad", [5, "-x", "a b", "", ["v1"]])
+def test_receipt_with_a_bad_release_is_untrusted(tmp_path: Path, bad: object) -> None:
+    _malformed(tmp_path, _variant(release=bad))
+    assert receipts.read("yq") is None
+
+
+def test_record_drops_an_unreadable_release(tmp_path: Path) -> None:
+    written = _record_yq(tmp_path, "release/2026")
+    assert written is not None
+    assert written.release is None
+    assert "release" not in json.loads(receipt_path("yq").read_text(encoding="utf-8"))
+    loaded = receipts.read("yq")
+    assert loaded is not None
+    assert loaded.release is None
+
+
+def test_a_hook_update_keeps_the_recorded_release(tmp_path: Path) -> None:
+    _record_yq(tmp_path, "v1.1.0")
+    assert receipts.record_hooks("yq", "codegraph-mcp-register", ("claude",))
+    kept = receipts.read("yq")
+    assert kept is not None
+    assert kept.release == "v1.1.0"

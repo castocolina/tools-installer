@@ -102,7 +102,14 @@ from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import HookOutcome, register_hooks
 from installer.run import CommandError, Runner, run_captured
 from installer.terminal_shell import terminal_sync_warning
-from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
+from installer.versions import (
+    ReleaseResolver,
+    TagResolver,
+    VersionError,
+    capturing_resolver,
+    release_resolver,
+    resolve_github_tag,
+)
 
 PostinstallFn = Callable[[Tool, Method, Runner, frozenset[str] | None], HookOutcome]
 
@@ -342,6 +349,7 @@ def _perform(
     owner = ownership.owner
     cleanup_warnings: tuple[str, ...] = ()
     detail = ""
+    resolve_release, resolved_tags = capturing_resolver(release_resolver(resolve_tag))
     # R1-05: snapshot before the owner branch runs anything, so the receipt
     # records only what this update created (a path that existed before is
     # proven only by the previous receipt).
@@ -370,7 +378,7 @@ def _perform(
             method,
             platform=platform,
             runner=runner,
-            resolve_tag=resolve_tag,
+            resolve_release=resolve_release,
             tool_id=target.tool.id,
         )
     else:
@@ -391,6 +399,7 @@ def _perform(
                     package=method_package(method),
                     smoke=None,
                     preexisting=preexisting,
+                    release=resolved_tags[-1] if resolved_tags else None,
                 )
             except OSError as exc:
                 note = f"install receipt not written: {exc}"
@@ -411,7 +420,7 @@ def _update_installer_owned(
     *,
     platform: Platform,
     runner: Runner,
-    resolve_tag: TagResolver,
+    resolve_release: ReleaseResolver,
     tool_id: str,
 ) -> tuple[str, ...]:
     if method is None:
@@ -419,11 +428,7 @@ def _update_installer_owned(
     if method.kind in download.DOWNLOAD_KINDS:
         result = download.update_download(
             method,
-            ExecContext(
-                runner=runner,
-                platform=platform,
-                resolve_release=release_resolver(resolve_tag),
-            ),
+            ExecContext(runner=runner, platform=platform, resolve_release=resolve_release),
         )
         return result.warnings
     if method.kind in apps.APP_KINDS:
@@ -451,11 +456,7 @@ def _update_installer_owned(
         # D-04: the newer tag is rebuilt in a fresh box; its ExecutorError reaches perform_update.
         return cargo_distrobox.install(
             method,
-            ExecContext(
-                runner=runner,
-                platform=platform,
-                resolve_release=release_resolver(resolve_tag),
-            ),
+            ExecContext(runner=runner, platform=platform, resolve_release=resolve_release),
         )
     raise UpdateError(f"no installer-owned update path for method kind '{method.kind}'")
 

@@ -3630,6 +3630,7 @@ def _receipt_service(
     resolve_tag: Callable[[str], str] = lambda _repo: "v4.54.1",
     inventory: ManagerInventory | None = None,
     which: Callable[[str], str | None] | None = None,
+    probe: str = "4.54.1",
 ) -> VersionRefreshService:
     def managed_which(cmd: str) -> str | None:
         hit = bin_dir / cmd
@@ -3644,7 +3645,7 @@ def _receipt_service(
         platform=_LINUX,
         cache_path=tmp_path / "versions.json",
         resolve_tag=resolve_tag,
-        probe_output=lambda _argv: "4.54.1",
+        probe_output=lambda _argv: probe,
         now=lambda: _STATE_NOW,
         managed_bin_dir=bin_dir,
         which=which if which is not None else managed_which,
@@ -3713,6 +3714,71 @@ def test_corrupt_receipt_is_an_unproven_note(
     assert _UNREADABLE in state.reasons
     assert state.receipt is None
     assert state.removable.removable == ()
+
+
+def _place_yq_recording(bin_dir: Path, release: str | None) -> Path:
+    placed = bin_dir / "yq"
+    placed.write_bytes(_YQ_BYTES)
+    assert receipts.record(
+        _yq(), _YQ_METHOD, package=None, smoke=None, default_bin_dir=bin_dir, release=release
+    )
+    return placed
+
+
+def test_sd_reads_current_when_its_receipt_proves_the_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sd v1.1.0 prints `sd 1.0.0`: the binary's own string lags its tag (24-09)."""
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    _place_yq_recording(bin_dir, "v1.1.0")
+    service = _receipt_service(tmp_path, bin_dir, resolve_tag=lambda _repo: "v1.1.0", probe="1.0.0")
+    state = _settled(service, _yq())
+    assert state.version is not None
+    assert state.version.outdated is False
+    assert state.version.installed == "1.0.0"
+    assert state.health is Health.OK
+    rows = build_plan(["yq"], [_yq()], service.state_of, _LINUX, reinstall=frozenset())
+    assert [(row.disposition, row.reason) for row in rows] == [
+        (Disposition.SKIP, "already current")
+    ]
+
+
+def test_a_changed_binary_falls_back_to_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    placed = _place_yq_recording(bin_dir, "v1.1.0")
+    placed.write_bytes(_YQ_BYTES + b"# replaced\n")
+    service = _receipt_service(tmp_path, bin_dir, resolve_tag=lambda _repo: "v1.1.0", probe="1.0.0")
+    state = _settled(service, _yq())
+    assert state.version is not None
+    assert state.version.outdated is True
+    assert _CHANGED in state.reasons
+
+
+def test_receipt_without_release_keeps_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    _place_yq_recording(bin_dir, None)
+    service = _receipt_service(tmp_path, bin_dir, resolve_tag=lambda _repo: "v1.1.0", probe="1.0.0")
+    state = _settled(service, _yq())
+    assert state.version is not None
+    assert state.version.outdated is True
+    assert state.health is Health.OUTDATED
+    assert state.reasons[0] == "1.0.0 -> v1.1.0 available"
+
+
+def test_older_recorded_release_still_reads_outdated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = _scratch_home(tmp_path, monkeypatch)
+    _place_yq_recording(bin_dir, "v1.0.0")
+    service = _receipt_service(tmp_path, bin_dir, resolve_tag=lambda _repo: "v1.1.0", probe="1.0.0")
+    state = _settled(service, _yq())
+    assert state.version is not None
+    assert state.version.outdated is True
+    assert state.health is Health.OUTDATED
 
 
 def test_receiptless_kinds_have_no_receipt_reason(

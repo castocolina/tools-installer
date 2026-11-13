@@ -11,7 +11,7 @@ import pytest
 
 import installer.engine as engine
 import installer.postinstall as postinstall
-from installer import cargo_distrobox, executors, post_install, receipts
+from installer import cargo_distrobox, executors, post_install, receipts, versions
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
@@ -2599,3 +2599,89 @@ def test_script_download_success_runs_the_script_on_stdin(
     assert outcome.status == InstallStatus.INSTALLED
     assert marker.exists()
     assert not temp_file.exists()
+
+
+# --- Plan 24-09: the receipt records the release the method resolved -----------------------------
+
+
+def test_install_records_the_resolved_release(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _pin_workdir(tmp_path, monkeypatch)
+    _calls, runner = fixture_runner(workdir, {"yq_linux_amd64": _RECEIPT_MEMBER_SCRIPT})
+    tool = _tool(_raw_yq_method(tmp_path / "bin"), tool_id="yq")
+
+    outcome = install_tool(tool, _platform(), runner=runner, resolve_tag=lambda _repo: "v1.1.0")
+
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("yq")
+    assert written is not None
+    assert written.release == "v1.1.0"
+
+
+def test_a_manager_install_records_no_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    tool = _tool(Method(kind="brew", params={"formula": "ripgrep"}))
+
+    outcome = install_tool(
+        tool, _macos_with_brew(), runner=lambda _cmd: None, read_inventory_fn=_empty_inventory
+    )
+
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.release is None
+
+
+def test_failed_release_attempt_records_no_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def resolves_then_fails(method: Method, ctx: ExecContext) -> str | None:
+        assert ctx.resolve_release(str(method.params["repo"])).tag == "v1.1.0"
+        raise CommandError(["curl"], 22)
+
+    monkeypatch.setattr(engine.download, "install_download", resolves_then_fails)
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    outcome = install_tool(
+        _gh_then_brew(),
+        platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1.1.0",
+        read_inventory_fn=_empty_inventory,
+    )
+
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "brew"
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.release is None
+
+
+def test_release_capture_keeps_the_production_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    production = Release("v9.0.0", {"asset.tar.gz": "d" * 64})
+
+    def fake_release(_repo: str, _fetch: object = None) -> Release:
+        return production
+
+    monkeypatch.setattr(versions, "resolve_github_release", fake_release)
+    handed: list[Release] = []
+
+    def resolves(method: Method, ctx: ExecContext) -> str | None:
+        handed.append(ctx.resolve_release(str(method.params["repo"])))
+        return None
+
+    monkeypatch.setattr(engine.download, "install_download", resolves)
+    method = Method(kind="github_release", params={"repo": "x/y", "asset": "a", "member": "rg"})
+
+    outcome = install_tool(_tool(method), _platform(), runner=lambda _cmd: None)
+
+    assert outcome.status == InstallStatus.INSTALLED
+    assert handed == [production]
+    assert handed[0] is production  # the digests reach the download unchanged
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.release == "v9.0.0"
