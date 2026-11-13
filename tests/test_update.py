@@ -38,6 +38,7 @@ from installer.pnpm_globals import PnpmUnavailable
 from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner
+from installer.session import Disposition, build_plan
 from installer.update import (
     InvalidateFn,
     PostinstallFn,
@@ -52,9 +53,12 @@ from installer.update import (
 )
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, VersionError, release_resolver, resolve_github_tag
+from tests.state_doubles import plan_state
 from tests.test_cargo_distrobox import (
     FakeBox,
+    alacritty_method,
     alacritty_tool,
+    failed_build,
     host_paths,
     immutable_with_tools,
     inner,
@@ -2248,3 +2252,78 @@ def test_newer_alacritty_tag_rebuilds_and_keeps_the_config() -> None:
         assert "# built from v0.18.0" in rebuilt.read_text(encoding="utf-8")
     assert not any("kept your existing" in note for note in outcome.cleanup_warnings)
     assert _digests(config) == config_before
+
+
+def _install_v017() -> None:
+    installed = install_tool(
+        alacritty_tool(),
+        immutable_with_tools(),
+        runner=_TaggedBox("v0.17.0"),
+        resolve_tag=lambda _repo: "v0.17.0",
+        present=lambda _tool: False,
+    )
+    assert installed.status is InstallStatus.INSTALLED
+
+
+def _old_install_bytes() -> dict[Path, bytes]:
+    receipt = receipts.receipt_path("alacritty")
+    return {path: path.read_bytes() for path in (*host_paths(), receipt)}
+
+
+def _rebuild_to_v018(runner: FakeBox) -> update.UpdateOutcome:
+    tool = alacritty_tool()
+    platform = immutable_with_tools()
+    return update.perform_update(
+        _alacritty_target(tool, platform, host_paths()[0]),
+        platform=platform,
+        runner=runner,
+        resolve_tag=lambda _repo: "v0.18.0",
+    )
+
+
+def test_current_alacritty_tag_plans_skip_without_a_box(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_box(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+        raise AssertionError("a current Alacritty must not start a build")
+
+    monkeypatch.setattr(cargo_distrobox, "install", no_box)
+    tool = alacritty_tool()
+    platform = immutable_with_tools()
+    state = plan_state(tool, platform=platform, owner="installer", method=alacritty_method())
+    [row] = build_plan([tool.id], [tool], lambda _id: state, platform, reinstall=frozenset())
+    assert row.disposition is Disposition.SKIP
+    assert row.reason == "already current"
+
+
+@pytest.mark.usefixtures("scratch_build")
+def test_failed_rebuild_raises_and_keeps_the_old_install() -> None:
+    _install_v017()
+    before = _old_install_bytes()
+    with pytest.raises(ExecutorError, match="error: could not compile"):
+        cargo_distrobox.install(
+            alacritty_method(),
+            ExecContext(
+                runner=FakeBox(failed_build()),
+                platform=immutable_with_tools(),
+                resolve_release=release_resolver(lambda _repo: "v0.18.0"),
+            ),
+        )
+
+    failing = FakeBox(failed_build())
+    outcome = _rebuild_to_v018(failing)
+    assert outcome.status == "failed"
+    assert outcome.detail == "error: could not compile"
+    assert failing.steps() == ["create", "clone", "build", "rm", "rmi"]
+    assert _old_install_bytes() == before
+
+
+@pytest.mark.usefixtures("scratch_build")
+def test_interrupted_rebuild_keeps_the_old_binary() -> None:
+    """Backstop: 24-01's staged swap already guards this; the test pins it on the update route."""
+    _install_v017()
+    before = _old_install_bytes()
+    interrupted = FakeBox({"build": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        _rebuild_to_v018(interrupted)
+
+    assert interrupted.steps() == ["create", "clone", "build", "rm", "rmi"]
+    assert _old_install_bytes() == before
