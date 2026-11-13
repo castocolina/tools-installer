@@ -1100,6 +1100,12 @@ def _collect_candidates(
         (method for method in applicable if method.kind in _INSTALLER_KINDS),
         None,
     )
+    if installer_method is None and artifacts:
+        # The receipt proves a source-built copy even where Distrobox or Podman are off PATH now;
+        # the method is kept for ownership and only the rebuild is gated (update names why).
+        installer_method = next(
+            (method for method in tool.methods if method.kind == "cargo_distrobox"), None
+        )
     if artifacts:
         found["installer"] = OwnershipCandidate(
             owner="installer",

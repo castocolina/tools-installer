@@ -4640,6 +4640,11 @@ def test_hook_fact_ignores_settled_targets(tmp_path: Path, monkeypatch: pytest.M
         ConfigStep("set up herdr's sidebar markers", "hook_register"),
     )
 
+    both = state("claude: not installed (/x)\n", _HERDR_NO_PLUGIN, seen)
+    assert both.unconfigured == (
+        ConfigStep("register herdr for claude and set up herdr's sidebar markers", "hook_register"),
+    )
+
     _hook_receipt({"herdr-integration": ("claude", "sidebar-markers")}, "herdr")
     seen.clear()
     done = state("claude: current (v10) (/x)\n", _HERDR_NO_PLUGIN, seen)

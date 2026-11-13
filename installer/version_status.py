@@ -782,14 +782,18 @@ def _hook_fact(
         settled = pair.settled(binary, probe_output)
         pending = [wanted for wanted in pending if wanted not in settled]
     reasons: list[str] = []
-    steps: list[ConfigStep] = []
+    actions: list[str] = []
     if labels := host_labels(pending):
         reasons.append(f"{tool.id} is not registered for {labels}")
-        steps.append(ConfigStep(f"register {tool.id} for {labels}", "hook_register"))
+        actions.append(f"register {tool.id} for {labels}")
     if any(wanted in pair.standalone for wanted in pending):
         reasons.append(f"{tool.id}'s sidebar markers are not set up")
-        steps.append(ConfigStep(f"set up {tool.id}'s sidebar markers", "hook_register"))
-    return _ConfigFacts(tuple(reasons), tuple(steps)) if reasons else _NO_FACTS
+        actions.append(f"set up {tool.id}'s sidebar markers")
+    if not reasons:
+        return _NO_FACTS
+    # One step: `register_hooks` handles every pending host and marker in one run, so a second
+    # step would find nothing to do and fail a reconfigure that succeeded.
+    return _ConfigFacts(tuple(reasons), (ConfigStep(" and ".join(actions), "hook_register"),))
 
 
 PNPM_GROUP_UNREADABLE_NOTE = "pnpm group not checked: the pnpm inventory is unreadable"

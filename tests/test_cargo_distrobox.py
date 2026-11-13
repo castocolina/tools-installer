@@ -24,7 +24,7 @@ from tests.test_desktop_entry import UPSTREAM as UPSTREAM_DESKTOP
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 IMAGE = "registry.fedoraproject.org/fedora-toolbox:44"
-PREFIX_LENGTH = 5  # timeout --kill-after=10 <seconds> env XDG_CACHE_HOME=<dir>
+PREFIX_LENGTH = 6  # timeout --kill-after=10 <seconds> env XDG_CACHE_HOME=<dir> DBX_..=podman
 BUILT_BINARY = "#!/bin/sh\necho 'alacritty 0.17.0'\n"
 ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg"/>\n'
 
@@ -50,6 +50,7 @@ def inner(argv: list[str]) -> list[str]:
     assert argv[1] == "--kill-after=10"
     assert argv[3] == "env"
     assert argv[4].startswith("XDG_CACHE_HOME=")
+    assert argv[5] == "DBX_CONTAINER_MANAGER=podman"
     return argv[PREFIX_LENGTH:]
 
 
@@ -391,3 +392,112 @@ def test_preexisting_terminfo_leaf_is_kept_and_named() -> None:
     assert receipt is not None
     assert mine not in {artifact.path for artifact in receipt.artifacts}
     assert host_paths()[4] in {artifact.path for artifact in receipt.artifacts}
+
+
+def _failing_swap(monkeypatch: pytest.MonkeyPatch, error: BaseException, *, stuck: bool) -> None:
+    """Make the swap of the third artifact raise `error`; with `stuck`, rollback fails too."""
+    third = host_paths()[2]
+    real_replace = os.replace
+
+    def flaky(src: str | Path, dst: str | Path) -> None:
+        if Path(dst) == third and str(src).endswith(NEW_SUFFIX):
+            raise error
+        if stuck and str(src).endswith(OLD_SUFFIX):
+            raise OSError("read-only")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+
+
+def test_a_stuck_rollback_still_reports_the_box_that_could_not_be_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert install(FakeBox()).status is InstallStatus.INSTALLED
+    _failing_swap(monkeypatch, OSError("disk full"), stuck=True)
+    box = FakeBox({"rm": CommandError(["distrobox", "rm"], 1, detail="busy")})
+
+    with pytest.raises(ExecutorError, match="rollback failed") as caught:
+        run_install(box, "v0.18.0")
+
+    assert "could not remove the Distrobox" in str(caught.value)
+    assert box.steps()[-2:] == ["rm", "rmi"]
+
+
+def test_an_unlinkable_staged_file_does_not_skip_the_box_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_unlink = Path.unlink
+
+    def refusing(self: Path, missing_ok: bool = False) -> None:
+        if self.name.endswith(NEW_SUFFIX):
+            raise PermissionError("immutable")
+        real_unlink(self, missing_ok=missing_ok)
+
+    _failing_swap(monkeypatch, OSError("disk full"), stuck=False)
+    monkeypatch.setattr(Path, "unlink", refusing)
+    box = FakeBox()
+
+    with pytest.raises(ExecutorError, match="disk full"):
+        run_install(box)
+
+    assert box.steps()[-2:] == ["rm", "rmi"]
+
+
+def test_an_interrupt_between_the_two_replaces_restores_the_previous_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert install(FakeBox()).status is InstallStatus.INSTALLED
+    before = {path: path.read_bytes() for path in host_paths()}
+    _failing_swap(monkeypatch, KeyboardInterrupt(), stuck=False)
+    newer = FakeBox()
+    newer.binary_text = BUILT_BINARY.replace("0.17.0", "0.18.0")
+
+    with pytest.raises(KeyboardInterrupt):
+        run_install(newer, "v0.18.0")
+
+    assert {path: path.read_bytes() for path in host_paths()} == before
+
+
+def test_every_step_pins_the_container_manager_to_podman() -> None:
+    box = FakeBox()
+    run_install(box)
+
+    assert box.calls
+    for call in box.calls:
+        assert "DBX_CONTAINER_MANAGER=podman" in call[:PREFIX_LENGTH]
+
+
+def test_a_run_dir_that_cannot_be_removed_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    def keep(_path: Path, ignore_errors: bool = False) -> None:
+        pass
+
+    monkeypatch.setattr(cargo_distrobox.shutil, "rmtree", keep)
+
+    notes = run_install(FakeBox())
+
+    assert any("could not remove" in note and "tools-installer-cargo-" in note for note in notes)
+
+
+def test_a_partial_uninstall_still_lists_the_surviving_recorded_artifacts() -> None:
+    assert install(FakeBox()).status is InstallStatus.INSTALLED
+    binary, *others = host_paths()
+    binary.unlink()  # a partial uninstall: the binary is gone, the rest is still there
+
+    plan = removal_plan(alacritty_tool(), Path.home() / ".local/bin")
+
+    assert plan.removable == ()
+    assert sorted(plan.yourself) == sorted(others)
+
+
+def test_a_binary_nobody_recorded_is_never_replaced() -> None:
+    binary = host_paths()[0]
+    binary.parent.mkdir(parents=True)
+    binary.write_text("my own alacritty, not executable\n")
+    binary.chmod(0o644)
+    box = FakeBox()
+
+    with pytest.raises(ExecutorError, match="existing .*alacritty"):
+        run_install(box)
+
+    assert box.calls == []  # refused before any box exists
+    assert binary.read_text() == "my own alacritty, not executable\n"

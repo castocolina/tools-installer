@@ -18,6 +18,7 @@ from installer.run import (
     MethodAwareRunner,
     NotingRunner,
     StreamingRunner,
+    run_bounded,
     run_captured,
     run_command,
     run_output,
@@ -821,3 +822,17 @@ def test_setup_applies_the_child_env_before_main_runs() -> None:
     )
     calls = [ast.unparse(stmt) for stmt in guard.body if isinstance(stmt, ast.Expr)]
     assert "apply_child_env(os.environ)" in calls
+
+
+def test_run_bounded_bounds_a_runner_that_takes_a_timeout() -> None:
+    with pytest.raises(CommandError) as exc:
+        run_bounded(run_captured, [sys.executable, "-c", "import time; time.sleep(30)"], 0.2)
+    assert exc.value.returncode == TIMEOUT_CODE
+
+
+def test_run_bounded_calls_other_runners_as_they_are() -> None:
+    calls: list[list[str]] = []
+
+    run_bounded(calls.append, ["herdr", "server", "reload-config"])
+
+    assert calls == [["herdr", "server", "reload-config"]]

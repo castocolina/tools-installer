@@ -1514,3 +1514,126 @@ def test_zsh_gone_reverts_only_the_ledgered_default_shell() -> None:
     kept = _sync_herdr(lookup=_lookup(herdr=_HERDR))
     assert "herdr" not in kept.reverted
     assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == "/bin/fish"
+
+
+def test_alacritty_dotfile_in_home_is_edited_in_place_and_nothing_shadows_it() -> None:
+    from installer.terminal_shell import alacritty_config_path
+
+    dotfile = Path.home() / ".alacritty.toml"
+    dotfile.write_text("[font]\nsize = 12\n")
+    assert alacritty_config_path(Path.home(), dict(os.environ)) == dotfile
+
+    _sync_alacritty()
+    assert dotfile.read_text().startswith("[font]\nsize = 12\n")
+    assert not _alacritty_toml().exists()
+
+
+def test_alacritty_config_precedence_prefers_xdg_over_the_home_dotfile() -> None:
+    from installer.terminal_shell import alacritty_config_path
+
+    (Path.home() / ".alacritty.toml").write_text("")
+    _alacritty_toml().parent.mkdir(parents=True)
+    _alacritty_toml().write_text("")
+    assert alacritty_config_path(Path.home(), dict(os.environ)) == _alacritty_toml()
+
+
+def test_alacritty_file_the_installer_created_is_deleted_when_only_whitespace_is_left(
+    tmp_path: Path,
+) -> None:
+    from installer.post_install import run_post_install
+
+    run_post_install(_alacritty_tool(), _platform())
+    _sync_alacritty()
+    assert _alacritty_toml().is_file()
+
+    _remove_alacritty(tmp_path)
+    assert not _alacritty_toml().exists()
+
+
+def test_alacritty_created_file_that_gained_user_content_is_kept(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    run_post_install(_alacritty_tool(), _platform())
+    with _alacritty_toml().open("a") as handle:
+        handle.write("\n[font]\nsize = 9\n")
+
+    _remove_alacritty(tmp_path)
+    assert tomllib.loads(_alacritty_toml().read_text()) == {"font": {"size": 9}}
+
+
+def test_alacritty_file_the_user_created_empty_is_kept(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    _alacritty_toml().parent.mkdir(parents=True)
+    _alacritty_toml().write_text("")
+    run_post_install(_alacritty_tool(), _platform())
+
+    _remove_alacritty(tmp_path)
+    assert _alacritty_toml().read_text() == ""
+
+
+def test_herdr_default_shell_follows_a_moved_zsh_and_reloads() -> None:
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text('[terminal]\nshell_mode = "auto"\n')
+    calls: list[list[str]] = []
+    _sync_herdr(runner=calls.append)
+    moved = _lookup(zsh="/opt/zsh/bin/zsh", herdr=_HERDR)
+
+    dry = _sync_herdr(lookup=moved, write=False)
+    assert "herdr" in dry.drifted and dry.warnings == ()
+
+    result = _sync_herdr(lookup=moved, runner=calls.append)
+
+    assert tomllib.loads(config.read_text())["terminal"]["default_shell"] == "/opt/zsh/bin/zsh"
+    assert result.warnings == () and "herdr" in result.drifted
+    assert len(calls) == 2
+    assert _ledgered_settings() == ["default-shell"]
+
+
+def test_alacritty_shell_path_with_a_non_bmp_character_is_valid_toml() -> None:
+    zsh = "/home/\U0001f600/.local/bin/zsh"
+
+    result = _sync_alacritty(lookup=_lookup(zsh=zsh, alacritty="/usr/bin/alacritty"))
+
+    assert "alacritty" in result.configured
+    assert result.warnings == ()
+    document = tomllib.loads(_alacritty_toml().read_text(encoding="utf-8"))
+    assert document["terminal"]["shell"]["program"] == zsh
+
+
+def test_herdr_reload_is_bounded_for_a_runner_that_takes_a_timeout() -> None:
+    seen: list[float | None] = []
+
+    def runner(_cmd: list[str], *, timeout: float | None = None) -> None:
+        seen.append(timeout)
+
+    config = _herdr_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text("")
+    _sync_herdr(runner=runner)
+
+    assert seen == [20.0]
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    ['[general]\nimport = ["~/.config/alacritty/theme.toml"]\n', 'import = ["/x/theme.toml"]\n'],
+    ids=["general-import", "legacy-top-level-import"],
+)
+def test_alacritty_config_that_imports_files_is_refused_with_a_reason(user_text: str) -> None:
+    from installer.terminal_shell import apply_alacritty_keys
+
+    config = _alacritty_toml()
+    config.parent.mkdir(parents=True)
+    config.write_text(user_text)
+
+    lines, refused = apply_alacritty_keys(Path.home(), dict(os.environ), skip_recorded=False)
+    result = _sync_alacritty()
+
+    assert refused is not None and "import" in refused
+    assert lines == ()
+    assert any(w.startswith("alacritty: partial:") and "import" in w for w in result.warnings)
+    assert "alacritty" not in result.configured
+    assert config.read_text() == user_text
+    assert not _alacritty_record().exists()

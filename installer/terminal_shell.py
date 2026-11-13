@@ -30,7 +30,8 @@ from installer.atomic import FileSnapshot, atomic_write_text, read_capped
 from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
-from installer.run import CommandError, Runner
+from installer.receipts import read_ledger
+from installer.run import CommandError, Runner, run_bounded
 from installer.shellrc import apply_block, strip_block
 
 Lookup = Callable[[str], str | None]
@@ -470,6 +471,7 @@ ALACRITTY_KEYS = "alacritty-keys"
 # version_status turns it into its `≈ apply install tuning` fact.
 KEYS_PENDING = "install tuning not applied"
 _KEYS_RECORD = "terminal-tuning-alacritty"
+_CREATED_RECORD = "terminal-alacritty-created"
 # TOML 1.0 escapes: `\u001b` is ESC. The Alt+arrow byte strings are the readline word keys.
 _KEY_BINDINGS = (
     ("Left", "Alt", 'chars = "\\u001bb"'),
@@ -480,12 +482,15 @@ _KEYS_HEADER = re.compile(r"^\s*\[\[\s*keyboard\.bindings\s*\]\]", re.MULTILINE)
 
 
 def alacritty_config_path(home: Path, environ: Mapping[str, str]) -> Path:
-    """The first existing of Alacritty's three config locations, else the XDG one."""
+    """The first existing of Alacritty's user config locations, in its own precedence order
+    (alacritty(5): XDG alacritty/, XDG file, ~/.config/alacritty/, ~/.alacritty.toml), else the
+    XDG one. The system-wide /etc/alacritty/alacritty.toml is never edited: it is not ours."""
     config_home = _xdg_config_home(home, environ)
     candidates = (
         config_home / "alacritty" / "alacritty.toml",
         config_home / "alacritty.toml",
         home / ".config" / "alacritty" / "alacritty.toml",
+        home / ".alacritty.toml",
     )
     return next((path for path in candidates if path.exists()), candidates[0])
 
@@ -494,13 +499,19 @@ def _keys_record(home: Path, environ: Mapping[str, str]) -> Path:
     return _xdg_data_home(home, environ) / "tools-installer" / _KEYS_RECORD
 
 
+def _created_marker(home: Path, environ: Mapping[str, str]) -> Path:
+    """Present while the installer itself created the Alacritty config file."""
+    return _xdg_data_home(home, environ) / "tools-installer" / _CREATED_RECORD
+
+
 def _first_line(exc: BaseException) -> str:
     return (str(exc).splitlines() or [type(exc).__name__])[0]
 
 
 def _toml_string(value: str) -> str:
-    """A TOML basic string; json.dumps escapes exactly what TOML requires."""
-    return json.dumps(value)
+    """A TOML basic string; json.dumps escapes what TOML requires, and non-ASCII stays literal
+    (the default would write a non-BMP character as a surrogate pair, which TOML rejects)."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _snapshot_text(snapshot: FileSnapshot | None) -> str:
@@ -528,8 +539,19 @@ def _table(document: Mapping[str, object], name: str) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, dict) else {}
 
 
+_IMPORTS = "you import other files (general.import); they are not followed"
+
+
+def _imports_files(document: Mapping[str, object]) -> bool:
+    """`[general] import` (or the legacy top-level `import`) names files this module never reads,
+    so a shell or binding the user keeps there cannot be checked for a conflict."""
+    return "import" in _table(document, "general") or "import" in document
+
+
 def _shell_plan(document: Mapping[str, object], zsh_path: str) -> tuple[str | None, list[str]]:
     """The shell region body and the `partial:` warnings, decided per part (D-08)."""
+    if _imports_files(document):
+        return None, [f"alacritty: partial: {_IMPORTS}"]
     parts: list[str] = []
     warnings: list[str] = []
     if "shell" in _table(document, "terminal"):
@@ -557,6 +579,8 @@ def _binding_id(key: object, mods: object) -> tuple[str, frozenset[str]]:
 
 
 def _keys_plan(document: Mapping[str, object], outside: str) -> _KeysPlan:
+    if _imports_files(document):
+        return _KeysPlan(None, refusal=_IMPORTS)
     bindings = _table(document, "keyboard").get("bindings")
     if bindings is not None and not _KEYS_HEADER.search(outside):
         return _KeysPlan(None, refusal="you already define keyboard.bindings inline")
@@ -576,7 +600,13 @@ def _keys_plan(document: Mapping[str, object], outside: str) -> _KeysPlan:
 
 
 def _commit_alacritty(
-    path: Path, before: FileSnapshot | None, text: str, updated: str, *, write: bool
+    path: Path,
+    before: FileSnapshot | None,
+    text: str,
+    updated: str,
+    *,
+    write: bool,
+    created_marker: Path,
 ) -> bool:
     """Report whether `updated` differs; write it only when `write`, and only after it re-parses
     and only if the file still is what was read (compare-before-commit)."""
@@ -588,6 +618,9 @@ def _commit_alacritty(
         raise TerminalShellError(f"the edit would not re-parse ({exc}); nothing written") from exc
     if write:
         write_if_unchanged(path, before, updated)
+        if before is None:  # the file is ours: strip may delete it once nothing else is in it
+            created_marker.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(created_marker, "created\n")
     return True
 
 
@@ -603,7 +636,14 @@ def _sync_alacritty(
         body, warnings = _shell_plan(document, zsh_path)
         warnings.extend(_keys_plan(document, outside).conflicts)
         updated = _replace_owned_region(text, ALACRITTY, body)
-        drifted = _commit_alacritty(path, before, text, updated, write=write)
+        drifted = _commit_alacritty(
+            path,
+            before,
+            text,
+            updated,
+            write=write,
+            created_marker=_created_marker(home, environ),
+        )
     except OSError as exc:
         return False, False, (f"alacritty: {_first_line(exc)}",)
     return body is not None, drifted, tuple(warnings)
@@ -639,7 +679,14 @@ def apply_alacritty_keys(
         if plan.refusal is not None:
             return (), plan.refusal
         updated = _replace_owned_region(text, ALACRITTY_KEYS, plan.body)
-        _commit_alacritty(path, before, text, updated, write=True)
+        _commit_alacritty(
+            path,
+            before,
+            text,
+            updated,
+            write=True,
+            created_marker=_created_marker(home, environ),
+        )
         record.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(record, "written\n")
     except OSError as exc:
@@ -680,7 +727,24 @@ def strip_alacritty(home: Path, environ: Mapping[str, str]) -> tuple[str, ...]:
             warnings.append(f"alacritty: {_first_line(exc)}")
     if not warnings:
         _keys_record(home, environ).unlink(missing_ok=True)
+        warnings.extend(_drop_created_config(path, _created_marker(home, environ)))
     return tuple(warnings)
+
+
+def _drop_created_config(path: Path, marker: Path) -> list[str]:
+    """Delete the config file the installer created once nothing but whitespace is left."""
+    if not marker.exists():
+        return []
+    try:
+        before = read_settings(path)
+        if before is None or _snapshot_text(before).strip():
+            marker.unlink()  # gone, or the user's now: never ours to delete
+            return []
+        path.unlink(missing_ok=True)
+        marker.unlink()
+    except OSError as exc:
+        return [f"alacritty: {_first_line(exc)}"]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +763,7 @@ def _herdr_reload(herdr_path: str, runner: Runner | None) -> tuple[str, ...]:
     if runner is None:
         return ()
     try:
-        runner([herdr_path, "server", "reload-config"])
+        run_bounded(runner, [herdr_path, "server", "reload-config"])
     except (CommandError, OSError) as exc:
         return (f"herdr: reload-config failed ({_first_line(exc)}); new panes read it on restart",)
     return ()
@@ -718,6 +782,14 @@ def _herdr_check(path: Path, zsh_path: str) -> tuple[bool, bool, tuple[str, ...]
         return True, True, ()
     if same_value(current, zsh_path):
         return True, False, ()
+    ledger = read_ledger(
+        HERDR
+    )  # a value the ledger records as ours follows zsh (the apply swaps it)
+    if ledger is not None and any(
+        entry.setting == "default-shell" and same_value(current, entry.value)
+        for entry in ledger.entries
+    ):
+        return True, True, ()
     return False, False, (_HERDR_PARTIAL,)
 
 
@@ -751,7 +823,7 @@ def _sync_herdr(
     kinds = {key.kind for key in result.keys}
     if "set_by_you" in kinds:
         return False, False, (_HERDR_PARTIAL,)
-    wrote = "wrote" in kinds
+    wrote = bool(kinds & {"wrote", "replaced_ours"})
     return True, wrote, _herdr_reload(herdr_path, runner) if wrote else ()
 
 
