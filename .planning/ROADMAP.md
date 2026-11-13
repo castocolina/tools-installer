@@ -563,7 +563,7 @@ Plans:
   3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
-**Plans**: 7/13 plans executed
+**Plans**: 10/13 plans executed
 
 Plans:
 **Wave 1**
@@ -580,9 +580,9 @@ Plans:
 - [x] 24.2-07-PLAN.md — The run lock in the TUI: install, update, removal and pnpm reinstall refuse during a scheduled run (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 24.2-08-PLAN.md — Lifecycle: default-on reconcile, in-place refresh and adoption, after-removal hook (F3), uninstall-sweep adapters (wave 4)
-- [ ] 24.2-09-PLAN.md — The Schedules view: VIEWS row 7, cells, detail, 30 s refresh, time and model modals, seven-tab header (wave 4)
-- [ ] 24.2-10-PLAN.md — Container e2e harness: Fedora 44 systemd target, per-built-in runs, busy, calendar, one catch-up, direct fallback (host-tested only) (wave 4)
+- [x] 24.2-08-PLAN.md — Lifecycle: default-on reconcile, in-place refresh and adoption, after-removal hook (F3), uninstall-sweep adapters (wave 4)
+- [x] 24.2-09-PLAN.md — The Schedules view: VIEWS row 7, cells, detail, 30 s refresh, time and model modals, seven-tab header (wave 4)
+- [x] 24.2-10-PLAN.md — Container e2e harness: Fedora 44 systemd target, per-built-in runs, busy, calendar, one catch-up, direct fallback (host-tested only) (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 24.2-11-PLAN.md — Handover switch: Policies drops the daemon row, four reconcile points, uninstall and removal through schedules, headless run lock (wave 5)
@@ -652,7 +652,7 @@ Plans:
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
-| 24.2 Schedules view | 7/13 | In Progress | - |
+| 24.2 Schedules view | 10/13 | In Progress | - |
 | 24.3 Catalog audit skill | 0/TBD | Not started | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
