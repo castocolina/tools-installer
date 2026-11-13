@@ -61,7 +61,7 @@ actuals:
 - Task 1 (merged-tree gate and UAT): done, commit `24eaa92`.
 - Task 2 (ORCHESTRATOR, nested-podman run): PENDING. Not started by the executor (checkpoint, by design).
 - Task 3 (ORCHESTRATOR, three distro runs): PENDING. Not started by the executor (checkpoint, by design).
-- This SUMMARY is `status: in-progress`. Per the plan (R2-15) the plan closes only after the orchestrator's runs, three passing distro runs and the user's recorded UAT results. ONB-04 and ONB-05 stay open.
+- This SUMMARY is `status: complete` for the agent-run work (Task 1, the nested run and three passing distro runs, ONB-04 met). ONB-05 stays open until the user records the 24-UAT.md results (R2-15).
 - STATE.md and ROADMAP.md were not updated, per the orchestrator's instruction.
 
 ## Task 1: merged-tree gate
