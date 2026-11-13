@@ -56,7 +56,7 @@
     {
       "number": "24.1",
       "name": "Onboard Neovim through the tool-onboarding skill",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "24.2",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 11 of 15 · 20% · executing"
+    "reason": "Phase 12 of 15 · 20% · executing"
   },
-  "updated_at": "2026-11-13T11:52:40.360Z"
+  "updated_at": "2026-11-13T16:54:46.666Z"
 }

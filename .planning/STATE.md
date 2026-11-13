@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: "24.1"
-current_phase_name: Onboard Neovim through the tool-onboarding skill
+current_phase: "24.2"
+current_phase_name: Schedules view
 status: executing
 stopped_at: Phase 23.2 complete, ready to verify Phase 17
-last_updated: "2026-11-13T11:52:40.352Z"
+last_updated: "2026-11-13T16:54:46.647Z"
 last_activity: 2026-11-13
-last_activity_desc: Phase 24.1 execution started
-state_head: 95762445595ee6bd767135315b32074f74ed052d
+last_activity_desc: Phase 24.2 execution started
+state_head: 3972b142fcc2cf5b5d543e023a5ae40c4bc751a0
 progress:
   total_phases: 15
   completed_phases: 3
-  total_plans: 216
-  completed_plans: 211
+  total_plans: 229
+  completed_plans: 216
   percent: 20
 ---
 
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 24.1 — Onboard Neovim through the tool-onboarding skill
+**Current focus:** Phase 24.2 — Schedules view
 
 ## Current Position
 
-Phase: 24.1 (Onboard Neovim through the tool-onboarding skill) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 24.1
-Last activity: 2026-11-13 — Phase 24.1 execution started
+Phase: 24.2 (Schedules view) — EXECUTING
+Plan: 1 of 13
+Status: Executing Phase 24.2
+Last activity: 2026-11-13 — Phase 24.2 execution started
 
 Progress: [██░░░░░░░░] 20%
 
