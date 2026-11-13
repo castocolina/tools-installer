@@ -3202,6 +3202,8 @@ def _nvim_lsp_stub(tmp_path: Path, fail: str = "") -> str:
     check_fail = boom.format("check") if fail == "check" else ""
     first_fail = boom.format("first-launch") if fail == "first-launch" else ""
     first_line = "" if fail == "first-launch" else "echo 'stub first launch line' >&2"
+    if fail == "lua-error":  # exit 0, yet init.lua raised
+        first_line += "\necho 'Error detected while processing /x/init.lua:' >&2"
     log = shlex.quote(str(tmp_path / "nvim-calls"))
     return (
         'echo "$PWD|$XDG_DATA_HOME|$XDG_STATE_HOME|$XDG_CACHE_HOME|'
@@ -3275,6 +3277,22 @@ def test_nvim_lsp_gather_keeps_its_evidence_when_a_launch_fails(
     assert "TRACER_NVIM_LSP_PROBE_FAILED" in lines
     assert not any(line.startswith("TRACER_NVIM_LSP_OK") for line in lines)
     assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_nvim_lsp_lua_error_with_exit_zero_fails_the_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F4: a Lua error in a launch's stderr fails the verdict even when every launch exits 0."""
+    result = _nvim_lsp_run(tmp_path, monkeypatch, fail="lua-error")
+    lines = result.stdout.splitlines()
+    assert result.returncode != 0, result.stdout
+    assert (
+        "TRACER_NVIM_LSP_LUA_ERROR first-launch: Error detected while processing /x/init.lua:"
+        in lines
+    )
+    # The stderr evidence stays visible for the network classification.
+    assert "NVIM_LSP_STDERR first-launch: Error detected while processing /x/init.lua:" in lines
+    assert not any(line.startswith("TRACER_NVIM_LSP_OK") for line in lines)
 
 
 def test_nvim_lsp_check_lua_measures_inside_nvim() -> None:

@@ -1595,9 +1595,10 @@ EOF
 # (printed by scripts/nvim-lsp-check.lua), `PROC <cmdline>`, `NVIM_LSP_NO_NVIM`, `NVIM_LSP_NO_STARTER`
 # and `NVIM_LSP_DONE` (both launches exited 0). Every other line is ignored, stderr noise and the
 # `NVIM_LSP_STDERR` evidence lines included: the marker counts only on a line that starts with it.
+# `NVIM_LSP_LUA_ERROR <launch>: <line>` (an error banner in a launch's stderr) fails the verdict.
 nvim_lsp_verdict() {
   local line part marker=0 clients="" entries="" filetypes="" lspconfig="" mason="" procs="" cmd
-  local no_nvim=0 no_starter=0 done=0 failed=0
+  local no_nvim=0 no_starter=0 done=0 failed=0 lua_errors=""
   local -a parts
   while IFS= read -r line; do
     case "$line" in
@@ -1618,6 +1619,7 @@ nvim_lsp_verdict() {
       NVIM_LSP_NO_NVIM) no_nvim=1 ;;
       NVIM_LSP_NO_STARTER) no_starter=1 ;;
       NVIM_LSP_DONE) done=1 ;;
+      "NVIM_LSP_LUA_ERROR "*) lua_errors+="${line#NVIM_LSP_LUA_ERROR }"$'\n' ;;
     esac
   done
   if [[ "$no_nvim" -eq 1 ]]; then
@@ -1632,6 +1634,11 @@ nvim_lsp_verdict() {
     printf 'TRACER_NVIM_LSP_PROBE_FAILED\n'
     return 1
   fi
+  while IFS= read -r cmd; do
+    [[ -n "$cmd" ]] || continue
+    printf 'TRACER_NVIM_LSP_LUA_ERROR %s\n' "$cmd"
+    failed=1
+  done <<<"$lua_errors"
   if [[ "$clients" != 0 ]]; then
     printf 'TRACER_NVIM_LSP_CLIENTS count=%s\n' "$clients"
     failed=1
@@ -1675,6 +1682,9 @@ if [ ! -f "$HOME/.config/nvim/init.lua" ]; then echo NVIM_LSP_NO_STARTER; exit 0
 t="$(mktemp -d)"
 fl='not run'
 ck='not run'
+# A Lua error in init.lua leaves exit 0 under +qa/qa!: E5xxx is nvim's Lua error code (E5108, E5113),
+# the others are its error banners. Treesitter's plain "Error: ..." noise matches none of them.
+lua_error='E5[0-9]{3}:|Error detected while processing|Error executing|stack traceback'
 evidence() {
   local launch status
   for launch in first-launch check; do
@@ -1682,6 +1692,7 @@ evidence() {
     printf 'NVIM_LSP_STDERR %s: exit status %s\n' "$launch" "$status"
     if [ -f "$t/$launch.err" ]; then
       tail -n 20 "$t/$launch.err" | sed "s/^/NVIM_LSP_STDERR $launch: /"
+      grep -E "$lua_error" "$t/$launch.err" | head -n 5 | sed "s/^/NVIM_LSP_LUA_ERROR $launch: /" || true
     fi
   done
   rm -rf "$t"
