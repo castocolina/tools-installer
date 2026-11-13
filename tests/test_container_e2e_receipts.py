@@ -2285,6 +2285,12 @@ _NESTED_STEPS = (
 )
 
 
+def test_nested_prepare_installs_su_for_the_tester_helpers() -> None:
+    """24-08 nested run #1: quay.io/podman/stable has no `su`, which exec_tester runs through."""
+    assert "su - " in _function("exec_tester")
+    assert "util-linux" in _function("nested_prepare")
+
+
 def _nested_script(call: str, *, real: Sequence[str] = (), stubs: str = "") -> str:
     """cmd_nested's helpers over a recording `ct`; a step not named in `real` prints its name."""
     text = _script_text()

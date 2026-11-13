@@ -1522,10 +1522,12 @@ nested_infeasible() {
   printf 'TRACER_NESTED_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
 }
 
-# Root installs the box's tools (curl and tar for the uv bootstrap and the workspace stream), the
-# workspace is streamed and uv bootstrapped for the nested user through the shared helpers.
+# Root installs the box's tools (curl and tar for the uv bootstrap and the workspace stream, and
+# util-linux for the `su` every tester helper runs through: quay.io/podman/stable ships without it),
+# the workspace is streamed and uv bootstrapped for the nested user through the shared helpers.
 nested_prepare() {
-  exec_root dnf install -y distrobox desktop-file-utils ncurses git python3 zsh curl tar || return 1
+  exec_root dnf install -y distrobox desktop-file-utils ncurses git python3 zsh curl tar util-linux \
+    || return 1
   install_github_token || return 1
   copy_workspace || return 1
   bootstrap_uv || return 1
