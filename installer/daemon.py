@@ -28,8 +28,44 @@ DEFAULT_HOUR = 3
 DEFAULT_MINUTE = 0
 DEFAULT_DAYS = 3
 DEFAULT_CAP_BYTES = 256 * 1024
+# Variables a scheduled run needs from the installing process when it has them: a custom pnpm
+# home, the proxy settings and the certificate bundles (F8). Lower-case proxy names are the
+# ones many tools read first.
+PASSTHROUGH_KEYS = (
+    "PNPM_HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+)
 # The only environment keys an agent or unit may carry (shared with systemd_daemon).
-ENVIRONMENT_KEYS = ("PATH", "HOME", "TMPDIR")
+ENVIRONMENT_KEYS = ("PATH", "HOME", "TMPDIR", *PASSTHROUGH_KEYS)
+
+
+def valid_passthrough_value(value: str) -> bool:
+    """A passthrough value is non-empty text with no newline or other control character."""
+    return bool(value) and value.isprintable()
+
+
+def check_environment(environment: Mapping[str, str]) -> None:
+    """The closed key set and the per-key shape of a unit or plist environment."""
+    unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
+    if unknown:
+        raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
+    if "PATH" in environment and not environment["PATH"]:
+        raise DaemonScheduleError("PATH must not be empty")
+    for key in ("HOME", "TMPDIR"):
+        if key in environment and not Path(environment[key]).is_absolute():
+            raise DaemonScheduleError(f"{key} must be an absolute path: {environment[key]!r}")
+    for key in PASSTHROUGH_KEYS:
+        if key in environment and not valid_passthrough_value(environment[key]):
+            raise DaemonScheduleError(f"{key} must be text without control characters")
+
 
 # Live-verified this session (see 11-01-PLAN.md Task 1 <read_first>): a real
 # `launchctl bootout` against a nonexistent label on this machine exits 3, and
@@ -105,7 +141,8 @@ def render_agent_plist(
 
     `calendar` is one {Hour, Minute} dict or a non-empty list of them (launchd
     fires at every entry). `program_arguments[0]` must be absolute and the
-    environment is closed to PATH, HOME and TMPDIR (HOME and TMPDIR absolute, PATH non-empty)
+    environment is closed to PATH, HOME, TMPDIR and the passthrough keys (HOME and TMPDIR
+    absolute, PATH non-empty, passthrough values free of control characters)
     and both log paths are absolute. Raises DaemonScheduleError
     before returning anything, so a bad value never reaches a written plist.
     """
@@ -113,14 +150,7 @@ def render_agent_plist(
         raise DaemonScheduleError(
             f"program_arguments[0] must be an absolute path: {list(program_arguments)[:1]!r}"
         )
-    unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
-    if unknown:
-        raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
-    if "PATH" in environment and not environment["PATH"]:
-        raise DaemonScheduleError("PATH must not be empty")
-    for key in ("HOME", "TMPDIR"):
-        if key in environment and not Path(environment[key]).is_absolute():
-            raise DaemonScheduleError(f"{key} must be an absolute path: {environment[key]!r}")
+    check_environment(environment)
     for name, log in (("stdout_path", stdout_path), ("stderr_path", stderr_path)):
         if not log.is_absolute():
             raise DaemonScheduleError(f"{name} must be a non-empty absolute path: {log!r}")

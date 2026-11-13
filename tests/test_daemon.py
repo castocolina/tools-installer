@@ -455,3 +455,17 @@ def test_record_decided_leaves_no_temp_sibling_file(tmp_path: Path) -> None:
     state_path = tmp_path / ".myshellrc"
     daemon.record_decided(state_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == [".myshellrc"]
+
+
+def test_agent_plist_carries_the_passthrough_keys() -> None:
+    environment = {**_AGENT_ENV, "HTTPS_PROXY": "http://p:3128", "SSL_CERT_FILE": "/c/ca.pem"}
+    plist = daemon.render_agent_plist(**_agent_kwargs(environment=environment))  # type: ignore[arg-type]
+    assert plist["EnvironmentVariables"] == environment
+
+
+@pytest.mark.parametrize("value", ["", "a\nb", "a\x00b"])
+def test_agent_plist_rejects_a_passthrough_value_with_a_control_character(value: str) -> None:
+    with pytest.raises(daemon.DaemonScheduleError):
+        daemon.render_agent_plist(
+            **_agent_kwargs(environment={**_AGENT_ENV, "NODE_EXTRA_CA_CERTS": value})  # type: ignore[arg-type]
+        )

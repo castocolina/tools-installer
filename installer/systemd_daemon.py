@@ -23,8 +23,8 @@ from typing import Generic, TypeVar
 from installer.atomic import atomic_write_bytes
 from installer.daemon import (
     ENVIRONMENT_KEYS,
-    WRAPPER_COMMAND,
     DaemonScheduleError,
+    check_environment,
     ensure_log_path,
     remove_wrapper,
     wrapper_present,
@@ -34,9 +34,8 @@ from installer.locations import xdg_config_base
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_query
 from installer.shellrc import apply_block, strip_block
 
-# Re-exported (imported, never re-declared -- the schedule engine needs these same names,
-# exactly like it imports installer.daemon's WRAPPER_COMMAND/remove_wrapper rather than
-# re-declaring a parallel copy).
+# Re-exported (imported, never re-declared -- the schedule engine needs these same names
+# rather than a parallel copy).
 __all__ = [
     "COMPETING_UNITS",
     "DEFAULT_AGE_MINUTES",
@@ -55,7 +54,6 @@ __all__ = [
     "CompetitorCache",
     "TimerStateCache",
     "UNIT_BASENAME",
-    "WRAPPER_COMMAND",
     "bootout",
     "bootstrap",
     "clean_timer_state",
@@ -157,6 +155,11 @@ def systemd_available(*, which: Callable[[str], str | None] = shutil.which) -> b
 _REJECTED_CHARS = ('"', "\\", "%", "$", "\n", "\r")
 
 
+def quotable(value: str) -> bool:
+    """Whether `_quote` would accept `value`; a caller drops what a unit cannot carry."""
+    return not any(char in value for char in _REJECTED_CHARS)
+
+
 def _quote(value: str) -> str:
     """Validate one rendered value and return it wrapped in double quotes.
 
@@ -183,22 +186,16 @@ def render_exec_service(
 ) -> str:
     """The systemd unit (.service) INI text for a oneshot run of any argv.
 
-    `argv[0]` must be absolute. The environment is closed to PATH, HOME and
-    TMPDIR (rendered in that order, whichever are given); HOME and TMPDIR must
-    be absolute and PATH non-empty. Every token and every KEY=value goes through
+    `argv[0]` must be absolute. The environment is closed to PATH, HOME, TMPDIR and
+    the passthrough keys (rendered in that order, whichever are given); HOME and TMPDIR
+    must be absolute, PATH non-empty and a passthrough value free of control
+    characters. Every token and every KEY=value goes through
     _quote, and everything is validated before anything is returned, so a bad
     value can never reach a written unit file.
     """
     if not argv or not Path(argv[0]).is_absolute():
         raise DaemonScheduleError(f"argv[0] must be an absolute path: {list(argv)[:1]!r}")
-    unknown = sorted(set(environment) - set(ENVIRONMENT_KEYS))
-    if unknown:
-        raise DaemonScheduleError(f"environment keys must be within {ENVIRONMENT_KEYS}: {unknown}")
-    if "PATH" in environment and not environment["PATH"]:
-        raise DaemonScheduleError("PATH must not be empty")
-    for key in ("HOME", "TMPDIR"):
-        if key in environment and not Path(environment[key]).is_absolute():
-            raise DaemonScheduleError(f"{key} must be an absolute path: {environment[key]!r}")
+    check_environment(environment)
     exec_start = " ".join(_quote(token) for token in argv)
     lines = [
         "[Unit]",
@@ -370,13 +367,19 @@ def query_systemctl(cmd: list[str]) -> str:
     return run_query(cmd, timeout=SYSTEMCTL_QUERY_TIMEOUT, accept_codes=(0, 1, 3, 4))
 
 
+def stop_timer(*, basename: str, run: Runner = run_captured) -> None:
+    """`systemctl --user stop <timer>` -- `clean` refuses an active timer, so stop it first."""
+    run(["systemctl", "--user", "stop", f"{basename}.timer"])
+
+
 def clean_timer_state(*, basename: str, run: Runner = run_captured) -> None:
     """`systemctl --user clean --what=state <timer>` -- drop the Persistent= stamp.
 
     `man systemd.timer` says to use this command before uninstalling a timer
     unit: without it the stamp survives and a later timer of the same name fires
     a catch-up for a schedule that is gone or re-timed. The caller runs it while
-    the unit is still loaded.
+    the unit is still loaded. systemd refuses it on an ACTIVE timer, so a caller that keeps the
+    timer (a re-time) stops it first with `stop_timer` and starts it again afterwards.
     """
     run(["systemctl", "--user", "clean", "--what=state", f"{basename}.timer"])
 

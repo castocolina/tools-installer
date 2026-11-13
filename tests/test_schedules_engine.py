@@ -192,12 +192,16 @@ def tree(root: Path) -> dict[str, bytes | str]:
     return out
 
 
+LOCK_FILES = frozenset(
+    {"schedules.json", "schedules.json.lock", "schedules.reconcile.lock", "run.lock"}
+)  # lock files stay: deleting one another process holds would let a third lock a new inode
+
+
 def files_left(root: Path) -> list[str]:
     return [
         str(path.relative_to(root))
         for path in sorted(root.rglob("*"))
-        if (path.is_file() or path.is_symlink())
-        and path.name not in {"schedules.json", "schedules.json.lock"}
+        if (path.is_file() or path.is_symlink()) and path.name not in LOCK_FILES
     ]
 
 
@@ -243,7 +247,7 @@ def test_turn_on_then_off_leaves_nothing_behind(env: Env) -> None:
     path = clean_unit_path(env.home, platform_os="fedora", environ=ctx.environ)
     assert f'Environment="PATH={path}"' in lines
     assert f'Environment="HOME={env.home}"' in lines
-    assert f'Environment="TMPDIR={ctx.tmpdir}"' in lines
+    assert 'Environment="TMPDIR=/tmp"' in lines
     timer_lines = timer.read_text().splitlines()
     assert "OnCalendar=*-*-* 00,06,12,18:00:00" in timer_lines
     assert "Persistent=true" in timer_lines
@@ -308,6 +312,63 @@ def test_existing_symlink_at_a_unit_path_is_refused(env: Env, tmp_path: Path) ->
     assert victim.read_text() == "[Service]\nExecStart=/bin/true\n"
     assert env.run.calls == []
     assert files_left(env.home) == [str(service.relative_to(env.home))]
+
+
+def test_a_symlink_replacing_a_recorded_unit_is_refused_on_repair(env: Env, tmp_path: Path) -> None:
+    turn_on(env.ctx, "update-claude")
+    victim = tmp_path / "victim.service"
+    victim.write_text("[Service]\nExecStart=/bin/true\n")
+    service = env.ctx.unit_dir / f"{CLAUDE_BASENAME}.service"
+    service.unlink()
+    service.symlink_to(victim)  # a recorded file, replaced by a link
+    with pytest.raises(OSError, match=f"{CLAUDE_BASENAME}.service"):
+        turn_on(env.ctx, "update-claude")
+    assert victim.read_text() == "[Service]\nExecStart=/bin/true\n"
+
+
+def test_units_carry_the_platform_tmpdir_never_the_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = make_env(tmp_path, monkeypatch).ctx
+
+    def context(tmpdir: str) -> ScheduleContext:
+        return context_for(
+            "fedora",
+            checkout=CHECKOUT,
+            read_models=base.read_models,
+            run=base.run,
+            read_output=base.read_output,
+            which=base.which,
+            present=base.present,
+            environ={"TMPDIR": tmpdir},
+        )
+
+    ctx = context("/somewhere/else")
+    assert ctx.tmpdir == "/tmp"
+    turn_on(ctx, "update-claude")
+    service = (ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text()
+    assert 'Environment="TMPDIR=/tmp"' in service.splitlines()
+    assert "/somewhere/else" not in service
+    # a different TMPDIR in the writing shell does not make the unit read as stale
+    again = context("/another/shell")
+    stale = vars(schedules)["_is_stale"]
+    assert (
+        stale(again, load_state(again.state_path).state, schedule_by_id("update-claude")) is False
+    )
+
+
+def test_the_macos_tmpdir_is_the_per_user_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    def per_user(_name: str) -> str:
+        return "/var/folders/ab/cd/T/"
+
+    def empty(_name: str) -> str:
+        return ""
+
+    monkeypatch.setattr(os, "confstr", per_user, raising=False)
+    assert schedules.default_tmpdir("macos") == "/var/folders/ab/cd/T"
+    monkeypatch.setattr(os, "confstr", empty, raising=False)
+    assert schedules.default_tmpdir("macos") == "/tmp"
+    assert schedules.default_tmpdir("fedora") == "/tmp"
 
 
 UNAVAILABLE = {
@@ -413,6 +474,7 @@ def test_retime(env: Env) -> None:
     assert "OnCalendar=*-*-* 01,09,17:30:00" in timer.read_text().splitlines()
     timer_name = f"{CLAUDE_BASENAME}.timer"
     assert env.run.text() == [
+        f"stop {timer_name}",  # F13: `clean` refuses an active timer
         f"clean --what=state {timer_name}",
         "daemon-reload",
         f"enable {timer_name}",
@@ -1010,7 +1072,10 @@ def test_toggle_during_a_run_leaves_the_run_alone(env: Env) -> None:
         assert runlock.try_acquire(ctx.lock_path, "probe") is None  # still held
     finally:
         held.release()
-    assert files_left(env.home) == [".local/state/tools-installer/run.lock"]  # only the run lock
+    # the run was reading them, so the off kept the shared files (F4)
+    assert files_left(env.home) == sorted(
+        f".local/share/tools-installer/schedules/{name}" for name in SHARED_NAMES
+    )
 
 
 ESCALATION = re.compile(r"\b(sudo|pkexec|doas)\b")
@@ -1133,6 +1198,7 @@ def test_a_failed_retime_restores_the_bytes_and_reregisters_after_the_reload(
     assert service.read_bytes() == service_before
     assert timer.read_bytes() == timer_before  # not the 8 h attempt
     assert timer_verbs(env) == [
+        "stop",
         "clean",
         "daemon-reload",
         "enable",
@@ -1619,3 +1685,94 @@ def test_a_macos_retime_on_an_off_row_only_saves_and_writes_no_plist(
     assert env.run.calls == []
     assert not mac_plist_path(env).exists()
     assert load_state(env.ctx.state_path).state.records["tmp-cleanup"].start == "04:15"
+
+
+def test_retiming_a_drift_row_never_records_a_modified_service_as_ours(env: Env) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    service = ctx.unit_dir / f"{CLAUDE_BASENAME}.service"
+    service.write_bytes(service.read_bytes() + b"# edited by hand\n")
+
+    retime(ctx, "update-claude", 8, "01:30")
+
+    state = load_state(ctx.state_path).state
+    by_path = {Path(a.path): a for a in state.records["update-claude"].files}
+    assert not receipts.matches(by_path[service], rehash=True)  # still not recorded as ours
+    timer = ctx.unit_dir / f"{CLAUDE_BASENAME}.timer"
+    assert receipts.matches(by_path[timer], rehash=True)
+    claude = schedule_by_id("update-claude")
+    assert row_state(ctx, state, claude, manager=True, present=ctx.present) == RowState("drift")
+
+
+def test_a_failed_registration_re_records_the_shared_files_it_rewrote(
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "update-claude")
+    new_runner = tmp_path / "new_runner.py"
+    new_runner.write_bytes((ctx.data_dir / "runner.py").read_bytes() + b"# a fix\n")
+    original = vars(schedules)["_shared_pairs"]
+
+    def refreshed(context: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
+        return ((new_runner, context.data_dir / "runner.py"), *original(context)[1:])
+
+    monkeypatch.setitem(vars(schedules), "_shared_pairs", refreshed)
+    env.run.arm(frozenset({("restart", 1)}))
+    with pytest.raises(CommandError):
+        turn_on(ctx, "update-opencode")
+
+    assert (ctx.data_dir / "runner.py").read_bytes() == new_runner.read_bytes()
+    shared = load_state(ctx.state_path).state.shared
+    assert shared
+    assert all(receipts.matches(a, rehash=True) for a in shared)
+
+
+PASSTHROUGH = {
+    "PNPM_HOME": "/opt/pnpm",
+    "HTTP_PROXY": "http://proxy.example:3128",
+    "HTTPS_PROXY": "http://proxy.example:3128",
+    "NO_PROXY": "localhost,.corp",
+    "no_proxy": "localhost,.corp",
+    "SSL_CERT_FILE": "/etc/ssl/ca.pem",
+    "REQUESTS_CA_BUNDLE": "/etc/ssl/ca.pem",
+    "NODE_EXTRA_CA_CERTS": "/etc/ssl/ca.pem",
+}
+
+
+def passthrough_ctx(env: Env, extra: dict[str, str]) -> ScheduleContext:
+    return replace(env.ctx, environ={**env.ctx.environ, **PASSTHROUGH, **extra})
+
+
+def test_the_linux_unit_carries_the_proxy_and_certificate_variables(env: Env) -> None:
+    ctx = passthrough_ctx(env, {"HTTP_PROXY": "bad\nvalue", "https_proxy": 'has"quote'})
+    turn_on(ctx, "update-claude")
+    lines = (ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text().splitlines()
+    for key, value in PASSTHROUGH.items():
+        if key != "HTTP_PROXY":
+            assert f'Environment="{key}={value}"' in lines
+    text = "\n".join(lines)
+    assert "bad" not in text  # an unrenderable value is dropped, not written
+    assert 'has"quote' not in text
+    assert "HTTP_PROXY" not in text
+
+
+def test_a_unit_without_those_variables_in_the_writing_process_carries_none(env: Env) -> None:
+    turn_on(env.ctx, "update-claude")
+    text = (env.ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text()
+    assert not any(key in text for key in PASSTHROUGH)
+
+
+def test_the_macos_plist_carries_the_proxy_and_certificate_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mac = make_env(tmp_path, monkeypatch, os_key="macos")
+    ctx = passthrough_ctx(mac, {"HTTP_PROXY": "bad\nvalue"})
+    turn_on(ctx, "update-claude")
+    plist = plistlib.loads(
+        (ctx.launch_agents_dir / "com.tools-installer.schedule.update-claude.plist").read_bytes()
+    )
+    carried = plist["EnvironmentVariables"]
+    assert {key: carried[key] for key in PASSTHROUGH if key != "HTTP_PROXY"} == {
+        key: value for key, value in PASSTHROUGH.items() if key != "HTTP_PROXY"
+    }
+    assert "HTTP_PROXY" not in carried

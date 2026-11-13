@@ -1283,6 +1283,12 @@ def test_teardown_verbs_take_a_basename(tmp_path: Path) -> None:
     assert other.calls == []
 
 
+def test_stop_timer() -> None:
+    recorder = _RecordingRun()
+    systemd_daemon.stop_timer(basename=_SCHEDULE_BASENAME, run=recorder)
+    assert recorder.calls == [["systemctl", "--user", "stop", f"{_SCHEDULE_BASENAME}.timer"]]
+
+
 def test_clean_timer_state() -> None:
     recorder = _RecordingRun()
     systemd_daemon.clean_timer_state(basename=_SCHEDULE_BASENAME, run=recorder)
@@ -1313,3 +1319,47 @@ def test_user_manager_reachable(stdout: str, expected: bool) -> None:
 
 def test_user_manager_reachable_reads_a_timeout_as_unreachable() -> None:
     assert systemd_daemon.user_manager_reachable(read_output=_RaisingReadOutput()) is False
+
+
+def test_the_unused_wrapper_command_is_not_re_exported() -> None:
+    assert "WRAPPER_COMMAND" not in vars(systemd_daemon)
+    assert "WRAPPER_COMMAND" not in systemd_daemon.__all__
+
+
+def test_render_exec_service_carries_the_passthrough_keys_after_the_closed_three() -> None:
+    lines = systemd_daemon.render_exec_service(
+        argv=_SCHEDULE_ARGV,
+        environment={
+            **_SCHEDULE_ENV,
+            "HTTPS_PROXY": "http://proxy.example:3128",
+            "PNPM_HOME": "/opt/pnpm home",
+            "NO_PROXY": "localhost,.corp",
+        },
+        description="d",
+    ).splitlines()
+    env_lines = [line for line in lines if line.startswith("Environment=")]
+    assert env_lines == [
+        'Environment="PATH=/a:/b"',
+        'Environment="HOME=/h"',
+        'Environment="TMPDIR=/t"',
+        'Environment="PNPM_HOME=/opt/pnpm home"',
+        'Environment="HTTPS_PROXY=http://proxy.example:3128"',
+        'Environment="NO_PROXY=localhost,.corp"',
+    ]
+
+
+@pytest.mark.parametrize("value", ["", "a\nb", "a\tb", "a\x00b", "a\x1b[0m", "a\x7fb"])
+def test_render_exec_service_rejects_a_passthrough_value_with_a_control_character(
+    value: str,
+) -> None:
+    with pytest.raises(DaemonScheduleError):
+        systemd_daemon.render_exec_service(
+            argv=_SCHEDULE_ARGV,
+            environment={**_SCHEDULE_ENV, "HTTP_PROXY": value},
+            description="d",
+        )
+
+
+def test_quotable_names_what_a_unit_value_can_carry() -> None:
+    assert systemd_daemon.quotable("http://proxy:3128")
+    assert not any(systemd_daemon.quotable(f"a{char}b") for char in '"\\%$\n\r')

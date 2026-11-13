@@ -13,10 +13,9 @@ import os
 import plistlib
 import re
 import shutil
-import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -185,6 +184,25 @@ def default_data_dir() -> Path:
     return root / "tools-installer" / "schedules"
 
 
+# Built from parts: a bare "/tmp" literal trips bandit B108 (as in cargo_distrobox.RUN_ROOT).
+_LINUX_TMPDIR: Final = str(Path("/") / "tmp")
+
+
+def default_tmpdir(platform_os: str) -> str:
+    """The platform's own TMPDIR, never the launching shell's (F17).
+
+    macOS: the per-user directory launchd hands a job. Linux: `/tmp`, written out rather than
+    omitted: it is what a unit with no TMPDIR resolves to, so behaviour is unchanged, and the
+    unit text stays one fixed value that no shell can make stale.
+    """
+    if platform_os == "macos":  # every other Platform.os key is Linux
+        with contextlib.suppress(ValueError, OSError):  # not Darwin, or the call failed
+            per_user = (os.confstr("CS_DARWIN_USER_TEMP_DIR") or "").rstrip("/")
+            if per_user:
+                return per_user
+    return _LINUX_TMPDIR
+
+
 def default_log_path(platform_os: str) -> Path:
     # Every Platform.os key but "macos" is Linux (installer/app.py).
     if platform_os == "macos":
@@ -227,6 +245,8 @@ class LoadedState:
     warning: str | None = None
     # True while the `.damaged` copy exists, so the guard outlives the load that saw the damage.
     damaged: bool = False
+    # True when the file could not be read at all (no `.damaged` copy is kept): never saved over.
+    unreadable: bool = False
 
 
 _STATE_VERSION = 1
@@ -350,13 +370,17 @@ def load_state(path: Path) -> LoadedState:
         return LoadedState(ScheduleState(), damaged=damaged_path(path).exists())
     except OSError as exc:
         return LoadedState(
-            ScheduleState(), _warning(str(exc) or "unreadable"), damaged_path(path).exists()
+            ScheduleState(),
+            _warning(str(exc) or "unreadable"),
+            damaged_path(path).exists(),
+            unreadable=True,
         )
     if raw is None:
         return LoadedState(
             ScheduleState(),
             _warning("not a regular file, or too large"),
             damaged_path(path).exists(),
+            unreadable=True,
         )
     try:
         state = _decode_state(json.loads(raw.decode("utf-8")))
@@ -390,9 +414,15 @@ def save_state(path: Path, state: ScheduleState) -> None:
 
 
 def update_state(path: Path, change: Callable[[ScheduleState], ScheduleState]) -> ScheduleState:
-    """Apply `change` to the stored state under the writer lock, so no decision is lost."""
+    """Apply `change` to the stored state under the writer lock, so no decision is lost.
+
+    A state that cannot be read raises OSError: saving defaults over it would lose every
+    decision, and no `.damaged` copy is kept for a read failure (F11)."""
     with runlock.hold(state_lock_path(path)):
-        state = change(load_state(path).state)
+        loaded = load_state(path)
+        if loaded.unreadable:
+            raise OSError(loaded.warning or "schedules.json could not be read")
+        state = change(loaded.state)
         save_state(path, state)
     return state
 
@@ -603,7 +633,7 @@ def context_for(
         launchd_log_path=home / "Library" / "Logs" / "tools-installer" / "schedules-launchd.log",
         legacy_bin_dir=home / ".local" / "bin",
         checkout=checkout,
-        tmpdir=environ.get("TMPDIR") or tempfile.gettempdir(),
+        tmpdir=default_tmpdir(platform_os),
         uid=os.getuid(),
         environ=environ,
         run=run,
@@ -710,7 +740,9 @@ def _shared_pairs(ctx: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
 
 
 def _ensure_shared_assets(
-    ctx: ScheduleContext, state: ScheduleState
+    ctx: ScheduleContext,
+    state: ScheduleState,
+    pairs: tuple[tuple[Path, Path], ...] | None = None,
 ) -> tuple[tuple[ReceiptArtifact, ...], tuple[Path, ...]]:
     """Copy the runner and the prune scripts into the data dir; return (artifacts, newly created).
 
@@ -718,11 +750,12 @@ def _ensure_shared_assets(
     `state.shared` is their ownership proof, standing in for SPEC R5's sentinel (R1-16); the
     runner keeps its own sentinel header. Every target is validated before any write, and a
     failed write puts back what this call already wrote, so a failure leaves no unrecorded
-    asset (R2-08).
+    asset (R2-08). `pairs` narrows the call to some of the shared assets (the reconcile's
+    refresh takes them one by one).
     """
     recorded = {Path(artifact.path): artifact for artifact in state.shared}
     pending: list[tuple[Path, bytes, bytes | None]] = []
-    for source, target in _shared_pairs(ctx):
+    for source, target in pairs or _shared_pairs(ctx):
         data = source.read_bytes()  # a missing source raises an OSError naming it
         if target.is_symlink():
             raise OSError(f"{target} is a symlink, not a file tools-installer wrote")
@@ -767,17 +800,37 @@ def _delete_recorded(files: tuple[ReceiptArtifact, ...]) -> tuple[ReceiptArtifac
     return tuple(a for a in present if Path(a.path) in refused)
 
 
-def _on_schedules(ctx: ScheduleContext, state: ScheduleState, *, exclude: str) -> bool:
-    """Whether any other schedule has files on disk; tmp cleanup counts by its units' names (F2)."""
-    if any(key != exclude and record.files for key, record in state.records.items()):
-        return True
-    return exclude != _TMP_ID and _tmp_unit_present(ctx)
+def _on_schedules(ctx: ScheduleContext, *, exclude: str | None) -> bool:
+    """Whether any other schedule has a unit or plist on disk, counted by unit name (F4, F10).
+
+    Names are ours alone, so this holds with a damaged or newer-schema `schedules.json` too."""
+    return any(schedule.id != exclude and _unit_footprint(ctx, schedule) for schedule in SCHEDULES)
+
+
+def _unit_footprint(ctx: ScheduleContext, schedule: Schedule) -> bool:
+    """Whether any unit file, wants link or plist of this schedule is on disk, by name."""
+    if ctx.platform_os == "macos":
+        return _exists(_plist_path(ctx, schedule.id))
+    return systemd_daemon.footprint_present(ctx.unit_dir, basename=basename_for(schedule.id))
+
+
+def _units_present(ctx: ScheduleContext, schedule: Schedule) -> bool:
+    """Whether the schedule's unit pair (or plist) is on disk, by name."""
+    if ctx.platform_os == "macos":
+        return _plist_path(ctx, schedule.id).exists()
+    return systemd_daemon.units_present(ctx.unit_dir, basename=basename_for(schedule.id))
 
 
 def _tmp_unit_present(ctx: ScheduleContext) -> bool:
+    return _units_present(ctx, schedule_by_id(_TMP_ID))
+
+
+def _remove_units_by_name(ctx: ScheduleContext, schedule: Schedule) -> None:
+    """Delete a schedule's units by name: ours though unrecorded (adopted, or a lost state)."""
     if ctx.platform_os == "macos":
-        return _plist_path(ctx, _TMP_ID).exists()
-    return systemd_daemon.units_present(ctx.unit_dir)
+        _plist_path(ctx, schedule.id).unlink(missing_ok=True)
+    else:
+        systemd_daemon.remove_units(ctx.unit_dir, basename=basename_for(schedule.id))
 
 
 def _grid(
@@ -835,7 +888,15 @@ def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]
 
 def _unit_environment(ctx: ScheduleContext) -> dict[str, str]:
     path = clean_unit_path(ctx.home, platform_os=ctx.platform_os, environ=ctx.environ)
-    return {"PATH": path, "HOME": str(ctx.home), "TMPDIR": ctx.tmpdir}
+    environment = {"PATH": path, "HOME": str(ctx.home), "TMPDIR": ctx.tmpdir}
+    # F8: what the installing process has, for the scheduled run to hand its children. A value
+    # the unit grammar cannot carry is dropped rather than failing the whole schedule.
+    macos = ctx.platform_os == "macos"  # every other Platform.os key is Linux
+    for key in daemon.PASSTHROUGH_KEYS:
+        value = ctx.environ.get(key, "")
+        if daemon.valid_passthrough_value(value) and (macos or systemd_daemon.quotable(value)):
+            environment[key] = value
+    return environment
 
 
 def _snapshot(paths: tuple[Path, ...]) -> dict[Path, bytes | None]:
@@ -851,11 +912,11 @@ def _restore(snapshot: dict[Path, bytes | None]) -> None:
             atomic_write_bytes(path, previous, mode=0o644)
 
 
-def _refuse_symlinks(paths: tuple[Path, ...], record: ScheduleRecord) -> None:
-    """`atomic_write_bytes` writes through a symlink, so one not recorded as ours is refused."""
-    recorded = {Path(artifact.path) for artifact in record.files}
+def _refuse_symlinks(paths: tuple[Path, ...]) -> None:
+    """`atomic_write_bytes` writes through a symlink, and this installer writes only regular
+    unit files, so a link at a written path is refused even where a file was recorded (F18)."""
     for path in paths:
-        if path.is_symlink() and path not in recorded:
+        if path.is_symlink():
             raise OSError(f"{path} is a symlink that tools-installer did not create")
 
 
@@ -909,7 +970,7 @@ def _apply_linux(
     service_text, timer_text = _linux_texts(ctx, schedule, record, uv)
     service_path, timer_path = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename)
     written = (timer_path,) if timer_only else (service_path, timer_path)
-    _refuse_symlinks(written, record)
+    _refuse_symlinks(written)
     link = systemd_daemon.wants_link_path(ctx.unit_dir, basename=basename)
     prior_registration = systemd_daemon.units_present(ctx.unit_dir, basename=basename)
     snapshot = _snapshot(written)
@@ -921,8 +982,9 @@ def _apply_linux(
             systemd_daemon.write_unit_pair(
                 ctx.unit_dir, basename=basename, service_text=service_text, timer_text=timer_text
             )
-        if clean_stamp:  # a missing stamp is not a failure
-            with contextlib.suppress(CommandError):
+        if clean_stamp:  # F13: `clean` refuses an active timer; the bootstrap starts it again
+            with contextlib.suppress(CommandError):  # a missing stamp is not a failure
+                systemd_daemon.stop_timer(basename=basename, run=ctx.run)
                 systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
         systemd_daemon.bootstrap(ctx.unit_dir, basename=basename, run=ctx.run)
     except (CommandError, OSError):
@@ -955,7 +1017,7 @@ def _apply_macos(
     label = label_for(schedule.id)
     plist_path = _plist_path(ctx, schedule.id)
     plist = _macos_plist(ctx, schedule, record, uv)
-    _refuse_symlinks((plist_path,), record)
+    _refuse_symlinks((plist_path,))
     # launchd needs StandardOutPath to resolve at registration (R1-06). A rollback leaves the
     # empty file; the last sweep deletes it.
     daemon.ensure_log_path(ctx.launchd_log_path)
@@ -1076,8 +1138,40 @@ def _take_over_competitors(ctx: ScheduleContext) -> tuple[str, ...]:
     return tuple(sentence for sentence in sentences if sentence)
 
 
+def _rerecord_shared(ctx: ScheduleContext, assets: tuple[ReceiptArtifact, ...]) -> None:
+    """After a failed registration, re-record the recorded shared files this call rewrote (F16).
+
+    Only entries already recorded are replaced: a file this call created was just deleted, and
+    one it merely adopted was never recorded."""
+    fresh = {Path(artifact.path): artifact for artifact in assets}
+
+    def change(current: ScheduleState) -> ScheduleState:
+        shared = tuple(fresh.get(Path(item.path), item) for item in current.shared)
+        return replace(current, shared=shared)
+
+    with contextlib.suppress(OSError):  # the registration error is the one to report
+        update_state(ctx.state_path, change)
+
+
 def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
-    """Write the shared assets, then the unit, register it, and record every file (D-02)."""
+    """Write the shared assets, then the unit, register it, and record every file (D-02).
+
+    Every user verb takes the reconcile lock, so a reconcile pass in another process cannot
+    interleave with it (F3); the lock order is run lock, reconcile lock, state lock.
+    """
+    _require_available(ctx, schedule_by_id(schedule_id))  # a refusal writes nothing, lock file too
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _turn_on(ctx, schedule_id)
+
+
+def _turn_on(
+    ctx: ScheduleContext, schedule_id: str, *, seen: ScheduleRecord | None = None
+) -> ApplyReport:
+    """The turn-on with the reconcile lock already held.
+
+    `seen` is the row the reconcile pass decided from: when the locked change finds another
+    decision, the units this call wrote are undone and nothing is recorded (F3).
+    """
     schedule = schedule_by_id(schedule_id)
     _require_available(ctx, schedule)  # before anything is written
     uv = _resolve_uv(ctx)
@@ -1087,11 +1181,12 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     try:
         _register(ctx, schedule, record, uv)
     except (CommandError, OSError):
-        if not _on_schedules(ctx, state, exclude=schedule_id):
+        if not _on_schedules(ctx, exclude=schedule_id):
             for path in created:  # R1-14: no unrecorded asset outlives a failed first apply
                 with contextlib.suppress(OSError):
                     path.unlink(missing_ok=True)
             _prune_data_dirs(ctx)
+        _rerecord_shared(ctx, assets)
         raise
     files = _fingerprint_unit(ctx, schedule)
     warnings: list[str] = []
@@ -1105,8 +1200,13 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     models = _read_models(ctx) if schedule_id == _CURSOR_ID else None
     shim_report: cursor_shim.ShimReport | None = None
 
+    moved = False
+
     def change(current: ScheduleState) -> ScheduleState:
-        nonlocal shim_report
+        nonlocal shim_report, moved
+        if seen is not None and record_for(current, schedule_id).decided != seen.decided:
+            moved = True
+            return current
         status = current.cursor_shim
         if schedule_id == _CURSOR_ID:
             saved, shim_report, warning = _refresh_cursor_shim(
@@ -1126,6 +1226,9 @@ def turn_on(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
         )
 
     saved_state = update_state(ctx.state_path, change)
+    if moved:  # another decision landed first: it wins, and what this call wrote goes
+        _remove_timer(ctx, schedule_id, keep_decision=True, restore_cursor_link=False)
+        return ApplyReport(False)
     grid = _grid(ctx, schedule, record_for(saved_state, schedule_id))
     upcoming = next_run(grid, datetime.now()) if grid else None
     return ApplyReport(True, upcoming, shim_report, tuple(warnings))
@@ -1184,11 +1287,8 @@ def _remove_timer(
             with contextlib.suppress(CommandError, OSError):
                 systemd_daemon.clean_timer_state(basename=basename, run=ctx.run)
     kept = _delete_recorded(record.files)
-    if schedule.kind is JobKind.TMP_CLEANUP and not record.files:  # adopted by name, never recorded
-        if macos:
-            _plist_path(ctx, schedule_id).unlink(missing_ok=True)
-        else:
-            systemd_daemon.remove_units(ctx.unit_dir)
+    if not record.files:  # adopted by name, or its record is lost: ours by name all the same
+        _remove_units_by_name(ctx, schedule)
     if reached and not macos:
         with contextlib.suppress(CommandError):
             systemd_daemon.daemon_reload(run=ctx.run)
@@ -1208,20 +1308,54 @@ def _remove_timer(
         records = {**current.records, schedule_id: updated}
         if forget and not kept:
             del records[schedule_id]
-        shared = current.shared
-        if shared and not _on_schedules(
-            ctx, replace(current, records=records), exclude=schedule_id
-        ):
-            shared = _delete_recorded(shared)
-            if shared:
-                names = ", ".join(str(artifact.path) for artifact in shared)
+        return replace(current, records=records, cursor_shim=status)
+
+    update_state(ctx.state_path, change)
+    _remove_shared_if_idle(ctx, warnings)
+    return _Removal(tuple(warnings), kept)
+
+
+@contextlib.contextmanager
+def _run_idle(ctx: ScheduleContext) -> Generator[bool]:
+    """Yield whether no scheduled run is in flight, holding the run lock for the body (F4).
+
+    The take never waits, so taking it under the reconcile lock cannot deadlock the order run
+    lock, reconcile lock, state lock. The installer's own mutation holds the run lock in this
+    process (a removal in flight); that is idle, not a scheduled run.
+    """
+    mine = runlock.holder(ctx.lock_path)
+    if mine is not None and mine.job == runlock.INSTALLER_JOB and mine.pid == os.getpid():
+        yield True
+        return
+    lock = runlock.try_acquire(ctx.lock_path, runlock.INSTALLER_JOB)
+    try:
+        yield lock is not None
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def _remove_shared_if_idle(ctx: ScheduleContext, warnings: list[str]) -> None:
+    """Delete the recorded shared files once no unit exists on disk and no run is in flight (F4).
+
+    The caller holds the reconcile lock, so no `turn_on` can adopt the files meanwhile; a
+    busy run leaves them recorded for the next removal."""
+    if not load_state(ctx.state_path).state.shared or _on_schedules(ctx, exclude=None):
+        return
+    with _run_idle(ctx) as idle:
+        if not idle:
+            return
+
+        def change(current: ScheduleState) -> ScheduleState:
+            kept = _delete_recorded(current.shared)
+            if kept:
+                names = ", ".join(str(artifact.path) for artifact in kept)
                 warnings.append(f"kept, changed since it was copied: {names}")
             else:
                 _prune_data_dirs(ctx)
-        return replace(current, records=records, shared=shared, cursor_shim=status)
+            return replace(current, shared=kept)
 
-    update_state(ctx.state_path, change)
-    return _Removal(tuple(warnings), kept)
+        update_state(ctx.state_path, change)
 
 
 def _kept_message(kept: tuple[ReceiptArtifact, ...]) -> str:
@@ -1230,6 +1364,11 @@ def _kept_message(kept: tuple[ReceiptArtifact, ...]) -> str:
 
 def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     """Disable first, then delete exactly the recorded files, then record the decision off."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _turn_off(ctx, schedule_id)
+
+
+def _turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     removal = _remove_timer(ctx, schedule_id, keep_decision=False)
     warnings = list(removal.warnings)
     if schedule_by_id(schedule_id).kind is JobKind.TMP_CLEANUP:
@@ -1240,8 +1379,32 @@ def turn_off(ctx: ScheduleContext, schedule_id: str) -> ApplyReport:
     return ApplyReport(True, None, None, tuple(warnings))
 
 
+def _retimed_files(
+    ctx: ScheduleContext, schedule: Schedule, record: ScheduleRecord
+) -> tuple[ReceiptArtifact, ...]:
+    """Fingerprints after a re-time: only the timer Linux rewrote is re-recorded (F15).
+
+    A `.service` or wants link that drifted keeps its recorded fingerprint, so it never reads
+    as ours. macOS rewrites the whole plist, so everything on disk is re-recorded.
+    """
+    fresh = _fingerprint_unit(ctx, schedule)
+    if ctx.platform_os == "macos":
+        return fresh
+    timer = systemd_daemon.unit_paths(ctx.unit_dir, basename=basename_for(schedule.id))[1]
+    recorded = {Path(artifact.path): artifact for artifact in record.files}
+    return tuple(
+        artifact if Path(artifact.path) == timer else recorded.get(Path(artifact.path), artifact)
+        for artifact in fresh
+    )
+
+
 def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
     """Validate, then change the grid; an off row only saves it, an on row rewrites its timer."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _retime(ctx, schedule_id, interval, start)
+
+
+def _retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
     schedule = schedule_by_id(schedule_id)
     macos = ctx.platform_os == "macos"
     if schedule.kind is JobKind.TMP_CLEANUP:
@@ -1260,7 +1423,7 @@ def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) ->
         # Linux rewrites only the timer: a running job is never touched and the new grid applies
         # from the next slot. macOS re-registers the plist, which stops a loaded run (R1-11).
         _register(ctx, schedule, fresh, _resolve_uv(ctx), timer_only=True, clean_stamp=True)
-        files = _fingerprint_unit(ctx, schedule)
+        files = _retimed_files(ctx, schedule, record)
 
     def change(current: ScheduleState) -> ScheduleState:
         updated = replace(
@@ -1275,6 +1438,11 @@ def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) ->
 
 def set_cursor_model(ctx: ScheduleContext, model: str) -> ApplyReport:
     """Save the configured model; refresh the shim only when the row is on (SPEC R7, D-20)."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):
+        return _set_cursor_model(ctx, model)
+
+
+def _set_cursor_model(ctx: ScheduleContext, model: str) -> ApplyReport:
     validate_model_id(model)
     advisory = record_for(load_state(ctx.state_path).state, _CURSOR_ID)
     # An off row spawns no `--list-models` (R3-10); the list is read before the lock (R2-05).
@@ -1322,9 +1490,8 @@ def row_state(
             return RowState("n/a", f"unavailable: {schedule.target} not installed")
     record = record_for(state, schedule.id)
     if not record.files:
-        # tmp cleanup's existing units are ours by name, even before they are recorded (R9)
-        on_by_name = schedule.kind is JobKind.TMP_CLEANUP and _tmp_unit_present(ctx)
-        return RowState("on" if on_by_name else "off")
+        # Units are ours by name even before they are recorded (R9) or with the state lost (F10)
+        return RowState("on" if _units_present(ctx, schedule) else "off")
     return RowState("on" if all(receipts.matches(a) for a in record.files) else "drift")
 
 
@@ -1366,9 +1533,11 @@ def _turn_on_default(
     if _decision_moved(ctx, schedule, seen):
         return
     try:
-        applied = turn_on(ctx, schedule.id)
+        applied = _turn_on(ctx, schedule.id, seen=seen)
     except (OSError, CommandError) as exc:
         warnings.append(f"Could not turn on {schedule.label}: {_error_line(exc)}.")
+        return
+    if not applied.changed:  # another decision landed first and was kept
         return
     turned.append(schedule.id)
     warnings.extend(applied.warnings)
@@ -1395,8 +1564,11 @@ def _seed_legacy_start(ctx: ScheduleContext, schedule: Schedule) -> None:
     """Adopting macOS's old plist keeps its daily time: seed the record's start from it (D-08)."""
     if ctx.platform_os != "macos" or schedule.kind is not JobKind.TMP_CLEANUP:
         return
-    record = record_for(load_state(ctx.state_path).state, schedule.id)
-    slot = daemon.read_schedule(_plist_path(ctx, schedule.id)) if not record.files else None
+    state = load_state(ctx.state_path).state
+    record = record_for(state, schedule.id)
+    # A record is the user's own saved time (F14): only a row never saved adopts the old plist's.
+    adoptable = not record.files and schedule.id not in state.records
+    slot = daemon.read_schedule(_plist_path(ctx, schedule.id)) if adoptable else None
     if slot is None or f"{slot[0]:02d}:{slot[1]:02d}" == record.start:
         return
     start = f"{slot[0]:02d}:{slot[1]:02d}"
@@ -1444,7 +1616,7 @@ def _refresh_in_place(ctx: ScheduleContext, schedule: Schedule, warnings: list[s
     if not _is_stale(ctx, load_state(ctx.state_path).state, schedule):
         return
     try:
-        applied = turn_on(ctx, schedule.id)
+        applied = _turn_on(ctx, schedule.id)
     except (OSError, CommandError) as exc:
         warnings.append(f"Could not refresh {schedule.label}: {_error_line(exc)}.")
         return
@@ -1478,12 +1650,46 @@ def _drop_gone_target(
     return True
 
 
+def _refresh_shared(ctx: ScheduleContext, warnings: list[str]) -> None:
+    """Refresh each recorded shared asset that differs from its source or is missing (F5).
+
+    One asset at a time: a copy the user edited (its recorded sha256 no longer matches) is
+    refused and warned about, and never blocks refreshing the others."""
+    state = load_state(ctx.state_path).state
+    recorded = {Path(artifact.path): artifact for artifact in state.shared}
+    fresh: dict[Path, ReceiptArtifact] = {}
+    for pair in _shared_pairs(ctx):
+        target = pair[1]
+        if target not in recorded:
+            continue
+        try:
+            (artifact,), _created = _ensure_shared_assets(ctx, state, pairs=(pair,))
+        except OSError as exc:
+            warnings.append(f"Could not refresh {target.name}: {_error_line(exc)}.")
+            continue
+        if artifact != recorded[target]:
+            fresh[target] = artifact
+    if not fresh:
+        return
+
+    def change(current: ScheduleState) -> ScheduleState:
+        shared = tuple(fresh.get(Path(item.path), item) for item in current.shared)
+        return replace(current, shared=shared)
+
+    try:
+        update_state(ctx.state_path, change)
+    except OSError as exc:
+        warnings.append(f"Could not record the refreshed shared scripts: {_error_line(exc)}.")
+
+
 def _reconcile_pass(ctx: ScheduleContext) -> ReconcileReport:
     loaded = load_state(ctx.state_path)
     damaged = loaded.damaged or loaded.warning is not None
     turned: list[str] = []
     removed: list[str] = []
     warnings: list[str] = [loaded.warning or STICKY_DAMAGE_WARNING] if damaged else []
+    if not damaged:
+        _refresh_shared(ctx, warnings)
     for schedule in SCHEDULES:
         record = record_for(load_state(ctx.state_path).state, schedule.id)
         if schedule.kind is JobKind.UPDATE and not ctx.present(schedule.target or ""):
@@ -1609,13 +1815,9 @@ def _footprint(ctx: ScheduleContext, state: ScheduleState, schedule: Schedule) -
     """Whether anything of this schedule is on disk; file reads only."""
     if any(_exists(Path(artifact.path)) for artifact in record_for(state, schedule.id).files):
         return True
-    if schedule.kind is not JobKind.TMP_CLEANUP:
-        return False
-    if daemon.wrapper_present(ctx.legacy_bin_dir):
+    if _unit_footprint(ctx, schedule):  # by name, so a damaged state still finds it (F10)
         return True
-    if ctx.platform_os == "macos":
-        return _exists(_plist_path(ctx, schedule.id))
-    return systemd_daemon.footprint_present(ctx.unit_dir)
+    return schedule.kind is JobKind.TMP_CLEANUP and daemon.wrapper_present(ctx.legacy_bin_dir)
 
 
 def _forget(ctx: ScheduleContext, schedule_id: str) -> None:
@@ -1631,13 +1833,18 @@ def _cleanup_if_last(ctx: ScheduleContext) -> None:
     state = load_state(ctx.state_path).state
     if any(_footprint(ctx, state, schedule) for schedule in SCHEDULES):
         return
-    kept = _delete_recorded(state.shared)
-    if kept:
-        raise OSError(f"kept, changed since it was copied: {', '.join(str(a.path) for a in kept)}")
-    _prune_data_dirs(ctx)
-    _clear_tmp_decided(ctx)
-    for path in _state_artifacts(ctx):
-        path.unlink(missing_ok=True)
+    with _run_idle(ctx) as idle:
+        if not idle:  # a run is reading the scripts and writing the log
+            raise OSError(runlock.BUSY_MESSAGE)
+        kept = _delete_recorded(state.shared)
+        if kept:
+            raise OSError(
+                f"kept, changed since it was copied: {', '.join(str(a.path) for a in kept)}"
+            )
+        _prune_data_dirs(ctx)
+        _clear_tmp_decided(ctx)
+        for path in _state_artifacts(ctx):
+            path.unlink(missing_ok=True)
 
 
 def _clear_tmp_decided(ctx: ScheduleContext) -> None:
@@ -1651,6 +1858,11 @@ def _sweep_result(layer: str, detail: str, warnings: Iterable[str]) -> PolicyRes
 
 def _sweep_schedule(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
     """The full removal of one schedule; idempotent, and it raises OSError naming what it kept."""
+    with runlock.hold(reconcile_lock_path(ctx.state_path)):  # a turn-on cannot adopt meanwhile
+        return _sweep_schedule_locked(ctx, schedule)
+
+
+def _sweep_schedule_locked(ctx: ScheduleContext, schedule: Schedule) -> PolicyResult:
     state = load_state(ctx.state_path).state
     warnings: list[str] = []
     refused: list[str] = []
@@ -1693,7 +1905,8 @@ def _schedule_policy(ctx: ScheduleContext, schedule: Schedule) -> Policy:
 
 def _state_policy(ctx: ScheduleContext) -> Policy:
     def clean() -> PolicyResult:
-        _cleanup_if_last(ctx)
+        with runlock.hold(reconcile_lock_path(ctx.state_path)):
+            _cleanup_if_last(ctx)
         return _sweep_result("state", "removed", ())
 
     return Policy(

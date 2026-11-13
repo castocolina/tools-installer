@@ -8,13 +8,14 @@ import os
 import plistlib
 import shutil
 import threading
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
 
-from installer import daemon, receipts, schedules, systemd_daemon
+from installer import daemon, receipts, runlock, schedules, systemd_daemon
 from installer.cursor_shim import is_our_shim
 from installer.run import CommandError
 from installer.schedules import (
@@ -524,7 +525,9 @@ def test_no_manager_reconcile_writes_nothing(
 
 # --- Task 3: uninstall-sweep adapters that leave no schedule file, script or record ---
 
-LOCK_NAMES = frozenset({"schedules.json.lock", "schedules.log.lock", "schedules.reconcile.lock"})
+LOCK_NAMES = frozenset(
+    {"schedules.json.lock", "schedules.log.lock", "schedules.reconcile.lock", "run.lock"}
+)
 ALL_IDS = ("schedule:tmp-cleanup", "schedule:cache-cleanup", "schedule:update-claude")
 
 
@@ -798,3 +801,338 @@ def test_an_unreachable_manager_removes_the_files_and_discloses_the_missing_relo
     assert unit_files(ctx, TMP_BASENAME) == []
     assert any("could not be reached" in warning for warning in report.warnings)
     assert "daemon-reload" not in lab.env.run.text()
+
+
+def test_an_unreadable_state_refuses_the_write_instead_of_saving_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=("claude", "opencode"))
+    ensure_schedule_defaults(lab.ctx)
+    turn_off(lab.ctx, "update-opencode")
+    before = lab.ctx.state_path.read_bytes()
+    real_read = schedules.read_capped
+
+    def unreadable(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+        if path == lab.ctx.state_path:
+            raise PermissionError("transient")
+        return real_read(path, cap, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(schedules, "read_capped", unreadable)
+    with pytest.raises(OSError, match="transient"):
+        update_state(lab.ctx.state_path, lambda state: state)
+    monkeypatch.undo()
+    assert lab.ctx.state_path.read_bytes() == before
+    assert not schedules.damaged_path(lab.ctx.state_path).exists()
+    assert load_state(lab.ctx.state_path).state.records["update-opencode"].decided is False
+
+
+def test_macos_reconcile_honours_a_time_recorded_before_the_first_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=(), os_key="macos")
+    ctx = lab.ctx
+    plist_path = ctx.launch_agents_dir / "com.tools-installer.prune-tmpdir.plist"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_bytes(  # the previous installer's plist, at its own daily time
+        plistlib.dumps(
+            {
+                "Label": "com.tools-installer.prune-tmpdir",
+                "ProgramArguments": ["/bin/true"],
+                "StartCalendarInterval": {"Hour": 5, "Minute": 15},
+            }
+        )
+    )
+    daemon.record_decided(ctx.myshellrc_path)
+    decide_off(ctx, "cache-cleanup")
+    schedules.retime(ctx, "tmp-cleanup", 24, "04:30")  # saved while the row is not on yet
+
+    ensure_schedule_defaults(ctx)
+
+    assert plistlib.loads(plist_path.read_bytes())["StartCalendarInterval"] == [
+        {"Hour": 4, "Minute": 30}
+    ]
+    assert load_state(ctx.state_path).state.records["tmp-cleanup"].start == "04:30"
+
+
+def damage_state(ctx: ScheduleContext) -> None:
+    """A newer checkout's schema: unreadable to this one, so the load answers defaults."""
+    ctx.state_path.write_text('{"version": 2}')
+
+
+def test_a_damaged_state_still_reads_live_timers_as_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    damage_state(lab.ctx)
+    state = load_state(lab.ctx.state_path).state
+    for schedule_id in ("update-claude", "cache-cleanup", "tmp-cleanup"):
+        row = schedules.row_state(
+            lab.ctx,
+            state,
+            schedules.schedule_by_id(schedule_id),
+            manager=True,
+            present=lab.ctx.present,
+        )
+        assert row.word == "on"
+
+
+def test_turn_off_under_a_damaged_state_removes_the_live_timer_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    damage_state(lab.ctx)
+
+    turn_off(lab.ctx, "update-claude")
+
+    assert unit_files(lab.ctx, CLAUDE_BASENAME) == []
+    assert len(unit_files(lab.ctx, CACHE_BASENAME)) == 3  # only the one asked for
+
+
+def test_the_sweep_under_a_damaged_state_removes_every_timer_before_the_damaged_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ensure_schedule_defaults(lab.ctx)
+    damage_state(lab.ctx)
+    load_state(lab.ctx.state_path)  # keeps the `.damaged` copy
+    damaged = schedules.damaged_path(lab.ctx.state_path)
+    seen: list[bool] = []
+    lab.env.run.hooks["disable"] = lambda _cmd: seen.append(damaged.exists())
+
+    sweep_policies(list(sweep_adapters(lab.ctx)))
+
+    for basename in (CLAUDE_BASENAME, CACHE_BASENAME, TMP_BASENAME):
+        assert unit_files(lab.ctx, basename) == []
+    assert seen
+    assert all(seen)  # the copy outlived every unit removal
+    assert not damaged.exists()
+    assert not lab.ctx.state_path.exists()
+
+
+def shared_files(ctx: ScheduleContext) -> list[Path]:
+    return [ctx.data_dir / name for name in ("runner.py", "prune-tmp-linux.sh")]
+
+
+def test_turning_off_the_last_schedule_keeps_the_shared_files_while_a_run_holds_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on(ctx, "update-claude")
+    held = runlock.try_acquire(ctx.lock_path, "update-claude")  # a scheduled run in flight
+    assert held is not None
+    try:
+        turn_off(ctx, "update-claude")
+    finally:
+        held.release()
+
+    assert unit_files(ctx, CLAUDE_BASENAME) == []
+    assert all(path.exists() for path in shared_files(ctx))  # a run may be reading them
+    assert load_state(ctx.state_path).state.shared  # still recorded, so a later off can remove
+
+    turn_on(ctx, "update-claude")
+    turn_off(ctx, "update-claude")  # idle now: the last off removes them
+    assert not any(path.exists() for path in shared_files(ctx))
+    assert load_state(ctx.state_path).state.shared == ()
+
+
+def test_shared_files_stay_while_any_unit_exists_on_disk_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on(ctx, "update-claude")
+
+    def another_process_adopts_the_assets(_cmd: list[str]) -> None:
+        # a unit pair another process wrote and has not recorded yet
+        systemd_daemon.write_unit_pair(
+            ctx.unit_dir, basename=CACHE_BASENAME, service_text="s\n", timer_text="t\n"
+        )
+
+    lab.env.run.hooks["daemon-reload"] = another_process_adopts_the_assets
+    turn_off(ctx, "update-claude")
+
+    assert all(path.exists() for path in shared_files(ctx))
+
+
+def test_the_sweep_reports_a_busy_run_and_keeps_the_shared_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    held = runlock.try_acquire(ctx.lock_path, "update-claude")
+    assert held is not None
+    try:
+        result = sweep_policies(list(sweep_adapters(ctx)))
+    finally:
+        held.release()
+
+    assert result.failed
+    assert all(path.exists() for path in shared_files(ctx))
+    assert ctx.state_path.exists()  # not removed under a run
+
+    result = sweep_policies(list(sweep_adapters(ctx)))
+    assert not result.failed
+    assert not any(path.exists() for path in shared_files(ctx))
+
+
+def test_the_installers_own_run_lock_does_not_block_removing_the_shared_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on(ctx, "update-claude")
+    mine = runlock.try_acquire(ctx.lock_path, runlock.INSTALLER_JOB)  # a REMOVAL in flight
+    assert mine is not None
+    try:
+        lab.live.discard("claude")
+        after_target_removed(ctx, "claude")
+    finally:
+        mine.release()
+
+    assert not any(path.exists() for path in shared_files(ctx))
+
+
+def ship_new_sources(
+    monkeypatch: pytest.MonkeyPatch, ctx: ScheduleContext, tmp_path: Path, *names: str
+) -> dict[str, bytes]:
+    """The checkout now ships changed copies of these shared assets (after a `git pull`)."""
+    original: Callable[[ScheduleContext], tuple[tuple[Path, Path], ...]] = vars(schedules)[
+        "_shared_pairs"
+    ]
+    new_bytes: dict[str, bytes] = {}
+    swapped: dict[Path, Path] = {}
+    for _source, target in original(ctx):
+        if target.name in names:
+            replacement = tmp_path / f"new-{target.name}"
+            replacement.write_bytes(target.read_bytes() + b"\n# a bug fix\n")
+            new_bytes[target.name] = replacement.read_bytes()
+            swapped[target] = replacement
+
+    def patched(context: ScheduleContext) -> tuple[tuple[Path, Path], ...]:
+        return tuple((swapped.get(target, source), target) for source, target in original(context))
+
+    monkeypatch.setitem(vars(schedules), "_shared_pairs", patched)
+    return new_bytes
+
+
+def test_the_reconcile_refreshes_a_shared_asset_that_differs_from_its_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    new = ship_new_sources(monkeypatch, ctx, tmp_path, "runner.py", "prune-tmp-linux.sh")
+
+    report = ensure_schedule_defaults(ctx)
+
+    assert (ctx.data_dir / "runner.py").read_bytes() == new["runner.py"]
+    assert (ctx.data_dir / "prune-tmp-linux.sh").read_bytes() == new["prune-tmp-linux.sh"]
+    assert report.warnings == ()
+    shared = load_state(ctx.state_path).state.shared
+    assert all(receipts.matches(a, rehash=True) for a in shared)
+    assert ensure_schedule_defaults(ctx) == ReconcileReport()  # and then it is quiet
+
+
+def test_the_reconcile_restores_a_deleted_shared_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    runner = ctx.data_dir / "runner.py"
+    original = runner.read_bytes()
+    runner.unlink()
+
+    ensure_schedule_defaults(ctx)
+
+    assert runner.read_bytes() == original
+    assert os.access(runner, os.X_OK)
+    shared = load_state(ctx.state_path).state.shared
+    assert all(receipts.matches(a, rehash=True) for a in shared)
+
+
+def test_the_reconcile_refuses_and_warns_for_a_user_edited_shared_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    edited = ctx.data_dir / "prune-tmp-linux.sh"
+    mine = edited.read_bytes() + b"# my own tweak\n"
+    edited.write_bytes(mine)
+    new = ship_new_sources(monkeypatch, ctx, tmp_path, "runner.py", "prune-tmp-linux.sh")
+
+    report = ensure_schedule_defaults(ctx)
+
+    assert edited.read_bytes() == mine  # never overwritten
+    assert any("prune-tmp-linux.sh" in warning for warning in report.warnings)
+    assert (ctx.data_dir / "runner.py").read_bytes() == new["runner.py"]  # the others refresh
+
+
+def test_a_user_off_that_lands_mid_reconcile_stays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch, present=("cursor-agent",))
+    ctx = lab.ctx
+    basename = "tools-installer-schedule-update-cursor-agent"
+    schedule_id = "update-cursor-agent"
+    entered, release = threading.Event(), threading.Event()
+
+    def hold_after_the_units_are_written() -> None:
+        # The model list is read after the units are registered and before the decision is saved.
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(10)
+
+    lab.env.models.on_call = hold_after_the_units_are_written
+    errors: list[BaseException] = []
+
+    def run(action: Callable[[], object]) -> threading.Thread:
+        def guarded() -> None:
+            try:
+                action()
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=guarded)
+        thread.start()
+        return thread
+
+    reconcile = run(lambda: ensure_schedule_defaults(ctx))
+    assert entered.wait(10)  # the pass is mid-flight: claude's units written, not yet recorded
+    off = run(lambda: turn_off(ctx, schedule_id))
+    time.sleep(0.3)  # without the reconcile lock the off would complete (and be undone) here
+    release.set()
+    reconcile.join(10)
+    off.join(10)
+
+    assert errors == []
+    state = load_state(ctx.state_path).state
+    assert state.records[schedule_id].decided is False
+    assert unit_files(ctx, basename) == []
+    cursor = schedules.schedule_by_id(schedule_id)
+    assert schedules.row_state(ctx, state, cursor, manager=True, present=ctx.present).word == "off"
+
+
+def test_a_reconcile_turn_on_whose_decision_moved_undoes_what_it_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    turn_on_for_pass = vars(schedules)["_turn_on"]
+    seen_before_the_off = ScheduleRecord(None, 6, "00:00", ())
+    off = ScheduleRecord(False, 6, "00:00", ())
+    update_state(
+        ctx.state_path,
+        lambda state: replace(state, records={**state.records, "update-claude": off}),
+    )
+
+    report = turn_on_for_pass(ctx, "update-claude", seen=seen_before_the_off)
+
+    assert report.changed is False
+    assert unit_files(ctx, CLAUDE_BASENAME) == []  # what the call wrote is undone
+    assert load_state(ctx.state_path).state.records["update-claude"].decided is False
