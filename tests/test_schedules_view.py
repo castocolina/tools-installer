@@ -17,7 +17,8 @@ from typing import Any
 import pytest
 from rich.cells import cell_len
 from rich.text import Text
-from textual.widgets import DataTable, Static
+from textual.containers import Vertical
+from textual.widgets import DataTable, Input, Label, OptionList, Select, Static
 
 from installer import runlock, schedules, wizard_app
 from installer.diskusage import DiskPressure
@@ -30,14 +31,16 @@ from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit
 from installer.ui_common import GLOBAL_NAV, VIEWS, FooterBar, WayfindingTab
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
+    CursorModelScreen,
     PolicyInputs,
     ScheduleInputs,
     SchedulesScreen,
+    ScheduleTimeScreen,
     UnifiedApp,
     UninstallInputs,
 )
 from tests.screen_family import settle
-from tests.test_schedules_engine import CLAUDE_BASENAME, Env, make_env
+from tests.test_schedules_engine import CLAUDE_BASENAME, Env, Install, make_env
 
 NOW = datetime(2026, 11, 13, 12, 5)
 IDS = [schedule.id for schedule in SCHEDULES]
@@ -657,3 +660,375 @@ async def test_tab_bar_fits_80_columns(
         for left, right in zip(tabs, tabs[1:], strict=False):
             assert right.region.x == left.region.right + 1
         assert tabs[-1].region.right == 79
+
+
+# --- Task 3: the time modal and the cursor-agent model modal -----------------------------------
+
+
+def timer_of(env: Env) -> Path:
+    return env.ctx.unit_dir / f"{CLAUDE_BASENAME}.timer"
+
+
+async def open_time_modal(
+    app: UnifiedApp, pilot: Any, screen: SchedulesScreen
+) -> ScheduleTimeScreen:
+    await move_to(pilot, screen, "update-claude")
+    await pilot.press("e")
+    await pilot.pause()
+    assert isinstance(app.screen, ScheduleTimeScreen)
+    return app.screen
+
+
+async def type_and_submit(pilot: Any, modal: ScheduleTimeScreen, start: str) -> None:
+    field = modal.query_one(Input)
+    field.value = start
+    field.focus()
+    await pilot.pause()
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def blocker(gate: threading.Event) -> Callable[[], None]:
+    """A `read_models` hook that waits for the test to open the gate."""
+
+    def wait() -> None:
+        gate.wait(timeout=10)
+
+    return wait
+
+
+def label_text(modal: Any, selector: str) -> str:
+    return str(modal.query_one(selector, Label).content)
+
+
+async def test_time_modal_saves_and_rejects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    schedules.turn_on(env.ctx, "update-claude")
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        modal = await open_time_modal(app, pilot, screen)
+        assert label_text(modal, "#time-title") == "When claude update runs"
+        assert modal.query_one(Select[int]).value == 6
+        assert modal.query_one(Input).value == "00:00"
+        assert label_text(modal, "#time-preview") == "Runs at 00:00, 06:00, 12:00, 18:00"
+
+        before = timer_of(env).read_bytes()
+        for bad in ("24:00", "7:5", "ab:cd", ""):
+            await type_and_submit(pilot, modal, bad)
+            assert app.screen is modal
+            assert label_text(modal, "#time-error") == schedules.START_MESSAGE
+            assert timer_of(env).read_bytes() == before
+
+        modal.query_one(Select[int]).value = 1
+        modal.query_one(Input).value = "00:30"
+        await pilot.pause()
+        assert label_text(modal, "#time-preview") == (
+            "Runs at 00:30, 01:30, 02:30 … 23:30 (24 times a day)"
+        )
+        modal.query_one(Select[int]).value = 8
+        await type_and_submit(pilot, modal, "01:30")
+        await settle(app, pilot)
+        assert app.screen is screen
+        assert (
+            screen.status.text == "claude update now runs every 8 h from 01:30; next run at 17:30."
+        )
+        assert cell(app, "update-claude", "every") == "8h 01:30"
+        assert "OnCalendar=*-*-* 01,09,17:30:00" in timer_of(env).read_text()
+
+        # Unchanged values: nothing is rewritten.
+        calls = len(env.run.calls)
+        modal = await open_time_modal(app, pilot, screen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is screen
+        modal = await open_time_modal(app, pilot, screen)
+        await type_and_submit(pilot, modal, "01:30")
+        await settle(app, pilot)
+        assert screen.status.text == "No change: claude update already runs every 8 h from 01:30."
+        assert len(env.run.calls) == calls
+
+
+async def test_time_modal_on_an_off_row_only_saves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        modal = await open_time_modal(app, pilot, screen)
+        modal.query_one(Select[int]).value = 8
+        await type_and_submit(pilot, modal, "01:30")
+        await settle(app, pilot)
+        assert screen.status.text == (
+            "Saved: claude update will run every 8 h from 01:30 once it is on."
+        )
+        assert unit_files(env) == []
+        assert cell(app, "update-claude", "every") == "8h 01:30"
+        assert cell(app, "update-claude", "state") == "○ [off]"
+
+
+async def test_tmp_cleanup_time_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await pilot.press("e")
+        await pilot.pause()
+        assert app.screen is screen
+        assert screen.status.text == (
+            "Cannot edit tmp cleanup: on Linux it runs every 10 min, a fixed cadence."
+        )
+
+    mac = make_env(tmp_path / "mac", monkeypatch, os_key="macos", present=EVERYTHING)
+    schedules.turn_on(mac.ctx, "tmp-cleanup")
+    app = make_app(mac, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await pilot.press("e")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ScheduleTimeScreen)
+        assert list(modal.query(Select[int])) == []
+        assert "Daily at (HH:MM, local time)" in [
+            str(label.content) for label in modal.query(Label)
+        ]
+        await type_and_submit(pilot, modal, "02:15")
+        await settle(app, pilot)
+        assert screen.status.text == "tmp cleanup now runs daily at 02:15; next run at 02:15."
+
+
+async def open_model_modal(
+    app: UnifiedApp, pilot: Any, screen: SchedulesScreen
+) -> CursorModelScreen:
+    await move_to(pilot, screen, "update-cursor-agent")
+    await pilot.press("m")
+    await pilot.pause()
+    assert isinstance(app.screen, CursorModelScreen)
+    return app.screen
+
+
+def option_texts(modal: CursorModelScreen) -> list[str]:
+    options = modal.query_one(OptionList)
+    return [options.get_option_at_index(i).prompt.__str__() for i in range(options.option_count)]
+
+
+async def test_model_modal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    Install(env.home)
+    schedules.turn_on(env.ctx, "update-cursor-agent")
+    gate = threading.Event()
+    env.models.on_call = blocker(gate)
+    app = make_app(env, monkeypatch)
+    try:
+        async with app.run_test(size=(80, 20)) as pilot:
+            screen = await open_schedules(app, pilot)
+            modal = await open_model_modal(app, pilot, screen)
+            assert label_text(modal, "#model-status") == "Reading your cursor-agent models…"
+            gate.set()
+            await settle(app, pilot)
+            assert option_texts(modal) == ["● gpt-5.6-sol-xhigh", "  gpt-5.5"]
+
+            field = modal.query_one(Input)
+            field.value = "5.5"
+            await pilot.pause()
+            assert option_texts(modal) == ["  gpt-5.5"]
+
+            for bad, message in (
+                ("bad id!", schedules.MODEL_CHARSET_MESSAGE),
+                ("--x", schedules.MODEL_SHAPE_MESSAGE),
+            ):
+                field.value = bad
+                field.focus()
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                assert app.screen is modal
+                assert label_text(modal, "#model-error") == message
+
+            field.value = "5.5"
+            await pilot.pause()
+            options = modal.query_one(OptionList)
+            options.focus()
+            options.highlighted = 0
+            await pilot.pause()
+            await pilot.press("enter")
+            await settle(app, pilot)
+            assert app.screen is screen
+            assert screen.status.text == "cursor-agent now defaults to gpt-5.5."
+            assert screen.status.severity == "ok"
+
+            await move_to(pilot, screen, "update-claude")
+            await pilot.press("m")
+            assert screen.status.text == (
+                "m sets the cursor-agent model; move to the cursor-agent row first."
+            )
+    finally:
+        gate.set()
+
+
+async def test_model_modal_unlisted_and_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    Install(env.home)
+    schedules.turn_on(env.ctx, "update-cursor-agent")
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        modal = await open_model_modal(app, pilot, screen)
+        await settle(app, pilot)
+        field = modal.query_one(Input)
+        field.value = "gpt-9-unlisted"
+        field.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert screen.status.text == (
+            "cursor-agent: gpt-9-unlisted is not in your model list; the shim passes through."
+        )
+        assert screen.status.severity == "warn"
+
+        env.models.answer = None
+        modal = await open_model_modal(app, pilot, screen)
+        await settle(app, pilot)
+        assert label_text(modal, "#model-status").startswith("Could not read the model list: ")
+        assert label_text(modal, "#model-status").endswith(". Type a model id.")
+        field = modal.query_one(Input)
+        field.value = "gpt-5.5"
+        field.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert screen.status.text == (
+            "cursor-agent now defaults to gpt-5.5; model unverified (list unreadable)."
+        )
+
+
+async def test_model_saved_while_off_and_a_list_after_esc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    gate = threading.Event()
+    env.models.on_call = blocker(gate)
+    app = make_app(env, monkeypatch)
+    try:
+        async with app.run_test(size=(80, 20)) as pilot:
+            screen = await open_schedules(app, pilot)
+            modal = await open_model_modal(app, pilot, screen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is screen
+            gate.set()
+            await settle(app, pilot)
+            assert modal.listed == ()  # the late list was dropped
+
+            gate.set()
+            modal = await open_model_modal(app, pilot, screen)
+            await settle(app, pilot)
+            field = modal.query_one(Input)
+            field.value = "gpt-5.5"
+            field.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await settle(app, pilot)
+            assert screen.status.text == (
+                "Saved: cursor-agent will default to gpt-5.5 once its schedule is on."
+            )
+    finally:
+        gate.set()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "line", "severity"),
+    [
+        (
+            "plain",
+            "Turned on cursor-agent update: next run at 18:00; model gpt-5.6-sol-xhigh.",
+            "ok",
+        ),
+        (
+            "foreign",
+            "Turned on cursor-agent update; your own cursor-agent file was kept.",
+            "warn",
+        ),
+        (
+            "unlisted",
+            "Turned on cursor-agent update; gpt-5.6-sol-xhigh is not listed, "
+            "so the shim passes through.",
+            "warn",
+        ),
+    ],
+)
+async def test_cursor_toggle_status_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str, line: str, severity: str
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    Install(env.home, foreign=scenario == "foreign")
+    if scenario == "unlisted":
+        env.models.answer = ("gpt-5.5",)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-cursor-agent")
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert screen.status.text == line
+        assert screen.status.severity == severity
+        if scenario == "foreign":
+            assert "your own ~/.local/bin/cursor-agent is kept" in screen.detail_text
+        if scenario == "plain":
+            await pilot.press("space")
+            await settle(app, pilot)
+            assert screen.status.text == (
+                "Turned off cursor-agent update; cursor-agent is a plain link again."
+            )
+
+
+async def test_apply_failure_repaints_from_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(
+        tmp_path,
+        monkeypatch,
+        os_key="fedora",
+        present=EVERYTHING,
+        fail_on=frozenset({("enable", 1)}),
+    )
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-claude")
+        await pilot.press("space")
+        await settle(app, pilot)
+        assert screen.status.text.startswith("Could not turn on claude update: ")
+        assert screen.status.severity == "error"
+        assert cell(app, "update-claude", "state") == "○ [off]"
+
+
+async def test_modals_fit_80x20(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    Install(env.home)
+    env.models.answer = tuple(f"model-{n}" for n in range(40))
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        modal = await open_time_modal(app, pilot, screen)
+        box = modal.query_one(Vertical)
+        assert box.region.height <= 14
+        assert box.max_scroll_y == 0
+        for child in box.children:
+            assert box.region.contains_region(child.region), child
+        await pilot.press("escape")
+        await pilot.pause()
+
+        model_modal = await open_model_modal(app, pilot, screen)
+        await settle(app, pilot)
+        box = model_modal.query_one(Vertical)
+        assert box.region.height == 16
+        assert model_modal.query_one(OptionList).max_scroll_y > 0
+        for child in box.children:
+            if child.display:  # the loading label is gone once the list lands
+                assert box.region.contains_region(child.region), child

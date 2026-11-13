@@ -30,10 +30,11 @@ from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from textual.widgets import DataTable, Input, Label, ListItem, ListView, OptionList, Select, Static
+from textual.widgets.option_list import Option
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from installer import daemon, env_redirect, receipts, runlock, schedules
+from installer import cursor_shim, daemon, env_redirect, receipts, runlock, schedules
 from installer.agent_settings import ledger_summary
 from installer.app import (
     UninstallDecision,
@@ -2997,6 +2998,7 @@ _CACHE_PRUNES = (
 _TMP_WHAT = "deletes orphaned Bun runtime files from the temp dir"
 _CACHE_WHAT = "runs each installed package manager's prune command"
 _TIMES_LISTED = 8  # more slots than this are shown as a compressed range
+_CURSOR_SCHEDULE_ID = "update-cursor-agent"
 
 
 def _fit(text: str, width: int, *, from_left: bool = False) -> str:
@@ -3038,6 +3040,8 @@ class SchedulesScreen(AppScreen):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("space", "toggle_schedule", "toggle schedule", show=True, priority=True),
+        Binding("e", "edit_time", "time", show=True),
+        Binding("m", "set_model", "model", show=True),
     ]
     DEFAULT_CSS = """
     SchedulesScreen #schedule-note { height: 1; padding: 0 1; }
@@ -3307,7 +3311,7 @@ class SchedulesScreen(AppScreen):
             if not commands:
                 return ["prunes: nothing — no uv, pnpm, brew or npm found"]
             return [f"prunes: {' · '.join(commands)}"]
-        if schedule.kind is schedules.JobKind.UPDATE and schedule.id == "update-cursor-agent":
+        if schedule.id == _CURSOR_SCHEDULE_ID:
             model = self._state.cursor_default_model
             lines = [f"model: {model} — press m to change"]
             shim = self._state.cursor_shim
@@ -3349,6 +3353,64 @@ class SchedulesScreen(AppScreen):
         verb: Literal["on", "off"] = "off" if row.word == "on" else "on"
         self._start_change(ScheduleChange(schedule.id, verb, was_drift=row.word == "drift"))
 
+    def _refuse_change(self, schedule: schedules.Schedule) -> bool:
+        """The shared refusal for `e` and `m` on a row that is still unknown or unavailable."""
+        row = self._row_state(schedule)
+        if row.word == "unknown":
+            self.status.set(_STILL_CHECKING, "warn")
+            return True
+        if row.word == "n/a":
+            self.status.set(f"Cannot change {schedule.label}: {row.reason}.", "warn")
+            return True
+        return False
+
+    def action_edit_time(self) -> None:
+        schedule = self._highlighted_schedule()
+        if schedule is None or self.app.refuse_if_mutating(self) or self._refuse_change(schedule):
+            return
+        if self._is_linux_tmp(schedule):
+            self.status.set(schedules.TMP_FIXED_CADENCE_MESSAGE, "warn")
+            return
+        record = schedules.record_for(self._state, schedule.id)
+        daily = schedule.kind is schedules.JobKind.TMP_CLEANUP
+        modal = ScheduleTimeScreen(
+            f"When {schedule.label} runs", None if daily else record.interval, record.start
+        )
+        self.app.push_screen(modal, self._time_saved(schedule.id))
+
+    def _time_saved(self, schedule_id: str) -> Callable[[tuple[int, str] | None], None]:
+        def saved(value: tuple[int, str] | None) -> None:
+            # Checked at the mutation point too: a mutation can start while the modal is open.
+            if value is None or self.app.refuse_if_mutating(self):
+                return
+            interval, start = value
+            self._start_change(
+                ScheduleChange(schedule_id, "retime", interval=interval, start=start)
+            )
+
+        return saved
+
+    def action_set_model(self) -> None:
+        schedule = self._highlighted_schedule()
+        if schedule is None or self.app.refuse_if_mutating(self):
+            return
+        if schedule.id != _CURSOR_SCHEDULE_ID:
+            self.status.set(
+                "m sets the cursor-agent model; move to the cursor-agent row first.", "warn"
+            )
+            return
+        ctx = self._ctx
+        if self._refuse_change(schedule) or ctx is None:
+            return
+        agent = cursor_shim.shim_paths(ctx.home)[1]
+        modal = CursorModelScreen(self._state.cursor_default_model, lambda: ctx.read_models(agent))
+        self.app.push_screen(modal, self._model_saved)
+
+    def _model_saved(self, model: str | None) -> None:
+        if model is None or self.app.refuse_if_mutating(self):
+            return
+        self._start_change(ScheduleChange(_CURSOR_SCHEDULE_ID, "model", model=model))
+
     def _start_change(self, change: ScheduleChange) -> None:
         self.app.begin_mutation(MutationHolder.SCHEDULE_CHANGE)
         self._change_worker(change)
@@ -3363,8 +3425,14 @@ class SchedulesScreen(AppScreen):
                 error = schedules.NO_MANAGER_REASON
             elif change.verb == "on":
                 report, error = run_live(lambda: schedules.turn_on(ctx, change.schedule_id))
-            else:
+            elif change.verb == "off":
                 report, error = run_live(lambda: schedules.turn_off(ctx, change.schedule_id))
+            elif change.verb == "retime":
+                report, error = run_live(
+                    lambda: schedules.retime(ctx, change.schedule_id, change.interval, change.start)
+                )
+            else:
+                report, error = run_live(lambda: schedules.set_cursor_model(ctx, change.model))
         finally:
             self.post_message(ScheduleChanged(change, report, error))
 
@@ -3378,21 +3446,105 @@ class SchedulesScreen(AppScreen):
         text, severity = self._change_line(message)
         self.app.show_result(self, text, severity)
 
+    def _upcoming(self, schedule: schedules.Schedule) -> str:
+        """`next run at HH:MM`, or the fixed cadence for Linux tmp cleanup."""
+        grid = self._grid(schedule)
+        if grid is None:
+            return "runs every 10 min"
+        return f"next run at {schedules.next_run(grid, self._inputs.now()):%H:%M}"
+
     def _change_line(self, message: ScheduleChanged) -> tuple[str, str]:
+        """The status for a finished change (UI-SPEC section 5); the state is already re-read."""
         change, error = message.change, message.error
         schedule = schedules.schedule_by_id(change.schedule_id)
         label = schedule.label
         if error is not None:
-            verb = "turn off" if change.verb == "off" else "turn on"
-            return f"Could not {verb} {label}: {_sentence(error)}", "error"
+            return self._failure_line(change, error, label), "error"
+        report = message.report or schedules.ApplyReport(False)
+        # Warnings the lines below do not already say (the kept-file sentence they do).
+        extra = [
+            sanitize_log_line(warning)
+            for warning in report.warnings
+            if not warning.startswith("your own ~/.local/bin/cursor-agent")
+        ]
         if change.verb == "off":
-            return f"Turned off {label}; its timer files are removed.", "ok"
-        grid = self._grid(schedule)
-        upcoming = f"{schedules.next_run(grid, self._inputs.now()):%H:%M}" if grid else None
-        when = f"next run at {upcoming}" if upcoming else "runs every 10 min"
+            line = f"Turned off {label}; its timer files are removed."
+            if schedule.id == _CURSOR_SCHEDULE_ID:
+                line = "Turned off cursor-agent update; cursor-agent is a plain link again."
+            severity = "ok"
+        elif change.verb == "retime":
+            line, severity = self._retime_line(change, schedule, report)
+        elif change.verb == "model":
+            line, severity = self._model_line(change.model, report)
+        else:
+            line, severity = self._on_line(change, schedule, report)
+        if extra:
+            return " ".join([line, *extra]), "warn"
+        return line, severity
+
+    @staticmethod
+    def _failure_line(change: ScheduleChange, error: str, label: str) -> str:
+        reason = _sentence(error)
+        if change.verb in ("on", "off"):
+            return f"Could not turn {change.verb} {label}: {reason}"
+        if change.verb == "retime":
+            return f"Could not change {label}: {reason}"
+        return f"Could not set the cursor-agent model: {reason}"
+
+    def _on_line(
+        self, change: ScheduleChange, schedule: schedules.Schedule, report: schedules.ApplyReport
+    ) -> tuple[str, str]:
+        label, when = schedule.label, self._upcoming(schedule)
         if change.was_drift:
             return f"Rewrote the {label} timer files: {when}.", "ok"
-        return f"Turned on {label}: {when}.", "ok"
+        if schedule.id != _CURSOR_SCHEDULE_ID or report.shim is None:
+            return f"Turned on {label}: {when}.", "ok"
+        model, shim = self._state.cursor_default_model, report.shim
+        if shim.write == "kept-foreign":
+            return f"Turned on {label}; your own cursor-agent file was kept.", "warn"
+        if shim.check == "not-listed":
+            return f"Turned on {label}; {model} is not listed, so the shim passes through.", "warn"
+        if shim.check == "unverified":
+            return f"Turned on {label}: {when}; model {model} (unverified).", "warn"
+        return f"Turned on {label}: {when}; model {model}.", "ok"
+
+    def _retime_line(
+        self, change: ScheduleChange, schedule: schedules.Schedule, report: schedules.ApplyReport
+    ) -> tuple[str, str]:
+        label = schedule.label
+        daily = schedule.kind is schedules.JobKind.TMP_CLEANUP
+        phrase = (
+            f"daily at {change.start}"
+            if daily
+            else f"every {change.interval} h from {change.start}"
+        )
+        if not report.changed:
+            return f"No change: {label} already runs {phrase}.", "ok"
+        if schedules.record_for(self._state, schedule.id).decided is True:
+            return f"{label} now runs {phrase}; {self._upcoming(schedule)}.", "ok"
+        return f"Saved: {label} will run {phrase} once it is on.", "ok"
+
+    def _model_line(self, model: str, report: schedules.ApplyReport) -> tuple[str, str]:
+        record = schedules.record_for(self._state, _CURSOR_SCHEDULE_ID)
+        if record.decided is not True:
+            return f"Saved: cursor-agent will default to {model} once its schedule is on.", "ok"
+        shim = report.shim
+        if shim is not None and shim.write == "kept-foreign":
+            return (
+                f"cursor-agent now defaults to {model}; your own cursor-agent file was kept.",
+                "warn",
+            )
+        if shim is not None and shim.check == "not-listed":
+            return (
+                f"cursor-agent: {model} is not in your model list; the shim passes through.",
+                "warn",
+            )
+        if shim is not None and shim.check == "unverified":
+            return (
+                f"cursor-agent now defaults to {model}; model unverified (list unreadable).",
+                "warn",
+            )
+        return f"cursor-agent now defaults to {model}.", "ok"
 
 
 class ConfirmGuardFile(ModalScreen[bool]):
@@ -3580,6 +3732,218 @@ class LinkModeScreen(ModalScreen[str | None]):
         self.dismiss(item_id.removeprefix("link-"))
 
     def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ScheduleTimeScreen(ModalScreen[tuple[int, str] | None]):
+    """When a schedule runs: an interval (one of eight) and a start time, validated in place.
+
+    A rejected value keeps the modal open with the validator's message and nothing leaves it
+    (P6); `escape` returns None. macOS tmp cleanup passes `interval=None`: a daily time only.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "cancel", show=False),
+    ]
+    DEFAULT_CSS = """
+    ScheduleTimeScreen { align: center middle; }
+    ScheduleTimeScreen > Vertical {
+        width: 60; height: auto; border: round $accent; padding: 0 1; background: $surface;
+    }
+    ScheduleTimeScreen Label { height: 1; }
+    """
+
+    def __init__(self, title: str, interval: int | None, start: str) -> None:
+        super().__init__()
+        self._title = title
+        self._interval = interval
+        self._start = start
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(Text(self._title, style="bold"), id="time-title")
+            if self._interval is not None:
+                yield Label("Every")
+                yield Select[int](
+                    [(f"{hours} h", hours) for hours in schedules.INTERVALS],
+                    value=self._interval,
+                    allow_blank=False,
+                    id="time-interval",
+                )
+            label = "Starting at" if self._interval is not None else "Daily at"
+            yield Label(f"{label} (HH:MM, local time)")
+            yield Input(self._start, placeholder="00:00", max_length=5, id="time-start")
+            yield Label("", id="time-preview")
+            yield Label("", id="time-error")
+            yield Label(Text("enter save | esc cancel", style="dim"), id="time-keys")
+
+    def on_mount(self) -> None:
+        self._refresh_preview()
+
+    def _chosen_interval(self) -> int | None:
+        if self._interval is None:
+            return 24
+        value = self.query_one(Select[int]).value
+        return value if isinstance(value, int) else None
+
+    def _refresh_preview(self) -> None:
+        start = self.query_one(Input).value
+        interval = self._chosen_interval()
+        try:
+            grid = schedules.slots(interval if interval is not None else 0, start)
+        except daemon.DaemonScheduleError:
+            text = "Runs at: enter a time as HH:MM"
+        else:
+            names = [f"{hour:02d}:{minute:02d}" for hour, minute in grid]
+            if self._interval is None:
+                text = f"Runs daily at {names[0]}"
+            elif len(names) <= _TIMES_LISTED:
+                text = f"Runs at {', '.join(names)}"
+            else:
+                text = f"Runs at {', '.join(names[:3])} … {names[-1]} ({len(names)} times a day)"
+        self.query_one("#time-preview", Label).update(Text(text, style="dim"))
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        del event
+        self._refresh_preview()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        del event
+        self._refresh_preview()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        start = self.query_one(Input).value
+        interval = self._chosen_interval()
+        try:
+            hours = schedules.validate_interval(interval if interval is not None else 0)
+            schedules.validate_start(start)
+        except daemon.DaemonScheduleError as exc:
+            self.query_one("#time-error", Label).update(Text(str(exc), style="red"))
+            return
+        self.dismiss((hours, start))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class CursorModelsRead(Message):
+    """The threaded `cursor-agent --list-models` read finished; `models` is None on failure."""
+
+    def __init__(self, models: tuple[str, ...] | None, error: str | None) -> None:
+        self.models = models
+        self.error = error
+        super().__init__()
+
+
+class CursorModelScreen(ModalScreen[str | None]):
+    """The cursor-agent default model: a filter field over the listed ids, or free text.
+
+    The list is read on a thread worker when the modal opens; an answer that lands after the
+    modal closed is dropped. An unlisted but well-formed id is accepted (D-18, offline edits).
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "cancel", show=False),
+    ]
+    DEFAULT_CSS = """
+    CursorModelScreen { align: center middle; }
+    CursorModelScreen > Vertical {
+        width: 64; height: 16; border: round $accent; padding: 0 1; background: $surface;
+    }
+    CursorModelScreen Label { height: 1; }
+    CursorModelScreen OptionList { height: 1fr; }
+    """
+
+    def __init__(self, current: str, read_models: Callable[[], tuple[str, ...] | None]) -> None:
+        super().__init__()
+        self._current = current
+        self._read_models = read_models
+        self._dismissed = False
+        # The ids the worker read, in list order; empty until the list lands.
+        self.listed: tuple[str, ...] = ()
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(
+                Text("Model cursor-agent uses when no --model is given", style="bold"),
+                id="model-title",
+            )
+            yield Input(self._current, id="model-input")
+            yield Label(Text("Reading your cursor-agent models…", style="dim"), id="model-status")
+            yield OptionList(id="model-list")
+            yield Label("", id="model-error")
+            yield Label(Text("enter use | esc cancel", style="dim"), id="model-keys")
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).display = False
+        self._read_worker()
+
+    @work(thread=True, exclusive=True, group="schedule-models", exit_on_error=False)
+    def _read_worker(self) -> None:
+        models: tuple[str, ...] | None = None
+        error: str | None = "the model list did not load"
+        try:
+            models, error = run_live(self._read_models)
+            if models is None and error is None:
+                error = "cursor-agent --list-models gave no list"
+        finally:
+            self.post_message(CursorModelsRead(models, error))
+
+    def on_cursor_models_read(self, message: CursorModelsRead) -> None:
+        if self._dismissed:
+            return
+        status = self.query_one("#model-status", Label)
+        if message.models is None:
+            reason = _sentence(message.error or "unknown error")
+            status.update(
+                Text(f"Could not read the model list: {reason} Type a model id.", "yellow")
+            )
+            return
+        self.listed = tuple(dict.fromkeys(message.models))
+        status.display = False
+        self.query_one(OptionList).display = True
+        self._fill()
+
+    def _fill(self) -> None:
+        typed = self.query_one(Input).value
+        needle = "" if typed == self._current else typed.lower()
+        options = self.query_one(OptionList)
+        options.clear_options()
+        options.add_options(
+            Option(
+                Text(f"{'● ' if model == self._current else '  '}{sanitize_log_line(model)}"),
+                id=model,
+            )
+            for model in self.listed
+            if needle in model.lower()
+        )
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        del event
+        if self.listed:
+            self._fill()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self._use(self.query_one(Input).value)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option.id is not None:  # every option is built with its model id
+            self._use(event.option.id)
+
+    def _use(self, model: str) -> None:
+        try:
+            schedules.validate_model_id(model)
+        except daemon.DaemonScheduleError as exc:
+            self.query_one("#model-error", Label).update(Text(str(exc), style="red"))
+            return
+        self._dismissed = True
+        self.dismiss(model)
+
+    def action_cancel(self) -> None:
+        self._dismissed = True
         self.dismiss(None)
 
 
