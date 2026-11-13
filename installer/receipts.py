@@ -49,6 +49,7 @@ APP_KEY_FILE = "Contents/Info.plist"
 
 _MAX_RECEIPT_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_RELEASE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
 _WRITE_LOCK = threading.Lock()
 
@@ -86,6 +87,8 @@ class Receipt:
     artifacts: tuple[ReceiptArtifact, ...]
     smoke: str | None
     hooks: Mapping[str, tuple[str, ...]]
+    # The release tag the method resolved; None for a kind that resolves none (24-09).
+    release: str | None = None
 
 
 def default_receipts_dir() -> Path:
@@ -140,6 +143,8 @@ def _write_unlocked(receipt: Receipt) -> None:
         "smoke": receipt.smoke,
         "hooks": {name: list(ids) for name, ids in receipt.hooks.items()},
     }
+    if receipt.release is not None:
+        payload["release"] = receipt.release
     _write_json(receipt_path(receipt.tool), payload, f"tool '{receipt.tool}': receipt path")
 
 
@@ -221,6 +226,9 @@ def read(tool_id: str) -> Receipt | None:
     at = data.get("at")
     if not isinstance(at, str):
         return None
+    release = data.get("release")
+    if release is not None and not _is_release_tag(release):
+        return None
     return Receipt(
         tool=tool_id,
         at=at,
@@ -229,7 +237,13 @@ def read(tool_id: str) -> Receipt | None:
         artifacts=tuple(artifacts),
         smoke=smoke,
         hooks=hooks,
+        release=release,
     )
+
+
+def _is_release_tag(value: object) -> TypeGuard[str]:
+    """True for a tag `record` writes and `read` accepts: no `/`, no space, no leading `-`."""
+    return isinstance(value, str) and _RELEASE_RE.fullmatch(value) is not None
 
 
 def _read_json_object(path: Path) -> dict[str, object] | None:
@@ -429,6 +443,7 @@ def _build_receipt(
     package: str | None,
     smoke: str | None,
     hooks: Mapping[str, tuple[str, ...]],
+    release: str | None = None,
 ) -> Receipt:
     """The one receipt constructor; callers pass fingerprints they already hold.
 
@@ -442,6 +457,7 @@ def _build_receipt(
         artifacts=artifacts,
         smoke=smoke,
         hooks=hooks,
+        release=release,
     )
 
 
@@ -453,8 +469,12 @@ def record(
     smoke: str | None,
     default_bin_dir: Path | None = None,
     preexisting: frozenset[Path] | None = None,
+    release: str | None = None,
 ) -> Receipt | None:
     """Write the receipt for a method that just succeeded; None for a receiptless kind.
+
+    `release` is the tag the method resolved: None for a kind that resolves none, and None
+    for a tag `read` would reject, so a receipt is never written that cannot be read back.
 
     Artifacts are `artifact_paths` (D-07) fingerprinted now; one the method did
     not create is dropped, including a dir whose key file is missing, so it is
@@ -494,7 +514,15 @@ def record(
     )
     # A re-record keeps the hosts a hook already registered (research Pitfall 1).
     hooks: Mapping[str, tuple[str, ...]] = previous.hooks if previous is not None else {}
-    receipt = _build_receipt(tool, method, artifacts, package=package, smoke=smoke, hooks=hooks)
+    receipt = _build_receipt(
+        tool,
+        method,
+        artifacts,
+        package=package,
+        smoke=smoke,
+        hooks=hooks,
+        release=release if _is_release_tag(release) else None,
+    )
     existed = receipt_exists(tool.id)
     try:
         write(receipt)

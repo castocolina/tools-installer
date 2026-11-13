@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -9,7 +11,7 @@ import pytest
 
 import installer.engine as engine
 import installer.postinstall as postinstall
-from installer import cargo_distrobox, executors, post_install, receipts
+from installer import cargo_distrobox, executors, post_install, receipts, versions
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
@@ -2493,3 +2495,193 @@ def test_cargo_distrobox_kept_image_note_reaches_the_outcome(
         "kept the existing image registry.fedoraproject.org/fedora-toolbox:44"
         in outcome.postinstall_warning
     )
+
+
+# --- Plan 24-09: a script install whose download failed is a failure ----------------------------
+
+
+# The autouse PATH sandbox hides every shell, so the script tests look for theirs on the host's.
+_HOST_UTILS = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
+
+
+def _fake_script_toolchain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, curl_exit: int
+) -> tuple[Path, Path, Path]:
+    """Fakes for every command the production script runs, with the script's own PATH on them.
+
+    Returns (fake bin dir, marker the downloaded script touches, the file mktemp hands out).
+    """
+    real_bash = shutil.which("bash", path=_HOST_UTILS)
+    assert real_bash is not None
+    real_rm = shutil.which("rm", path=_HOST_UTILS)
+    assert real_rm is not None
+    fake = tmp_path / "script-fakes"
+    fake.mkdir()
+    marker = tmp_path / "script-ran"
+    temp_file = tmp_path / "download.tmp"
+    curl_body = (
+        'echo "curl: (35) TLS connect error" >&2\nexit 35\n'
+        if curl_exit
+        else f"printf ': > %q\\n' {marker} > \"$out\"\n"
+    )
+    bodies = {
+        "curl": (
+            'while [ $# -gt 0 ]; do\n  if [ "$1" = -o ]; then out=$2; shift; fi\n  shift\ndone\n'
+            + curl_body
+        ),
+        "mktemp": f": > {temp_file}\necho {temp_file}\n",
+        "rm": f'exec {real_rm} "$@"\n',
+        # a fake shell that runs its stdin, which is where the downloaded script arrives
+        "bash": 'while IFS= read -r line || [ -n "$line" ]; do eval "$line"; done\n',
+    }
+    for name, body in bodies.items():
+        script = fake / name
+        script.write_text(f"#!{real_bash}\n{body}", encoding="utf-8")
+        script.chmod(0o755)
+    monkeypatch.setattr(executors, "shell_path", lambda: str(fake))
+    return fake, marker, temp_file
+
+
+def _file_runner(tmp_path: Path, fake: Path) -> Callable[[list[str]], None]:
+    """Run a `sh -c` script as a file with bash (the sandbox refuses the `-c` string itself)."""
+    real_bash = shutil.which("bash", path=_HOST_UTILS)
+    assert real_bash is not None
+
+    def runner(cmd: list[str]) -> None:
+        assert cmd[:2] == ["sh", "-c"]
+        script_file = tmp_path / "script-under-test.sh"
+        script_file.write_text(cmd[2], encoding="utf-8")
+        done = subprocess.run(
+            [real_bash, str(script_file)],
+            env={"PATH": str(fake), "HOME": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode:
+            raise CommandError(cmd, done.returncode, detail=done.stderr)
+
+    return runner
+
+
+def _script_tool() -> Tool:
+    return _tool(
+        Method(kind="script", params={"url": "https://example.test/i.sh", "shell": "bash"})
+    )
+
+
+def test_script_download_failure_fails_the_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    fake, marker, _temp = _fake_script_toolchain(tmp_path, monkeypatch, curl_exit=35)
+    tool = _script_tool()
+
+    outcome = install_tool(tool, _platform(), runner=_file_runner(tmp_path, fake))
+
+    assert outcome.status == InstallStatus.FAILED
+    (error,) = outcome.errors
+    assert isinstance(error, CommandError)
+    assert error.returncode == 35
+    assert "TLS connect error" in error.detail
+    assert not marker.exists()
+    assert receipts.read(tool.id) is None
+
+
+def test_script_download_success_runs_the_script_on_stdin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    fake, marker, temp_file = _fake_script_toolchain(tmp_path, monkeypatch, curl_exit=0)
+
+    outcome = install_tool(_script_tool(), _platform(), runner=_file_runner(tmp_path, fake))
+
+    assert outcome.status == InstallStatus.INSTALLED
+    assert marker.exists()
+    assert not temp_file.exists()
+
+
+# --- Plan 24-09: the receipt records the release the method resolved -----------------------------
+
+
+def test_install_records_the_resolved_release(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _pin_workdir(tmp_path, monkeypatch)
+    _calls, runner = fixture_runner(workdir, {"yq_linux_amd64": _RECEIPT_MEMBER_SCRIPT})
+    tool = _tool(_raw_yq_method(tmp_path / "bin"), tool_id="yq")
+
+    outcome = install_tool(tool, _platform(), runner=runner, resolve_tag=lambda _repo: "v1.1.0")
+
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("yq")
+    assert written is not None
+    assert written.release == "v1.1.0"
+
+
+def test_a_manager_install_records_no_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    tool = _tool(Method(kind="brew", params={"formula": "ripgrep"}))
+
+    outcome = install_tool(
+        tool, _macos_with_brew(), runner=lambda _cmd: None, read_inventory_fn=_empty_inventory
+    )
+
+    assert outcome.status == InstallStatus.INSTALLED
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.release is None
+
+
+def test_failed_release_attempt_records_no_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+
+    def resolves_then_fails(method: Method, ctx: ExecContext) -> str | None:
+        assert ctx.resolve_release(str(method.params["repo"])).tag == "v1.1.0"
+        raise CommandError(["curl"], 22)
+
+    monkeypatch.setattr(engine.download, "install_download", resolves_then_fails)
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+
+    outcome = install_tool(
+        _gh_then_brew(),
+        platform,
+        runner=lambda _cmd: None,
+        resolve_tag=lambda _repo: "v1.1.0",
+        read_inventory_fn=_empty_inventory,
+    )
+
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "brew"
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.release is None
+
+
+def test_release_capture_keeps_the_production_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_not_installed(monkeypatch)
+    production = Release("v9.0.0", {"asset.tar.gz": "d" * 64})
+
+    def fake_release(_repo: str, _fetch: object = None) -> Release:
+        return production
+
+    monkeypatch.setattr(versions, "resolve_github_release", fake_release)
+    handed: list[Release] = []
+
+    def resolves(method: Method, ctx: ExecContext) -> str | None:
+        handed.append(ctx.resolve_release(str(method.params["repo"])))
+        return None
+
+    monkeypatch.setattr(engine.download, "install_download", resolves)
+    method = Method(kind="github_release", params={"repo": "x/y", "asset": "a", "member": "rg"})
+
+    outcome = install_tool(_tool(method), _platform(), runner=lambda _cmd: None)
+
+    assert outcome.status == InstallStatus.INSTALLED
+    assert handed == [production]
+    assert handed[0] is production  # the digests reach the download unchanged
+    written = receipts.read("rg")
+    assert written is not None
+    assert written.release == "v9.0.0"

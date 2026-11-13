@@ -97,31 +97,39 @@ def test_prefix_writable_fails_closed_on_a_foreign_owner_or_a_probe_error(
     assert executors.prefix_writable(prefix) is False
 
 
+def _download_then(url: str, invoke: str) -> str:
+    """The script a script method runs: download to a temp file, then feed the shell from it."""
+    return (
+        'f="$(mktemp)" || exit 1; trap \'rm -f "$f"\' EXIT; '
+        f'curl -fsSL --retry 3 --retry-all-errors -o "$f" -- {url} && {invoke} < "$f"'
+    )
+
+
 def test_brew_executor_builds_install():
     calls, runner = _record()
     execute(Method(kind="brew", params={"formula": "jq"}), runner)
     assert calls == [["brew", "install", "jq"]]
 
 
-def test_script_executor_pipes_curl_into_shell():
+def test_script_executor_downloads_then_runs_the_shell():
     calls, runner = _record()
     execute(
         Method(kind="script", params={"url": "https://astral.sh/uv/install.sh", "shell": "sh"}),
         runner,
     )
-    assert _script_of(calls) == "curl -fsSL -- https://astral.sh/uv/install.sh | sh"
+    assert _script_of(calls) == _download_then("https://astral.sh/uv/install.sh", "sh")
 
 
 def test_script_executor_defaults_shell_to_sh():
     calls, runner = _record()
     execute(Method(kind="script", params={"url": "https://example.com/i.sh"}), runner)
-    assert _script_of(calls) == "curl -fsSL -- https://example.com/i.sh | sh"
+    assert _script_of(calls) == _download_then("https://example.com/i.sh", "sh")
 
 
 def test_script_executor_quotes_url_with_special_chars():
     calls, runner = _record()
     execute(Method(kind="script", params={"url": "https://x.com/i.sh?a=b&c=d"}), runner)
-    assert _script_of(calls) == "curl -fsSL -- 'https://x.com/i.sh?a=b&c=d' | sh"
+    assert _script_of(calls) == _download_then("'https://x.com/i.sh?a=b&c=d'", "sh")
 
 
 def test_missing_required_param_raises():
@@ -199,8 +207,8 @@ def test_script_passes_env_assignments_to_the_shell() -> None:
         },
     )
     execute(method, runner)
-    assert (
-        _script_of(calls) == "curl -fsSL -- https://example.test/install.sh | NONINTERACTIVE=1 bash"
+    assert _script_of(calls) == _download_then(
+        "https://example.test/install.sh", "NONINTERACTIVE=1 bash"
     )
 
 
@@ -208,7 +216,7 @@ def test_script_without_env_is_unchanged() -> None:
     calls, runner = _record()
     method = Method(kind="script", params={"url": "https://example.test/i.sh"})
     execute(method, runner)
-    assert _script_of(calls) == "curl -fsSL -- https://example.test/i.sh | sh"
+    assert _script_of(calls) == _download_then("https://example.test/i.sh", "sh")
 
 
 def test_script_executor_passes_args_after_sh_s() -> None:
@@ -225,8 +233,21 @@ def test_script_executor_passes_args_after_sh_s() -> None:
         runner,
     )
     pipeline = _script_of(calls)
-    assert "curl -fsSL -- https://sw.kovidgoyal.net/kitty/installer.sh" in pipeline
-    assert pipeline.endswith("| sh -s -- launch=n")
+    assert '-o "$f" -- https://sw.kovidgoyal.net/kitty/installer.sh' in pipeline
+    assert pipeline.endswith('&& sh -s -- launch=n < "$f"')
+
+
+def test_script_pipeline_downloads_then_runs() -> None:
+    calls, runner = _record()
+    execute(
+        Method(kind="script", params={"url": "https://astral.sh/uv/install.sh", "shell": "sh"}),
+        runner,
+    )
+    assert _script_of(calls) == (
+        'f="$(mktemp)" || exit 1; trap \'rm -f "$f"\' EXIT; '
+        'curl -fsSL --retry 3 --retry-all-errors -o "$f" -- https://astral.sh/uv/install.sh '
+        '&& sh < "$f"'
+    )
 
 
 def test_uv_script_without_args_is_byte_identical() -> None:
@@ -235,7 +256,7 @@ def test_uv_script_without_args_is_byte_identical() -> None:
         Method(kind="script", params={"url": "https://astral.sh/uv/install.sh", "shell": "sh"}),
         runner,
     )
-    assert _script_of(calls) == "curl -fsSL -- https://astral.sh/uv/install.sh | sh"
+    assert _script_of(calls) == _download_then("https://astral.sh/uv/install.sh", "sh")
 
 
 @pytest.mark.parametrize(

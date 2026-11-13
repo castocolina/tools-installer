@@ -417,3 +417,19 @@ def release_resolver(resolve_tag: TagResolver) -> ReleaseResolver:
     if resolve_tag is resolve_github_tag:
         return resolve_github_release
     return lambda repo: Release(resolve_tag(repo), {})
+
+
+def capturing_resolver(resolve: ReleaseResolver) -> tuple[ReleaseResolver, list[str]]:
+    """Wrap `resolve` so every tag it returns is also appended to the returned list.
+
+    Wrap the ReleaseResolver, never the TagResolver: `release_resolver` keeps the API digests
+    only for the identity `resolve_github_tag`. The Release is returned unchanged.
+    """
+    seen: list[str] = []
+
+    def capture(repo: str) -> Release:
+        release = resolve(repo)
+        seen.append(release.tag)
+        return release
+
+    return capture, seen

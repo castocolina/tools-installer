@@ -260,6 +260,8 @@ strip = 1
 kind = "brew"
 formula = "bat"
 
+# Verified 2026-11-12: sd v1.1.0's Cargo.toml ([workspace.package]) still declares 1.0.0, so sd --version prints
+# 1.0.0; the receipt's recorded release decides whether it is current (24-09).
 [[tool]]
 id = "sd"
 name = "sd"
@@ -268,7 +270,7 @@ cmd = "sd"
 priority = "P0"
 audience = "ai"
 tier = "ai"
-verified = 2026-11-03
+verified = 2026-11-12
 desc = "Replaces common sed substitutions with clearer syntax and safer literal defaults."
 [[tool.method]]
 kind = "github_release"
