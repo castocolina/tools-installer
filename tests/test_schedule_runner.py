@@ -422,6 +422,67 @@ def test_child_env_passes_the_proxy_certificate_and_pnpm_variables(
     assert "SUDO_ASKPASS" not in values
 
 
+_UV_LOCKED = (
+    "error: Timeout (5s) when waiting for lock on `/home/u/.cache/uv` at "
+    "`/home/u/.cache/uv/.lock`, is another uv process running? You can set `UV_LOCK_TIMEOUT` "
+    "to increase the timeout."
+)
+
+
+def _locked_uv(bin_dir: Path) -> Path:
+    return _script(
+        bin_dir,
+        "uv",
+        f'echo "$UV_LOCK_TIMEOUT $@" > "{bin_dir}/uv.argv"\necho "{_UV_LOCKED}" >&2\nexit 2',
+    )
+
+
+def test_uv_cache_prune_runs_with_a_short_lock_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _locked_uv(bin_dir)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("UV_LOCK_TIMEOUT", "300")
+    _run(tmp_path, "cache-cleanup")
+    argv = (bin_dir / "uv.argv").read_text().split()
+    assert argv == ["5", "cache", "prune"]  # never --force
+
+
+def test_a_uv_lock_timeout_is_skipped_not_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _locked_uv(bin_dir)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert _texts(lines)[-1] == "skipped: uv cache in use"
+
+
+def test_a_uv_lock_timeout_does_not_hide_the_other_managers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _locked_uv(bin_dir)
+    _recorder(bin_dir, "pnpm")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 0
+    assert _texts(lines)[-1] == "ok: pruned pnpm (uv cache in use)"
+
+
+def test_a_uv_failure_that_is_not_the_lock_still_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    _recorder(bin_dir, "uv", exit_code=2)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    code, lines = _run(tmp_path, "cache-cleanup")
+    assert code == 1
+    assert _texts(lines)[-1] == "failed: uv cache prune exited 2"
+
+
 def test_manager_timeout_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleep = shutil.which("sleep")
     assert sleep is not None

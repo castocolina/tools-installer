@@ -53,6 +53,10 @@ _MANAGERS = (
     ("brew", ("cleanup",)),
     ("npm", ("cache", "verify")),
 )
+# `uv cache prune` waits for any live `uv run` until UV_LOCK_TIMEOUT (default 300 s): a short
+# wait turns a busy cache into a skip instead of a 5-minute stall and a failure.
+_UV_LOCK_TIMEOUT = "5"
+_UV_LOCK_MARKER = b"when waiting for lock"
 _KILL_GRACE = 10  # seconds a group gets between SIGTERM and SIGKILL, and for the last collect
 # The house child policy; source: installer/run.py CHILD_ENV (this file cannot import it).
 _CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
@@ -142,9 +146,10 @@ def _append(log_path: Path, line: str, cap: int) -> None:
         os.close(fd)  # closing the descriptor releases the lock
 
 
-def _child_env() -> dict[str, str]:
+def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {key: os.environ[key] for key in _PASSED_ENV if key in os.environ}
     env.update(_CHILD_ENV)
+    env.update(extra or {})
     return env
 
 
@@ -155,14 +160,20 @@ def _kill_group(pid: int, sig: signal.Signals) -> None:
         os.killpg(pid, sig)
 
 
-def _run_child(argv: list[str], *, timeout: float, cwd: Path | None = None) -> _Child:
+def _run_child(
+    argv: list[str],
+    *,
+    timeout: float,
+    cwd: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> _Child:
     """Run argv with no shell, in its own session; on a timeout kill the whole group."""
     try:
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=_child_env(),
+            env=_child_env(extra_env),
             cwd=cwd,
             start_new_session=True,
         )
@@ -286,13 +297,19 @@ def _cache_cleanup(emit: Emit) -> str:
     """Run each installed manager's own prune command; one failure never stops the others."""
     path_value = os.environ.get("PATH", "")
     passed: list[str] = []
+    in_use: list[str] = []
     failure = ""
     for name, args in _MANAGERS:
         found = _resolve(name, path_value)
         if found is None:
             continue
         command = " ".join((name, *args))
-        child = _run_child([found, *args], timeout=_MANAGER_TIMEOUT)
+        extra = {"UV_LOCK_TIMEOUT": _UV_LOCK_TIMEOUT} if name == "uv" else None
+        child = _run_child([found, *args], timeout=_MANAGER_TIMEOUT, extra_env=extra)
+        if name == "uv" and child.code not in (None, 0) and _UV_LOCK_MARKER in child.err:
+            emit(f"ran: {command} (cache in use)")
+            in_use.append(name)
+            continue
         if child.problem is None:
             emit(f"ran: {command} (exit {child.code})")
             reason = f"exited {child.code}"
@@ -308,6 +325,10 @@ def _cache_cleanup(emit: Emit) -> str:
             failure = f"{command} {reason}"
     if failure:
         return f"failed: {failure} ({', '.join(passed)} ok)" if passed else f"failed: {failure}"
+    if in_use and not passed:
+        return "skipped: uv cache in use"
+    if in_use:
+        return f"ok: pruned {', '.join(passed)} (uv cache in use)"
     return f"ok: pruned {', '.join(passed)}" if passed else "ok: nothing to clean"
 
 
