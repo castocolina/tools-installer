@@ -1,6 +1,7 @@
 import errno
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1375,7 +1376,7 @@ def _by_hand_lines() -> tuple[str, ...]:
         _BY_HAND_HEAD,
         f"git clone {_STARTER_URL} ~/.config/nvim",
         f"git -C ~/.config/nvim checkout -B master {_kickstart_pin()}",
-        f"git -C ~/.config/nvim apply {_kickstart_patch()}",
+        f"git -C ~/.config/nvim apply {shlex.quote(str(_kickstart_patch()))}",
     )
 
 
@@ -1639,5 +1640,29 @@ def test_neovim_hints_print_with_your_own_config(monkeypatch: pytest.MonkeyPatch
 
     output = run_post_install(_shipped_neovim(), _mutable())
 
-    assert output.lines == (_SHELL_INIT_LINE, _YOURS_LINE, *_HINT_LINES)
+    assert output.lines == (_SHELL_INIT_LINE, _YOURS_LINE)
     assert fake.calls == []
+
+
+def test_a_reinstall_over_the_installers_starter_does_not_call_it_yours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = use_fake_git(monkeypatch)
+    run_post_install(_shipped_neovim(), _mutable())
+    fake.calls.clear()
+
+    output = run_post_install(_shipped_neovim(), _mutable())
+
+    assert output.lines == (
+        _SHELL_INIT_LINE,
+        "Starter already in ~/.config/nvim (left as is).",
+        *_HINT_LINES,
+    )
+    assert fake.calls == []
+
+
+def test_the_by_hand_patch_path_is_quoted(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_git(monkeypatch, present=False)
+    monkeypatch.setitem(vars(post_install), "_KICKSTART_PATCH", Path("/opt/my tools/a.patch"))
+
+    assert _starter()[-1] == "git -C ~/.config/nvim apply '/opt/my tools/a.patch'"

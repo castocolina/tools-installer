@@ -38,6 +38,7 @@ root injects with `use_git_runner`; with no runner wired it refuses (24.1 D-15, 
 """
 
 import os
+import shlex
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -191,8 +192,19 @@ def _by_hand() -> tuple[str, ...]:
         "To add it by hand:",
         f"git clone {_KICKSTART_URL} {_NVIM_STARTER_TARGET}",
         f"git -C {_NVIM_STARTER_TARGET} checkout -B master {_KICKSTART_PIN}",
-        f"git -C {_NVIM_STARTER_TARGET} apply {_KICKSTART_PATCH}",
+        f"git -C {_NVIM_STARTER_TARGET} apply {shlex.quote(str(_KICKSTART_PATCH))}",
     )
+
+
+# The line the patch adds to init.lua: what tells the installer's starter from the user's config.
+_STARTER_MARKER = "tools-installer: no language servers"
+
+
+def _holds_starter(target: Path) -> bool:
+    try:
+        return _STARTER_MARKER in (target / "init.lua").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def _absent_or_empty(path: Path) -> bool:
@@ -217,6 +229,8 @@ def _clone_nvim_starter(
     if xdg_config_base(home, os.environ) != config_dir:
         return ("Starter not added: XDG_CONFIG_HOME points elsewhere than ~/.config (left as is).",)
     if not _absent_or_empty(target):
+        if _holds_starter(target):
+            return (f"Starter already in {_NVIM_STARTER_TARGET} (left as is).",)
         return (f"Starter not added: {_NVIM_STARTER_TARGET} is yours (left as is).",)
     if shutil.which("git") is None:
         return ("Starter not added: git is not installed.", *_by_hand())
@@ -429,6 +443,11 @@ def _show_nvim_hints(
     confirm: ConfirmSensitiveAction | None,
 ) -> tuple[str, ...]:
     del tool, platform, confirm
+    target = Path.home() / ".config" / "nvim"
+    # The hints say Neovim runs no language server: true of the starter or of no config, not of
+    # a config of the user's own.
+    if not _absent_or_empty(target) and not _holds_starter(target):
+        return ()
     return _NVIM_HINTS
 
 
