@@ -4563,9 +4563,9 @@ def test_policy_appends_decided_closures_after_every_existing_field() -> None:
 def test_unarmed_collector_wait_returns_immediately() -> None:
     import time
 
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
     started = time.monotonic()
     messages, completed = collector.wait(5)
     assert time.monotonic() - started < 0.2
@@ -4574,9 +4574,9 @@ def test_unarmed_collector_wait_returns_immediately() -> None:
 
 
 def test_finished_collector_returns_its_messages() -> None:
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
     collector.arm()
     collector.append("another timer is still running")
     collector.finish()
@@ -4588,9 +4588,9 @@ def test_finished_collector_returns_its_messages() -> None:
 def test_armed_collector_times_out_when_never_finished() -> None:
     import time
 
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
     collector.arm()
     collector.append("partial")
     started = time.monotonic()
@@ -4604,9 +4604,9 @@ def test_armed_collector_times_out_when_never_finished() -> None:
 def test_collector_finish_from_another_thread_unblocks_the_waiter() -> None:
     import time
 
-    from installer.policy import DaemonDefaultWarnings
+    from installer.schedules import ScheduleDefaultWarnings
 
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
     collector.arm()
     collector.append("taken over")
     observed: list[tuple[tuple[str, ...], bool]] = []
@@ -4625,9 +4625,10 @@ def test_collector_finish_from_another_thread_unblocks_the_waiter() -> None:
 
 
 def test_daemon_default_closure_finishes_when_apply_raises_runtime_error() -> None:
-    from installer.policy import DaemonDefaultWarnings, ensure_daemon_default
+    from installer.policy import ensure_daemon_default
+    from installer.schedules import ScheduleDefaultWarnings
 
-    collector = DaemonDefaultWarnings()
+    collector = ScheduleDefaultWarnings()
     collector.arm()
 
     def boom() -> PolicyResult:

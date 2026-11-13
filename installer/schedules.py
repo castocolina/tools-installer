@@ -14,6 +14,7 @@ import plistlib
 import re
 import shutil
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -1526,6 +1527,42 @@ def reconcile_lines(report: ReconcileReport) -> tuple[tuple[str, Literal["ok", "
         )
     lines.extend((warning, "warn") for warning in report.warnings)
     return tuple(lines)
+
+
+# A wedged or never-dispatched worker costs this delay, never a hang.
+SCHEDULE_DEFAULT_WAIT_SECONDS = 5.0
+
+
+class ScheduleDefaultWarnings:
+    """Collects warnings from the on-by-default apply and says when it finished.
+
+    The schedule defaults run on a Textual thread worker that ``app.run()`` does
+    not join. Without this event the competing-mechanism disclosure is printed
+    only when that worker happens to finish before the CLI's next line, and the
+    ``summary is None`` abort branch returns before any later print at all.
+    ``wait`` returns immediately, with completion True, when the collector was
+    never armed, so a run with no auto-apply pays nothing.
+    """
+
+    def __init__(self) -> None:
+        self._messages: list[str] = []
+        self._armed = False
+        self._finished = threading.Event()
+
+    def append(self, message: str) -> None:
+        self._messages.append(message)
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def finish(self) -> None:
+        self._finished.set()
+
+    def wait(self, timeout: float) -> tuple[tuple[str, ...], bool]:
+        if not self._armed:
+            return (), True
+        completed = self._finished.wait(timeout)
+        return tuple(self._messages), completed
 
 
 # --- The uninstall sweep: one adapter per schedule with anything of ours on disk (24.2-08) ----

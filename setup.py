@@ -31,6 +31,7 @@ from installer import (
     env_redirect,
     pnpm_globals,
     post_install,
+    runlock,
     schedules,
     systemd_daemon,
 )
@@ -65,8 +66,6 @@ from installer.model import Tool, load_categories, load_tools
 from installer.ownership import read_inventory
 from installer.platform import Platform, detect
 from installer.policy import (
-    DAEMON_DEFAULT_WAIT_SECONDS,
-    DaemonDefaultWarnings,
     Policy,
     ban_policy,
     cache_redirect_policy,
@@ -90,6 +89,7 @@ from installer.run import (
     run_git_isolated,
 )
 from installer.schedule_run import RunDeps, run_schedule
+from installer.schedules import SCHEDULE_DEFAULT_WAIT_SECONDS, ScheduleDefaultWarnings
 from installer.session import exit_code, ran_anything
 from installer.settings import (
     SettingsStore,
@@ -829,6 +829,29 @@ def _print_repairs(
         console.print(text, markup=False, soft_wrap=True)
 
 
+def _schedule_context(
+    platform: Platform, present: Callable[[str], bool]
+) -> schedules.ScheduleContext:
+    """The one context builder: the view, the reconciles and the sweep share these seams."""
+    return schedules.context_for(
+        platform.os,
+        checkout=Path(__file__).resolve().parent,
+        which=shutil.which,
+        present=present,
+        read_models=cursor_shim.read_models,
+    )
+
+
+def _reconcile_headless(
+    console: Console, tools: list[Tool], platform: Platform, refresh: VersionRefreshService
+) -> None:
+    """Turn on the schedules nobody has decided about, after an install run (SPEC R3)."""
+    launch = {tool.id: is_installed(tool) for tool in tools}
+    ctx = _schedule_context(platform, refresh.installed_or(launch))
+    for text, _severity in schedules.reconcile_lines(schedules.ensure_schedule_defaults(ctx)):
+        console.print(text, markup=False, soft_wrap=True)
+
+
 def _build_app(
     tools: list[Tool],
     platform: Platform,
@@ -839,7 +862,7 @@ def _build_app(
     unattended: bool = False,
     settings: SettingsStore | None = None,
     prompt_link_mode: bool = False,
-    daemon_default_warnings: DaemonDefaultWarnings | None = None,
+    daemon_default_warnings: ScheduleDefaultWarnings | None = None,
     disk_pressure: Callable[..., DiskPressure] | None = None,
     timer_cache: systemd_daemon.TimerStateCache | None = None,
     competing: Callable[..., tuple[systemd_daemon.CompetingUnit, ...]] | None = None,
@@ -1001,7 +1024,6 @@ def _build_app(
                 for bundle in bundles
                 if bundle.id not in SHELL_INIT_TOOLS
             ),
-            *((daemon,) if daemon is not None else ()),
             *redirects,
             *desktop,
         ],
@@ -1013,12 +1035,7 @@ def _build_app(
 
     installed_now = version_refresh.installed_or(installed)
     schedule_inputs = ScheduleInputs(
-        context=schedules.context_for(
-            platform.os,
-            checkout=Path(__file__).resolve().parent,
-            present=installed_now,
-            read_models=cursor_shim.read_models,
-        ),
+        context=_schedule_context(platform, installed_now),
         present=installed_now,
         disk_pressure=disk_pressure,
         competing=competing,
@@ -1240,7 +1257,7 @@ def _run_interactive_wizard(
     settings: SettingsStore,
     prompt_link_mode: bool,
 ) -> int:
-    warnings = DaemonDefaultWarnings()
+    warnings = ScheduleDefaultWarnings()
     with _stdin_on_tty():
         # Only the genuine interactive wizard flow auto-applies the daemon
         # default (allowlist at the _build_app call site). _build_app builds
@@ -1262,7 +1279,7 @@ def _run_interactive_wizard(
     # app.run() does not join the thread worker, so this waits on the
     # collector the closure finishes, bounded so a wedged worker delays
     # rather than hangs.
-    messages, completed = warnings.wait(DAEMON_DEFAULT_WAIT_SECONDS)
+    messages, completed = warnings.wait(SCHEDULE_DEFAULT_WAIT_SECONDS)
     for message in messages:
         console.print(message)
     if not completed:
@@ -1571,19 +1588,28 @@ def main(argv: list[str]) -> int:
     post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
     post_install.use_git_runner(run_git_isolated)
     refresh, updates, _, install = _build_services(tools, platform)
-    outcomes = run_wizard(
-        tools,
-        prompter,
-        console,
-        options,
-        refresh=refresh,
-        updates=updates,
-        install=install,
-        terminal_sync=lambda: _sync_terminals(platform),
-        on_mismatch=_ask_mismatch,
-    )
-    if outcomes is None:
-        return 0
+    # D-12: the install run and the reconcile that follows it share one hold of the run lock.
+    run_lock = runlock.try_acquire(runlock.run_lock_path(), runlock.INSTALLER_JOB)
+    if run_lock is None:
+        console.print(runlock.BUSY_MESSAGE, markup=False, soft_wrap=True)
+        return 1
+    try:
+        outcomes = run_wizard(
+            tools,
+            prompter,
+            console,
+            options,
+            refresh=refresh,
+            updates=updates,
+            install=install,
+            terminal_sync=lambda: _sync_terminals(platform),
+            on_mismatch=_ask_mismatch,
+        )
+        if outcomes is None:
+            return 0
+        _reconcile_headless(console, tools, platform, refresh)
+    finally:
+        run_lock.release()
     path_error: str | None = None
     verify_error: str | None = None
     if ran_anything(outcomes):

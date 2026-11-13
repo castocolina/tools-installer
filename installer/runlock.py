@@ -21,6 +21,8 @@ from installer.atomic import read_capped
 from installer.locations import ensure_dir
 
 INSTALLER_JOB = "installer"
+# What a headless install or uninstall prints, then exits 1, while a scheduled run holds the lock.
+BUSY_MESSAGE = "A scheduled run is running; try again when it finishes."
 _HOLDER_READ_CAP = 4096
 
 

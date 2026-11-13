@@ -10,7 +10,6 @@ with no screen changes.
 
 import contextlib
 import os
-import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -1405,42 +1404,6 @@ def linux_daemon_policy(
         clear_decided=lambda: systemd_daemon.clear_decided(state_path),
         owned=_owned,
     )
-
-
-# A wedged or never-dispatched worker costs this delay, never a hang.
-DAEMON_DEFAULT_WAIT_SECONDS = 5.0
-
-
-class DaemonDefaultWarnings:
-    """Collects warnings from the on-by-default apply and says when it finished.
-
-    The daemon default runs on a Textual thread worker that ``app.run()`` does
-    not join. Without this event the competing-mechanism disclosure is printed
-    only when that worker happens to finish before the CLI's next line, and the
-    ``summary is None`` abort branch returns before any later print at all.
-    ``wait`` returns immediately, with completion True, when the collector was
-    never armed, so a run with no auto-apply pays nothing.
-    """
-
-    def __init__(self) -> None:
-        self._messages: list[str] = []
-        self._armed = False
-        self._finished = threading.Event()
-
-    def append(self, message: str) -> None:
-        self._messages.append(message)
-
-    def arm(self) -> None:
-        self._armed = True
-
-    def finish(self) -> None:
-        self._finished.set()
-
-    def wait(self, timeout: float) -> tuple[tuple[str, ...], bool]:
-        if not self._armed:
-            return (), True
-        completed = self._finished.wait(timeout)
-        return tuple(self._messages), completed
 
 
 def ensure_daemon_default(
