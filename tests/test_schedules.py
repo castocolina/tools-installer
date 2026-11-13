@@ -1,6 +1,8 @@
 """The Schedules core: the closed table, the slot grid, the state file and the log reader."""
 
 import json
+import os
+import tempfile
 import time
 from collections.abc import Iterator
 from datetime import datetime
@@ -9,9 +11,10 @@ from typing import Literal
 
 import pytest
 
-from installer import receipts
+from installer import receipts, systemd_daemon
 from installer.daemon import DaemonScheduleError
 from installer.ownership import NATIVE_OWNERS
+from installer.runlock import run_lock_path, try_acquire
 from installer.schedules import (
     INTERVAL_MESSAGE,
     MODEL_CHARSET_MESSAGE,
@@ -19,18 +22,24 @@ from installer.schedules import (
     SCHEDULES,
     START_MESSAGE,
     UPDATE_SCHEDULE_IDS,
+    LastRun,
+    ScheduleContext,
     ScheduleRecord,
     ScheduleState,
     calendar_dicts,
     clean_unit_path,
     clear_damage,
+    context_for,
     damaged_path,
     default_data_dir,
     default_log_path,
     default_state_path,
+    last_cell,
     load_state,
     next_run,
     on_calendar,
+    parse_log,
+    read_last_runs,
     record_for,
     save_state,
     schedule_by_id,
@@ -496,3 +505,210 @@ def test_update_result_line_bounds_the_detail() -> None:
         "failed: update failed",
         1,
     )
+
+
+def _stamp(day: int, hour: int, minute: int, second: int = 0) -> str:
+    """A log timestamp: local wall-clock time with its UTC offset, as the runner writes it."""
+    return datetime(2026, 11, day, hour, minute, second).astimezone().isoformat(timespec="seconds")
+
+
+def _log(*entries: tuple[str, str, str]) -> str:
+    return "".join(f"{stamp} {job} {rest}\n" for stamp, job, rest in entries)
+
+
+def test_read_last_runs(tmp_path: Path) -> None:
+    log = tmp_path / "schedules.log"
+    log.write_text(
+        _log(
+            (_stamp(13, 12, 0, 1), "update-claude", "start"),
+            (_stamp(13, 12, 0, 1), "cache-cleanup", "start"),
+            (_stamp(13, 12, 0, 2), "cache-cleanup", "ran: uv cache prune (exit 0)"),
+            (_stamp(13, 12, 0, 4), "update-claude", "ok: up to date"),
+            (_stamp(13, 12, 0, 9), "cache-cleanup", "ok: pruned uv, pnpm"),
+            (_stamp(13, 12, 0, 10), "cache-cleanup", "ran: late line"),
+            (_stamp(13, 12, 1, 0), "update-pi", "skipped: pi owned by bun"),
+            (_stamp(13, 12, 2, 0), "update-opencode", "failed: boom"),
+        )
+        + "not a log line\n"
+        + "garbage-time update-pi ok: no\n"
+        + "2026-11-13T12:03:00+01:00 only-two\n"
+    )
+    runs = read_last_runs(log, tmp_path / "run.lock")
+
+    claude = runs["update-claude"]
+    assert (claude.word, claude.text) == ("ok", "ok: up to date")
+    assert claude.at == datetime(2026, 11, 13, 12, 0, 4)
+    cache = runs["cache-cleanup"]
+    assert (cache.word, cache.text) == ("ok", "ok: pruned uv, pnpm")
+    assert runs["update-pi"].word == "skipped"
+    assert runs["update-opencode"].word == "failed"
+    assert "update-copilot" not in runs  # rendered as never
+
+
+def test_a_trailing_start_is_running_only_for_the_live_holder(tmp_path: Path) -> None:
+    log = tmp_path / "schedules.log"
+    lock = tmp_path / "run.lock"
+    log.write_text(_log((_stamp(13, 12, 0, 1), "update-claude", "start")))
+
+    interrupted = read_last_runs(log, lock)["update-claude"]
+    assert (interrupted.word, interrupted.text) == ("interrupted", "failed: interrupted")
+    assert interrupted.at == datetime(2026, 11, 13, 12, 0, 1)
+
+    other = try_acquire(lock, "update-pi")
+    assert other is not None
+    assert read_last_runs(log, lock)["update-claude"].word == "interrupted"
+    other.release()
+
+    mine = try_acquire(lock, "update-claude")
+    assert mine is not None
+    assert read_last_runs(log, lock)["update-claude"].word == "running"
+    mine.release()
+
+
+def test_a_result_after_a_start_wins_and_a_start_after_a_result_wins(tmp_path: Path) -> None:
+    text = _log(
+        (_stamp(13, 1, 0), "update-pi", "start"),
+        (_stamp(13, 1, 1), "update-pi", "ok: up to date"),
+        (_stamp(13, 7, 0), "update-pi", "start"),
+    )
+    assert parse_log(text, running_job=None)["update-pi"].word == "interrupted"
+    assert parse_log(text, running_job="update-pi")["update-pi"].word == "running"
+
+
+def test_a_missing_log_reads_as_nothing_and_a_non_file_is_an_error(tmp_path: Path) -> None:
+    assert read_last_runs(tmp_path / "none.log", tmp_path / "run.lock") == {}
+    directory = tmp_path / "dir.log"
+    directory.mkdir()
+    with pytest.raises(OSError, match="schedules.log is not a regular file"):
+        read_last_runs(directory, tmp_path / "run.lock")
+
+
+def test_read_last_runs_sanitizes(tmp_path: Path) -> None:
+    log = tmp_path / "schedules.log"
+    stamp = _stamp(13, 12, 0)
+    log.write_bytes(
+        f"{stamp} update-claude failed: \x1b[31mbad\x1b[0m [red]markup[/red] \xff\n".encode(
+            "latin-1"
+        )
+    )
+    last = read_last_runs(log, tmp_path / "run.lock")["update-claude"]
+    assert "\x1b" not in last.text
+    assert "[red]markup[/red]" in last.text
+    assert last.word == "failed"
+
+
+NOW = datetime(2026, 11, 13, 12, 30)
+
+
+@pytest.mark.parametrize(
+    ("last", "expected"),
+    (
+        (LastRun(datetime(2026, 11, 13, 12, 0), "ok", "ok: x"), "✓ 12:00"),
+        (LastRun(datetime(2026, 11, 13, 12, 0), "skipped", "skipped: x"), "– 12:00"),
+        (LastRun(datetime(2026, 11, 13, 12, 0), "failed", "failed: x"), "! 12:00"),
+        (LastRun(datetime(2026, 11, 13, 12, 0), "interrupted", "failed: interrupted"), "! 12:00"),
+        (LastRun(datetime(2026, 11, 13, 12, 0), "running", "running"), "running"),
+        (None, "never"),
+        (LastRun(datetime(2026, 11, 11, 23, 59), "ok", "ok: x"), "✓ 2d"),
+        (LastRun(datetime(2026, 11, 12, 23, 59), "ok", "ok: x"), "✓ 1d"),
+        (LastRun(datetime(2026, 6, 16, 12, 0), "ok", "ok: x"), "✓ 150d".replace("150", ">99")),
+        (LastRun(datetime(2026, 11, 13, 12, 30, 30), "ok", "ok: x"), "✓ 12:30"),
+        (LastRun(None, "failed", "failed: x"), "!"),
+    ),
+)
+def test_last_cell(last: LastRun | None, expected: str) -> None:
+    assert last_cell(last, NOW) == expected
+
+
+def test_a_result_just_ahead_of_the_clock_shows_its_own_time() -> None:
+    skewed = LastRun(datetime(2026, 11, 13, 12, 30, 30), "ok", "ok: x")
+    assert last_cell(skewed, datetime(2026, 11, 13, 12, 30, 0)) == "✓ 12:30"
+
+
+def test_a_log_result_under_a_minute_old_never_reads_as_a_future_time(tmp_path: Path) -> None:
+    # Held-out edge (SPEC R1): a result stamped moments before `now` shows that time.
+    now = datetime(2026, 11, 13, 12, 0, 20)
+    log = tmp_path / "schedules.log"
+    log.write_text(_log((_stamp(13, 12, 0, 5), "update-claude", "ok: up to date")))
+    last = read_last_runs(log, tmp_path / "run.lock")["update-claude"]
+    assert last.at is not None
+    assert last.at <= now
+    assert last_cell(last, now) == "✓ 12:00"
+
+
+def _fake_models(_path: Path) -> tuple[str, ...] | None:
+    return None
+
+
+def test_context_for_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contexts: list[ScheduleContext] = []
+    for name in ("one", "two"):
+        home = tmp_path / name
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        context = context_for("fedora", checkout=tmp_path / "repo", read_models=_fake_models)
+        contexts.append(context)
+        assert context.platform_os == "fedora"
+        assert context.home == home
+        assert context.unit_dir == systemd_daemon.user_unit_dir(home, os.environ)
+        assert context.launch_agents_dir == home / "Library/LaunchAgents"
+        assert context.data_dir == default_data_dir()
+        assert context.state_path == default_state_path()
+        assert context.log_path == default_log_path("fedora")
+        assert context.lock_path == run_lock_path()
+        assert context.myshellrc_path == home / ".myshellrc"
+        assert (
+            context.launchd_log_path == home / "Library/Logs/tools-installer/schedules-launchd.log"
+        )
+        assert context.legacy_bin_dir == home / ".local/bin"
+        assert context.checkout == tmp_path / "repo"
+        assert context.read_models is _fake_models
+        assert context.uid == os.getuid()
+    assert contexts[0].state_path != contexts[1].state_path
+    assert contexts[0].unit_dir != contexts[1].unit_dir
+
+
+def test_context_for_follows_xdg_and_stores_its_seams(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    calls: list[list[str]] = []
+
+    def run(cmd: list[str]) -> None:
+        calls.append(cmd)
+
+    def read_output(cmd: list[str]) -> str:
+        calls.append(cmd)
+        return ""
+
+    context = context_for(
+        "macos",
+        checkout=tmp_path,
+        read_models=_fake_models,
+        run=run,
+        read_output=read_output,
+        which=lambda _name: None,
+        present=lambda tool: tool == "claude",
+    )
+    assert context.data_dir == tmp_path / "data/tools-installer/schedules"
+    assert context.unit_dir == tmp_path / "config/systemd/user"
+    assert context.log_path == tmp_path / "home/Library/Logs/tools-installer/schedules.log"
+    assert context.tmpdir == str(tmp_path / "tmp")
+    assert context.run is run
+    assert context.read_output is read_output
+    assert context.present("claude") and not context.present("pi")
+    assert context.which("uv") is None
+    assert calls == []  # building a context starts nothing
+
+
+def test_context_for_tmpdir_falls_back_to_the_temp_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TMPDIR", raising=False)
+    context = context_for("debian", checkout=tmp_path, read_models=_fake_models)
+    assert context.tmpdir == tempfile.gettempdir()
+    assert context.present("claude") is False

@@ -40,6 +40,10 @@ WATCHED_DIRS: tuple[str, ...] = (
     ".local/state/tools-installer/receipts",
     ".config/environment.d",
     ".local/state/tools-installer/config",
+    # The schedule state file, log and lock files are deliberately unwatched: a live scheduled
+    # run rewrites them while the suite runs (24.2 RESEARCH Pitfall 3).
+    ".local/share/tools-installer/schedules",
+    "Library/LaunchAgents",
 )
 
 BACKUP_SUFFIX = ".tools-installer.old"

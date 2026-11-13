@@ -9,18 +9,21 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Literal, cast
 
-from installer import daemon, receipts, runlock
+from installer import daemon, receipts, runlock, systemd_daemon
 from installer.atomic import atomic_write_bytes, atomic_write_text, read_capped
 from installer.locations import ensure_dir
 from installer.ownership import NATIVE_OWNERS, OS_PACKAGE_OWNER
 from installer.receipts import ReceiptArtifact
+from installer.run import OutputRunner, Runner, run_captured
 from installer.sanitize import sanitize_log_line
 from installer.update import UpdateOutcome
 
@@ -454,3 +457,152 @@ def update_result_line(
     if outcome.postinstall_warning:
         line += f"; postinstall warning: {_first_line(outcome.postinstall_warning, 'see log')}"
     return line, code
+
+
+Word = Literal["ok", "skipped", "failed", "running", "interrupted"]
+
+
+@dataclass(frozen=True)
+class LastRun:
+    """A schedule's newest log entry; `at` is naive local wall-clock time."""
+
+    at: datetime | None
+    word: Word
+    text: str
+
+
+_RESULT_WORDS: Final = ("ok", "skipped", "failed")
+_INTERRUPTED_TEXT: Final = "failed: interrupted"
+_LOG_FIELDS: Final = 3
+
+
+def _local_naive(moment: datetime) -> datetime:
+    return moment.astimezone().replace(tzinfo=None) if moment.tzinfo else moment
+
+
+def parse_log(text: str, *, running_job: str | None) -> dict[str, LastRun]:
+    """Each schedule id's newest `start` or result line; `ran:` lines and bad lines are ignored.
+
+    A line is `<ISO-8601 time> <id> <rest>`. Later lines win (the log is append-only), so a
+    trailing `start` means the run has no result yet: `running` while `running_job` names it,
+    else `interrupted`.
+    """
+    latest: dict[str, LastRun] = {}
+    for line in text.splitlines():
+        fields = line.split(" ", 2)
+        if len(fields) != _LOG_FIELDS:
+            continue
+        stamp, job, rest = fields
+        try:
+            at = _local_naive(datetime.fromisoformat(stamp))
+        except ValueError:
+            continue
+        rest = sanitize_log_line(rest).strip()
+        if rest == "start":
+            word: Word = "running" if running_job == job else "interrupted"
+            latest[job] = LastRun(at, word, "running" if word == "running" else _INTERRUPTED_TEXT)
+            continue
+        result = rest.split(":", 1)[0]
+        if result in _RESULT_WORDS and rest.startswith(f"{result}:"):
+            latest[job] = LastRun(at, cast(Word, result), rest)
+    return latest
+
+
+def read_last_runs(log_path: Path, lock_path: Path) -> dict[str, LastRun]:
+    """The log's last run per schedule; a missing log is `{}`, an unreadable one raises OSError."""
+    try:
+        raw = read_capped(log_path, LOG_CAP_BYTES * 2, follow_symlinks=False)
+    except FileNotFoundError:
+        return {}
+    if raw is None:
+        raise OSError("schedules.log is not a regular file")
+    live = runlock.holder(lock_path)
+    return parse_log(raw.decode("utf-8", errors="replace"), running_job=live.job if live else None)
+
+
+_GLYPHS: Final[dict[str, str]] = {
+    "ok": "✓",
+    "skipped": "–",
+    "failed": "!",
+    "interrupted": "!",
+}
+_DAYS_CAP = 99
+
+
+def last_cell(last: LastRun | None, now: datetime) -> str:
+    """The Last column: a glyph and `HH:MM` for today (or a skewed future), else days ago."""
+    if last is None:
+        return "never"
+    if last.word == "running":
+        return "running"
+    glyph = _GLYPHS[last.word]
+    if last.at is None:
+        return glyph
+    if last.at.date() >= now.date():
+        return f"{glyph} {last.at:%H:%M}"
+    days = (now.date() - last.at.date()).days
+    return f"{glyph} >{_DAYS_CAP}d" if days > _DAYS_CAP else f"{glyph} {days}d"
+
+
+@dataclass(frozen=True)
+class ScheduleContext:
+    """Everything a schedule engine, run entry, view or e2e driver needs, with injected seams."""
+
+    platform_os: str
+    home: Path
+    unit_dir: Path
+    launch_agents_dir: Path
+    data_dir: Path
+    state_path: Path
+    log_path: Path
+    lock_path: Path
+    myshellrc_path: Path
+    launchd_log_path: Path
+    legacy_bin_dir: Path
+    checkout: Path
+    tmpdir: str
+    uid: int
+    environ: Mapping[str, str]
+    run: Runner
+    read_output: OutputRunner
+    which: Callable[[str], str | None]
+    present: Callable[[str], bool]
+    read_models: Callable[[Path], tuple[str, ...] | None]
+
+
+def context_for(
+    platform_os: str,
+    *,
+    checkout: Path,
+    read_models: Callable[[Path], tuple[str, ...] | None],
+    run: Runner = run_captured,
+    read_output: OutputRunner = systemd_daemon.query_systemctl,
+    which: Callable[[str], str | None] = shutil.which,
+    present: Callable[[str], bool] = lambda _tool: False,
+    environ: Mapping[str, str] = os.environ,
+) -> ScheduleContext:
+    """Fill a context's paths from HOME now; `read_models` is required so a forgotten wiring
+    is a type error, never a silent "model unverified". Starts no process."""
+    home = Path.home()
+    return ScheduleContext(
+        platform_os=platform_os,
+        home=home,
+        unit_dir=systemd_daemon.user_unit_dir(home, environ),
+        launch_agents_dir=home / "Library" / "LaunchAgents",
+        data_dir=default_data_dir(),
+        state_path=default_state_path(),
+        log_path=default_log_path(platform_os),
+        lock_path=runlock.run_lock_path(),
+        myshellrc_path=home / ".myshellrc",
+        launchd_log_path=home / "Library" / "Logs" / "tools-installer" / "schedules-launchd.log",
+        legacy_bin_dir=home / ".local" / "bin",
+        checkout=checkout,
+        tmpdir=environ.get("TMPDIR") or tempfile.gettempdir(),
+        uid=os.getuid(),
+        environ=environ,
+        run=run,
+        read_output=read_output,
+        which=which,
+        present=present,
+        read_models=read_models,
+    )
