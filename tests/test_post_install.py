@@ -450,6 +450,44 @@ def test_user_export_skips_missing_and_non_regular_files() -> None:
     assert "tweak:neovim" in (home / ".myshellrc").read_text()
 
 
+def _write_neovim_block_then(export_in: str) -> Path:
+    home = Path.home()
+    _neovim_lines()  # the installer writes its block and record
+    rc = home / ".myshellrc"
+    assert shell_init_record(rc) == ("neovim",)
+    rc.write_text("export KEEP=1\n" + rc.read_text())
+    (home / export_in).write_text("export EDITOR=vim\n")
+    return rc
+
+
+@pytest.mark.parametrize("shell_file", [".zshrc", ".zshenv", ".profile"])
+def test_neovim_yield_strips_the_block_it_wrote_earlier(shell_file: str) -> None:
+    rc = _write_neovim_block_then(shell_file)
+    lines = _neovim_lines()
+    assert len(lines) == 1
+    assert lines[0].startswith("Kept your EDITOR (")
+    assert "tweak:neovim" not in rc.read_text()
+    assert "export KEEP=1" in rc.read_text()
+    assert shell_init_record(rc) is None
+
+
+def test_neovim_reconfigure_with_a_recorded_block_also_strips_it() -> None:
+    rc = _write_neovim_block_then(".zshrc")
+    output = apply_install_tuning(_shell_init_tool("neovim"), _mutable(), skip_recorded=True)
+    assert output.lines[0].startswith("Kept your EDITOR (")
+    assert "tweak:neovim" not in rc.read_text()
+    assert shell_init_record(rc) is None
+
+
+def test_neovim_unreadable_startup_file_keeps_the_block() -> None:
+    home = Path.home()
+    _neovim_lines()
+    (home / ".zshrc").write_bytes(b"#" * ((1 << 20) + 1))
+    assert _neovim_lines()[0].startswith("Could not read ~/.zshrc")
+    assert "tweak:neovim" in (home / ".myshellrc").read_text()
+    assert shell_init_record(home / ".myshellrc") == ("neovim",)
+
+
 def test_user_export_fails_closed_on_an_oversized_file() -> None:
     (Path.home() / ".zshrc").write_bytes(b"#" * ((1 << 20) + 1))
     assert _neovim_lines() == (

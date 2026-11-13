@@ -68,9 +68,11 @@ from installer.run import CommandError, OutputRunner, command_error_line
 from installer.sanitize import sanitize_log_line
 from installer.terminal_shell import apply_alacritty_keys
 from installer.tweaks import (
+    forget_shell_init,
     record_shell_init,
     shell_init_bundle,
     shell_init_record,
+    strip_tweak_block,
     user_export,
 )
 
@@ -274,12 +276,17 @@ def _tune_shell_init(tool: Tool, platform: Platform, *, skip_recorded: bool) -> 
     if bundle is None or (bundle.platforms and platform.os not in bundle.platforms):
         return ()
     rc_path = Path.home() / ".myshellrc"
+    yielded = user_export(bundle.yields_to, tool.id) if bundle.yields_to else None
+    if yielded is not None:
+        # The user's own export wins: nothing written, recorded or pending. A block written
+        # before they added it would still override an export in an earlier-read file, so it goes
+        # (an unreadable startup file proves nothing, so then it stays).
+        if yielded.kept:
+            strip_tweak_block(tool.id, rc_path)
+            forget_shell_init(rc_path, tool.id)
+        return (yielded.line,)
     if skip_recorded and tool.id in (shell_init_record(rc_path) or ()):
         return ()
-    if bundle.yields_to:
-        yielded = user_export(bundle.yields_to, tool.id)
-        if yielded is not None:  # the user's own export wins: nothing written, recorded or pending
-            return (yielded,)
     tweak_policy(
         bundle,
         rc_path=rc_path,
