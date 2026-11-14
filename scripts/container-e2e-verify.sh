@@ -2738,8 +2738,15 @@ landing_stage() {
   fi
 }
 
+# The driver refuses to run without this file, which toolbox and distrobox hosts never have
+# (tests/e2e_landing_driver.py LANDING_MARKER).
+write_landing_marker() {
+  exec_root sh -c "printf 'audit-landing\n' > /etc/tools-installer-e2e-landing"
+}
+
 landing_bootstrap() {
   landing_stage start start_container replace
+  landing_stage marker write_landing_marker
   landing_stage prereqs install_root_prereqs
   landing_stage tester create_tester
   landing_stage workspace copy_workspace

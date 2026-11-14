@@ -483,6 +483,57 @@ def test_the_driver_does_not_run_outside_a_container(
     assert "only inside the disposable container" in capsys.readouterr().out
 
 
+def _container_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, engine: bool, marker: bool, home: Path
+) -> None:
+    """A container whose engine file, harness marker and HOME are as given."""
+    engine_file = tmp_path / "containerenv"
+    if engine:
+        engine_file.write_text("", encoding="utf-8")
+    marker_file = tmp_path / "landing-marker"
+    if marker:
+        marker_file.write_text("audit-landing\n", encoding="utf-8")
+    monkeypatch.setattr(driver, "_ENGINE_FILES", (engine_file,))
+    monkeypatch.setattr(driver, "LANDING_MARKER", marker_file)
+    monkeypatch.setattr(driver, "_TESTER_HOME", Path("/home/tester"))
+    monkeypatch.setenv("HOME", str(home))
+
+
+@pytest.mark.parametrize(
+    ("engine", "marker", "home", "runs"),
+    [
+        (True, True, "/home/tester", True),
+        (False, True, "/home/tester", False),  # no container engine file
+        (True, False, "/home/tester", False),  # toolbox/distrobox: engine file, no harness marker
+        (True, True, "/home/someone", False),  # the real HOME is mounted
+        (True, False, "/home/someone", False),
+    ],
+)
+def test_the_driver_needs_the_container_the_marker_and_the_tester_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    engine: bool,
+    marker: bool,
+    home: str,
+    runs: bool,
+) -> None:
+    """F13: `/run/.containerenv` is also in toolbox and distrobox, which mount the real HOME."""
+    _container_files(monkeypatch, tmp_path, engine=engine, marker=marker, home=Path(home))
+    assert vars(driver)["_in_container"]() is runs
+    if not runs:
+        assert driver.main(["install", "opencode"]) == 2
+        assert "only inside the disposable container" in capsys.readouterr().out
+
+
+def test_the_script_writes_the_marker_the_driver_requires() -> None:
+    writer = _function("write_landing_marker")
+    assert str(driver.LANDING_MARKER) in writer
+    body = _function("landing_bootstrap")
+    assert "landing_stage marker write_landing_marker" in body
+    assert body.index("landing_stage start") < body.index("landing_stage marker")
+
+
 # --- the step order and the shell helpers ---------------------------------------------------------
 
 _STEP = re.compile(r"^  landing_step (\S+) (.+?) \|\| failed=1$", re.MULTILINE)

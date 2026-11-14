@@ -809,9 +809,22 @@ def accepts(args: Sequence[str]) -> bool:
     return _parse(args) is not None
 
 
+# The harness script writes the marker as root inside its own container (write_landing_marker).
+# `/run/.containerenv` alone is not proof: toolbox and distrobox have it too, and they mount the
+# real HOME, where this driver would install, remove and register for real.
+LANDING_MARKER = Path("/etc/tools-installer-e2e-landing")
+_ENGINE_FILES = (Path("/run/.containerenv"), Path("/.dockerenv"))
+_TESTER_HOME = Path("/home/tester")
+
+
 def _in_container() -> bool:
-    """The driver installs and removes real tools: it runs in a container or not at all."""
-    return Path("/run/.containerenv").exists() or Path("/.dockerenv").exists()
+    """The driver installs and removes real tools: it runs in the harness's container, as its
+    tester, or not at all."""
+    return (
+        any(file.exists() for file in _ENGINE_FILES)
+        and LANDING_MARKER.is_file()
+        and Path.home() == _TESTER_HOME
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
