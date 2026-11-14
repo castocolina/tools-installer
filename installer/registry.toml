@@ -1552,7 +1552,7 @@ cmd = "opencode"
 priority = "P0"
 audience = "human"
 tier = "user"
-verified = 2026-11-04
+verified = 2026-11-14
 desc = "Open source coding agent for the user, useful when teams want provider-flexible terminal workflows."
 # real companion set for this ai-tier catalog (Phase 8, REQ-recommends-wiring-agent-hosts):
 # codegraph (MCP server, host-agnostic), graphify (explicitly supports this host per its
@@ -1560,30 +1560,43 @@ desc = "Open source coding agent for the user, useful when teams want provider-f
 recommends = ["codegraph", "graphify"]
 post_install = ["apply_agent_tuning"]
 owner_probes = ["pacman"]
-# Verified 2026-10-10: https://opencode.ai/install hardcodes
-# INSTALL_DIR=$HOME/.opencode/bin and moves the binary there. Live host has
-# the file at that path.
-# Verified 2026-11-04: the install script writes the binary to ~/.opencode/bin/opencode
-# (INSTALL_DIR lines 80-81, install lines 367-375), so `paths` is that binary, a leaf.
-# `update` is `opencode upgrade` (anomalyco/opencode v1.19.5, packages/opencode/src/cli/cmd/upgrade.ts);
-# without --major it stays on OpenCode 1. No `remove`: v1.19.5 cli/cmd/uninstall.ts on a curl
-# install rewrites the shell rc (cleanShellConfig, whatever --keep-config says), always deletes the
-# cache and state dirs, and only prints an `rm` hint for the binary. None of that is receipt-proven,
-# so the receipt-proven binary is the whole removal.
+# Verified 2026-10-10: the installer hardcodes INSTALL_DIR=$HOME/.opencode/bin, and the v2
+# installer uses the same directory.
+# Verified 2026-11-14 (OpenCode 2, npm @opencode/cli 2.3.0): https://opencode.ai/v2/install writes
+# the binary to ~/.opencode/bin/opencode and always writes an `opencode2` shim next to it (lines
+# 345-374), so both files are `paths` leaves. `--no-modify-path` keeps it from editing shell rc
+# files. No `update` key: an update re-runs this v2 script through update.py's script branch.
+# v1's `opencode upgrade` stays on OpenCode 1 without --major (v1.19.5 upgrade.ts lines 22, 79,
+# 102), and `upgrade --major` pipes the v2 installer without --no-modify-path.
+# `remove` stops the background `opencode serve --service` through the v2-only `opencode2` shim
+# before the proven paths go; `service stop` is a no-op without a registration (v2.2.6
+# packages/client/src/effect/service.ts). The head binds only to a receipt-proven `opencode2`, so
+# an OpenCode 1 receipt (only `opencode` proven) skips the recipe: v1.19.5 has no `service` command
+# (strict yargs, default `$0 [project]`). A user who upgraded OpenCode 1 to 2 outside the installer
+# keeps a receipt without `opencode2`, so the recipe is skipped there too until an installer update
+# rewrites the receipt (a recorded limit). v2's own `uninstall` is not used: it deletes
+# ~/.cache/opencode and may edit shell rc files. The landing container check (24.3-11) proves the
+# install, update and removal; this text does not.
+# Latest: npm `@opencode/cli`, because GitHub's releases/latest still serves v1.19.5 (the 1.x line).
+# Brew: homebrew/core `opencode` (2.3.0). The tap `anomalyco/tap/opencode` serves 1.19.5 and
+# conflicts with core `opencode`; a host with the tap formula stays brew-owned on 1.19.5
+# (`ownership.listed_name` reads a tap formula by its last segment). pacman `extra/opencode`
+# serves 2.2.7 at verify time.
 [[tool.method]]
 kind = "script"
-url = "https://opencode.ai/install"
+url = "https://opencode.ai/v2/install"
 shell = "bash"
 args = ["--no-modify-path"]
 bin_dir = "~/.opencode/bin"
-paths = ["~/.opencode/bin/opencode"]
-update = ["opencode", "upgrade"]
+paths = ["~/.opencode/bin/opencode", "~/.opencode/bin/opencode2"]
+remove = ["opencode2", "service", "stop"]
+latest_npm = "@opencode/cli"
 [[tool.method]]
 kind = "pacman"
 package = "opencode"
 [[tool.method]]
 kind = "brew"
-formula = "anomalyco/tap/opencode"
+formula = "opencode"
 
 # Verified 2026-09-06: the install script was fetched live (curl -fsS
 # https://cursor.com/install) and read verbatim this session; it self-detects
@@ -1782,6 +1795,11 @@ desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its ow
 # Verified 2026-11-07 (Phase 23, CONF-02/CONF-03): hosts come from
 # postinstall.present_harnesses (moved there in 23.1-02); receipt.hooks records the registered hosts. The
 # new-host sweep (CONF-02) lands in plan 23-07.
+# Verified 2026-11-14 (audit 2026-11-13, codegraph v1.6.2): from 24.3-08 the hook also targets copilot
+# as codegraph's `copilot-cli` target, and Pi as `pi` only behind a `codegraph install --print-config pi`
+# gate; v1.6.2 has no `pi` target, so Pi stays unregistered until codegraph ships one. Like its claude,
+# codex, opencode and cursor targets, copilot-cli replaces an existing `codegraph` entry in
+# ~/.copilot/mcp-config.json, and its uninstall deletes that entry (review R1-17).
 postinstall = "codegraph-mcp-register"
 [[tool.method]]
 kind = "github_release"
@@ -3198,11 +3216,16 @@ category = "ai"
 cmd = "pi"
 priority = "P1"
 audience = "human"
-desc = "Minimal coding-agent harness; setup remains interactive, and uninstall uses pnpm remove."
+desc = "Minimal coding-agent harness with built-in MCP and its own updater; the host-setup handoff installs it with pnpm."
 tier = "user"
-verified = 2026-11-04
-# Verified 2026-11-04: the host-setup handoff installs @earendil-works/pi-coding-agent through pnpm
-# (installer/host_setup.py); that package is on the npm registry (latest 1.5.0). No script keys.
+verified = 2026-11-14
+# Verified 2026-11-14: MCP is built in since 0.99.0 (CHANGELOG.md): `pi mcp add|remove|list|login|logout`
+# reads ~/.pi/agent/mcp.json, and `pi update` self-updates the install (refused under another package
+# manager such as Nix). The vendor README now leads with `curl -fsSL https://pi.dev/install.sh | sh`,
+# which runs sudo for its Node, npm and xz-utils installs on Debian and Alpine, so the method change
+# waits in Backlog 999.13. Pi requires Node.js >=22.19.0 (npm @earendil-works/pi-coding-agent engines;
+# latest 1.5.2 at verify time). The host-setup handoff still installs the package through pnpm
+# (installer/host_setup.py). No script keys.
 requires = ["pnpm"]
 owner_probes = ["host-setup"]
 [[tool.method]]
@@ -3220,7 +3243,7 @@ priority = "P2"
 audience = "both"
 desc = "Official draw.io Desktop release with export CLI; uninstall removes its managed app or AppImage."
 tier = "user"
-verified = 2026-11-03
+verified = 2026-11-14
 [[tool.method]]
 kind = "github_release"
 os = ["debian", "arch", "fedora"]
@@ -3247,8 +3270,8 @@ kind = "app"
 os = ["macos"]
 arch = ["arm64"]
 url = "https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/draw.io-arm64-{ver}.zip"
-version = "32.6.1"
-sha256 = "2f15c0a280e27d43426849de8e0437440fb02a15ae3a441bf124b4efe91c1c71"
+version = "32.6.10"
+sha256 = "d97a0740fdf835fb9944369b87d86eb9ff1e37f2e0e1306544711f721f977a35"
 app = "draw.io.app"
 cli = "Contents/MacOS/draw.io"
 cli_name = "drawio"
@@ -3257,8 +3280,8 @@ kind = "app"
 os = ["macos"]
 arch = ["amd64"]
 url = "https://github.com/jgraph/drawio-desktop/releases/download/v{ver}/draw.io-x64-{ver}.zip"
-version = "32.6.1"
-sha256 = "e2792a35bd46996a85257d46f52f54b6a081981d7ab65cc5c8056fa6bce15d68"
+version = "32.6.10"
+sha256 = "8994cd728b5fd6eac5da62fa622e68882eeb51ed5d0bec019de4d4a8672b73d0"
 app = "draw.io.app"
 cli = "Contents/MacOS/draw.io"
 cli_name = "drawio"
