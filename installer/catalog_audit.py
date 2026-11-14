@@ -1164,9 +1164,31 @@ def _verify_lines(run: Path) -> list[str]:
 
 
 def _token(text: str) -> str | None:
-    """The first backticked span of `text`, without its backticks."""
-    found = _SPAN_RE.search(text)
-    return found[0][1:-1] if found else None
+    """The first backticked span of `text` that is not a citation, without its backticks."""
+    spans = (span[1:-1] for span in _SPAN_RE.findall(text))
+    return next((span for span in spans if _citation(span, whole=True) is None), None)
+
+
+_HASH_COMMENT_SUFFIXES = frozenset({".py", ".sh", ".bash", ".zsh", ".toml"})
+
+
+def _code_part(line: str, suffix: str) -> str:
+    """The line without its `#` comment, for the languages where `#` starts one.
+
+    shortcut: a quote left open by an apostrophe or a multi-line string
+    is not tracked across lines; upgrade to tokenize if a stale check misreads one.
+    """
+    if suffix not in _HASH_COMMENT_SUFFIXES:
+        return line
+    quote = ""
+    for index, char in enumerate(line):
+        if quote:
+            quote = "" if char == quote and line[index - 1] != "\\" else quote
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index]
+    return line
 
 
 def _line_has(repo: Path, location: str, token: str) -> bool:
@@ -1176,7 +1198,9 @@ def _line_has(repo: Path, location: str, token: str) -> bool:
         target = (repo / name).resolve()
         if not target.is_relative_to(repo.resolve()) or int(number) < 1:
             return False
-        text = target.read_text(encoding="utf-8").splitlines()[int(number) - 1]
+        text = _code_part(
+            target.read_text(encoding="utf-8").splitlines()[int(number) - 1], target.suffix
+        )
     except (OSError, ValueError, IndexError):
         return False
     return re.search(rf"(?<!\w){re.escape(token)}(?!\w)", text) is not None
@@ -1498,11 +1522,7 @@ def _script_findings(model: _Model, repo: Path) -> list[str]:
                 None,
             )
             status = row.effective()
-        elif (
-            row.report == "drift"
-            and (cited := _citation(row.report_source)) is not None
-            and _token(row.report_source) is not None
-        ):
+        elif row.report == "drift" and (cited := _citation(row.report_source)) is not None:
             where, shown, token, status = (
                 cited,
                 row.report_source,
@@ -1520,10 +1540,11 @@ def _script_findings(model: _Model, repo: Path) -> list[str]:
     for name, number, entry, status, shown, disposition, token in sorted(
         found, key=lambda f: f[:5]
     ):
-        fresh = token is None or _line_has(repo, f"{name}:{number}", token)
         state = (
-            "current"
-            if fresh
+            "unchecked"
+            if token is None
+            else "current"
+            if _line_has(repo, f"{name}:{number}", token)
             else f"stale (resolved by {disposition})"
             if _mapped(disposition)
             else "stale"

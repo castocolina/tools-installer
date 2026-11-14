@@ -1179,6 +1179,11 @@ def test_scan_groups_by_file_in_path_order(tmp_path: Path) -> None:
         ("--target=auto", 'A = "--target=auto"', "current"),
         ('"$@"', 'exec "$target" "$@"', "current"),
         ('exec "$target" "$@"', 'exec "$target" "$@"', "current"),
+        ("permission", "# permission was renamed", "stale"),
+        ("permission", "    # permission was renamed", "stale"),
+        ("permission", "KEYS = ()  # was permission", "stale"),
+        ("permission", 'KEYS = ("permission",)  # kept', "current"),
+        ("permission", 'KEYS = "a # b" + "permission"', "current"),
     ],
 )
 def test_stale_citation(
@@ -1989,3 +1994,37 @@ def test_a_finding_needs_a_cited_command_unless_a_script_cite_stands_in(
     assert _add(registry, root, capsys, "alpha", *bare)[0] == catalog_audit.EXIT_REFUSED
     command = ("--check", "update argv", "--status", "ok", "--source", "`alpha upgrade`")
     assert _add(registry, root, capsys, "alpha", *command)[0] == 0
+
+
+# ---- 24.3 review F2: the stale check reads a declared token, never the citation ----
+
+
+@pytest.mark.parametrize(
+    ("line", "state"),
+    [
+        ('KEYS = (("permission",), "allow")', "current"),
+        ("# permission is documented here", "stale"),
+        ("KEYS = ()", "stale"),
+    ],
+)
+def test_stale_check_of_a_report_row_uses_the_token_not_the_citation(
+    line: str, state: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cited = "`x.py:3` writes the `permission` key the schema deprecates"
+    rows = (_CHECK_ROWS[0], f"| update argv | drift | {cited} |", *_CHECK_ROWS[2:])
+    registry, root, repo = _arrange(
+        tmp_path, alpha=_report("alpha", rows=rows), repo_files={"x.py": f"a\nb\n{line}\n"}
+    )
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    assert _script_row(_summary_text(root), "x.py:3")[4] == state
+
+
+def test_stale_check_without_a_declared_token_says_unchecked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rows = (_CHECK_ROWS[0], "| update argv | drift | x.py:3 writes a bad key |", *_CHECK_ROWS[2:])
+    registry, root, repo = _arrange(
+        tmp_path, alpha=_report("alpha", rows=rows), repo_files={"x.py": "a\nb\nc\n"}
+    )
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    assert _script_row(_summary_text(root), "x.py:3")[4] == "unchecked"
