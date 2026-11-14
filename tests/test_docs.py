@@ -503,3 +503,99 @@ def test_link_checker_checks_cross_document_fragments(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _broken_links(guide) == ["sibling.md#missing-section"]
+
+
+_LADDER_TERMS = (
+    "Homebrew",
+    "bun",
+    "pnpm",
+    "`.sh` installer",
+    "GitHub release",
+    "Native package manager",
+)
+_MOVE_TO_BUN_TERMS = (
+    "without Homebrew",
+    "Uninstall view",
+    "install it again",
+    "receipt",
+    "removal command",
+    "knows the manager and the package",
+    "no command",
+    "repair note",
+)
+_BUN_OVERCLAIMS = ("run without node", "blocks every")
+
+
+def _install_decision_section(text: str) -> str:
+    """The `## How installs are decided` section: its heading up to the next level-2 heading."""
+    start = text.index("## How installs are decided")
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
+
+
+def _first_position(text: str, term: str) -> int:
+    """Index of the first whole-word mention of term, or -1 when the text never names it."""
+    match = re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text)
+    return match.start() if match else -1
+
+
+def test_readme_ladder_names_brew_then_bun_then_pnpm() -> None:
+    """PRIO-01, PRIO-07 (tracer): the README ladder names brew, bun, pnpm, then the rest."""
+    section = _install_decision_section(README.read_text(encoding="utf-8"))
+    positions = [_first_position(section, term) for term in _LADDER_TERMS]
+    found = dict(zip(_LADDER_TERMS, positions, strict=True))
+    missing = [term for term, position in found.items() if position < 0]
+    assert not missing, f"install-decision section never names: {missing}"
+    assert positions == sorted(positions), f"ladder not in rank order: {found}"
+
+
+def test_readme_has_no_homebrew_last_resort_line() -> None:
+    """PRIO-07: no README line still calls Homebrew a last resort."""
+    for line in README.read_text(encoding="utf-8").splitlines():
+        if "Homebrew" in line and "last resort" in line:
+            raise AssertionError(f"Homebrew called a last resort: {line!r}")
+
+
+def test_readme_states_the_no_homebrew_case_and_the_move_to_bun() -> None:
+    """PRIO-05 (R1-09, R2-14, R3-05): the no-Homebrew case and the move to bun are both stated."""
+    section = _install_decision_section(README.read_text(encoding="utf-8"))
+    for term in _MOVE_TO_BUN_TERMS:
+        assert term in section, f"install-decision section lacks: {term!r}"
+
+
+def _rank_passage(text: str) -> str:
+    """The Phase 12 paragraph that describes the `_RANK` install-preference ladder."""
+    start = text.index("`installer/resolve.py::resolve_methods` returns")
+    return text[start : text.index("\n\n", start)]
+
+
+def test_architecture_rank_passage_names_brew_first() -> None:
+    """PRIO-07 (R1-26 family): the `_RANK` passage names brew, then bun, then pnpm."""
+    passage = _rank_passage(ARCHITECTURE.read_text(encoding="utf-8"))
+    assert passage.index("brew") < passage.index("bun") < passage.index("pnpm"), passage
+    assert "install-preference ladder" in passage
+    assert "never provenance" in passage
+    assert "rank 40" not in passage
+
+
+def test_onboarding_skill_lists_the_bun_kind() -> None:
+    """D-22: the onboarding skill names bun in its method list (step 4) and removal table (4b)."""
+    assert "`bun`" in _skill_section("4")
+    assert "`bun`" in _skill_section("4b")
+
+
+def test_architecture_names_no_stale_pi_host_setup_example() -> None:
+    """R1-26: pi is no longer the host_setup example; the tier note names the mmdc -> bun edge."""
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    assert "Worked example: pi." not in text
+    assert "`mmdc` -> `bun`" in text
+
+
+def test_docs_make_no_overclaim_about_bun() -> None:
+    """PRIO-07: bun-installed CLIs are said to run under node; no doc claims otherwise."""
+    for path in [README, ARCHITECTURE]:
+        text = path.read_text(encoding="utf-8").lower()
+        rel = path.relative_to(REPO_ROOT)
+        assert "run under node" in text, f"{rel}: never says bun-installed CLIs run under node"
+        for claim in _BUN_OVERCLAIMS:
+            assert claim not in text, f"{rel}: overclaims bun with {claim!r}"
