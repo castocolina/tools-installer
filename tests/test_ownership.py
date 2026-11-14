@@ -3367,3 +3367,102 @@ def test_manager_listing_bun_tells_empty_from_unreadable(bun_home: Path) -> None
     assert listing("bun") == frozenset({_PI_PACKAGE})
     manifest.write_text("not json", encoding="utf-8")
     assert listing("bun") is None
+
+
+_MMDC = "@mermaid-js/mermaid-cli"
+
+
+def _mmdc_bun_first() -> Tool:
+    params: dict[str, object] = {"npm_pkg": _MMDC}
+    return Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method("bun", params), Method("node", params)),
+    )
+
+
+def test_pnpm_mmdc_stays_pnpm_when_the_bun_inventory_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch, bun_home: Path
+) -> None:
+    pnpm_home = bun_home / "pnpm"
+    monkeypatch.setenv("PNPM_HOME", str(pnpm_home))
+    result = _resolve(
+        _mmdc_bun_first(),
+        inventory=_readable(pnpm_globals=frozenset({_MMDC}), bun_globals=None),
+        which=str(pnpm_home / "mmdc"),
+        platform=_DEBIAN,
+    )
+    assert (result.owner, result.confidence) == ("pnpm", "direct")
+
+
+def test_unreadable_bun_inventory_reads_unknown(bun_home: Path) -> None:
+    command = bun_home / ".bun" / "install" / "global" / "node_modules" / _PI_PACKAGE / "cli"
+    result = _resolve(
+        _bun_pi(), inventory=_readable(bun_globals=None), which=str(command), platform=_DEBIAN
+    )
+    assert result.owner == "unknown"
+    assert result.current_version is None
+
+
+def test_listed_bun_package_without_a_version_blocks_elimination(
+    monkeypatch: pytest.MonkeyPatch, bun_home: Path
+) -> None:
+    pnpm_home = bun_home / "pnpm"
+    monkeypatch.setenv("PNPM_HOME", str(pnpm_home))
+
+    def resolve(bun_globals: dict[str, str | None], which: str | None) -> ManagerOwnership:
+        return _resolve(
+            _mmdc_bun_first(),
+            inventory=_readable(pnpm_globals=frozenset({_MMDC}), bun_globals=bun_globals),
+            which=which,
+            platform=_DEBIAN,
+        )
+
+    assert resolve({_MMDC: None}, None).owner == "unknown"
+    absent = resolve({}, None)
+    assert (absent.owner, absent.confidence) == ("pnpm", "by-elimination")
+    proven = resolve({_MMDC: None}, str(pnpm_home / "mmdc"))
+    assert (proven.owner, proven.confidence) == ("pnpm", "direct")
+
+
+def test_volta_owner_takes_the_first_javascript_method_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bun_home: Path
+) -> None:
+    volta_bin = tmp_path / "volta" / "bin"
+    volta_bin.mkdir(parents=True)
+    shim = volta_bin / "volta-shim"
+    shim.write_text("#!/bin/sh\n")
+    shim.chmod(0o755)
+    (volta_bin / "pi").symlink_to(shim)
+    monkeypatch.setenv("VOLTA_HOME", str(tmp_path / "volta"))
+    result = _resolve(
+        _bun_pi(),
+        inventory=_readable(bun_globals={}),
+        which=str(volta_bin / "pi"),
+        platform=_DEBIAN,
+    )
+    assert result.owner == "volta"
+    assert result.package == _PI_PACKAGE
+
+
+def test_owner_from_a_symlinked_home_matches_the_real_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real)
+    _seed_bun_pi(real)
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    owners: list[Owner] = []
+    for home in (real, linked):
+        monkeypatch.setenv("HOME", str(home))
+        inventory = read_inventory(has_brew=False, query=_no_query, pnpm_packages=_no_pnpm)
+        command = str(home / ".bun" / "bin" / "pi")
+        owners.append(
+            _resolve(_bun_pi(), inventory=inventory, which=command, platform=_DEBIAN).owner
+        )
+    assert owners == ["bun", "bun"]

@@ -56,7 +56,7 @@ from typing import Literal, cast
 
 import installer.locations
 from installer import agent_settings, omz, receipts
-from installer.bun_globals import method_bin_dir
+from installer.bun_globals import listed_versions, method_bin_dir
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
@@ -160,7 +160,20 @@ def _merge_inventory(fresh: ManagerInventory, previous: ManagerSnapshot | None) 
         else fallback.pnpm_globals,
         uv_tools=fresh.uv_tools if fresh.uv_tools is not None else fallback.uv_tools,
         brew_prefix=fresh.brew_prefix if fresh.brew_prefix is not None else fallback.brew_prefix,
+        # Never backfilled: bun's inventory is read live every pass, so a stale view cannot win.
+        bun_globals=fresh.bun_globals,
     )
+
+
+def _merged_evidence(
+    stored: Mapping[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]]],
+) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Each tool's `(broken, notes)` across every source manager, in sorted source order."""
+    merged: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+    for (tool_id, _source), (broken, notes) in sorted(stored.items()):
+        held_broken, held_notes = merged.get(tool_id, ((), ()))
+        merged[tool_id] = ((*held_broken, *broken), (*held_notes, *notes))
+    return merged
 
 
 def _merge_outdated(fresh: OutdatedReport, previous: ManagerSnapshot | None) -> OutdatedReport:
@@ -1162,6 +1175,7 @@ class VersionRefreshService:
         resolve_pnpm: Callable[[], str | None] = real_pnpm,
         artifacts_for: Callable[[Tool], Sequence[Path]] | None = None,
         read_inventory_fn: Callable[..., ManagerInventory] | None = None,
+        bun_versions: Callable[[], Mapping[str, str | None] | None] = listed_versions,
         read_outdated_fn: Callable[..., OutdatedReport] | None = None,
         native_probe: ProbeRunner | None = None,
         home: Path | None = None,
@@ -1192,6 +1206,7 @@ class VersionRefreshService:
         self._read_inventory = (
             read_inventory_fn if read_inventory_fn is not None else read_inventory
         )
+        self._bun_versions = bun_versions
         self._read_outdated = read_outdated_fn if read_outdated_fn is not None else read_outdated
         # Deliberately None by default, breaking the surrounding query/which
         # convention: those defaults predate the D-05 native probes, and a
@@ -1216,7 +1231,8 @@ class VersionRefreshService:
         # Ids a removal is changing: hidden from `state_of` until the next epoch.
         self._pending_ids: set[str] = set()
         # Doctor findings per tool id: (broken, notes), read by every pass (D-13).
-        self._evidence: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        # Kept per tool and per source manager, so one audit never clears another's findings.
+        self._evidence: dict[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]]] = {}
         # The cleared manager snapshot may not have reached disk (invalidate).
         self._managers_invalid = False
         # Tracked casks that auto-update, as the last published pass saw them (LIFE-10).
@@ -1340,10 +1356,12 @@ class VersionRefreshService:
         epoch: int,
         broken: tuple[str, ...] = (),
         notes: tuple[str, ...] = (),
+        source: str = "pnpm",
     ) -> bool:
-        """Store Doctor findings for `tool_id`; True when the stored value changed.
+        """Store Doctor findings for `tool_id` from one `source` manager; True when they changed.
 
-        Empty evidence deletes the entry. The next pass reads it (D-13).
+        One value per tool and source: a source's empty evidence deletes only its own entry, and
+        a pass reads the union (D-13).
         `epoch` is the epoch the audit started at: findings read before a
         later `invalidate` are stale and dropped (C-09).
         """
@@ -1351,12 +1369,12 @@ class VersionRefreshService:
         with self._lock:
             if epoch != self._epoch:
                 return False
-            if self._evidence.get(tool_id) == new:
+            if self._evidence.get((tool_id, source)) == new:
                 return False
             if new is None:
-                del self._evidence[tool_id]
+                del self._evidence[(tool_id, source)]
             else:
-                self._evidence[tool_id] = new
+                self._evidence[(tool_id, source)] = new
             return True
 
     def invalidate(self, *, reason: str) -> int:
@@ -1599,6 +1617,7 @@ class VersionRefreshService:
         inventory = self._read_inventory(
             has_brew=platform.has_brew, query=self._query, pnpm_packages=self._pnpm_packages
         )
+        inventory = replace(inventory, bun_globals=self._bun_versions())
         uv_tool_dir = query_uv_tool_dir(self._query) if self._which("uv") is not None else None
         return self._resolve_owner_from(
             tool,
@@ -1765,7 +1784,7 @@ class VersionRefreshService:
         # the node probe inside `_live_platform` is a probe like any other, and evidence
         # recorded while it runs belongs to the next pass.
         with self._lock:
-            evidence = dict(self._evidence)
+            evidence = _merged_evidence(self._evidence)
         platform = self._live_platform()
         with self._lock:
             self._platform = platform
@@ -1778,6 +1797,7 @@ class VersionRefreshService:
             now=now, platform=platform, casks=casks
         )
         inventory = snapshot.inventory if snapshot is not None else _EMPTY_INVENTORY
+        inventory = replace(inventory, bun_globals=self._bun_versions())
         outdated = snapshot.outdated if snapshot is not None else _EMPTY_OUTDATED
         which = self._looked_through
         hosts, presence_error = self._present_hosts()

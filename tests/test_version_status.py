@@ -29,6 +29,7 @@ from installer import (
     version_status,
 )
 from installer.app import run_wizard
+from installer.bun_globals import listed_versions
 from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus, UninstallState
@@ -3187,6 +3188,7 @@ def _owner_pass_service(
     probe_output: Callable[[list[str]], str | None] = lambda _argv: "1.0.0",
     artifacts_for: Callable[[Tool], list[Path]] = lambda _tool: [],
     inventory_reads: list[dict[str, object]] | None = None,
+    bun_versions: Callable[[], Mapping[str, str | None] | None] = listed_versions,
 ) -> VersionRefreshService:
     held = inventory if inventory is not None else _empty_inventory()
 
@@ -3212,6 +3214,7 @@ def _owner_pass_service(
         resolve_pnpm=lambda: None,
         native_probe=native_probe,
         path_value=lambda: path_value,
+        bun_versions=bun_versions,
     )
 
 
@@ -7159,3 +7162,138 @@ def test_herdr_partial_warning_reads_as_a_reason(tmp_path: Path) -> None:
     assert states["herdr"].health is Health.MISCONFIGURED
     assert states["herdr"].reasons[0] == warning
     assert states["herdr"].unconfigured == ()
+
+
+# -- 24.5-03: bun's inventory is read live every pass, through one injectable reader. --
+
+_PI_PKG = "@earendil-works/pi-coding-agent"
+
+
+def _bun_pi() -> Tool:
+    params: dict[str, object] = {"npm_pkg": _PI_PKG, "min_node": "22.19.0"}
+    return Tool(
+        id="pi",
+        name="Pi",
+        category="ai",
+        cmd="pi",
+        methods=(Method("bun", params), Method("node", params)),
+    )
+
+
+def _bun_scratch_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    return home
+
+
+def _bun_pi_command(home: Path) -> str:
+    """pi's command inside bun's global tree (it need not exist: the path is only attributed)."""
+    return str(home / ".bun" / "install" / "global" / "node_modules" / _PI_PKG / "dist" / "cli.js")
+
+
+def _seed_bun_tree(home: Path, manifest: str | bytes | None = None) -> Path:
+    global_dir = home / ".bun" / "install" / "global"
+    package = global_dir / "node_modules" / _PI_PKG
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "package.json").write_text('{"version": "1.5.2"}', encoding="utf-8")
+    path = global_dir / "package.json"
+    if manifest is None:
+        manifest = json.dumps({"dependencies": {_PI_PKG: "1.5.2"}})
+    if isinstance(manifest, bytes):
+        path.write_bytes(manifest)
+    else:
+        path.write_text(manifest, encoding="utf-8")
+    return path
+
+
+def _bun_pass_service(tmp_path: Path, home: Path, **kwargs: Any) -> VersionRefreshService:
+    return _owner_pass_service(
+        tmp_path / "svc", which=lambda _cmd: _bun_pi_command(home), managed=home / "bin", **kwargs
+    )
+
+
+def _owner_of(service: VersionRefreshService, tool: Tool) -> tuple[str, str | None]:
+    service.refresh([tool])
+    state = service.state_of(tool.id)
+    assert state is not None
+    return state.ownership.owner, state.ownership.current_version
+
+
+def test_refresh_reads_the_bun_inventory_live_every_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _bun_scratch_home(tmp_path, monkeypatch)
+    reads: list[dict[str, object]] = []
+    service = _bun_pass_service(tmp_path, home, inventory_reads=reads)
+    pi = _bun_pi()
+    assert _owner_of(service, pi) == ("unknown", None)
+    manifest = _seed_bun_tree(home)
+    # The manager snapshot is fresh now: no manager is asked again, yet the new package shows.
+    assert _owner_of(service, pi) == ("bun", "1.5.2")
+    assert len(reads) == 1
+    cached = json.loads((tmp_path / "svc" / "versions.json").read_text(encoding="utf-8"))
+    assert "bun" not in json.dumps(cached["managers"])
+    manifest.write_text("not json", encoding="utf-8")
+    assert _owner_of(service, pi) == ("unknown", None)  # never backfilled from an earlier pass
+    assert len(reads) == 1
+
+
+def test_refresh_reads_bun_through_the_injected_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _bun_scratch_home(tmp_path, monkeypatch)  # no bun tree on disk
+    pi = _bun_pi()
+    present = _bun_pass_service(tmp_path / "a", home, bun_versions=lambda: {_PI_PKG: "1.5.2"})
+    assert _owner_of(present, pi) == ("bun", "1.5.2")
+    unreadable = _bun_pass_service(tmp_path / "b", home, bun_versions=lambda: None)
+    assert _owner_of(unreadable, pi) == ("unknown", None)
+
+
+def test_refresh_pass_survives_an_undecodable_bun_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _bun_scratch_home(tmp_path, monkeypatch)
+    _seed_bun_tree(home, b"\xff\xfe\x00")
+    assert _owner_of(_bun_pass_service(tmp_path, home), _bun_pi()) == ("unknown", None)
+
+
+def test_resolve_owner_reads_bun_through_the_injected_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _bun_scratch_home(tmp_path, monkeypatch)
+    # The fresh inventory the update path reads has no bun view; the injected reader supplies it.
+    service = _bun_pass_service(
+        tmp_path,
+        home,
+        inventory=replace(_empty_inventory(), bun_globals=None),
+        bun_versions=lambda: {_PI_PKG: "1.5.2"},
+    )
+    ownership = service.resolve_owner(_bun_pi())
+    assert (ownership.owner, ownership.current_version) == ("bun", "1.5.2")
+    assert _owner_of(service, _bun_pi()) == ("bun", "1.5.2")
+
+
+def test_evidence_from_one_source_never_clears_another(tmp_path: Path) -> None:
+    service = _pending_service(tmp_path, lambda _argv: "1.0.0")
+    tools = _pending_tools()
+    epoch = service.epoch
+    assert service.record_evidence("rg", epoch=epoch, broken=("p",), source="pnpm") is True
+    assert service.record_evidence("rg", epoch=epoch, broken=("p",), source="pnpm") is False
+    assert (
+        service.record_evidence("rg", epoch=epoch, broken=("b",), notes=("n",), source="bun")
+        is True
+    )
+    state = _settled_states(service, tools)["rg"]
+    assert {"p", "b", "n"} <= set(state.reasons)
+    assert service.record_evidence("rg", epoch=epoch, source="bun") is True
+    state = _settled_states(service, tools)["rg"]
+    assert "p" in state.reasons
+    assert "b" not in state.reasons
+    assert "n" not in state.reasons
+    service.record_evidence("rg", epoch=epoch, broken=("b",), source="bun")
+    service.invalidate(reason="rg reinstalled")
+    state = _settled_states(service, tools)["rg"]
+    assert not {"p", "b"} & set(state.reasons)

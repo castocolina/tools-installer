@@ -875,7 +875,7 @@ def _volta_owner(
         return None
     if not any(active_path.parent == _resolve_active_path(str(d)) for d in volta_dirs):
         return None
-    node = next((method for method in tool.methods if method.kind == "node"), None)
+    node = next((method for method in tool.methods if method.kind in ("bun", "node")), None)
     synthetic = OwnershipCandidate(
         owner="volta",
         method=None,
@@ -1212,6 +1212,21 @@ def _collect_candidates(
     return tuple(found[owner] for owner in _CANDIDATE_ORDER if owner in found)
 
 
+def _bun_lists_unverified(tool: Tool, listed: Mapping[str, str | None]) -> bool:
+    """Whether bun lists a package of this tool whose own package.json cannot be read.
+
+    That copy is present but unverifiable, so it is incomplete evidence, never the negative
+    evidence that lets another manager win by elimination (the receipt gate reads it the same way).
+    """
+    return any(
+        method.kind == "bun"
+        and isinstance(pkg := method.params.get("npm_pkg"), str)
+        and pkg in listed
+        and listed[pkg] is None
+        for method in tool.methods
+    )
+
+
 def _unreadable(tool: Tool, platform: Platform, inventory: ManagerInventory) -> frozenset[Owner]:
     missing: set[Owner] = set()
     for owner in competing_owners(tool, platform):
@@ -1225,7 +1240,9 @@ def _unreadable(tool: Tool, platform: Platform, inventory: ManagerInventory) -> 
             missing.add("pnpm")
         elif owner == "uv" and inventory.uv_tools is None:
             missing.add("uv")
-        elif owner == "bun" and inventory.bun_globals is None:
+        elif owner == "bun" and (
+            inventory.bun_globals is None or _bun_lists_unverified(tool, inventory.bun_globals)
+        ):
             missing.add("bun")
     return frozenset(missing)
 
