@@ -1,0 +1,987 @@
+TRACER_HERDR_INSTALLED_OK hosts=claude,codex,copilot,cursor,opencode
+TRACER_NVIM_INSTALLED_OK version=v0.12.6 head=8e35dbe
+Installed 14 packages in 14ms
+Install plan — 1 will install, 66 skipped, 11 blocked, 8 manual
+✓ uv                 skipped — already current
+✓ rg                 skipped — already current
+○ jq                 manual — needs sudo (never run here); you run: `sudo apt-get install jq`
+✓ brew               skipped — already current; owner unknown
+✓ fd                 skipped — already current
+✓ bat                skipped — already current
+✓ sd                 skipped — already current
+✓ git                skipped — managed by apt
+✓ eza                skipped — already current
+✓ gh                 skipped — already current
+✓ yq                 skipped — already current
+✓ codex              skipped — already current
+✓ claude             skipped — already current; owner unknown
+✓ opencode           skipped — already current
+✓ cursor-agent       skipped — already current; owner unknown
+✓ copilot            skipped — already current
+○ glab               manual — needs sudo (never run here); you run: `sudo apt-get install glab`
+✓ fzf                skipped — already current
+✓ starship           skipped — already current
+○ zsh                manual — needs sudo (never run here); you run: `sudo apt-get install zsh`
+✓ direnv             skipped — already current
+✓ just               skipped — already current
+✓ ruff               skipped — already current
+✓ watch              skipped — managed by apt
+○ docker             manual — needs sudo (never run here); you run: `sudo apt-get install docker.io`
+○ podman             manual — needs sudo (never run here); you run: `sudo apt-get install podman`
+✓ colima             skipped — already current; owner unknown
+✓ aichat             skipped — already current
+✓ antigravity        skipped — already current
+✓ codegraph          skipped — already current
+✓ graphify           skipped — already current; owner unknown
+○ unzip              manual — needs sudo (never run here); you run: `sudo apt-get install unzip`
+○ zip                manual — needs sudo (never run here); you run: `sudo apt-get install zip`
+○ sdkman             blocked — needs unzip
+○ java               blocked — needs sdkman
+○ gradle             blocked — needs sdkman
+○ maven              blocked — needs sdkman
+✓ vscode             skipped — already current
+✓ pnpm               skipped — managed by Volta
+○ pi                 will install — not installed
+✓ delta              skipped — already current
+✓ zoxide             skipped — already current
+✓ lazygit            skipped — already current
+○ oh-my-zsh          blocked — needs zsh
+✓ dust               skipped — already current
+✓ hyperfine          skipped — already current
+✓ bottom             skipped — already current
+✓ gum                skipped — already current
+✓ glow               skipped — already current
+✓ xh                 skipped — already current
+✓ difftastic         skipped — already current
+✓ gitui              skipped — already current
+✓ lazydocker         skipped — already current
+✓ dive               skipped — already current
+✓ duf                skipped — already current
+✓ hexyl              skipped — already current
+✓ miller             skipped — already current
+✓ shfmt              skipped — already current
+✓ tealdeer           skipped — already current
+✓ fx                 skipped — already current
+✓ dasel              skipped — already current
+✓ gron               skipped — already current
+✓ deno               skipped — already current; owner unknown
+○ groovy             blocked — needs sdkman
+○ springbootcli      blocked — needs sdkman
+✓ bun                skipped — already current; owner unknown
+✓ volta              skipped — already current
+✓ fnm                skipped — already current; owner unknown
+✓ jetbrains-toolbox  skipped — already current
+✓ neovim             skipped — already current
+✓ herdr              skipped — already current
+✓ drawio-desktop     skipped — already current
+✓ procs              skipped — already current; owner unknown
+✓ ast-grep           skipped — already current; owner unknown
+✓ jless              skipped — already current; owner unknown
+✓ gitleaks           skipped — already current
+✓ vale               skipped — already current
+✓ broot              skipped — already current; owner unknown
+✓ sublime            skipped — already current
+✓ kitty              skipped — already current
+✓ wezterm            skipped — already current
+○ alacritty          manual — needs sudo (never run here); you run: `sudo apt-get install alacritty`
+– gnu-bash           blocked — gnu-bash only supports macos.
+– container          blocked — container only supports macos.
+– mmdc               blocked — mmdc needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+– puppeteer          blocked — puppeteer needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+Summary — 66 skipped, 11 blocked, 9 manual
+✓ uv                 skipped — already current
+✓ rg                 skipped — already current
+○ jq                 manual — you run: `sudo apt-get install jq`
+✓ brew               skipped — already current; owner unknown
+✓ fd                 skipped — already current
+✓ bat                skipped — already current
+✓ sd                 skipped — already current
+✓ git                skipped — managed by apt
+✓ eza                skipped — already current
+✓ gh                 skipped — already current
+✓ yq                 skipped — already current
+✓ codex              skipped — already current
+✓ claude             skipped — already current; owner unknown
+✓ opencode           skipped — already current
+✓ cursor-agent       skipped — already current; owner unknown
+✓ copilot            skipped — already current
+○ glab               manual — you run: `sudo apt-get install glab`
+✓ fzf                skipped — already current
+✓ starship           skipped — already current
+○ zsh                manual — you run: `sudo apt-get install zsh`
+✓ direnv             skipped — already current
+✓ just               skipped — already current
+✓ ruff               skipped — already current
+✓ watch              skipped — managed by apt
+○ docker             manual — you run: `sudo apt-get install docker.io`
+○ podman             manual — you run: `sudo apt-get install podman`
+✓ colima             skipped — already current; owner unknown
+✓ aichat             skipped — already current
+✓ antigravity        skipped — already current
+✓ codegraph          skipped — already current
+✓ graphify           skipped — already current; owner unknown
+○ unzip              manual — you run: `sudo apt-get install unzip`
+○ zip                manual — you run: `sudo apt-get install zip`
+○ sdkman             blocked — needs unzip
+○ java               blocked — needs sdkman
+○ gradle             blocked — needs sdkman
+○ maven              blocked — needs sdkman
+✓ vscode             skipped — already current
+✓ pnpm               skipped — managed by Volta
+○ pi                 manual — see the setup steps in the log
+✓ delta              skipped — already current
+✓ zoxide             skipped — already current
+✓ lazygit            skipped — already current
+○ oh-my-zsh          blocked — needs zsh
+✓ dust               skipped — already current
+✓ hyperfine          skipped — already current
+✓ bottom             skipped — already current
+✓ gum                skipped — already current
+✓ glow               skipped — already current
+✓ xh                 skipped — already current
+✓ difftastic         skipped — already current
+✓ gitui              skipped — already current
+✓ lazydocker         skipped — already current
+✓ dive               skipped — already current
+✓ duf                skipped — already current
+✓ hexyl              skipped — already current
+✓ miller             skipped — already current
+✓ shfmt              skipped — already current
+✓ tealdeer           skipped — already current
+✓ fx                 skipped — already current
+✓ dasel              skipped — already current
+✓ gron               skipped — already current
+✓ deno               skipped — already current; owner unknown
+○ groovy             blocked — needs sdkman
+○ springbootcli      blocked — needs sdkman
+✓ bun                skipped — already current; owner unknown
+✓ volta              skipped — already current
+✓ fnm                skipped — already current; owner unknown
+✓ jetbrains-toolbox  skipped — already current
+✓ neovim             skipped — already current
+✓ herdr              skipped — already current
+✓ drawio-desktop     skipped — already current
+✓ procs              skipped — already current; owner unknown
+✓ ast-grep           skipped — already current; owner unknown
+✓ jless              skipped — already current; owner unknown
+✓ gitleaks           skipped — already current
+✓ vale               skipped — already current
+✓ broot              skipped — already current; owner unknown
+✓ sublime            skipped — already current
+✓ kitty              skipped — already current
+✓ wezterm            skipped — already current
+○ alacritty          manual — you run: `sudo apt-get install alacritty`
+– gnu-bash           blocked — gnu-bash only supports macos.
+– container          blocked — container only supports macos.
+– mmdc               blocked — mmdc needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+– puppeteer          blocked — puppeteer needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+jq — manual setup required:
+  sudo apt-get install jq
+glab — manual setup required:
+  sudo apt-get install glab
+zsh — manual setup required:
+  sudo apt-get install zsh
+docker — manual setup required:
+  sudo apt-get install docker.io
+podman — manual setup required:
+  sudo apt-get install podman
+unzip — manual setup required:
+  sudo apt-get install unzip
+zip — manual setup required:
+  sudo apt-get install zip
+pi — manual setup required:
+  After leaving the installer, run these Pi setup commands in a console:
+  pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+  pi
+alacritty — manual setup required:
+  sudo apt-get install alacritty
+TRACER_RERUN_OK installed=0 updated=0 skipped=66 failed=0 dependency_failed=0 blocked=11 manual=9
+TRACER_RECEIPT_PRE_UNINSTALL_OK tool=yq
+TRACER_RECEIPT_PATHS_OK recorded=105 removable=62
+TRACER_HOOKS_RECORDED hosts=claude,codex,cursor,opencode files=8
+TRACER_SETTINGS_INSTALLED_OK agents=6 keys=29
+TRACER_COPILOT_VERSION_OK
+Installed 14 packages in 21ms
+The following will be removed:
+  /home/tester/.local/bin/tldr
+  /home/tester/.local/opt/codegraph
+  /home/tester/.local/bin/codegraph
+  /home/tester/.local/bin/herdr
+  /home/tester/.local/opt/rg
+  /home/tester/.local/bin/rg
+  /home/tester/.local/opt/fd
+  /home/tester/.local/bin/fd
+  /home/tester/.local/opt/bat
+  /home/tester/.local/bin/bat
+  /home/tester/.local/opt/sd
+  /home/tester/.local/bin/sd
+  /home/tester/.local/opt/delta
+  /home/tester/.local/bin/delta
+  /home/tester/.local/opt/eza
+  /home/tester/.local/bin/eza
+  /home/tester/.local/opt/zoxide
+  /home/tester/.local/bin/zoxide
+  /home/tester/.local/opt/fzf
+  /home/tester/.local/bin/fzf
+  /home/tester/.local/opt/lazygit
+  /home/tester/.local/bin/lazygit
+  /home/tester/.local/opt/gh
+  /home/tester/.local/bin/gh
+  /home/tester/.local/bin/yq
+  /home/tester/.local/opt/starship
+  /home/tester/.local/bin/starship
+  /home/tester/.local/bin/direnv
+  /home/tester/.local/opt/just
+  /home/tester/.local/bin/just
+  /home/tester/.local/opt/ruff
+  /home/tester/.local/bin/ruff
+  /home/tester/.local/opt/dust
+  /home/tester/.local/bin/dust
+  /home/tester/.local/opt/hyperfine
+  /home/tester/.local/bin/hyperfine
+  /home/tester/.local/opt/btm
+  /home/tester/.local/bin/btm
+  /home/tester/.local/opt/gum
+  /home/tester/.local/bin/gum
+  /home/tester/.local/opt/glow
+  /home/tester/.local/bin/glow
+  /home/tester/.local/opt/xh
+  /home/tester/.local/bin/xh
+  /home/tester/.local/opt/difft
+  /home/tester/.local/bin/difft
+  /home/tester/.local/opt/gitui
+  /home/tester/.local/bin/gitui
+  /home/tester/.local/opt/lazydocker
+  /home/tester/.local/bin/lazydocker
+  /home/tester/.local/opt/dive
+  /home/tester/.local/bin/dive
+  /home/tester/.local/opt/duf
+  /home/tester/.local/bin/duf
+  /home/tester/.local/opt/hexyl
+  /home/tester/.local/bin/hexyl
+  /home/tester/.local/opt/mlr
+  /home/tester/.local/bin/mlr
+  /home/tester/.local/bin/shfmt
+  /home/tester/.local/bin/fx
+  /home/tester/.local/bin/dasel
+  /home/tester/.local/opt/gron
+  /home/tester/.local/bin/gron
+  /home/tester/.local/opt/aichat
+  /home/tester/.local/bin/aichat
+  /home/tester/.codex/packages/standalone/releases
+  /home/tester/.codex/packages/standalone/current
+  /home/tester/.local/bin/codex
+  /home/tester/.local/bin/claude
+  /home/tester/.local/share/claude
+  /home/tester/.opencode/bin/opencode
+  /home/tester/.local/share/cursor-agent/versions
+  /home/tester/.local/bin/agent
+  /home/tester/.local/bin/cursor-agent
+  /home/tester/.local/opt/copilot
+  /home/tester/.local/bin/copilot
+  /home/tester/.local/bin/agy
+  /home/tester/.volta/bin/volta
+  /home/tester/.volta/bin/volta-shim
+  /home/tester/.volta/bin/volta-migrate
+  /home/tester/.volta/bin/node
+  /home/tester/.volta/bin/npm
+  /home/tester/.volta/bin/npx
+  /home/tester/.volta/bin/pnpm
+  /home/tester/.volta/bin/yarn
+  /home/tester/.volta/bin/yarnpkg
+  /home/tester/.local/opt/gitleaks
+  /home/tester/.local/bin/gitleaks
+  /home/tester/.local/opt/vale
+  /home/tester/.local/bin/vale
+  /home/tester/.local/opt/code
+  /home/tester/.local/bin/code
+  /home/tester/.local/opt/jetbrains-toolbox
+  /home/tester/.local/bin/jetbrains-toolbox
+  /home/tester/.local/opt/subl
+  /home/tester/.local/bin/subl
+  /home/tester/.local/opt/nvim
+  /home/tester/.local/bin/nvim
+  /home/tester/.local/kitty.app
+  /home/tester/.local/bin/wezterm
+  /home/tester/.local/share/pnpm/bin/pnpm
+  /home/tester/.local/share/pnpm/bin/pn
+  /home/tester/.local/share/pnpm/bin/pnpx
+  /home/tester/.local/share/pnpm/bin/pnx
+  /home/tester/.local/bin/drawio
+codegraph: runs codegraph uninstall --target claude,codex,opencode,cursor --location global --yes --keep-cli
+herdr: runs herdr integration uninstall claude
+herdr: runs herdr integration uninstall codex
+herdr: runs herdr integration uninstall opencode
+herdr: runs herdr integration uninstall cursor
+herdr: runs herdr integration uninstall copilot
+herdr: runs herdr plugin uninstall herdr-setup.markers
+colima: runs brew uninstall colima
+graphify: runs uv tool uninstall graphifyy
+deno: runs brew uninstall deno
+procs: runs brew uninstall procs
+ast-grep: runs brew uninstall ast-grep
+jless: runs brew uninstall jless
+bun: runs brew uninstall bun
+fnm: runs brew uninstall fnm
+broot: runs brew uninstall broot
+Not removed (tools-installer cannot prove it installed these); remove them yourself if you want them gone:
+  /home/tester/.local/bin/uv
+  /home/tester/.local/bin/uvx
+These shell tweaks will also be disabled (tweak:starship, tweak:direnv, tweak:zoxide, tweak:fzf, tweak:fnm, tweak:volta, tweak:neovim).
+Config kept; only the Uninstall view deletes config (press c on a row):
+  ~/.cache/tealdeer
+  ~/.config/herdr
+  ~/.local/state/herdr
+  ~/.config/glow
+  ~/.config/nvim
+herdr: removes ui.sidebar.agents.rows, ui.sidebar.agents.row_gap, ui.sidebar.spaces.rows from ~/.config/herdr/config.toml
+zoxide: turns off its shell init in ~/.myshellrc
+fzf: turns off its shell init in ~/.myshellrc
+starship: turns off its shell init in ~/.myshellrc
+direnv: turns off its shell init in ~/.myshellrc
+codex: removes approval_policy, sandbox_mode from ~/.codex/config.toml
+claude: removes permissions.defaultMode, skipDangerousModePermissionPrompt, attribution.commit, attribution.pr from ~/.claude/settings.json
+opencode: removes permission from ~/.config/opencode/opencode.json
+cursor-agent: removes approvalMode, attribution.attributeCommitsToAgent, attribution.attributePRsToAgent from ~/.cursor/cli-config.json
+copilot: removes defaultPermissionMode, includeCoAuthoredBy from ~/.copilot/settings.json
+volta: turns off its shell init in ~/.myshellrc
+fnm: turns off its shell init in ~/.myshellrc
+vscode: removes telemetry.telemetryLevel, workbench.enableExperiments, workbench.settings.enableNaturalLanguageSearch, extensions.ignoreRecommendations, window.restoreWindows, workbench.startupEditor, editor.minimap.enabled, files.watcherExclude, search.followSymlinks, npm.autoDetect, task.autoDetect, typescript.disableAutomaticTypeAcquisition, git.autoRepositoryDetection, terminal.integrated.defaultProfile.linux, chat.disableAIFeatures, extensions.autoUpdate, extensions.autoCheckUpdates from ~/.config/Code/User/settings.json
+neovim: turns off its shell init in ~/.myshellrc
+Agent and editor settings this installer wrote (reverted):
+  ~/.claude/settings.json: permissions.defaultMode, skipDangerousModePermissionPrompt, attribution.commit, attribution.pr
+  ~/.codex/config.toml: approval_policy, sandbox_mode
+  ~/.config/opencode/opencode.json: permission
+  ~/.cursor/cli-config.json: approvalMode, attribution.attributeCommitsToAgent, attribution.attributePRsToAgent
+  ~/.config/Code/User/settings.json: telemetry.telemetryLevel, workbench.enableExperiments, workbench.settings.enableNaturalLanguageSearch, extensions.ignoreRecommendations, window.restoreWindows, workbench.startupEditor, editor.minimap.enabled, files.watcherExclude, search.followSymlinks, npm.autoDetect, task.autoDetect, typescript.disableAutomaticTypeAcquisition, git.autoRepositoryDetection, terminal.integrated.defaultProfile.linux, chat.disableAIFeatures, extensions.autoUpdate, extensions.autoCheckUpdates
+  ~/.copilot/settings.json: defaultPermissionMode, includeCoAuthoredBy
+  ~/.config/herdr/config.toml: ui.sidebar.agents.rows, ui.sidebar.agents.row_gap, ui.sidebar.spaces.rows
+Unregistered from agent hosts: claude, codex, cursor-agent, opencode.
+Unregistered from agent hosts: claude, codex, copilot, cursor-agent, opencode.
+Settings reverted for herdr, codex, claude, opencode, cursor-agent, copilot, vscode.
+Shell init turned off for zoxide, fzf, starship, direnv, volta, fnm, neovim.
+TRACER_UNINSTALL_OK
+TRACER_RECEIPT_REMOVAL_OK tool=yq
+TRACER_RECEIPTS_GONE_OK count=62
+TRACER_LEFTOVER_OK
+TRACER_HOOKS_UNREGISTERED_OK count=8
+TRACER_HERDR_RESIDUE agent=codex key=features.hooks
+TRACER_SETTINGS_REVERT_OK keys=29
+TRACER_HERDR_STATUS_CLEAN_OK
+TRACER_HERDR_REVERT_OK
+TRACER_NVIM_REMOVED_OK
+TRACER_GSD_ABSENT_OK pass=uninstall
+Installed 14 packages in 15ms
+Install plan — 63 will install, 4 skipped, 11 blocked, 8 manual
+✓ uv                 skipped — already current
+○ rg                 will install — not installed
+○ jq                 manual — needs sudo (never run here); you run: `sudo apt-get install jq`
+✓ brew               skipped — already current; owner unknown
+○ fd                 will install — not installed
+○ bat                will install — not installed
+○ sd                 will install — not installed
+✓ git                skipped — managed by apt
+○ eza                will install — not installed
+○ gh                 will install — not installed
+○ yq                 will install — not installed
+○ codex              will install — not installed
+○ claude             will install — not installed
+○ opencode           will install — not installed
+○ cursor-agent       will install — not installed
+○ copilot            will install — not installed
+○ glab               manual — needs sudo (never run here); you run: `sudo apt-get install glab`
+○ fzf                will install — not installed
+○ starship           will install — not installed
+○ zsh                manual — needs sudo (never run here); you run: `sudo apt-get install zsh`
+○ direnv             will install — not installed
+○ just               will install — not installed
+○ ruff               will install — not installed
+✓ watch              skipped — managed by apt
+○ docker             manual — needs sudo (never run here); you run: `sudo apt-get install docker.io`
+○ podman             manual — needs sudo (never run here); you run: `sudo apt-get install podman`
+○ colima             will install — not installed
+○ aichat             will install — not installed
+○ antigravity        will install — not installed
+○ codegraph          will install — not installed
+○ graphify           will install — not installed
+○ unzip              manual — needs sudo (never run here); you run: `sudo apt-get install unzip`
+○ zip                manual — needs sudo (never run here); you run: `sudo apt-get install zip`
+○ sdkman             blocked — needs unzip
+○ java               blocked — needs sdkman
+○ gradle             blocked — needs sdkman
+○ maven              blocked — needs sdkman
+○ vscode             will install — not installed
+○ pnpm               will install — not installed
+○ pi                 will install — not installed
+○ delta              will install — not installed
+○ zoxide             will install — not installed
+○ lazygit            will install — not installed
+○ oh-my-zsh          blocked — needs zsh
+○ dust               will install — not installed
+○ hyperfine          will install — not installed
+○ bottom             will install — not installed
+○ gum                will install — not installed
+○ glow               will install — not installed
+○ xh                 will install — not installed
+○ difftastic         will install — not installed
+○ gitui              will install — not installed
+○ lazydocker         will install — not installed
+○ dive               will install — not installed
+○ duf                will install — not installed
+○ hexyl              will install — not installed
+○ miller             will install — not installed
+○ shfmt              will install — not installed
+○ tealdeer           will install — not installed
+○ fx                 will install — not installed
+○ dasel              will install — not installed
+○ gron               will install — not installed
+○ deno               will install — not installed
+○ groovy             blocked — needs sdkman
+○ springbootcli      blocked — needs sdkman
+○ bun                will install — not installed
+○ volta              will install — not installed
+○ fnm                will install — not installed
+○ jetbrains-toolbox  will install — not installed
+○ neovim             will install — not installed
+○ herdr              will install — not installed
+○ drawio-desktop     will install — not installed
+○ procs              will install — not installed
+○ ast-grep           will install — not installed
+○ jless              will install — not installed
+○ gitleaks           will install — not installed
+○ vale               will install — not installed
+○ broot              will install — not installed
+○ sublime            will install — not installed
+○ kitty              will install — not installed
+○ wezterm            will install — not installed
+○ alacritty          manual — needs sudo (never run here); you run: `sudo apt-get install alacritty`
+– gnu-bash           blocked — gnu-bash only supports macos.
+– container          blocked — container only supports macos.
+– mmdc               blocked — mmdc needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+– puppeteer          blocked — puppeteer needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+==> Installing Codex CLI
+==> Detected platform: Linux (x64)
+==> Resolved version: 0.169.0
+==> Downloading Codex CLI
+==> Installing standalone package to /home/tester/.codex/packages/standalone/releases/0.169.0-x86_64-unknown-linux-musl
+==> /home/tester/.local/bin is already on PATH
+==> Current terminal: codex
+==> Future terminals: open a new terminal and run: codex
+Codex CLI 0.169.0 installed successfully.
+Setting up Claude Code...
+
+Checking installation status...
+Installing Claude Code native build latest...
+Setting up launcher and shell integration...
+✔ Claude Code successfully installed!
+
+  Version: 2.1.325
+
+  Location: ~/.local/bin/claude
+
+
+  Next: Run claude --help to get started
+
+✅ Installation complete!
+
+[0m
+[0;2mInstalling [0mopencode [0;2mversion: [0m1.19.5[0m
+#=O#-      #            #                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   0.0%####################################                                                                                                                                                                                                                                                                                                                                                                        9.2%#####################################################################################                                                                                                                                                                                                                                                                                                                      21.8%#######################################################################################################################################                                                                                                                                                                                                                                                                    34.5%########################################################################################################################################################################################                                                                                                                                                                                                                   46.9%########################################################################################################################################################################################################################################                                                                                                                                                                   59.2%#####################################################################################################################################################################################################################################################################################                                                                                                                      70.7%#####################################################################################################################################################################################################################################################################################################################################                                                                      82.9%####################################################################################################################################################################################################################################################################################################################################################################################                       94.7%######################################################################################################################################################################################################################################################################################################################################################################################################### 100.0%
+
+[0;2m                    [0m             ▄     
+[0;2m█▀▀█ █▀▀█ █▀▀█ █▀▀▄ [0m█▀▀▀ █▀▀█ █▀▀█ █▀▀█
+[0;2m█░░█ █░░█ █▀▀▀ █░░█ [0m█░░░ █░░█ █░░█ █▀▀▀
+[0;2m▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ [0m▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+[0;2mOpenCode includes free models, to start:[0m
+
+cd <project>  [0;2m# Open directory[0m
+opencode      [0;2m# Run command[0m
+
+[0;2mFor more information visit [0mhttps://opencode.ai/docs
+
+
+
+Cursor Agent Installer
+
+▸ Detecting system architecture...
+[1A[2K✓ Detected linux/x64
+▸ Creating installation directory...
+[1A[2K✓ Directory created
+▸ Downloading Cursor Agent package...
+  Download URL: https://downloads.cursor.com/lab/2026.11.13-eacade1/linux/x64/agent-cli-package.tar.gz
+######                                                                                                                                                                                                                                                                                                                                                                                                      1.6%###################                                                                                                                                                                                                                                                                                                                                                                                         4.9%######################################                                                                                                                                                                                                                                                                                                                                                                      9.7%#####################################################                                                                                                                                                                                                                                                                                                                                                      13.6%########################################################################                                                                                                                                                                                                                                                                                                                                   18.3%##############################################################################################                                                                                                                                                                                                                                                                                                             24.0%##################################################################################################################                                                                                                                                                                                                                                                                                         29.2%#######################################################################################################################################                                                                                                                                                                                                                                                                    34.5%#############################################################################################################################################################                                                                                                                                                                                                                                              40.0%###############################################################################################################################################################################                                                                                                                                                                                                                            44.6%#################################################################################################################################################################################################                                                                                                                                                                                                          49.3%########################################################################################################################################################################################################################                                                                                                                                                                                   55.0%###########################################################################################################################################################################################################################################                                                                                                                                                                59.9%###################################################################################################################################################################################################################################################################                                                                                                                                        66.1%######################################################################################################################################################################################################################################################################################                                                                                                                     70.9%#######################################################################################################################################################################################################################################################################################                                                                                                                    71.2%###########################################################################################################################################################################################################################################################################################################                                                                                                76.2%#################################################################################################################################################################################################################################################################################################################################                                                                          81.8%####################################################################################################################################################################################################################################################################################################################################################                                                       86.6%###########################################################################################################################################################################################################################################################################################################################################################################                                92.6%#############################################################################################################################################################################################################################################################################################################################################################################################              97.1%######################################################################################################################################################################################################################################################################################################################################################################################################### 100.0%
+[1A[2K[1A[2K[1A[2K[1A[2K✓ Package downloaded and extracted
+▸ Finalizing installation...
+[1A[2K✓ Package installed successfully
+▸ Creating bin directory...
+[1A[2K✓ Bin directory ready
+▸ Creating symlinks to agent executable...
+[1A[2K✓ Symlink created
+
+✨ Installation Complete! 
+
+
+Start using Cursor Agent:
+   agent
+
+
+Happy coding! 🚀
+
+==> Fetching downloads for: colima
+✔︎ Bottle colima (0.10.3)
+==> Pouring colima--0.10.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/colima/0.10.3: 14 files, 11.4MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+==> colima
+To start colima now and restart at login:
+  brew services start colima
+Or, if you don't want/need a background service you can just run:
+  /home/linuxbrew/.linuxbrew/opt/colima/bin/colima start -f
+⠋ Detecting system environment...
+✓ Platform detected: linux_amd64
+⠋ Querying release repository...
+✓ Latest available version: 1.5.8
+⠋ Downloading release package...
+✓ Download complete and checksum verified.
+⠋ Extracting binary from archive...
+⠋ Configuring shell environment...
+ERROR: logging before google.Init: I1114 03:48:52.271400       1 installer.go:27] Running Antigravity CLI setup...
+ERROR: logging before google.Init: I1114 03:48:52.271458       1 installer.go:147] Appending PATH export to profile /home/tester/.bashrc: export PATH="/home/tester/.local/bin:$PATH"
+ERROR: logging before google.Init: I1114 03:48:52.271631       1 installer.go:184] Successfully updated shell profile: /home/tester/.bashrc
+ERROR: logging before google.Init: I1114 03:48:52.271645       1 installer.go:147] Appending PATH export to profile /home/tester/.zshrc: export PATH="/home/tester/.local/bin:$PATH"
+ERROR: logging before google.Init: I1114 03:48:52.271697       1 installer.go:184] Successfully updated shell profile: /home/tester/.zshrc
+
+✅ Antigravity CLI installed successfully at /home/tester/.local/bin/agy
+ERROR: logging before google.Init: I1114 03:48:52.271725       1 installer_unix.go:40] PATH verification: ~/.local/bin is correctly configured in active PATH environment.
+Run 'agy' to start the CLI
+┌  CodeGraph v1.6.2
+│
+◆  Claude Code: Updated ~/.claude.json
+│
+◆  Claude Code: Updated ~/.claude/settings.json
+│
+◆  Claude Code: Created ~/.claude/CLAUDE.md
+│
+◆  Codex CLI: Updated ~/.codex/config.toml
+│
+◆  Codex CLI: Created ~/.codex/AGENTS.md
+│
+◆  opencode: Updated ~/.config/opencode/opencode.json
+│
+◆  opencode: Created ~/.config/opencode/AGENTS.md
+│
+◆  Cursor: Updated ~/.cursor/mcp.json
+│
+●  Cursor: Restart Cursor for MCP changes to take effect.
+│
+◇  Next: index a project ──────────────────────────────────────────────────╮
+│                                                                          │
+│  cd <your-project>                                                       │
+│  codegraph init        # build a project’s graph (one time; auto-syncs   │
+│  after)                                                                  │
+│  # (codegraph install --init does both steps in one command)             │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────╯
+│
+└  Done! Restart your agents to use CodeGraph.
+
+Resolved 31 packages in 1ms
+Installed 31 packages in 42ms
+ + graphifyy==0.9.108
+ + networkx==3.7
+ + numpy==2.5.4
+ + pyyaml==6.0.3
+ + rapidfuzz==3.14.6
+ + tree-sitter==0.25.2
+ + tree-sitter-bash==0.25.1
+ + tree-sitter-c==0.24.2
+ + tree-sitter-c-sharp==0.23.5
+ + tree-sitter-cpp==0.23.4
+ + tree-sitter-elixir==0.3.5
+ + tree-sitter-fortran==0.6.0
+ + tree-sitter-go==0.25.0
+ + tree-sitter-groovy==0.1.2
+ + tree-sitter-java==0.23.5
+ + tree-sitter-javascript==0.25.0
+ + tree-sitter-json==0.24.8
+ + tree-sitter-julia==0.23.1
+ + tree-sitter-kotlin==1.1.0
+ + tree-sitter-lua==0.5.0
+ + tree-sitter-objc==3.0.2
+ + tree-sitter-php==0.24.1
+ + tree-sitter-powershell==0.26.4
+ + tree-sitter-python==0.25.0
+ + tree-sitter-ruby==0.23.1
+ + tree-sitter-rust==0.24.2
+ + tree-sitter-scala==0.26.13
+ + tree-sitter-swift==0.7.4
+ + tree-sitter-typescript==0.23.2
+ + tree-sitter-verilog==1.0.3
+ + tree-sitter-zig==1.1.2
+Installed 2 executables: graphify, graphify-mcp
+==> Downloading pnpm 12.18.0
+Installing pnpm CLI globally from /tmp/tmp.J3B3wWpj8y
+.../global/v11/7a6f-18e7cccaf6f42877-0   | Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/tester/.local/share/pnpm/store/v11
+  Virtual store is at:             ../.local/share/pnpm/store/v11/links
+.../global/v11/7a6f-18e7cccaf6f42877-0   | Progress: resolved 1, reused 0, downloaded 0, added 1, done
+
+dependencies:
++ pnpm file:../../../../../../../../tmp/tmp.J3B3wWpj8y
+
+Done in 47ms using pnpm v12.18.0
+Configuration already up to date in /home/tester/.bashrc
+
+No changes to the environment were made. Everything is already up to date.
+To uninstall, delete /home/tester/.local/share/pnpm and the lines pnpm setup added to the shell config file named above.
+See https://pnpm.io/uninstall
+Successfully updated cache.
+Pages for the following languages were downloaded: en
+==> Fetching downloads for: deno
+✔︎ Bottle deno (2.9.8)
+==> Pouring deno--2.9.8.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/deno/2.9.8: 12 files, 241.4MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+error: unzip is required to install bun
+==> Fetching downloads for: bun
+✔︎ Bottle bun (1.4.4_1)
+==> Pouring bun--1.4.4_1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/bun/1.4.4_1: 10 files, 88.7MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+[1;32m  Installing[0m latest version of Volta (2.0.2)
+[1;32m    Checking[0m for existing Volta installation
+[1;32m    Fetching[0m archive for Linux, version 2.0.2
+#=O#-      #            #                                                                                                                                                                                                                                                                                                                                                                                       #=O=- #         #             #                                                                                                                                                                                                                                                                                                                                                                                 -=#=-    #           #               #                                                                                                                                                                                                                                                                                                                                                                          #######################################################################################################################################################                                                                                                                                                                                                                                                    38.5%######################################################################################################################################################################################################################################################################################################################################################################################################### 100.0%
+[1;32m    Creating[0m directory layout
+[1;32m  Extracting[0m Volta binaries and launchers
+[1;32m    Finished[0m installation. Updating user profile settings.
+Checking dependencies for the installation script...
+Checking availability of curl... OK!
+Checking availability of unzip... Missing!
+Not installing fnm due to missing dependencies.
+==> Fetching downloads for: fnm
+✔︎ Bottle fnm (1.39.0)
+==> Pouring fnm--1.39.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/fnm/1.39.0: 12 files, 8.8MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+installed claude integration hook to /home/tester/.claude/hooks/herdr-agent-state.sh
+ensured claude settings at /home/tester/.claude/settings.json
+installed codex integration hook to /home/tester/.codex/herdr-agent-state.sh
+ensured codex hooks at /home/tester/.codex/hooks.json
+ensured codex config at /home/tester/.codex/config.toml
+installed opencode integration plugin to /home/tester/.config/opencode/plugins/herdr-agent-state.js
+installed opencode tui integration plugin to /home/tester/.config/opencode/herdr-tui-session.js
+ensured opencode tui plugin config at /home/tester/.config/opencode/tui.jsonc
+installed cursor integration hook to /home/tester/.cursor/herdr-agent-state.sh
+updated cursor hooks at /home/tester/.cursor/hooks.json
+installed copilot integration hook to /home/tester/.copilot/hooks/herdr-agent-state.sh
+ensured copilot settings at /home/tester/.copilot/settings.json
+Plugin install preview:
+  id: herdr-setup.markers
+  name: Workspace here marker
+  version: 0.3.0
+  source: castocolina/herdr-setup/plugins/workspace-here
+  ref: 2b5ca2aedf06a5a988a5087da22e65b469ffc84d
+  commit: 2b5ca2aedf06a5a988a5087da22e65b469ffc84d
+  actions: 3
+  startup commands: 1
+  events: 5
+  panes: 0
+  link handlers: 0
+  build commands: 0
+    startup: python3 mark.py
+    action mark: python3 mark.py
+    action sort-local: python3 mark.py local
+    action sort-native: python3 mark.py native
+    event pane.agent_detected: python3 mark.py
+    event pane.focused: python3 mark.py
+    event pane.moved: python3 mark.py
+    event tab.focused: python3 mark.py
+    event workspace.focused: python3 mark.py
+Installed herdr-setup.markers from castocolina/herdr-setup/plugins/workspace-here.
+Config: /home/tester/.config/herdr/plugins/config/herdr-setup.markers
+{"id":"cli:server:reload-config","error":{"code":"server_not_running","message":"no herdr server is running at /home/tester/.config/herdr/herdr.sock; run `herdr` to start or attach it"}}
+==> Downloading Homebrew API data
+✔︎ JSON API packages.x86_64_linux.jws.json
+==> Fetching downloads for: procs
+✔︎ Bottle procs (0.14.12)
+==> Pouring procs--0.14.12.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/procs/0.14.12: 12 files, 6.8MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+==> Fetching downloads for: ast-grep
+✔︎ Bottle ast-grep (0.51.2)
+==> Pouring ast-grep--0.51.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/ast-grep/0.51.2: 14 files, 56.9MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+==> Fetching downloads for: jless
+✔︎ Bottle jless (0.9.0)
+==> Pouring jless--0.9.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/jless/0.9.0: 8 files, 3.9MB
+==> Fetching downloads for: broot
+✔︎ Bottle broot (1.62.0)
+==> Pouring broot--1.62.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/broot/1.62.0: 18 files, 15.3MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+Downloading from: https://github.com/kovidgoyal/kitty/releases/download/v0.50.0/kitty-0.50.0-x86_64.txz
+
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+ 20 44.6M   20 9502k    0     0  16.9M      0  0:00:02 --:--:--  0:00:02 16.9M100 44.6M  100 44.6M    0     0  43.8M      0  0:00:01  0:00:01 --:--:-- 75.4M
+Installing to /home/tester/.local/kitty.app
+Summary — 62 installed, 4 skipped, 11 blocked, 9 manual
+✓ uv                 skipped — already current
+✓ rg                 installed
+○ jq                 manual — you run: `sudo apt-get install jq`
+✓ brew               skipped — already current; owner unknown
+✓ fd                 installed
+✓ bat                installed
+✓ sd                 installed
+✓ git                skipped — managed by apt
+✓ eza                installed
+✓ gh                 installed
+✓ yq                 installed
+✓ codex              installed
+✓ claude             installed
+✓ opencode           installed
+✓ cursor-agent       installed
+✓ copilot            installed
+○ glab               manual — you run: `sudo apt-get install glab`
+✓ fzf                installed
+✓ starship           installed
+○ zsh                manual — you run: `sudo apt-get install zsh`
+✓ direnv             installed
+✓ just               installed
+✓ ruff               installed
+✓ watch              skipped — managed by apt
+○ docker             manual — you run: `sudo apt-get install docker.io`
+○ podman             manual — you run: `sudo apt-get install podman`
+✓ colima             installed
+✓ aichat             installed
+✓ antigravity        installed
+✓ codegraph          installed
+✓ graphify           installed
+○ unzip              manual — you run: `sudo apt-get install unzip`
+○ zip                manual — you run: `sudo apt-get install zip`
+○ sdkman             blocked — needs unzip
+○ java               blocked — needs sdkman
+○ gradle             blocked — needs sdkman
+○ maven              blocked — needs sdkman
+✓ vscode             installed
+✓ pnpm               installed
+○ pi                 manual — see the setup steps in the log
+✓ delta              installed
+✓ zoxide             installed
+✓ lazygit            installed
+○ oh-my-zsh          blocked — needs zsh
+✓ dust               installed
+✓ hyperfine          installed
+✓ bottom             installed
+✓ gum                installed
+✓ glow               installed
+✓ xh                 installed
+✓ difftastic         installed
+✓ gitui              installed
+✓ lazydocker         installed
+✓ dive               installed
+✓ duf                installed
+✓ hexyl              installed
+✓ miller             installed
+✓ shfmt              installed
+✓ tealdeer           installed
+✓ fx                 installed
+✓ dasel              installed
+✓ gron               installed
+✓ deno               installed
+○ groovy             blocked — needs sdkman
+○ springbootcli      blocked — needs sdkman
+✓ bun                installed
+✓ volta              installed
+✓ fnm                installed
+✓ jetbrains-toolbox  installed
+✓ neovim             installed
+✓ herdr              installed
+✓ drawio-desktop     installed
+✓ procs              installed
+✓ ast-grep           installed
+✓ jless              installed
+✓ gitleaks           installed
+✓ vale               installed
+✓ broot              installed
+✓ sublime            installed
+✓ kitty              installed
+✓ wezterm            installed
+○ alacritty          manual — you run: `sudo apt-get install alacritty`
+– gnu-bash           blocked — gnu-bash only supports macos.
+– container          blocked — container only supports macos.
+– mmdc               blocked — mmdc needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+– puppeteer          blocked — puppeteer needs Node 22.12.0 or newer for its install method; this 
+                     system's node is 20.19.2.
+jq — manual setup required:
+  sudo apt-get install jq
+glab — manual setup required:
+  sudo apt-get install glab
+zsh — manual setup required:
+  sudo apt-get install zsh
+docker — manual setup required:
+  sudo apt-get install docker.io
+podman — manual setup required:
+  sudo apt-get install podman
+unzip — manual setup required:
+  sudo apt-get install unzip
+zip — manual setup required:
+  sudo apt-get install zip
+pi — manual setup required:
+  After leaving the installer, run these Pi setup commands in a console:
+  pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+  pi
+alacritty — manual setup required:
+  sudo apt-get install alacritty
+fzf — after install:
+  Shell init on: open a new terminal to use it.
+starship — after install:
+  Shell init on: open a new terminal to use it.
+direnv — after install:
+  Shell init on: open a new terminal to use it.
+vscode — after install:
+  Lean tip: skip resident type-checkers (Pylance held 358 MB here).
+  Run the project's pre-commit as an on-demand task, not on every save.
+zoxide — after install:
+  Shell init on: open a new terminal to use it.
+volta — after install:
+  Shell init on: open a new terminal to use it.
+fnm — after install:
+  Shell init on: open a new terminal to use it.
+neovim — after install:
+  Shell init on: open a new terminal to use it.
+  Starter already in ~/.config/nvim (left as is).
+  Neovim runs no language server: check the open file with :!pre-commit run --files %
+  For one session with a server, run :lsp enable <name> inside nvim.
+⚠ herdr postinstall warning: reload-config failed (command failed (1): /home/tester/.local/bin/herdr server reload-config); restart herdr
+Agent-host hooks
+codegraph: registered for claude, codex, cursor-agent, opencode
+  claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md
+herdr: registered for claude, codex, copilot, cursor-agent, opencode
+Agent and editor settings
+codex — ~/.codex/config.toml:
+  wrote approval_policy
+  wrote sandbox_mode
+claude — ~/.claude/settings.json:
+  wrote permissions.defaultMode
+  wrote skipDangerousModePermissionPrompt
+  wrote attribution.commit
+  wrote attribution.pr
+opencode — ~/.config/opencode/opencode.json:
+  wrote permission
+cursor-agent — ~/.cursor/cli-config.json:
+  replaced CLI default: approvalMode = "allowlist"
+  replaced CLI default: attribution.attributeCommitsToAgent = true
+  replaced CLI default: attribution.attributePRsToAgent = true
+  revert restores the replaced defaults
+copilot — ~/.copilot/settings.json:
+  wrote defaultPermissionMode
+  wrote includeCoAuthoredBy
+vscode — ~/.config/Code/User/settings.json:
+  wrote telemetry.telemetryLevel
+  wrote workbench.enableExperiments
+  wrote workbench.settings.enableNaturalLanguageSearch
+  wrote extensions.ignoreRecommendations
+  wrote window.restoreWindows
+  wrote workbench.startupEditor
+  wrote editor.minimap.enabled
+  wrote files.watcherExclude
+  wrote search.followSymlinks
+  wrote npm.autoDetect
+  wrote task.autoDetect
+  wrote typescript.disableAutomaticTypeAcquisition
+  wrote git.autoRepositoryDetection
+  wrote terminal.integrated.defaultProfile.linux
+  wrote chat.disableAIFeatures
+  wrote extensions.autoUpdate
+  wrote extensions.autoCheckUpdates
+cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)
+codex, opencode: no documented attribution key; nothing written
+  rg: sha256 ✓
+  fd: sha256 ✓
+  bat: sha256 ✓
+  sd: sha256 ✓
+  eza: sha256 ✓
+  gh: sha256 ✓
+  yq: sha256 ✓
+  copilot: sha256 ✓
+  fzf: sha256 ✓
+  starship: sha256 ✓
+  direnv: sha256 ✓
+  just: sha256 ✓
+  ruff: sha256 ✓
+  aichat: sha256 ✓
+  codegraph: sha256 ✓
+  vscode: unverified (unpinned url; no sha256 to verify against)
+  delta: sha256 ✓
+  zoxide: sha256 ✓
+  lazygit: sha256 ✓
+  dust: sha256 ✓
+  hyperfine: sha256 ✓
+  bottom: sha256 ✓
+  gum: sha256 ✓
+  glow: sha256 ✓
+  xh: sha256 ✓
+  difftastic: sha256 ✓
+  gitui: sha256 ✓
+  lazydocker: sha256 ✓
+  dive: sha256 ✓
+  duf: sha256 ✓
+  hexyl: sha256 ✓
+  miller: sha256 ✓
+  shfmt: sha256 ✓
+  tealdeer: sha256 ✓
+  fx: sha256 ✓
+  dasel: sha256 ✓
+  gron: unverified (no checksum file and no GitHub sha256 digest for gron-linux-amd64-0.7.1.tgz)
+  jetbrains-toolbox: unverified (unpinned url; no sha256 to verify against)
+  neovim: sha256 ✓
+  herdr: sha256 ✓
+  drawio-desktop: sha256 ✓
+  gitleaks: sha256 ✓
+  vale: sha256 ✓
+  sublime: sha256 ✓
+  wezterm: sha256 ✓
+PATH configured in /home/tester/.myshellrc (restart your shell or source it).
+/home/tester/.local/share/fnm not on PATH
+  /home/tester/.local/share/fnm is not on your PATH.
+  → Run `make fix`, then open a new terminal (or `source ~/.myshellrc`).
+/home/linuxbrew/.linuxbrew/bin duplicated on PATH
+  /home/linuxbrew/.linuxbrew/bin appears more than once on PATH.
+  → Usually a nested shell re-adding an inherited entry, which clears when you open a new shell. To confirm, run `env -i HOME="$HOME" bash -lic 'echo $PATH'` — if it still repeats there, an rc file is adding it on every shell.
+These PATH lines duplicate directories already managed; they can be removed:
+  /home/tester/.zshrc:
+    export PATH="/home/tester/.local/bin:$PATH"
+  /home/tester/.bashrc:
+    export PATH="/home/tester/.local/bin:$PATH"
+TRACER_REINSTALL_OK installed=62 updated=0 skipped=4 failed=0 dependency_failed=0 blocked=11 manual=9
+TRACER_GSD_ABSENT_OK pass=reinstall
+TRACER_CONTAINER_TEARDOWN_OK

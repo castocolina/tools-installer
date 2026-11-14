@@ -1,0 +1,1301 @@
+Installed 14 packages in 14ms
+Install plan — 62 will install, 4 skipped, 11 blocked, 9 manual
+✓ uv                 skipped — already current
+○ rg                 will install — not installed
+○ jq                 manual — needs sudo (never run here); you run: `sudo pacman -S --needed jq`
+✓ brew               skipped — already current; owner unknown
+○ fd                 will install — not installed
+○ bat                will install — not installed
+○ sd                 will install — not installed
+✓ git                skipped — managed by pacman
+○ eza                will install — not installed
+○ gh                 will install — not installed
+○ yq                 will install — not installed
+○ codex              will install — not installed
+○ claude             will install — not installed
+○ opencode           will install — not installed
+○ cursor-agent       will install — not installed
+○ copilot            will install — not installed
+○ glab               manual — needs sudo (never run here); you run: `sudo pacman -S --needed glab`
+○ fzf                will install — not installed
+○ starship           will install — not installed
+○ zsh                manual — needs sudo (never run here); you run: `sudo pacman -S --needed zsh`
+○ direnv             will install — not installed
+○ just               will install — not installed
+○ ruff               will install — not installed
+✓ watch              skipped — managed by pacman
+○ docker             manual — needs sudo (never run here); you run: `sudo pacman -S --needed docker`
+○ podman             manual — needs sudo (never run here); you run: `sudo pacman -S --needed podman`
+○ colima             will install — not installed
+○ aichat             will install — not installed
+○ antigravity        will install — not installed
+○ codegraph          will install — not installed
+○ graphify           will install — not installed
+○ unzip              manual — needs sudo (never run here); you run: `sudo pacman -S --needed unzip`
+○ zip                manual — needs sudo (never run here); you run: `sudo pacman -S --needed zip`
+○ sdkman             blocked — needs unzip
+○ java               blocked — needs sdkman
+○ gradle             blocked — needs sdkman
+○ maven              blocked — needs sdkman
+○ vscode             will install — not installed
+○ pnpm               will install — not installed
+○ pi                 will install — not installed
+○ delta              will install — not installed
+○ zoxide             will install — not installed
+○ lazygit            will install — not installed
+○ oh-my-zsh          blocked — needs zsh
+○ dust               will install — not installed
+○ hyperfine          will install — not installed
+○ bottom             will install — not installed
+○ gum                will install — not installed
+○ glow               will install — not installed
+○ xh                 will install — not installed
+○ difftastic         will install — not installed
+○ gitui              will install — not installed
+○ lazydocker         will install — not installed
+○ dive               will install — not installed
+○ duf                will install — not installed
+○ hexyl              will install — not installed
+○ miller             will install — not installed
+○ shfmt              will install — not installed
+○ tealdeer           will install — not installed
+○ fx                 will install — not installed
+○ dasel              will install — not installed
+○ gron               will install — not installed
+○ deno               will install — not installed
+○ groovy             blocked — needs sdkman
+○ springbootcli      blocked — needs sdkman
+○ bun                will install — not installed
+○ volta              will install — not installed
+○ fnm                will install — not installed
+○ jetbrains-toolbox  will install — not installed
+○ neovim             will install — not installed
+○ puppeteer          blocked — needs unzip
+○ mmdc               blocked — needs puppeteer
+○ herdr              will install — not installed
+○ drawio-desktop     will install — not installed
+○ procs              will install — not installed
+○ ast-grep           will install — not installed
+○ jless              will install — not installed
+○ gitleaks           will install — not installed
+○ vale               will install — not installed
+○ broot              will install — not installed
+○ sublime            will install — not installed
+○ kitty              will install — not installed
+○ wezterm            manual — needs sudo (never run here); you run: `sudo pacman -S --needed 
+                     wezterm`
+○ alacritty          manual — needs sudo (never run here); you run: `sudo pacman -S --needed 
+                     alacritty`
+– gnu-bash           blocked — gnu-bash only supports macos.
+– container          blocked — container only supports macos.
+==> Installing Codex CLI
+==> Detected platform: Linux (x64)
+==> Resolved version: 0.169.0
+==> Downloading Codex CLI
+==> Installing standalone package to /home/tester/.codex/packages/standalone/releases/0.169.0-x86_64-unknown-linux-musl
+==> /home/tester/.local/bin is already on PATH
+==> Current terminal: codex
+==> Future terminals: open a new terminal and run: codex
+Codex CLI 0.169.0 installed successfully.
+Setting up Claude Code...
+
+Checking installation status...
+Installing Claude Code native build latest...
+Setting up launcher and shell integration...
+✔ Claude Code successfully installed!
+
+  Version: 2.1.325
+
+  Location: ~/.local/bin/claude
+
+
+  Next: Run claude --help to get started
+
+✅ Installation complete!
+
+[0m
+[0;2mInstalling [0mopencode [0;2mversion: [0m1.19.5[0m
+                                                                                                                                                                                                                                                                                                                                                                                                            0.0%######################                                                                                                                                                                                                                                                                                                                                                                                      5.8%########################################################################                                                                                                                                                                                                                                                                                                                                   18.3%#############################################################################################################                                                                                                                                                                                                                                                                                              28.0%###################################################################################################################################################                                                                                                                                                                                                                                                        37.6%#####################################################################################################################################################################################                                                                                                                                                                                                                      46.3%########################################################################################################################################################################################################################                                                                                                                                                                                   55.0%############################################################################################################################################################################################################################################################                                                                                                                                               64.2%###############################################################################################################################################################################################################################################################################################                                                                                                            73.2%#####################################################################################################################################################################################################################################################################################################################################                                                                      82.9%#######################################################################################################################################################################################################################################################################################################################################################################                                    91.4%######################################################################################################################################################################################################################################################################################################################################################################################################### 100.0%
+
+[0;2m                    [0m             ▄     
+[0;2m█▀▀█ █▀▀█ █▀▀█ █▀▀▄ [0m█▀▀▀ █▀▀█ █▀▀█ █▀▀█
+[0;2m█░░█ █░░█ █▀▀▀ █░░█ [0m█░░░ █░░█ █░░█ █▀▀▀
+[0;2m▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ [0m▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+[0;2mOpenCode includes free models, to start:[0m
+
+cd <project>  [0;2m# Open directory[0m
+opencode      [0;2m# Run command[0m
+
+[0;2mFor more information visit [0mhttps://opencode.ai/docs
+
+
+
+Cursor Agent Installer
+
+▸ Detecting system architecture...
+[1A[2K✓ Detected linux/x64
+▸ Creating installation directory...
+[1A[2K✓ Directory created
+▸ Downloading Cursor Agent package...
+  Download URL: https://downloads.cursor.com/lab/2026.11.13-eacade1/linux/x64/agent-cli-package.tar.gz
+###########                                                                                                                                                                                                                                                                                                                                                                                                 3.0%#############################                                                                                                                                                                                                                                                                                                                                                                               7.5%#############################################                                                                                                                                                                                                                                                                                                                                                              11.7%########################################################################                                                                                                                                                                                                                                                                                                                                   18.5%################################################################################################                                                                                                                                                                                                                                                                                                           24.6%#######################################################################################################################                                                                                                                                                                                                                                                                                    30.4%###########################################################################################################################################                                                                                                                                                                                                                                                                35.4%################################################################################################################################################                                                                                                                                                                                                                                                           36.6%#########################################################################################################################################################                                                                                                                                                                                                                                                  39.1%###############################################################################################################################################################################                                                                                                                                                                                                                            44.7%#############################################################################################################################################################################################                                                                                                                                                                                                              48.2%##################################################################################################################################################################################################################                                                                                                                                                                                         53.6%############################################################################################################################################################################################################################################                                                                                                                                                               60.2%##################################################################################################################################################################################################################################################################                                                                                                                                         65.8%#########################################################################################################################################################################################################################################################################################                                                                                                                  71.6%#####################################################################################################################################################################################################################################################################################################################                                                                                      78.7%############################################################################################################################################################################################################################################################################################################################################                                                               84.7%########################################################################################################################################################################################################################################################################################################################################################################                                   91.8%##############################################################################################################################################################################################################################################################################################################################################################################################             97.3%######################################################################################################################################################################################################################################################################################################################################################################################################### 100.0%
+[1A[2K[1A[2K[1A[2K[1A[2K✓ Package downloaded and extracted
+▸ Finalizing installation...
+[1A[2K✓ Package installed successfully
+▸ Creating bin directory...
+[1A[2K✓ Bin directory ready
+▸ Creating symlinks to agent executable...
+[1A[2K✓ Symlink created
+
+✨ Installation Complete! 
+
+
+Start using Cursor Agent:
+   agent
+
+
+Happy coding! 🚀
+
+==> Downloading bottle manifests
+✔︎ Bottle Manifest colima (0.10.3)
+==> Would install 1 formula:
+colima 0.10.3
+==> Would install 100 dependencies for colima:
+capstone                   5.0.9
+libyaml                    0.2.5
+dtc                        1.8.1
+zlib-ng-compat             2.3.3_1
+bzip2                      1.0.8
+pcre2                      10.49
+expat                      2.10.0
+dbus                       1.16.4
+ncurses                    6.6
+readline                   8.3.6
+libxcrypt                  4.5.2
+sqlite                     3.54.1
+util-linux                 2.42.4
+libffi                     3.8.0
+ca-certificates            2026-11-05
+mpdecimal                  4.0.1
+openssl@4                  4.1.0
+xz                         5.8.4
+lz4                        1.11.1
+zstd                       1.5.7_1
+libedit                    20260512-3.1
+python@3.15                3.15.2
+glib                       2.90.1
+gmp                        6.3.0
+libunistring               1.5
+libidn2                    2.3.8
+libtasn1                   4.21.0
+nettle                     4.0
+p11-kit                    0.26.6
+gnutls                     3.8.13_2
+jpeg-turbo                 3.2.1
+libpng                     1.6.59
+libslirp                   4.9.7
+libssh                     0.12.2_1
+systemd                    262.2
+libusb                     1.0.30
+lzo                        2.10
+pixman                     0.46.4
+snappy                     1.3.1
+vde                        2.3.3
+attr                       2.6.0
+brotli                     1.2.1
+freetype                   2.15.0
+fontconfig                 2.18.3
+xorgproto                  2026.1
+libxau                     1.0.12
+libxdmcp                   1.1.5
+libxcb                     1.17.0
+libx11                     1.8.14
+libxext                    1.3.7
+libxrender                 0.9.13
+cairo                      1.18.6
+elfutils                   0.197
+giflib                     6.1.3
+webp                       1.6.0
+libtiff                    4.7.2
+libxml2                    2.15.4
+shared-mime-info           2.5.1
+gdk-pixbuf                 2.44.8
+libxfixes                  6.0.2
+libxi                      1.8.4
+libxtst                    1.2.6
+at-spi2-core               2.62.1
+fribidi                    1.0.18
+gsettings-desktop-schemas  51.0
+graphite2                  1.3.15
+icu4c@79                   79.1
+harfbuzz                   15.1.0
+hicolor-icon-theme         0.18
+libxrandr                  1.5.5
+libxxf86vm                 1.1.7
+libclc                     23.1.5
+z3                         5.4.1
+llvm                       23.1.5_1
+spirv-llvm-translator      23.1.3
+spirv-tools                1.4.363.0
+xcb-util-keysyms           0.4.1
+libpciaccess               0.19
+libdrm                     2.4.134
+libxshmfence               1.3.3
+lm-sensors                 3.6.2
+wayland                    1.26.0
+mesa                       26.3.0
+mesa-glu                   9.0.3
+freeglut                   3.8.0
+libepoxy                   1.5.10
+libdatrie                  0.2.14
+libthai                    0.1.30
+pango                      1.58.2
+iso-codes                  4.20.1
+libxdamage                 1.1.7
+libxinerama                1.1.6
+xkeyboard-config           2.48
+libxkbcommon               1.13.2
+wayland-protocols          1.49
+gtk+3                      3.24.52_1
+keyutils                   1.6.3
+libcap-ng                  0.9.6_1
+qemu                       11.1.3
+lima                       2.3.0
+==> Fetching downloads for: colima
+✔︎ Bottle colima (0.10.3)
+✔︎ Bottle Manifest capstone (5.0.9)
+✔︎ Bottle capstone (5.0.9)
+✔︎ Bottle Manifest libyaml (0.2.5)
+✔︎ Bottle libyaml (0.2.5)
+✔︎ Bottle Manifest dtc (1.8.1)
+✔︎ Bottle dtc (1.8.1)
+✔︎ Bottle Manifest zlib-ng-compat (2.3.3_1)
+✔︎ Bottle zlib-ng-compat (2.3.3_1)
+✔︎ Bottle Manifest bzip2 (1.0.8)
+✔︎ Bottle bzip2 (1.0.8)
+✔︎ Bottle Manifest pcre2 (10.49)
+✔︎ Bottle Manifest expat (2.10.0)
+✔︎ Bottle expat (2.10.0)
+✔︎ Bottle Manifest dbus (1.16.4)
+✔︎ Bottle dbus (1.16.4)
+✔︎ Bottle Manifest ncurses (6.6)
+✔︎ Bottle ncurses (6.6)
+✔︎ Bottle Manifest readline (8.3.6)
+✔︎ Bottle readline (8.3.6)
+✔︎ Bottle Manifest libxcrypt (4.5.2)
+✔︎ Bottle libxcrypt (4.5.2)
+✔︎ Bottle Manifest sqlite (3.54.1)
+✔︎ Bottle sqlite (3.54.1)
+✔︎ Bottle Manifest util-linux (2.42.4)
+✔︎ Bottle util-linux (2.42.4)
+✔︎ Bottle Manifest libffi (3.8.0)
+✔︎ Bottle libffi (3.8.0)
+✔︎ Bottle Manifest ca-certificates (2026-11-05)
+✔︎ Bottle ca-certificates (2026-11-05)
+✔︎ Bottle Manifest mpdecimal (4.0.1)
+✔︎ Bottle mpdecimal (4.0.1)
+✔︎ Bottle Manifest openssl@4 (4.1.0)
+✔︎ Bottle Manifest xz (5.8.4)
+✔︎ Bottle xz (5.8.4)
+✔︎ Bottle Manifest lz4 (1.11.1)
+✔︎ Bottle lz4 (1.11.1)
+✔︎ Bottle Manifest zstd (1.5.7_1)
+✔︎ Bottle Manifest libedit (20260512-3.1)
+✔︎ Bottle libedit (20260512-3.1)
+✔︎ Bottle Manifest python@3.15 (3.15.2)
+✔︎ Bottle Manifest glib (2.90.1)
+✔︎ Bottle glib (2.90.1)
+✔︎ Bottle Manifest gmp (6.3.0)
+✔︎ Bottle Manifest libunistring (1.5)
+✔︎ Bottle libunistring (1.5)
+✔︎ Bottle Manifest libidn2 (2.3.8)
+✔︎ Bottle libidn2 (2.3.8)
+✔︎ Bottle Manifest libtasn1 (4.21.0)
+✔︎ Bottle libtasn1 (4.21.0)
+✔︎ Bottle Manifest nettle (4.0)
+✔︎ Bottle nettle (4.0)
+✔︎ Bottle Manifest p11-kit (0.26.6)
+✔︎ Bottle p11-kit (0.26.6)
+✔︎ Bottle Manifest gnutls (3.8.13_2)
+✔︎ Bottle gnutls (3.8.13_2)
+✔︎ Bottle Manifest jpeg-turbo (3.2.1)
+✔︎ Bottle jpeg-turbo (3.2.1)
+✔︎ Bottle Manifest libpng (1.6.59)
+✔︎ Bottle libpng (1.6.59)
+✔︎ Bottle Manifest libslirp (4.9.7)
+✔︎ Bottle libslirp (4.9.7)
+✔︎ Bottle Manifest libssh (0.12.2_1)
+✔︎ Bottle libssh (0.12.2_1)
+✔︎ Bottle Manifest systemd (262.2)
+✔︎ Bottle Manifest libusb (1.0.30)
+✔︎ Bottle libusb (1.0.30)
+✔︎ Bottle Manifest lzo (2.10)
+✔︎ Bottle lzo (2.10)
+✔︎ Bottle Manifest pixman (0.46.4)
+✔︎ Bottle pixman (0.46.4)
+✔︎ Bottle Manifest snappy (1.3.1)
+✔︎ Bottle snappy (1.3.1)
+✔︎ Bottle Manifest vde (2.3.3)
+✔︎ Bottle vde (2.3.3)
+✔︎ Bottle Manifest attr (2.6.0)
+✔︎ Bottle attr (2.6.0)
+✔︎ Bottle Manifest brotli (1.2.1)
+✔︎ Bottle brotli (1.2.1)
+✔︎ Bottle Manifest freetype (2.15.0)
+✔︎ Bottle freetype (2.15.0)
+✔︎ Bottle Manifest fontconfig (2.18.3)
+✔︎ Bottle fontconfig (2.18.3)
+✔︎ Bottle Manifest xorgproto (2026.1)
+✔︎ Bottle xorgproto (2026.1)
+✔︎ Bottle Manifest libxau (1.0.12)
+✔︎ Bottle libxau (1.0.12)
+✔︎ Bottle Manifest libxdmcp (1.1.5)
+✔︎ Bottle libxdmcp (1.1.5)
+✔︎ Bottle Manifest libxcb (1.17.0)
+✔︎ Bottle libxcb (1.17.0)
+✔︎ Bottle Manifest libx11 (1.8.14)
+✔︎ Bottle libx11 (1.8.14)
+✔︎ Bottle Manifest libxext (1.3.7)
+✔︎ Bottle libxext (1.3.7)
+✔︎ Bottle Manifest libxrender (0.9.13)
+✔︎ Bottle libxrender (0.9.13)
+✔︎ Bottle Manifest cairo (1.18.6)
+✔︎ Bottle cairo (1.18.6)
+✔︎ Bottle Manifest elfutils (0.197)
+✔︎ Bottle elfutils (0.197)
+✔︎ Bottle Manifest giflib (6.1.3)
+✔︎ Bottle giflib (6.1.3)
+✔︎ Bottle Manifest webp (1.6.0)
+✔︎ Bottle webp (1.6.0)
+✔︎ Bottle Manifest libtiff (4.7.2)
+✔︎ Bottle libtiff (4.7.2)
+✔︎ Bottle Manifest libxml2 (2.15.4)
+✔︎ Bottle libxml2 (2.15.4)
+✔︎ Bottle Manifest shared-mime-info (2.5.1)
+✔︎ Bottle shared-mime-info (2.5.1)
+✔︎ Bottle Manifest gdk-pixbuf (2.44.8)
+✔︎ Bottle gdk-pixbuf (2.44.8)
+✔︎ Bottle Manifest libxfixes (6.0.2)
+✔︎ Bottle libxfixes (6.0.2)
+✔︎ Bottle Manifest libxi (1.8.4)
+✔︎ Bottle libxi (1.8.4)
+✔︎ Bottle Manifest libxtst (1.2.6)
+✔︎ Bottle libxtst (1.2.6)
+✔︎ Bottle Manifest at-spi2-core (2.62.1)
+✔︎ Bottle at-spi2-core (2.62.1)
+✔︎ Bottle Manifest fribidi (1.0.18)
+✔︎ Bottle fribidi (1.0.18)
+✔︎ Bottle Manifest gsettings-desktop-schemas (51.0)
+✔︎ Bottle gsettings-desktop-schemas (51.0)
+✔︎ Bottle Manifest graphite2 (1.3.15)
+✔︎ Bottle graphite2 (1.3.15)
+✔︎ Bottle Manifest icu4c@79 (79.1)
+✔︎ Bottle Manifest harfbuzz (15.1.0)
+✔︎ Bottle harfbuzz (15.1.0)
+✔︎ Bottle Manifest hicolor-icon-theme (0.18)
+✔︎ Bottle hicolor-icon-theme (0.18)
+✔︎ Bottle Manifest libxrandr (1.5.5)
+✔︎ Bottle libxrandr (1.5.5)
+✔︎ Bottle Manifest libxxf86vm (1.1.7)
+✔︎ Bottle libxxf86vm (1.1.7)
+✔︎ Bottle Manifest libclc (23.1.5)
+✔︎ Bottle Manifest z3 (5.4.1)
+✔︎ Bottle Manifest llvm (23.1.5_1)
+✔︎ Bottle Manifest spirv-llvm-translator (23.1.3)
+✔︎ Bottle spirv-llvm-translator (23.1.3)
+✔︎ Bottle Manifest spirv-tools (1.4.363.0)
+✔︎ Bottle spirv-tools (1.4.363.0)
+✔︎ Bottle Manifest xcb-util-keysyms (0.4.1)
+✔︎ Bottle xcb-util-keysyms (0.4.1)
+✔︎ Bottle Manifest libpciaccess (0.19)
+✔︎ Bottle libpciaccess (0.19)
+✔︎ Bottle Manifest libdrm (2.4.134)
+✔︎ Bottle libdrm (2.4.134)
+✔︎ Bottle Manifest libxshmfence (1.3.3)
+✔︎ Bottle libxshmfence (1.3.3)
+✔︎ Bottle Manifest lm-sensors (3.6.2)
+✔︎ Bottle lm-sensors (3.6.2)
+✔︎ Bottle Manifest wayland (1.26.0)
+✔︎ Bottle wayland (1.26.0)
+✔︎ Bottle Manifest mesa (26.3.0)
+✔︎ Bottle Manifest mesa-glu (9.0.3)
+✔︎ Bottle mesa-glu (9.0.3)
+✔︎ Bottle Manifest freeglut (3.8.0)
+✔︎ Bottle freeglut (3.8.0)
+✔︎ Bottle Manifest libepoxy (1.5.10)
+✔︎ Bottle libepoxy (1.5.10)
+✔︎ Bottle Manifest libdatrie (0.2.14)
+✔︎ Bottle libdatrie (0.2.14)
+✔︎ Bottle Manifest libthai (0.1.30)
+✔︎ Bottle libthai (0.1.30)
+✔︎ Bottle Manifest pango (1.58.2)
+✔︎ Bottle pango (1.58.2)
+✔︎ Bottle Manifest iso-codes (4.20.1)
+✔︎ Bottle Manifest libxdamage (1.1.7)
+✔︎ Bottle libxdamage (1.1.7)
+✔︎ Bottle Manifest libxinerama (1.1.6)
+✔︎ Bottle libxinerama (1.1.6)
+✔︎ Bottle Manifest xkeyboard-config (2.48)
+✔︎ Bottle Manifest libxkbcommon (1.13.2)
+✔︎ Bottle Manifest wayland-protocols (1.49)
+✔︎ Bottle Manifest gtk+3 (3.24.52_1)
+✔︎ Bottle Manifest keyutils (1.6.3)
+✔︎ Bottle keyutils (1.6.3)
+✔︎ Bottle Manifest libcap-ng (0.9.6_1)
+✔︎ Bottle Manifest qemu (11.1.3)
+✔︎ Bottle Manifest lima (2.3.0)
+✔︎ Bottle libcap-ng (0.9.6_1)
+✔︎ Bottle wayland-protocols (1.49)
+✔︎ Bottle gmp (6.3.0)
+✔︎ Bottle zstd (1.5.7_1)
+✔︎ Bottle libxkbcommon (1.13.2)
+✔︎ Bottle xkeyboard-config (2.48)
+✔︎ Bottle python@3.15 (3.15.2)
+✔︎ Bottle gtk+3 (3.24.52_1)
+✔︎ Bottle z3 (5.4.1)
+✔︎ Bottle systemd (262.2)
+✔︎ Bottle pcre2 (10.49)
+✔︎ Bottle lima (2.3.0)
+✔︎ Bottle openssl@4 (4.1.0)
+✔︎ Bottle libclc (23.1.5)
+✔︎ Bottle iso-codes (4.20.1)
+✔︎ Bottle icu4c@79 (79.1)
+✔︎ Bottle mesa (26.3.0)
+✔︎ Bottle qemu (11.1.3)
+✔︎ Bottle llvm (23.1.5_1)
+==> Installing dependencies for colima: capstone, libyaml, dtc, zlib-ng-compat, bzip2, pcre2, expat, dbus, ncurses, readline, libxcrypt, sqlite, util-linux, libffi, ca-certificates, mpdecimal, openssl@4, xz, lz4, zstd, libedit, python@3.15, glib, gmp, libunistring, libidn2, libtasn1, nettle, p11-kit, gnutls, jpeg-turbo, libpng, libslirp, libssh, systemd, libusb, lzo, pixman, snappy, vde, attr, brotli, freetype, fontconfig, xorgproto, libxau, libxdmcp, libxcb, libx11, libxext, libxrender, cairo, elfutils, giflib, webp, libtiff, libxml2, shared-mime-info, gdk-pixbuf, libxfixes, libxi, libxtst, at-spi2-core, fribidi, gsettings-desktop-schemas, graphite2, icu4c@79, harfbuzz, hicolor-icon-theme, libxrandr, libxxf86vm, libclc, z3, llvm, spirv-llvm-translator, spirv-tools, xcb-util-keysyms, libpciaccess, libdrm, libxshmfence, lm-sensors, wayland, mesa, mesa-glu, freeglut, libepoxy, libdatrie, libthai, pango, iso-codes, libxdamage, libxinerama, xkeyboard-config, libxkbcommon, wayland-protocols, gtk+3, keyutils, libcap-ng, qemu and lima
+==> Installing colima dependency: capstone (5.0.9)
+==> Pouring capstone--5.0.9.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/capstone/5.0.9: 31 files, 30.3MB
+==> Installing colima dependency: libyaml (0.2.5)
+==> Pouring libyaml--0.2.5.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libyaml/0.2.5: 11 files, 380.9KB
+==> Installing colima dependency: dtc (1.8.1)
+==> Pouring dtc--1.8.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/dtc/1.8.1: 20 files, 626.3KB
+==> Installing colima dependency: zlib-ng-compat (2.3.3_1)
+==> Pouring zlib-ng-compat--2.3.3_1.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/zlib-ng-compat/2.3.3_1: 17 files, 600.6KB
+==> Installing colima dependency: bzip2 (1.0.8)
+==> Pouring bzip2--1.0.8.x86_64_linux.bottle.2.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/bzip2/1.0.8: 31 files, 583.3KB
+==> Installing colima dependency: pcre2 (10.49)
+==> Pouring pcre2--10.49.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/pcre2/10.49: 249 files, 8.4MB
+==> Installing colima dependency: expat (2.10.0)
+==> Pouring expat--2.10.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/expat/2.10.0: 23 files, 940.6KB
+==> Installing colima dependency: dbus (1.16.4)
+==> Pouring dbus--1.16.4.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/dbus/1.16.4: 78 files, 2.2MB
+==> Installing colima dependency: ncurses (6.6)
+==> Pouring ncurses--6.6.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/ncurses/6.6: 4,071 files, 11.5MB
+==> Installing colima dependency: readline (8.3.6)
+==> Pouring readline--8.3.6.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/readline/8.3.6: 56 files, 3MB
+==> Installing colima dependency: libxcrypt (4.5.2)
+==> Pouring libxcrypt--4.5.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxcrypt/4.5.2: 25 files, 368.8KB
+==> Installing colima dependency: sqlite (3.54.1)
+==> Pouring sqlite--3.54.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/sqlite/3.54.1: 13 files, 6.9MB
+==> Installing colima dependency: util-linux (2.42.4)
+==> Pouring util-linux--2.42.4.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/util-linux/2.42.4: 461 files, 30.6MB
+==> Installing colima dependency: libffi (3.8.0)
+==> Pouring libffi--3.8.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libffi/3.8.0: 19 files, 968.7KB
+==> Installing colima dependency: ca-certificates (2026-11-05)
+==> Pouring ca-certificates--2026-11-05.all.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/ca-certificates/2026-11-05: 5 files, 195.7KB
+==> Installing colima dependency: mpdecimal (4.0.1)
+==> Pouring mpdecimal--4.0.1.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/mpdecimal/4.0.1: 22 files, 787.7KB
+==> Installing colima dependency: openssl@4 (4.1.0)
+==> Pouring openssl@4--4.1.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/openssl@4/4.1.0: 6,878 files, 31.3MB
+==> Installing colima dependency: xz (5.8.4)
+==> Pouring xz--5.8.4.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/xz/5.8.4: 97 files, 2.8MB
+==> Installing colima dependency: lz4 (1.11.1)
+==> Pouring lz4--1.11.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/lz4/1.11.1: 28 files, 917.8KB
+==> Installing colima dependency: zstd (1.5.7_1)
+==> Pouring zstd--1.5.7_1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/zstd/1.5.7_1: 32 files, 3.1MB
+==> Installing colima dependency: libedit (20260512-3.1)
+==> Pouring libedit--20260512-3.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libedit/20260512-3.1: 61 files, 1.8MB
+==> Installing colima dependency: python@3.15 (3.15.2)
+==> Pouring python@3.15--3.15.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/python@3.15/3.15.2: 3,535 files, 86.9MB
+==> Installing colima dependency: glib (2.90.1)
+==> Pouring glib--2.90.1.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/glib/2.90.1: 510 files, 43MB
+==> Installing colima dependency: gmp (6.3.0)
+==> Pouring gmp--6.3.0.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/gmp/6.3.0: 24 files, 4.1MB
+==> Installing colima dependency: libunistring (1.5)
+==> Pouring libunistring--1.5.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libunistring/1.5: 60 files, 6.4MB
+==> Installing colima dependency: libidn2 (2.3.8)
+==> Pouring libidn2--2.3.8.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libidn2/2.3.8: 81 files, 895KB
+==> Installing colima dependency: libtasn1 (4.21.0)
+==> Pouring libtasn1--4.21.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libtasn1/4.21.0: 65 files, 653.1KB
+==> Installing colima dependency: nettle (4.0)
+==> Pouring nettle--4.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/nettle/4.0: 93 files, 3.2MB
+==> Installing colima dependency: p11-kit (0.26.6)
+==> Pouring p11-kit--0.26.6.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/p11-kit/0.26.6: 33 files, 6.9MB
+==> Installing colima dependency: gnutls (3.8.13_2)
+==> Pouring gnutls--3.8.13_2.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/gnutls/3.8.13_2: 1,309 files, 12.3MB
+==> Installing colima dependency: jpeg-turbo (3.2.1)
+==> Pouring jpeg-turbo--3.2.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/jpeg-turbo/3.2.1: 47 files, 5.9MB
+==> Installing colima dependency: libpng (1.6.59)
+==> Pouring libpng--1.6.59.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libpng/1.6.59: 29 files, 1.5MB
+==> Installing colima dependency: libslirp (4.9.7)
+==> Pouring libslirp--4.9.7.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libslirp/4.9.7: 14 files, 531.8KB
+==> Installing colima dependency: libssh (0.12.2_1)
+==> Pouring libssh--0.12.2_1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libssh/0.12.2_1: 25 files, 2.1MB
+==> Installing colima dependency: systemd (262.2)
+==> Pouring systemd--262.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/systemd/262.2: 2,200 files, 41.4MB
+==> Installing colima dependency: libusb (1.0.30)
+==> Pouring libusb--1.0.30.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libusb/1.0.30: 24 files, 656.8KB
+==> Installing colima dependency: lzo (2.10)
+==> Pouring lzo--2.10.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/lzo/2.10: 32 files, 668.8KB
+==> Installing colima dependency: pixman (0.46.4)
+==> Pouring pixman--0.46.4.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/pixman/0.46.4: 12 files, 1.8MB
+==> Installing colima dependency: snappy (1.3.1)
+==> Pouring snappy--1.3.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/snappy/1.3.1: 20 files, 206.8KB
+==> Installing colima dependency: vde (2.3.3)
+==> Pouring vde--2.3.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/vde/2.3.3: 71 files, 1MB
+==> Installing colima dependency: attr (2.6.0)
+==> Pouring attr--2.6.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/attr/2.6.0: 43 files, 371.1KB
+==> Installing colima dependency: brotli (1.2.1)
+==> Pouring brotli--1.2.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/brotli/1.2.1: 33 files, 2MB
+==> Installing colima dependency: freetype (2.15.0)
+==> Pouring freetype--2.15.0.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/freetype/2.15.0: 69 files, 3.4MB
+==> Installing colima dependency: fontconfig (2.18.3)
+==> Pouring fontconfig--2.18.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/fontconfig/2.18.3: 101 files, 2MB
+==> Installing colima dependency: xorgproto (2026.1)
+==> Pouring xorgproto--2026.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/xorgproto/2026.1: 268 files, 4.1MB
+==> Installing colima dependency: libxau (1.0.12)
+==> Pouring libxau--1.0.12.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxau/1.0.12: 22 files, 115.2KB
+==> Installing colima dependency: libxdmcp (1.1.5)
+==> Pouring libxdmcp--1.1.5.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxdmcp/1.1.5: 12 files, 128.8KB
+==> Installing colima dependency: libxcb (1.17.0)
+==> Pouring libxcb--1.17.0.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxcb/1.17.0: 2,498 files, 7.3MB
+==> Installing colima dependency: libx11 (1.8.14)
+==> Pouring libx11--1.8.14.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libx11/1.8.14: 1,030 files, 8MB
+==> Installing colima dependency: libxext (1.3.7)
+==> Pouring libxext--1.3.7.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxext/1.3.7: 89 files, 491.7KB
+==> Installing colima dependency: libxrender (0.9.13)
+==> Pouring libxrender--0.9.13.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxrender/0.9.13: 14 files, 227.2KB
+==> Installing colima dependency: cairo (1.18.6)
+==> Pouring cairo--1.18.6.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/cairo/1.18.6: 56 files, 5.8MB
+==> Installing colima dependency: elfutils (0.197)
+==> Pouring elfutils--0.197.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/elfutils/0.197: 195 files, 8.8MB
+==> Installing colima dependency: giflib (6.1.3)
+==> Pouring giflib--6.1.3.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/giflib/6.1.3: 44 files, 607.6KB
+==> Installing colima dependency: webp (1.6.0)
+==> Pouring webp--1.6.0.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/webp/1.6.0: 63 files, 3.3MB
+==> Installing colima dependency: libtiff (4.7.2)
+==> Pouring libtiff--4.7.2.x86_64_linux.bottle.2.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libtiff/4.7.2: 495 files, 9MB
+==> Installing colima dependency: libxml2 (2.15.4)
+==> Pouring libxml2--2.15.4.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxml2/2.15.4: 60 files, 2.3MB
+==> Installing colima dependency: shared-mime-info (2.5.1)
+==> Pouring shared-mime-info--2.5.1.x86_64_linux.bottle.tar.gz
+
+Note that '/home/linuxbrew/.linuxbrew/share' is not in the search path
+set by the XDG_DATA_HOME and XDG_DATA_DIRS
+environment variables, so applications may not
+be able to find it until you set them. The
+directories currently searched are:
+
+- /var/tmp/s-5ZmAQTDb/shared-mime-info-postinstall-20261114-16370-vpsaa4/.local/share
+- /usr/local/share/
+- /usr/share/
+
+🍺  /home/linuxbrew/.linuxbrew/Cellar/shared-mime-info/2.5.1: 90 files, 6.2MB
+==> Installing colima dependency: gdk-pixbuf (2.44.8)
+==> Pouring gdk-pixbuf--2.44.8.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/gdk-pixbuf/2.44.8: 153 files, 3.7MB
+==> Installing colima dependency: libxfixes (6.0.2)
+==> Pouring libxfixes--6.0.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxfixes/6.0.2: 14 files, 122.6KB
+==> Installing colima dependency: libxi (1.8.4)
+==> Pouring libxi--1.8.4.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxi/1.8.4: 87 files, 810.2KB
+==> Installing colima dependency: libxtst (1.2.6)
+==> Pouring libxtst--1.2.6.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxtst/1.2.6: 24 files, 157.6KB
+==> Installing colima dependency: at-spi2-core (2.62.1)
+==> Pouring at-spi2-core--2.62.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/at-spi2-core/2.62.1: 205 files, 4.8MB
+==> Installing colima dependency: fribidi (1.0.18)
+==> Pouring fribidi--1.0.18.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/fribidi/1.0.18: 70 files, 760.9KB
+==> Installing colima dependency: gsettings-desktop-schemas (51.0)
+==> Pouring gsettings-desktop-schemas--51.0.x86_64_linux.bottle.tar.gz
+Warning: Schema “org.gnome.system.locale” has path “/system/locale/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy” has path “/system/proxy/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.http” has path “/system/proxy/http/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.https” has path “/system/proxy/https/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.ftp” has path “/system/proxy/ftp/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.socks” has path “/system/proxy/socks/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+🍺  /home/linuxbrew/.linuxbrew/Cellar/gsettings-desktop-schemas/51.0: 109 files, 7.1MB
+==> Installing colima dependency: graphite2 (1.3.15)
+==> Pouring graphite2--1.3.15.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/graphite2/1.3.15: 19 files, 297.5KB
+==> Installing colima dependency: icu4c@79 (79.1)
+==> Pouring icu4c@79--79.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/icu4c@79/79.1: 279 files, 95.6MB
+==> Installing colima dependency: harfbuzz (15.1.0)
+==> Pouring harfbuzz--15.1.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/harfbuzz/15.1.0: 103 files, 20.3MB
+==> Installing colima dependency: hicolor-icon-theme (0.18)
+==> Pouring hicolor-icon-theme--0.18.all.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/hicolor-icon-theme/0.18: 8 files, 80.7KB
+==> Installing colima dependency: libxrandr (1.5.5)
+==> Pouring libxrandr--1.5.5.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxrandr/1.5.5: 28 files, 233.3KB
+==> Installing colima dependency: libxxf86vm (1.1.7)
+==> Pouring libxxf86vm--1.1.7.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxxf86vm/1.1.7: 35 files, 117.3KB
+==> Installing colima dependency: libclc (23.1.5)
+==> Pouring libclc--23.1.5.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libclc/23.1.5: 18 files, 73.6MB
+==> Installing colima dependency: z3 (5.4.1)
+==> Pouring z3--5.4.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/z3/5.4.1: 156 files, 57.4MB
+==> Installing colima dependency: llvm (23.1.5_1)
+==> Pouring llvm--23.1.5_1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/llvm/23.1.5_1: 9,394 files, 2.7GB
+==> Installing colima dependency: spirv-llvm-translator (23.1.3)
+==> Pouring spirv-llvm-translator--23.1.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/spirv-llvm-translator/23.1.3: 12 files, 7.4MB
+==> Installing colima dependency: spirv-tools (1.4.363.0)
+==> Pouring spirv-tools--1.4.363.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/spirv-tools/1.4.363.0: 52 files, 12.1MB
+==> Installing colima dependency: xcb-util-keysyms (0.4.1)
+==> Pouring xcb-util-keysyms--0.4.1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/xcb-util-keysyms/0.4.1: 12 files, 63.4KB
+==> Installing colima dependency: libpciaccess (0.19)
+==> Pouring libpciaccess--0.19.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libpciaccess/0.19: 11 files, 81.9KB
+==> Installing colima dependency: libdrm (2.4.134)
+==> Pouring libdrm--2.4.134.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libdrm/2.4.134: 74 files, 1.3MB
+==> Installing colima dependency: libxshmfence (1.3.3)
+==> Pouring libxshmfence--1.3.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxshmfence/1.3.3: 12 files, 52.1KB
+==> Installing colima dependency: lm-sensors (3.6.2)
+==> Pouring lm-sensors--3.6.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/lm-sensors/3.6.2: 32 files, 643.1KB
+==> Installing colima dependency: wayland (1.26.0)
+==> Pouring wayland--1.26.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/wayland/1.26.0: 40 files, 1MB
+==> Installing colima dependency: mesa (26.3.0)
+==> Pouring mesa--26.3.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/mesa/26.3.0: 259 files, 425MB
+==> Installing colima dependency: mesa-glu (9.0.3)
+==> Pouring mesa-glu--9.0.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/mesa-glu/9.0.3: 8 files, 1.6MB
+==> Installing colima dependency: freeglut (3.8.0)
+==> Pouring freeglut--3.8.0.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/freeglut/3.8.0: 108 files, 1.7MB
+==> Installing colima dependency: libepoxy (1.5.10)
+==> Pouring libepoxy--1.5.10.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libepoxy/1.5.10: 15 files, 3.6MB
+==> Installing colima dependency: libdatrie (0.2.14)
+==> Pouring libdatrie--0.2.14.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libdatrie/0.2.14: 21 files, 277.1KB
+==> Installing colima dependency: libthai (0.1.30)
+==> Pouring libthai--0.1.30.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libthai/0.1.30: 31 files, 959KB
+==> Installing colima dependency: pango (1.58.2)
+==> Pouring pango--1.58.2.x86_64_linux.bottle.1.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/pango/1.58.2: 72 files, 4MB
+==> Installing colima dependency: iso-codes (4.20.1)
+==> Pouring iso-codes--4.20.1.all.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/iso-codes/4.20.1: 1,209 files, 23.4MB
+==> Installing colima dependency: libxdamage (1.1.7)
+==> Pouring libxdamage--1.1.7.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxdamage/1.1.7: 14 files, 68.4KB
+==> Installing colima dependency: libxinerama (1.1.6)
+==> Pouring libxinerama--1.1.6.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxinerama/1.1.6: 18 files, 80.1KB
+==> Installing colima dependency: xkeyboard-config (2.48)
+==> Pouring xkeyboard-config--2.48.all.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/xkeyboard-config/2.48: 396 files, 10.9MB
+==> Installing colima dependency: libxkbcommon (1.13.2)
+==> Pouring libxkbcommon--1.13.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libxkbcommon/1.13.2: 46 files, 1.6MB
+==> Installing colima dependency: wayland-protocols (1.49)
+==> Pouring wayland-protocols--1.49.all.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/wayland-protocols/1.49: 128 files, 1.1MB
+==> Installing colima dependency: gtk+3 (3.24.52_1)
+==> Pouring gtk+3--3.24.52_1.x86_64_linux.bottle.tar.gz
+Warning: Schema “org.gnome.system.locale” has path “/system/locale/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy” has path “/system/proxy/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.http” has path “/system/proxy/http/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.https” has path “/system/proxy/https/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.ftp” has path “/system/proxy/ftp/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+Warning: Schema “org.gnome.system.proxy.socks” has path “/system/proxy/socks/”.  Paths starting with “/apps/”, “/desktop/” or “/system/” are deprecated.
+gtk3-update-icon-cache: Cache file created successfully.
+🍺  /home/linuxbrew/.linuxbrew/Cellar/gtk+3/3.24.52_1: 770 files, 62.5MB
+==> Installing colima dependency: keyutils (1.6.3)
+==> Pouring keyutils--1.6.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/keyutils/1.6.3: 66 files, 481.8KB
+==> Installing colima dependency: libcap-ng (0.9.6_1)
+==> Pouring libcap-ng--0.9.6_1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/libcap-ng/0.9.6_1: 55 files, 461.4KB
+==> Installing colima dependency: qemu (11.1.3)
+==> Pouring qemu--11.1.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/qemu/11.1.3: 206 files, 1GB
+==> Installing colima dependency: lima (2.3.0)
+==> Pouring lima--2.3.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/lima/2.3.0: 155 files, 84.2MB
+==> Installing colima
+==> Pouring colima--0.10.3.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/colima/0.10.3: 14 files, 11.4MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+==> colima
+To start colima now and restart at login:
+  brew services start colima
+Or, if you don't want/need a background service you can just run:
+  /home/linuxbrew/.linuxbrew/opt/colima/bin/colima start -f
+⠋ Detecting system environment...
+✓ Platform detected: linux_amd64
+⠋ Querying release repository...
+✓ Latest available version: 1.5.8
+⠋ Downloading release package...
+✓ Download complete and checksum verified.
+⠋ Extracting binary from archive...
+⠋ Configuring shell environment...
+ERROR: logging before google.Init: I1114 03:54:36.827614       1 installer.go:27] Running Antigravity CLI setup...
+ERROR: logging before google.Init: I1114 03:54:36.827665       1 installer.go:147] Appending PATH export to profile /home/tester/.bashrc: export PATH="/home/tester/.local/bin:$PATH"
+ERROR: logging before google.Init: I1114 03:54:36.827815       1 installer.go:184] Successfully updated shell profile: /home/tester/.bashrc
+ERROR: logging before google.Init: I1114 03:54:36.827835       1 installer.go:147] Appending PATH export to profile /home/tester/.zshrc: export PATH="/home/tester/.local/bin:$PATH"
+ERROR: logging before google.Init: I1114 03:54:36.827885       1 installer.go:184] Successfully updated shell profile: /home/tester/.zshrc
+ERROR: logging before google.Init: I1114 03:54:36.827897       1 installer.go:147] Appending PATH export to profile /home/tester/.bash_profile: export PATH="/home/tester/.local/bin:$PATH"
+ERROR: logging before google.Init: I1114 03:54:36.827927       1 installer.go:184] Successfully updated shell profile: /home/tester/.bash_profile
+ERROR: logging before google.Init: I1114 03:54:36.827937       1 installer.go:147] Appending PATH export to profile /home/tester/.profile: export PATH="/home/tester/.local/bin:$PATH"
+ERROR: logging before google.Init: I1114 03:54:36.827968       1 installer.go:184] Successfully updated shell profile: /home/tester/.profile
+ERROR: logging before google.Init: I1114 03:54:36.827977       1 installer_unix.go:40] PATH verification: ~/.local/bin is correctly configured in active PATH environment.
+
+✅ Antigravity CLI installed successfully at /home/tester/.local/bin/agy
+Run 'agy' to start the CLI
+┌  CodeGraph v1.6.2
+│
+◆  Claude Code: Updated ~/.claude.json
+│
+◆  Claude Code: Updated ~/.claude/settings.json
+│
+◆  Claude Code: Created ~/.claude/CLAUDE.md
+│
+◆  Codex CLI: Updated ~/.codex/config.toml
+│
+◆  Codex CLI: Created ~/.codex/AGENTS.md
+│
+◆  opencode: Updated ~/.config/opencode/opencode.json
+│
+◆  opencode: Created ~/.config/opencode/AGENTS.md
+│
+◆  Cursor: Created ~/.cursor/mcp.json
+│
+●  Cursor: Restart Cursor for MCP changes to take effect.
+│
+◇  Next: index a project ──────────────────────────────────────────────────╮
+│                                                                          │
+│  cd <your-project>                                                       │
+│  codegraph init        # build a project’s graph (one time; auto-syncs   │
+│  after)                                                                  │
+│  # (codegraph install --init does both steps in one command)             │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────╯
+codegraph collects anonymous usage stats (no code, paths, or names) — "codegraph telemetry off" or CODEGRAPH_TELEMETRY=0 disables. Details: https://github.com/colbymchenry/codegraph/blob/main/TELEMETRY.md
+│
+└  Done! Restart your agents to use CodeGraph.
+
+Resolved 31 packages in 256ms
+Downloading graphifyy (1.9MiB)
+Downloading networkx (2.0MiB)
+Downloading numpy (15.9MiB)
+Downloading rapidfuzz (3.0MiB)
+   Building pyyaml==6.0.3
+   Building tree-sitter==0.25.2
+ Downloaded graphifyy
+ Downloaded networkx
+ Downloaded rapidfuzz
+ Downloaded numpy
+      Built pyyaml==6.0.3
+      Built tree-sitter==0.25.2
+Prepared 31 packages in 7.14s
+Installed 31 packages in 34ms
+ + graphifyy==0.9.108
+ + networkx==3.7
+ + numpy==2.5.4
+ + pyyaml==6.0.3
+ + rapidfuzz==3.14.6
+ + tree-sitter==0.25.2
+ + tree-sitter-bash==0.25.1
+ + tree-sitter-c==0.24.2
+ + tree-sitter-c-sharp==0.23.5
+ + tree-sitter-cpp==0.23.4
+ + tree-sitter-elixir==0.3.5
+ + tree-sitter-fortran==0.6.0
+ + tree-sitter-go==0.25.0
+ + tree-sitter-groovy==0.1.2
+ + tree-sitter-java==0.23.5
+ + tree-sitter-javascript==0.25.0
+ + tree-sitter-json==0.24.8
+ + tree-sitter-julia==0.23.1
+ + tree-sitter-kotlin==1.1.0
+ + tree-sitter-lua==0.5.0
+ + tree-sitter-objc==3.0.2
+ + tree-sitter-php==0.24.1
+ + tree-sitter-powershell==0.26.4
+ + tree-sitter-python==0.25.0
+ + tree-sitter-ruby==0.23.1
+ + tree-sitter-rust==0.24.2
+ + tree-sitter-scala==0.26.13
+ + tree-sitter-swift==0.7.4
+ + tree-sitter-typescript==0.23.2
+ + tree-sitter-verilog==1.0.3
+ + tree-sitter-zig==1.1.2
+Installed 2 executables: graphify, graphify-mcp
+==> Downloading pnpm 12.18.0
+Installing pnpm CLI globally from /tmp/tmp.4B0F07AnzH
+.../global/v11/45ce-18e7cd1c5457a3dc-0   | Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/tester/.local/share/pnpm/store/v11
+  Virtual store is at:             ../.local/share/pnpm/store/v11/links
+.../global/v11/45ce-18e7cd1c5457a3dc-0   | Progress: resolved 1, reused 0, downloaded 0, added 1, done
+
+dependencies:
++ pnpm file:../../../../../../../../tmp/tmp.4B0F07AnzH
+
+Done in 71ms using pnpm v12.18.0
+Appended new lines to /home/tester/.bashrc
+
+The following configuration changes were made:
+export PNPM_HOME='/home/tester/.local/share/pnpm'
+case ":$PATH:" in
+  ":$PNPM_HOME/bin:"*) ;;
+  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
+esac
+
+To start using pnpm, run:
+source /home/tester/.bashrc
+
+To uninstall, delete /home/tester/.local/share/pnpm and the lines pnpm setup added to the shell config file named above.
+See https://pnpm.io/uninstall
+Successfully created cache directory `/home/tester/.cache/tealdeer/tldr-pages`.
+Successfully updated cache.
+Pages for the following languages were downloaded: en
+==> Downloading bottle manifests
+✔︎ Bottle Manifest deno (2.9.8)
+==> Would install 1 formula:
+deno 2.9.8
+==> Would install 1 dependency for deno:
+little-cms2 2.20
+==> Fetching downloads for: deno
+✔︎ Bottle Manifest little-cms2 (2.20)
+✔︎ Bottle little-cms2 (2.20)
+✔︎ Bottle deno (2.9.8)
+==> Installing deno dependency: little-cms2 (2.20)
+==> Pouring little-cms2--2.20.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/little-cms2/2.20: 24 files, 1.6MB
+==> Installing deno
+==> Pouring deno--2.9.8.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/deno/2.9.8: 12 files, 241.4MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+error: unzip is required to install bun
+==> Downloading bottle manifests
+✔︎ Bottle Manifest bun (1.4.4_1)
+==> Fetching downloads for: bun
+✔︎ Bottle bun (1.4.4_1)
+==> Pouring bun--1.4.4_1.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/bun/1.4.4_1: 10 files, 88.7MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+[1;32m  Installing[0m latest version of Volta (2.0.2)
+[1;32m    Checking[0m for existing Volta installation
+[1;32m    Fetching[0m archive for Linux, version 2.0.2
+#=O#-      #            #                                                                                                                                                                                                                                                                                                                                                                                       #####################################################################################################################################                                                                                                                                                                                                                                                                      34.1%######################################################################################################################################################################################################################################################################################################################################################################################################### 100.0%
+[1;32m    Creating[0m directory layout
+[1;32m  Extracting[0m Volta binaries and launchers
+[1;32m    Finished[0m installation. Updating user profile settings.
+Checking dependencies for the installation script...
+Checking availability of curl... OK!
+Checking availability of unzip... Missing!
+Not installing fnm due to missing dependencies.
+==> Downloading bottle manifests
+✔︎ Bottle Manifest fnm (1.39.0)
+==> Fetching downloads for: fnm
+✔︎ Bottle fnm (1.39.0)
+==> Pouring fnm--1.39.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/fnm/1.39.0: 12 files, 8.8MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+installed claude integration hook to /home/tester/.claude/hooks/herdr-agent-state.sh
+ensured claude settings at /home/tester/.claude/settings.json
+installed codex integration hook to /home/tester/.codex/herdr-agent-state.sh
+ensured codex hooks at /home/tester/.codex/hooks.json
+ensured codex config at /home/tester/.codex/config.toml
+installed opencode integration plugin to /home/tester/.config/opencode/plugins/herdr-agent-state.js
+installed opencode tui integration plugin to /home/tester/.config/opencode/herdr-tui-session.js
+ensured opencode tui plugin config at /home/tester/.config/opencode/tui.jsonc
+installed cursor integration hook to /home/tester/.cursor/herdr-agent-state.sh
+updated cursor hooks at /home/tester/.cursor/hooks.json
+installed copilot integration hook to /home/tester/.copilot/hooks/herdr-agent-state.sh
+ensured copilot settings at /home/tester/.copilot/settings.json
+Plugin install preview:
+  id: herdr-setup.markers
+  name: Workspace here marker
+  version: 0.3.0
+  source: castocolina/herdr-setup/plugins/workspace-here
+  ref: 2b5ca2aedf06a5a988a5087da22e65b469ffc84d
+  commit: 2b5ca2aedf06a5a988a5087da22e65b469ffc84d
+  actions: 3
+  startup commands: 1
+  events: 5
+  panes: 0
+  link handlers: 0
+  build commands: 0
+    startup: python3 mark.py
+    action mark: python3 mark.py
+    action sort-local: python3 mark.py local
+    action sort-native: python3 mark.py native
+    event pane.agent_detected: python3 mark.py
+    event pane.focused: python3 mark.py
+    event pane.moved: python3 mark.py
+    event tab.focused: python3 mark.py
+    event workspace.focused: python3 mark.py
+Installed herdr-setup.markers from castocolina/herdr-setup/plugins/workspace-here.
+Config: /home/tester/.config/herdr/plugins/config/herdr-setup.markers
+{"id":"cli:server:reload-config","error":{"code":"server_not_running","message":"no herdr server is running at /home/tester/.config/herdr/herdr.sock; run `herdr` to start or attach it"}}
+==> Downloading bottle manifests
+✔︎ Bottle Manifest procs (0.14.12)
+==> Fetching downloads for: procs
+✔︎ Bottle procs (0.14.12)
+==> Pouring procs--0.14.12.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/procs/0.14.12: 12 files, 6.8MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+==> Downloading bottle manifests
+✔︎ Bottle Manifest ast-grep (0.51.2)
+==> Fetching downloads for: ast-grep
+✔︎ Bottle ast-grep (0.51.2)
+==> Pouring ast-grep--0.51.2.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/ast-grep/0.51.2: 14 files, 56.9MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+==> Downloading bottle manifests
+✔︎ Bottle Manifest jless (0.9.0)
+==> Fetching downloads for: jless
+✔︎ Bottle jless (0.9.0)
+==> Pouring jless--0.9.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/jless/0.9.0: 8 files, 3.9MB
+==> Downloading bottle manifests
+✔︎ Bottle Manifest broot (1.62.0)
+==> Fetching downloads for: broot
+✔︎ Bottle broot (1.62.0)
+==> Pouring broot--1.62.0.x86_64_linux.bottle.tar.gz
+🍺  /home/linuxbrew/.linuxbrew/Cellar/broot/1.62.0: 18 files, 15.3MB
+==> Caveats
+Bash completion has been installed to:
+  /home/linuxbrew/.linuxbrew/etc/bash_completion.d
+Downloading from: https://github.com/kovidgoyal/kitty/releases/download/v0.50.0/kitty-0.50.0-x86_64.txz
+
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
+  0      0   0      0   0      0      0      0                              0100 44.67M 100 44.67M   0      0 42.10M      0   00:01   00:01              0100 44.67M 100 44.67M   0      0 42.10M      0   00:01   00:01              0100 44.67M 100 44.67M   0      0 42.10M      0   00:01   00:01              0
+Installing to /home/tester/.local/kitty.app
+Summary — 61 installed, 4 skipped, 11 blocked, 10 manual
+✓ uv                 skipped — already current
+✓ rg                 installed
+○ jq                 manual — you run: `sudo pacman -S --needed jq`
+✓ brew               skipped — already current; owner unknown
+✓ fd                 installed
+✓ bat                installed
+✓ sd                 installed
+✓ git                skipped — managed by pacman
+✓ eza                installed
+✓ gh                 installed
+✓ yq                 installed
+✓ codex              installed
+✓ claude             installed
+✓ opencode           installed
+✓ cursor-agent       installed
+✓ copilot            installed
+○ glab               manual — you run: `sudo pacman -S --needed glab`
+✓ fzf                installed
+✓ starship           installed
+○ zsh                manual — you run: `sudo pacman -S --needed zsh`
+✓ direnv             installed
+✓ just               installed
+✓ ruff               installed
+✓ watch              skipped — managed by pacman
+○ docker             manual — you run: `sudo pacman -S --needed docker`
+○ podman             manual — you run: `sudo pacman -S --needed podman`
+✓ colima             installed
+✓ aichat             installed
+✓ antigravity        installed
+✓ codegraph          installed
+✓ graphify           installed
+○ unzip              manual — you run: `sudo pacman -S --needed unzip`
+○ zip                manual — you run: `sudo pacman -S --needed zip`
+○ sdkman             blocked — needs unzip
+○ java               blocked — needs sdkman
+○ gradle             blocked — needs sdkman
+○ maven              blocked — needs sdkman
+✓ vscode             installed
+✓ pnpm               installed
+○ pi                 manual — see the setup steps in the log
+✓ delta              installed
+✓ zoxide             installed
+✓ lazygit            installed
+○ oh-my-zsh          blocked — needs zsh
+✓ dust               installed
+✓ hyperfine          installed
+✓ bottom             installed
+✓ gum                installed
+✓ glow               installed
+✓ xh                 installed
+✓ difftastic         installed
+✓ gitui              installed
+✓ lazydocker         installed
+✓ dive               installed
+✓ duf                installed
+✓ hexyl              installed
+✓ miller             installed
+✓ shfmt              installed
+✓ tealdeer           installed
+✓ fx                 installed
+✓ dasel              installed
+✓ gron               installed
+✓ deno               installed
+○ groovy             blocked — needs sdkman
+○ springbootcli      blocked — needs sdkman
+✓ bun                installed
+✓ volta              installed
+✓ fnm                installed
+✓ jetbrains-toolbox  installed
+✓ neovim             installed
+○ puppeteer          blocked — needs unzip
+○ mmdc               blocked — needs puppeteer
+✓ herdr              installed
+✓ drawio-desktop     installed
+✓ procs              installed
+✓ ast-grep           installed
+✓ jless              installed
+✓ gitleaks           installed
+✓ vale               installed
+✓ broot              installed
+✓ sublime            installed
+✓ kitty              installed
+○ wezterm            manual — you run: `sudo pacman -S --needed wezterm`
+○ alacritty          manual — you run: `sudo pacman -S --needed alacritty`
+– gnu-bash           blocked — gnu-bash only supports macos.
+– container          blocked — container only supports macos.
+jq — manual setup required:
+  sudo pacman -S --needed jq
+glab — manual setup required:
+  sudo pacman -S --needed glab
+zsh — manual setup required:
+  sudo pacman -S --needed zsh
+docker — manual setup required:
+  sudo pacman -S --needed docker
+podman — manual setup required:
+  sudo pacman -S --needed podman
+unzip — manual setup required:
+  sudo pacman -S --needed unzip
+zip — manual setup required:
+  sudo pacman -S --needed zip
+pi — manual setup required:
+  After leaving the installer, run these Pi setup commands in a console:
+  pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+  pi
+wezterm — manual setup required:
+  sudo pacman -S --needed wezterm
+alacritty — manual setup required:
+  sudo pacman -S --needed alacritty
+fzf — after install:
+  Shell init on: open a new terminal to use it.
+starship — after install:
+  Shell init on: open a new terminal to use it.
+direnv — after install:
+  Shell init on: open a new terminal to use it.
+vscode — after install:
+  Lean tip: skip resident type-checkers (Pylance held 358 MB here).
+  Run the project's pre-commit as an on-demand task, not on every save.
+zoxide — after install:
+  Shell init on: open a new terminal to use it.
+volta — after install:
+  Shell init on: open a new terminal to use it.
+fnm — after install:
+  Shell init on: open a new terminal to use it.
+neovim — after install:
+  Shell init on: open a new terminal to use it.
+  Starter: kickstart.nvim 8e35dbe (no language servers) is in ~/.config/nvim.
+  Open nvim once so the starter downloads its plugins (it asks Proceed? once).
+  Neovim runs no language server: check the open file with :!pre-commit run --files %
+  For one session with a server, run :lsp enable <name> inside nvim.
+⚠ herdr postinstall warning: reload-config failed (command failed (1): /home/tester/.local/bin/herdr server reload-config); restart herdr
+Agent-host hooks
+codegraph: registered for claude, codex, cursor-agent, opencode
+  claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md
+herdr: registered for claude, codex, copilot, cursor-agent, opencode
+Agent and editor settings
+codex — ~/.codex/config.toml:
+  wrote approval_policy
+  wrote sandbox_mode
+claude — ~/.claude/settings.json:
+  wrote permissions.defaultMode
+  wrote skipDangerousModePermissionPrompt
+  wrote attribution.commit
+  wrote attribution.pr
+opencode — ~/.config/opencode/opencode.json:
+  wrote permission
+cursor-agent — ~/.cursor/cli-config.json:
+  replaced CLI default: approvalMode = "allowlist"
+  replaced CLI default: attribution.attributeCommitsToAgent = true
+  replaced CLI default: attribution.attributePRsToAgent = true
+  revert restores the replaced defaults
+copilot — ~/.copilot/settings.json:
+  wrote defaultPermissionMode
+  wrote includeCoAuthoredBy
+vscode — ~/.config/Code/User/settings.json:
+  wrote telemetry.telemetryLevel
+  wrote workbench.enableExperiments
+  wrote workbench.settings.enableNaturalLanguageSearch
+  wrote extensions.ignoreRecommendations
+  wrote window.restoreWindows
+  wrote workbench.startupEditor
+  wrote editor.minimap.enabled
+  wrote files.watcherExclude
+  wrote search.followSymlinks
+  wrote npm.autoDetect
+  wrote task.autoDetect
+  wrote typescript.disableAutomaticTypeAcquisition
+  wrote git.autoRepositoryDetection
+  wrote terminal.integrated.defaultProfile.linux
+  wrote chat.disableAIFeatures
+  wrote extensions.autoUpdate
+  wrote extensions.autoCheckUpdates
+cursor-agent: the Cursor CLI ignores the commit opt-out (as of 2026-10-04)
+codex, opencode: no documented attribution key; nothing written
+  rg: sha256 ✓
+  fd: sha256 ✓
+  bat: sha256 ✓
+  sd: sha256 ✓
+  eza: sha256 ✓
+  gh: sha256 ✓
+  yq: sha256 ✓
+  copilot: sha256 ✓
+  fzf: sha256 ✓
+  starship: sha256 ✓
+  direnv: sha256 ✓
+  just: sha256 ✓
+  ruff: sha256 ✓
+  aichat: sha256 ✓
+  codegraph: sha256 ✓
+  vscode: unverified (unpinned url; no sha256 to verify against)
+  delta: sha256 ✓
+  zoxide: sha256 ✓
+  lazygit: sha256 ✓
+  dust: sha256 ✓
+  hyperfine: sha256 ✓
+  bottom: sha256 ✓
+  gum: sha256 ✓
+  glow: sha256 ✓
+  xh: sha256 ✓
+  difftastic: sha256 ✓
+  gitui: sha256 ✓
+  lazydocker: sha256 ✓
+  dive: sha256 ✓
+  duf: sha256 ✓
+  hexyl: sha256 ✓
+  miller: sha256 ✓
+  shfmt: sha256 ✓
+  tealdeer: sha256 ✓
+  fx: sha256 ✓
+  dasel: sha256 ✓
+  gron: unverified (no checksum file and no GitHub sha256 digest for gron-linux-amd64-0.7.1.tgz)
+  jetbrains-toolbox: unverified (unpinned url; no sha256 to verify against)
+  neovim: sha256 ✓
+  herdr: sha256 ✓
+  drawio-desktop: sha256 ✓
+  gitleaks: sha256 ✓
+  vale: sha256 ✓
+  sublime: sha256 ✓
+PATH configured in /home/tester/.myshellrc (restart your shell or source it).
+PATH looks healthy
+  All bin dirs are present, on PATH, and unique.
+These PATH lines duplicate directories already managed; they can be removed:
+  /home/tester/.zshrc:
+    export PATH="/home/tester/.local/bin:$PATH"
+    export PATH="$VOLTA_HOME/bin:$PATH"
+  /home/tester/.bashrc:
+    export PATH="/home/tester/.local/bin:$PATH"
+    export PATH="$VOLTA_HOME/bin:$PATH"
+PASS1_COUNTS installed=61 updated=0 skipped=4 failed=0 dependency_failed=0 mismatched=0 blocked=11 manual=10 not_attempted=0 crashed=0 post_run_errors=0 summaries=1 runs=1 setup_exit=0
+TRACER_DISTRO_BLOCKED distro=arch tool=sdkman reason=needs unzip
+TRACER_DISTRO_BLOCKED distro=arch tool=java reason=needs sdkman
+TRACER_DISTRO_BLOCKED distro=arch tool=gradle reason=needs sdkman
+TRACER_DISTRO_BLOCKED distro=arch tool=maven reason=needs sdkman
+TRACER_DISTRO_BLOCKED distro=arch tool=oh-my-zsh reason=needs zsh
+TRACER_DISTRO_BLOCKED distro=arch tool=groovy reason=needs sdkman
+TRACER_DISTRO_BLOCKED distro=arch tool=springbootcli reason=needs sdkman
+TRACER_DISTRO_BLOCKED distro=arch tool=puppeteer reason=needs unzip
+TRACER_DISTRO_BLOCKED distro=arch tool=mmdc reason=needs puppeteer
+TRACER_DISTRO_BLOCKED distro=arch tool=gnu-bash reason=gnu-bash only supports macos.
+TRACER_DISTRO_BLOCKED distro=arch tool=container reason=container only supports macos.
+TRACER_CLEAN_INSTALL_OK installed=61 updated=0 skipped=4 failed=0 blocked=11 manual=10
+TRACER_RECEIPT_OK tool=yq
+TRACER_GSD_ABSENT_OK pass=install

@@ -1,0 +1,175 @@
+[[finding]]
+entry = "codegraph"
+check = "script"
+status = "drift"
+source = "doc names `present_agent_hosts`, which does not exist; the code has present_hosts() and present_harnesses (installer/postinstall.py:84,95)"
+cite = ".claude/skills/tool-onboarding/SKILL.md:176"
+
+[[finding]]
+entry = "codegraph"
+check = "script"
+status = "drift"
+source = "doc names `present_agent_hosts`, which does not exist; the code has present_hosts() and present_harnesses (installer/postinstall.py:84,95)"
+cite = ".claude/architecture.md:355"
+
+[[finding]]
+entry = "codegraph"
+check = "script"
+status = "drift"
+source = "doc names `present_agent_hosts`, which does not exist; the code has present_hosts() and present_harnesses (installer/postinstall.py:84,95)"
+cite = ".claude/architecture.md:623"
+
+[[finding]]
+entry = "cursor-agent"
+check = "script"
+status = "unknown"
+source = "reason: designed rewrite (model-injecting shim, 24.2 D-17), container check not run"
+cite = "installer/cursor_shim.py:65"
+
+[[finding]]
+entry = "(installer)"
+check = "script"
+status = "unknown"
+source = "reason: designed rewrite (npx/redirect shim), container check not run"
+cite = "installer/guards.py:218"
+
+[[finding]]
+entry = "(installer)"
+check = "script"
+status = "unknown"
+source = "reason: designed rewrite (npx/redirect shim), container check not run"
+cite = "installer/guards.py:260"
+
+[[finding]]
+entry = "(installer)"
+check = "script"
+status = "unknown"
+source = "reason: designed rewrite (npx/redirect shim), container check not run"
+cite = "installer/guards.py:333"
+
+[[finding]]
+entry = "zip"
+check = "script"
+status = "drift"
+source = "`zip --version` prints the copyright line \"1990-2008\" first; extract_observed_version (installer/versions.py:211) reads those years, not \"Zip 3.0\" on line 2"
+cite = "installer/versions.py:211"
+
+[[finding]]
+entry = "container"
+check = "removal recipe and paths"
+status = "unknown"
+source = "reason: container check not run (macOS-only entry, no Linux container can run it)"
+
+[[finding]]
+entry = "container"
+check = "postinstall hook"
+status = "unknown"
+source = "reason: container check not run (macOS-only entry, no Linux container can run it)"
+
+[[finding]]
+entry = "podman"
+check = "removal recipe and paths"
+status = "unknown"
+source = "reason: container check not run (Linux methods are sudo handoffs the harness never runs; macOS brew not runnable in a Linux container)"
+
+[[finding]]
+entry = "ast-grep"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "jetbrains-toolbox"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "jless"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "maven"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "procs"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "sdkman"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "sublime"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "vscode"
+check = "update argv"
+status = "unknown"
+source = "reason: container check not run (the harness rerun reports already current; an update needs a newer upstream than the install)"
+
+[[finding]]
+entry = "duf"
+check = "postinstall hook"
+status = "unknown"
+source = "reason: container check not run (the harness does not exercise this postinstall expectation)"
+
+[[finding]]
+entry = "hexyl"
+check = "install method"
+status = "unknown"
+source = "reason: container check not run for package currency (the install itself passed: container .planning/audits/catalog/2026-11-13/containers/fedora-pass1-transcript.log)"
+
+[[finding]]
+entry = "java"
+check = "install method"
+status = "unknown"
+source = "reason: container check not run for package currency (the install itself passed: container .planning/audits/catalog/2026-11-13/containers/fedora-pass1-transcript.log)"
+
+[[finding]]
+entry = "antigravity"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+
+[[finding]]
+entry = "duf"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+
+[[finding]]
+entry = "jetbrains-toolbox"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+
+[[finding]]
+entry = "jless"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+
+[[finding]]
+entry = "procs"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+
+[[finding]]
+entry = "sublime"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
