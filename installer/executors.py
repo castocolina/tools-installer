@@ -520,7 +520,12 @@ def _node(method: Method, runner: Runner) -> None:
     # performed by this installer must reach real pnpm so its gated postinstall
     # model still applies.
     pnpm = real_pnpm()
+    min_node = method.params.get("min_node")
     if pnpm is None:
+        if isinstance(min_node, str) and min_node:
+            # A host with bun but no node ends the bun-then-pnpm ladder here: the node floor
+            # is the fix both methods share, so name it rather than "install pnpm".
+            _require_minimum("node", ["node", "--version"], min_node)
         left_behind = _pnpm_left_behind()
         if left_behind is not None:
             # Present but unreachable: a fresh install would only repeat the same PATH miss.
@@ -544,7 +549,6 @@ def _node(method: Method, runner: Runner) -> None:
     # pnpm's documentation, also persists the permission for future versions of
     # that package, which is why the name set is constrained at load time.
     allowances = [f"--allow-build={name}" for name in dict.fromkeys(allow_build)]
-    min_node = method.params.get("min_node")
     if co_install or allow_build:
         floor = PNPM_CO_INSTALL_MIN if co_install else PNPM_ALLOW_BUILD_MIN
         # Probe the resolved absolute path, never the bare name: a bare `pnpm`

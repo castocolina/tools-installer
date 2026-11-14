@@ -3028,3 +3028,75 @@ def test_a_bun_generic_smoke_failure_also_ends_the_ladder(
     assert isinstance(outcome.errors[-1], executors.MethodLeftInstalled)
     assert "bun left rg installed after its smoke run failed" in str(outcome.errors[-1])
     assert str(home / ".bun" / "bin") not in os.environ["PATH"]
+
+
+def test_bun_without_node_or_pnpm_names_node_as_the_fix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _bun_host(monkeypatch, tmp_path, scratch_path_for_manager_smoke)
+    (scratch_path_for_manager_smoke / "pnpm").unlink()
+
+    def no_node(_argv: list[str]) -> None:
+        return None
+
+    monkeypatch.setattr(executors, "probe_version", no_node)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _bun_then_node_mmdc(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert calls == []
+    reason = str(outcome.errors[-1])
+    assert "does not meet the required minimum 22.12.0" in reason
+    assert "install pnpm" not in reason
+
+
+def _peer_note_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scratch: Path,
+    peer_dir: Path | None,
+) -> tuple[InstallOutcome, list[list[str]]]:
+    _bun_host(monkeypatch, tmp_path, scratch)
+    if peer_dir is not None:
+        peer_dir.mkdir(parents=True, exist_ok=True)
+        (peer_dir / "puppeteer").write_text("#!/bin/sh\n", encoding="utf-8")
+        (peer_dir / "puppeteer").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{peer_dir}{os.pathsep}{scratch}")
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _bun_then_node_mmdc(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    return outcome, calls
+
+
+def test_bun_names_a_peer_another_manager_owns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    peer_dir = tmp_path / "home" / ".local" / "share" / "pnpm" / "bin"
+    outcome, calls = _peer_note_outcome(
+        monkeypatch, tmp_path, scratch_path_for_manager_smoke, peer_dir
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "bun"
+    assert [call[0].rsplit("/", 1)[-1] for call in calls] == ["bun"]  # the other copy is untouched
+    warning = outcome.postinstall_warning or ""
+    assert "puppeteer" in warning
+    assert "mmdc" in warning
+    assert str(peer_dir / "puppeteer") in warning
+
+
+@pytest.mark.parametrize("peer_under_bun_bin", [False, True])
+def test_bun_names_no_peer_when_none_or_only_its_own_exists(
+    peer_under_bun_bin: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scratch_path_for_manager_smoke: Path,
+) -> None:
+    own_bin = tmp_path / "home" / ".bun" / "bin" if peer_under_bun_bin else None
+    outcome, _calls = _peer_note_outcome(
+        monkeypatch, tmp_path, scratch_path_for_manager_smoke, own_bin
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is None

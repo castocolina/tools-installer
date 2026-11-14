@@ -1251,6 +1251,28 @@ def test_node_reports_an_absent_pnpm_and_points_at_the_troubleshooting_guide(
     assert calls == []
 
 
+def test_node_without_pnpm_but_with_a_good_node_still_says_install_pnpm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(executors, "probe_version", _const_probe("v22.23.1"))
+    method = Method(kind="node", params={"npm_pkg": "x", "min_node": "22.12.0"})
+    with pytest.raises(ExecutorError, match=r"pnpm not found on PATH — install pnpm"):
+        execute(method, _record()[1])
+
+
+def test_node_without_pnpm_names_a_node_below_the_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(executors, "probe_version", _const_probe(None))
+    method = Method(kind="node", params={"npm_pkg": "x", "min_node": "22.12.0"})
+    with pytest.raises(ExecutorError, match="does not meet the required minimum 22.12.0"):
+        execute(method, _record()[1])
+
+
 def test_node_reports_a_present_pnpm_off_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

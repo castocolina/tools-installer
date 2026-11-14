@@ -4,11 +4,11 @@ import os
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from installer import apps, cargo_distrobox, download, executors, receipts
 from installer.agent_settings import FileResult
-from installer.bun_globals import method_bin_dir
+from installer.bun_globals import bun_dirs, method_bin_dir
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.enums import InstallStatus
@@ -289,6 +289,7 @@ def install_tool(
         previous = receipts.read(tool.id)
         already_there = _package_already_there(method, package, manager_inventory)
         path_before = os.environ.get("PATH", "")
+        peer_notes = _bun_peer_notes(tool, method)
         # One context serves the whole ladder: only the method that succeeds may record a release.
         resolved_tags.clear()
         try:
@@ -370,6 +371,7 @@ def install_tool(
             if crash:
                 warning = f"{warning}; {crash}" if warning else crash
             leftovers.extend(notes)
+            leftovers.extend(peer_notes)
             if leftovers:
                 joined = "; ".join(leftovers)
                 warning = f"{warning}; {joined}" if warning else joined
@@ -385,6 +387,32 @@ def install_tool(
                 settings=output.settings,
             )
     return InstallOutcome(tool.id, InstallStatus.FAILED, errors=tuple(errors))
+
+
+def _bun_peer_notes(tool: Tool, method: Method) -> list[str]:
+    """A note per `co_install` member another manager already owns on PATH, for a bun method.
+
+    bun installs its own copy and leaves that one with its manager (D-20); no rule here picks
+    the method by who owns the peer.
+    """
+    if method.kind != "bun":
+        return []
+    raw = method.params.get("co_install")
+    names = (
+        [name for name in cast(list[object], raw) if isinstance(name, str)]
+        if isinstance(raw, list)
+        else []
+    )
+    bun_bin = bun_dirs()[0]
+    notes: list[str] = []
+    for name in names:
+        found = real_binary(name, path_value=os.environ.get("PATH", ""))
+        if found is not None and Path(found).parent != bun_bin:
+            notes.append(
+                f"bun installed its own {name} for {tool.id}; "
+                f"the {name} at {found} stays with its manager"
+            )
+    return notes
 
 
 def _package_already_there(
