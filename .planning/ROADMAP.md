@@ -659,7 +659,9 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 24.4-06-PLAN.md — `--guard`/`--unguard` and `make guard`/`make unguard` gone, `installer/guards.py` deleted, GUARD-01 scan and route tests (wave 4)
-- [ ] 24.4-07-PLAN.md — README, TROUBLESHOOTING, AGENTS.md and the architecture rules describe the launch cleanup; link check (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 24.4-07-PLAN.md — README, TROUBLESHOOTING, AGENTS.md and the architecture rules describe the launch cleanup; link check (wave 5, after 24.4-06 so AGENTS.md keeps its host rule until the targets are gone)
 
 ### Phase 24.5: JavaScript install priority brew then bun then volta (INSERTED)
 
