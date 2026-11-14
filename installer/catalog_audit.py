@@ -852,7 +852,6 @@ _PY_SURFACES = (
     "installer/postinstall.py",
     "installer/post_install.py",
     "installer/agent_settings.py",
-    "installer/guards.py",
     "installer/env_redirect.py",
     "installer/cursor_shim.py",
 )

@@ -964,6 +964,24 @@ def _found(rows: list[catalog_audit.ScanRow]) -> list[tuple[str, int]]:
     return [(row.path, row.line) for row in rows if row.status == "finding"]
 
 
+# The npx redirect's f-string exec line, planted in a scratch surface now that guards.py is retired.
+_FSTRING_EXEC_LINE = 'exec {shlex.quote(target_path)} {quoted_args} "$@"'
+_FSTRING_SHIM = f"SHIM = f'''#!/bin/sh\n{_FSTRING_EXEC_LINE}\n'''\n"
+
+
+def test_py_surfaces_do_not_name_the_retired_guard() -> None:
+    surfaces: tuple[str, ...] = vars(catalog_audit)["_PY_SURFACES"]
+    assert "installer/guards.py" not in surfaces
+    assert "installer/legacy_guard.py" not in surfaces
+
+
+def test_every_py_surface_exists() -> None:
+    root = Path(catalog_audit.__file__).resolve().parent.parent
+    surfaces: tuple[str, ...] = vars(catalog_audit)["_PY_SURFACES"]
+    missing = [name for name in surfaces if not (root / name).is_file()]
+    assert missing == [], f"_PY_SURFACES lists files that do not exist: {missing}"
+
+
 def test_scan_elevation_heads(tmp_path: Path) -> None:
     python = (
         'A = ["sudo", "dnf"]\n'
@@ -985,11 +1003,11 @@ def test_scan_elevation_heads(tmp_path: Path) -> None:
         "printf 'sudo x\\n'\n"
         "echo sudo\n"
     )
-    rows = _scan_rows(tmp_path, {"installer/guards.py": python, "scripts/a.sh": shell})
+    rows = _scan_rows(tmp_path, {"installer/env_redirect.py": python, "scripts/a.sh": shell})
     assert _found(rows) == [
-        ("installer/guards.py", 1),
-        ("installer/guards.py", 2),
-        ("installer/guards.py", 3),
+        ("installer/env_redirect.py", 1),
+        ("installer/env_redirect.py", 2),
+        ("installer/env_redirect.py", 3),
         ("scripts/a.sh", 1),
         ("scripts/a.sh", 2),
         ("scripts/a.sh", 3),
@@ -1009,8 +1027,8 @@ def test_scan_target_auto_or_all(tmp_path: Path) -> None:
         'E = ["--target", "claude,codex"]\n'
         'F = "--target auto"\n'
     )
-    rows = _scan_rows(tmp_path, {"installer/guards.py": python})
-    assert _found(rows) == [("installer/guards.py", n) for n in (1, 2, 3, 6)]
+    rows = _scan_rows(tmp_path, {"installer/env_redirect.py": python})
+    assert _found(rows) == [("installer/env_redirect.py", n) for n in (1, 2, 3, 6)]
     assert rows[0].pattern.startswith("`--target`")
     assert rows[2].pattern.startswith("`--target=auto`")
 
@@ -1053,22 +1071,21 @@ def test_scan_shim_exec_rewrites(tmp_path: Path, exec_line: str, clean: bool) ->
 def test_scan_reads_f_string_shims_offline(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    guards = (_INSTALLER / "guards.py").read_text(encoding="utf-8")
     cursor = (_INSTALLER / "cursor_shim.py").read_text(encoding="utf-8")
-    files = {"installer/guards.py": guards, "installer/cursor_shim.py": cursor}
+    files = {"installer/env_redirect.py": _FSTRING_SHIM, "installer/cursor_shim.py": cursor}
     repo = _repo(tmp_path, files)
     rows = catalog_audit.scan(repo, (), _NO_SCHEMAS)
 
     def at(text: str, needle: str) -> int:
         return next(n for n, line in enumerate(text.splitlines(), 1) if needle in line)
 
-    npx = ("installer/guards.py", at(guards, 'exec {shlex.quote(target_path)} {quoted_args} "$@"'))
+    fstring = ("installer/env_redirect.py", at(_FSTRING_SHIM, _FSTRING_EXEC_LINE))
     shim = ("installer/cursor_shim.py", at(cursor, 'exec "$target" {flag}'))
     mid = ("installer/cursor_shim.py", at(cursor, 'exec "$target" "$@";;'))
-    assert npx in _found(rows)
+    assert fstring in _found(rows)
     assert shim in _found(rows)
     assert mid not in _found(rows)
-    assert next(r for r in rows if (r.path, r.line) == npx).pattern.startswith("`exec `")
+    assert next(r for r in rows if (r.path, r.line) == fstring).pattern.startswith("`exec `")
     assert next(r for r in rows if (r.path, r.line) == shim).pattern.startswith('`exec "$target" `')
 
     registry = _two_entry_registry(tmp_path)
@@ -1081,7 +1098,7 @@ def test_scan_reads_f_string_shims_offline(
     )
     assert code == 0, err
     summary = (run / "SUMMARY.md").read_text(encoding="utf-8")
-    for path, line in (npx, shim):
+    for path, line in (fstring, shim):
         assert _script_row(summary, f"{path}:{line}")[4] == "current"
 
 
@@ -1157,7 +1174,7 @@ def test_scan_rows_name_their_entry(tmp_path: Path) -> None:
         "installer/agent_settings.py": _keys_source("permission"),
         "installer/postinstall.py": _MAPS,
         "installer/cursor_shim.py": 'X = ["sudo", "x"]\n',
-        "installer/guards.py": 'X = ["sudo", "x"]\n',
+        "installer/env_redirect.py": 'X = ["sudo", "x"]\n',
         "scripts/a.sh": "sudo x\n",
         "scripts/lib/b.sh": "echo ok\n",
     }
@@ -1166,7 +1183,7 @@ def test_scan_rows_name_their_entry(tmp_path: Path) -> None:
         ("installer/agent_settings.py", "opencode", "finding"),
         ("installer/postinstall.py", "codegraph", "finding"),
         ("installer/cursor_shim.py", "cursor-agent", "finding"),
-        ("installer/guards.py", "(installer)", "finding"),
+        ("installer/env_redirect.py", "(installer)", "finding"),
         ("scripts/a.sh", "(maintainer)", "finding"),
         ("scripts/lib/b.sh", "(maintainer)", "ok"),
     }
@@ -1175,13 +1192,13 @@ def test_scan_rows_name_their_entry(tmp_path: Path) -> None:
 def test_scan_groups_by_file_in_path_order(tmp_path: Path) -> None:
     files = {
         "scripts/z.sh": "sudo a\nsudo b\n",
-        "installer/guards.py": 'X = ["sudo", "x"]\n',
+        "installer/env_redirect.py": 'X = ["sudo", "x"]\n',
         "scripts/lib/clean.sh": "echo ok\n",
         "scripts/a.sh": "echo ok\n",
     }
     rows = _scan_rows(tmp_path, files)
     assert [(r.path, r.line, r.status) for r in rows] == [
-        ("installer/guards.py", 1, "finding"),
+        ("installer/env_redirect.py", 1, "finding"),
         ("scripts/a.sh", 0, "ok"),
         ("scripts/lib/clean.sh", 0, "ok"),
         ("scripts/z.sh", 1, "finding"),
@@ -1242,7 +1259,9 @@ def test_scan_quotes_no_config_values(tmp_path: Path, capsys: pytest.CaptureFixt
         tmp_path,
         {
             "installer/agent_settings.py": source + 'TOKEN = "canary-constant-3"\n',
-            "installer/guards.py": 'NAME = "canary-constant-4"\nX = ["sudo", "canary-arg-5"]\n',
+            "installer/env_redirect.py": (
+                'NAME = "canary-constant-4"\nX = ["sudo", "canary-arg-5"]\n'
+            ),
         },
     )
     argv = ["scan", "--date", DAY, "--root", str(root), "--repo", str(repo)]
@@ -1457,15 +1476,12 @@ def test_add_finding_validates_and_appends(
 def test_shared_surface_finding_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    guards = (_INSTALLER / "guards.py").read_text(encoding="utf-8")
     number = next(
-        n
-        for n, line in enumerate(guards.splitlines(), 1)
-        if 'exec {shlex.quote(target_path)} {quoted_args} "$@"' in line
+        n for n, line in enumerate(_FSTRING_SHIM.splitlines(), 1) if _FSTRING_EXEC_LINE in line
     )
-    cite = f"installer/guards.py:{number}"
+    cite = f"installer/env_redirect.py:{number}"
     registry, root, repo = _arrange(
-        tmp_path, alpha=_report("alpha"), repo_files={"installer/guards.py": guards}
+        tmp_path, alpha=_report("alpha"), repo_files={"installer/env_redirect.py": _FSTRING_SHIM}
     )
     code, err = _add(
         registry,
@@ -1681,13 +1697,13 @@ def test_summary_orders_entries_then_scripts(
         repo_files={
             "scripts/a.sh": "x\nsudo y\n",
             "scripts/z.sh": "sudo q\n",
-            "installer/guards.py": "a\nb\nc = ['sudo']\n",
+            "installer/env_redirect.py": "a\nb\nc = ['sudo']\n",
         },
     )
     (root / DAY / "scripts.md").write_text(
         "| location | entry | status | pattern |\n|---|---|---|---|\n"
         "| scripts/a.sh:2 | (maintainer) | finding | `sudo` elevation |\n"
-        "| installer/guards.py:3 | (installer) | finding | `sudo` elevation |\n",
+        "| installer/env_redirect.py:3 | (installer) | finding | `sudo` elevation |\n",
         encoding="utf-8",
     )
     assert _sum(registry, root, repo, capsys)[0] == 0
@@ -1697,7 +1713,7 @@ def test_summary_orders_entries_then_scripts(
     )
     block = summary.split("## Script findings\n", 1)[1]
     where = [line.split("|")[1].strip() for line in block.splitlines() if line.startswith("| ")][1:]
-    assert where == ["installer/guards.py:3", "scripts/a.sh:2", "scripts/z.sh:1"]
+    assert where == ["installer/env_redirect.py:3", "scripts/a.sh:2", "scripts/z.sh:1"]
 
 
 def test_summary_marks_resolved_stale_findings(
