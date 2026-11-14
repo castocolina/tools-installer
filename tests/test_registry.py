@@ -611,6 +611,31 @@ def test_mmdc_entry_records_the_brownfield_gap_and_group_coupling() -> None:
     assert "INCOMPLETE:" in text
 
 
+def test_bun_facts_are_recorded_in_the_registry_comments() -> None:
+    text = REGISTRY.read_text(encoding="utf-8")
+    for fact in (
+        "run under node",
+        "trustedDependencies",
+        "default allowlist",
+        "bun add -g --trust puppeteer@^25",
+    ):
+        assert fact in text, f"the registry comments lack the verified bun fact {fact!r}"
+
+
+def test_registry_comments_make_no_overclaim_about_bun() -> None:
+    """SPEC prohibition: bun CLIs need node, and bun does not block every dependency script."""
+    text = REGISTRY.read_text(encoding="utf-8").lower()
+    for claim in (
+        "run without node",
+        "runs without node",
+        "without needing node",
+        "blocks every dependency script",
+        "blocks all dependency scripts",
+        "blocks every lifecycle script",
+    ):
+        assert claim not in text, f"the registry makes the forbidden claim {claim!r}"
+
+
 def test_puppeteer_entry_records_the_double_install_disposition() -> None:
     text = REGISTRY.read_text(encoding="utf-8")
     assert "Installed twice" in text

@@ -2204,6 +2204,11 @@ audience = "both"
 tier = "system"
 verified = 2026-11-04
 desc = "Fast all-in-one JavaScript runtime and toolkit"
+# Verified 2026-11-14 (disposable fedora:44 container, bun 1.3.14): bun's global tree is `~/.bun/install/global`
+# (manifest `package.json`, text `bun.lock`, `node_modules`) with symlinked bins in `~/.bun/bin`; `BUN_INSTALL`,
+# `BUN_INSTALL_BIN` and `BUN_INSTALL_GLOBAL_DIR` relocate them. Bins installed with `bun add -g` start with
+# `#!/usr/bin/env node`, so they run under node, not under bun. The catalog's npm-package CLIs (mmdc, puppeteer,
+# pi) install through this tool first and keep a pnpm method as the fallback.
 [[tool.method]]
 kind = "script"
 url = "https://bun.sh/install"
@@ -2279,6 +2284,9 @@ formula = "pnpm"
 # The finding above holds for the npm versions Volta pins today and should be
 # re-verified with `volta run --node <pinned-version> npm --version` if this
 # entry is revisited after 2026-10-05.
+# Volta stays the Node runtime only: this catalog adds no `volta install` method for any tool (upstream is
+# unmaintained and the finding above stands). A copy Volta already installed is still detected through its
+# shim directory and keeps its update hint and its removal command.
 [[tool]]
 id = "volta"
 name = "Volta"
@@ -2706,14 +2714,29 @@ package = "neovim"
 # `@mermaid-js/mermaid-cli` declares no preinstall/install/postinstall script
 # of its own (verified via unpkg.com/@mermaid-js/mermaid-cli/package.json),
 # Volta's unrestricted-scripts tradeoff buys nothing for mmdc while giving up
-# pnpm's default-deny gate for puppeteer's postinstall, which is the one
-# script in this pair that matters.
+# the default-deny gate (bun's default allowlist, pnpm's `--allow-build`) for
+# puppeteer's postinstall, which is the one script in this pair that matters.
 # Four criteria: stability — brew is a reproducing breakage, not a risk;
-# security — pnpm's scoped `--allow-build=puppeteer` versus Volta's blanket
-# unrestricted execution; simplicity — no migration, mmdc is already
-# `kind="node"`; maintainability — one manager owns mmdc and its peer, so the
-# pair can share a single pnpm install group.
-# Why `co_install`/`allow_build`/`versions` are on this method:
+# security — bun runs dependency lifecycle scripts only for its default
+# allowlist or the user's `trustedDependencies`, and pnpm gates them behind a
+# scoped `--allow-build=puppeteer`, versus Volta's blanket unrestricted
+# execution; simplicity — bun installs mmdc and its peer in one command, and
+# the `node` method stays as the fallback; maintainability — one manager owns
+# mmdc and its peer.
+# The bun method (D-19): `bun add -g @mermaid-js/mermaid-cli puppeteer@^25`.
+# Verified 2026-11-14: bun has no per-invocation install groups, and mmdc
+# installed alone makes puppeteer an auto-installed peer with no manifest entry
+# and no bin link, which stays after mmdc's removal. So the bun method names the
+# peer explicitly through `co_install` and `versions` instead of relying on that.
+# A puppeteer another manager owns is left alone (D-20): bun installs its own
+# copy in its own tree and the install notes name the other copy's path.
+# Bun but no node: bun-installed CLIs run under node, and `requires` names no
+# node provider because no catalog tool guarantees a node runtime; on a host with
+# bun and no node runtime the floor message names the fix.
+# Everything below that speaks of pnpm groups, the `--allow-build` grant, SPLIT
+# and INCOMPLETE shapes and `pnpm remove -g` describes the `node` fallback
+# method; the bun method has no groups, no allowance and no persistent grant.
+# Why `co_install`/`allow_build`/`versions` are on the `node` method:
 # `@mermaid-js/mermaid-cli` declares puppeteer as a peerDependency
 # (`^23 || ^24 || ^25`), so it is deliberately not auto-installed; and pnpm's
 # Global Packages documentation states that packages installed in separate
@@ -2797,9 +2820,20 @@ versions = { puppeteer = "^25" }
 # Verified 2026-09-05: puppeteer declares `postinstall = "node install.mjs"`,
 # which downloads Chrome for Testing and chrome-headless-shell into
 # `~/.cache/puppeteer`. pnpm blocks that script by default and reports it as a
-# warning rather than an error, so `allow_build = ["puppeteer"]` on these
+# warning rather than an error, so `allow_build = ["puppeteer"]` on the `node`
 # methods is what makes the browser actually arrive. Without it the install
 # reports success and the tool is broken.
+# bun (verified 2026-11-14, bun 1.3.14 and bun.com/docs/install/lifecycle): bun
+# runs dependency lifecycle scripts only for its default allowlist or the user's
+# `trustedDependencies`. puppeteer is on bun's default allowlist, so its
+# postinstall runs with no trust flag and the bun methods carry no `allow_build`
+# (it is a load error there). A user-written `trustedDependencies` in bun's
+# global manifest replaces that default allowlist instead of extending it; if it
+# omits puppeteer, bun skips the postinstall, the smoke check below fails, and
+# its reason names `bun add -g --trust puppeteer@^25`. The installer never
+# passes a trust flag and never writes that manifest.
+# The text from here on about `--allow-build` and its persistent grant describes
+# the `node` stanzas only.
 # The `--allow-build` grant is PERSISTENT and PACKAGE-LEVEL, not
 # per-invocation: pnpm's own `add` documentation records that the flag also
 # writes the package into pnpm's build allowance configuration, so that
@@ -2843,7 +2877,7 @@ versions = { puppeteer = "^25" }
 # Linux arm64: puppeteer's own troubleshooting documentation states Chrome
 # publishes no Linux arm64 binary, so the browser puppeteer downloads by
 # default cannot run there at all. This is NOT a caveat — it is why the Linux
-# method declares `arch = ["amd64"]`. Chrome for Testing now ships linux-arm64
+# methods declare `arch = ["amd64"]`. Chrome for Testing now ships linux-arm64
 # (2026-10), but `@puppeteer/browsers` still maps LINUX_ARM to linux64. The
 # entry resolves no method on Linux arm64, so `installer/deps.py` skips both
 # puppeteer and mmdc there with a dependency-unavailable warning instead of
@@ -2855,7 +2889,7 @@ versions = { puppeteer = "^25" }
 # 05-01's executor preflight refuses the install below it rather than letting
 # the postinstall fail obscurely.
 # `smoke = "puppeteer-browser"` is the post-install check plan 05-01 Task 4
-# ships: after `pnpm add -g` returns, the installer runs a bounded node script
+# ships: after the install command returns, the installer runs a bounded node script
 # that calls puppeteer's own `launch()`, opens a blank page and closes the
 # browser, and fails the install when that does not work. A package manager's
 # exit code proves a download succeeded, not that the thing downloaded can run,
@@ -2870,15 +2904,15 @@ versions = { puppeteer = "^25" }
 # connection, so any executable that printed something passed.
 # The check starts a browser and opens a blank page; it renders no diagram.
 # When it runs, and the gap that leaves: on the INSTALL path it fires exactly
-# once, after `pnpm add -g` has already returned — the packages stay installed
+# once, after the install command has already returned — the packages stay installed
 # and the bin shim stays on PATH, so `installer/status.py::is_installed` (PATH
 # presence) makes `installer/engine.py::install_tool` return ALREADY_INSTALLED
 # on every later run and the executor is never reached again. A browser that
 # stops starting later (an OS update removing one of the shared libraries
 # above) would therefore have been reported as installed forever. The Doctor
 # closes that: `installer/pnpm_globals.py::audit_node_globals` re-runs this
-# check for every catalog tool pnpm still manages and reports a failure as a
-# WARN. Residual, accepted: the re-check lives on the Doctor, not in
+# check for every catalog tool pnpm or bun still manages (bun-owned entries
+# included) and reports a failure as a WARN. Residual, accepted: the re-check lives on the Doctor, not in
 # `is_installed` — that function answers "is it here?" for every tool of every
 # kind on every catalog render, and spawning a browser to answer it would stop
 # it describing availability at all. So re-running the INSTALL alone still
