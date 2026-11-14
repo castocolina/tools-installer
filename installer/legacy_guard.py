@@ -39,9 +39,9 @@ PathLookup = Callable[[str, str], str | None]
 def _is_leftover(data: bytes) -> bool:
     """The one definition of a recognized leftover shim body.
 
-    At most 8192 bytes, strict UTF-8, either sentinel. The remover uses it, and the PATH
-    lookups that later move into this module share it, so cleanup, presence, smoke and probe
-    can never disagree on what a leftover is.
+    At most 8192 bytes, strict UTF-8, either sentinel. The remover and every in-process PATH
+    lookup share it. The standalone schedule runner cannot import this module, so it mirrors
+    the rule; a test pins the two together.
     """
     if len(data) > _SHIM_MAX_BYTES:
         return False

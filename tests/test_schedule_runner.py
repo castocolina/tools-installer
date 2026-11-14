@@ -314,6 +314,34 @@ def test_runner_sentinels_match_legacy_guard() -> None:
     assert vars(schedule_runner)["_SHIM_HEAD_BYTES"] == vars(legacy_guard)["_SHIM_MAX_BYTES"]
 
 
+_SENTINEL = legacy_guard.SHIM_SENTINEL.encode()
+_LIMIT = vars(legacy_guard)["_SHIM_MAX_BYTES"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"#!/bin/sh\n" + _SENTINEL + b"\n",
+        b"#!/bin/sh\n" + _SENTINEL + b"\n" + b"#" * (_LIMIT - len(_SENTINEL) - 12),
+        b"#!/bin/sh\n" + _SENTINEL + b"\n" + b"#" * _LIMIT,
+        b"#!/bin/sh\n\xff\n" + _SENTINEL + b"\n",
+        b"#!/bin/sh\necho real\n",
+    ],
+    ids=["marked", "exactly-at-limit", "oversize", "non-utf8", "real"],
+)
+def test_runner_and_installer_agree_on_what_a_leftover_is(tmp_path: Path, body: bytes) -> None:
+    """The runner mirrors `legacy_guard._is_leftover` (it cannot import it): both must skip
+    the same files, so each one resolves the real binary behind or the file itself."""
+    first = _script(tmp_path / "first", "npm", "")
+    first.write_bytes(body)
+    real = _script(tmp_path / "real", "npm", "exit 0")
+    path_value = f"{first.parent}{os.pathsep}{real.parent}"
+
+    assert vars(schedule_runner)["_resolve"]("npm", path_value) == legacy_guard.real_binary(
+        "npm", path_value=path_value
+    )
+
+
 def test_runner_skips_a_shim_whose_sentinel_sits_past_4096_bytes(tmp_path: Path) -> None:
     shim_dir = tmp_path / "shim"
     real_dir = tmp_path / "real"

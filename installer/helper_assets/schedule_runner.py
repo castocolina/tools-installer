@@ -362,9 +362,9 @@ def _resolve(name: str, path_value: str) -> str | None:
     """The first real `name` on PATH: absolute entries only, never a leftover guard shim.
 
     Like `legacy_guard.real_binary`: the sentinel, not the directory, marks a shim, so a real
-    binary that lives in the managed bin dir stays resolvable. A sentinel anywhere in the first
-    8192 bytes marks a leftover, which skips every file the launch remover would recognize (and,
-    the safe direction, also a larger file whose head carries a sentinel).
+    binary that lives in the managed bin dir stays resolvable. The runner cannot import the
+    package, so it mirrors `legacy_guard._is_leftover` (at most 8192 bytes, strict UTF-8, a
+    sentinel); `test_runner_and_installer_agree_on_what_a_leftover_is` pins the two together.
     """
     for entry in path_value.split(os.pathsep):
         candidate = Path(entry) / name
@@ -372,12 +372,22 @@ def _resolve(name: str, path_value: str) -> str | None:
             continue
         try:
             with candidate.open("rb") as handle:
-                head = handle.read(_SHIM_HEAD_BYTES)
+                body = handle.read(_SHIM_HEAD_BYTES + 1)
         except OSError:
             continue
-        if not any(sentinel in head for sentinel in _SHIM_SENTINELS):
+        if not _is_leftover(body):
             return str(candidate)
     return None
+
+
+def _is_leftover(body: bytes) -> bool:
+    if len(body) > _SHIM_HEAD_BYTES:
+        return False
+    try:
+        body.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return any(sentinel in body for sentinel in _SHIM_SENTINELS)
 
 
 def _cache_cleanup(emit: Emit) -> str:
