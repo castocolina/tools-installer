@@ -3189,6 +3189,7 @@ def _owner_pass_service(
     artifacts_for: Callable[[Tool], list[Path]] = lambda _tool: [],
     inventory_reads: list[dict[str, object]] | None = None,
     bun_versions: Callable[[], Mapping[str, str | None] | None] = listed_versions,
+    resolve_npm: Callable[[str], str] = _forbidden_npm,
 ) -> VersionRefreshService:
     held = inventory if inventory is not None else _empty_inventory()
 
@@ -3202,6 +3203,7 @@ def _owner_pass_service(
         platform=platform if platform is not None else _no_brew_platform(),
         cache_path=tmp_path / "versions.json",
         resolve_tag=lambda _repo: "1.0.0",
+        resolve_npm=resolve_npm,
         probe_output=probe_output,
         now=lambda: _STATE_NOW,
         managed_bin_dir=managed,
@@ -7209,7 +7211,13 @@ def _seed_bun_tree(home: Path, manifest: str | bytes | None = None) -> Path:
     return path
 
 
+def _pi_latest(package: str) -> str:
+    return "1.5.2"
+
+
 def _bun_pass_service(tmp_path: Path, home: Path, **kwargs: Any) -> VersionRefreshService:
+    # A bun-owned row asks the registry for its latest; these tests are about ownership only.
+    kwargs.setdefault("resolve_npm", _pi_latest)
     return _owner_pass_service(
         tmp_path / "svc", which=lambda _cmd: _bun_pi_command(home), managed=home / "bin", **kwargs
     )
@@ -7297,3 +7305,126 @@ def test_evidence_from_one_source_never_clears_another(tmp_path: Path) -> None:
     service.invalidate(reason="rg reinstalled")
     state = _settled_states(service, tools)["rg"]
     assert not {"p", "b"} & set(state.reasons)
+
+
+# -- 24.5-04: a bun-owned row reads its version from the tree and its latest from npm. --
+
+
+def _bun_puppeteer() -> Tool:
+    params: dict[str, object] = {"npm_pkg": "puppeteer", "versions": {"puppeteer": "^25"}}
+    return Tool(
+        id="puppeteer",
+        name="puppeteer",
+        category="diagram",
+        cmd="puppeteer",
+        methods=(Method("bun", params),),
+    )
+
+
+def _bun_status(
+    *,
+    owner: Owner = "bun",
+    version: str | None = "25.10.0",
+    resolve_npm: Callable[[str], str] = lambda package: "25.17.0",
+    probe_output: Callable[[list[str]], str | None] = lambda argv: pytest.fail(f"probed {argv}"),
+    entry: VersionCacheEntry | None = None,
+    allow_fetch: bool = True,
+    outdated: OutdatedReport | None = None,
+) -> tuple[VersionStatus, VersionCacheEntry | None]:
+    tool = _bun_puppeteer()
+    return resolve_status(
+        tool,
+        ownership=_owned(tool, owner, package="puppeteer", current_version=version),
+        outdated=outdated if outdated is not None else OutdatedReport(None, None, None, None),
+        entry=entry,
+        now=datetime(2026, 11, 14, tzinfo=UTC),
+        probe_output=probe_output,
+        resolve_tag=lambda repo: "v0",
+        resolve_npm=resolve_npm,
+        platform=_platform(),
+        allow_fetch=allow_fetch,
+    )
+
+
+def test_bun_owner_outdated_against_stubbed_registry() -> None:
+    status, entry = _bun_status()
+    assert (status.installed, status.latest, status.outdated) == ("25.10.0", "25.17.0", True)
+    assert (status.stale, status.source, status.pinned_spec) == (False, "bun", "puppeteer ^25")
+    assert entry is not None and entry.latest_version == "25.17.0"
+
+
+def test_bun_branch_never_reads_the_outdated_map() -> None:
+    # An empty pnpm map reads as "current" in the pnpm branch; it must not for bun.
+    report = OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+    status, _entry = _bun_status(outdated=report)
+    assert (status.latest, status.outdated) == ("25.17.0", True)
+
+
+def test_bun_branch_respects_the_fetch_budget() -> None:
+    cached = VersionCacheEntry(
+        latest_version="25.17.0", checked_at="2026-11-01T00:00:00+00:00", failed_at=None
+    )
+    status, entry = _bun_status(resolve_npm=_forbidden_npm, entry=cached, allow_fetch=False)
+    assert (status.latest, status.stale, entry) == ("25.17.0", True, None)
+
+
+def test_bun_owner_with_no_package_version_falls_back_to_the_probe() -> None:
+    status, _entry = _bun_status(version=None, probe_output=lambda argv: "25.9.0")
+    assert status.installed == "25.9.0"
+
+
+def test_unreadable_bun_inventory_reads_unknown_status() -> None:
+    status, entry = _bun_status(owner="unknown", version=None, probe_output=lambda argv: None)
+    assert (status.outdated, status.stale, entry) == (None, True, None)
+
+
+def _bun_row(index: int) -> Tool:
+    package = f"bunpkg-{index:02d}"
+    return Tool(
+        id=package,
+        name=package,
+        category="dev",
+        cmd=package,
+        methods=(Method("bun", {"npm_pkg": package}),),
+    )
+
+
+def _bun_budget_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tools: Sequence[Tool], calls: list[str]
+) -> VersionRefreshService:
+    home = _bun_scratch_home(tmp_path, monkeypatch)
+    managed = home / "bin"
+    tree = home / ".bun" / "install" / "global" / "node_modules"
+    listed = {tool.cmd: "1.0.0" for tool in tools if tool.methods[0].kind == "bun"}
+
+    def which(cmd: str) -> str:
+        return str((tree / cmd / "cli.js") if cmd in listed else (managed / cmd))
+
+    def resolve_npm(package: str) -> str:
+        calls.append(package)
+        return "2.0.0"
+
+    return _owner_pass_service(
+        tmp_path / "svc",
+        which=which,
+        managed=managed,
+        bun_versions=lambda: listed,
+        resolve_npm=resolve_npm,
+        probe_output=lambda _argv: "1.0.0",
+        artifacts_for=lambda tool: [] if tool.cmd in listed else [managed / tool.cmd],
+    )
+
+
+@pytest.mark.parametrize("mixed", [True, False])
+def test_bun_fetches_count_toward_the_refresh_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mixed: bool
+) -> None:
+    tools = [
+        _npm_tool(f"inst-{i:02d}") if mixed and i % 2 else _bun_row(i)
+        for i in range(MAX_FETCHES_PER_REFRESH + 4)
+    ]
+    calls: list[str] = []
+    service = _bun_budget_service(tmp_path, monkeypatch, tools, calls)
+    statuses = _versions(service, tools)
+    assert len(calls) == MAX_FETCHES_PER_REFRESH
+    assert all(statuses[tool.id].stale is True for tool in tools[-4:])

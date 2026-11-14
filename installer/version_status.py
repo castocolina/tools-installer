@@ -361,6 +361,7 @@ def _latest_status(
     allow_fetch: bool,
     ownership: ManagerOwnership | None,
     unresolved: str | None,
+    installed: str | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Probe the installed tool, optionally fetch the latest tag, build status.
 
@@ -368,11 +369,13 @@ def _latest_status(
     other path uses `is_stale(entry, now=now)` so a failed fetch that preserved
     an older `latest`, and a fetch skipped by backoff, both surface as stale.
     `allow_fetch=False` skips the network even when `should_fetch` is True
-    (the per-pass fetch budget) and forces stale=True.
+    (the per-pass fetch budget) and forces stale=True. A non-None `installed` is
+    the version the caller already read (bun's own package.json), so nothing is probed.
     """
-    argv = version_argv(tool, ownership, unresolved=unresolved)
-    output = probe_output(argv) if argv is not None else None
-    installed = extract_observed_version(output) if output else None
+    if installed is None:
+        argv = version_argv(tool, ownership, unresolved=unresolved)
+        output = probe_output(argv) if argv is not None else None
+        installed = extract_observed_version(output) if output else None
     now_iso = now.astimezone(UTC).isoformat()
     fetched = False
     latest: str | None
@@ -423,7 +426,7 @@ def _latest_status(
 
 
 def _pinned_spec(ownership: ManagerOwnership) -> str | None:
-    if ownership.owner != "pnpm" or ownership.method is None:
+    if ownership.owner not in ("pnpm", "bun") or ownership.method is None:
         return None
     raw = ownership.method.params.get("versions")
     if not isinstance(raw, dict):
@@ -607,6 +610,23 @@ def resolve_status(
             ),
             None,
         )
+    if owner == "bun" and ownership.package is not None:
+        # bun lists nothing in `bun outdated -g`, so absence from a manager map proves nothing:
+        # the installed version is the tree's own and the latest is the npm registry's.
+        package = ownership.package
+        status, new_entry = _latest_status(
+            tool,
+            read_release=lambda: Release(resolve_npm(package), {}),
+            source="bun",
+            entry=entry,
+            now=now,
+            probe_output=probe_output,
+            allow_fetch=allow_fetch,
+            ownership=ownership,
+            unresolved=unresolved,
+            installed=ownership.current_version,
+        )
+        return replace(status, pinned_spec=pin), new_entry
     if owner in ("brew", "cask", "pnpm", "uv"):
         mapping = {
             "brew": outdated.brew,
@@ -1833,10 +1853,16 @@ class VersionRefreshService:
             )
             entry = cache.get(tool.id)
             allow_fetch = fetches < MAX_FETCHES_PER_REFRESH
+            # The installer (github or npm) and bun (npm) owners are the two that fetch.
             would_fetch = (
                 allow_fetch
-                and ownership.owner == "installer"
-                and (github_repo(tool, platform) or npm_package(tool, platform)) is not None
+                and (
+                    (
+                        ownership.owner == "installer"
+                        and (github_repo(tool, platform) or npm_package(tool, platform)) is not None
+                    )
+                    or (ownership.owner == "bun" and ownership.package is not None)
+                )
                 and should_fetch(entry, now=now)
             )
             status, new_entry = resolve_status(
