@@ -678,11 +678,11 @@ Research must verify these points before the design is locked:
 - What "brew first" means on Linux hosts without brew.
 **Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.5 SPEC and D-23)*
 **Depends on:** Phase 24.4
-**Plans:** 9 plans
+**Plans:** 1/9 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 24.5-01-PLAN.md — A `bun` method kind installs an npm package by absolute path after the node floor; bun's global bin dir reaches PATH, status, shellrc and the version probe (wave 1)
+- [x] 24.5-01-PLAN.md — A `bun` method kind installs an npm package by absolute path after the node floor; bun's global bin dir reaches PATH, status, shellrc and the version probe (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 24.5-02-PLAN.md — After `bun add -g`: owner-tree browser check, a failed check ends the ladder, the trust line only when the user's trust list blocked puppeteer, the node fix on a node-less host, the peer note (wave 2)
