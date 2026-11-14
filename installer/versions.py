@@ -24,6 +24,10 @@ ReleaseResolver = Callable[[str], "Release"]
 
 _SHA256_DIGEST = re.compile(r"^sha256:([0-9a-fA-F]{64})$")
 
+# An npm package name, `name` or `@scope/name`: the one shape the registry's `latest_npm`
+# and `resolve_npm_latest` both accept (always used with `fullmatch`).
+NPM_PACKAGE_RE = re.compile(r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*")
+
 
 @dataclass(frozen=True)
 class Release:
@@ -404,6 +408,21 @@ def resolve_github_release(repo: str, fetch: Fetch = urlopen_fetch) -> Release:
 def resolve_github_tag(repo: str, fetch: Fetch = urlopen_fetch) -> str:
     """Return the latest release tag for owner/repo, verbatim (leading 'v' preserved)."""
     return resolve_github_release(repo, fetch).tag
+
+
+def resolve_npm_latest(package: str, fetch: Fetch = urlopen_fetch) -> str:
+    """Return the npm registry's `latest` dist-tag for `package`, verbatim."""
+    if NPM_PACKAGE_RE.fullmatch(package) is None:
+        raise VersionError(f"invalid npm package name {package!r}")
+    url = f"https://registry.npmjs.org/-/package/{urllib.parse.quote(package, safe='@')}/dist-tags"
+    try:
+        data = json.loads(fetch(url))
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        raise VersionError(f"failed to resolve npm latest for {package}: {exc}") from exc
+    latest = cast(dict[str, object], data).get("latest") if isinstance(data, dict) else None
+    if not isinstance(latest, str) or not latest:
+        raise VersionError(f"no npm latest for {package}")
+    return latest
 
 
 def release_resolver(resolve_tag: TagResolver) -> ReleaseResolver:

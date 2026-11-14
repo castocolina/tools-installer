@@ -10,7 +10,7 @@ from typing import Literal, TypeVar, cast
 
 from installer.enums import Audience, Category, Priority, Tier
 from installer.host_setup import HOST_SETUP_IDS
-from installer.versions import parse_declared_version
+from installer.versions import NPM_PACKAGE_RE, parse_declared_version
 
 SMOKE_CHECK_NAMES: frozenset[str] = frozenset({"puppeteer-browser"})
 
@@ -58,6 +58,7 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
             "remove",
             "update",
             "writable_prefix",
+            "latest_npm",
         }
     ),
     "node": frozenset(
@@ -782,6 +783,14 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                     raise ValueError(
                         f"tool '{row['id']}': method 'script' key 'writable_prefix' "
                         "must be an absolute path without . or .. parts"
+                    )
+                if "latest_npm" in params and not (
+                    isinstance(params["latest_npm"], str)
+                    and NPM_PACKAGE_RE.fullmatch(params["latest_npm"])
+                ):
+                    raise ValueError(
+                        f"tool '{row['id']}': method 'script' key 'latest_npm' "
+                        "must be an npm package name such as @scope/name"
                     )
             if kind == "cargo_distrobox" and (why := _cargo_distrobox_refusal(params)):
                 raise ValueError(f"tool '{row['id']}': method 'cargo_distrobox' {why}")

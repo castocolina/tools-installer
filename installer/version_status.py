@@ -124,6 +124,7 @@ from installer.versions import (
     probe_version_output,
     release_resolver,
     resolve_github_tag,
+    resolve_npm_latest,
 )
 
 MAX_FETCHES_PER_REFRESH = 20
@@ -291,6 +292,18 @@ def github_repo(tool: Tool, platform: Platform) -> tuple[Method, str] | None:
     return None
 
 
+def npm_package(tool: Tool, platform: Platform) -> str | None:
+    """The first applicable script method's `latest_npm` package.
+
+    Used ONLY to find the latest-version SOURCE. This is not an ownership claim.
+    """
+    for method in resolve_methods(tool, platform):
+        package = method.params.get("latest_npm") if method.kind == "script" else None
+        if isinstance(package, str) and package:
+            return package
+    return None
+
+
 def resolve_github_release_status(
     tool: Tool,
     *,
@@ -303,13 +316,39 @@ def resolve_github_release_status(
     ownership: ManagerOwnership | None = None,
     unresolved: str | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
+    """The GitHub latest-version status: `_latest_status` reading one release."""
+    return _latest_status(
+        tool,
+        read_release=lambda: release_resolver(resolve_tag)(repo),
+        source="github",
+        entry=entry,
+        now=now,
+        probe_output=probe_output,
+        allow_fetch=allow_fetch,
+        ownership=ownership,
+        unresolved=unresolved,
+    )
+
+
+def _latest_status(
+    tool: Tool,
+    *,
+    read_release: Callable[[], Release],
+    source: str,
+    entry: VersionCacheEntry | None,
+    now: datetime,
+    probe_output: Callable[[list[str]], str | None],
+    allow_fetch: bool,
+    ownership: ManagerOwnership | None,
+    unresolved: str | None,
+) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Probe the installed tool, optionally fetch the latest tag, build status.
 
-    `stale` is False only after a successful `resolve_tag` in THIS pass; every
+    `stale` is False only after a successful `read_release` in THIS pass; every
     other path uses `is_stale(entry, now=now)` so a failed fetch that preserved
     an older `latest`, and a fetch skipped by backoff, both surface as stale.
     `allow_fetch=False` skips the network even when `should_fetch` is True
-    (the per-pass GitHub budget) and forces stale=True.
+    (the per-pass fetch budget) and forces stale=True.
     """
     output = probe_output(_version_argv(tool, ownership, unresolved=unresolved))
     installed = extract_observed_version(output) if output else None
@@ -319,7 +358,7 @@ def resolve_github_release_status(
     new_entry: VersionCacheEntry | None
     if allow_fetch and should_fetch(entry, now=now):
         try:
-            release = release_resolver(resolve_tag)(repo)
+            release = read_release()
             latest = release.tag
             new_entry = VersionCacheEntry(
                 latest_version=latest,
@@ -357,7 +396,7 @@ def resolve_github_release_status(
         latest=latest,
         outdated=outdated,
         stale=stale,
-        source="github",
+        source=source,
     )
     return status, new_entry
 
@@ -468,6 +507,7 @@ def resolve_status(
     platform: Platform,
     allow_fetch: bool = True,
     unresolved: str | None = None,
+    resolve_npm: Callable[[str], str] = resolve_npm_latest,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Pick the latest-version source from ownership.owner, never from rank.
 
@@ -477,9 +517,11 @@ def resolve_status(
     owner = ownership.owner
     if owner == "installer":
         found = github_repo(tool, platform)
+        package = npm_package(tool, platform)
+        latest_source: tuple[VersionStatus, VersionCacheEntry | None] | None = None
         if found is not None:
             _method, repo = found
-            status, new_entry = resolve_github_release_status(
+            latest_source = resolve_github_release_status(
                 tool,
                 repo=repo,
                 entry=entry,
@@ -490,6 +532,20 @@ def resolve_status(
                 ownership=ownership,
                 unresolved=unresolved,
             )
+        elif package is not None:
+            latest_source = _latest_status(
+                tool,
+                read_release=lambda: Release(resolve_npm(package), {}),
+                source="npm",
+                entry=entry,
+                now=now,
+                probe_output=probe_output,
+                allow_fetch=allow_fetch,
+                ownership=ownership,
+                unresolved=unresolved,
+            )
+        if latest_source is not None:
+            status, new_entry = latest_source
             if pin is None:
                 return status, new_entry
             pinned = VersionStatus(
@@ -1071,6 +1127,7 @@ class VersionRefreshService:
         platform: Platform,
         cache_path: Path,
         resolve_tag: TagResolver = resolve_github_tag,
+        resolve_npm: Callable[[str], str] = resolve_npm_latest,
         probe_output: Callable[[list[str]], str | None] = probe_version_output,
         now: Callable[[], datetime] | None = None,
         managed_bin_dir: Path | None = None,
@@ -1090,6 +1147,7 @@ class VersionRefreshService:
         self._platform = platform
         self._cache_path = cache_path
         self._resolve_tag = resolve_tag
+        self._resolve_npm = resolve_npm
         self._probe_output = probe_output
         self._now = now if now is not None else (lambda: datetime.now(UTC))
         # Module-attribute read: the conftest sandbox patches locations.bin_dir,
@@ -1746,6 +1804,7 @@ class VersionRefreshService:
                 now=now,
                 probe_output=self._probe_output,
                 resolve_tag=self._resolve_tag,
+                resolve_npm=self._resolve_npm,
                 platform=platform,
                 allow_fetch=allow_fetch,
                 unresolved=which(tool.cmd),

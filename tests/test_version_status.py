@@ -1,4 +1,6 @@
+import functools
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -112,7 +114,14 @@ from installer.version_status import (
     uninstall_label,
     version_notes,
 )
-from installer.versions import Release, VersionError, resolve_github_tag
+from installer.versions import (
+    Release,
+    VersionError,
+    release_resolver,
+    resolve_github_release,
+    resolve_github_tag,
+    resolve_npm_latest,
+)
 from tests.state_doubles import (
     ScriptedUpdates,
     absent_state,
@@ -159,11 +168,13 @@ def _installer_owned_service(
     resolve_tag: Callable[[str], str],
     probe_output: Callable[[list[str]], str | None],
     now: Callable[[], datetime],
+    resolve_npm: Callable[[str], str] | None = None,
 ) -> VersionRefreshService:
     return VersionRefreshService(
         platform=_platform(),
         cache_path=cache_path,
         resolve_tag=resolve_tag,
+        resolve_npm=resolve_npm if resolve_npm is not None else _forbidden_npm,
         probe_output=probe_output,
         now=now,
         managed_bin_dir=_MANAGED,
@@ -492,6 +503,57 @@ def test_fetch_budget_caps_resolve_tag_calls(tmp_path: Path) -> None:
     assert len(statuses) == 25
     deferred = [tool.id for tool in tools[MAX_FETCHES_PER_REFRESH:]]
     assert all(statuses[tool_id].stale is True for tool_id in deferred)
+
+
+def _forbidden_npm(package: str) -> str:
+    raise AssertionError(f"resolve_npm called for {package}")
+
+
+def test_installer_owned_script_reads_npm_latest(tmp_path: Path) -> None:
+    registry = tmp_path / "registry.toml"
+    registry.write_text(
+        """
+[[tool]]
+id = "cli"
+category = "ai"
+tier = "user"
+verified = 2026-10-13
+[[tool.method]]
+kind = "script"
+url = "https://example.test/i.sh"
+shell = "sh"
+latest_npm = "@scope/cli"
+"""
+    )
+    tool = load_tools(registry)[0]
+    urls: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        urls.append(url)
+        return json.dumps({"latest": "2.3.0", "next": "3.0.0-beta.1"}).encode()
+
+    def resolve_tag(repo: str) -> str:
+        raise AssertionError(f"resolve_tag called for {repo}")
+
+    path = tmp_path / "versions.json"
+    service = _installer_owned_service(
+        path,
+        resolve_tag=resolve_tag,
+        probe_output=lambda argv: "cli v1.19.5",
+        now=lambda: datetime(2026, 11, 13, tzinfo=UTC),
+        resolve_npm=functools.partial(resolve_npm_latest, fetch=fetch),
+    )
+    status = _versions(service, [tool])["cli"]
+    assert urls == ["https://registry.npmjs.org/-/package/@scope%2Fcli/dist-tags"]
+    assert (status.installed, status.latest, status.outdated) == ("v1.19.5", "2.3.0", True)
+    assert (status.source, status.stale) == ("npm", False)
+    assert load_version_cache(path)["cli"].latest_version == "2.3.0"
+
+
+def test_github_tag_seam_is_untouched() -> None:
+    assert release_resolver(resolve_github_tag) is resolve_github_release
+    default = inspect.signature(VersionRefreshService.__init__).parameters["resolve_tag"].default
+    assert default is resolve_github_tag
 
 
 def test_one_service_two_threads_merge_both_tool_ids(tmp_path: Path) -> None:
