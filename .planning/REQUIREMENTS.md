@@ -152,6 +152,16 @@
 - [ ] **GUARD-05**: Installer-spawned shells get PATH in its normal order, and installer lookups still skip a sentinel-marked leftover the launch could not remove [user request 2026-11-14]
 - [ ] **GUARD-06**: Live docs, the architecture rule doc, the catalog-audit surface list, REQUIREMENTS.md and the tests stop describing the guard as a feature [user request 2026-11-14]
 
+### Install priority
+
+- [ ] **PRIO-01**: Install-method resolution tries Homebrew (formula or cask) first, then bun, then pnpm on the volta-provided Node runtime, then the earlier order; a host without Homebrew keeps the earlier order [user request 2026-11-14: "prefiero el order sea brew -> bun -> volta y despues lo demas"]
+- [ ] **PRIO-02**: A `bun` method kind installs an npm package with `bun add -g`, checks the declared Node floor (bun-installed CLIs run under node), runs the smoke check and wires bun's global bin dir into PATH [user request 2026-11-14]
+- [ ] **PRIO-03**: mmdc, puppeteer and pi install through bun first; mmdc and puppeteer keep their pnpm fallback; the vendor-installed agent CLIs keep their methods [user request 2026-11-14]
+- [ ] **PRIO-04**: A bun-installed tool gets owner `bun`, receipts, version status (npm registry latest), update within its declared range, `bun remove --global` removal, and the Doctor browser audit [user request 2026-11-14]
+- [ ] **PRIO-05**: Tools already owned by pnpm, volta, brew or a vendor installer keep their owner; nothing reinstalls or moves them [user request 2026-11-14]
+- [ ] **PRIO-06**: The bun method passes no `--trust` and writes no `trustedDependencies`; a blocked postinstall fails the smoke check with the trust command [user request 2026-11-14]
+- [ ] **PRIO-07**: README, the architecture rule doc, registry comments and REQUIREMENTS.md describe the new order and only verified bun claims [user request 2026-11-14]
+
 ### Lean
 
 - [ ] **LEAN-01**: Dead code is removed (agent policy modules, questionary chooser, `audit.py`, dead fields and messages) while race epochs stay [F11, F14, F15, G #9]
@@ -291,6 +301,13 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | GUARD-04 | Phase 24.3.1 | Pending |
 | GUARD-05 | Phase 24.3.1 | Pending |
 | GUARD-06 | Phase 24.3.1 | Pending |
+| PRIO-01 | Phase 24.3.2 | Pending |
+| PRIO-02 | Phase 24.3.2 | Pending |
+| PRIO-03 | Phase 24.3.2 | Pending |
+| PRIO-04 | Phase 24.3.2 | Pending |
+| PRIO-05 | Phase 24.3.2 | Pending |
+| PRIO-06 | Phase 24.3.2 | Pending |
+| PRIO-07 | Phase 24.3.2 | Pending |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |
@@ -298,8 +315,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 **Coverage:**
 
-- v1 requirements: 108 total *(recounted 2026-11-07 in 23.2: HOST, TUNE, SCHED and AUDIT rows were not counted)* *(amended 2026-11-14, 24.3.1 SPEC: GUARD-01..06 added)*
-- Mapped to phases: 108 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 23.1: 5, Phase 23.2: 7, Phase 24: 7, Phase 24.1: 3, Phase 24.2: 5, Phase 24.3: 4, Phase 24.3.1: 6, Phase 25: 4)
+- v1 requirements: 115 total *(recounted 2026-11-07 in 23.2: HOST, TUNE, SCHED and AUDIT rows were not counted)* *(amended 2026-11-14, 24.3.1 SPEC: GUARD-01..06 added)* *(amended 2026-11-14, 24.3.2 SPEC: PRIO-01..07 added)*
+- Mapped to phases: 115 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 23.1: 5, Phase 23.2: 7, Phase 24: 7, Phase 24.1: 3, Phase 24.2: 5, Phase 24.3: 4, Phase 24.3.1: 6, Phase 24.3.2: 7, Phase 25: 4)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 

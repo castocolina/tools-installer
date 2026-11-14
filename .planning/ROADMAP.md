@@ -661,7 +661,7 @@ Research must verify these points before the design is locked:
 - Update and uninstall routes.
 - Coexistence with existing pnpm and volta installs.
 - What "brew first" means on Linux hosts without brew.
-**Requirements**: TBD (spec at run time)
+**Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.3.2 SPEC and D-23)*
 **Depends on:** Phase 24.3.1
 **Plans:** 0 plans
 
@@ -675,7 +675,7 @@ Plans:
 **Requirements**: LEAN-01, LEAN-02, LEAN-03, LEAN-04
 **Success Criteria** (what must be TRUE):
 
-  1. The agent policy modules, the questionary chooser, `audit.py`, dead fields and dead Message classes are deleted while the race epochs stay, and the full suite plus `make validate` are green.
+  1. The agent policy modules, the questionary chooser, `audit.py`, dead fields and dead Message classes are deleted while the race epochs stay, and the full suite plus `make validate` are green. *(amended 2026-11-14, 24.3.2 D-17: pi leaves the `host_setup` kind for a bun method plus a pnpm `node` fallback, so `host_setup`, `HOST_SETUPS`, the host-setup ownership probe and `update.py`'s host-setup pi branch lose their only registry user; their removal joins this dead-code sweep)*
   2. App composition lives in `installer/compose.py`, checked by pyright and counted in the coverage gate.
   3. `wizard_app.py` is split and its review-history comments are gone, with the CLI `--all`/`--categories` tests unchanged.
   4. The run log is bounded.
