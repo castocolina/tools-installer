@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any, cast
+
+import pytest
 
 from installer import catalog_audit
 
@@ -212,3 +215,139 @@ def test_trigger_queries_shape() -> None:
     assert 8 <= len(positives) <= 12
     assert 8 <= len(negatives) <= 12
     assert len([q for q in negatives if _NEAR_MISS_RE.search(q["query"])]) >= 3
+
+
+PHASE_DIR = REPO_ROOT / ".planning" / "phases" / "24.3-catalog-audit-skill"
+_VERDICT_KEYS = frozenset(
+    {
+        "skill",
+        "judge",
+        "rubric_version",
+        "spec_sha",
+        "scores",
+        "max",
+        "total",
+        "max_total",
+        "percent",
+        "grade",
+        "findings",
+    }
+)
+_GRADE_FLOORS = ((90, "A"), (80, "B"), (70, "C"), (60, "D"))
+_PASS_PERCENT = 80.0
+_DIMENSIONS = tuple(f"D{i}" for i in range(1, 9))
+_RUBRIC_MAX = (20, 15, 15, 15, 15, 15, 15, 15)
+
+
+def _grade(percent: float) -> str:
+    return next((grade for floor, grade in _GRADE_FLOORS if percent >= floor), "F")
+
+
+def _parse_verdict(document: str, *, final: bool) -> dict[str, object]:
+    """The one verdict line of a skill-judge document; ValueError names the reason."""
+    candidates: list[dict[str, Any]] = []
+    for line in document.splitlines():
+        try:
+            obj = json.loads(line.strip())
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and "scores" in obj:
+            candidates.append(cast("dict[str, Any]", obj))
+    if len(candidates) != 1:
+        raise ValueError(f"expected one verdict line, found {len(candidates)}")
+    verdict = candidates[0]
+    missing = _VERDICT_KEYS - verdict.keys()
+    if missing:
+        raise ValueError(f"missing keys {sorted(missing)}")
+    if not isinstance(verdict["scores"], dict) or not isinstance(verdict["max"], dict):
+        raise ValueError("scores and max must be objects")
+    scores = cast("dict[str, int]", verdict["scores"])
+    maxima = cast("dict[str, int]", verdict["max"])
+    if scores.keys() != maxima.keys():
+        raise ValueError("scores and max name different dimensions")
+    if scores.keys() != set(_DIMENSIONS):
+        raise ValueError("scores must name exactly D1..D8")
+    for dim, score in scores.items():
+        if not 0 <= score <= maxima[dim]:
+            raise ValueError(f"{dim} score {score} outside 0..{maxima[dim]}")
+    if verdict["total"] != sum(scores.values()):
+        raise ValueError("total is not the sum of scores")
+    if verdict["max_total"] != sum(maxima.values()):
+        raise ValueError("max_total is not the sum of max")
+    percent = round(verdict["total"] / verdict["max_total"] * 100, 1)
+    if verdict["percent"] != percent:
+        raise ValueError(f"percent is {verdict['percent']}, rounding gives {percent}")
+    if verdict["grade"] != _grade(percent):
+        raise ValueError(f"grade {verdict['grade']} does not match {percent}")
+    if final and percent < _PASS_PERCENT:
+        raise ValueError(f"final percent {percent} is below {_PASS_PERCENT}")
+    return verdict
+
+
+def _verdict(
+    points: tuple[int, ...] = (16, 12, 12, 12, 12, 12, 12, 13), **overrides: Any
+) -> dict[str, Any]:
+    total, max_total = sum(points), sum(_RUBRIC_MAX)
+    percent = round(total / max_total * 100, 1)
+    verdict: dict[str, Any] = {
+        "skill": "catalog-audit",
+        "judge": "fixture",
+        "rubric_version": 4,
+        "spec_sha": "0" * 40,
+        "scores": dict(zip(_DIMENSIONS, points, strict=True)),
+        "max": dict(zip(_DIMENSIONS, _RUBRIC_MAX, strict=True)),
+        "total": total,
+        "max_total": max_total,
+        "percent": percent,
+        "grade": _grade(percent),
+        "findings": [],
+    }
+    return verdict | overrides
+
+
+def test_verdict_parser_accepts_and_refuses() -> None:
+    good = _verdict()
+    assert (good["total"], good["max_total"], good["percent"], good["grade"]) == (
+        101,
+        125,
+        80.8,
+        "B",
+    )
+    assert _parse_verdict("Summary text\n\n" + json.dumps(good), final=True)["percent"] == 80.8
+    no_findings = {k: v for k, v in good.items() if k != "findings"}
+    no_d8_max = {k: v for k, v in good["max"].items() if k != "D8"}
+    refused = {
+        "percent rounding": (json.dumps(_verdict(percent=80.7)), "rounding gives 80.8"),
+        "grade": (json.dumps(_verdict(grade="A")), "does not match"),
+        "missing findings": (json.dumps(no_findings), "missing keys"),
+        "two lines": (json.dumps(good) + "\n" + json.dumps(good), "found 2"),
+        "no line": ("no verdict here", "found 0"),
+        "total": (json.dumps(_verdict(total=102)), "total is not the sum"),
+        "max_total": (json.dumps(_verdict(max_total=126)), "max_total is not the sum"),
+        "score above max": (
+            json.dumps(_verdict(scores={**good["scores"], "D1": 21})),
+            "outside 0..20",
+        ),
+        "score below zero": (
+            json.dumps(_verdict(scores={**good["scores"], "D1": -1})),
+            "outside 0..20",
+        ),
+        "scores key missing from max": (
+            json.dumps(_verdict(max=no_d8_max)),
+            "different dimensions",
+        ),
+    }
+    for name, (document, reason) in refused.items():
+        with pytest.raises(ValueError, match=re.escape(reason)):
+            _parse_verdict(document, final=False)
+        assert name
+    low = json.dumps(_verdict((14, 11, 11, 11, 11, 11, 11, 11)))
+    assert _parse_verdict(low, final=False)["grade"] == "C"
+    with pytest.raises(ValueError, match="below 80.0"):
+        _parse_verdict(low, final=True)
+
+
+def test_skill_judge_verdicts_are_well_formed() -> None:
+    for path in sorted(PHASE_DIR.glob("24.3-SKILLJUDGE-*.md")):
+        verdict = _parse_verdict(_text(path), final=path.stem.endswith("-FINAL"))
+        assert "catalog-audit" in str(verdict["skill"]), path.name
