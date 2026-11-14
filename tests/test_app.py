@@ -982,7 +982,6 @@ def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytes
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=myshellrc,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -1019,7 +1018,6 @@ def test_run_uninstall_aborts_when_declined(tmp_path: Path, monkeypatch: pytest.
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _m: False,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -1762,7 +1760,6 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=fail_confirm,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -2356,38 +2353,26 @@ def test_run_doctor_unavailable_daemon_is_an_ordinary_warning(tmp_path: Path) ->
     assert "Policies" not in plain
 
 
-def test_run_uninstall_also_removes_guard_artifacts(tmp_path: Path):
+def test_uninstall_preview_never_mentions_a_leftover_guard_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from installer.app import run_uninstall
-    from installer.guards import install_shims, write_ban_aliases
+    from installer.guards import install_shims
+    from tests.test_uninstall import plant_removal_fixtures
 
-    shim_dir = tmp_path / ".local" / "bin"
-    myshellrc = tmp_path / ".myshellrc"
-    rc = tmp_path / ".zshrc"
-    install_shims(shim_dir)
-    write_ban_aliases(myshellrc)
-    write_ban_aliases(rc)
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    run_uninstall(
-        [],
-        console,
-        default_bin_dir=shim_dir,
-        myshellrc_path=myshellrc,
-        rc_paths=[rc],
-        confirm=lambda _m: True,
-        bundles=(),
-        zshrc_path=tmp_path / ".zshrc",
-        extra_policies=(),
-        runner=_no_removal_runner,
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tools = plant_removal_fixtures(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    install_shims(bin_dir)  # a marked leftover in the managed bin dir
+    console, buf = _console()
+    removed, failed = run_uninstall(
+        tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: False)
     )
-    assert not (shim_dir / "pip").exists()
-    assert "tools-installer ban" not in myshellrc.read_text()
-    assert "tools-installer ban" not in rc.read_text()
-    # With only guard artifacts (no tool paths), the preview must announce the
-    # ban removal and NOT contradict itself with "nothing to uninstall".
     out = buf.getvalue()
-    assert "The pip/npm ban will also be removed" in out
-    assert "Nothing to uninstall" not in out
+    assert (removed, failed) == ([], ())  # declined: nothing ran
+    assert "will also be removed" not in out
+    assert "ban" not in out
+    assert (bin_dir / "pip").exists()  # the launch removal is the only cleanup
 
 
 def test_perform_uninstall_removes_only_chosen_levers(
@@ -2409,18 +2394,16 @@ def test_perform_uninstall_removes_only_chosen_levers(
     myshellrc = tmp_path / ".myshellrc"
     write_myshellrc([bin_dir], myshellrc)  # writes the managed PATH block
 
-    # Only the tool's proven pair is selected; ban + path-block left intact.
+    # Only the tool's proven pair is selected; the path-block is left intact.
     decision = UninstallDecision(
         tools=(loop_tool("fd"),),
         paths={"fd": (artifact, opt)},
-        remove_ban=False,
         remove_path_block=False,
     )
     perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=myshellrc,
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -2442,12 +2425,11 @@ def test_perform_uninstall_removes_path_block_when_chosen(tmp_path: Path) -> Non
     myshellrc = tmp_path / ".myshellrc"
     write_myshellrc([bin_dir], myshellrc)
 
-    decision = UninstallDecision(tools=(), paths={}, remove_ban=True, remove_path_block=True)
+    decision = UninstallDecision(tools=(), paths={}, remove_path_block=True)
     perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=myshellrc,
-        rc_paths=[myshellrc],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -2506,35 +2488,15 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
     assert isinstance(outcomes, list)
 
 
-def test_perform_uninstall_ban_lever_removes_shims_and_aliases(tmp_path: Path) -> None:
-    from installer.app import UninstallDecision, perform_uninstall
-    from installer.guards import guard_status, install_shims, write_ban_aliases
+def test_uninstall_decision_has_no_guard_lever() -> None:
+    import dataclasses
+    import inspect
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    myshellrc = tmp_path / ".myshellrc"
-    rc = tmp_path / ".zshrc"
-    install_shims(bin_dir)  # plant real ban shims
-    write_ban_aliases(myshellrc)  # plant the alias block in both targets
-    write_ban_aliases(rc)
-    assert any(guard_status(bin_dir).values())  # precondition: ban is active
+    from installer.app import perform_uninstall, run_uninstall
 
-    decision = UninstallDecision(tools=(), paths={}, remove_ban=True, remove_path_block=False)
-    perform_uninstall(
-        decision,
-        bin_dir=bin_dir,
-        myshellrc_path=myshellrc,
-        rc_paths=[rc],
-        bundles=(),
-        zshrc_path=tmp_path / ".zshrc",
-        extra_policies=(),
-        runner=_no_removal_runner,
-        catalog=decision.tools,
-    )
-
-    assert all(active is False for active in guard_status(bin_dir).values())  # shims gone
-    assert "alias" not in myshellrc.read_text()  # alias block stripped from myshellrc
-    assert "alias" not in rc.read_text()  # ...and from each rc path
+    assert "remove_ban" not in {f.name for f in dataclasses.fields(UninstallDecision)}
+    assert "rc_paths" not in inspect.signature(run_uninstall).parameters
+    assert "rc_paths" not in inspect.signature(perform_uninstall).parameters
 
 
 def _enable_countdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
@@ -2563,7 +2525,6 @@ def test_run_uninstall_previews_and_sweeps_active_tweaks(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2611,7 +2572,6 @@ def test_run_uninstall_sweeps_the_very_tweaks_it_previewed(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2640,7 +2600,6 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2656,7 +2615,6 @@ def test_run_uninstall_reports_nothing_to_uninstall_only_when_truly_empty(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: False,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2681,7 +2639,6 @@ def test_run_uninstall_declined_removes_nothing(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: False,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2705,7 +2662,6 @@ def test_run_uninstall_without_bundles_sweeps_nothing(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -2739,7 +2695,6 @@ def test_run_uninstall_preview_names_the_plugins_and_the_zshrc(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: False,
         bundles=BUNDLES,
         zshrc_path=zshrc,
@@ -2770,7 +2725,6 @@ def test_run_uninstall_preview_stays_silent_about_a_zshrc_it_does_not_own(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
         zshrc_path=zshrc,
@@ -2796,7 +2750,6 @@ def test_run_uninstall_reports_what_the_sweep_did_not_what_it_previewed(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2825,7 +2778,6 @@ def test_run_uninstall_names_the_tweaks_it_could_not_disable(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2867,7 +2819,6 @@ def test_run_uninstall_sweeps_a_schedule_policy_and_names_the_background_job(
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -2893,7 +2844,6 @@ def test_run_uninstall_copy_is_plural_for_several_schedules_and_names_state_alon
             console,
             default_bin_dir=tmp_path / ".local" / "bin",
             myshellrc_path=tmp_path / ".myshellrc",
-            rc_paths=[],
             confirm=lambda _m: True,
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
@@ -2922,7 +2872,6 @@ def test_run_uninstall_preview_names_the_background_job_when_a_schedule_is_owned
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _m: False,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -2948,7 +2897,6 @@ def test_run_uninstall_preview_stays_byte_identical_when_the_daemon_is_absent(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=rc_path,
-        rc_paths=[],
         confirm=lambda _m: False,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -2987,7 +2935,6 @@ def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
         console,
         default_bin_dir=tmp_path / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _m: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -3008,12 +2955,9 @@ def test_run_uninstall_and_perform_uninstall_sweep_and_name_an_extra_policy(
         is_active=lambda: True,
     )
     result = perform_uninstall(
-        UninstallDecision(
-            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
-        ),
+        UninstallDecision(tools=(), paths={}, remove_path_block=False, remove_tweaks=True),
         bin_dir=tmp_path / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(again,),
@@ -3033,7 +2977,6 @@ def test_uninstall_entry_points_require_extra_policies(tmp_path: Path) -> None:
             console,
             default_bin_dir=tmp_path / "bin",
             myshellrc_path=tmp_path / ".myshellrc",
-            rc_paths=[],
             confirm=lambda _m: True,
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
@@ -3041,10 +2984,9 @@ def test_uninstall_entry_points_require_extra_policies(tmp_path: Path) -> None:
         )
     with pytest.raises(TypeError):
         perform_uninstall(  # type: ignore[call-arg]
-            UninstallDecision(tools=(), paths={}, remove_ban=False, remove_path_block=False),
+            UninstallDecision(tools=(), paths={}, remove_path_block=False),
             bin_dir=tmp_path / "bin",
             myshellrc_path=tmp_path / ".myshellrc",
-            rc_paths=[],
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
             runner=_no_removal_runner,
@@ -3210,7 +3152,6 @@ class _UninstallKwargs(TypedDict):
 
     default_bin_dir: Path
     myshellrc_path: Path
-    rc_paths: list[Path]
     confirm: Callable[[str], bool]
     bundles: tuple[TweakBundle, ...]
     zshrc_path: Path
@@ -3228,7 +3169,6 @@ def _uninstall_kwargs(
     return {
         "default_bin_dir": bin_dir,
         "myshellrc_path": myshellrc,
-        "rc_paths": [],
         "confirm": confirm,
         "bundles": (),
         "zshrc_path": tmp_path / ".zshrc",
@@ -3427,7 +3367,6 @@ def test_perform_uninstall_reproves_per_tool(
             decision,
             bin_dir=bin_dir,
             myshellrc_path=myshellrc,
-            rc_paths=[],
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
             extra_policies=(),
@@ -3437,7 +3376,7 @@ def test_perform_uninstall_reproves_per_tool(
 
     yq, bin_dir = plant_raw_yq(tmp_path)
     decision = UninstallDecision(
-        tools=(yq,), paths={"yq": (bin_dir / "yq",)}, remove_ban=False, remove_path_block=False
+        tools=(yq,), paths={"yq": (bin_dir / "yq",)}, remove_path_block=False
     )
     assert apply(decision).warnings == ()
     assert not (bin_dir / "yq").exists()
@@ -3469,7 +3408,6 @@ def _sweep_two_tools(
             decision,
             bin_dir=bin_dir,
             myshellrc_path=myshellrc,
-            rc_paths=[],
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
             extra_policies=(),
@@ -3489,7 +3427,6 @@ def test_perform_uninstall_reports_each_tool(
     decision = UninstallDecision(
         tools=(yq, fd),
         paths={"yq": (bin_dir / "yq",), "fd": (bin_dir / "fd", opt_fd)},
-        remove_ban=False,
         remove_path_block=False,
     )
     result = apply(decision)
@@ -3508,7 +3445,7 @@ def test_perform_uninstall_reports_a_refused_tool(
     apply, yq, _fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
     (bin_dir / "yq").write_text("rewritten after install, a different size")
     decision = UninstallDecision(
-        tools=(yq,), paths={"yq": (bin_dir / "yq",)}, remove_ban=False, remove_path_block=False
+        tools=(yq,), paths={"yq": (bin_dir / "yq",)}, remove_path_block=False
     )
     result = apply(decision)
     line = f"changed since the preview; not removed: {bin_dir / 'yq'}"
@@ -3536,35 +3473,35 @@ def _raising_remove_proven(monkeypatch: pytest.MonkeyPatch, bad: str, error: OSE
 def test_perform_uninstall_one_failed_delete_does_not_stop_the_rest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """D-08: fd's delete raises; yq is still removed and the ban lever still runs."""
+    """D-08: fd's delete raises; yq is still removed and the PATH-block lever still runs."""
+    from installer.shellrc import write_myshellrc
+
     apply, yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
     _raising_remove_proven(monkeypatch, "fd", OSError("disk full\nsecond line"))
-    from installer.guards import guard_status, install_shims
-
-    install_shims(bin_dir)
-    assert any(guard_status(bin_dir).values())
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)
+    assert "tools-installer path" in myshellrc.read_text()
     opt_fd = tmp_path / ".local" / "opt" / "fd"
     decision = UninstallDecision(
         tools=(yq, fd),
         paths={"yq": (bin_dir / "yq",), "fd": (bin_dir / "fd", opt_fd)},
-        remove_ban=True,
-        remove_path_block=False,
+        remove_path_block=True,
     )
     result = apply(decision)
     assert result.removed == ("yq",)
     assert result.remove_failed == (("fd", "disk full"),)
     assert not (bin_dir / "yq").exists()
     assert (bin_dir / "fd").is_symlink()
-    assert all(active is False for active in guard_status(bin_dir).values())
+    assert "tools-installer path" not in myshellrc.read_text()
 
 
 def test_perform_uninstall_a_planning_error_does_not_stop_the_rest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """C-15: planning fd raises (a non-searchable parent); yq is still removed,
-    fd is `remove_failed`, and the ban lever still runs."""
+    fd is `remove_failed`, and the PATH-block lever still runs."""
     from installer import app as app_module
-    from installer.guards import guard_status, install_shims
+    from installer.shellrc import write_myshellrc
 
     apply, yq, fd, bin_dir = _sweep_two_tools(tmp_path, monkeypatch)
     real = app_module.removal_plan
@@ -3576,18 +3513,19 @@ def test_perform_uninstall_a_planning_error_does_not_stop_the_rest(
 
     # remove_tool plans through removal_plan (the post-confirm proof, review R1-10).
     monkeypatch.setattr(app_module, "removal_plan", plan)
-    install_shims(bin_dir)
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc([bin_dir], myshellrc)
+    assert "tools-installer path" in myshellrc.read_text()
     opt_fd = tmp_path / ".local" / "opt" / "fd"
     decision = UninstallDecision(
         tools=(fd, yq),
         paths={"fd": (bin_dir / "fd", opt_fd), "yq": (bin_dir / "yq",)},
-        remove_ban=True,
-        remove_path_block=False,
+        remove_path_block=True,
     )
     result = apply(decision)
     assert result.removed == ("yq",)
     assert result.remove_failed == (("fd", "permission denied: opt"),)
-    assert all(active is False for active in guard_status(bin_dir).values())
+    assert "tools-installer path" not in myshellrc.read_text()
 
 
 def test_perform_uninstall_an_empty_error_reads_its_type(
@@ -3599,7 +3537,6 @@ def test_perform_uninstall_an_empty_error_reads_its_type(
     decision = UninstallDecision(
         tools=(fd,),
         paths={"fd": (bin_dir / "fd", opt_fd)},
-        remove_ban=False,
         remove_path_block=False,
     )
     assert apply(decision).remove_failed == (("fd", "OSError failed"),)
@@ -3613,7 +3550,6 @@ def test_perform_uninstall_a_tool_with_nothing_left_is_remove_failed(
     decision = UninstallDecision(
         tools=(fd,),
         paths={"fd": (bin_dir / "fd", opt_fd)},
-        remove_ban=False,
         remove_path_block=False,
     )
     (bin_dir / "fd").unlink()
@@ -3635,7 +3571,6 @@ def test_perform_uninstall_names_only_the_previewed_paths_that_dropped_out(
     decision = UninstallDecision(
         tools=(fd,),
         paths={"fd": (bin_dir / "fd", opt_fd, gone)},
-        remove_ban=False,
         remove_path_block=False,
     )
     result = apply(decision)
@@ -3654,7 +3589,6 @@ def test_perform_uninstall_refuses_a_plan_that_grew_since_the_preview(
     decision = UninstallDecision(
         tools=(fd,),
         paths={"fd": (bin_dir / "fd",)},
-        remove_ban=False,
         remove_path_block=False,
     )
     result = apply(decision)
@@ -3687,14 +3621,12 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     decision = UninstallDecision(
         tools=(fd,),
         paths={"fd": (bin_dir / "fd", opt_fd)},
-        remove_ban=False,
         remove_path_block=False,
     )
     result = perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=myshellrc,
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -3713,14 +3645,12 @@ def test_perform_uninstall_refuses_paths_changed_since_the_preview(
     decision = UninstallDecision(
         tools=(fd,),
         paths={"fd": (bin_dir / "fd", opt_fd)},
-        remove_ban=False,
         remove_path_block=False,
     )
     result = perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=myshellrc,
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -3782,14 +3712,12 @@ def _perform(
         tools=(tool,),
         paths={tool.id: paths},
         argv={tool.id: argv},
-        remove_ban=False,
         remove_path_block=False,
     )
     return perform_uninstall(
         decision,
         bin_dir=home / ".local" / "bin",
         myshellrc_path=home / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=home / ".zshrc",
         runner=runner,
@@ -4362,14 +4290,12 @@ def test_perform_uninstall_removes_a_dependent_before_its_manager(
         tools=(uv, ruff),
         paths={"uv": (uv_binary,), "ruff": ()},
         argv={"ruff": ("uv", "tool", "uninstall", "ruff")},
-        remove_ban=False,
         remove_path_block=False,
     )
     result = perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         runner=runner,
@@ -4600,7 +4526,6 @@ def _decision(
         tools=tuple(tools),
         paths={tool_id: plan.removable for tool_id, plan in plans.items()},
         argv={tool_id: plan.argv for tool_id, plan in plans.items()},
-        remove_ban=False,
         remove_path_block=False,
         config=dict(config or {}),
     )
@@ -4615,7 +4540,6 @@ def _apply(
         decision,
         bin_dir=home / ".local" / "bin",
         myshellrc_path=home / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=home / ".zshrc",
         extra_policies=(),
@@ -5331,7 +5255,6 @@ def test_the_cli_prints_the_unregister_line_before_the_remove_line(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=confirm,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -5360,7 +5283,6 @@ def test_the_cli_reports_the_unregistered_hosts(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _message: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -5394,7 +5316,6 @@ def test_the_cli_reports_a_failed_unregister(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _message: True,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -5422,7 +5343,6 @@ def test_perform_uninstall_passes_the_previewed_unregister(
         tools=(tool,),
         paths={tool.id: plan.removable},
         argv={tool.id: plan.argv},
-        remove_ban=False,
         remove_path_block=False,
         unregister={tool.id: plan.unregister},
     )
@@ -5438,7 +5358,6 @@ def test_perform_uninstall_passes_the_previewed_unregister(
         tools=(tool,),
         paths={tool.id: plan.removable},
         argv={tool.id: plan.argv},
-        remove_ban=False,
         remove_path_block=False,
     )
     calls.clear()
@@ -5475,7 +5394,6 @@ def test_the_cli_previews_and_reports_the_revert(
         console,
         default_bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=confirm,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -5499,7 +5417,6 @@ def _removal_decision(tool: Tool) -> UninstallDecision:
         tools=(tool,),
         paths={tool.id: plan.removable},
         argv={tool.id: plan.argv},
-        remove_ban=False,
         remove_path_block=False,
     )
 
@@ -5524,7 +5441,6 @@ def test_removing_starship_turns_off_only_its_shell_init(
         _removal_decision(tool),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
-        rc_paths=[],
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -5562,7 +5478,6 @@ def test_the_cli_names_the_shell_init_it_turns_off(
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
-        rc_paths=[],
         confirm=confirm,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -5592,7 +5507,6 @@ def test_the_settings_pseudo_row_reverts_every_written_key(
     decision = UninstallDecision(
         tools=(),
         paths={},
-        remove_ban=False,
         remove_path_block=False,
         revert_settings=True,
     )
@@ -5600,7 +5514,6 @@ def test_the_settings_pseudo_row_reverts_every_written_key(
         decision,
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -5637,7 +5550,6 @@ def test_the_cli_uninstall_reverts_every_written_key(
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=confirm,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -5672,7 +5584,6 @@ def test_the_cli_uninstall_lists_only_keys_still_holding_our_value(
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         confirm=lambda _message: False,
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
@@ -5719,7 +5630,6 @@ def test_removing_zsh_sweeps_the_desktop_shell_file(
         _removal_decision(tool),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
@@ -5752,7 +5662,6 @@ def test_a_refused_zsh_removal_keeps_the_desktop_shell_file(
         decision,
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
@@ -5783,7 +5692,6 @@ def test_macos_zsh_removal_leaves_the_desktop_shell_file(
         _removal_decision(tool),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(desktop_shell_policy(zsh_path=None, conf_dir=conf_dir, home=tmp_path),),
@@ -6043,7 +5951,6 @@ def test_shell_init_removal_removes_only_that_block(
         _removal_decision(tool),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
-        rc_paths=[],
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -6087,7 +5994,6 @@ def test_neovim_removal_turns_off_its_editor_block(
         _removal_decision(tool),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
-        rc_paths=[],
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
         extra_policies=(),
@@ -6118,7 +6024,6 @@ def test_a_full_uninstall_clears_the_shell_init_record(
         console,
         default_bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=myshellrc,
-        rc_paths=[],
         confirm=lambda _message: True,
         bundles=BUNDLES,
         zshrc_path=tmp_path / ".zshrc",
@@ -6286,7 +6191,6 @@ def _tui_decision(
         tools=tuple(tools),
         paths={tool_id: plan.removable for tool_id, plan in plans.items()},
         argv={tool_id: plan.argv for tool_id, plan in plans.items()},
-        remove_ban=False,
         remove_path_block=False,
         unregister={tool_id: plan.unregister for tool_id, plan in plans.items()},
         config=dict(config or {}),
@@ -6312,7 +6216,6 @@ def test_full_uninstall_unregisters_hooks_before_agent_reverts(
             console,
             default_bin_dir=tmp_path / ".local" / "bin",
             myshellrc_path=tmp_path / ".myshellrc",
-            rc_paths=[],
             confirm=_always,
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
@@ -6451,7 +6354,7 @@ def test_run_uninstall_requires_extra_policies() -> None:
 def test_perform_uninstall_requires_extra_policies() -> None:
     from installer.app import UninstallDecision, perform_uninstall
 
-    decision = UninstallDecision(tools=(), paths={}, remove_ban=False, remove_path_block=False)
+    decision = UninstallDecision(tools=(), paths={}, remove_path_block=False)
     untyped: Any = perform_uninstall  # the call omits a required keyword on purpose
     with pytest.raises(TypeError):
         untyped(

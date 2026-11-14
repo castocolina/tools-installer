@@ -71,9 +71,7 @@ def make_app(
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         fix_preview="",
         fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
-        ),
+        uninstall=UninstallInputs(has_path_block=lambda: False, remove=lambda _d: SweepResult()),
         policies=PolicyInputs(policies=[]),
         schedules=ScheduleInputs(
             context=ctx,

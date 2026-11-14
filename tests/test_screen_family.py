@@ -114,7 +114,6 @@ def _family_app(
         reinstall_globals=reinstall_globals,
         uninstall=uninstall
         or UninstallInputs(
-            ban_names=lambda: [],
             has_path_block=has_path_block,
             remove=lambda _decision: SweepResult(),
             tweak_ids=lambda: (),
@@ -745,7 +744,7 @@ def _removal_app(
     tmp_path: Path,
     remover: HeldRemover,
     *,
-    ban: bool = False,
+    path_block: bool = False,
     service: FrozenStateService | None = None,
     app_cls: type[UnifiedApp] = UnifiedApp,
 ) -> tuple[UnifiedApp, FrozenStateService]:
@@ -755,8 +754,7 @@ def _removal_app(
         [removable_state(yq, [tmp_path / "yq"]), removable_state(fd, [tmp_path / "fd"])]
     )
     inputs = UninstallInputs(
-        ban_names=lambda: ["pip"] if ban else [],
-        has_path_block=lambda: False,
+        has_path_block=lambda: path_block,
         remove=remover,
         tweak_ids=lambda: (),
     )
@@ -1153,14 +1151,14 @@ async def test_an_invalidate_failure_is_reported_and_the_pass_still_runs(tmp_pat
 async def test_an_env_only_removal_requests_a_pass_without_invalidating(tmp_path: Path):
     remover = HeldRemover(SweepResult())
     remover.release.set()
-    app, service = _removal_app(tmp_path, remover, ban=True)
+    app, service = _removal_app(tmp_path, remover, path_block=True)
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         await app.show_view("uninstall")
         before = service.passes
-        await _confirm_removal(app, pilot, "#ban")
+        await _confirm_removal(app, pilot, "#path-block")
         await settle(app, pilot)
-        assert remover.calls[0].remove_ban
+        assert remover.calls[0].remove_path_block
         assert service.invalidations == ()
         assert service.passes == before + 1
 
@@ -1256,7 +1254,6 @@ async def test_a_partial_delete_keeps_its_reason_while_leftovers_remain(
     service = frozen_service(tmp_path)
     service.publish([plan_state(fd, removable=plan)])
     inputs = UninstallInputs(
-        ban_names=lambda: [],
         has_path_block=lambda: False,
         remove=remove,
         tweak_ids=lambda: (),
@@ -1522,7 +1519,6 @@ def _update_app(
     service = frozen_service(tmp_path)
     service.publish([_rg_state(service, case), removable_state(fd, [tmp_path / "fd"])])
     inputs = UninstallInputs(
-        ban_names=lambda: [],
         has_path_block=lambda: False,
         remove=remover,
         tweak_ids=lambda: (),
@@ -1656,7 +1652,6 @@ def _policy_app(
         node_globals=node_globals,
         reinstall_globals=reinstall_globals,
         uninstall=UninstallInputs(
-            ban_names=lambda: [],
             has_path_block=lambda: False,
             remove=remover,
             tweak_ids=tweak_ids,
@@ -3022,7 +3017,7 @@ class MatrixSeams:
 
     app: UnifiedApp
     service: FrozenStateService
-    bans: list[str]
+    tweaks: list[str]
     witnesses: tuple[Any, ...]
 
 
@@ -3030,7 +3025,7 @@ def matrix_app(
     tmp_path: Path,
     *,
     remover: HeldRemover | None = None,
-    bans: list[str] | None = None,
+    tweaks: list[str] | None = None,
     job_apply: Callable[[], PolicyResult] | None = None,
 ) -> MatrixSeams:
     """One catalog for every matrix case: the witnesses start MISSING, and the
@@ -3059,7 +3054,7 @@ def matrix_app(
         pass_state(by_id["w-user"], platform=platform, notes=(_WITNESS_NOTE,)),
         plan_state(by_id["w-ai"]),
     )
-    ban_list = bans if bans is not None else []
+    tweak_list = tweaks if tweaks is not None else []
 
     def missing_now() -> tuple[str, ...]:
         state = service.state_of("w-system")
@@ -3099,17 +3094,16 @@ def matrix_app(
         version_refresh=service,
         updates=updates,
         uninstall=UninstallInputs(
-            ban_names=lambda: list(ban_list),
             has_path_block=lambda: False,
             remove=remover,
-            tweak_ids=lambda: (),
+            tweak_ids=lambda: tuple(tweak_list),
         ),
         policies=PolicyInputs(policies=policies),
         node_globals=_managed_report,
         reinstall_globals=lambda _packages: (),
         execute=execute,
     )
-    return MatrixSeams(app, service, ban_list, witnesses)
+    return MatrixSeams(app, service, tweak_list, witnesses)
 
 
 def _cursor(app: UnifiedApp, view: str, key: str) -> None:
@@ -3250,24 +3244,24 @@ async def test_a_held_mutation_repaints_a_view_navigated_to_before_it_finishes(t
 
 
 async def test_the_uninstall_rows_follow_a_completed_policy_toggle(tmp_path: Path):
-    bans = ["pip"]
+    tweaks = ["tweak:docker"]
 
-    def clear_the_ban() -> PolicyResult:
-        bans.clear()
+    def clear_the_tweaks() -> PolicyResult:
+        tweaks.clear()
         return _policy_result()
 
-    seams = matrix_app(tmp_path, bans=bans, job_apply=clear_the_ban)
+    seams = matrix_app(tmp_path, tweaks=tweaks, job_apply=clear_the_tweaks)
     app = seams.app
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         await _open_view(app, pilot, "uninstall")
-        assert "#ban" in _row_keys(app)
+        assert "#tweaks" in _row_keys(app)
         await _open_view(app, pilot, "policies")
         _cursor(app, "policies", "job")
         await pilot.press("space")
         await settle(app, pilot)
         await _open_view(app, pilot, "uninstall")
-        assert "#ban" not in _row_keys(app)
+        assert "#tweaks" not in _row_keys(app)
 
 
 # -- 21-21: the replaced forks stay deleted --

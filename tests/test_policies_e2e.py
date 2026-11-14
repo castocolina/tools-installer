@@ -64,7 +64,6 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -104,7 +103,6 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -166,7 +164,6 @@ async def test_policies_screen_toggles_omz_plugins_live(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -213,7 +210,6 @@ def _omz_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -343,7 +339,6 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -396,9 +391,7 @@ async def test_cache_redirect_toggles_against_a_sandboxed_home(
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         fix_preview="",
         fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
-        ),
+        uninstall=UninstallInputs(has_path_block=lambda: False, remove=lambda _d: SweepResult()),
         policies=PolicyInputs(policies=[redirect]),
         initial_view="policies",
     )
@@ -448,7 +441,6 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -498,7 +490,6 @@ def _mode_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -770,9 +761,7 @@ def _live_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=uninstall
-        or UninstallInputs(
-            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
-        ),
+        or UninstallInputs(has_path_block=lambda: False, remove=lambda _d: SweepResult()),
         policies=PolicyInputs(policies=policies),
         initial_view="policies",
         version_refresh=service,
@@ -1012,7 +1001,6 @@ def _settings_app(home: Path, *rows: Policy) -> UnifiedApp:
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _d: SweepResult(),
         ),
@@ -1118,9 +1106,7 @@ async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.Monke
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         fix_preview="",
         fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
-        ),
+        uninstall=UninstallInputs(has_path_block=lambda: False, remove=lambda _d: SweepResult()),
         policies=PolicyInputs(policies=[block, tweak]),
         initial_view="policies",
     )

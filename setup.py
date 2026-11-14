@@ -41,7 +41,6 @@ from installer.app import (
     configure_path,
     consolidation_refusal_message,
     doctor_data,
-    guard_state,
     perform_uninstall,
     run_doctor,
     run_guard,
@@ -785,13 +784,6 @@ def _build_app(
         exists=Path.is_dir,
     )
 
-    def _guard_state() -> tuple[dict[str, bool], str | None]:
-        # Re-read, never a snapshot: the Policies view installs and removes the
-        # pip/npm ban live in this same process, and both the Doctor report and
-        # the Uninstall row describe exactly that state. One closure so the two
-        # views can never disagree about it.
-        return guard_state(_DEFAULT_BIN_DIR, os.environ.get("PATH", ""))
-
     def _current_link_mode() -> str:
         return settings.link_mode if settings is not None else link_mode
 
@@ -820,15 +812,13 @@ def _build_app(
         return (*redirects, *desktop, *schedules.sweep_adapters(schedule_ctx))
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
-        # Runs live inside the UninstallScreen. rc_paths is the standard set so the
-        # ban aliases are cleaned wherever they were written, regardless of mode.
+        # Runs live inside the UninstallScreen.
         # The sweep result is returned so the view reports what came off.
         return perform_uninstall(
             decision,
             runner=run_captured,
             bin_dir=_DEFAULT_BIN_DIR,
             myshellrc_path=_MYSHELLRC,
-            rc_paths=_RC_PATHS,
             bundles=BUNDLES,
             zshrc_path=_ZSHRC,
             extra_policies=_uninstall_extras(),
@@ -874,7 +864,6 @@ def _build_app(
     # statement-execution time, not only at call time.
     catalog_ids = frozenset(tool.id for tool in tools)
     uninstall_inputs = UninstallInputs(
-        ban_names=lambda: [name for name, active in _guard_state()[0].items() if active],
         has_path_block=lambda: has_managed_block(_MYSHELLRC),
         remove=_do_uninstall,
         tweak_ids=lambda: active_tweak_ids(
@@ -1319,7 +1308,6 @@ def _teardown_cli(console: Console, platform: Platform, *, assume_yes: bool) -> 
         runner=run_captured,
         default_bin_dir=_DEFAULT_BIN_DIR,
         myshellrc_path=_MYSHELLRC,
-        rc_paths=_RC_PATHS,
         confirm=confirm,
         # Every bundle, not just the ones applicable here: a teardown must be
         # total (see _build_app).

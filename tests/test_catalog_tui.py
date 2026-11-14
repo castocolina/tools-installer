@@ -114,7 +114,6 @@ def _unified_app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=lambda _decision: SweepResult(),
         ),

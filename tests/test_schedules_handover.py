@@ -389,7 +389,6 @@ def _perform(
         decision,
         bin_dir=env.home / ".local" / "bin",
         myshellrc_path=env.ctx.myshellrc_path,
-        rc_paths=[],
         bundles=(),
         zshrc_path=env.home / ".zshrc",
         extra_policies=extras,
@@ -411,7 +410,6 @@ def _decision(tool: Tool, binary: Path, *, tweaks: bool = False) -> UninstallDec
     return UninstallDecision(
         tools=(tool,),
         paths={tool.id: (binary,)},
-        remove_ban=False,
         remove_path_block=False,
         remove_tweaks=tweaks,
     )
@@ -452,7 +450,6 @@ def test_cli_removal_takes_the_timer(tmp_path: Path, monkeypatch: pytest.MonkeyP
         Console(file=buffer, width=200, no_color=True),
         default_bin_dir=env.home / ".local" / "bin",
         myshellrc_path=ctx.myshellrc_path,
-        rc_paths=[],
         confirm=lambda _message: True,
         bundles=(),
         zshrc_path=env.home / ".zshrc",
@@ -545,7 +542,6 @@ def test_full_uninstall_sweeps_schedules_cli(
         Console(file=buffer, width=300, no_color=True),
         default_bin_dir=env.home / ".local" / "bin",
         myshellrc_path=ctx.myshellrc_path,
-        rc_paths=[],
         confirm=lambda _message: True,
         bundles=(),
         zshrc_path=env.home / ".zshrc",

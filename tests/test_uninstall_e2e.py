@@ -13,7 +13,6 @@ from installer.agent_settings import apply_setting, ledger_summary
 from installer.app import HOST_SETTINGS_OS, UninstallDecision, perform_uninstall
 from installer.doctor import DoctorReport
 from installer.download import artifact_paths
-from installer.guards import guard_status, install_shims, write_ban_aliases
 from installer.locations import display_path
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory
@@ -75,8 +74,6 @@ def _build_real_app(
     (opt / "fd").write_text("binary")
     (bin_dir / "fd").symlink_to(opt / "fd")
     myshellrc = home / ".myshellrc"
-    install_shims(bin_dir)
-    write_ban_aliases(myshellrc)
     write_myshellrc([bin_dir], myshellrc)
 
     service = _fd_service(home, bin_dir, previewed_extra)
@@ -86,7 +83,6 @@ def _build_real_app(
             decision,
             bin_dir=bin_dir,
             myshellrc_path=myshellrc,
-            rc_paths=[myshellrc],
             bundles=(),
             zshrc_path=home / ".zshrc",
             extra_policies=(),
@@ -95,7 +91,6 @@ def _build_real_app(
         )
 
     inputs = UninstallInputs(
-        ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
     )
@@ -122,8 +117,6 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
     (bin_dir / "fd").symlink_to(opt / "fd")
     myshellrc = home / ".myshellrc"
     zshrc = home / ".zshrc"
-    install_shims(bin_dir)
-    write_ban_aliases(myshellrc)
     write_myshellrc([bin_dir], myshellrc)
     countdown = next(bundle for bundle in BUNDLES if bundle.id == "countdown")
     tweak_policy(countdown, rc_path=myshellrc, bin_dir=bin_dir).apply()
@@ -144,7 +137,6 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
             decision,
             bin_dir=bin_dir,
             myshellrc_path=myshellrc,
-            rc_paths=[myshellrc],
             bundles=BUNDLES,
             zshrc_path=zshrc,
             extra_policies=(),
@@ -153,7 +145,6 @@ def _build_real_app_with_tweaks(home: Path) -> tuple[UnifiedApp, Path, Path, Pat
         )
 
     inputs = UninstallInputs(
-        ban_names=lambda: [name for name, active in guard_status(bin_dir).items() if active],
         has_path_block=lambda: has_managed_block(myshellrc),
         remove=_remove,
         tweak_ids=tweak_ids,
@@ -188,7 +179,6 @@ def _error_app(home: Path) -> UnifiedApp:
     service = frozen_service(home)
     service.publish([removable_state(_dl_tool(), [bin_dir / "fd"])])
     inputs = UninstallInputs(
-        ban_names=list,
         has_path_block=lambda: False,
         remove=_boom,
     )
@@ -214,7 +204,7 @@ async def test_uninstall_e2e_removes_everything_against_sandbox(
     monkeypatch.setenv("HOME", str(tmp_path))
     app, opt, bin_dir, myshellrc = _build_real_app(Path.home())
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("a")  # select all: tool + ban + PATH block
+        await pilot.press("a")  # select all: tool + PATH block
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm: apply live against the sandbox
         await settle(app, pilot)
@@ -225,9 +215,7 @@ async def test_uninstall_e2e_removes_everything_against_sandbox(
 
     assert not opt.exists()
     assert not (bin_dir / "fd").exists()
-    assert all(active is False for active in guard_status(bin_dir).values())
     assert has_managed_block(myshellrc) is False
-    assert "alias" not in myshellrc.read_text()
 
 
 async def test_uninstall_ux_journey_captures_each_state(
@@ -405,10 +393,9 @@ def test_a_package_already_in_the_manager_gets_no_receipt(
     plan = removal_plan(tool, tmp_path / ".local" / "bin")
     assert (plan.level, plan.argv) == ("none", ())
     result = perform_uninstall(
-        UninstallDecision(tools=(tool,), paths={}, remove_ban=False, remove_path_block=False),
+        UninstallDecision(tools=(tool,), paths={}, remove_path_block=False),
         bin_dir=tmp_path / ".local" / "bin",
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         runner=_no_removal_runner,
@@ -485,12 +472,10 @@ def test_a_declared_path_present_before_the_install_is_never_adopted(
         UninstallDecision(
             tools=(tool,),
             paths={"t": plan.removable},
-            remove_ban=False,
             remove_path_block=False,
         ),
         bin_dir=bin_dir,
         myshellrc_path=tmp_path / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=tmp_path / ".zshrc",
         runner=_no_removal_runner,
@@ -602,12 +587,10 @@ def test_every_receipt_kind_installs_and_removes_in_both_directions(
                 tools=(tool,),
                 paths={tool.id: plan.removable},
                 argv={tool.id: plan.argv},
-                remove_ban=False,
                 remove_path_block=False,
             ),
             bin_dir=bin_dir,
             myshellrc_path=tmp_path / ".myshellrc",
-            rc_paths=[],
             bundles=(),
             zshrc_path=tmp_path / ".zshrc",
             runner=calls.append,
@@ -691,12 +674,10 @@ def _remove_claude(home: Path, *, moved: bool = False) -> SweepResult:
             tools=(tool,),
             paths={tool.id: plan.removable},
             argv={tool.id: plan.argv},
-            remove_ban=False,
             remove_path_block=False,
         ),
         bin_dir=bin_dir,
         myshellrc_path=home / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=home / ".zshrc",
         extra_policies=(),

@@ -93,7 +93,6 @@ def _remove(tool: Tool, config: dict[str, tuple[Path, ...]] | None = None) -> Sw
         tools=(tool,),
         paths={tool.id: plan.removable},
         argv={tool.id: plan.argv},
-        remove_ban=False,
         remove_path_block=False,
         config=dict(config or {}),
     )
@@ -101,7 +100,6 @@ def _remove(tool: Tool, config: dict[str, tuple[Path, ...]] | None = None) -> Sw
         decision,
         bin_dir=bin_dir,
         myshellrc_path=Path.home() / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=Path.home() / ".zshrc",
         extra_policies=(),

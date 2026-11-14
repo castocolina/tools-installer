@@ -3027,14 +3027,12 @@ def _remove_opencode(
         paths={opencode.id: plan.removable},
         argv={opencode.id: plan.argv},
         unregister={opencode.id: plan.unregister},
-        remove_ban=False,
         remove_path_block=False,
     )
     return perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=home / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=home / ".zshrc",
         extra_policies=(),

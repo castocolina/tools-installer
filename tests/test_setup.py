@@ -25,7 +25,6 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
-from installer.guards import install_shims
 from installer.legacy_guard import (
     BAN_BEGIN,
     BAN_END,
@@ -723,9 +722,7 @@ def test_the_uninstall_view_is_wired_to_a_total_teardown_of_the_real_zshrc(
     assert isinstance(inputs, UninstallInputs)
 
     inputs.remove(
-        UninstallDecision(
-            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
-        )
+        UninstallDecision(tools=(), paths={}, remove_path_block=False, remove_tweaks=True)
     )
     assert forwarded[0]["bundles"] is BUNDLES
     assert forwarded[0]["zshrc_path"] == tmp_path / ".zshrc"
@@ -738,22 +735,19 @@ def test_the_uninstall_view_reads_every_environment_row_live(
 ) -> None:
     """Each environment input must be a predicate the view can re-read, not a
     value frozen when the app was built — the Policies and Doctor views change
-    all three while the Uninstall view is suspended."""
+    them while the Uninstall view is suspended."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
 
-    assert inputs.ban_names() == []
     assert inputs.has_path_block() is False
     assert inputs.tweak_ids() == ()
-    # Enable the ban and the PATH block behind the view's back, exactly as the
-    # Policies and Doctor views do, and the same closures now report them.
+    # Write the PATH block behind the view's back, exactly as the Doctor view
+    # does, and the same closure now reports it.
     bin_dir = tmp_path / ".local" / "bin"
-    install_shims(bin_dir)
     write_myshellrc([bin_dir], tmp_path / ".myshellrc")
-    assert inputs.ban_names() != []
     assert inputs.has_path_block() is True
 
 
@@ -850,9 +844,7 @@ def test_uninstall_still_sweeps_shell_init_and_omz(
     assert isinstance(inputs, UninstallInputs)
     assert {"tweak:zoxide", "omz-plugins"} <= set(inputs.tweak_ids())
     inputs.remove(
-        UninstallDecision(
-            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
-        )
+        UninstallDecision(tools=(), paths={}, remove_path_block=False, remove_tweaks=True)
     )
     assert not {"tweak:zoxide", "omz-plugins"} & set(inputs.tweak_ids())
     assert zshrc.read_text().startswith("plugins=(z)\n")
@@ -1347,8 +1339,8 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
     Both are import-time constants closed over by every uninstall and policy
     wire, so the wire — that .zshrc comes from `installer.locations.zshrc_path`
     rather than a hardcoded `~/.zshrc`, and that `_RC_PATHS` reuses it so the
-    ban aliases and the Oh-My-Zsh edit agree on which file is real — is only
-    visible by re-importing under a different environment.
+    duplicate-line cleanup and the Oh-My-Zsh edit agree on which .zshrc is real —
+    is only visible by re-importing under a different environment.
     """
     zdotdir = tmp_path / "zsh"
     zdotdir.mkdir()
@@ -1373,7 +1365,8 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
         assert setup.main(["--uninstall", "--yes"]) == 0
         assert forwarded[0]["bundles"] is BUNDLES
         assert forwarded[0]["zshrc_path"] == zdotdir / ".zshrc"
-        assert forwarded[0]["rc_paths"] == [zdotdir / ".zshrc", tmp_path / ".bashrc"]
+        assert vars(setup)["_RC_PATHS"] == [zdotdir / ".zshrc", tmp_path / ".bashrc"]
+        assert "rc_paths" not in forwarded[0]
     finally:
         monkeypatch.undo()
         # conftest clears $ZDOTDIR to keep the suite off the developer's own zsh
@@ -1462,9 +1455,7 @@ def test_the_interactive_uninstall_view_forwards_the_schedule_adapters(
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
-        UninstallDecision(
-            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
-        )
+        UninstallDecision(tools=(), paths={}, remove_path_block=False, remove_tweaks=True)
     )
     assert "daemon_policy" not in forwarded[0]
     extras = cast("tuple[Policy, ...]", forwarded[0]["extra_policies"])
@@ -3017,9 +3008,7 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
     inputs = seen[-1]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
     inputs.remove(
-        UninstallDecision(
-            tools=(), paths={}, remove_ban=False, remove_path_block=False, remove_tweaks=True
-        )
+        UninstallDecision(tools=(), paths={}, remove_path_block=False, remove_tweaks=True)
     )
     policies = seen[-1]["policies"]
     assert isinstance(policies, PolicyInputs)

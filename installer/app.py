@@ -943,7 +943,6 @@ def run_uninstall(
     *,
     default_bin_dir: Path,
     myshellrc_path: Path,
-    rc_paths: list[Path],
     confirm: Callable[[str], bool],
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
@@ -953,8 +952,8 @@ def run_uninstall(
     schedule_removed: Callable[[str], tuple[str, ...]] | None = None,
 ) -> tuple[list[Path], tuple[str, ...]]:
     """Preview each tool's removal, confirm, then remove the tools in dependency order,
-    the PATH block, any pip/npm-ban artifacts (shims + alias blocks), and still-enabled
-    shell tweaks (the background maintenance jobs included, when owned).
+    the PATH block, and still-enabled shell tweaks (the background maintenance jobs
+    included, when owned).
 
     Returns (the removed proven paths, the ids whose removal failed), both in removal
     order; ([], ()) when nothing is to be removed or the user declined. Each tool goes
@@ -971,13 +970,12 @@ def run_uninstall(
     either survives an uninstall that printed success.
 
     The tweak preview and the tweak sweep are one `active_policies` list, not
-    two reads of it: `remove_paths`, `remove_managed_block`, `remove_shims` and
-    four `remove_ban_aliases` calls sit between them, every one writing the same
-    ~/.myshellrc and bin_dir the activity predicate reads. Nothing in that set
-    changes the answer today — the shim names do not collide with the
-    `tools-installer-` helpers and every rc rewrite is marker-scoped — but this
-    is the only path that deletes the user's shell config, so the invariant is
-    held by construction rather than by that argument staying true.
+    two reads of it: `remove_paths` and `remove_managed_block` sit between them,
+    both writing the ~/.myshellrc and bin_dir the activity predicate reads.
+    Nothing in that set changes the answer today — every rc rewrite is
+    marker-scoped — but this is the only path that deletes the user's shell
+    config, so the invariant is held by construction rather than by that
+    argument staying true.
     """
     ordered = [(tool, removal_plan(tool, default_bin_dir)) for tool in removal_order(tools)]
     # A retired tool is previewed in its own section after the catalog tools (UI-SPEC section 2).
@@ -995,7 +993,6 @@ def run_uninstall(
         dict.fromkeys(p for _tool, plan in catalog for p in plan.yourself if p not in paths)
     )
     commands = [(tool.id, plan.argv) for tool, plan in ordered if plan.argv]
-    shimmed = [name for name, installed in guard_status(default_bin_dir).items() if installed]
     # Built once and held across the teardown: the preview below and the sweep
     # at the end act on these same objects, so nothing removed in between can
     # make the two disagree. Re-reading before the sweep would leave the
@@ -1021,7 +1018,6 @@ def run_uninstall(
     if (
         not paths
         and not commands
-        and not shimmed
         and not tweaks
         and not settings_files
         and not any(plan.level != "none" for _tool, plan in retired)
@@ -1052,8 +1048,6 @@ def run_uninstall(
         console.print(line, markup=False, soft_wrap=True)
     render_remove_yourself(yourself, console)
     _print_retired_preview(retired, console)
-    if shimmed:
-        console.print(f"The pip/npm ban will also be removed ({', '.join(shimmed)}).")
     if tweaks:
         # Byte-identical to today when no schedule: id is among the offered ids —
         # the tail is appended only when one is present.
@@ -1159,10 +1153,6 @@ def run_uninstall(
     done = _merge(after)
     remove_managed_block(myshellrc_path)
     clear_shell_init_record(myshellrc_path)
-    remove_shims(default_bin_dir)
-    remove_ban_aliases(myshellrc_path)
-    for rc_path in rc_paths:
-        remove_ban_aliases(rc_path)
     # Report the sweep's own result, not the preview: only this knows what came
     # off, and a per-policy failure no longer aborts the rest of the teardown.
     # A policy a tool's own removal already turned off is not swept (and reported) twice.
@@ -1188,13 +1178,12 @@ def run_uninstall(
 class UninstallDecision:
     """The levers the in-app uninstall view collected: the previewed artifact
     paths of each selected tool (by tool id), plus whether to also remove the
-    pip/npm ban, the managed PATH block, and the still-enabled shell tweaks.
+    managed PATH block and the still-enabled shell tweaks.
     `tools` are the selected tools, so deletion re-proves per tool exactly like
     the CLI (L-19-06)."""
 
     tools: tuple[Tool, ...]
     paths: Mapping[str, tuple[Path, ...]]
-    remove_ban: bool
     remove_path_block: bool
     remove_tweaks: bool = False
     # The vendor or manager command each tool's preview showed (empty when it has none).
@@ -1268,7 +1257,6 @@ def perform_uninstall(
     *,
     bin_dir: Path,
     myshellrc_path: Path,
-    rc_paths: list[Path],
     bundles: tuple[TweakBundle, ...],
     zshrc_path: Path,
     extra_policies: tuple[Policy, ...],
@@ -1281,7 +1269,7 @@ def perform_uninstall(
     removers. `catalog` is the whole registry (review R1-15): a config path is shared with
     every tool that declares it, selected or not, so the shared-owner rule cannot narrow.
     Unlike `run_uninstall`, nothing is removed all-or-nothing: a
-    partial selection leaves the ban and PATH wiring untouched. Each selected
+    partial selection leaves the PATH wiring untouched. Each selected
     tool is removed on its own: the result's `removed` and `remove_failed`
     name every tool's outcome, and one refusal or failed delete (`OSError`)
     never stops the next tool or the environment levers.
@@ -1364,11 +1352,6 @@ def perform_uninstall(
         reverted, kept, warnings = _revert_settings(receipts.CONFIG_AGENTS, platform_os=platform_os)
         after.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
     done = _merge(after)
-    if decision.remove_ban:
-        remove_shims(bin_dir)
-        remove_ban_aliases(myshellrc_path)
-        for rc_path in rc_paths:
-            remove_ban_aliases(rc_path)
     if decision.remove_path_block:
         remove_managed_block(myshellrc_path)
     swept = SweepResult()

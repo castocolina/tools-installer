@@ -90,7 +90,6 @@ def _app(
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
-            ban_names=list,
             has_path_block=lambda: False,
             remove=remove,
         ),
@@ -516,9 +515,7 @@ async def test_a_long_review_scrolls_and_keeps_its_keys_line(tmp_path: Path) -> 
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         fix_preview="",
         fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
-        ),
+        uninstall=UninstallInputs(has_path_block=lambda: False, remove=lambda _d: SweepResult()),
         policies=PolicyInputs(policies=[], link_mode=lambda: "symlink"),
         version_refresh=service,
     )
@@ -642,9 +639,7 @@ async def test_uninstall_review_fits_80x20(tmp_path: Path, monkeypatch: pytest.M
         report=DoctorReport(missing=(), broken=(), duplicated=()),
         fix_preview="",
         fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list, has_path_block=lambda: False, remove=lambda _decision: result
-        ),
+        uninstall=UninstallInputs(has_path_block=lambda: False, remove=lambda _decision: result),
         policies=PolicyInputs(policies=[], link_mode=lambda: "symlink"),
         version_refresh=service,
     )

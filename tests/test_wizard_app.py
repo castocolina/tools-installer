@@ -170,7 +170,6 @@ def _rg_rows() -> list[_Case]:
 
 def _uninstall_inputs(
     *,
-    ban_names: list[str] | Callable[[], list[str]] | None = None,
     has_path_block: bool | Callable[[], bool] = False,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
     tweak_ids: tuple[str, ...] | Callable[[], tuple[str, ...]] = (),
@@ -181,7 +180,6 @@ def _uninstall_inputs(
     """The environment inputs keep the plain-value convenience: they are
     predicates, and most tests only care about one fixed reading."""
     return UninstallInputs(
-        ban_names=_predicate(ban_names if ban_names is not None else []),
         has_path_block=_predicate(has_path_block),
         remove=remove,
         tweak_ids=_predicate(tweak_ids),
@@ -1147,22 +1145,17 @@ async def test_uninstall_toggle_selects_highlighted_tool() -> None:
         assert app.screen.selected == set()
 
 
-async def test_uninstall_select_all_includes_ban_and_block() -> None:
-    inputs = _uninstall_inputs(
-        ban_names=["pip", "npm"],
-        has_path_block=True,
-    )
+async def test_uninstall_select_all_includes_the_block() -> None:
+    inputs = _uninstall_inputs(has_path_block=True)
     app = _app(cases=_rg_rows(), uninstall=inputs)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         await pilot.press("a")
         assert app.screen.selected == {"rg"}
-        assert app.screen.remove_ban is True
         assert app.screen.remove_path_block is True
         await pilot.press("i")  # invert clears everything
         assert app.screen.selected == set()
-        assert app.screen.remove_ban is False
         assert app.screen.remove_path_block is False
 
 
@@ -1533,7 +1526,7 @@ async def test_env_predicate_failure_during_a_background_repaint_never_escapes()
 async def test_an_env_lever_only_sweep_does_not_invalidate_ownership(tmp_path: Path) -> None:
     """WR-01 (15.4-REVIEW.md): `_apply_removal` called `invalidate`
     unconditionally after any successful sweep -- including one that removed
-    only the pip/npm ban or the PATH block and no tool at all. That degrades
+    only the PATH block and no tool at all. That degrades
     every managed row's attribution to the generic registry phrase in
     exchange for nothing: an env lever is not a mutation of any tool's
     ownership."""
@@ -1542,18 +1535,18 @@ async def test_an_env_lever_only_sweep_does_not_invalidate_ownership(tmp_path: P
     app = _version_app(
         [],
         service,
-        uninstall=_uninstall_inputs(ban_names=["pip"], remove=_recorder(captured)),
+        uninstall=_uninstall_inputs(has_path_block=True, remove=_recorder(captured)),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("space")  # the ban pseudo-row is the only entry
+        await pilot.press("space")  # the PATH-block pseudo-row is the only entry
         await pilot.press("enter")
         await pilot.press("enter")  # confirm
         await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
-        assert captured and captured[0].remove_ban is True
+        assert captured and captured[0].remove_path_block is True
         assert service.invalidations == ()
 
 
@@ -1650,7 +1643,7 @@ async def test_a_removal_with_no_refresh_service_still_completes() -> None:
     captured: list[UninstallDecision] = []
     app = _app(
         tools=[],
-        uninstall=_uninstall_inputs(ban_names=["pip"], remove=_recorder(captured)),
+        uninstall=_uninstall_inputs(has_path_block=True, remove=_recorder(captured)),
         initial_view="uninstall",
     )
     async with app.run_test(size=(100, 30)) as pilot:
@@ -1661,7 +1654,7 @@ async def test_a_removal_with_no_refresh_service_still_completes() -> None:
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
         assert screen.applied is True
-        assert captured and captured[0].remove_ban is True
+        assert captured and captured[0].remove_path_block is True
 
 
 def test_state_refreshed_is_a_noop_on_an_unmounted_screen() -> None:
@@ -1798,12 +1791,11 @@ async def test_uninstall_partial_selection_apply() -> None:
     assert captured[0].paths == {"rg": (Path("/opt/rg"),)}
 
 
-async def test_uninstall_applied_summary_ban_and_path() -> None:
-    """Status text mentions ban and PATH lines when both are selected.
-    Also verifies that remove_ban/remove_path_block read the browser's live
+async def test_uninstall_applied_summary_names_the_path_block() -> None:
+    """Status text mentions the PATH line when it is selected.
+    Also verifies that remove_path_block reads the browser's live
     selection correctly after the modal is dismissed (the post-modal read path)."""
     inputs = _uninstall_inputs(
-        ban_names=["pip"],
         has_path_block=True,
         remove=lambda _d: SweepResult(),
     )
@@ -1812,22 +1804,20 @@ async def test_uninstall_applied_summary_ban_and_path() -> None:
         await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        await pilot.press("a")  # select all: tool + ban + path block
-        assert screen.remove_ban is True
+        await pilot.press("a")  # select all: tool + path block
         assert screen.remove_path_block is True
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm
         await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert screen.applied is True
-        assert "ban removed" in screen.status.text
         assert "PATH wiring removed" in screen.status.text
 
 
 async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
-    """Selecting only the ban (no tool) yields no count line."""
+    """Selecting only the PATH block (no tool) yields no count line."""
     inputs = _uninstall_inputs(
-        ban_names=["pip"],
+        has_path_block=True,
         remove=lambda _d: SweepResult(),
     )
     app = _app(cases=_rg_rows(), uninstall=inputs)
@@ -1835,18 +1825,18 @@ async def test_uninstall_applied_summary_omits_tool_line_when_no_tool() -> None:
         await pilot.press("5")
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        # rows: [#removable, rg, #environment, #ban] — step past the section header.
-        await pilot.press("down", "down")  # onto the ban row
-        await pilot.press("space")  # select only the ban
+        # rows: [#removable, rg, #environment, #path-block] — step past the section header.
+        await pilot.press("down", "down")  # onto the PATH-block row
+        await pilot.press("space")  # select only the PATH block
         assert screen.selected == set()  # no tool ids selected
-        assert screen.remove_ban is True
+        assert screen.remove_path_block is True
         await pilot.press("enter")  # accept → confirmation modal
         await pilot.press("enter")  # confirm
         await settle(app, pilot)
         assert isinstance(app.screen, UninstallScreen)
         assert screen.applied is True
         assert "tool(s)" not in screen.status.text
-        assert "ban removed" in screen.status.text
+        assert "PATH wiring removed" in screen.status.text
 
 
 async def test_uninstall_cancel_modal_removes_nothing() -> None:
@@ -3052,27 +3042,6 @@ async def test_uninstall_refreshes_and_clears_applied_when_live_state_changed_af
         assert "#tweaks" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
 
 
-async def test_uninstall_ban_row_appears_once_the_ban_is_enabled_elsewhere() -> None:
-    """Enabling the ban in Policies must not leave its removal lever unreachable.
-
-    The flagship policy starts OFF on a fresh machine, so a build-time snapshot
-    shows the Uninstall view a machine with no ban on it for the rest of the
-    session — however many times the user enables one.
-    """
-    live: list[str] = []
-    app = _app(uninstall=_uninstall_inputs(ban_names=lambda: list(live)))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert "#ban" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
-        live.extend(["pip", "npm"])  # PoliciesScreen.action_toggle_policy → ban_policy.apply
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        cells = app.screen.query_one(DataTable[Any]).get_row("#ban")
-        assert "pip, npm" in " ".join(str(cell) for cell in cells)
-
-
 async def test_uninstall_path_block_row_appears_once_doctor_has_written_it() -> None:
     """DoctorScreen.action_apply writes the very block has_path_block detects."""
     written = [False]
@@ -3086,20 +3055,6 @@ async def test_uninstall_path_block_row_appears_once_doctor_has_written_it() -> 
         await pilot.press("5")
         assert isinstance(app.screen, UninstallScreen)
         assert "#path-block" in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
-
-
-async def test_uninstall_ban_row_disappears_once_the_ban_is_removed_elsewhere() -> None:
-    """The stale-True direction: a lever that removes nothing while
-    _applied_summary claims 'pip/npm ban removed' anyway."""
-    live = ["pip", "npm"]
-    app = _app(uninstall=_uninstall_inputs(ban_names=lambda: list(live)), initial_view="uninstall")
-    async with app.run_test(size=(100, 30)) as pilot:
-        assert isinstance(app.screen, UninstallScreen)
-        live.clear()
-        await pilot.press("escape")
-        await pilot.press("5")
-        assert isinstance(app.screen, UninstallScreen)
-        assert "#ban" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
 
 
 async def test_doctor_screen_shows_missing_pnpm_globals_and_preview() -> None:
@@ -3877,6 +3832,26 @@ async def test_unified_app_hands_the_policy_inputs_probe_to_the_doctor() -> None
 
 
 # -- the disk probe travels on PolicyInputs (plan 15.7-06) --
+
+
+async def test_uninstall_view_has_no_ban_row() -> None:
+    import dataclasses
+
+    assert "ban_names" not in {f.name for f in dataclasses.fields(UninstallInputs)}
+    app = _app(
+        cases=_rg_rows(),
+        uninstall=_uninstall_inputs(has_path_block=True, tweak_ids=("tweak:docker",)),
+        initial_view="uninstall",
+    )
+    async with app.run_test(size=(100, 30)):
+        assert isinstance(app.screen, UninstallScreen)
+        assert _row_keys(app.screen) == [
+            "#removable here",
+            "rg",
+            "#environment",
+            "#path-block",
+            "#tweaks",
+        ]
 
 
 def test_doctor_view_takes_no_guard_state() -> None:
@@ -6532,7 +6507,7 @@ async def test_state_refreshed_preserves_a_standing_removal_summary(tmp_path: Pa
     app = _version_app(
         [tool],
         service,
-        uninstall=_uninstall_inputs(ban_names=["pip"], remove=_recorder(captured)),
+        uninstall=_uninstall_inputs(has_path_block=True, remove=_recorder(captured)),
         initial_view="uninstall",
     )
     async with app.run_test(size=(120, 30)) as pilot:
@@ -6643,7 +6618,7 @@ async def test_uninstall_health_column_reads_the_published_state(tmp_path: Path)
     service.publish([plan_state(yq, health=Health.OK), plan_state(jq, health=Health.OUTDATED)])
     app = _app(
         tools=[yq, jq],
-        uninstall=_uninstall_inputs(ban_names=["pip"]),
+        uninstall=_uninstall_inputs(has_path_block=True),
         initial_view="uninstall",
         version_refresh=service,
     )
@@ -6656,8 +6631,11 @@ async def test_uninstall_health_column_reads_the_published_state(tmp_path: Path)
         for tool in (yq, jq):
             state = service.state_of(tool.id)
             assert _uninstall_cell(table, tool.id, "health") == health_cell(state).plain
-        ban = [_uninstall_cell(table, "#ban", key) for key in ("health", "cat", "via", "removes")]
-        assert ban == ["", "env", "shell config", "shims + aliases (pip)"]
+        block = [
+            _uninstall_cell(table, "#path-block", key)
+            for key in ("health", "cat", "via", "removes")
+        ]
+        assert block == ["", "env", "shell config", "managed block in ~/.myshellrc"]
 
 
 async def test_uninstall_health_repaints_when_a_pass_publishes(tmp_path: Path) -> None:
@@ -7069,23 +7047,23 @@ async def test_a_publish_rereads_the_environment_rows(tmp_path: Path) -> None:
     rg = _tool("rg")
     service = frozen_service(tmp_path)
     service.publish([removable_state(rg, [Path("/opt/rg")])])
-    bans = ["pip"]
+    block = {"on": True}
     app = _app(
         tools=[rg],
         version_refresh=service,
-        uninstall=_uninstall_inputs(ban_names=lambda: list(bans)),
+        uninstall=_uninstall_inputs(has_path_block=lambda: block["on"]),
         initial_view="uninstall",
     )
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, UninstallScreen)
-        assert "#ban" in _row_keys(screen)
+        assert "#path-block" in _row_keys(screen)
         screen.status.set("kept", "ok")
-        bans.clear()
+        block["on"] = False
         app.request_refresh()
         await settle(app, pilot)
-        assert "#ban" not in _row_keys(screen)
+        assert "#path-block" not in _row_keys(screen)
         assert screen.status.text == "kept"
 
 
@@ -7126,15 +7104,15 @@ async def test_a_failed_env_read_on_publish_keeps_rows_and_status(tmp_path: Path
     service.publish([removable_state(rg, [Path("/opt/rg")])])
     failing = {"on": False}
 
-    def bans() -> list[str]:
+    def has_block() -> bool:
         if failing["on"]:
             raise OSError("denied")
-        return ["pip"]
+        return True
 
     app = _app(
         tools=[rg],
         version_refresh=service,
-        uninstall=_uninstall_inputs(ban_names=bans),
+        uninstall=_uninstall_inputs(has_path_block=has_block),
         initial_view="uninstall",
     )
     async with app.run_test(size=(120, 30)) as pilot:
@@ -7145,12 +7123,12 @@ async def test_a_failed_env_read_on_publish_keeps_rows_and_status(tmp_path: Path
         failing["on"] = True
         app.request_refresh()
         await settle(app, pilot)
-        assert "#ban" in _row_keys(screen)
+        assert "#path-block" in _row_keys(screen)
         assert screen.status.text == "written"
         screen.status.clear()
         app.request_refresh()
         await settle(app, pilot)
-        assert "#ban" in _row_keys(screen)
+        assert "#path-block" in _row_keys(screen)
         assert (screen.status.text, screen.status.severity) == (
             "Could not read the uninstall state: denied.",
             "warn",
@@ -8278,7 +8256,6 @@ def _removing_closure(
             decision,
             bin_dir=home / ".local" / "bin",
             myshellrc_path=home / ".myshellrc",
-            rc_paths=[],
             bundles=(),
             zshrc_path=home / ".zshrc",
             extra_policies=(),
@@ -8685,7 +8662,7 @@ async def test_retired_rows_sort_by_id_after_the_catalog() -> None:
     app = _app(
         cases=_rg_rows(),
         uninstall=_uninstall_inputs(
-            ban_names=["pip"],
+            has_path_block=True,
             retired=lambda: receipts.scan_retired(set()).tools,
         ),
         initial_view="uninstall",
@@ -8700,7 +8677,7 @@ async def test_retired_rows_sort_by_id_after_the_catalog() -> None:
             "alpha",
             "zeta",
             "#environment",
-            "#ban",
+            "#path-block",
         ]
 
 

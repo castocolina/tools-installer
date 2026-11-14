@@ -456,14 +456,12 @@ def _uninstall(tool: Tool, runner: Runner) -> uninstall.SweepResult:
         paths={tool.id: plan.removable},
         argv={tool.id: plan.argv},
         unregister={tool.id: plan.unregister},
-        remove_ban=False,
         remove_path_block=False,
     )
     return app.perform_uninstall(
         decision,
         bin_dir=bin_dir,
         myshellrc_path=home / ".myshellrc",
-        rc_paths=[],
         bundles=(),
         zshrc_path=home / ".zshrc",
         extra_policies=(),

@@ -136,21 +136,20 @@ from installer.version_status import (
 @dataclass(frozen=True)
 class UninstallInputs:
     """Everything the UninstallScreen needs besides the published tool state:
-    the active ban names, whether a managed PATH block exists, the active
-    shell-tweak ids, and the live removal closure bound by the composition root.
+    whether a managed PATH block exists, the active shell-tweak ids, and the live
+    removal closure bound by the composition root.
 
-    `ban_names`, `has_path_block`, `tweak_ids` and `retired` are PREDICATES, not their
+    `has_path_block`, `tweak_ids` and `retired` are PREDICATES, not their
     results, because each is mutated live by another view in the same process:
-    the Policies view writes the ban's shims and aliases and toggles the tweaks,
-    and the Doctor view writes the very managed PATH block `has_path_block`
-    detects. A value frozen at construction goes stale the moment the user
-    does. `UninstallScreen` re-reads all four on every entry and on every
-    publish. `retired` re-lists the receipts whose tool id left the catalog (D-09).
+    the Policies view toggles the tweaks, and the Doctor view writes the very
+    managed PATH block `has_path_block` detects. A value frozen at construction
+    goes stale the moment the user does. `UninstallScreen` re-reads all three on
+    every entry and on every publish. `retired` re-lists the receipts whose tool id
+    left the catalog (D-09).
     The tool rows are not an input: they are a projection of the
     published state (`version_status.uninstall_group`, `uninstall_label` and
     `uninstall_detail`), so no second classification can disagree with it."""
 
-    ban_names: Callable[[], list[str]]
     has_path_block: Callable[[], bool]
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
@@ -1000,13 +999,13 @@ class DoctorScreen(AppScreen):
 @dataclass(frozen=True)
 class _UninstallEntry:
     """A browsable uninstall row: either a classified tool or an environment
-    pseudo-row (the pip/npm ban, the managed PATH block, or the shell tweaks).
+    pseudo-row (the managed PATH block, the shell tweaks, or the settings).
 
-    `key` is the stable id (a tool id, or "#ban"/"#path-block"/"#tweaks"). `cells`
+    `key` is the stable id (a tool id, or "#path-block"/"#tweaks"/"#settings"). `cells`
     are the pre-rendered columns. `selectable` gates toggling (removable tools and
     the env rows are selectable; managed/absent/unavailable tools are not).
     `detail` is the detail-bar line. `paths` are the tool's removable artifacts
-    (empty for env rows). `is_ban`/`is_path_block`/`is_tweaks` flag the env rows
+    (empty for env rows). `is_path_block`/`is_tweaks`/`is_settings` flag the env rows
     so a selection maps back to the UninstallDecision levers. `tool` is the
     tool for a tool row, None for an environment row. `group` is the section a
     tool row sits in (`uninstall_group`), None for an environment row."""
@@ -1016,7 +1015,6 @@ class _UninstallEntry:
     selectable: bool
     detail: str
     paths: tuple[Path, ...]
-    is_ban: bool
     is_path_block: bool
     is_tweaks: bool = False
     is_settings: bool = False
@@ -1033,7 +1031,7 @@ class _UninstallEntry:
 
 
 # Section titles per state, in display order. The "environment" section holds the
-# ban/PATH pseudo-rows.
+# PATH/tweak/settings pseudo-rows.
 _STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
     (UninstallState.REMOVABLE, "removable here"),
     (UninstallState.MANAGED, "managed elsewhere"),
@@ -1045,15 +1043,13 @@ _STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
 # deletes files; ConfirmUninstall still lists every path.
 _REMOVES_CELL_MAX = 40
 _NOTHING_TO_UNINSTALL = "Nothing to uninstall."
-_BAN_KEY = "#ban"
 _BLOCK_KEY = "#path-block"
 _TWEAK_KEY = "#tweaks"
 _SETTINGS_KEY = "#settings"
-_ENV_KEYS = (_BAN_KEY, _BLOCK_KEY, _TWEAK_KEY, _SETTINGS_KEY)
-# (ban names, PATH block present, active tweak ids, ledgered settings files, retired receipts
+_ENV_KEYS = (_BLOCK_KEY, _TWEAK_KEY, _SETTINGS_KEY)
+# (PATH block present, active tweak ids, ledgered settings files, retired receipts
 # with the removal plan each one shows)
 _EnvState = tuple[
-    list[str],
     bool,
     tuple[str, ...],
     tuple[Path, ...],
@@ -1185,7 +1181,6 @@ class UninstallScreen(AppScreen):
         # The last entry built from a KNOWN state: a row whose state is unknown
         # again (a removal in flight) keeps its section and selectability.
         self._painted: dict[str, _UninstallEntry] = {}
-        self._ban_names_of = inputs.ban_names
         self._has_path_block_of = inputs.has_path_block
         self._tweak_ids_of = inputs.tweak_ids
         self._retired_of = inputs.retired
@@ -1197,9 +1192,8 @@ class UninstallScreen(AppScreen):
         # stashed on `self._startup_error`; the first `enter_view` surfaces it
         # as a one-time warn and re-reads, so the screen self-heals.
         env, env_error = run_live(self._env_state)
-        empty_env: _EnvState = ([], False, (), (), ())
+        empty_env: _EnvState = (False, (), (), ())
         (
-            self._ban_names,
             self._has_path_block,
             self._tweak_ids,
             self._settings_files,
@@ -1227,8 +1221,6 @@ class UninstallScreen(AppScreen):
         entries = [self._with_failure(self._tool_entry(tool), tool) for tool in self._tools]
         # Built from the pairs the last re-read stored, so painting never reads the filesystem.
         entries.extend(self._retired_entry(tool, plan) for tool, plan in self._retired)
-        if self._ban_names:
-            entries.append(self._ban_entry())
         if self._has_path_block:
             entries.append(self._block_entry())
         if self._tweak_ids:
@@ -1271,7 +1263,6 @@ class UninstallScreen(AppScreen):
                 uninstall_detail(tool, state, self._required_by.get(tool.id, ()), config=config)
             ),
             paths=tuple(paths),
-            is_ban=False,
             is_path_block=False,
             tool=tool,
             group=group,
@@ -1347,28 +1338,9 @@ class UninstallScreen(AppScreen):
             selectable=False,
             detail=uninstall_detail(tool, state),
             paths=(),
-            is_ban=False,
             is_path_block=False,
             tool=tool,
             group=UninstallState.ABSENT,
-        )
-
-    def _ban_entry(self) -> _UninstallEntry:
-        return _UninstallEntry(
-            key=_BAN_KEY,
-            cells=[
-                mark(False),
-                Text("pip/npm ban", style="bold yellow"),
-                Text(""),
-                Text("env", style="yellow"),
-                Text("shell config", style="dim"),
-                Text(f"shims + aliases ({', '.join(self._ban_names)})", style="dim"),
-            ],
-            selectable=True,
-            detail=f"pip/npm ban — shims + interactive aliases ({', '.join(self._ban_names)})",
-            paths=(),
-            is_ban=True,
-            is_path_block=False,
         )
 
     def _block_entry(self) -> _UninstallEntry:
@@ -1385,7 +1357,6 @@ class UninstallScreen(AppScreen):
             selectable=True,
             detail="PATH wiring — the managed block in ~/.myshellrc",
             paths=(),
-            is_ban=False,
             is_path_block=True,
         )
 
@@ -1425,7 +1396,6 @@ class UninstallScreen(AppScreen):
             selectable=True,
             detail=detail,
             paths=(),
-            is_ban=False,
             is_path_block=False,
             is_tweaks=True,
         )
@@ -1449,7 +1419,6 @@ class UninstallScreen(AppScreen):
             selectable=True,
             detail=f"reverts only keys that still hold this installer's value: {files}",
             paths=(),
-            is_ban=False,
             is_path_block=False,
             is_settings=True,
         )
@@ -1475,7 +1444,6 @@ class UninstallScreen(AppScreen):
             selectable=selectable,
             detail=sanitize_log_line(_retired_detail(tool.id, plan)),
             paths=plan.removable,
-            is_ban=False,
             is_path_block=False,
             tool=tool,
             argv=plan.argv,
@@ -1524,7 +1492,7 @@ class UninstallScreen(AppScreen):
         env = [
             entry
             for entry in self._entries
-            if entry.is_ban or entry.is_path_block or entry.is_tweaks or entry.is_settings
+            if entry.is_path_block or entry.is_tweaks or entry.is_settings
         ]
         if env:
             sections.append(("environment", "shell config the installer manages", env))
@@ -1550,10 +1518,10 @@ class UninstallScreen(AppScreen):
         Every one of them touches the FILESYSTEM and can therefore raise
         (CR-01, 15.4-REVIEW.md): `has_path_block` -> `shellrc.has_managed_block`
         -> `Path.read_text()`; `tweak_ids` -> `active_tweak_ids` -> the rc files
-        and the managed bin dir; `ban_names` -> `guard_state`, which probes that
-        same bin dir; the settings files -> the ledgers. That is why this tuple is its own seam:
-        every caller evaluates it through `run_live`, so a failure degrades to the last known
-        values plus a warn rather than escaping the nav path.
+        and the managed bin dir; the settings files -> the ledgers. That is why this
+        tuple is its own seam: every caller evaluates it through `run_live`, so a
+        failure degrades to the last known values plus a warn rather than escaping
+        the nav path.
         """
         settings_files = tuple(
             path
@@ -1568,7 +1536,6 @@ class UninstallScreen(AppScreen):
         # D-09: the retired receipts re-listed live, each with the plan its row will show.
         retired = tuple((tool, removal_plan(tool, managed)) for tool in self._retired_of())
         return (
-            self._ban_names_of(),
             self._has_path_block_of(),
             self._tweak_ids_of(),
             settings_files,
@@ -1583,7 +1550,6 @@ class UninstallScreen(AppScreen):
         env, error = run_live(self._env_state)
         if env is not None:
             (
-                self._ban_names,
                 self._has_path_block,
                 self._tweak_ids,
                 self._settings_files,
@@ -1650,10 +1616,6 @@ class UninstallScreen(AppScreen):
     def selected(self) -> set[str]:
         """Selected *tool* ids (the env pseudo-rows are reported separately)."""
         return {key for key in self._browser.selected if key not in _ENV_KEYS}
-
-    @property
-    def remove_ban(self) -> bool:
-        return _BAN_KEY in self._browser.selected
 
     @property
     def remove_path_block(self) -> bool:
@@ -1798,8 +1760,6 @@ class UninstallScreen(AppScreen):
         parts: list[str] = []
         if tool_count:
             parts.append(f"{tool_count} tool(s)")
-        if _BAN_KEY in ids:
-            parts.append("the pip/npm ban")
         if _BLOCK_KEY in ids:
             parts.append("the PATH wiring")
         if _TWEAK_KEY in ids:
@@ -1827,7 +1787,6 @@ class UninstallScreen(AppScreen):
             paths={tool_id: self._by_key[tool_id].paths for tool_id in tools},
             argv={tool_id: self._by_key[tool_id].argv for tool_id in tools},
             unregister={tool_id: self._by_key[tool_id].unregister for tool_id in tools},
-            remove_ban=self.remove_ban,
             remove_path_block=self.remove_path_block,
             remove_tweaks=self.remove_tweaks,
             revert_settings=self.remove_settings,
@@ -1883,11 +1842,6 @@ class UninstallScreen(AppScreen):
 
     def _applied_summary(self, decision: UninstallDecision, swept: SweepResult) -> str:
         parts: list[str] = []
-        if decision.remove_ban:
-            parts.append(
-                "pip/npm ban removed — open a new shell or run `hash -r` so cached"
-                " command paths refresh."
-            )
         if decision.remove_path_block:
             parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
         if decision.remove_tweaks:
