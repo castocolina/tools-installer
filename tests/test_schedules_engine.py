@@ -1744,14 +1744,16 @@ def passthrough_ctx(env: Env, extra: dict[str, str]) -> ScheduleContext:
 
 
 def test_the_linux_unit_carries_the_proxy_and_certificate_variables(env: Env) -> None:
-    ctx = passthrough_ctx(env, {"HTTP_PROXY": "bad\nvalue", "https_proxy": 'has"quote'})
+    ctx = passthrough_ctx(
+        env, {"HTTP_PROXY": "unrenderable-proxy\nvalue", "https_proxy": 'has"quote'}
+    )
     turn_on(ctx, "update-claude")
     lines = (ctx.unit_dir / f"{CLAUDE_BASENAME}.service").read_text().splitlines()
     for key, value in PASSTHROUGH.items():
         if key != "HTTP_PROXY":
             assert f'Environment="{key}={value}"' in lines
     text = "\n".join(lines)
-    assert "bad" not in text  # an unrenderable value is dropped, not written
+    assert "unrenderable-proxy" not in text  # an unrenderable value is dropped, not written
     assert 'has"quote' not in text
     assert "HTTP_PROXY" not in text
 
@@ -1766,7 +1768,7 @@ def test_the_macos_plist_carries_the_proxy_and_certificate_variables(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mac = make_env(tmp_path, monkeypatch, os_key="macos")
-    ctx = passthrough_ctx(mac, {"HTTP_PROXY": "bad\nvalue"})
+    ctx = passthrough_ctx(mac, {"HTTP_PROXY": "unrenderable-proxy\nvalue"})
     turn_on(ctx, "update-claude")
     plist = plistlib.loads(
         (ctx.launch_agents_dir / "com.tools-installer.schedule.update-claude.plist").read_bytes()
