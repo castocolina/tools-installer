@@ -3,9 +3,11 @@
 `installer/resolve.py::resolve_methods` answers "which methods could install
 this here, best first" and its ordering is the `_RANK` install-preference
 ladder. This module answers a different question: which manager actually owns
-the installed copy. The two must never be conflated, because a tool such as
-`rg` declares `github_release` (rank 20) and `brew` (rank 40) and a
-brew-installed copy would otherwise be treated as a GitHub download.
+the installed copy. The two must never be conflated: index 0 is install
+preference, never provenance. A tool such as `rg` declares `github_release`
+and `brew`; on a Homebrew host brew is tried first, yet an `rg` this installer
+downloaded earlier (or on a host without Homebrew) is installer-owned, so
+reading index 0 as the owner would misattribute it.
 
 `dnf`, `apt`, `pacman`, and `rpm_ostree` are valid `METHOD_KINDS`. Phase 12 left
 them out of scope: a tool installed through a Linux system package manager

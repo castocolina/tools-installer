@@ -1,10 +1,11 @@
 """Ownership-first update dispatch.
 
 This module never indexes `resolve_methods(tool, platform)[0]` for provenance.
-`resolve_methods` ordering is install preference, not which manager actually
-placed the tool — `rg` declares `github_release` (rank 20) ahead of `brew`
-(rank 40), so a brew-installed copy would otherwise be re-downloaded into
-`~/.local/bin`. Callers construct an `UpdateTarget` from a resolved
+`resolve_methods` ordering is install preference, never provenance — `rg`
+declares `github_release` and `brew`; on a Homebrew host brew is tried first,
+yet an `rg` this installer downloaded earlier (or on a host without Homebrew)
+is installer-owned, so reading index 0 would update it through the wrong
+manager. Callers construct an `UpdateTarget` from a resolved
 `ManagerOwnership`; `perform_update` only acts on that evidence.
 
 It also never imports `installer.engine`. `install_tool` short-circuits on
