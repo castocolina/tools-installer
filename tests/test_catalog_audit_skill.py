@@ -347,6 +347,23 @@ def test_verdict_parser_accepts_and_refuses() -> None:
         _parse_verdict(low, final=True)
 
 
+def test_resume_eval_fixture_is_a_partial_run() -> None:
+    evals = {e["id"]: e for e in json.loads(_text(EVALS))["evals"]}
+    files = [SKILL_DIR / name for name in evals["resume-after-interruption"]["files"]]
+    assert all(path.is_file() for path in files)
+    assert sorted(files[0].parent.iterdir()) == sorted(files)
+    registry = {tool.id for tool in catalog_audit.load_tools(catalog_audit.REGISTRY)}
+    stems = {path.stem for path in files}
+    assert (len(stems & registry), stems - registry) == (2, {"gone-tool"})
+    for path in files:
+        body = _text(path).rstrip("\n")
+        assert body.endswith(catalog_audit.FOOTER), path.name
+        if path.stem in registry:
+            report = body.removesuffix(catalog_audit.FOOTER)
+            home = Path("/nonexistent-home")
+            assert catalog_audit.validate_report(report, path.stem, home=home) == [], path.name
+
+
 def test_skill_judge_verdicts_are_well_formed() -> None:
     for path in sorted(PHASE_DIR.glob("24.3-SKILLJUDGE-*.md")):
         verdict = _parse_verdict(_text(path), final=path.stem.endswith("-FINAL"))

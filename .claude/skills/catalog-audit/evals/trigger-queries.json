@@ -52,15 +52,15 @@
     "should_trigger": false
   },
   {
-    "query": "review this PR diff for bugs in the uninstall planner",
+    "query": "what changed in opencode 2.0, summarise the release notes",
     "should_trigger": false
   },
   {
-    "query": "why does the wizard crash when I press escape on the tool list",
+    "query": "check the removal recipe of the lazygit entry is correct and fix it",
     "should_trigger": false
   },
   {
-    "query": "write a unit test for the version cache expiry logic",
+    "query": "grep installer/ for sudo calls",
     "should_trigger": false
   },
   {
@@ -69,6 +69,14 @@
   },
   {
     "query": "update my local pi install to the latest version",
+    "should_trigger": false
+  },
+  {
+    "query": "we ship a pinned release asset for jq, check that its pin and asset still resolve",
+    "should_trigger": false
+  },
+  {
+    "query": "walk me through researching a new tool called atuin before I add it to the registry",
     "should_trigger": false
   }
 ]

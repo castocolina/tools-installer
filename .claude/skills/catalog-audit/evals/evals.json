@@ -14,13 +14,18 @@
     },
     {
       "id": "resume-after-interruption",
-      "prompt": "the audit I started yesterday for 2026-11-12 got cut off halfway, pick it up where it stopped and finish the remaining entries",
-      "expected_output": "The agent calls status for that date, continues from the entry it names, leaves the complete reports untouched and writes only the missing ones.",
+      "prompt": "the audit I started yesterday for 2026-11-12 got cut off halfway, pick it up where it stopped and finish the remaining entries (the run directory is the partial-run fixture, copied to .planning/audits/catalog/2026-11-12/)",
+      "expected_output": "The agent calls status for that date, which names the third registry entry as next, leaves the complete uv and rg reports untouched, reports the gone-tool orphan, and writes only the missing reports.",
       "assertions": [
-        "The agent runs `status --date 2026-11-12` before any other audit command and continues from the id after `next`",
-        "No report that was already complete is rewritten (its bytes are identical before and after)",
-        "A leftover orphan report named by status is reported to the user, not silently deleted",
-        "The agent does not start a new run directory for a different date"
+        "The agent runs `status --date 2026-11-12` before any other audit command and continues from the entry that `next` names",
+        "The uv and rg reports are not rewritten (their bytes are identical before and after)",
+        "The gone-tool orphan named by status is reported to the user with the summary, never deleted or renamed",
+        "The agent does not start a new run directory for a different date, and runs `verify` only if verify-registry.md is missing"
+      ],
+      "files": [
+        "evals/files/partial-run/2026-11-12/uv.md",
+        "evals/files/partial-run/2026-11-12/rg.md",
+        "evals/files/partial-run/2026-11-12/gone-tool.md"
       ]
     },
     {
@@ -31,7 +36,7 @@
         "The report has a `- latest: unknown: <reason>` line naming the 403 for the GitHub source",
         "The `install method` and `update argv` rows read unknown, not ok, when every latest line is unknown",
         "The report names the other sources the facts block offered, rather than a number the agent remembered",
-        "No retry loop hammers the API: the agent moves on and records the row as unknown"
+        "The transcript shows at most one request to api.github.com for the entry, and the agent records the row as unknown instead of retrying"
       ]
     },
     {

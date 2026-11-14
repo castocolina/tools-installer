@@ -50,5 +50,9 @@ what `write` accepts. Every value in it is illustrative; copy the shape, never a
   - `n/a` means the step cannot apply to this entry; its source starts with `reason: `.
 - `## Proposed changes`: `- none`, or one `- <change>; risk: low|medium|high; evidence: <source>`
   line per change.
+  Rate risk by what the change touches:
+  - low: a dated `# Verified` comment, a classifier, or a pin bump with no behaviour change;
+  - medium: an install method or update argv change, verified in a container;
+  - high: a removal path, a write to user config, anything that touches a shell rc file or needs root.
 - Use `~` for the home directory, never an absolute home path, and never quote a credential or a
   config value. The tool appends its completion footer; never write it yourself.
