@@ -914,3 +914,306 @@ def test_verify_copies_the_warm_state_first(
     assert code == 0
     assert seen == [before[0]]
     assert (warm.read_bytes(), warm.stat().st_mtime_ns) == before
+
+
+# ---- 24.3-03 Task 2: the script scan's mechanical checks and stale citations ----
+
+_INSTALLER = Path(catalog_audit.__file__).resolve().parent
+_NO_SCHEMAS: Mapping[str, Mapping[str, object]] = {}
+
+
+def _scan_rows(
+    tmp_path: Path,
+    files: Mapping[str, str],
+    *,
+    tools: tuple[Tool, ...] = (),
+    schemas: Mapping[str, Mapping[str, object]] = _NO_SCHEMAS,
+) -> list[catalog_audit.ScanRow]:
+    return catalog_audit.scan(_repo(tmp_path, files), tools, schemas)
+
+
+def _found(rows: list[catalog_audit.ScanRow]) -> list[tuple[str, int]]:
+    return [(row.path, row.line) for row in rows if row.status == "finding"]
+
+
+def test_scan_elevation_heads(tmp_path: Path) -> None:
+    python = (
+        'A = ["sudo", "dnf"]\n'
+        'B = ("doas", "x")\n'
+        'C = ["/usr/bin/pkexec", "x"]\n'
+        'print("run sudo dnf install x")\n'
+        'print(f"sudo dnf install {A}")\n'
+        'D = ["dnf", "sudo"]\n'
+    )
+    shell = (
+        "sudo rm x\n"
+        "a; sudo rm x\n"
+        "a && sudo rm x\n"
+        "a || sudo rm x\n"
+        "a | sudo rm x\n"
+        "y=$(sudo rm x)\n"
+        "# sudo x\n"
+        'echo "run sudo x"\n'
+        "printf 'sudo x\\n'\n"
+        "echo sudo\n"
+    )
+    rows = _scan_rows(tmp_path, {"installer/guards.py": python, "scripts/a.sh": shell})
+    assert _found(rows) == [
+        ("installer/guards.py", 1),
+        ("installer/guards.py", 2),
+        ("installer/guards.py", 3),
+        ("scripts/a.sh", 1),
+        ("scripts/a.sh", 2),
+        ("scripts/a.sh", 3),
+        ("scripts/a.sh", 4),
+        ("scripts/a.sh", 5),
+        ("scripts/a.sh", 6),
+    ]
+    assert rows[0].pattern.startswith("`sudo`")
+
+
+def test_scan_target_auto_or_all(tmp_path: Path) -> None:
+    python = (
+        'A = ["--target", "auto"]\n'
+        'B = ["--target", "all"]\n'
+        'C = "x --target=auto"\n'
+        'D = ["--target", csv]\n'
+        'E = ["--target", "claude,codex"]\n'
+        'F = "--target auto"\n'
+    )
+    rows = _scan_rows(tmp_path, {"installer/guards.py": python})
+    assert _found(rows) == [("installer/guards.py", n) for n in (1, 2, 3, 6)]
+    assert rows[0].pattern.startswith("`--target`")
+    assert rows[2].pattern.startswith("`--target=auto`")
+
+
+_MAPS = (
+    '_CODEGRAPH_TARGETS = {"claude": "claude", "ghost-host": "ghost"}\n'
+    'POSTINSTALL_HOOKS = {"codegraph-mcp-register": HookPair(targets=_CODEGRAPH_TARGETS)}\n'
+)
+
+
+def test_scan_hook_target_keys_outside_presence(tmp_path: Path) -> None:
+    hooked = _tool("codegraph", postinstall="codegraph-mcp-register")
+    rows = _scan_rows(tmp_path, {"installer/postinstall.py": _MAPS}, tools=(hooked,))
+    assert [(r.line, r.entry) for r in rows if r.status == "finding"] == [(1, "codegraph")]
+    assert "`ghost-host`" in rows[0].pattern
+    shipped = (_INSTALLER / "postinstall.py").read_text(encoding="utf-8")
+    clean = _scan_rows(tmp_path / "shipped", {"installer/postinstall.py": shipped})
+    assert [r for r in clean if r.status == "finding"] == []
+
+
+@pytest.mark.parametrize(
+    ("exec_line", "clean"),
+    [
+        ('exec "$real" "$@"', True),
+        ('exec pnpm dlx "$@"', False),
+        ('exec "$real" --model x "$@"', False),
+        ('exec "$real"', False),
+    ],
+)
+def test_scan_shim_exec_rewrites(tmp_path: Path, exec_line: str, clean: bool) -> None:
+    source = f"SHIM = '''#!/bin/sh\n{exec_line}\n'''\n"
+    rows = _scan_rows(tmp_path, {"installer/env_redirect.py": source})
+    if clean:
+        assert _found(rows) == []
+    else:
+        assert _found(rows) == [("installer/env_redirect.py", 2)]
+        assert exec_line in rows[0].pattern
+
+
+def test_scan_reads_f_string_shims_offline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    guards = (_INSTALLER / "guards.py").read_text(encoding="utf-8")
+    cursor = (_INSTALLER / "cursor_shim.py").read_text(encoding="utf-8")
+    files = {"installer/guards.py": guards, "installer/cursor_shim.py": cursor}
+    repo = _repo(tmp_path, files)
+    rows = catalog_audit.scan(repo, (), _NO_SCHEMAS)
+
+    def at(text: str, needle: str) -> int:
+        return next(n for n, line in enumerate(text.splitlines(), 1) if needle in line)
+
+    npx = ("installer/guards.py", at(guards, 'exec {shlex.quote(target_path)} {quoted_args} "$@"'))
+    shim = ("installer/cursor_shim.py", at(cursor, 'exec "$target" {flag}'))
+    mid = ("installer/cursor_shim.py", at(cursor, 'exec "$target" "$@";;'))
+    assert npx in _found(rows)
+    assert shim in _found(rows)
+    assert mid not in _found(rows)
+    assert next(r for r in rows if (r.path, r.line) == npx).pattern.startswith("`exec `")
+    assert next(r for r in rows if (r.path, r.line) == shim).pattern.startswith('`exec "$target" `')
+
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    run = root / DAY
+    run.mkdir(parents=True)
+    (run / "scripts.md").write_text(catalog_audit.scan_text(DAY, rows), encoding="utf-8")
+    code, _, err = _main(
+        ["summarize", "--date", DAY, "--root", str(root), "--repo", str(repo)], registry, capsys
+    )
+    assert code == 0, err
+    summary = (run / "SUMMARY.md").read_text(encoding="utf-8")
+    for path, line in (npx, shim):
+        assert _script_row(summary, f"{path}:{line}")[4] == "current"
+
+
+def _script_row(summary: str, location: str) -> list[str]:
+    row = next(line for line in summary.splitlines() if line.startswith(f"| {location} |"))
+    return [cell.strip() for cell in row.strip("|").split("|")]
+
+
+_OPENCODE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "permission": {"$ref": "#/$defs/PermissionConfig", "deprecated": True},
+        "permissions": {"type": "array"},
+    },
+    "$defs": {"PermissionConfig": {}},
+}
+
+
+def _keys_source(path: str) -> str:
+    return (
+        "from installer.agent_settings import SettingKey\n"
+        f'_KEYS = {{("opencode", "auto-approve"): (SettingKey(("{path}",), "allow"),)}}\n'
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "pattern"),
+    [
+        ("permission", "`permission` deprecated in the opencode schema"),
+        ("nope", "`nope` not allowed in the opencode schema"),
+        ("permissions", None),
+    ],
+)
+def test_scan_schema_flags_the_opencode_permission_key(
+    key: str,
+    pattern: str | None,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    repo = _repo(tmp_path, {"installer/agent_settings.py": _keys_source(key)})
+    schema = tmp_path / "p243e03-opencode.json"
+    schema.write_text(json.dumps(_OPENCODE_SCHEMA), encoding="utf-8")
+    argv = ["scan", "--date", DAY, "--root", str(root), "--repo", str(repo)]
+    code, _, err = _main([*argv, "--schema", f"opencode={schema}"], registry, capsys)
+    assert code == 0, err
+    scripts = (root / DAY / "scripts.md").read_text(encoding="utf-8")
+    if pattern is None:
+        assert "| installer/agent_settings.py | (installer) | ok |" in scripts
+        assert "finding" not in scripts
+    else:
+        assert f"| installer/agent_settings.py:2 | opencode | finding | {pattern}" in scripts
+
+
+def test_scan_rejects_a_bad_schema_argument(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    bad = tmp_path / "p243e03-bad.json"
+    bad.write_text("[1]", encoding="utf-8")
+    base = ["scan", "--date", DAY, "--root", str(root), "--repo", str(_repo(tmp_path))]
+    for spec in ("opencode", "opencode=", f"opencode={tmp_path}/missing.json", f"opencode={bad}"):
+        code, _, _ = _main([*base, "--schema", spec], registry, capsys)
+        assert code == catalog_audit.EXIT_USAGE, spec
+
+
+def test_scan_rows_name_their_entry(tmp_path: Path) -> None:
+    hooked = _tool("codegraph", postinstall="codegraph-mcp-register")
+    files = {
+        "installer/agent_settings.py": _keys_source("permission"),
+        "installer/postinstall.py": _MAPS,
+        "installer/cursor_shim.py": 'X = ["sudo", "x"]\n',
+        "installer/guards.py": 'X = ["sudo", "x"]\n',
+        "scripts/a.sh": "sudo x\n",
+        "scripts/lib/b.sh": "echo ok\n",
+    }
+    rows = _scan_rows(tmp_path, files, tools=(hooked,), schemas={"opencode": _OPENCODE_SCHEMA})
+    assert {(r.path, r.entry, r.status) for r in rows} == {
+        ("installer/agent_settings.py", "opencode", "finding"),
+        ("installer/postinstall.py", "codegraph", "finding"),
+        ("installer/cursor_shim.py", "cursor-agent", "finding"),
+        ("installer/guards.py", "(installer)", "finding"),
+        ("scripts/a.sh", "(maintainer)", "finding"),
+        ("scripts/lib/b.sh", "(maintainer)", "ok"),
+    }
+
+
+def test_scan_groups_by_file_in_path_order(tmp_path: Path) -> None:
+    files = {
+        "scripts/z.sh": "sudo a\nsudo b\n",
+        "installer/guards.py": 'X = ["sudo", "x"]\n',
+        "scripts/lib/clean.sh": "echo ok\n",
+        "scripts/a.sh": "echo ok\n",
+    }
+    rows = _scan_rows(tmp_path, files)
+    assert [(r.path, r.line, r.status) for r in rows] == [
+        ("installer/guards.py", 1, "finding"),
+        ("scripts/a.sh", 0, "ok"),
+        ("scripts/lib/clean.sh", 0, "ok"),
+        ("scripts/z.sh", 1, "finding"),
+        ("scripts/z.sh", 2, "finding"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("token", "line", "state"),
+    [
+        ("permission", '_KEYS = (("permission",), "allow")', "current"),
+        ("permission", '_KEYS = (("permissions",), "allow")', "stale"),
+        ("permission", "_KEYS = ()", "stale"),
+        ("--target=auto", 'A = "--target=auto"', "current"),
+        ('"$@"', 'exec "$target" "$@"', "current"),
+        ('exec "$target" "$@"', 'exec "$target" "$@"', "current"),
+    ],
+)
+def test_stale_citation(
+    token: str, line: str, state: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    repo = _repo(tmp_path, {"x.py": f"a\nb\n{line}\n"})
+    run = root / DAY
+    run.mkdir(parents=True)
+    (run / "scripts.md").write_text(
+        "# scripts\n\n| location | entry | status | pattern |\n|---|---|---|---|\n"
+        f"| x.py:3 | alpha | finding | `{token}` was flagged |\n"
+        "| x.py:9 | alpha | finding | `a` beyond the end |\n"
+        "| gone.py:1 | alpha | finding | `a` file removed |\n",
+        encoding="utf-8",
+    )
+    argv = ["summarize", "--date", DAY, "--root", str(root), "--repo", str(repo)]
+    assert _main(argv, registry, capsys)[0] == 0
+    summary = (run / "SUMMARY.md").read_text(encoding="utf-8")
+    assert _script_row(summary, "x.py:3")[4] == state
+    assert _script_row(summary, "x.py:9")[4] == "stale"
+    assert _script_row(summary, "gone.py:1")[4] == "stale"
+
+
+def test_scan_quotes_no_config_values(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    schema = dict(_OPENCODE_SCHEMA)
+    schema["properties"] = {
+        "permission": {"deprecated": True, "default": "canary-schema-default-1"},
+    }
+    schema_path = tmp_path / "p243e03-canary.json"
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    source = _keys_source("permission").replace('"allow"', '"canary-key-value-2"')
+    repo = _repo(
+        tmp_path,
+        {
+            "installer/agent_settings.py": source + 'TOKEN = "canary-constant-3"\n',
+            "installer/guards.py": 'NAME = "canary-constant-4"\nX = ["sudo", "canary-arg-5"]\n',
+        },
+    )
+    argv = ["scan", "--date", DAY, "--root", str(root), "--repo", str(repo)]
+    assert _main([*argv, "--schema", f"opencode={schema_path}"], registry, capsys)[0] == 0
+    scripts = (root / DAY / "scripts.md").read_text(encoding="utf-8")
+    assert "deprecated" in scripts
+    assert "canary" not in scripts

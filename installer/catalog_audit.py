@@ -18,6 +18,7 @@ Exit codes: 0 ok; 64 usage error; 70 internal error; 73 report refused.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import functools
 import http.client
@@ -41,10 +42,10 @@ from installer import verify_registry, versions
 from installer.agent_settings import DYNAMIC_KEYS, TUNING_GROUPS, setting_keys
 from installer.atomic import atomic_write_bytes, atomic_write_text
 from installer.locations import ensure_dir
-from installer.model import Method, Tool, load_tools, method_package
+from installer.model import ELEVATION_COMMANDS, Method, Tool, load_tools, method_package
 from installer.ownership import ManagerOwnership
 from installer.platform import detect_os
-from installer.postinstall import POSTINSTALL_HOOKS
+from installer.postinstall import HARNESS_PRESENCE, POSTINSTALL_HOOKS
 from installer.run import run_output
 from installer.verify_registry import github_token
 from installer.version_status import probed_version
@@ -754,9 +755,267 @@ def _default_entry(path: str) -> str:
     return "cursor-agent" if path == "installer/cursor_shim.py" else INSTALLER_OWNER
 
 
-def scan(repo: Path) -> list[ScanRow]:
-    """One `ok` row per audited surface; the checks that add `finding` rows come in Task 2."""
-    return sorted(ScanRow(path, 0, _default_entry(path), "ok", "") for path in _surfaces(repo))
+_TARGET_RE = re.compile(r"--target[= ](?:auto|all)\b")
+# `exec <one command word> "$@"`: the only shim exec line that passes argv straight through.
+_EXEC_CLEAN_RE = re.compile(r'exec (?:"\$\w+"|\$\w+|[\w./+-]+) "\$@"')
+_PLACEHOLDER = "{…}"
+_ELEVATION = "|".join(sorted(re.escape(name) for name in ELEVATION_COMMANDS))
+_SHELL_ELEVATION_RE = re.compile(
+    r"(?:^|[;&|`(]|\b(?:if|then|elif|else|do|while|until)\s)\s*"
+    rf"(?P<cmd>(?:\S*/)?(?:{_ELEVATION}))(?![\w-])"
+)
+_QUOTED_RE = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'")
+
+
+@dataclass(frozen=True)
+class _Hit:
+    """One mechanical finding; `entries` empty means the surface's own entry."""
+
+    line: int
+    pattern: str
+    entries: tuple[str, ...] = ()
+
+
+def _str_const(node: ast.AST | None) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _as_map(node: object) -> Mapping[str, object]:
+    return cast(Mapping[str, object], node) if isinstance(node, dict) else {}
+
+
+def _assignments(tree: ast.AST) -> list[tuple[str, ast.expr]]:
+    found: list[tuple[str, ast.expr]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            if isinstance(node.targets[0], ast.Name):
+                found.append((node.targets[0].id, node.value))
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            found.append((node.target.id, node.value))
+    return found
+
+
+def _docstrings(tree: ast.Module) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        scope = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        if isinstance(node, scope) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and _str_const(first.value) is not None:
+                ids.add(id(first.value))
+    return ids
+
+
+def _sequence_hits(node: ast.List | ast.Tuple) -> list[_Hit]:
+    hits: list[_Hit] = []
+    head = _str_const(node.elts[0]) if node.elts else None
+    if head is not None and head.rsplit("/", 1)[-1] in ELEVATION_COMMANDS:
+        hits.append(_Hit(node.elts[0].lineno, f"`{head}` elevation command at the head of an argv"))
+    for current, following in zip(node.elts, node.elts[1:], strict=False):
+        value = _str_const(following)
+        if _str_const(current) == "--target" and value in ("auto", "all"):
+            hits.append(_Hit(current.lineno, f"`--target` argv with `{value}`"))
+    return hits
+
+
+def _render(node: ast.Constant | ast.JoinedStr) -> str:
+    """The template text; every formatted value of an f-string shows as a placeholder."""
+    if isinstance(node, ast.Constant):
+        return str(node.value)
+    return "".join(_str_const(part) or _PLACEHOLDER for part in node.values)
+
+
+def _string_hits(node: ast.Constant | ast.JoinedStr, lines: list[str]) -> list[_Hit]:
+    """Target and shim-exec findings of one string constant or f-string template."""
+    hits: list[_Hit] = []
+    rendered = _render(node)
+    match = _TARGET_RE.search(rendered)
+    if match is not None:
+        line = node.lineno + rendered.count("\n", 0, match.start())
+        hits.append(_Hit(line, f"`{match[0]}` registers every host"))
+    span = range(node.lineno - 1, node.end_lineno or node.lineno)
+    for raw in rendered.splitlines():
+        text = raw.strip()
+        while text.startswith(_PLACEHOLDER):  # a formatted value that ends with a newline
+            text = text.removeprefix(_PLACEHOLDER).lstrip()
+        if not text.startswith("exec ") or _EXEC_CLEAN_RE.fullmatch(text):
+            continue
+        holed = _PLACEHOLDER in text
+        fragment = text.split(_PLACEHOLDER, 1)[0] if holed else text
+        line = next((i + 1 for i in span if fragment + ("{" if holed else "") in lines[i]), None)
+        if line is None:  # the source line escapes characters the render does not
+            fragment = "exec"
+            line = next((i + 1 for i in span if "exec" in lines[i]), node.lineno)
+        hits.append(_Hit(line, f"`{fragment}` shim exec line rewrites argv: {text}"))
+    return hits
+
+
+def _target_map_hits(tree: ast.Module, tools: Sequence[Tool]) -> list[_Hit]:
+    """Target-map keys outside the presence ids; the entries are the hook's tools."""
+    assigned = _assignments(tree)
+    hook_of: dict[str, str] = {}
+    for name, value in assigned:
+        if name == "POSTINSTALL_HOOKS" and isinstance(value, ast.Dict):
+            for key, hook in zip(value.keys, value.values, strict=True):
+                if (hook_id := _str_const(key)) and isinstance(hook, ast.Call):
+                    for kw in hook.keywords:
+                        if kw.arg == "targets" and isinstance(kw.value, ast.Name):
+                            hook_of[kw.value.id] = hook_id
+    hits: list[_Hit] = []
+    for name, value in assigned:
+        if not name.endswith("_TARGETS") or not isinstance(value, ast.Dict):
+            continue
+        hook_id = hook_of.get(name, "")
+        shipped = POSTINSTALL_HOOKS.get(hook_id)
+        allowed = set(HARNESS_PRESENCE) | set(shipped.standalone if shipped else ())
+        owners = tuple(sorted(t.id for t in tools if hook_id and t.postinstall == hook_id))
+        for key in value.keys:
+            text = _str_const(key)
+            if key is not None and text is not None and text not in allowed:
+                hits.append(_Hit(key.lineno, f"`{text}` is not a HARNESS_PRESENCE id", owners))
+    return hits
+
+
+def _deref(root: Mapping[str, object], node: object) -> Mapping[str, object]:
+    """`node` with local `#/...` references followed (bounded, so a cycle ends)."""
+    current = _as_map(node)
+    for _ in range(16):
+        ref = current.get("$ref")
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            break
+        target: object = root
+        for part in ref[2:].split("/"):
+            target = _as_map(target).get(part)
+        current = _as_map(target)
+    return current
+
+
+def _schema_verdict(schema: Mapping[str, object], path: tuple[str, ...]) -> tuple[str, str] | None:
+    """(part, verdict) for the first part of `path` the schema deprecates or disallows."""
+    node = _deref(schema, schema)
+    for part in path:
+        properties = _as_map(node.get("properties"))
+        if part not in properties:
+            return (part, "not allowed") if node.get("additionalProperties") is False else None
+        child = _as_map(properties[part])
+        node = _deref(schema, child)
+        if child.get("deprecated") is True or node.get("deprecated") is True:
+            return part, "deprecated"
+    return None
+
+
+def _schema_hits(tree: ast.Module, schemas: Mapping[str, Mapping[str, object]]) -> list[_Hit]:
+    """`_KEYS` tuning key paths the agent's vendor schema deprecates or does not allow."""
+    hits: list[_Hit] = []
+    for name, value in _assignments(tree):
+        if name != "_KEYS" or not isinstance(value, ast.Dict):
+            continue
+        for key, row in zip(value.keys, value.values, strict=True):
+            agent = _str_const(key.elts[0]) if isinstance(key, ast.Tuple) and key.elts else None
+            schema = schemas.get(agent) if agent else None
+            if agent is None or schema is None:
+                continue
+            for call in ast.walk(row):
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
+                    continue
+                first = call.args[0] if call.args else None
+                if call.func.id != "SettingKey" or not isinstance(first, ast.Tuple):
+                    continue
+                path = tuple(_str_const(part) or "" for part in first.elts)
+                verdict = _schema_verdict(schema, path)
+                if verdict is not None:
+                    where = f" (key path {'.'.join(path)})" if len(path) > 1 else ""
+                    pattern = f"`{verdict[0]}` {verdict[1]} in the {agent} schema{where}"
+                    hits.append(_Hit(first.lineno, pattern, (agent,)))
+    return hits
+
+
+def _py_hits(
+    path: str,
+    text: str,
+    tools: Sequence[Tool],
+    schemas: Mapping[str, Mapping[str, object]],
+) -> list[_Hit]:
+    """Findings of one Python surface, read as text by `ast` and never imported."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return [_Hit(exc.lineno or 1, "`SyntaxError` the surface does not parse")]
+    lines = text.splitlines()
+    nested = {id(c) for j in ast.walk(tree) if isinstance(j, ast.JoinedStr) for c in ast.walk(j)}
+    skip = _docstrings(tree) | nested
+    hits: list[_Hit] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.List | ast.Tuple):
+            hits.extend(_sequence_hits(node))
+        elif isinstance(node, ast.JoinedStr) or (
+            isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip
+        ):
+            hits.extend(_string_hits(node, lines))
+    if path == "installer/postinstall.py":
+        hits.extend(_target_map_hits(tree, tools))
+    return [*hits, *_schema_hits(tree, schemas)]
+
+
+def _blank_quotes(line: str) -> str:
+    """The line without quoted words (a printed hint), keeping quotes that hold `$(...)`."""
+
+    def blank(match: re.Match[str]) -> str:
+        text = match[0]
+        return text if "$(" in text or "`" in text else '""'
+
+    return _QUOTED_RE.sub(blank, line)
+
+
+def _shell_hits(text: str) -> list[_Hit]:
+    hits: list[_Hit] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        found = _SHELL_ELEVATION_RE.search(_blank_quotes(line))
+        if found is not None:
+            hits.append(
+                _Hit(number, f"`{found['cmd']}` elevation command at a shell command position")
+            )
+    return hits
+
+
+def scan(
+    repo: Path, tools: Sequence[Tool], schemas: Mapping[str, Mapping[str, object]]
+) -> list[ScanRow]:
+    """An `ok` row per clean surface and a `finding` row per mechanical unsafe pattern."""
+    rows: set[ScanRow] = set()
+    for path in _surfaces(repo):
+        text = (repo / path).read_text(encoding="utf-8", errors="replace")
+        hits = _shell_hits(text) if path.endswith(".sh") else _py_hits(path, text, tools, schemas)
+        default = _default_entry(path)
+        if not hits:
+            rows.add(ScanRow(path, 0, default, "ok", ""))
+        for hit in hits:
+            for entry in hit.entries or (default,):
+                rows.add(ScanRow(path, hit.line, entry, "finding", hit.pattern.replace("\n", " ")))
+    return sorted(rows)
+
+
+def read_schemas(specs: Sequence[str]) -> dict[str, Mapping[str, object]]:
+    """Vendor JSON schemas the agent fetched to a scratch dir, read as data (`AGENT=PATH`)."""
+    schemas: dict[str, Mapping[str, object]] = {}
+    for spec in specs:
+        agent, sep, where = spec.partition("=")
+        if not (sep and agent and where):
+            raise UsageError(f"--schema wants AGENT=PATH, got {spec!r}")
+        try:
+            data: object = json.loads(Path(where).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise UsageError(f"--schema {agent}: cannot read {where} as JSON") from None
+        if not isinstance(data, dict):
+            raise UsageError(f"--schema {agent}: {where} is not a JSON object")
+        schemas[agent] = cast(dict[str, object], data)
+    return schemas
 
 
 def scan_text(day: str, rows: Sequence[ScanRow]) -> str:
@@ -813,7 +1072,56 @@ def _verify_lines(run: Path) -> list[str]:
     return [next((x for x in lines if x.startswith("exit: ")), "exit: unknown"), *drift]
 
 
-def summarize(tools: Sequence[Tool], run: Path) -> str:
+def _token(text: str) -> str | None:
+    """The first backticked span of `text`, without its backticks."""
+    found = _SPAN_RE.search(text)
+    return found[0][1:-1] if found else None
+
+
+def _line_has(repo: Path, location: str, token: str) -> bool:
+    """True when line N of `path:N` still holds `token` at exact token boundaries."""
+    name, _, number = location.rpartition(":")
+    try:
+        target = (repo / name).resolve()
+        if not target.is_relative_to(repo.resolve()) or int(number) < 1:
+            return False
+        text = target.read_text(encoding="utf-8").splitlines()[int(number) - 1]
+    except (OSError, ValueError, IndexError):
+        return False
+    return re.search(rf"(?<!\w){re.escape(token)}(?!\w)", text) is not None
+
+
+def _cell(text: str) -> str:
+    return text.replace("|", "\\|")
+
+
+def _script_findings(
+    run: Path, reports: Mapping[str, Mapping[str, list[str]]], repo: Path
+) -> list[str]:
+    """Scan findings and report rows citing `path:line` with a backticked token, by path."""
+    found: set[tuple[str, int, str, str]] = set()
+    for row in _read_scan(run):
+        if row.status == "finding":
+            found.add((row.path, row.line, row.entry, row.pattern))
+    for entry, sections in reports.items():
+        for check in sections.get("Checks", [])[2:]:
+            _, state, source = _cells(check)
+            cite = _CITATION_RE.search(source)
+            if state == "drift" and cite is not None and _token(source) is not None:
+                name, _, number = cite[0].rpartition(":")
+                found.add((name, int(number), entry, source))
+    lines = ["| location | entry | status | pattern | state |", "|---|---|---|---|---|"]
+    for name, number, entry, pattern in sorted(found):
+        token = _token(pattern)
+        fresh = token is None or _line_has(repo, f"{name}:{number}", token)
+        lines.append(
+            f"| {name}:{number} | {entry} | drift | {_cell(pattern)} | "
+            f"{'current' if fresh else 'stale'} |"
+        )
+    return lines if found else ["none"]
+
+
+def summarize(tools: Sequence[Tool], run: Path, *, repo: Path) -> str:
     """The audit summary: a pure function of the run directory, with no timestamp."""
     state = status(tools, run)
     reports = {
@@ -842,6 +1150,7 @@ def summarize(tools: Sequence[Tool], run: Path) -> str:
     lines += ["", "## verify-registry", *_verify_lines(run)]
     scanned = [f"- {r.path} {r.entry}: ok" for r in _read_scan(run) if r.status == "ok"]
     lines += ["", "## Script scan", *(scanned or ["not recorded"])]
+    lines += ["", "## Script findings", *_script_findings(run, reports, repo)]
     return "\n".join(lines) + "\n"
 
 
@@ -864,6 +1173,8 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--repo", type=Path, default=CHECKOUT)
         if name == "verify":
             cmd.add_argument("--state", type=Path, required=True)
+        if name == "scan":
+            cmd.add_argument("--schema", action="append", default=[], metavar="AGENT=PATH")
     sub.add_parser("facts").add_argument("id")
     return parser
 
@@ -912,10 +1223,14 @@ def _run(
         record_verify(run, args.state, args.repo, home, verify_main or verify_registry.main)
         print("wrote verify-registry.md")
     elif args.cmd == "scan":
-        _write_run_file(run, "scripts.md", scan_text(args.date, scan(args.repo)))
+        _write_run_file(
+            run,
+            "scripts.md",
+            scan_text(args.date, scan(args.repo, tools, read_schemas(args.schema))),
+        )
         print("wrote scripts.md")
     elif args.cmd == "summarize":
-        _write_run_file(run, "SUMMARY.md", summarize(tools, run))
+        _write_run_file(run, "SUMMARY.md", summarize(tools, run, repo=args.repo))
         print("wrote SUMMARY.md")
     else:
         tool = _find(tools, args.id)
