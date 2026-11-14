@@ -3950,6 +3950,123 @@ def test_a_failing_remove_deletes_nothing(tmp_path: Path, monkeypatch: pytest.Mo
     assert result.removed == ()
 
 
+def _opencode_stop_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pid: int | None,
+    state: str,
+) -> tuple[SweepResult, Path]:
+    """Remove a recipe tool named opencode whose `service stop` fails; the registered service
+    (state dir `service.json`, vendor v2.3.0) names `pid`, whose process answers `state`."""
+    import json
+
+    from installer import app
+    from installer.uninstall import removal_plan
+
+    tool = _vend_tool(
+        tool_id="opencode",
+        paths=("~/.local/bin/opencode",),
+        remove=("opencode", "service", "stop"),
+    )
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch, tool=tool)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    if pid is not None:
+        registration = tmp_path / ".local" / "state" / "opencode" / "service.json"
+        registration.parent.mkdir(parents=True)
+        registration.write_text(json.dumps({"url": "http://127.0.0.1:1", "pid": pid}))
+    asked: list[int] = []
+
+    def process_state(asked_pid: int) -> str:
+        asked.append(asked_pid)
+        return state
+
+    monkeypatch.setattr(app, "service_process_state", process_state)
+    plan = removal_plan(tool, bin_dir)
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="Server process 4242 is still running")
+
+    result = _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
+    return result, bin_dir / "opencode"
+
+
+@pytest.mark.parametrize("state", ["zombie", "gone"])
+def test_a_failed_service_stop_on_a_dead_pid_still_removes_with_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    """F12: a zombie passes the vendor's kill(pid, 0) poll forever; no live service remains."""
+    from installer import receipts
+
+    result, binary = _opencode_stop_fails(tmp_path, monkeypatch, pid=4242, state=state)
+    assert result.removed == ("opencode",)
+    assert result.remove_failed == ()
+    assert not binary.exists()
+    assert receipts.read("opencode") is None
+    assert any("4242" in note and state in note for note in result.receipt_retired)
+
+
+def test_a_failed_service_stop_on_a_live_pid_keeps_refusing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+
+    result, binary = _opencode_stop_fails(tmp_path, monkeypatch, pid=4242, state="alive")
+    assert result.remove_failed == (("opencode", "Server process 4242 is still running"),)
+    assert binary.exists()
+    assert receipts.receipt_path("opencode").exists()
+
+
+def test_a_failed_service_stop_with_no_registration_keeps_refusing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No registered pid is no evidence: the vendor's message stands."""
+    result, binary = _opencode_stop_fails(tmp_path, monkeypatch, pid=None, state="gone")
+    assert result.remove_failed == (("opencode", "Server process 4242 is still running"),)
+    assert binary.exists()
+
+
+def test_a_failing_recipe_of_another_tool_keeps_refusing_whatever_its_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app
+    from installer.uninstall import removal_plan
+
+    def gone(_pid: int) -> str:
+        return "gone"
+
+    monkeypatch.setattr(app, "service_process_state", gone)
+    tool, bin_dir = _vend_recorded(tmp_path, monkeypatch)
+    plan = removal_plan(tool, bin_dir)
+
+    def runner(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="Error: vend uninstall failed")
+
+    result = _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
+    assert result.remove_failed == (("vend", "Error: vend uninstall failed"),)
+
+
+def test_service_process_state_reads_gone_zombie_and_alive() -> None:
+    import os
+    import sys
+    import time
+
+    from installer import app
+
+    state = app.service_process_state
+    assert state(os.getpid()) == "alive"
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        for _ in range(250):  # exited, not yet waited on: a zombie
+            if state(child.pid) == "zombie":
+                break
+            time.sleep(0.02)
+        assert state(child.pid) == "zombie"
+    finally:
+        child.wait()
+    assert state(child.pid) == "gone"
+
+
 def test_a_vendor_remove_that_deleted_the_binary_is_a_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
