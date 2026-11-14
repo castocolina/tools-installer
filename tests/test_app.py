@@ -1,4 +1,5 @@
 import io
+import json
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -6240,3 +6241,180 @@ def test_perform_uninstall_requires_extra_policies() -> None:
             zshrc_path=Path("/tmp/.zshrc"),
             runner=_no_removal_runner,
         )
+
+
+_MMDC_PACKAGE = "@mermaid-js/mermaid-cli"
+
+
+def _seed_bun_tree(home: Path, members: Mapping[str, str]) -> None:
+    """A bun global tree under `home`: each `{package: command}` is in the manifest, in
+    `node_modules` and linked in the bin dir, as `bun add --global` leaves it."""
+    install = home / ".bun" / "install" / "global"
+    bin_dir = home / ".bun" / "bin"
+    bin_dir.mkdir(parents=True)
+    manifest = {"dependencies": {package: "^1.0.0" for package in members}}
+    install.mkdir(parents=True)
+    (install / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for package, command in members.items():
+        member = install / "node_modules" / package
+        member.mkdir(parents=True)
+        (member / "package.json").write_text('{"version": "1.0.0"}', encoding="utf-8")
+        (bin_dir / command).symlink_to(member / "cli.js")
+
+
+def _bun_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, seed: Mapping[str, str] | None = None
+) -> tuple[Tool, Tool]:
+    """A bun-owned mmdc (with puppeteer as its co-install) and puppeteer, each with its receipt,
+    over a seeded bun tree; `resolve_bun` answers an absolute fake."""
+    from installer import app as app_module
+    from installer import receipts
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    _seed_bun_tree(tmp_path, seed or {_MMDC_PACKAGE: "mmdc", "puppeteer": "puppeteer"})
+    monkeypatch.setattr(app_module, "resolve_bun", lambda: "/fake/bun")
+    mmdc_method = Method(kind="bun", params={"npm_pkg": _MMDC_PACKAGE, "co_install": ["puppeteer"]})
+    puppeteer_method = Method(kind="bun", params={"npm_pkg": "puppeteer"})
+    mmdc = _manager_tool("mmdc", mmdc_method, requires=("puppeteer",))
+    puppeteer = _manager_tool("puppeteer", puppeteer_method)
+    receipts.record(mmdc, mmdc_method, package=_MMDC_PACKAGE, smoke=None)
+    receipts.record(puppeteer, puppeteer_method, package="puppeteer", smoke=None)
+    return mmdc, puppeteer
+
+
+def _bun_runner(home: Path, calls: list[list[str]], *, keep_peer: bool = False) -> Runner:
+    """Simulates `bun remove --global <pkg>` on the seeded tree: the manifest entry, the package
+    directory and the bin link go; with `keep_peer` puppeteer is dropped from the manifest only."""
+    install = home / ".bun" / "install" / "global"
+
+    def runner(cmd: list[str]) -> None:
+        calls.append(cmd)
+        package = cmd[-1]
+        manifest = json.loads((install / "package.json").read_text(encoding="utf-8"))
+        manifest["dependencies"].pop(package, None)
+        (install / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+        if keep_peer and package == "puppeteer":
+            return
+        shutil.rmtree(install / "node_modules" / package, ignore_errors=True)
+        for link in (home / ".bun" / "bin").iterdir():
+            if not link.exists():
+                link.unlink()
+
+    return runner
+
+
+def test_bun_removal_runs_bun_remove_global(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+
+    mmdc, _puppeteer = _bun_tools(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    result = _apply(
+        _decision([mmdc], tmp_path),
+        tmp_path,
+        runner=_bun_runner(tmp_path, calls),
+        catalog=[mmdc],
+    )
+    assert calls == [["/fake/bun", "remove", "--global", _MMDC_PACKAGE]]
+    assert result.removed == ("mmdc",)
+    assert result.remove_failed == ()
+    assert receipts.read("mmdc") is None
+
+
+def test_bun_kept_peer_is_not_reported_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import receipts
+
+    _mmdc, puppeteer = _bun_tools(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    result = _apply(
+        _decision([puppeteer], tmp_path),
+        tmp_path,
+        runner=_bun_runner(tmp_path, calls, keep_peer=True),
+        catalog=[puppeteer],
+    )
+    assert result.removed == ()
+    assert result.remove_failed == (
+        ("puppeteer", "bun kept puppeteer because another global package needs it"),
+    )
+    assert receipts.read("puppeteer") is not None
+
+
+def test_bun_second_removal_reports_already_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import receipts
+    from installer.app import remove_tool
+
+    _mmdc, puppeteer = _bun_tools(tmp_path, monkeypatch)
+    install = tmp_path / ".bun" / "install" / "global"
+    shutil.rmtree(install / "node_modules" / "puppeteer")
+    (tmp_path / ".bun" / "bin" / "puppeteer").unlink()
+    monkeypatch.setattr(app_module, "manager_listing", _listing({_MMDC_PACKAGE}))
+    argv = ("bun", "remove", "--global", "puppeteer")
+    calls: list[list[str]] = []
+    outcome = remove_tool(
+        puppeteer, paths=(), argv=argv, bin_dir=tmp_path / ".local" / "bin", runner=calls.append
+    )
+    assert (outcome.removed, outcome.detail) == (True, "already removed")
+    assert calls == []
+    assert receipts.read("puppeteer") is None
+
+    # A package bun kept as a peer is gone from the manifest but still in node_modules: it is
+    # not "already removed", so the command runs again.
+    (install / "node_modules" / "puppeteer").mkdir()
+    receipts.record(puppeteer, puppeteer.methods[0], package="puppeteer", smoke=None)
+    outcome = remove_tool(
+        puppeteer, paths=(), argv=argv, bin_dir=tmp_path / ".local" / "bin", runner=calls.append
+    )
+    assert calls == [["/fake/bun", "remove", "--global", "puppeteer"]]
+    assert outcome.removed is False
+    assert receipts.read("puppeteer") is not None
+
+
+def test_bun_removal_without_bun_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer import app as app_module
+    from installer import receipts
+    from installer.app import remove_tool
+
+    _mmdc, puppeteer = _bun_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "resolve_bun", lambda: None)
+    calls: list[list[str]] = []
+    outcome = remove_tool(
+        puppeteer,
+        paths=(),
+        argv=("bun", "remove", "--global", "puppeteer"),
+        bin_dir=tmp_path / ".local" / "bin",
+        runner=calls.append,
+    )
+    assert (outcome.removed, outcome.detail) == (False, "bun not found on PATH")
+    assert calls == []
+    assert receipts.read("puppeteer") is not None
+
+
+def test_joint_removal_of_mmdc_and_puppeteer_reports_neither_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proves the removal ORDER only: the dependent (mmdc) goes first. This fake deletes each
+    package on its own removal, so it cannot model bun keeping puppeteer as mmdc's peer; the
+    `remove-both` container step of 24.5-09 observes the real behaviour (review R1-21)."""
+    from installer import receipts
+
+    mmdc, puppeteer = _bun_tools(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    result = _apply(
+        _decision([puppeteer, mmdc], tmp_path),
+        tmp_path,
+        runner=_bun_runner(tmp_path, calls),
+        catalog=[puppeteer, mmdc],
+    )
+    assert [cmd[-1] for cmd in calls] == [_MMDC_PACKAGE, "puppeteer"]
+    assert set(result.removed) == {"mmdc", "puppeteer"}
+    assert result.remove_failed == ()
+    assert receipts.read("mmdc") is None
+    assert receipts.read("puppeteer") is None
