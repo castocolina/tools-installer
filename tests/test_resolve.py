@@ -467,6 +467,10 @@ def test_os_only_rejections_drop_when_another_method_passes_the_os_gate() -> Non
     assert "debian not supported" not in arm.detail
 
 
+def _mmdc_kinds(mmdc: Tool, node: str | None) -> list[str]:
+    return [m.kind for m in resolve_methods(mmdc, _host("debian", node=node))]
+
+
 def test_node_floor_rejects_with_the_reason() -> None:
     mmdc = _registry_tool("mmdc")
     reason = unavailable_reason(mmdc, _host("debian", node="20.19.2"))
@@ -474,9 +478,9 @@ def test_node_floor_rejects_with_the_reason() -> None:
     assert reason.short == "needs Node >= 22.12.0; this system has 20.19.2"
     assert "mmdc needs Node 22.12.0 or newer" in reason.detail
     assert resolve_methods(mmdc, _host("debian", node="20.19.2")) == []
-    assert [m.kind for m in resolve_methods(mmdc, _host("debian", node="26.13.0"))] == ["node"]
-    assert [m.kind for m in resolve_methods(mmdc, _host("debian", node="22.12.0"))] == ["node"]
-    assert [m.kind for m in resolve_methods(mmdc, _host("debian", node=None))] == ["node"]
+    assert _mmdc_kinds(mmdc, "26.13.0") == ["bun", "node"]
+    assert _mmdc_kinds(mmdc, "22.12.0") == ["bun", "node"]
+    assert _mmdc_kinds(mmdc, None) == ["bun", "node"]
 
 
 def test_node_floor_rejects_a_prerelease_at_the_floor() -> None:

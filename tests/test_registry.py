@@ -859,7 +859,7 @@ def test_no_macos_allowlist_stays_honest() -> None:
         )
 
 
-def test_puppeteer_is_an_ai_tier_node_tool_requiring_pnpm() -> None:
+def test_puppeteer_is_an_ai_tier_bun_tool_with_a_pnpm_fallback() -> None:
     puppeteer = next(t for t in load_tools(REGISTRY) if t.id == "puppeteer")
     assert (
         puppeteer.name,
@@ -869,27 +869,32 @@ def test_puppeteer_is_an_ai_tier_node_tool_requiring_pnpm() -> None:
         puppeteer.audience,
         puppeteer.tier,
     ) == ("Puppeteer", "dev", "puppeteer", "P3", "both", "ai")
-    assert puppeteer.requires == ("pnpm", "unzip")
+    assert puppeteer.requires == ("bun", "unzip")
     assert puppeteer.recommends == ()
-    assert len(puppeteer.methods) == 2
-    assert {m.kind for m in puppeteer.methods} == {"node"}
+    assert [m.kind for m in puppeteer.methods] == ["bun", "node", "bun", "node"]
     for method in puppeteer.methods:
         assert method.params["npm_pkg"] == "puppeteer"
-        assert method.params["allow_build"] == ["puppeteer"]
         assert method.params["versions"] == {"puppeteer": "^25"}
         assert method.params["min_node"] == "22.12.0"
         assert method.params["smoke"] == "puppeteer-browser"
         assert "co_install" not in method.params
-    macos = next(m for m in puppeteer.methods if m.os == ("macos",))
-    assert macos.arch == ()
-    linux = next(m for m in puppeteer.methods if m.os == ("debian", "arch", "fedora"))
-    assert linux.arch == ("amd64",)
+        # bun runs puppeteer's postinstall from its default allowlist; only pnpm needs a grant.
+        if method.kind == "node":
+            assert method.params["allow_build"] == ["puppeteer"]
+        else:
+            assert "allow_build" not in method.params
+    macos = [m for m in puppeteer.methods if m.os == ("macos",)]
+    assert [m.kind for m in macos] == ["bun", "node"]
+    assert all(m.arch == () for m in macos)
+    linux = [m for m in puppeteer.methods if m.os == ("debian", "arch", "fedora")]
+    assert [m.kind for m in linux] == ["bun", "node"]
+    assert all(m.arch == ("amd64",) for m in linux)
     for arch in ("amd64", "arm64"):
         macos_plat = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
-        assert len(resolve_methods(puppeteer, macos_plat)) == 1
+        assert [m.kind for m in resolve_methods(puppeteer, macos_plat)] == ["bun", "node"]
     for platform_os in ("debian", "arch", "fedora"):
         linux_amd64 = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
-        assert len(resolve_methods(puppeteer, linux_amd64)) == 1
+        assert [m.kind for m in resolve_methods(puppeteer, linux_amd64)] == ["bun", "node"]
 
 
 def test_puppeteer_resolves_no_method_on_linux_arm64_because_chrome_has_no_binary() -> None:
@@ -913,9 +918,11 @@ def test_mmdc_skips_on_linux_arm64_when_puppeteer_is_unavailable() -> None:
     assert "mmdc" not in ids
     assert "puppeteer" not in ids
     assert {row.tool_id for row in result.blocked} >= {"puppeteer", "mmdc"}
+    # mmdc's own stanzas carry no os or arch limit, so the block is the dependency's.
+    assert [m.kind for m in resolve_methods(by_id["mmdc"], platform)] == ["bun", "node"]
 
 
-def test_selecting_mmdc_drags_in_pnpm_and_puppeteer_on_linux_amd64() -> None:
+def test_selecting_mmdc_drags_in_bun_and_puppeteer_on_linux_amd64() -> None:
     catalog = load_tools(REGISTRY)
     by_id = {tool.id: tool for tool in catalog}
     platform = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
@@ -926,9 +933,10 @@ def test_selecting_mmdc_drags_in_pnpm_and_puppeteer_on_linux_amd64() -> None:
         is_installed=lambda _tool: False,
     )
     ids = [tool.id for tool in result.closure]
-    assert ids.index("pnpm") < ids.index("puppeteer") < ids.index("mmdc")
+    assert ids.index("bun") < ids.index("puppeteer") < ids.index("mmdc")
+    assert "pnpm" not in ids
     assert result.requested_by["puppeteer"] == "mmdc"
-    assert result.requested_by["pnpm"] == "mmdc"
+    assert result.requested_by["bun"] == "mmdc"
 
 
 def test_graphify_uses_the_uv_tool_executor_and_requires_uv() -> None:
@@ -1031,18 +1039,21 @@ def test_no_chrome_headless_shell_catalog_entry() -> None:
     assert "chrome-headless-shell" not in ids
 
 
-def test_mmdc_requires_puppeteer_and_groups_the_node_install() -> None:
+def test_mmdc_requires_puppeteer_and_groups_its_bun_and_node_installs() -> None:
     mmdc = next(t for t in load_tools(REGISTRY) if t.id == "mmdc")
-    assert mmdc.requires == ("pnpm", "puppeteer")
-    node = next(method for method in mmdc.methods if method.kind == "node")
-    assert node.params["npm_pkg"] == "@mermaid-js/mermaid-cli"
-    assert node.params["co_install"] == ["puppeteer"]
+    assert mmdc.requires == ("bun", "puppeteer")
+    assert [method.kind for method in mmdc.methods] == ["bun", "node"]
+    for method in mmdc.methods:
+        assert method.params["npm_pkg"] == "@mermaid-js/mermaid-cli"
+        assert method.params["co_install"] == ["puppeteer"]
+        assert method.params["min_node"] == "22.12.0"
+        assert method.params["smoke"] == "puppeteer-browser"
+        assert method.params["versions"] == {"puppeteer": "^25"}
+        assert method.os == ()
+        assert method.arch == ()
+    bun, node = mmdc.methods
+    assert "allow_build" not in bun.params
     assert node.params["allow_build"] == ["puppeteer"]
-    assert node.params["min_node"] == "22.12.0"
-    assert node.params["smoke"] == "puppeteer-browser"
-    assert node.params["versions"] == {"puppeteer": "^25"}
-    assert node.os == ()
-    assert node.arch == ()
 
 
 def test_co_install_names_resolve_to_required_catalog_tools() -> None:
@@ -1050,14 +1061,14 @@ def test_co_install_names_resolve_to_required_catalog_tools() -> None:
     npm_pkg_owners: dict[str, list[str]] = {}
     for tool in tools:
         for method in tool.methods:
-            if method.kind != "node":
+            if method.kind not in ("node", "bun"):
                 continue
             pkg = method.params.get("npm_pkg")
             if isinstance(pkg, str):
                 npm_pkg_owners.setdefault(pkg, []).append(tool.id)
     for tool in tools:
         for method in tool.methods:
-            if method.kind != "node" or "co_install" not in method.params:
+            if method.kind not in ("node", "bun") or "co_install" not in method.params:
                 continue
             raw = method.params["co_install"]
             assert isinstance(raw, list)
@@ -2057,11 +2068,34 @@ def test_agent_host_recommends_entries_name_the_companions() -> None:
             assert needle in window, f"missing {needle!r} in {host_id}'s recommends window"
 
 
-def test_shipped_node_tools_require_pnpm() -> None:
+def test_shipped_bun_tools_require_bun() -> None:
+    """A tool with a bun method requires bun; one whose only JavaScript method is node, pnpm."""
     tools = load_tools(REGISTRY)
     for tool in tools:
-        if any(m.kind == "node" for m in tool.methods):
-            assert "pnpm" in tool.requires, f"{tool.id}: node tool must require pnpm"
+        if any(m.kind == "bun" for m in tool.methods):
+            assert "bun" in tool.requires, f"{tool.id}: bun tool must require bun"
+        elif any(m.kind == "node" for m in tool.methods):
+            assert "pnpm" in tool.requires, f"{tool.id}: node-only tool must require pnpm"
+
+
+def test_mmdc_puppeteer_pi_declare_a_bun_method_first() -> None:
+    tools = {tool.id: tool for tool in load_tools(REGISTRY)}
+    for tool_id in ("mmdc", "puppeteer", "pi"):
+        kinds = [m.kind for m in tools[tool_id].methods]
+        assert kinds[0] == "bun", tool_id
+        assert "node" in kinds, f"{tool_id}: node stays reachable as the fallback"
+        assert "host_setup" not in kinds, tool_id
+    assert tools["mmdc"].requires == ("bun", "puppeteer")
+    assert tools["puppeteer"].requires == ("bun", "unzip")
+    assert tools["pi"].requires == ("bun",)
+    assert tools["pi"].owner_probes == ()
+    assert not any(m.kind == "brew" for m in tools["mmdc"].methods)
+
+
+def test_agent_clis_declare_no_bun_method() -> None:
+    tools = {tool.id: tool for tool in load_tools(REGISTRY)}
+    for tool_id in ("codex", "claude", "opencode", "copilot", "cursor-agent", "antigravity"):
+        assert not any(m.kind == "bun" for m in tools[tool_id].methods), tool_id
 
 
 def test_shipped_uv_tool_tools_require_uv() -> None:
@@ -2165,8 +2199,8 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
     for tool_id, owner_probes in expected.items():
         assert tools[tool_id].owner_probes == owner_probes, tool_id
 
-    # The pre-existing host-setup owner_probes row keeps its value.
-    assert tools["pi"].owner_probes == ("host-setup",)
+    # pi left the host-setup handoff (24.5-06), so its probe row is gone with the method.
+    assert tools["pi"].owner_probes == ()
     assert tools["drawio-desktop"].owner_probes == ()
 
     # The second assertion is the one that matters over time: it turns
@@ -3076,14 +3110,20 @@ def test_pi_entry_text_is_current() -> None:
     assert "setup remains interactive" not in pi.desc
     assert "MCP" in pi.desc
     assert len(pi.desc) <= 150
-    assert [m.kind for m in pi.methods] == ["host_setup"]
-    assert pi.methods[0].params["setup_id"] == "pi"
-    assert pi.requires == ("pnpm",)
-    assert pi.owner_probes == ("host-setup",)
+    assert [m.kind for m in pi.methods] == ["bun", "node"]
+    for method in pi.methods:
+        assert method.params == {
+            "npm_pkg": "@earendil-works/pi-coding-agent",
+            "min_node": "22.19.0",
+        }
+    assert pi.requires == ("bun",)
+    assert pi.owner_probes == ()
     block = REGISTRY.read_text(encoding="utf-8").split('id = "pi"', 1)[1].split("[[tool]]", 1)[0]
     assert "verified = 2026-11-14" in block
     assert "Verified 2026-11-14" in block
     assert "0.99.0" in block
+    assert "host-setup handoff" not in block
+    assert "engines.node" in block
 
 
 def test_codegraph_note_names_its_copilot_and_pi_hosts() -> None:

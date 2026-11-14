@@ -2690,8 +2690,9 @@ package = "neovim"
 kind = "pacman"
 package = "neovim"
 
-# Install-method decision (2026-09-05, this phase's research): mmdc stays on
-# pnpm (`kind = "node"`). Homebrew is rejected because upstream mermaid-cli's
+# Install-method decision (2026-11-14, Phase 24.5, superseding the 2026-09-05 pnpm-only
+# decision): mmdc installs through bun first, with pnpm (`kind = "node"`) as the
+# fallback. Homebrew is rejected because upstream mermaid-cli's
 # own README states that install path is "no longer supported", and GitHub
 # issue #1122 (closed "not planned") records a brew-installed mmdc failing at
 # runtime with a chrome-headless-shell error because the formula declares only
@@ -2774,9 +2775,16 @@ cmd = "mmdc"
 priority = "P2"
 audience = "both"
 tier = "user"
-verified = 2026-09-05
+verified = 2026-11-14
 desc = "Render Mermaid diagrams to SVG/PNG/PDF from the command line"
-requires = ["pnpm", "puppeteer"]
+requires = ["bun", "puppeteer"]
+[[tool.method]]
+kind = "bun"
+npm_pkg = "@mermaid-js/mermaid-cli"
+co_install = ["puppeteer"]
+min_node = "22.12.0"
+smoke = "puppeteer-browser"
+versions = { puppeteer = "^25" }
 [[tool.method]]
 kind = "node"
 npm_pkg = "@mermaid-js/mermaid-cli"
@@ -2898,16 +2906,31 @@ audience = "both"
 # Runtime dependency of mmdc, never launched by the human directly — its own
 # desc above already says so (D-08).
 tier = "ai"
-verified = 2026-11-13
+verified = 2026-11-14
 desc = "Headless-Chrome automation library; downloads its own Chrome and chrome-headless-shell. Required at runtime by mmdc."
 # Verified 2026-11-13 (Phase 24 archlinux e2e): its postinstall extracts the Chrome zip with
 # `unzip` ("Extraction failed: no zip archiver is available"), so unzip is a prerequisite.
-requires = ["pnpm", "unzip"]
+requires = ["bun", "unzip"]
+[[tool.method]]
+kind = "bun"
+os = ["macos"]
+npm_pkg = "puppeteer"
+versions = { puppeteer = "^25" }
+min_node = "22.12.0"
+smoke = "puppeteer-browser"
 [[tool.method]]
 kind = "node"
 os = ["macos"]
 npm_pkg = "puppeteer"
 allow_build = ["puppeteer"]
+versions = { puppeteer = "^25" }
+min_node = "22.12.0"
+smoke = "puppeteer-browser"
+[[tool.method]]
+kind = "bun"
+os = ["debian", "arch", "fedora"]
+arch = ["amd64"]
+npm_pkg = "puppeteer"
 versions = { puppeteer = "^25" }
 min_node = "22.12.0"
 smoke = "puppeteer-browser"
@@ -3218,7 +3241,7 @@ category = "ai"
 cmd = "pi"
 priority = "P1"
 audience = "human"
-desc = "Minimal coding-agent harness with built-in MCP and its own updater; the host-setup handoff installs it with pnpm."
+desc = "Minimal coding-agent harness with built-in MCP and its own updater; installs through bun, with pnpm as the fallback."
 tier = "user"
 verified = 2026-11-14
 # Verified 2026-11-14: MCP is built in since 0.99.0 (CHANGELOG.md): `pi mcp add|remove|list|login|logout`
@@ -3226,13 +3249,18 @@ verified = 2026-11-14
 # manager such as Nix). The vendor README now leads with `curl -fsSL https://pi.dev/install.sh | sh`,
 # which runs sudo for its Node, npm and xz-utils installs on Debian and Alpine, so the method change
 # waits in Backlog 999.13. Pi requires Node.js >=22.19.0 (npm @earendil-works/pi-coding-agent engines;
-# latest 1.5.2 at verify time). The host-setup handoff still installs the package through pnpm
-# (installer/host_setup.py). No script keys.
-requires = ["pnpm"]
-owner_probes = ["host-setup"]
+# latest 1.5.2 at verify time). Installed by an executed bun install (Phase 24.5), with an executed pnpm
+# install as the fallback; `min_node = "22.19.0"` is the package's own `engines.node`. The package declares
+# no install scripts (checked live 2026-11-14), so neither manager has a dependency script to gate. No script keys.
+requires = ["bun"]
 [[tool.method]]
-kind = "host_setup"
-setup_id = "pi"
+kind = "bun"
+npm_pkg = "@earendil-works/pi-coding-agent"
+min_node = "22.19.0"
+[[tool.method]]
+kind = "node"
+npm_pkg = "@earendil-works/pi-coding-agent"
+min_node = "22.19.0"
 
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import setup
-from installer import cli, cursor_shim, receipts, runlock, schedules
+from installer import cli, cursor_shim, executors, receipts, runlock, schedules
 from installer.helper_assets import schedule_runner
 from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.model import Tool, load_tools
@@ -21,7 +21,13 @@ from installer.ownership import Confidence, ManagerOwnership, Owner
 from installer.platform import Platform
 from installer.run import CommandError, run_captured_in_group
 from installer.schedule_run import RunDeps, run_schedule
-from installer.update import UpdateOutcome, UpdateService, UpdateTarget, resolve_update_argv
+from installer.update import (
+    UpdateOutcome,
+    UpdateService,
+    UpdateTarget,
+    perform_update,
+    resolve_update_argv,
+)
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 _FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
@@ -315,23 +321,50 @@ def _pnpm_behind_a_ban_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     return real
 
 
-def test_pi_updates_through_its_reviewed_host_setup_command(
+def test_pnpm_owned_pi_updates_through_pnpm_on_schedule_and_interactively(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Backstop for routing: a pnpm-owned pi updates through pnpm, never bun, from both entries.
+
+    The scheduled entry point `run_schedule("update-pi", ..., parent_holds_lock=False)` takes the
+    run lock itself on the scratch path and releases it; the interactive one is `perform_update`,
+    which takes no lock. Contention is pinned by `test_run_schedule_takes_the_lock_without_the_flag`
+    and `test_busy_lock_skips`, which this phase does not change.
+    """
     real = _pnpm_behind_a_ban_shim(tmp_path, monkeypatch)
+
+    def node_probe(_argv: list[str]) -> str:
+        return "v22.23.1"
+
+    monkeypatch.setattr(executors, "probe_version", node_probe)
     tool = _tool("pi")
-    ownership = _ownership(
-        tool, "pnpm", with_method=False, package="@earendil-works/pi-coding-agent"
+    node = next(method for method in tool.methods if method.kind == "node")
+    ownership = replace(
+        _ownership(tool, "pnpm", package="@earendil-works/pi-coding-agent"), method=node
     )
-    recorder = Recorder()
-    deps = _deps(tool, ownership, recorder, _versions("1.4.0", "1.5.0"))
-    assert run_schedule("update-pi", deps, parent_holds_lock=True) == (
+    expected = [str(real), "add", "-g", "@earendil-works/pi-coding-agent"]
+
+    scheduled = Recorder()
+    deps = _deps(tool, ownership, scheduled, _versions("1.4.0", "1.5.0"))
+    assert run_schedule("update-pi", deps, parent_holds_lock=False) == (
         "ok: updated 1.4.0 → 1.5.0",
         0,
     )
-    assert recorder.calls == [
-        [str(real), "add", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"]
-    ]
+    assert scheduled.calls == [expected]
+    probe = runlock.try_acquire(runlock.run_lock_path(), "installer")
+    assert probe is not None  # the scheduled run released the lock it took
+    probe.release()
+
+    interactive = Recorder()
+    outcome = perform_update(
+        UpdateTarget(tool, ownership),
+        platform=_FEDORA,
+        runner=interactive,
+        resolve_tag=lambda _repo: "v1.0.0",
+    )
+    assert (outcome.status, outcome.owner) == ("updated", "pnpm")
+    assert interactive.calls == [expected]
+    assert not any("bun" in Path(argv[0]).name for argv in (*scheduled.calls, *interactive.calls))
 
 
 # --- the run lock, the cursor shim after each cursor update, the runner contract --------------

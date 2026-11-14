@@ -20,9 +20,9 @@ def _by_id(tool_id: str) -> Tool:
     return next(t for t in load_tools(_REGISTRY) if t.id == tool_id)
 
 
-def test_mmdc_is_a_node_tool_requiring_pnpm() -> None:
+def test_mmdc_keeps_a_node_method_as_the_pnpm_fallback() -> None:
     mmdc = _by_id("mmdc")
-    assert mmdc.requires == ("pnpm", "puppeteer")
+    assert mmdc.requires == ("bun", "puppeteer")
     node_methods = [m for m in mmdc.methods if m.kind == "node"]
     assert node_methods and node_methods[0].params["npm_pkg"] == "@mermaid-js/mermaid-cli"
 
@@ -47,7 +47,10 @@ def _stub_version_probe_and_browser_launch(monkeypatch: pytest.MonkeyPatch) -> N
 def test_installing_mmdc_runs_pnpm_add_global_no_bare_npm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """With no bun on PATH the ladder falls through bun's method to the pnpm one."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)  # a developer's own bun must not answer
     _stub_version_probe_and_browser_launch(monkeypatch)
     real_dir = tmp_path / "real"
     real_dir.mkdir()

@@ -177,13 +177,13 @@ def test_real_registry_cross_tier_and_same_tier_requires_edges_resolve_unchanged
     catalog = load_tools(registry)
     by_id = {tool.id: tool for tool in catalog}
     mmdc = by_id["mmdc"]
-    pnpm = by_id["pnpm"]
+    bun = by_id["bun"]
     java = by_id["java"]
     sdkman = by_id["sdkman"]
-    assert mmdc.tier == "user" and pnpm.tier == "system"
+    assert mmdc.tier == "user" and bun.tier == "system"
     assert java.tier == sdkman.tier == "system"
     mmdc_result = _resolve([mmdc], catalog)
-    assert mmdc_result.requested_by["pnpm"] == "mmdc"
+    assert mmdc_result.requested_by["bun"] == "mmdc"
     java_result = _resolve([java], catalog)
     assert java_result.requested_by["sdkman"] == "java"
 
@@ -238,15 +238,15 @@ def test_missing_requires_matches_the_real_registry_cross_tier_edge() -> None:
     catalog = load_tools(registry)
     by_id = {tool.id: tool for tool in catalog}
     mmdc = by_id["mmdc"]
-    pnpm = by_id["pnpm"]
+    bun = by_id["bun"]
     installed = {tool.id: False for tool in catalog}
     empty: set[str] = set()
     assert missing_requires(mmdc, catalog, staged=empty, installed=installed) == (
-        "pnpm",
+        "bun",
         "puppeteer",
         "unzip",  # puppeteer's own prerequisite (Phase 24 archlinux e2e)
     )
-    assert mmdc.tier != pnpm.tier
+    assert mmdc.tier != bun.tier
 
 
 def test_resolve_dependencies_does_not_resolve_recommends() -> None:

@@ -3088,6 +3088,7 @@ _FROZEN_REMOVAL: dict[str, tuple[str, str | None]] = {
     "brew": ("formula", "brew uninstall {}"),
     "cask": ("cask", "brew uninstall --cask {}"),
     "node": ("npm_pkg", "pnpm remove --global {}"),
+    "bun": ("npm_pkg", "bun remove --global {}"),
     "uv-tool": ("pypi_pkg", "uv tool uninstall {}"),
     "sdkman": ("candidate", "sdk uninstall {} <version>"),
     "dnf": ("package", None),

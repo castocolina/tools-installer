@@ -6997,7 +6997,7 @@ def test_constant_probe_service_keeps_mmdc_available(tmp_path: Path) -> None:
     mmdc = next(tool for tool in load_tools(REGISTRY) if tool.id == "mmdc")
     service.refresh([mmdc])
     assert service.platform.node_version is None
-    assert [m.kind for m in resolve_methods(mmdc, service.platform)] == ["node"]
+    assert [m.kind for m in resolve_methods(mmdc, service.platform)] == ["bun", "node"]
 
 
 def test_newer_alacritty_tag_reads_outdated(tmp_path: Path) -> None:

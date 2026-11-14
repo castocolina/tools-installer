@@ -56,6 +56,11 @@ def empty_outdated(**_kwargs: object) -> OutdatedReport:
     return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
 
 
+def no_bun_globals() -> Mapping[str, str | None]:
+    """An empty bun tree: the service's default reader would list the developer's real one."""
+    return {}
+
+
 def _no_release(repo: str) -> str:
     raise OSError(f"offline test double: no release lookup for {repo}")
 
@@ -79,6 +84,7 @@ def offline_service(
     read_inventory_fn: Callable[..., ManagerInventory] = empty_inventory,
     read_outdated_fn: Callable[..., OutdatedReport] = empty_outdated,
     present: Callable[[Tool], bool] | None = None,
+    bun_versions: Callable[[], Mapping[str, str | None] | None] = no_bun_globals,
 ) -> VersionRefreshService:
     """A service with no first pass. By default every command resolves into
     the scratch managed bin dir, so every tool reads present and installer-owned."""
@@ -95,6 +101,7 @@ def offline_service(
         read_inventory_fn=read_inventory_fn,
         read_outdated_fn=read_outdated_fn,
         pnpm_packages=lambda: (),
+        bun_versions=bun_versions,
         query=lambda *_a, **_k: "",
         native_probe=native_probe,
         home=home,
