@@ -515,7 +515,7 @@ def test_legacy_alias_notice_names_the_settings_key() -> None:
         "instead."
     ) in texts
     assert (
-        "Removed the opencode-auto alias; installing opencode writes permission in its settings "
+        "Removed the opencode-auto alias; installing opencode writes permissions in its settings "
         "instead."
     ) in texts
     assert not any("Policies" in text for text in texts)

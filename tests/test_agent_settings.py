@@ -36,6 +36,8 @@ from installer.receipts import ConfigLedger, ConfigWrite, read_ledger, write_led
 
 ROOT = Path(__file__).resolve().parent.parent
 
+ALLOW_ALL = {"action": "*", "resource": "*", "effect": "allow"}
+
 VSCODE_SETTINGS = (
     '// VS Code user settings\n{\n  /* editor */\n  "editor.fontSize": 14, // size\n}\n'
 )
@@ -668,13 +670,13 @@ def test_opencode_prefers_the_existing_jsonc_and_refuses_both() -> None:
     text = jsonc.read_text(encoding="utf-8")
     assert "// opencode" in text
     assert "/* theme */" in text
-    assert json.loads(strip_jsonc(text)) == {"theme": "dark", "permission": "allow"}
+    assert json.loads(strip_jsonc(text)) == {"theme": "dark", "permissions": [ALLOW_ALL]}
     assert not plain.exists()
 
     jsonc.unlink()
     applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
     assert applied.path == plain
-    assert json.loads(plain.read_text(encoding="utf-8")) == {"permission": "allow"}
+    assert json.loads(plain.read_text(encoding="utf-8")) == {"permissions": [ALLOW_ALL]}
 
     jsonc.write_text("{}\n", encoding="utf-8")
     plain_before = plain.read_bytes()
@@ -683,6 +685,198 @@ def test_opencode_prefers_the_existing_jsonc_and_refuses_both() -> None:
     assert applied.refused == "both opencode.json and opencode.jsonc exist"
     assert plain.read_bytes() == plain_before
     assert jsonc.read_bytes() == jsonc_before
+
+
+def test_opencode_auto_approve_writes_the_permissions_rule() -> None:
+    home = Path.home()
+    jsonc = home / ".config" / "opencode" / "opencode.jsonc"
+    jsonc.parent.mkdir(parents=True, exist_ok=True)
+    original = '// mine\n{\n  "theme": "dark"\n}\n'
+    jsonc.write_text(original, encoding="utf-8")
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="fedora")
+
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "wrote")]
+    text = jsonc.read_text(encoding="utf-8")
+    assert "// mine" in text
+    assert json.loads(strip_jsonc(text)) == {"theme": "dark", "permissions": [ALLOW_ALL]}
+    ledger = read_ledger("opencode")
+    assert ledger is not None
+    assert [entry.key_path for entry in ledger.entries] == [("permissions",)]
+
+    assert _reverted("opencode", home=home).refused is None
+    assert jsonc.read_text(encoding="utf-8") == original
+
+
+def _apply_the_retired_permission_key(jsonc: Path, content: str) -> None:
+    """Record `permission: "allow"` in the ledger the way a pre-24.3 install did."""
+    keys = vars(agent_settings)["_KEYS"]
+    retired = (agent_settings.SettingKey(("permission",), "allow"),)
+    jsonc.parent.mkdir(parents=True, exist_ok=True)
+    jsonc.write_text(content, encoding="utf-8")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(keys, ("opencode", "auto-approve"), retired)
+        apply_setting("opencode", "auto-approve", home=Path.home(), platform_os="linux")
+
+
+def test_pre_24_3_permission_ledger_entry_reverts() -> None:
+    home = Path.home()
+    jsonc = home / ".config" / "opencode" / "opencode.jsonc"
+    original = '{\n  "theme": "dark"\n}\n'
+    _apply_the_retired_permission_key(jsonc, original)
+    assert json.loads(strip_jsonc(jsonc.read_text(encoding="utf-8"))) == {
+        "theme": "dark",
+        "permission": "allow",
+    }
+
+    reverted = _reverted("opencode", home=home)
+
+    assert reverted.refused is None
+    assert [(key.key, key.kind) for key in reverted.keys] == [("permission", "removed")]
+    assert jsonc.read_text(encoding="utf-8") == original
+    assert read_ledger("opencode") is None
+
+
+def _opencode_facts_absent() -> tuple[str, ...]:
+    return agent_settings.setting_facts(
+        "opencode", "auto-approve", home=Path.home(), platform_os="linux"
+    ).absent
+
+
+def _opencode_jsonc() -> Path:
+    path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_ledger_owned_permission_is_ours() -> None:
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    _apply_the_retired_permission_key(jsonc, '{\n  "theme": "dark"\n}\n')
+    before = jsonc.read_bytes()
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert applied.refused is None
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "already")]
+    assert jsonc.read_bytes() == before
+    assert _opencode_facts_absent() == ()
+
+    reverted = _reverted("opencode", home=home)
+
+    assert reverted.refused is None
+    assert [(key.key, key.kind) for key in reverted.keys] == [("permission", "removed")]
+    assert json.loads(strip_jsonc(jsonc.read_text(encoding="utf-8"))) == {"theme": "dark"}
+
+
+@pytest.mark.parametrize("value", ["ask", "allow", {"edit": "ask"}])
+def test_user_permission_blocks_the_rule(value: object) -> None:
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    jsonc.write_text(json.dumps({"permission": value}), encoding="utf-8")
+    before = jsonc.read_bytes()
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert applied.refused is None
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "set_by_you")]
+    assert jsonc.read_bytes() == before
+    assert read_ledger("opencode") is None
+    assert _opencode_facts_absent() == ()
+
+
+def test_unrecorded_identical_rule_reads_already() -> None:
+    """R1-18: the writer's existing `same_value` result; no write, no entry, nothing to revert."""
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    jsonc.write_text(json.dumps({"permissions": [ALLOW_ALL]}), encoding="utf-8")
+    before = jsonc.read_bytes()
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "already")]
+    assert jsonc.read_bytes() == before
+    assert read_ledger("opencode") is None
+    assert _reverted_or_nothing("opencode", home=home) == ()
+    assert jsonc.read_bytes() == before
+
+
+def _reverted_or_nothing(agent: str, *, home: Path) -> tuple[str, ...]:
+    """The keys a removal touches: empty when the ledger records nothing."""
+    return tuple(
+        key.key
+        for result in revert_agent(agent, home=home, platform_os="linux")
+        for key in result.keys
+    )
+
+
+def test_user_permissions_array_is_kept_byte_identical() -> None:
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    rules = [
+        {"action": "bash", "resource": "*", "effect": "deny"},
+        {"action": "*", "resource": "*", "effect": "ask"},
+    ]
+    jsonc.write_text(json.dumps({"permissions": rules}, indent=2) + "\n", encoding="utf-8")
+    before = jsonc.read_bytes()
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "set_by_you")]
+    assert jsonc.read_bytes() == before
+    assert read_ledger("opencode") is None
+    assert _opencode_facts_absent() == ()
+
+
+def test_recorded_permission_with_a_changed_value_is_the_users() -> None:
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    _apply_the_retired_permission_key(jsonc, "{}\n")
+    jsonc.write_text('{"permission": "ask"}\n', encoding="utf-8")
+    before = jsonc.read_bytes()
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "set_by_you")]
+    assert jsonc.read_bytes() == before
+    assert _opencode_facts_absent() == ()
+
+
+def test_retired_key_removed_by_the_user_lets_the_rule_in() -> None:
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    original = '{\n  "theme": "dark"\n}\n'
+    _apply_the_retired_permission_key(jsonc, original)
+    jsonc.write_text(original, encoding="utf-8")  # the user deleted the recorded key
+
+    applied = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+
+    assert [(key.key, key.kind) for key in applied.keys] == [("permissions", "wrote")]
+    assert json.loads(strip_jsonc(jsonc.read_text(encoding="utf-8"))) == {
+        "theme": "dark",
+        "permissions": [ALLOW_ALL],
+    }
+
+    assert _reverted("opencode", home=home).refused is None
+    assert jsonc.read_text(encoding="utf-8") == original
+    assert read_ledger("opencode") is None
+
+
+@pytest.mark.parametrize("content", [None, ""])
+def test_empty_and_missing_opencode_jsonc_match_copilot(content: str | None) -> None:
+    home = Path.home()
+    jsonc = _opencode_jsonc()
+    copilot = Path.home() / ".copilot" / "settings.json"
+    copilot.parent.mkdir(parents=True, exist_ok=True)
+    if content is not None:
+        jsonc.write_text(content, encoding="utf-8")
+        copilot.write_text(content, encoding="utf-8")
+
+    ours = apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
+    theirs = apply_setting("copilot", "auto-approve", home=home, platform_os="linux")
+
+    assert ours.refused == theirs.refused
+    assert [key.kind for key in ours.keys] == [key.kind for key in theirs.keys]
 
 
 def test_codex_auto_approve_goes_to_the_top_level() -> None:
@@ -978,8 +1172,7 @@ def test_opencode_and_a_created_claude_parent_revert_after_a_user_key_follows() 
     opencode.write_text("{}\n", encoding="utf-8")
     apply_setting("opencode", "auto-approve", home=home, platform_os="linux")
     opencode.write_text(
-        opencode.read_text(encoding="utf-8").replace('"allow"', '"allow", "theme": "dark"'),
-        "utf-8",
+        opencode.read_text(encoding="utf-8").replace("{", '{"theme": "dark",', 1), "utf-8"
     )
     claude = _claude_settings_file()
     claude.write_text('{"model": "opus"}\n', encoding="utf-8")
@@ -1045,9 +1238,9 @@ def test_a_recorded_file_that_is_gone_is_reported_and_no_other_file_is_touched()
     ]
     assert jsonc.read_bytes() == renamed
     assert read_ledger("opencode") == ledger_before
-    assert ledger_summary("opencode", home=home) == ((plain, ("permission",)),)
+    assert ledger_summary("opencode", home=home) == ((plain, ("permissions",)),)
     assert settings_change_lines(("opencode",)) == (
-        "opencode: cannot remove permission: ~/.config/opencode/opencode.json is missing",
+        "opencode: cannot remove permissions: ~/.config/opencode/opencode.json is missing",
     )
 
 
