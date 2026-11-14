@@ -1210,8 +1210,19 @@ def _cited(source: str) -> bool:
     )
 
 
+def _transcript_problem(run: Path, source: str) -> str | None:
+    """Why a `container: <file>` source is no evidence: the file must be in the run directory."""
+    if _CONTAINER_RE.fullmatch(source) is None:
+        return None
+    name = source.removeprefix("container: ")
+    path = run / name
+    if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(run.resolve()):
+        return f"the container transcript {name!r} is not a file inside the run directory"
+    return None
+
+
 def _finding_problems(
-    row: Mapping[str, object], ids: Sequence[str] | None, home: Path, label: str
+    row: Mapping[str, object], ids: Sequence[str] | None, home: Path, label: str, run: Path
 ) -> list[str]:
     problems = _identity_problems(row, ids, label)
     problems += [f"{label}: unknown field {k!r}" for k in sorted(set(row) - _FINDING_FIELDS)]
@@ -1225,6 +1236,8 @@ def _finding_problems(
         problems.append(f"{label}: the source holds a newline or a control character")
     elif state == "unknown" and not source.startswith("reason: "):
         problems.append(f"{label}: an unknown source starts with 'reason: '")
+    elif (problem := _transcript_problem(run, source)) is not None:
+        problems.append(f"{label}: {problem}")
     elif state in ("ok", "drift") and not _cited(source):
         problems.append(
             f"{label}: an {state} source needs a URL, a `command`, a repo citation (path:line) "
@@ -1254,7 +1267,7 @@ def read_findings(run: Path, home: Path) -> list[Finding]:
     """The validated `findings.toml` rows in file order; any problem refuses the file."""
     rows, problems = _load_table(run / _FINDINGS, "finding")
     for number, row in enumerate(rows, 1):
-        problems += _finding_problems(row, None, home, f"{_FINDINGS} finding #{number}")
+        problems += _finding_problems(row, None, home, f"{_FINDINGS} finding #{number}", run)
     if problems:
         raise ReportRefused(problems)
     return [Finding(**{k: str(v) for k, v in row.items()}) for row in rows]
@@ -1300,7 +1313,7 @@ def add_finding(run: Path, tools: Sequence[Tool], home: Path, row: Mapping[str, 
     """Validate one late finding and append it to the run's `findings.toml` (rewritten whole)."""
     ids = [tool.id for tool in tools]
     existing = read_findings(run, home)
-    problems = _finding_problems(row, ids, home, "finding")
+    problems = _finding_problems(row, ids, home, "finding", run)
     if problems:
         raise ReportRefused(problems)
     return _write_run_file(run, _FINDINGS, _findings_toml([*existing, Finding(**row)]))

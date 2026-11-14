@@ -1230,7 +1230,7 @@ def test_scan_quotes_no_config_values(tmp_path: Path, capsys: pytest.CaptureFixt
 # ---- 24.3-03 Task 3: findings, dispositions, the merge rule and the landing-set gate ----
 
 _PROSE_OK = "https://example.com/check"
-_CONTAINER_OK = "container: .e2e-artifacts/x.log"
+_CONTAINER_OK = "container: x.log"  # a transcript file in the run directory
 _NOT_RUN = "reason: container check not run"
 
 
@@ -1249,6 +1249,7 @@ def _arrange(
             _store(root, entry, text)
     _repo(tmp_path, repo_files)
     (root / DAY).mkdir(parents=True, exist_ok=True)
+    (root / DAY / "x.log").write_text("transcript\n", encoding="utf-8")
     return registry, root, tmp_path / "repo"
 
 
@@ -1876,3 +1877,36 @@ def test_removed_entry_keeps_its_rows_as_orphans(
     args = ("--check", "update argv", "--status", "ok", "--source", _PROSE_OK)
     assert _add(registry, root, capsys, "alpha", *args)[0] == 0
     assert _add(registry, root, capsys, "gone", *args)[0] == catalog_audit.EXIT_REFUSED
+
+
+# ---- 24.3 review F5: `container:` evidence is a transcript file under the run directory ----
+
+
+@pytest.mark.parametrize("name", ["missing.log", "../x.log", "sub", "link.log"])
+def test_container_source_needs_a_transcript_in_the_run_dir(
+    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, _ = _arrange(tmp_path, alpha=_report("alpha"))
+    run = root / DAY
+    (run / "sub").mkdir()
+    (run / "link.log").symlink_to(run / "x.log")
+    (root / "x.log").write_text("outside\n", encoding="utf-8")
+    args = ("--check", "install method", "--status", "ok", "--source", f"container: {name}")
+    code, err = _add(registry, root, capsys, "alpha", *args)
+    assert code == catalog_audit.EXIT_REFUSED, err
+    assert "transcript" in err
+    assert not (run / "findings.toml").exists()
+
+
+def test_a_hand_edited_container_finding_without_a_transcript_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
+    (root / DAY / "findings.toml").write_text(
+        '[[finding]]\nentry = "alpha"\ncheck = "install method"\nstatus = "ok"\n'
+        'source = "container: yes"\n',
+        encoding="utf-8",
+    )
+    code, err = _sum(registry, root, repo, capsys)
+    assert code == catalog_audit.EXIT_REFUSED
+    assert "transcript" in err
