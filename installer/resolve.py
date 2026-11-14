@@ -119,7 +119,7 @@ def _rejection(method: Method, platform: Platform) -> str:
     ):
         return "min_os_version"
     kind = method.kind
-    if kind == "node" and not _node_ok(method, platform):
+    if kind in ("node", "bun") and not _node_ok(method, platform):
         return "node"
     if kind == "cargo_distrobox":
         return "tools"

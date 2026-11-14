@@ -2779,3 +2779,36 @@ min_node = "22.12.0"
     assert receipt is not None
     assert receipt.method.kind == "bun"
     assert receipt.package == "@mermaid-js/mermaid-cli"
+
+
+def _bun_then_node_tool() -> Tool:
+    params: dict[str, object] = {"npm_pkg": "@mermaid-js/mermaid-cli"}
+    return _tool(Method("bun", params), Method("node", params))
+
+
+def test_install_tool_falls_through_from_bun_to_pnpm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    calls: list[list[str]] = []
+    failed = install_tool(
+        _bun_then_node_tool(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    assert failed.status == InstallStatus.FAILED
+    assert calls == []
+    first, second = failed.errors
+    assert "bun not found" in str(first)
+    assert "\n" not in str(first)
+    assert "pnpm not found" in str(second)
+
+    pnpm = scratch_path_for_manager_smoke / "pnpm"
+    pnpm.write_text("#!/bin/sh\n", encoding="utf-8")
+    pnpm.chmod(0o755)
+    installed = install_tool(
+        _bun_then_node_tool(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    assert installed.status == InstallStatus.INSTALLED
+    assert installed.method_kind == "node"
+    assert calls == [[str(pnpm), "add", "-g", "@mermaid-js/mermaid-cli"]]

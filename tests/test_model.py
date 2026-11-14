@@ -2104,3 +2104,26 @@ def test_bun_pkg_names_are_regex_checked(tmp_path: Path) -> None:
     for good in ("@scope/name", "plain"):
         (tool,) = load_tools(_bun_registry(tmp_path, npm_pkg=good))
         assert tool.methods[0].params["npm_pkg"] == good
+
+
+def test_bun_method_loads(tmp_path: Path) -> None:
+    extra = (
+        'co_install = ["@other/peer"]\n'
+        'versions = { "@other/peer" = "^1" }\n'
+        'min_node = "22.12.0"\n'
+        'smoke = "puppeteer-browser"\n'
+        'smoke_argv = ["--version"]'
+    )
+    (tool,) = load_tools(_bun_registry(tmp_path, extra))
+    assert tool.methods[0].kind == "bun"
+    assert tool.methods[0].params["min_node"] == "22.12.0"
+
+
+def test_bun_allow_build_is_a_load_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build"):
+        load_tools(_bun_registry(tmp_path, 'allow_build = ["puppeteer"]'))
+
+
+def test_bun_versions_key_outside_the_install_group_is_a_load_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions.*other"):
+        load_tools(_bun_registry(tmp_path, 'versions = { other = "^1" }'))

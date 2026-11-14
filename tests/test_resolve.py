@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import installer.resolve as resolve_module
 from installer.assets import arch_tokens, render_asset
 from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
@@ -483,6 +484,37 @@ def test_node_floor_rejects_a_prerelease_at_the_floor() -> None:
     reason = unavailable_reason(mmdc, _host("debian", node="22.12.0-rc.1"))
     assert reason is not None
     assert reason.short == "needs Node >= 22.12.0; this system has 22.12.0-rc.1"
+
+
+def _floor_tool(kind: str) -> Tool:
+    return Tool(
+        id="floored",
+        name="floored",
+        category="c",
+        cmd="floored",
+        methods=(Method(kind=kind, params={"npm_pkg": "x", "min_node": "22.12.0"}),),
+    )
+
+
+@pytest.mark.parametrize("kind", ["node", "bun"])
+def test_applies_and_rejection_stay_in_parity_for_the_floor(kind: str) -> None:
+    applies = vars(resolve_module)["_applies"]
+    rejection = vars(resolve_module)["_rejection"]
+    (method,) = _floor_tool(kind).methods
+    blocked = _host("debian", node="20.0.0")
+    assert not applies(method, blocked)
+    assert rejection(method, blocked) == "node"
+    assert applies(method, _host("debian", node="22.12.0"))
+
+
+def test_bun_floor_blocks_at_plan_time() -> None:
+    tool = _floor_tool("bun")
+    reason = unavailable_reason(tool, _host("debian", node="20.0.0"))
+    assert reason is not None
+    assert reason.short == "needs Node >= 22.12.0; this system has 20.0.0"
+    assert resolve_methods(tool, _host("debian", node="20.0.0")) == []
+    assert [m.kind for m in resolve_methods(tool, _host("debian", node=None))] == ["bun"]
+    assert [m.kind for m in resolve_methods(tool, _host("debian", node="22.12.0"))] == ["bun"]
 
 
 def test_node_floor_plans_blocked_not_failed() -> None:
