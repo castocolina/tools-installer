@@ -2727,3 +2727,55 @@ def test_release_capture_keeps_the_production_resolver(monkeypatch: pytest.Monke
     written = receipts.read("rg")
     assert written is not None
     assert written.release == "v9.0.0"
+
+
+def test_a_bun_method_installs_by_absolute_path_and_records_a_bun_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    fake_bun = scratch_path_for_manager_smoke / "bun"
+    fake_bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_bun.chmod(0o755)
+
+    def probe(_argv: list[str]) -> str:
+        return "v22.23.1"
+
+    monkeypatch.setattr(executors, "probe_version", probe)
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        """
+[[tool]]
+id = "mmdc"
+category = "diagram"
+cmd = "mmdc"
+tier = "user"
+verified = 2026-01-01
+[[tool.method]]
+kind = "bun"
+npm_pkg = "@mermaid-js/mermaid-cli"
+co_install = ["puppeteer"]
+versions = { puppeteer = "^25" }
+min_node = "22.12.0"
+""",
+        encoding="utf-8",
+    )
+    (tool,) = load_tools(manifest)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        tool,
+        Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        runner=calls.append,
+        present=lambda _t: False,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "bun"
+    assert calls == [[str(fake_bun), "add", "-g", "@mermaid-js/mermaid-cli", "puppeteer@^25"]]
+    assert os.environ["PATH"].startswith(str(home / ".bun" / "bin"))
+    receipt = receipts.read(tool.id)
+    assert receipt is not None
+    assert receipt.method.kind == "bun"
+    assert receipt.package == "@mermaid-js/mermaid-cli"

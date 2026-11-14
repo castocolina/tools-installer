@@ -26,6 +26,7 @@ POSTINSTALL_HOOK_NAMES: frozenset[str] = frozenset(
 METHOD_KINDS = (
     "script",
     "node",
+    "bun",
     "uv-tool",
     "sdkman",
     "host_setup",
@@ -64,6 +65,7 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
     "node": frozenset(
         {"npm_pkg", "co_install", "allow_build", "min_node", "smoke", "versions", "smoke_argv"}
     ),
+    "bun": frozenset({"npm_pkg", "co_install", "min_node", "smoke", "versions", "smoke_argv"}),
     "uv-tool": frozenset({"pypi_pkg", "smoke_argv"}),
     "sdkman": frozenset({"candidate", "bin_dir", "version", "smoke_argv"}),
     "host_setup": frozenset({"setup_id"}),
@@ -110,6 +112,7 @@ KIND_PACKAGE_PARAM: dict[str, str] = {
     "brew": "formula",
     "cask": "cask",
     "node": "npm_pkg",
+    "bun": "npm_pkg",
     "uv-tool": "pypi_pkg",
     "sdkman": "candidate",
     "dnf": "package",
@@ -677,20 +680,32 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                     )
                 if isinstance(strip, bool) or not isinstance(strip, int) or strip < 0:
                     raise ValueError(f"tool '{row['id']}': 'strip' must be a non-negative integer")
-            if kind == "node":
+            if kind in ("node", "bun"):
                 npm_pkg = params.get("npm_pkg")
                 if not isinstance(npm_pkg, str) or not npm_pkg:
                     raise ValueError(
-                        f"tool '{row['id']}': method 'node' requires a non-empty 'npm_pkg'"
+                        f"tool '{row['id']}': method '{kind}' requires a non-empty 'npm_pkg'"
                     )
                 if "," in npm_pkg:
                     raise ValueError(
-                        f"tool '{row['id']}': method 'node' 'npm_pkg' must not contain a comma"
+                        f"tool '{row['id']}': method '{kind}' 'npm_pkg' must not contain a comma"
                     )
                 context = f"tool '{row['id']}'"
                 co_install: tuple[str, ...] = ()
                 if "co_install" in params:
                     co_install = _parse_pkg_list(params["co_install"], "co_install", context)
+                if kind == "bun":
+                    # Each name becomes one argv element for bun's option parser: refuse a
+                    # leading `-` and anything that is not an npm package name.
+                    for field, name in (
+                        ("npm_pkg", npm_pkg),
+                        *(("co_install", member) for member in co_install),
+                    ):
+                        if NPM_PACKAGE_RE.fullmatch(name) is None:
+                            raise ValueError(
+                                f"{context}: method 'bun' {field} '{name}' "
+                                "is not an npm package name such as @scope/name"
+                            )
                 install_group = {npm_pkg, *co_install}
                 if "allow_build" in params:
                     allow_build = _parse_pkg_list(params["allow_build"], "allow_build", context)
