@@ -113,7 +113,7 @@
 ### Host safety
 
 - [x] **HOST-01**: The catalog no longer offers rtk, matt-pocock-skills, opengsd, ponytail, superpowers, softaworks-agent-toolkit, openspec or spec-kit: their registry entries, skill-pack and project-pack reconfigure steps (including every `pnpm dlx @opengsd/gsd-core` run), status probes and tests are deleted; a host that still has a receipt for one of them can remove it (or is told to remove it itself) and is never offered a reinstall [user request 2026-11-07]
-- [x] **HOST-02**: The `npx` guard shim translates `-p X` / `--package X` to `--package=X`, drops `-y` / `--yes`, and exits non-zero on any other npx-only flag, so a flag mismatch can never run a package's default bin [audit 2026-11-07: `npx -y -p @opengsd/gsd-core gsd-mcp-server` ran GSD's global installer 10 times] *(amended 2026-11-07, 23.1 reviews: interactive `npx` also goes through the translator: the guard alias block no longer aliases `npx` to `pnpm dlx`, and an existing block is rewritten at the next launch; orchestrator decision the user may reverse)* *(amended 2026-11-14, 24.3.1 GUARD-01: superseded. The owner retired the guard ("Los alias de npx, npm, pip han demostrado ser un desastre"); the npx translator is deleted and a launch removes the installer-written shims and ban block)*
+- [x] **HOST-02**: The `npx` guard shim translates `-p X` / `--package X` to `--package=X`, drops `-y` / `--yes`, and exits non-zero on any other npx-only flag, so a flag mismatch can never run a package's default bin [audit 2026-11-07: `npx -y -p @opengsd/gsd-core gsd-mcp-server` ran GSD's global installer 10 times] *(amended 2026-11-07, 23.1 reviews: interactive `npx` also goes through the translator: the guard alias block no longer aliases `npx` to `pnpm dlx`, and an existing block is rewritten at the next launch; orchestrator decision the user may reverse)* *(amended 2026-11-14, 24.4 GUARD-01: superseded. The owner retired the guard ("Los alias de npx, npm, pip han demostrado ser un desastre"); the npx translator is deleted and a launch removes the installer-written shims and ban block)*
 - [x] **HOST-03**: Unit tests cannot execute a real toolchain: the subprocess guard is an allowlist that also inspects `sh -c` / `bash -c` scripts; linuxbrew and real-home bins are off the test PATH; agent and toolchain variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_CONFIG*`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `npm_config_*`, `UV_*`, `HOMEBREW_*`, `GH_TOKEN`, `GITHUB_TOKEN`) are cleared; network sockets are blocked [user request 2026-11-07]
 - [x] **HOST-04**: The real-HOME fingerprint also watches `~/.claude/{gsd-core,.gsd-source,gsd-file-manifest.json,agents,commands,hooks}`, `~/.gsd`, `~/.agents`, `~/.codex`, `~/.cursor`, `~/.config/opencode`, `~/.local/{bin,opt}`, uv tools, the pnpm global dir, Volta tools, `~/.config/systemd/user` and `~/.oh-my-zsh` (listing and mtime only) and fails the run on any change [user request 2026-11-07]
 - [x] **HOST-05**: Every check that installs or removes real packages runs only in the container e2e, which also asserts that no global GSD tree (`~/.claude/gsd-core`, `.gsd-source`) appears [user request 2026-11-07]
@@ -295,19 +295,19 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | AUDIT-02 | Phase 24.3 | Complete |
 | AUDIT-03 | Phase 24.3 | Complete |
 | AUDIT-04 | Phase 24.3 | Complete |
-| GUARD-01 | Phase 24.3.1 | Pending |
-| GUARD-02 | Phase 24.3.1 | Pending |
-| GUARD-03 | Phase 24.3.1 | Pending |
-| GUARD-04 | Phase 24.3.1 | Pending |
-| GUARD-05 | Phase 24.3.1 | Pending |
-| GUARD-06 | Phase 24.3.1 | Pending |
-| PRIO-01 | Phase 24.3.2 | Pending |
-| PRIO-02 | Phase 24.3.2 | Pending |
-| PRIO-03 | Phase 24.3.2 | Pending |
-| PRIO-04 | Phase 24.3.2 | Pending |
-| PRIO-05 | Phase 24.3.2 | Pending |
-| PRIO-06 | Phase 24.3.2 | Pending |
-| PRIO-07 | Phase 24.3.2 | Pending |
+| GUARD-01 | Phase 24.4 | Pending |
+| GUARD-02 | Phase 24.4 | Pending |
+| GUARD-03 | Phase 24.4 | Pending |
+| GUARD-04 | Phase 24.4 | Pending |
+| GUARD-05 | Phase 24.4 | Pending |
+| GUARD-06 | Phase 24.4 | Pending |
+| PRIO-01 | Phase 24.5 | Pending |
+| PRIO-02 | Phase 24.5 | Pending |
+| PRIO-03 | Phase 24.5 | Pending |
+| PRIO-04 | Phase 24.5 | Pending |
+| PRIO-05 | Phase 24.5 | Pending |
+| PRIO-06 | Phase 24.5 | Pending |
+| PRIO-07 | Phase 24.5 | Pending |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |
@@ -315,8 +315,8 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 **Coverage:**
 
-- v1 requirements: 115 total *(recounted 2026-11-07 in 23.2: HOST, TUNE, SCHED and AUDIT rows were not counted)* *(amended 2026-11-14, 24.3.1 SPEC: GUARD-01..06 added)* *(amended 2026-11-14, 24.3.2 SPEC: PRIO-01..07 added)*
-- Mapped to phases: 115 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 23.1: 5, Phase 23.2: 7, Phase 24: 7, Phase 24.1: 3, Phase 24.2: 5, Phase 24.3: 4, Phase 24.3.1: 6, Phase 24.3.2: 7, Phase 25: 4)
+- v1 requirements: 115 total *(recounted 2026-11-07 in 23.2: HOST, TUNE, SCHED and AUDIT rows were not counted)* *(amended 2026-11-14, 24.4 SPEC: GUARD-01..06 added)* *(amended 2026-11-14, 24.5 SPEC: PRIO-01..07 added)*
+- Mapped to phases: 115 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 23.1: 5, Phase 23.2: 7, Phase 24: 7, Phase 24.1: 3, Phase 24.2: 5, Phase 24.3: 4, Phase 24.4: 6, Phase 24.5: 7, Phase 25: 4)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 

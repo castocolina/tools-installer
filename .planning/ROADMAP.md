@@ -38,8 +38,8 @@
 - [x] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite (completed 2026-11-14)
 - [x] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim (completed 2026-11-14)
 - [x] **Phase 24.3: Catalog audit skill** (INSERTED) - Catalog-audit skill looping over every entry; opencode v2 and Pi MCP refresh (completed 2026-11-14)
-- [ ] **Phase 24.3.1: Retire the npx, npm and pip guard aliases and redirects**
-- [ ] **Phase 24.3.2: JavaScript install priority brew then bun then volta**
+- [ ] **Phase 24.4: Retire the npx, npm and pip guard aliases and redirects**
+- [ ] **Phase 24.5: JavaScript install priority brew then bun then volta**
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
 - [ ] **Phase 26: Commit and push quality hooks** - Fast checks on commit, the full test suite on push, installed by `make install`
 
@@ -632,7 +632,7 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 - [x] 24.3-11-PLAN.md — Phase gate: merged-tree gates, verify-registry green, the orchestrator's landing container check as the wave-5 gate, drift dispositions, 999.12 closed, confirmations (wave 6)
 
-### Phase 24.3.1: Retire the npx, npm and pip guard aliases and redirects (INSERTED)
+### Phase 24.4: Retire the npx, npm and pip guard aliases and redirects (INSERTED)
 
 **Goal:** The installer no longer writes the guard aliases or the PATH redirects for npx, npm and pip. A launch removes the ones it wrote on existing hosts, and the user's own lines stay.
 **Context (2026-11-14):** The owner said: "Los alias de npx, npm, pip han demostrado ser un desastre". Today `installer/guards.py` does three things:
@@ -641,14 +641,14 @@ Plans:
 - It wraps npm/pnpm. It is reached through `make guard`/`make unguard`, the Policies row, and the launch repair that rewrites the alias block and the npx redirect.
 
 The 24-UAT host launch rewrote `~/.local/bin/npx` and dropped `alias npx='pnpm dlx'` from `~/.myshellrc`. Scope: the guard writers, the launch repair, the Policies row, the make targets, the docs and the tests. The repair keeps removing old installer-written blocks and shims.
-**Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05, GUARD-06 *(amended 2026-11-14, 24.3.1 SPEC)*
+**Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05, GUARD-06 *(amended 2026-11-14, 24.4 SPEC)*
 **Depends on:** Phase 24.3
 **Plans:** 0 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 24.3.1 to break down)
+- [ ] TBD (run /gsd-plan-phase 24.4 to break down)
 
-### Phase 24.3.2: JavaScript install priority brew then bun then volta (INSERTED)
+### Phase 24.5: JavaScript install priority brew then bun then volta (INSERTED)
 
 **Goal:** Install-method priority prefers brew, then bun, then volta, then the rest. JavaScript CLIs install through bun where bun supports them, and through volta and pnpm otherwise.
 **Context (2026-11-14):** The owner said: "prefiero el order sea brew -> bun -> volta y despues lo demas, entiendo que bun es mas rapido como runtime e instalador de node y de dependencias ademas de mas seguro". Today:
@@ -661,12 +661,12 @@ Research must verify these points before the design is locked:
 - Update and uninstall routes.
 - Coexistence with existing pnpm and volta installs.
 - What "brew first" means on Linux hosts without brew.
-**Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.3.2 SPEC and D-23)*
-**Depends on:** Phase 24.3.1
+**Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.5 SPEC and D-23)*
+**Depends on:** Phase 24.4
 **Plans:** 0 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 24.3.2 to break down)
+- [ ] TBD (run /gsd-plan-phase 24.5 to break down)
 
 ### Phase 25: Lean
 
@@ -675,7 +675,7 @@ Plans:
 **Requirements**: LEAN-01, LEAN-02, LEAN-03, LEAN-04
 **Success Criteria** (what must be TRUE):
 
-  1. The agent policy modules, the questionary chooser, `audit.py`, dead fields and dead Message classes are deleted while the race epochs stay, and the full suite plus `make validate` are green. *(amended 2026-11-14, 24.3.2 D-17: pi leaves the `host_setup` kind for a bun method plus a pnpm `node` fallback, so `host_setup`, `HOST_SETUPS`, the host-setup ownership probe and `update.py`'s host-setup pi branch lose their only registry user; their removal joins this dead-code sweep)*
+  1. The agent policy modules, the questionary chooser, `audit.py`, dead fields and dead Message classes are deleted while the race epochs stay, and the full suite plus `make validate` are green. *(amended 2026-11-14, 24.5 D-17: pi leaves the `host_setup` kind for a bun method plus a pnpm `node` fallback, so `host_setup`, `HOST_SETUPS`, the host-setup ownership probe and `update.py`'s host-setup pi branch lose their only registry user; their removal joins this dead-code sweep)*
   2. App composition lives in `installer/compose.py`, checked by pyright and counted in the coverage gate.
   3. `wizard_app.py` is split and its review-history comments are gone, with the CLI `--all`/`--categories` tests unchanged.
   4. The run log is bounded.
