@@ -59,6 +59,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
+from tests.screen_family import wait_until
 from tests.state_doubles import (
     FrozenStateService,
     ScriptedUpdates,
@@ -3930,8 +3931,8 @@ async def test_uninstall_screen_passes_the_selected_tools(
             await pilot.press(key)
         await pilot.press("enter")  # accept -> confirmation modal
         await pilot.press("enter")  # confirm
-        await pilot.pause()
-        assert screen.applied is True
+        # the apply worker can lag on a loaded runner
+        await wait_until(pilot, lambda: screen.applied)
     (decision,) = captured
     assert decision.tools == ((rg,) if with_tool else ())
     assert decision.remove_ban is with_ban
