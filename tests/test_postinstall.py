@@ -1129,3 +1129,29 @@ def test_reload_failure_is_a_note(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "sidebar" in config.read_text(encoding="utf-8")
     assert warning is not None
     assert "reload-config failed" in warning
+
+
+@pytest.mark.parametrize("answer", [None, "", "  \n"], ids=["failed", "empty", "blank"])
+def test_the_pi_gate_reads_no_config_as_unsupported_for_every_probe(answer: str | None) -> None:
+    """F18: the register probe (`""` on an empty exit 0) and the status probe (None) agree."""
+    supported = vars(pi)["_codegraph_supported"]
+
+    def probe(_argv: list[str]) -> str | None:
+        return answer
+
+    assert supported("/b/cg", probe, ("claude", "pi")) == ("claude",)
+    assert supported("/b/cg", _answers_config, ("claude", "pi")) == ("claude", "pi")
+
+
+def test_the_pi_probe_runs_once_per_binary_for_the_process() -> None:
+    """F19: refresh passes ask the gate again and again; the probe answers once."""
+    supported = vars(pi)["_codegraph_supported"]
+    asked: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str | None:
+        asked.append(argv)
+        return None
+
+    for _ in range(3):
+        assert supported("/b/cg-once", probe, ("pi",)) == ()
+    assert len(asked) == 1

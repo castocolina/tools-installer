@@ -242,18 +242,40 @@ def _run_codegraph_query(argv: list[str]) -> str | None:
 codegraph_query: Callable[[list[str]], str | None] = _run_codegraph_query
 
 
+# One answer per codegraph binary (path, mtime) and probe for the life of the process: the status
+# refresh asks on every pass while Pi is present. An upgraded binary has a new mtime and is asked
+# again. shortcut: a probe timeout is remembered as "no pi target" until the binary changes.
+_pi_support: dict[tuple[str, int, Callable[[list[str]], str | None]], bool] = {}
+
+
+def _codegraph_supports_pi(binary: str, probe: Callable[[list[str]], str | None]) -> bool:
+    """Whether `--print-config pi` exits 0 with a config on stdout.
+
+    The register and status paths hand this different probes (`codegraph_query` returns "" for an
+    empty exit 0, `probe_version_output` returns None), so empty output reads as unsupported in
+    both, never as a pass in one and a miss in the other."""
+    try:
+        mtime = os.stat(binary).st_mtime_ns
+    except OSError:
+        mtime = -1
+    key = (binary, mtime, probe)
+    if key not in _pi_support:
+        _pi_support[key] = bool((probe([binary, "install", "--print-config", "pi"]) or "").strip())
+    return _pi_support[key]
+
+
 def _codegraph_supported(
     binary: str | None, probe: Callable[[list[str]], str | None], wanted: tuple[str, ...]
 ) -> tuple[str, ...]:
     """The ids of `wanted` this codegraph can register.
 
     One id its `--target` does not know fails the whole call, claude and codex included, so
-    `pi` (not in every release) is kept only when `--print-config pi` exits 0. The probe
+    `pi` (not in every release) is kept only when `--print-config pi` prints a config. The probe
     runs only when `pi` is wanted, and its argv is fixed here, never registry text.
     """
     if "pi" not in wanted:
         return wanted
-    if binary is not None and probe([binary, "install", "--print-config", "pi"]) is not None:
+    if binary is not None and _codegraph_supports_pi(binary, probe):
         return wanted
     return tuple(known for known in wanted if known != "pi")
 
