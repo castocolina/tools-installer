@@ -1,6 +1,5 @@
-"""End-to-end policies toggle: drive the real PoliciesScreen through the real
-ban_policy closures against a sandboxed HOME, asserting shims + aliases appear on
-enable and vanish on disable while the real $HOME is never touched. Saves SVG
+"""End-to-end policies screen: drive the real PoliciesScreen through real policy
+closures against a sandboxed HOME while the real $HOME is never touched. Saves SVG
 screenshots for agent inspection."""
 
 import os
@@ -15,12 +14,11 @@ from textual.widgets import DataTable
 from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
 from installer.enums import Severity
-from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL, guard_status
+from installer.guards import guard_status
 from installer.model import Method, Tool
 from installer.policy import (
     Policy,
     PolicyResult,
-    ban_policy,
     omz_plugins_policy,
     tweak_policy,
 )
@@ -34,6 +32,7 @@ from installer.wizard_app import (
     UnifiedApp,
     UninstallInputs,
 )
+from tests.policy_doubles import block_policy
 from tests.screen_family import settle
 from tests.state_doubles import FrozenStateService, absent_state, frozen_service, plan_state
 
@@ -51,26 +50,13 @@ def _tool() -> Tool:
     )
 
 
-def _plant_volta_and_pnpm(home: Path) -> Path:
-    real_dir = home / "real"
-    real_dir.mkdir()
-    for name in ("volta", "pnpm"):
-        binary = real_dir / name
-        binary.write_text("#!/bin/sh\n")
-        binary.chmod(0o755)
-    return real_dir
-
-
-def _build_real_app(home: Path, *, path_value: str | None = None) -> tuple[UnifiedApp, Path, Path]:
+def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     rc = home / ".myshellrc"
-    policy = ban_policy(
-        shim_dir=bin_dir,
+    policy = block_policy(
         apply_rc_paths=[rc],
         remove_rc_paths=[rc],
-        path_value=path_value if path_value is not None else str(bin_dir),
-        which=lambda _name: None,
     )
     app = UnifiedApp(
         [_tool()],
@@ -93,61 +79,6 @@ def _build_real_app(home: Path, *, path_value: str | None = None) -> tuple[Unifi
 def _snapshot(app: UnifiedApp, name: str) -> None:
     _UX.mkdir(parents=True, exist_ok=True)
     (_UX / name).write_text(app.export_screenshot())
-
-
-async def test_policies_e2e_toggle_round_trip_against_sandbox(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    home = Path.home()
-    real_dir = _plant_volta_and_pnpm(home)
-    bin_dir = home / ".local" / "bin"
-    app, bin_dir, rc = _build_real_app(home, path_value=f"{bin_dir}:{real_dir}")
-    async with app.run_test(size=(100, 30)) as pilot:
-        _snapshot(app, "01-open.svg")
-        await pilot.press("space")  # enable: writes shims + aliases live
-        assert isinstance(app.screen, PoliciesScreen)
-        assert app.screen.active_state["ban"] is True
-        status = guard_status(bin_dir)
-        assert status == {"npm": True, "pip": True, "pip3": True, "npx": True, "pnpm": True}
-        assert REDIRECT_SENTINEL in (bin_dir / "npm").read_text()
-        assert REDIRECT_SENTINEL in (bin_dir / "pnpm").read_text()
-        assert REDIRECT_SENTINEL in (bin_dir / "npx").read_text()
-        assert SHIM_SENTINEL in (bin_dir / "pip").read_text()
-        assert SHIM_SENTINEL in (bin_dir / "pip3").read_text()
-        assert "alias" in rc.read_text()
-        _snapshot(app, "02-enabled.svg")
-        await pilot.press("space")  # disable: clears both layers
-        assert isinstance(app.screen, PoliciesScreen)
-        assert app.screen.active_state["ban"] is False
-        _snapshot(app, "03-disabled.svg")
-
-    assert all(active is False for active in guard_status(bin_dir).values())
-    assert not (bin_dir / "npx").exists()
-    assert not (bin_dir / "pnpm").exists()
-    assert "alias" not in rc.read_text()
-
-
-async def test_policies_e2e_volta_absent_leaves_pnpm_unshimmed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    app, bin_dir, rc = _build_real_app(Path.home())
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("space")
-        assert isinstance(app.screen, PoliciesScreen)
-        status = guard_status(bin_dir)
-        assert status["npm"] is True
-        assert status["pip"] is True
-        assert status["pip3"] is True
-        assert status["npx"] is True
-        assert status["pnpm"] is False
-        assert SHIM_SENTINEL in (bin_dir / "npm").read_text()
-        assert not (bin_dir / "pnpm").exists()
-        await pilot.press("space")
-
-    assert all(active is False for active in guard_status(bin_dir).values())
-    assert "alias" not in rc.read_text()
 
 
 def _countdown() -> TweakBundle:
@@ -341,50 +272,6 @@ async def test_policies_screen_rechecks_omz_requirement_before_toggle(
         assert "plugins=(z sudo git docker)" in zshrc.read_text()
 
 
-async def test_policies_screen_never_syncs_terminals_for_ban_policy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    sync_calls: list[str] = []
-    policy = ban_policy(
-        shim_dir=tmp_path / ".local" / "bin",
-        apply_rc_paths=[tmp_path / ".myshellrc"],
-        remove_rc_paths=[tmp_path / ".myshellrc"],
-        path_value="",
-        which=lambda _name: None,
-    )
-    zshrc = tmp_path / ".zshrc"
-    zshrc.write_text(_ZSHRC_OMZ)
-    omz = omz_plugins_policy(
-        zshrc_path=zshrc,
-        state_path=tmp_path / ".myshellrc",
-        present=True,
-        terminal_sync=lambda: sync_calls.append("called") or None,
-    )
-    app = UnifiedApp(
-        [_tool()],
-        {"search": ""},
-        report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(tmp_path / ".local" / "bin"), None),
-        fix_preview="",
-        fix=lambda: None,
-        uninstall=UninstallInputs(
-            ban_names=list,
-            has_path_block=lambda: False,
-            remove=lambda _d: SweepResult(),
-        ),
-        policies=PolicyInputs(policies=[policy, omz]),
-        initial_view="policies",
-    )
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
-        await pilot.press("space")
-        await pilot.pause()
-        assert isinstance(app.screen, PoliciesScreen)
-        assert app.screen.active_state["ban"] is True
-        assert sync_calls == []
-
-
 async def test_policies_screen_refuses_omz_toggle_without_oh_my_zsh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -544,19 +431,15 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    real_dir = _plant_volta_and_pnpm(home)
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     rc = home / ".myshellrc"
     zshrc = home / ".zshrc"
     bashrc = home / ".bashrc"
     mode = {"v": "centralized"}
-    ban = ban_policy(
-        shim_dir=bin_dir,
+    block = block_policy(
         apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
         remove_rc_paths=[rc, zshrc, bashrc],
-        path_value=f"{bin_dir}:{real_dir}",
-        which=lambda _name: None,
     )
     bundle = next(b for b in BUNDLES if b.id == "docker")
     tweak = tweak_policy(
@@ -578,7 +461,7 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
             remove=lambda _d: SweepResult(),
         ),
         policies=PolicyInputs(
-            policies=[ban, tweak],
+            policies=[block, tweak],
             link_mode=lambda: mode["v"],
             set_link_mode=lambda value: mode.__setitem__("v", value),
         ),
@@ -587,24 +470,24 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")  # enable the ban (row 0)
+        await pilot.press("space")  # enable the block (row 0)
         await settle(app, pilot)
         await pilot.press("down", "space")  # enable the tweak (row 1)
         await settle(app, pilot)
-        assert "tools-installer ban" in rc.read_text()
+        assert "tools-installer block" in rc.read_text()
         await pilot.press("m")
         await pilot.press("down", "down", "enter")  # pick split
         await pilot.pause()
 
         assert mode["v"] == "split"
-        assert "tools-installer ban" not in rc.read_text()
-        assert "tools-installer ban" in zshrc.read_text()
-        assert "tools-installer ban" in bashrc.read_text()
+        assert "tools-installer block" not in rc.read_text()
+        assert "tools-installer block" in zshrc.read_text()
+        assert "tools-installer block" in bashrc.read_text()
         assert "tools-installer tweak:docker" in rc.read_text()
         for split_rc in (zshrc, bashrc):
             assert f'. "{rc}"' in split_rc.read_text()
         assert "Link mode saved: split" in screen.status.text
-        assert "Moved: ban" in screen.status.text
+        assert "Moved: block" in screen.status.text
         assert screen.status.severity == "ok"
 
 
@@ -655,17 +538,13 @@ def _test_tweak(home: Path, mode: dict[str, str]) -> Policy:
     )
 
 
-def _test_ban(home: Path, mode: dict[str, str]) -> Policy:
-    bin_dir = home / ".local" / "bin"
+def _test_block(home: Path, mode: dict[str, str]) -> Policy:
     rc = home / ".myshellrc"
     zshrc = home / ".zshrc"
     bashrc = home / ".bashrc"
-    return ban_policy(
-        shim_dir=bin_dir,
+    return block_policy(
         apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
         remove_rc_paths=[rc, zshrc, bashrc],
-        path_value=str(bin_dir),
-        which=lambda _name: None,
     )
 
 
@@ -674,9 +553,6 @@ async def test_move_link_mode_ignores_policies_that_are_not_link_mode_aware(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    _plant_volta_and_pnpm(home)
-    bin_dir = home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
     calls: list[str] = []
 
     def recorded(name: str, fn: Callable[[], PolicyResult]) -> Callable[[], PolicyResult]:
@@ -695,8 +571,8 @@ async def test_move_link_mode_ignores_policies_that_are_not_link_mode_aware(
         remove=recorded("daemon-remove", lambda: PolicyResult((), None, None)),
     )
     mode = {"v": "centralized"}
-    ban = _test_ban(home, mode)
-    app = _mode_app(home, mode, [daemon_like, ban])
+    block = _test_block(home, mode)
+    app = _mode_app(home, mode, [daemon_like, block])
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
@@ -712,29 +588,20 @@ async def test_first_run_link_mode_picker_moves_active_policies(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    _plant_volta_and_pnpm(home)
-    bin_dir = home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
     rc = home / ".myshellrc"
     zshrc = home / ".zshrc"
     bashrc = home / ".bashrc"
     mode = {"v": "centralized"}
-    ban = ban_policy(
-        shim_dir=bin_dir,
+    block = block_policy(
         apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
         remove_rc_paths=[rc, zshrc, bashrc],
-        path_value=str(bin_dir),
-        which=lambda _name: None,
     )
-    ban.apply()  # active before the app is built, so active_state starts True
-    ban = ban_policy(
-        shim_dir=bin_dir,
+    block.apply()  # active before the app is built, so active_state starts True
+    block = block_policy(
         apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
         remove_rc_paths=[rc, zshrc, bashrc],
-        path_value=str(bin_dir),
-        which=lambda _name: None,
     )
-    app = _mode_app(home, mode, [ban], prompt_link_mode=True)
+    app = _mode_app(home, mode, [block], prompt_link_mode=True)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, LinkModeScreen)
@@ -744,11 +611,11 @@ async def test_first_run_link_mode_picker_moves_active_policies(
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         assert mode["v"] == "split"
-        assert "tools-installer ban" not in rc.read_text()
-        assert "tools-installer ban" in zshrc.read_text()
-        assert "tools-installer ban" in bashrc.read_text()
+        assert "tools-installer block" not in rc.read_text()
+        assert "tools-installer block" in zshrc.read_text()
+        assert "tools-installer block" in bashrc.read_text()
         assert "Link mode saved: split" in screen.status.text
-        assert "Moved: ban" in screen.status.text
+        assert "Moved: block" in screen.status.text
 
 
 async def test_policies_screen_reports_a_failed_move(
@@ -756,22 +623,16 @@ async def test_policies_screen_reports_a_failed_move(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    _plant_volta_and_pnpm(home)
-    bin_dir = home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
     rc = home / ".myshellrc"
     zshrc = home / ".zshrc"
     bashrc = home / ".bashrc"
     mode = {"v": "centralized"}
-    ban = ban_policy(
-        shim_dir=bin_dir,
+    block = block_policy(
         apply_rc_paths=lambda: [rc] if mode["v"] == "centralized" else [zshrc, bashrc],
         remove_rc_paths=[rc, zshrc, bashrc],
-        path_value=str(bin_dir),
-        which=lambda _name: None,
     )
     tweak = _test_tweak_with_failing_split_apply(home, mode)
-    app = _mode_app(home, mode, [ban, tweak])
+    app = _mode_app(home, mode, [block, tweak])
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
@@ -783,7 +644,7 @@ async def test_policies_screen_reports_a_failed_move(
         await pilot.pause()
 
         assert mode["v"] == "split"
-        assert "Moved: ban" in screen.status.text
+        assert "Moved: block" in screen.status.text
         assert "Failed: tweak:docker" in screen.status.text
         assert "apply boom" in screen.status.text
         assert screen.status.severity == "warn"
@@ -820,7 +681,6 @@ async def test_policies_screen_shows_lost_policies_off_after_a_failed_restore(
     checkbox that claims a policy that is no longer on disk."""
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    _plant_volta_and_pnpm(home)
     mode = {"v": "centralized"}
     saves: list[str] = []
 
@@ -830,13 +690,13 @@ async def test_policies_screen_shows_lost_policies_off_after_a_failed_restore(
             raise OSError("settings.json unwritable")
         mode["v"] = value
 
-    ban = _test_ban(home, mode)
+    block = _test_block(home, mode)
     tweak = _test_tweak_with_failing_split_apply(home, mode)
-    app = _mode_app(home, mode, [ban, tweak], set_link_mode=set_mode)
+    app = _mode_app(home, mode, [block, tweak], set_link_mode=set_mode)
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")  # enable the ban (row 0)
+        await pilot.press("space")  # enable the block (row 0)
         await settle(app, pilot)
         await pilot.press("down", "space")  # enable the tweak (row 1)
         await settle(app, pilot)
@@ -852,53 +712,49 @@ async def test_link_mode_change_after_an_uninstall_does_not_resurrect(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """opencode H2: the migration set is read from the policies' own on-disk
-    activity at the moment of the change, so a ban another view (Uninstall)
+    activity at the moment of the change, so a block another view (Uninstall)
     removed is not recreated by a link-mode change."""
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    _plant_volta_and_pnpm(home)
-    bin_dir = home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
     rc = home / ".myshellrc"
     zshrc = home / ".zshrc"
     bashrc = home / ".bashrc"
     mode = {"v": "centralized"}
-    ban = _test_ban(home, mode)
-    app = _mode_app(home, mode, [ban])
+    block = _test_block(home, mode)
+    app = _mode_app(home, mode, [block])
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")  # enable the ban
+        await pilot.press("space")  # enable the block
         await settle(app, pilot)
         # what the Uninstall view's sweep leaves on disk, without touching
         # this screen's cached active_state:
-        ban.remove()
+        block.remove()
         await pilot.press("m", "down", "down", "enter")  # pick split
         await pilot.pause()
 
         assert mode["v"] == "split"
-        assert "tools-installer ban" not in (rc.read_text() if rc.exists() else "")
-        assert "tools-installer ban" not in (zshrc.read_text() if zshrc.exists() else "")
-        assert "tools-installer ban" not in (bashrc.read_text() if bashrc.exists() else "")
+        assert "tools-installer block" not in (rc.read_text() if rc.exists() else "")
+        assert "tools-installer block" not in (zshrc.read_text() if zshrc.exists() else "")
+        assert "tools-installer block" not in (bashrc.read_text() if bashrc.exists() else "")
         assert "Moved" not in screen.status.text
 
 
 async def test_split_to_centralized_move_reports_the_path_wiring_action(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """opencode M1: moving the ban from split (aliases in each rc) to
-    centralized (aliases in ~/.myshellrc) leaves the aliases unsourced until
+    """opencode M1: moving the block from split (a copy in each rc) to
+    centralized (one in ~/.myshellrc) leaves the block unsourced until
     the PATH wiring is refreshed, so the report names the exact action."""
     monkeypatch.setenv("HOME", str(tmp_path))
     home = Path.home()
-    _plant_volta_and_pnpm(home)
     mode = {"v": "split"}
-    ban = _test_ban(home, mode)
-    app = _mode_app(home, mode, [ban])
+    block = _test_block(home, mode)
+    app = _mode_app(home, mode, [block])
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
-        await pilot.press("space")  # enable the ban
+        await pilot.press("space")  # enable the block
         await settle(app, pilot)
         await pilot.press("m", "enter")  # pick centralized
         await pilot.pause()
@@ -936,43 +792,6 @@ def _live_app(
 
 def _cell(app: UnifiedApp, policy_id: str, column: str) -> str:
     return app.view("policies").query_one(DataTable[Any]).get_cell(policy_id, column).plain
-
-
-async def test_a_removed_ban_reads_off_on_the_next_entry(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    rc = tmp_path / ".myshellrc"
-    ban = ban_policy(
-        shim_dir=bin_dir,
-        apply_rc_paths=[rc],
-        remove_rc_paths=[rc],
-        path_value=str(bin_dir),
-        which=lambda _name: None,
-    )
-    ban.apply()
-
-    def remove(_decision: Any) -> SweepResult:
-        ban.remove()
-        return SweepResult()
-
-    uninstall = UninstallInputs(
-        ban_names=lambda: [n for n, on in guard_status(bin_dir).items() if on],
-        has_path_block=lambda: False,
-        remove=remove,
-    )
-    app = _live_app([ban], uninstall=uninstall)
-    async with app.run_test(size=(120, 30)) as pilot:
-        await settle(app, pilot)
-        assert _cell(app, "ban", "state") == "● [on]"
-        await app.show_view("uninstall")
-        table = app.view("uninstall").query_one(DataTable[Any])
-        table.move_cursor(row=table.get_row_index("#ban"))
-        for key in ("space", "enter", "enter"):
-            await pilot.press(key)
-        await settle(app, pilot)
-        assert not any(guard_status(bin_dir).values())
-        await app.show_view("policies")
-        assert _cell(app, "ban", "state") == "○ [off]"
 
 
 async def test_installing_watch_unblocks_the_docker_tweak(tmp_path: Path) -> None:
@@ -1284,12 +1103,9 @@ async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.Monke
     rc = tmp_path / ".myshellrc"
     bin_dir = tmp_path / ".local" / "bin"
     bin_dir.mkdir(parents=True)
-    ban = ban_policy(
-        shim_dir=bin_dir,
+    block = block_policy(
         apply_rc_paths=[rc],
         remove_rc_paths=[rc],
-        path_value=str(bin_dir),
-        which=lambda _name: None,
     )
     tweak = tweak_policy(_countdown(), rc_path=rc, bin_dir=bin_dir, installed_tools={"uv": True})
     app = UnifiedApp(
@@ -1302,7 +1118,7 @@ async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.Monke
         uninstall=UninstallInputs(
             ban_names=list, has_path_block=lambda: False, remove=lambda _d: SweepResult()
         ),
-        policies=PolicyInputs(policies=[ban, tweak]),
+        policies=PolicyInputs(policies=[block, tweak]),
         initial_view="policies",
     )
     actions = VIEW_BY_NAME["policies"].actions

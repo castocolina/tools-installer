@@ -67,7 +67,6 @@ from installer.ownership import read_inventory
 from installer.platform import Platform, detect
 from installer.policy import (
     Policy,
-    ban_policy,
     cache_redirect_policy,
     desktop_shell_policy,
     tweak_policy,
@@ -837,9 +836,6 @@ def _build_app(
             schedule_removed=lambda tool_id: _schedule_removed_lines(schedule_ctx, tool_id),
         )
 
-    def _ban_apply_rc_paths() -> list[Path]:
-        return ban_rc_paths(_current_link_mode(), _SHELL)
-
     def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
         return _split_sourced_from(_current_link_mode())
 
@@ -899,13 +895,6 @@ def _build_app(
     startup_lines += scan_retired(catalog_ids).warnings
     policy_inputs = PolicyInputs(
         policies=[
-            ban_policy(
-                shim_dir=_DEFAULT_BIN_DIR,
-                apply_rc_paths=_ban_apply_rc_paths,
-                remove_rc_paths=all_ban_rc_paths(),
-                path_value=os.environ.get("PATH", ""),
-                which=shutil.which,
-            ),
             *(
                 tweak_policy(
                     bundle,

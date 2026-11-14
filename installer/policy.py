@@ -3,9 +3,9 @@
 A Policy bundles its identity (id/label/description), a snapshot of whether it is
 currently active, and two idempotent closures — apply and remove — that each
 return a structured per-layer PolicyResult. The pure layer owns the composition
-of installer.guards; the IO boundary (setup.py) binds the real shim dir and rc
-paths. The pip/npm ban is the first and only instance; future env tweaks slot in
-with no screen changes.
+of the tweak, cache-redirect and desktop-shell primitives; the IO boundary
+(setup.py) binds the real paths. Tweaks, cache redirects and the desktop shell
+are its instances; future env policies slot in with no screen changes.
 """
 
 import os
@@ -15,16 +15,6 @@ from pathlib import Path
 from typing import Literal, cast
 
 from installer import env_redirect
-from installer.guards import (
-    guard_path_warning,
-    guard_status,
-    install_global_redirect_shims,
-    install_redirect_shims,
-    install_shims,
-    remove_ban_aliases,
-    remove_shims,
-    write_ban_aliases,
-)
 from installer.locations import display_path as _display_path
 from installer.locations import zshrc_path
 from installer.omz import (
@@ -48,18 +38,13 @@ from installer.tweaks import (
     write_tweak,
 )
 
-_RELOAD_HINT = "Open a new shell or run `hash -r` so cached command paths refresh."
-# hash -r is about cached command PATH lookups and says nothing useful about a
-# plugin array; a plugin change needs a new zsh or a sourced .zshrc.
+# A plugin array change needs a new zsh or a sourced .zshrc to be loaded.
 _ZSH_RELOAD_HINT = "Open a new zsh shell, or run `source ~/.zshrc`, so Oh-My-Zsh loads the plugins."
-# `hash -r` only refreshes cached PATH lookups; a freshly written alias or
-# shell function needs the rc file re-sourced (or a new shell) to be loaded at
-# all, so tweak_policy uses these two constants instead of _RELOAD_HINT, which
-# stays correct for ban_policy's own PATH shims. The disable hint deliberately
-# never contains the substring "source ~/.myshellrc": remove_tweak only
-# deletes rc-file text, it cannot un-define something already loaded into the
-# current shell, so re-sourcing is not valid advice after disabling — only a
-# fresh shell drops it.
+# A freshly written alias or shell function needs the rc file re-sourced (or a
+# new shell) to be loaded at all. The disable hint deliberately never contains
+# the substring "source ~/.myshellrc": remove_tweak only deletes rc-file text,
+# it cannot un-define something already loaded into the current shell, so
+# re-sourcing is not valid advice after disabling — only a fresh shell drops it.
 _TWEAK_ENABLE_HINT = (
     "Open a new shell, or run `source ~/.myshellrc`, so the new alias or function is loaded."
 )
@@ -190,8 +175,8 @@ def lost_policy_ids(message: str) -> tuple[str, ...]:
 def _rollback(policies: list[Policy]) -> tuple[str, ...]:
     """Re-apply every removed policy in the LIVE mode: remove() then apply(),
     both closures reading the live mode. remove() is mode-independent for the
-    link-mode-aware policies (the ban strips the remove_rc_paths union, the
-    tweak its fixed rc_path), so it also takes an already-moved block back out
+    link-mode-aware policies (each strips its fixed rc file or the union of
+    every rc file it may have written), so it also takes an already-moved block back out
     of the new mode's files, and it is a no-op for a policy that is still
     removed. Each policy's rollback error is caught so it can never replace
     the original exception the caller re-raises. Returns the ids whose
@@ -283,95 +268,6 @@ def move_link_mode(
     return tuple(report)
 
 
-def ban_policy(
-    *,
-    shim_dir: Path,
-    apply_rc_paths: list[Path] | Callable[[], list[Path]],
-    remove_rc_paths: list[Path],
-    path_value: str,
-    which: Callable[[str], str | None],
-) -> Policy:
-    """The pip/npm ban as a Policy, composing installer.guards.
-
-    apply writes shims into shim_dir and aliases into apply_rc_paths; remove
-    clears shims and strips aliases from remove_rc_paths (the union of every
-    location, so disabling leaves no stragglers regardless of link mode).
-
-    apply_rc_paths is re-read at apply time (a list or a zero-argument
-    callable returning one) because the link mode is now adjustable while the
-    app is running. A ban whose aliases land in a ~/.myshellrc that split
-    mode never sources is a silent no-op the user has no way to notice.
-    """
-    if isinstance(apply_rc_paths, list):
-        captured_apply = cast("list[Path]", apply_rc_paths)
-
-        def read_apply_rc_paths() -> list[Path]:
-            return captured_apply
-    else:
-        read_apply_rc_paths = apply_rc_paths
-
-    def _apply() -> PolicyResult:
-        # Hard blocks first, unconditional redirects second, argv-conditional
-        # redirects third; each later writer owns the names it declares and
-        # leaves the earlier, safer body in place whenever its own target is
-        # unresolvable.
-        shim_results = install_shims(shim_dir)
-        shim_results.update(install_redirect_shims(shim_dir, path_value=path_value))
-        shim_results.update(install_global_redirect_shims(shim_dir, path_value=path_value))
-        active = sum(
-            1
-            for state in shim_results.values()
-            if state.startswith(("created", "refreshed", "blocked"))
-        )
-        shim_detail = f"{active} active in {_display_path(shim_dir)}"
-        degraded = [
-            f"{name} {state}"
-            for name, state in shim_results.items()
-            if not state.startswith(("created", "refreshed"))
-        ]
-        if degraded:
-            shim_detail += f" ({'; '.join(degraded)})"
-        targets = read_apply_rc_paths()
-        for rc_path in targets:
-            write_ban_aliases(rc_path)
-        alias_detail = "written to " + ", ".join(_display_path(p) for p in targets)
-        return PolicyResult(
-            layers=(PolicyLayer("Shims", shim_detail), PolicyLayer("Aliases", alias_detail)),
-            reload_hint=_RELOAD_HINT,
-            warning=guard_path_warning(shim_dir, path_value, which),
-        )
-
-    def _remove() -> PolicyResult:
-        shim_results = remove_shims(shim_dir)
-        removed = sum(1 for state in shim_results.values() if state == "removed")
-        shim_detail = f"{removed} removed from {_display_path(shim_dir)}"
-        for rc_path in remove_rc_paths:
-            remove_ban_aliases(rc_path)
-        alias_detail = "cleared from " + ", ".join(_display_path(p) for p in remove_rc_paths)
-        return PolicyResult(
-            layers=(PolicyLayer("Shims", shim_detail), PolicyLayer("Aliases", alias_detail)),
-            reload_hint=_RELOAD_HINT,
-            warning=None,
-        )
-
-    return Policy(
-        id="ban",
-        label="pip/npm ban",
-        description=(
-            "blocks bare pip/pip3, redirects npx to pnpm dlx, and wraps npm/pnpm "
-            "so global installs run volta install instead (shims + aliases)"
-        ),
-        active=any(guard_status(shim_dir).values()),
-        apply=_apply,
-        remove=_remove,
-        # Live re-probe (17-20, opencode H2): a construction-time snapshot goes
-        # stale the moment another view (Uninstall) sweeps the shims, and a
-        # stale snapshot would make a link-mode change resurrect the ban.
-        is_active=lambda: any(guard_status(shim_dir).values()),
-        link_mode_aware=True,
-    )
-
-
 def _installed_predicate(
     installed_tools: Mapping[str, bool] | Callable[[str], bool] | None,
 ) -> Callable[[str], bool]:
@@ -409,12 +305,12 @@ def tweak_policy(
     installed_tools: Mapping[str, bool] | Callable[[str], bool] | None = None,
     ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
 ) -> Policy:
-    """A curated shell-tweak bundle as a Policy, parallel to ban_policy.
+    """A curated shell-tweak bundle as a Policy, parallel to Tool.
 
     apply writes the bundle's marker block into rc_path; remove strips it. `active`
     is "the bundle's block is present in rc_path". Idempotent (reuses tweaks'
     block machinery). The id is namespaced `tweak:<id>` so it never collides with
-    the ban or another bundle in the Policies tab.
+    another policy in the Policies tab.
 
     `installed_tools` is a mapping or a live predicate; prerequisites are read
     when rendered or applied (`missing_requires_now`), not frozen at build time.

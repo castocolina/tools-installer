@@ -786,7 +786,6 @@ def test_the_uninstall_view_reads_the_app_catalog_and_service(
 
 _KEPT_POLICY_IDS = {
     "fedora": [
-        "ban",
         "tweak:docker",
         "tweak:countdown",
         "tweak:apt-upgrade",
@@ -794,7 +793,6 @@ _KEPT_POLICY_IDS = {
         "desktop-shell",
     ],
     "macos": [
-        "ban",
         "tweak:docker",
         "tweak:countdown",
         "cache-redirect:bun",
@@ -2793,12 +2791,6 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
 
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
-    ban = next(policy for policy in policies.policies if policy.id == "ban")
-    result = ban.apply()
-    alias_detail = result.layers[1].detail
-    assert ".zshrc" in alias_detail
-    assert ".bashrc" in alias_detail
-    assert ".myshellrc" not in alias_detail
     tweak = next(policy for policy in policies.policies if policy.id == "tweak:docker")
     tweak.apply()
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".zshrc").read_text()
