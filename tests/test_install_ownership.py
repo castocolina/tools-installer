@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 import installer.install_ownership as ownership
 from installer.install_ownership import Ownership, detect_owner
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.model import OWNER_PROBES, Method, Tool
 
 
@@ -888,3 +890,44 @@ def test_native_index_survives_an_unresolvable_output_path() -> None:
     output = "/us\0r/bin/git\tevil\n/usr/bin/git\tgit-core\n"
     index = ownership.native_index("fedora", ["/usr/bin/git"], _batch_probe(output, []))
     assert ownership.path_owner_package("fedora", "/usr/bin/git", index) == "git-core"
+
+
+def test_a_host_setup_probe_never_runs_a_leftover_pnpm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """GUARD-05, review C3-2: the production probe runner never runs a leftover pnpm wrapper;
+    a real pnpm behind it runs by absolute path, and with none behind it no probe runs."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    leftover = bin_dir / "pnpm"
+    leftover.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 127\n")
+    leftover.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="@earendil-works/pi-coding-agent\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    tool = _tool(
+        owner_probes=("host-setup",),
+        methods=(Method(kind="host_setup", params={"setup_id": "pi"}),),
+    )
+
+    assert detect_owner(tool, ownership.run_probe, immutable=False).confidence == "unknown"
+    assert calls == []
+
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    real = real_dir / "pnpm"
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{real_dir}")
+
+    owner = detect_owner(tool, ownership.run_probe, immutable=False)
+
+    assert owner == Ownership("pnpm", "verified", "host setup lists pi")
+    assert calls == [[str(real), "list", "--global", "--depth", "0", "--json"]]

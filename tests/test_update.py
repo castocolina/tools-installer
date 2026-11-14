@@ -19,7 +19,7 @@ from installer.download import UpdateExecResult as DownloadUpdateExecResult
 from installer.engine import install_tool
 from installer.enums import InstallStatus
 from installer.executors import ExecutorError
-from installer.guards import REDIRECT_SENTINEL
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import (

@@ -11,7 +11,7 @@ import pytest
 
 import installer.engine as engine
 import installer.postinstall as postinstall
-from installer import cargo_distrobox, executors, post_install, receipts, versions
+from installer import cargo_distrobox, executors, legacy_guard, post_install, receipts, versions
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.engine import install_tool
@@ -1044,7 +1044,7 @@ def test_no_receipt_means_no_registration(monkeypatch: pytest.MonkeyPatch) -> No
 def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
@@ -1324,7 +1324,7 @@ def test_the_registry_marks_only_oh_my_zsh_as_refusing_existing() -> None:
 def test_repair_dispatches_post_install_like_a_fresh_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_which(cmd: str) -> str | None:
+    def fake_which(cmd: str, path: str | None = None) -> str | None:
         return "/usr/bin/chsh" if cmd == "chsh" else None
 
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
@@ -1778,6 +1778,49 @@ def test_declared_bin_dir_binary_is_smoked_not_an_earlier_path_hit(
     tool = _tool(Method(kind="script", params={"url": "u", "shell": "sh", "bin_dir": str(dest)}))
     outcome = install_tool(tool, _platform(), runner=runner, repair=True)
     assert outcome.status == InstallStatus.FAILED
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_manager_smoke_never_runs_a_leftover(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, declared: bool
+) -> None:
+    """GUARD-05, review H6: a leftover guard shim is never the smoke target; a real binary
+    later on PATH is, and with none there is nothing to smoke."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    leftover = home / ".local" / "bin" / "pnpm"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text(f"#!/bin/sh\n{legacy_guard.REDIRECT_SENTINEL}\nexit 127\n")
+    leftover.chmod(0o755)
+    monkeypatch.setenv("PATH", str(leftover.parent))
+    smoked: list[Path] = []
+
+    def recording_smoke(path: Path, argv: tuple[str, ...] = ("--version",), **_ignored: object):
+        smoked.append(path)
+
+    monkeypatch.setattr(executors, "smoke_binary", recording_smoke)
+    method = (
+        Method(kind="script", params={"url": "u", "shell": "sh", "bin_dir": "~/.local/bin"})
+        if declared
+        else Method(kind="brew", params={"formula": "pnpm"})
+    )
+    tool = Tool(id="pnpm", name="pnpm", category="c", cmd="pnpm", methods=(method,))
+    target = vars(engine)["_manager_smoke_target"]
+    run_smoke = vars(engine)["_run_manager_smoke"]
+
+    assert target(method, "pnpm") is None
+    assert run_smoke(method, tool) is False
+    assert smoked == []
+
+    real = tmp_path / "real" / "pnpm"
+    real.parent.mkdir()
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{leftover.parent}{os.pathsep}{real.parent}")
+
+    assert target(method, "pnpm") == real
+    assert run_smoke(method, tool) is True
+    assert smoked == [real]
 
 
 def test_without_a_bin_dir_the_path_hit_is_smoked(

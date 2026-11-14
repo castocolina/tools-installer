@@ -14,8 +14,8 @@ import pytest
 
 import setup
 from installer import cli, cursor_shim, receipts, runlock, schedules
-from installer.guards import REDIRECT_SENTINEL
 from installer.helper_assets import schedule_runner
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.model import Tool, load_tools
 from installer.ownership import Confidence, ManagerOwnership, Owner
 from installer.platform import Platform

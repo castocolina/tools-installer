@@ -60,7 +60,13 @@ from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
 from installer.install_ownership import ProbeRunner, native_index
-from installer.legacy_guard import look_through_shim, real_pnpm
+from installer.legacy_guard import (
+    is_our_shim,
+    look_through_shim,
+    real_binary,
+    real_pnpm,
+    which_in_path,
+)
 from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import ConfigStep, Method, Tool, method_package
 from installer.ownership import (
@@ -350,7 +356,8 @@ def _latest_status(
     `allow_fetch=False` skips the network even when `should_fetch` is True
     (the per-pass fetch budget) and forces stale=True.
     """
-    output = probe_output(version_argv(tool, ownership, unresolved=unresolved))
+    argv = version_argv(tool, ownership, unresolved=unresolved)
+    output = probe_output(argv) if argv is not None else None
     installed = extract_observed_version(output) if output else None
     now_iso = now.astimezone(UTC).isoformat()
     fetched = False
@@ -415,7 +422,8 @@ def _pinned_spec(ownership: ManagerOwnership) -> str | None:
 
 def version_argv(
     tool: Tool, ownership: ManagerOwnership | None, *, unresolved: str | None = None
-) -> list[str]:
+) -> list[str] | None:
+    """The probe argv, or None when only a leftover guard shim could answer (never run it)."""
     # A Volta shim or a host-setup launcher resolves to a dispatcher, not the
     # tool: probe the PATH hit itself (19-RESEARCH Pitfall 6).
     if unresolved is not None and (
@@ -434,8 +442,16 @@ def version_argv(
         if not isinstance(bin_dir, str) or not bin_dir:
             continue
         candidate = Path(bin_dir).expanduser() / tool.cmd
-        if candidate.is_file():
+        if candidate.is_file() and not is_our_shim(candidate):
             return [str(candidate), "--version"]
+    path_value = os.environ.get("PATH", "")
+    found = which_in_path(tool.cmd, path_value)
+    if found is not None and is_our_shim(Path(found)):
+        # An absolute path: a bare name would let the child resolve the leftover again.
+        real = real_binary(
+            tool.cmd, shim_dir=installer.locations.bin_dir(None), path_value=path_value
+        )
+        return None if real is None else [real, "--version"]
     return [tool.cmd, "--version"]
 
 
@@ -463,7 +479,8 @@ def probed_version(
     from_file = _version_file(ownership)
     if from_file is not False:
         return from_file
-    output = probe_output(version_argv(tool, ownership, unresolved=unresolved))
+    argv = version_argv(tool, ownership, unresolved=unresolved)
+    output = probe_output(argv) if argv is not None else None
     return extract_observed_version(output) if output else None
 
 

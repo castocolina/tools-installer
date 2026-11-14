@@ -50,8 +50,10 @@ _TMP_TIMEOUT = 600
 _MANAGER_TIMEOUT = 1200
 _UPDATE_TIMEOUT = 1800
 _RESULT_PREFIXES = ("ok:", "skipped:", "failed:")
-# Source: installer/guards.py SHIM_SENTINEL and REDIRECT_SENTINEL (this file cannot import it).
+# Source: installer/legacy_guard.py SHIM_SENTINEL, REDIRECT_SENTINEL and _SHIM_MAX_BYTES (this file
+# cannot import it; tests/test_schedule_runner.py pins the copy).
 _SHIM_SENTINELS = (b"# tools-installer-ban-shim", b"# tools-installer-redirect-shim")
+_SHIM_HEAD_BYTES = 8192
 # Each manager's own prune command, in the UI's target order.
 _MANAGERS = (
     ("uv", ("cache", "prune")),
@@ -357,10 +359,12 @@ def _update(run_id: str, installer: str, uv: str) -> str:
 
 
 def _resolve(name: str, path_value: str) -> str | None:
-    """The first real `name` on PATH: absolute entries only, never the installer's own shim.
+    """The first real `name` on PATH: absolute entries only, never a leftover guard shim.
 
-    Like `guards.real_binary`: the sentinel, not the directory, marks a shim, so a real binary
-    that lives in the managed bin dir stays resolvable.
+    Like `legacy_guard.real_binary`: the sentinel, not the directory, marks a shim, so a real
+    binary that lives in the managed bin dir stays resolvable. A sentinel anywhere in the first
+    8192 bytes marks a leftover, which skips every file the launch remover would recognize (and,
+    the safe direction, also a larger file whose head carries a sentinel).
     """
     for entry in path_value.split(os.pathsep):
         candidate = Path(entry) / name
@@ -368,7 +372,7 @@ def _resolve(name: str, path_value: str) -> str | None:
             continue
         try:
             with candidate.open("rb") as handle:
-                head = handle.read(4096)
+                head = handle.read(_SHIM_HEAD_BYTES)
         except OSError:
             continue
         if not any(sentinel in head for sentinel in _SHIM_SENTINELS):

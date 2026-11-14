@@ -9,7 +9,7 @@ import pytest
 
 import installer.executors as executors
 from installer.executors import EXECUTORS, SMOKE_CHECKS, ExecutorError, execute
-from installer.guards import REDIRECT_SENTINEL
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.locations import prepend_path
 from installer.model import SMOKE_CHECK_NAMES, Method, load_tools
 from installer.run import TIMEOUT_CODE, CommandError, Runner

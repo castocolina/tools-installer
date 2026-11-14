@@ -32,7 +32,7 @@ from installer.app import run_wizard
 from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus, UninstallState
-from installer.guards import REDIRECT_SENTINEL
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.locations import display_path
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import (
@@ -2108,6 +2108,48 @@ def test_probe_falls_back_to_bare_cmd_when_no_path_is_known() -> None:
         resolve_tag=lambda _repo: "v1.6.0",
     )
     assert direct == [["codegraph", "--version"]]
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_version_probe_never_runs_a_leftover(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, declared: bool
+) -> None:
+    """GUARD-05, review H6: a leftover guard shim is never probed; the real binary behind
+    it is, by absolute path, and with none behind it nothing runs."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    leftover = home / ".local" / "bin" / "pnpm"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 127\n")
+    leftover.chmod(0o755)
+    monkeypatch.setenv("PATH", str(leftover.parent))
+    method = Method(kind="script", params={"bin_dir": str(leftover.parent)})
+    tool = _tool("pnpm", method) if declared else _tool("pnpm")
+    ownership = replace(_owned(tool, "unknown"), active_path=None, method=None)
+
+    def probe_calls() -> list[list[str]]:
+        calls, probe = _probe_calls()
+        resolve_status(
+            tool,
+            ownership=ownership,
+            outdated=_empty_outdated(),
+            entry=None,
+            now=_status_now(),
+            probe_output=probe,
+            resolve_tag=lambda _repo: "v0",
+            platform=_platform(),
+        )
+        return calls
+
+    assert probe_calls() == []
+
+    real = tmp_path / "real" / "pnpm"
+    real.parent.mkdir()
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{leftover.parent}{os.pathsep}{real.parent}")
+
+    assert probe_calls() == [[str(real), "--version"]]
 
 
 def test_version_file_is_read_without_a_subprocess_probe(tmp_path: Path) -> None:

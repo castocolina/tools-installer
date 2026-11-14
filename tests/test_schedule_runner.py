@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from installer import legacy_guard
 from installer.helper_assets import schedule_runner
 from installer.run import CHILD_ENV
 
@@ -213,8 +214,8 @@ def test_runner_never_imports_the_installer_package() -> None:
 
 # --- cache-cleanup ----------------------------------------------------------
 
-_SHIM_LINE = "# tools-installer-ban-shim"
-_REDIRECT_LINE = "# tools-installer-redirect-shim"
+_SHIM_LINE = legacy_guard.SHIM_SENTINEL
+_REDIRECT_LINE = legacy_guard.REDIRECT_SENTINEL
 
 
 def _texts(lines: list[str], run_id: str = "cache-cleanup") -> list[str]:
@@ -302,6 +303,28 @@ def test_npm_skips_the_ban_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     code, lines = _run(tmp_path, "cache-cleanup")
     assert code == 0
     assert _texts(lines)[-1] == "ok: nothing to clean"
+
+
+def test_runner_sentinels_match_legacy_guard() -> None:
+    """The runner cannot import the installer, so its byte copy is pinned here (D-14)."""
+    assert vars(schedule_runner)["_SHIM_SENTINELS"] == (
+        legacy_guard.SHIM_SENTINEL.encode(),
+        legacy_guard.REDIRECT_SENTINEL.encode(),
+    )
+    assert vars(schedule_runner)["_SHIM_HEAD_BYTES"] == vars(legacy_guard)["_SHIM_MAX_BYTES"]
+
+
+def test_runner_skips_a_shim_whose_sentinel_sits_past_4096_bytes(tmp_path: Path) -> None:
+    shim_dir = tmp_path / "shim"
+    real_dir = tmp_path / "real"
+    padding = "#" * 99 + "\n"
+    late = _script(shim_dir, "npm", f"{padding * 50}{_SHIM_LINE}\nexit 9")
+    assert late.read_text().index(_SHIM_LINE) > 4096 and late.stat().st_size < 8192
+    real = _script(real_dir, "npm", "exit 0")
+    resolve = vars(schedule_runner)["_resolve"]
+
+    assert resolve("npm", f"{shim_dir}{os.pathsep}{real_dir}") == str(real)
+    assert resolve("npm", str(shim_dir)) is None
 
 
 @pytest.mark.parametrize("name", ["npm", "pnpm"])

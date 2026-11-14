@@ -24,7 +24,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Literal, cast
 
+import installer.locations
 from installer.host_setup import HOST_SETUPS
+from installer.legacy_guard import GUARD_NAMES, real_binary
 from installer.model import Tool
 
 ProbeRunner = Callable[[list[str]], str]
@@ -50,7 +52,21 @@ _UNKNOWN = Ownership(None, "unknown", "no verified manager")
 
 
 def run_probe(command: list[str]) -> str:
-    """Run a read-only ownership probe without inheriting the caller's terminal."""
+    """Run a read-only ownership probe without inheriting the caller's terminal.
+
+    A leftover guard shim is never run: a guard-named argv[0] runs as the real binary behind it
+    (by absolute path) or not at all.
+    """
+    if command and command[0] in GUARD_NAMES:
+        # Module-attribute read: the conftest sandbox patches locations.bin_dir.
+        real = real_binary(
+            command[0],
+            shim_dir=installer.locations.bin_dir(None),
+            path_value=os.environ.get("PATH", ""),
+        )
+        if real is None:
+            raise FileNotFoundError(command[0])  # what subprocess raises for a missing program
+        command = [real, *command[1:]]
     return subprocess.run(
         command,
         capture_output=True,

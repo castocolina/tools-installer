@@ -14,7 +14,7 @@ import installer.session as session_module
 from installer import agent_settings, executors, postinstall, receipts
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
-from installer.guards import REDIRECT_SENTINEL
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.model import (
     ConfigStep,
     ConfigStepKind,

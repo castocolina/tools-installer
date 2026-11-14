@@ -1,7 +1,6 @@
 """Install a tool by walking its resolved priority ladder until one method works."""
 
 import os
-import shutil
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from installer.agent_settings import FileResult
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.enums import InstallStatus
+from installer.legacy_guard import is_our_shim, real_binary
 from installer.locations import bin_dir, prepend_path
 from installer.model import Method, Tool
 from installer.ownership import (
@@ -54,11 +54,12 @@ def _manager_smoke_target(method: Method, cmd: str) -> Path | None:
     raw_bin_dir = method.params.get("bin_dir")
     if isinstance(raw_bin_dir, str) and raw_bin_dir:
         declared = bin_dir(raw_bin_dir) / cmd
-        if declared.is_file():
+        # A leftover guard shim is never the method's binary: fall through to the PATH lookup.
+        if declared.is_file() and not is_our_shim(declared):
             if os.access(declared, os.X_OK):
                 return declared
             return None
-    resolved = shutil.which(cmd)
+    resolved = real_binary(cmd, shim_dir=bin_dir(None), path_value=os.environ.get("PATH", ""))
     if resolved is None:
         return None
     return Path(resolved)
@@ -206,9 +207,9 @@ def install_tool(
     Manager kinds are smoke-run once after a successful install when a runnable
     target exists: an executable ``<bin_dir>/<cmd>`` names the method's own
     binary; a present but non-executable file there means nothing to smoke; a
-    missing one falls back to ``shutil.which(tool.cmd)`` (in a repair run,
-    possibly an older copy on PATH). A failed smoke falls through; the package
-    stays installed and is reported with its removal command, never removed
+    missing one (or a leftover guard shim) falls back to the leftover-aware PATH
+    lookup (in a repair run, possibly an older copy on PATH). A failed smoke falls
+    through; the package stays installed and is reported with its removal command, never removed
     (SPEC REG-05 covers installer-created links only; Ledger L-18-16).
 
     A success writes the tool's receipt (`receipts.record`) before any hook

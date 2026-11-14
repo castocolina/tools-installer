@@ -7,7 +7,7 @@ from typing import cast
 import pytest
 
 from installer import pnpm_globals
-from installer.guards import REDIRECT_SENTINEL
+from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.model import Method, Tool, load_tools
 from installer.pnpm_globals import (
     LIST_TIMEOUT_SECONDS,
