@@ -150,7 +150,7 @@
 - [ ] **GUARD-03**: The cleanup keeps every byte and file it did not write: user aliases, CR line endings, orphan markers, symlinks, unmarked or oversize files, and a marked file swapped for another file before the identity re-check that runs immediately before delete [user request 2026-11-14] *(amended 2026-11-14, 24.4 review cycles 1-2: a marked shim's identity (device, inode and bytes, through an O_NOFOLLOW re-open) is re-verified immediately before unlink, and a file swapped before that re-check is kept; no userspace unlink is atomic against a swap, so a swap between the re-check and the unlink is a documented residual, not excluded)*
 - [ ] **GUARD-04**: The Policies row `ban`, `make guard`/`make unguard`, `--guard`/`--unguard`, the Doctor guard section and the uninstall ban row are gone [user request 2026-11-14]
 - [ ] **GUARD-05**: Installer-spawned shells get PATH in its normal order, and installer lookups still skip a sentinel-marked leftover the launch could not remove [user request 2026-11-14]
-- [ ] **GUARD-06**: Live docs, the architecture rule doc, the catalog-audit surface list, REQUIREMENTS.md and the tests stop describing the guard as a feature [user request 2026-11-14]
+- [x] **GUARD-06**: Live docs, the architecture rule doc, the catalog-audit surface list, REQUIREMENTS.md and the tests stop describing the guard as a feature [user request 2026-11-14]
 
 ### Install priority
 
@@ -300,7 +300,7 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | GUARD-03 | Phase 24.4 | Pending |
 | GUARD-04 | Phase 24.4 | Pending |
 | GUARD-05 | Phase 24.4 | Pending |
-| GUARD-06 | Phase 24.4 | Pending |
+| GUARD-06 | Phase 24.4 | Complete |
 | PRIO-01 | Phase 24.5 | Pending |
 | PRIO-02 | Phase 24.5 | Pending |
 | PRIO-03 | Phase 24.5 | Pending |
