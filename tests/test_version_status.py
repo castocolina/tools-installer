@@ -3711,7 +3711,7 @@ def test_host_setup_tool_version_probes_the_unresolved_path(tmp_path: Path) -> N
     "route", ["volta", "host_setup_installer", "host_setup_brew", "host_setup_github"]
 )
 def test_resolve_status_forwards_the_unresolved_path_for_volta_and_host_setup(route: str) -> None:
-    """review C2-M5: every route from `resolve_status` into `_version_argv`
+    """review C2-M5: every route from `resolve_status` into `version_argv`
     carries the looked-through hit."""
     host_setup = Method(kind="host_setup", params={"setup_id": "demo"})
     if route == "volta":

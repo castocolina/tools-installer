@@ -338,9 +338,13 @@ def _default_probe_version_output(argv: list[str]) -> str | None:
     `probe_version` is pinned to the first non-empty line; tools that put the
     version on a later line need the whole stdout so `extract_observed_version`
     can scan it. This function does not replace that contract.
+
+    The child runs with codegraph's telemetry off (`CODEGRAPH_TELEMETRY=0`, verified against
+    v1.6.2) and the common `DO_NOT_TRACK=1` convention set; other vendors may not honour it.
     """
     try:
-        text = run_output(argv, timeout=PROBE_VERSION_TIMEOUT)
+        env = {**os.environ, "CODEGRAPH_TELEMETRY": "0", "DO_NOT_TRACK": "1"}
+        text = run_output(argv, timeout=PROBE_VERSION_TIMEOUT, env=env)
     except (CommandError, OSError):
         return None
     if not text.strip():

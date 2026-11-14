@@ -6,6 +6,7 @@ import io
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from email.message import Message
 from pathlib import Path
 from typing import cast
@@ -655,12 +656,36 @@ def test_probe_version_output_returns_full_stdout_while_probe_version_stays_firs
 ) -> None:
     import installer.versions as versions
 
-    def fake_output(argv: list[str], timeout: float | None = None) -> str:
+    def fake_output(
+        argv: list[str], timeout: float | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
         return "first line\nv0.23.5\n"
 
     monkeypatch.setattr(versions, "run_output", fake_output)
     assert probe_version(["eza", "--version"]) == "first line"
     assert probe_version_output(["eza", "--version"]) == "first line\nv0.23.5\n"
+
+
+def test_version_probe_turns_vendor_telemetry_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every version probe runs with codegraph's telemetry off and DO_NOT_TRACK set (R1-13)."""
+    import installer.versions as versions
+
+    seen: dict[str, object] = {}
+
+    def fake_output(
+        argv: list[str], timeout: float | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
+        seen.update(argv=argv, timeout=timeout, env=env)
+        return "codegraph 1.6.2\n"
+
+    monkeypatch.setenv("CATALOG_PROBE_CANARY", "kept")
+    monkeypatch.setattr(versions, "run_output", fake_output)
+    assert probe_version_output(["codegraph", "--version"]) == "codegraph 1.6.2\n"
+    env = cast(Mapping[str, str], seen["env"])
+    assert env["CODEGRAPH_TELEMETRY"] == "0"
+    assert env["DO_NOT_TRACK"] == "1"
+    assert env["CATALOG_PROBE_CANARY"] == "kept"
+    assert seen["timeout"] == versions.PROBE_VERSION_TIMEOUT
 
 
 def test_probe_version_output_returns_none_on_error_or_whitespace(
@@ -669,13 +694,25 @@ def test_probe_version_output_returns_none_on_error_or_whitespace(
     import installer.versions as versions
     from installer.run import CommandError
 
-    def boom(argv: list[str], timeout: float | None = None) -> str:
+    def boom(
+        argv: list[str], timeout: float | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
         raise CommandError(argv, 127)
 
     monkeypatch.setattr(versions, "run_output", boom)
     assert probe_version_output(["missing", "--version"]) is None
 
-    def blank(argv: list[str], timeout: float | None = None) -> str:
+    def broken(
+        argv: list[str], timeout: float | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(versions, "run_output", broken)
+    assert probe_version_output(["broken", "--version"]) is None
+
+    def blank(
+        argv: list[str], timeout: float | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
         return "   \n"
 
     monkeypatch.setattr(versions, "run_output", blank)

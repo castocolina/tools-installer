@@ -19,26 +19,40 @@ from __future__ import annotations
 
 import argparse
 import functools
+import http.client
+import json
 import platform
 import re
 import shutil
 import sys
+import tomllib
 import traceback
+import urllib.parse
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 from installer import versions
+from installer.agent_settings import DYNAMIC_KEYS, TUNING_GROUPS, setting_keys
 from installer.atomic import atomic_write_text
 from installer.locations import ensure_dir
-from installer.model import Tool, load_tools
+from installer.model import Method, Tool, load_tools, method_package
+from installer.ownership import ManagerOwnership
 from installer.platform import detect_os
+from installer.postinstall import POSTINSTALL_HOOKS
 from installer.run import run_output
 from installer.verify_registry import github_token
-from installer.versions import Fetch, resolve_github_release
+from installer.version_status import probed_version
+from installer.versions import (
+    Fetch,
+    VersionError,
+    parse_version,
+    resolve_github_release,
+    resolve_npm_latest,
+)
 
 REGISTRY = Path(__file__).with_name("registry.toml")
 RUN_ROOT = Path(__file__).resolve().parents[1] / ".planning" / "audits" / "catalog"
@@ -298,20 +312,329 @@ def write_report(run: Path, entry_id: str, text: str, *, home: Path) -> Path:
     return target
 
 
-def entry_facts(tool: Tool, tools: Sequence[Tool], seams: Seams) -> str:
-    """The fact block for one entry."""
-    lines = [f"# facts: {tool.id}", "- methods:"]
-    lines.extend(f"  - {method.kind}" for method in tool.methods)
-    output = seams.probe([tool.cmd, "--version"])
-    installed = versions.extract_observed_version(output) if output else None
-    lines.append(f"- installed: {installed or 'not installed'}")
+@dataclass(frozen=True)
+class _Source:
+    """One upstream the gatherer reads a latest version from; `url` is "" when none is read."""
+
+    label: str
+    url: str
+    read: Callable[[Fetch], str]
+
+
+_URLS = {
+    "formula": "https://formulae.brew.sh/api/formula/{}.json",
+    "cask": "https://formulae.brew.sh/api/cask/{}.json",
+    "arch": "https://archlinux.org/packages/search/json/?name={}",
+    "fedora": "https://mdapi.fedoraproject.org/rawhide/pkg/{}",
+    "debian": "https://sources.debian.org/api/src/{}/",
+    "pypi": "https://pypi.org/pypi/{}/json",
+}
+
+
+def _url(key: str, name: str) -> str:
+    return _URLS[key].format(urllib.parse.quote(name, safe=""))
+
+
+def _json_object(url: str, fetch: Fetch) -> dict[str, object]:
+    """A JSON object body; a transport failure, a non-JSON body or an error body raises."""
+    try:
+        data = json.loads(fetch(url))
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        raise VersionError(f"could not read {url}") from exc
+    if not isinstance(data, dict):
+        raise VersionError("the answer is not a JSON object")
+    body = cast(dict[str, object], data)
+    if "error" in body:
+        # An error body behind HTTP 200 (sources.debian.org answers {"error": 404}).
+        raise VersionError(f"the answer is an error body: {str(body['error'])[:80]}")
+    return body
+
+
+def _dig(node: object, *path: str) -> str:
+    """The non-empty string at `path` inside nested JSON objects."""
+    for key in path:
+        node = cast(dict[str, object], node).get(key) if isinstance(node, dict) else None
+    if isinstance(node, str) and node:
+        return node
+    raise VersionError(f"no {'.'.join(path)} in the answer")
+
+
+def _github_latest(repo: str, fetch: Fetch) -> str:
+    return resolve_github_release(repo, fetch).tag
+
+
+def _brew_formula_latest(name: str, fetch: Fetch) -> str:
+    return _dig(_json_object(_url("formula", name), fetch), "versions", "stable")
+
+
+def _brew_cask_latest(name: str, fetch: Fetch) -> str:
+    return _dig(_json_object(_url("cask", name), fetch), "version")
+
+
+def _arch_latest(name: str, fetch: Fetch) -> str:
+    results = _json_object(_url("arch", name), fetch).get("results")
+    for row in cast(list[object], results) if isinstance(results, list) else []:
+        if isinstance(row, dict):
+            row = cast(dict[str, object], row)
+        else:
+            continue
+        if row.get("pkgname") == name:
+            return f"{_dig(row, 'pkgver')}-{_dig(row, 'pkgrel')} ({_dig(row, 'repo')})"
+    raise VersionError(f"no exact pkgname match for {name!r}")
+
+
+def _fedora_latest(name: str, fetch: Fetch) -> str:
+    body = _json_object(_url("fedora", name), fetch)
+    return f"{_dig(body, 'version')}-{_dig(body, 'release')} (Fedora rawhide)"
+
+
+def _debian_latest(name: str, fetch: Fetch) -> str:
+    rows = _json_object(_url("debian", name), fetch).get("versions")
+    if not isinstance(rows, list) or not rows:
+        raise VersionError("no versions in the answer")
+    return _dig(cast(list[object], rows)[0], "version")
+
+
+def _pypi_latest(name: str, fetch: Fetch) -> str:
+    return _dig(_json_object(_url("pypi", name), fetch), "info", "version")
+
+
+# kind -> (label, URL key, reader) for the kinds whose latest version is one JSON read by name.
+_NAMED_READERS: dict[str, tuple[str, str, Callable[[str, Fetch], str]]] = {
+    "brew": ("brew", "formula", _brew_formula_latest),
+    "cask": ("cask", "cask", _brew_cask_latest),
+    "pacman": ("pacman", "arch", _arch_latest),
+    "dnf": ("dnf", "fedora", _fedora_latest),
+    "apt": ("apt", "debian", _debian_latest),
+    "uv-tool": ("pypi", "pypi", _pypi_latest),
+}
+
+
+def _unread(label: str, why: str) -> _Source:
+    def read(_fetch: Fetch) -> str:
+        raise VersionError(why)
+
+    return _Source(label, "", read)
+
+
+def _param(method: Method, key: str) -> str | None:
+    value = method.params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _method_source(method: Method) -> _Source | None:
+    kind = method.kind
+    repo = _param(method, "repo")
+    if kind in ("github_release", "cargo_distrobox") and repo:
+        url = f"https://api.github.com/repos/{repo}/releases/latest"
+        return _Source("github", url, functools.partial(_github_latest, repo))
+    package = _param(method, "npm_pkg") or _param(method, "latest_npm")
+    if package:
+        quoted = urllib.parse.quote(package, safe="@")
+        url = f"https://registry.npmjs.org/-/package/{quoted}/dist-tags"
+        return _Source("npm", url, functools.partial(resolve_npm_latest, package))
+    name = method_package(method)
+    if kind in _NAMED_READERS and name:
+        label, url_key, reader = _NAMED_READERS[kind]
+        if kind == "brew" and "/" in name:
+            return _unread(label, "tap formula, not on formulae.brew.sh")
+        return _Source(label, _url(url_key, name), functools.partial(reader, name))
+    if kind in ("app", "tarball"):
+        return _Source(kind, "", lambda _fetch: f"see verify-registry.md ({kind})")
+    if kind in ("sdkman", "host_setup", "rpm_ostree"):
+        return _unread(kind, f"not read by the gatherer ({kind})")
+    return None
+
+
+def _sources(tool: Tool) -> list[_Source]:
+    found: dict[tuple[str, str], _Source] = {}
     for method in tool.methods:
-        repo = method.params.get("repo")
-        if method.kind == "github_release" and isinstance(repo, str):
-            tag = resolve_github_release(repo, seams.fetch).tag
-            url = f"https://api.github.com/repos/{repo}/releases/latest"
-            lines.append(f"- latest: {tag} ({url})")
-    return "\n".join(lines) + "\n"
+        source = _method_source(method)
+        if source is not None:
+            found.setdefault((source.label, source.url), source)
+    return list(found.values())
+
+
+def _reason(exc: VersionError) -> str:
+    """One line naming the failure: the transport error's class and text, else the message."""
+    cause = exc.__cause__
+    text = f"{type(cause).__name__}: {cause}".rstrip(": ") if cause is not None else str(exc)
+    lines = text.splitlines()
+    return (lines[0] if lines else type(exc).__name__)[:160]
+
+
+def _latest_lines(tool: Tool, fetch: Fetch) -> list[str]:
+    lines: list[str] = []
+    resolved: list[tuple[str, str]] = []
+    for source in _sources(tool):
+        try:
+            value = source.read(fetch)
+            resolved.append((source.label, value))
+        except VersionError as exc:
+            value = f"unknown: {_reason(exc)}"
+        lines.append(f"- latest: {value}" + (f" ({source.url})" if source.url else ""))
+    if not lines:
+        lines.append("- latest: unknown: no latest source declared")
+    majors = {parsed[0] for _, value in resolved if (parsed := parse_version(value))}
+    if len(majors) > 1:
+        shown = " vs ".join(
+            f"{value} ({label})" for label, value in resolved if parse_version(value)
+        )
+        lines.append(f"- note: major split: {shown}")
+    return lines
+
+
+def _method_pins(method: Method) -> list[str]:
+    version = _param(method, "version")
+    if method.kind in ("app", "tarball", "sdkman") and version:
+        return [f"{version} ({method.kind} version param)"]
+    pinned = method.params.get("versions")
+    if method.kind == "node" and isinstance(pinned, dict):
+        pairs = cast(dict[str, object], pinned)
+        return [f"{name} {spec} (node versions param)" for name, spec in pairs.items()]
+    return []
+
+
+def _pinned_line(tool: Tool) -> str:
+    pins = [pin for method in tool.methods for pin in _method_pins(method)]
+    loose = list(dict.fromkeys(m.kind for m in tool.methods if not _method_pins(m)))
+    return "; ".join([*pins, *([f"unpinned ({', '.join(loose)})"] if loose else [])])
+
+
+def _installed_line(tool: Tool, seams: Seams) -> str:
+    here = [m for m in tool.methods if not m.os or seams.platform_os in m.os] or list(tool.methods)
+    target = next((m for m in here if m.params.get("version_file")), here[0])
+    ownership = ManagerOwnership(
+        tool_id=tool.id,
+        owner="installer",
+        method=target,
+        package=None,
+        current_version=None,
+        confidence="direct",
+        shadowed=False,
+        candidates=(),
+        active_candidate=None,
+        active_path=None,
+        unknown_reason=None,
+    )
+    calls: list[tuple[list[str], str | None]] = []
+
+    def probe(argv: list[str]) -> str | None:
+        output = seams.probe(argv)
+        calls.append((argv, output))
+        return output
+
+    found = probed_version(tool, ownership, probe, unresolved=seams.which(tool.cmd))
+    if not calls:  # a version_file answered (or was missing) before any exec
+        version_file = _param(target, "version_file") or ""
+        if found:
+            return f"{found} ({version_file})"
+        if version_file and Path(version_file).expanduser().exists():
+            return f"unknown: no version in {version_file}"
+        return "not installed"
+    argv, output = calls[0]
+    if output is None:
+        return "not installed"
+    if found is None:
+        return "unknown: no version in the --version output"
+    return f"{found} ({' '.join(argv)}; bin_dir first, then the PATH hit)"
+
+
+def _method_line(method: Method) -> str:
+    params = " ".join(
+        f"{key}={json.dumps(value)}"
+        for key, value in method.params.items()
+        if key not in ("paths", "update", "remove")
+    )
+    where = f"os: {', '.join(method.os) or 'all'}, arch: {', '.join(method.arch) or 'all'}"
+    return f"  - {method.kind} ({where}) {params}".rstrip()
+
+
+def _argvs(tool: Tool, key: str) -> list[str]:
+    found: list[str] = []
+    for method in tool.methods:
+        argv = method.params.get(key)
+        if isinstance(argv, list):
+            found.append(" ".join(str(token) for token in cast(list[object], argv)))
+    return list(dict.fromkeys(found))
+
+
+def _hook_line(name: str | None) -> str:
+    hook = POSTINSTALL_HOOKS.get(name or "")
+    if name is None:
+        return "none"
+    if hook is None:
+        return f"{name} (not in POSTINSTALL_HOOKS)"
+    if hook.targets is None:
+        return f"{name} (host-independent)"
+    return f"{name} (targets: {', '.join(hook.targets)})"
+
+
+def _tuning_line(tool: Tool, platform_os: str) -> str:
+    groups = [
+        f"{group}: "
+        + ", ".join(".".join(k.path) for k in setting_keys(tool.id, group, platform_os))
+        for group in TUNING_GROUPS.get(tool.id, ())
+    ]
+    groups += [
+        f"{setting}: {', '.join('.'.join(path) for path in paths)}"
+        for (agent, setting), paths in DYNAMIC_KEYS.items()
+        if agent == tool.id
+    ]
+    return "; ".join(groups) or "none"
+
+
+def _repos(tool: Tool) -> set[str]:
+    return {
+        r
+        for m in tool.methods
+        if m.kind in ("github_release", "cargo_distrobox")
+        if (r := _param(m, "repo"))
+    }
+
+
+def _tilde(text: str, home: Path) -> str:
+    """Show the home prefix as `~`, so a committed report holds no absolute home path."""
+    for prefix in sorted({str(home), str(home.resolve())} - {"", "/"}, key=len, reverse=True):
+        text = text.replace(prefix, "~")
+    return text
+
+
+def entry_facts(
+    tool: Tool,
+    tools: Sequence[Tool],
+    seams: Seams,
+    *,
+    verified: Mapping[str, str] | None = None,
+) -> str:
+    """The read-only fact block for one entry; it runs only `[<binary>, "--version"]`."""
+    paths = [str(p) for m in tool.methods for p in cast(list[object], m.params.get("paths") or [])]
+    updates = _argvs(tool, "update")
+    removes = _argvs(tool, "remove")
+    lines = [f"# facts: {tool.id}", f"- cmd: {tool.cmd}", "- methods:"]
+    lines.extend(_method_line(method) for method in tool.methods)
+    lines += [
+        f"- pinned: {_pinned_line(tool)}",
+        f"- verified: {(verified or {}).get(tool.id, 'unknown')}",
+        f"- paths: {', '.join(dict.fromkeys(paths)) or 'none'}",
+        f"- update: {'; '.join(updates) or 'none (the installer re-runs the method)'}",
+        f"- remove: {'; '.join(removes) or 'none'}",
+        f"- postinstall: {_hook_line(tool.postinstall)}",
+        f"- post_install: {', '.join(tool.post_install) or 'none'}",
+        f"- tuning: {_tuning_line(tool, seams.platform_os)}",
+        f"- installed: {_installed_line(tool, seams)}",
+        *_latest_lines(tool, seams.fetch),
+    ]
+    mine = _repos(tool)
+    lines.extend(
+        f"- see also: {other.id}"
+        for other in tools
+        if other.id != tool.id and (other.cmd == tool.cmd or mine & _repos(other))
+    )
+    runtime = next((name for name in ("podman", "docker") if seams.which(name)), None)
+    none = '- container: none (rows that need a container read "unknown: container check not run")'
+    lines.append(f"- container: {runtime}" if runtime else none)
+    return _tilde("\n".join(lines) + "\n", seams.home)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -333,6 +656,12 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _verified_dates(registry: Path) -> dict[str, str]:
+    with registry.open("rb") as handle:
+        rows = cast(list[dict[str, object]], tomllib.load(handle).get("tool", []))
+    return {str(row["id"]): str(row["verified"]) for row in rows if "verified" in row}
+
+
 def _find(tools: Sequence[Tool], entry_id: str) -> Tool:
     for tool in tools:
         if tool.id == entry_id:
@@ -348,11 +677,15 @@ def _run(
     gh: Callable[[list[str]], str] | None,
 ) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
-    tools = load_tools(args.registry if args.registry is not None else registry)
+    registry_path = args.registry if args.registry is not None else registry
+    tools = load_tools(registry_path)
     home = seams.home if seams is not None else Path.home()
     if args.cmd == "facts":
         active = seams or default_seams(gh or functools.partial(run_output, timeout=60))
-        print(entry_facts(_find(tools, args.id), tools, active), end="")
+        facts = entry_facts(
+            _find(tools, args.id), tools, active, verified=_verified_dates(registry_path)
+        )
+        print(facts, end="")
         return 0
     run = run_dir(args.root or root or RUN_ROOT, args.date)
     if args.cmd == "status":

@@ -350,7 +350,7 @@ def _latest_status(
     `allow_fetch=False` skips the network even when `should_fetch` is True
     (the per-pass fetch budget) and forces stale=True.
     """
-    output = probe_output(_version_argv(tool, ownership, unresolved=unresolved))
+    output = probe_output(version_argv(tool, ownership, unresolved=unresolved))
     installed = extract_observed_version(output) if output else None
     now_iso = now.astimezone(UTC).isoformat()
     fetched = False
@@ -413,7 +413,7 @@ def _pinned_spec(ownership: ManagerOwnership) -> str | None:
     return None
 
 
-def _version_argv(
+def version_argv(
     tool: Tool, ownership: ManagerOwnership | None, *, unresolved: str | None = None
 ) -> list[str]:
     # A Volta shim or a host-setup launcher resolves to a dispatcher, not the
@@ -463,7 +463,7 @@ def probed_version(
     from_file = _version_file(ownership)
     if from_file is not False:
         return from_file
-    output = probe_output(_version_argv(tool, ownership, unresolved=unresolved))
+    output = probe_output(version_argv(tool, ownership, unresolved=unresolved))
     return extract_observed_version(output) if output else None
 
 
