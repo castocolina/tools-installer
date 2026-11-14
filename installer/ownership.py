@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from installer.apps import APP_KINDS
+from installer.bun_globals import bun_dirs, listed_versions, read_bun_globals
 from installer.download import DOWNLOAD_KINDS
 from installer.host_setup import HOST_SETUPS
 from installer.install_ownership import (
@@ -82,6 +83,7 @@ Owner = Literal[
     "brew",
     "cask",
     "pnpm",
+    "bun",
     "uv",
     "sdkman",
     "volta",
@@ -150,11 +152,20 @@ _KIND_TO_OWNER: dict[str, Owner] = {
     "brew": "brew",
     "cask": "cask",
     "node": "pnpm",
+    "bun": "bun",
     "uv-tool": "uv",
     "sdkman": "sdkman",
 }
 _INSTALLER_KINDS = frozenset((*DOWNLOAD_KINDS, *APP_KINDS, "script", "cargo_distrobox"))
-_CANDIDATE_ORDER: tuple[Owner, ...] = ("installer", "brew", "cask", "pnpm", "uv", "sdkman")
+_CANDIDATE_ORDER: tuple[Owner, ...] = (
+    "installer",
+    "brew",
+    "cask",
+    "pnpm",
+    "bun",
+    "uv",
+    "sdkman",
+)
 
 # 15.4-02/D-01 (second half): the closed, declared set of method kinds allowed
 # on the ownership-only path (`_ownership_only_methods` below), mapped to the
@@ -296,6 +307,8 @@ class ManagerInventory:
     pnpm_globals: frozenset[str] | None
     uv_tools: Mapping[str, str] | None
     brew_prefix: Path | None
+    # name -> installed version, None when the member's own package.json cannot be read.
+    bun_globals: Mapping[str, str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -388,6 +401,7 @@ def read_inventory(
     has_brew: bool,
     query: Callable[..., str] = run_query,
     pnpm_packages: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
+    bun_versions: Callable[[], Mapping[str, str | None] | None] = listed_versions,
 ) -> ManagerInventory:
     """Ask each manager once. A failed or unparseable query is `None`, never empty."""
     brew_prefix: Path | None = None
@@ -406,6 +420,7 @@ def read_inventory(
         pnpm_globals=pnpm_globals,
         uv_tools=uv_tools,
         brew_prefix=brew_prefix,
+        bun_globals=bun_versions(),
     )
 
 
@@ -423,6 +438,9 @@ def manager_listing(
     if kind == "node":
         packages = pnpm_packages()
         return None if packages is None else frozenset(packages)
+    if kind == "bun":
+        listed = read_bun_globals()
+        return None if listed is None else frozenset(listed)
     return None
 
 
@@ -514,6 +532,8 @@ def owner_dirs(
         "brew": brew_dirs,
         "cask": cask_dirs,
         "pnpm": (pnpm_dir,),
+        # The global tree, never ~/.bun: bun's own binary lives in ~/.bun/bin.
+        "bun": (bun_dirs()[1],),
         "uv": () if uv_tool_dir is None else (uv_tool_dir,),
         "volta": (volta_dir,),
     }
@@ -1169,6 +1189,16 @@ def _collect_candidates(
                     current_version=None,
                     evidence=f"pnpm global inventory lists {pkg}",
                 )
+        elif method.kind == "bun" and inventory.bun_globals is not None:
+            pkg = method.params.get("npm_pkg")
+            if isinstance(pkg, str) and isinstance(version := inventory.bun_globals.get(pkg), str):
+                found["bun"] = OwnershipCandidate(
+                    owner="bun",
+                    method=method,
+                    package=pkg,
+                    current_version=version,
+                    evidence=f"bun global tree lists {pkg}",
+                )
         elif method.kind == "uv-tool" and inventory.uv_tools is not None:
             pkg = method.params.get("pypi_pkg")
             if isinstance(pkg, str) and pkg in inventory.uv_tools:
@@ -1195,6 +1225,8 @@ def _unreadable(tool: Tool, platform: Platform, inventory: ManagerInventory) -> 
             missing.add("pnpm")
         elif owner == "uv" and inventory.uv_tools is None:
             missing.add("uv")
+        elif owner == "bun" and inventory.bun_globals is None:
+            missing.add("bun")
     return frozenset(missing)
 
 
@@ -1325,6 +1357,7 @@ OWNER_LABELS: dict[Owner, str] = {
     # Homebrew artifact.
     "cask": "Homebrew cask",
     "pnpm": "pnpm",
+    "bun": "bun",
     "uv": "uv",
     "sdkman": "SDKMAN",
     "volta": "Volta",
@@ -1400,6 +1433,7 @@ OWNER_DETAIL_LABELS: dict[Owner, str] = {
     "brew": "managed by Homebrew",
     "cask": "managed by Homebrew",
     "pnpm": "managed by pnpm",
+    "bun": "managed by bun",
     "uv": "managed by uv",
     "sdkman": "managed by SDKMAN",
     "volta": "managed by Volta",
@@ -1562,6 +1596,7 @@ _REMOVAL_DESCRIPTIONS: dict[Owner, str] = {
     "brew": "managed by {label} — remove {name} with Homebrew (no verified formula name)",
     "cask": "managed by {label} — remove {name} with Homebrew (no verified cask name)",
     "pnpm": "managed by {label} — remove {name} with pnpm (no verified package name)",
+    "bun": "managed by {label} — remove {name} with bun (no verified package name)",
     "uv": "managed by {label} — remove {name} with uv (no verified package name)",
     "sdkman": "managed by {label} — remove {name} with SDKMAN (no verified candidate name)",
     "volta": "managed by {label} — remove {name} with Volta (no verified package name)",

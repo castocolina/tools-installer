@@ -2730,6 +2730,51 @@ def test_release_capture_keeps_the_production_resolver(monkeypatch: pytest.Monke
     assert written.release == "v9.0.0"
 
 
+def _bun_inventory(
+    bun_globals: dict[str, str | None] | None,
+) -> Callable[..., ManagerInventory]:
+    """A reader whose only listing is bun's: the install may record its receipt or not."""
+
+    def read(*, has_brew: bool) -> ManagerInventory:
+        del has_brew
+        return ManagerInventory(None, None, frozenset(), None, None, bun_globals=bun_globals)
+
+    return read
+
+
+@pytest.mark.parametrize(
+    ("listed", "claimed"),
+    [
+        ({}, True),
+        ({"@mermaid-js/mermaid-cli": "12.2.0"}, False),
+        ({"@mermaid-js/mermaid-cli": None}, False),  # listed, member package.json missing (R1-06)
+    ],
+)
+def test_bun_install_records_a_bun_receipt_unless_bun_already_listed(
+    listed: dict[str, str | None],
+    claimed: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scratch_path_for_manager_smoke: Path,
+) -> None:
+    _bun_host(monkeypatch, tmp_path, scratch_path_for_manager_smoke)
+    tool = _tool(Method("bun", {"npm_pkg": "@mermaid-js/mermaid-cli"}), tool_id="mmdc")
+    outcome = install_tool(
+        tool,
+        _platform(),
+        runner=lambda _cmd: None,
+        present=lambda _t: False,
+        read_inventory_fn=_bun_inventory(listed),
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    receipt = receipts.read("mmdc")
+    if not claimed:
+        assert receipt is None
+        return
+    assert receipt is not None
+    assert (receipt.method.kind, receipt.package) == ("bun", "@mermaid-js/mermaid-cli")
+
+
 def test_a_bun_method_installs_by_absolute_path_and_records_a_bun_receipt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
 ) -> None:
@@ -2771,6 +2816,7 @@ min_node = "22.12.0"
         Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
         runner=calls.append,
         present=lambda _t: False,
+        read_inventory_fn=_bun_inventory({}),
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.method_kind == "bun"

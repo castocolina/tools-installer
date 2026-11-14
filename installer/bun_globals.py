@@ -2,17 +2,20 @@
 
 This never calls bun's CLI: `bun pm bin -g` errors on a fresh host, before the first global
 install, which is exactly when the answer is needed. Importers: engine, executors, status,
-shellrc and version_status; this module imports only `installer.model` so none can cycle.
+shellrc, ownership and version_status; this module imports only the standard library,
+`installer.model` and `installer.versions` so none can cycle.
 """
 
 import json
 import os
+import re
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 from installer.model import Method
+from installer.versions import NPM_PACKAGE_RE
 
 
 def _env_dir(name: str) -> Path | None:
@@ -79,6 +82,70 @@ def trusted_dependencies() -> list[str] | None:
     items = cast(list[object], raw)
     names = [item for item in items if isinstance(item, str)]
     return names if len(names) == len(items) else None
+
+
+_VERSION_RE = re.compile(r"[0-9A-Za-z.+-]{1,64}")
+
+
+class BunGlobal(NamedTuple):
+    """One package bun's global manifest lists: its range, and the version actually installed."""
+
+    range: str
+    # None when the member's own package.json is missing, unreadable or carries no short version.
+    version: str | None
+
+
+def _installed_version(name: str) -> str | None:
+    """The `version` of `<global>/node_modules/<name>/package.json`, None when it cannot be read."""
+    try:
+        document: object = json.loads(
+            (bun_dirs()[1] / "node_modules" / name / "package.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):  # a missing file, bad UTF-8 and bad JSON all read as unknown
+        return None
+    if not isinstance(document, dict):
+        return None
+    version = cast(dict[str, object], document).get("version")
+    return version if isinstance(version, str) and _VERSION_RE.fullmatch(version) else None
+
+
+def read_bun_globals() -> dict[str, BunGlobal] | None:
+    """The packages bun's global manifest lists, read as files; None when that cannot be trusted.
+
+    Names are the manifest's `dependencies` keys and each version is the installed package's own
+    `package.json`: bun's CLI is not used (`bun list -g --json` prints a text tree and
+    `bun outdated -g` lists nothing), and `node_modules` is not scanned because an auto-installed
+    peer is not in the manifest. A missing tree is `{}`. An unreadable or invalid manifest, a key
+    that is not an npm package name (it would steer the member path out of the tree) and a
+    non-string range are None; an unreadable member keeps its name with version None.
+    """
+    manifest = _load_manifest()
+    if manifest is None:
+        return None
+    raw = manifest.get("dependencies", {})
+    if not isinstance(raw, dict):
+        return None
+    dependencies = cast(dict[object, object], raw)
+    found: dict[str, BunGlobal] = {}
+    for name, spec in dependencies.items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(spec, str)
+            or NPM_PACKAGE_RE.fullmatch(name) is None
+        ):
+            return None
+        found[name] = BunGlobal(spec, _installed_version(name))
+    return found
+
+
+def listed_versions() -> dict[str, str | None] | None:
+    """`{name: installed version}` for every listed package, None versions kept.
+
+    Membership, not the version map, proves a package was already there (a listed package whose
+    own package.json cannot be read is still bun's).
+    """
+    globals_ = read_bun_globals()
+    return None if globals_ is None else {name: item.version for name, item in globals_.items()}
 
 
 def method_bin_dir(method: Method) -> Path | None:

@@ -438,6 +438,8 @@ def _listing(inventory: ManagerInventory, kind: str) -> Collection[str] | None:
         return inventory.brew_casks
     if kind == "uv-tool":
         return inventory.uv_tools
+    if kind == "bun":
+        return inventory.bun_globals
     return inventory.pnpm_globals
 
 

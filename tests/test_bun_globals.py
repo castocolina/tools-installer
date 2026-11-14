@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from installer.bun_globals import bun_dirs, method_bin_dir, resolve_bun, trusted_dependencies
+from installer.bun_globals import (
+    BunGlobal,
+    bun_dirs,
+    listed_versions,
+    method_bin_dir,
+    read_bun_globals,
+    resolve_bun,
+    trusted_dependencies,
+)
 from installer.model import Method
 
 _BUN_VARS = ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR")
@@ -149,3 +157,86 @@ def test_trusted_dependencies_reads_an_unreadable_manifest_as_none(
 
     monkeypatch.setattr(Path, "read_text", refuse)
     assert trusted_dependencies() is None
+    assert read_bun_globals() is None
+
+
+def _plant_member(name: str, content: str | bytes) -> Path:
+    member = bun_dirs()[1] / "node_modules" / name / "package.json"
+    member.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, bytes):
+        member.write_bytes(content)
+    else:
+        member.write_text(content, encoding="utf-8")
+    return member
+
+
+def test_reader_gives_an_empty_inventory_for_no_tree_or_no_dependencies(
+    scratch_home: Path,
+) -> None:
+    assert read_bun_globals() == {}  # no tree at all
+    assert listed_versions() == {}
+    bun_dirs()[1].mkdir(parents=True)
+    assert read_bun_globals() == {}  # a tree with no manifest
+    _write_manifest(scratch_home, '{"dependencies": {}}')
+    assert read_bun_globals() == {}
+    _write_manifest(scratch_home, '{"trustedDependencies": ["esbuild"]}')
+    assert read_bun_globals() == {}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "not json",
+        b"\xff\xfe",
+        '["dependencies"]',
+        '{"dependencies": ["x"]}',
+        '{"dependencies": {"left-pad": 1}}',
+        '{"dependencies": {"../../etc": "1.0.0"}}',
+        '{"dependencies": {"left-pad": "1.0.0", "Not/Valid": "1.0.0"}}',
+    ],
+)
+def test_reader_gives_none_for_an_unreadable_or_untrustworthy_manifest(
+    scratch_home: Path, content: str | bytes
+) -> None:
+    _write_manifest(scratch_home, content)
+    assert read_bun_globals() is None
+    assert listed_versions() is None
+
+
+def test_reader_takes_names_from_the_manifest_and_versions_from_the_member(
+    scratch_home: Path,
+) -> None:
+    _write_manifest(
+        scratch_home,
+        '{"dependencies": {"@earendil-works/pi-coding-agent": "1.5.2", "left-pad": "^1.0.0"}}',
+    )
+    _plant_member("@earendil-works/pi-coding-agent", '{"version": "1.5.2"}')
+    _plant_member("left-pad", '{"version": "1.3.0"}')
+    assert read_bun_globals() == {
+        "@earendil-works/pi-coding-agent": BunGlobal("1.5.2", "1.5.2"),
+        "left-pad": BunGlobal("^1.0.0", "1.3.0"),
+    }
+    assert listed_versions() == {"@earendil-works/pi-coding-agent": "1.5.2", "left-pad": "1.3.0"}
+
+
+@pytest.mark.parametrize(
+    "member",
+    [None, b"\xff\xfe", "not json", '{"version": 3}', '{"version": "1.0 && rm"}', "[]"],
+)
+def test_reader_keeps_a_listed_package_with_an_unverifiable_member_at_version_none(
+    scratch_home: Path, member: str | bytes | None
+) -> None:
+    _write_manifest(scratch_home, '{"dependencies": {"left-pad": "1.0.0"}}')
+    if member is not None:
+        _plant_member("left-pad", member)
+    assert read_bun_globals() == {"left-pad": BunGlobal("1.0.0", None)}
+    assert listed_versions() == {"left-pad": None}
+
+
+def test_reader_reports_the_tree_as_bun_left_it_after_an_interrupted_run(
+    scratch_home: Path,
+) -> None:
+    _write_manifest(scratch_home, '{"dependencies": {"left-pad": "1.0.0", "right-pad": "2.0.0"}}')
+    _plant_member("right-pad", '{"version": "2.0.0"}')
+    _plant_member("puppeteer", '{"version": "25.0.0"}')  # a kept peer: in node_modules only
+    assert listed_versions() == {"left-pad": None, "right-pad": "2.0.0"}

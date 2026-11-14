@@ -89,6 +89,7 @@ def _readable(
     pnpm_globals: frozenset[str] | None = frozenset(),
     uv_tools: dict[str, str] | None = None,
     brew_prefix: Path | None = _BREW_PREFIX,
+    bun_globals: dict[str, str | None] | None = None,
 ) -> ManagerInventory:
     return ManagerInventory(
         brew_formulae={} if brew_formulae is None else brew_formulae,
@@ -96,6 +97,7 @@ def _readable(
         pnpm_globals=pnpm_globals,
         uv_tools={} if uv_tools is None else uv_tools,
         brew_prefix=brew_prefix,
+        bun_globals=bun_globals,
     )
 
 
@@ -3273,3 +3275,95 @@ def test_node_floor_never_drops_ownership(monkeypatch: pytest.MonkeyPatch) -> No
         unknown.package,
         unknown.confidence,
     )
+
+
+# -- 24.5-03: owner bun, read from bun's global tree as files.
+
+_DEBIAN = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
+
+
+@pytest.fixture
+def bun_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    return home
+
+
+def _bun_pi() -> Tool:
+    return Tool(
+        id="pi",
+        name="Pi",
+        category="ai",
+        cmd="pi",
+        methods=(
+            Method("bun", {"npm_pkg": _PI_PACKAGE, "min_node": "22.19.0"}),
+            Method("node", {"npm_pkg": _PI_PACKAGE, "min_node": "22.19.0"}),
+        ),
+    )
+
+
+def _seed_bun_pi(home: Path, *, version: str | None = "1.5.2") -> Path:
+    """bun's tree as `bun add -g` leaves it: manifest, member package and a linked command."""
+    global_dir = home / ".bun" / "install" / "global"
+    package = global_dir / "node_modules" / _PI_PACKAGE
+    (package / "dist").mkdir(parents=True)
+    (global_dir / "package.json").write_text(
+        json.dumps({"dependencies": {_PI_PACKAGE: "1.5.2"}}), encoding="utf-8"
+    )
+    if version is not None:
+        (package / "package.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+    cli = package / "dist" / "cli.js"
+    cli.write_text("#!/usr/bin/env node\n")
+    cli.chmod(0o755)
+    link = home / ".bun" / "bin" / "pi"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(cli)
+    return link
+
+
+def _no_query(argv: list[str], **_kwargs: object) -> str:
+    raise CommandError(argv, 1, detail="not installed")
+
+
+def _no_pnpm() -> tuple[str, ...]:
+    return ()
+
+
+def test_bun_owned_pi_reads_owner_and_version(bun_home: Path) -> None:
+    link = _seed_bun_pi(bun_home)
+    inventory = read_inventory(has_brew=False, query=_no_query, pnpm_packages=_no_pnpm)
+    result = _resolve(_bun_pi(), inventory=inventory, which=str(link), platform=_DEBIAN)
+    assert result.owner == "bun"
+    assert result.confidence == "direct"
+    assert result.current_version == "1.5.2"
+    assert result.package == _PI_PACKAGE
+
+
+def test_bun_s_own_binary_is_not_bun_owned(bun_home: Path) -> None:
+    dirs = owner_dirs(inventory=_readable(), managed_bin_dir=_MANAGED, platform=_DEBIAN)
+    assert attribute_path(bun_home / ".bun" / "bin" / "bun", dirs) == frozenset()
+    assert dirs["bun"] == (bun_home / ".bun" / "install" / "global",)
+
+
+def test_read_inventory_survives_an_undecodable_bun_manifest(bun_home: Path) -> None:
+    manifest = bun_home / ".bun" / "install" / "global" / "package.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes(b"\xff\xfe\x00")
+    inventory = read_inventory(has_brew=False, query=_no_query, pnpm_packages=_no_pnpm)
+    assert inventory.bun_globals is None
+
+
+def test_manager_listing_bun_tells_empty_from_unreadable(bun_home: Path) -> None:
+    listing = ownership.manager_listing
+    assert listing("bun") == frozenset()  # no tree at all
+    manifest = bun_home / ".bun" / "install" / "global" / "package.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"dependencies": {}}', encoding="utf-8")
+    assert listing("bun") == frozenset()
+    _seed_bun_pi(bun_home, version=None)  # listed, member package.json missing
+    assert listing("bun") == frozenset({_PI_PACKAGE})
+    manifest.write_text("not json", encoding="utf-8")
+    assert listing("bun") is None

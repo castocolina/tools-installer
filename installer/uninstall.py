@@ -113,6 +113,7 @@ MANAGER_UNINSTALL_ARGV: dict[str, tuple[str, ...]] = {
     "cask": ("brew", "uninstall", "--cask"),
     "uv-tool": ("uv", "tool", "uninstall"),
     "node": ("pnpm", "remove", "--global"),
+    "bun": ("bun", "remove", "--global"),
 }
 
 
