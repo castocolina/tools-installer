@@ -102,6 +102,20 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           start. --direct is the fallback for a host without systemd containers:
                           a plain container that runs each job's command without units.
                           --keep-image keeps the built image.
+  audit-landing [--keep-image]
+                          Orchestrator only: a disposable Fedora container bootstrapped like
+                          `bootstrap` (Homebrew, uv), in which the installer's own code installs,
+                          tunes, updates and removes OpenCode 2 and codegraph through
+                          tests/e2e_landing_driver.py, as the tester. Prints, in order,
+                          TRACER_OPENCODE_V2_INSTALL_OK, _V2_TUNING_OK, _LATEST_OK,
+                          _UPDATE_WHILE_RUNNING_OK, _V2_REMOVE_OK, _V2_STOP_IDLE_OK,
+                          _V1_REMOVE_OK, _V1_UPDATE_OK and TRACER_CODEGRAPH_COPILOT_OK,
+                          _PI_GATED_OK, _UNREGISTER_OK, _COPILOT_IDE_ONLY_OK. A step that cannot
+                          prove its claim prints _V2_SERVICE_STOP_UNPROVEN or
+                          _UPDATE_WHILE_RUNNING_UNPROVEN, and a product failure a named _FAILED
+                          line; TRACER_LANDING_INFEASIBLE step=... says the environment failed
+                          (a pull, dnf, Homebrew, uv, a vendor download, TLS) and exits 2.
+                          Removes the container (and its image unless --keep-image) on every exit.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -292,13 +306,17 @@ fi
 '
 }
 
-bootstrap_homebrew_and_uv() {
+bootstrap_homebrew() {
   # shellcheck disable=SC2016 # $() expands in the tester's shell
   exec_tester 'set -euo pipefail
 if [[ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
   NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 fi
 '
+}
+
+bootstrap_homebrew_and_uv() {
+  bootstrap_homebrew
   bootstrap_uv
   write_tester_path
 }
@@ -2660,6 +2678,141 @@ cmd_schedules() {
   return "$failed"
 }
 
+# --- audit-landing target (24.3-09, SPEC R5): orchestrator only ------------------------------------
+# A disposable Fedora container, bootstrapped like `bootstrap` (Homebrew, uv), in which the installer's
+# own code (tests/e2e_landing_driver.py) installs, tunes, updates and removes the landing set's tools.
+# It passes no token and mounts no host directory; the tester's login PATH holds Homebrew and
+# ~/.local/bin only, so the driver reaches vendor binaries through their receipts.
+LANDING_CONTAINER_NAME=tools-installer-e2e-landing
+LANDING_IMAGE="$IMAGE_FEDORA"
+LANDING_KEEP_IMAGE=0
+# The checks run into the environment, not the product: a pull, dnf, Homebrew, uv, a vendor
+# download, TLS or DNS.
+LANDING_ENV_RE='Could not resolve host|Temporary failure in name resolution|Network is unreachable|Connection (timed out|refused|reset)|curl: \([0-9]+\)|SSL|TLS|certificate|Error: (initializing source|pulling|reading blob)|[Ff]ailed to download|[Ff]ailed to synchronize'
+LANDING_TRANSCRIPT=
+
+# $1 names the step, $2 is the failing step's output: the first line naming an error is reported,
+# else the last non-empty one.
+landing_infeasible() {
+  local detail
+  detail="$(printf '%s\n' "$2" | awk '/rror|nknown|ailed|esolve/ && e == "" { e = $0 } NF { l = $0 } END { print (e != "" ? e : l) }')"
+  printf 'TRACER_LANDING_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
+}
+
+# Whether $1, a step's output, reads as one of the environment's failures.
+landing_environmental() {
+  printf '%s\n' "$1" | grep -Eq "$LANDING_ENV_RE"
+}
+
+# EXIT trap: the container and, unless --keep-image, the image go on every outcome; both removals
+# tolerate absence (a base image another container still uses stays).
+landing_teardown() {
+  ct rm -f "$LANDING_CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [[ "$LANDING_KEEP_IMAGE" -ne 1 ]]; then
+    ct rmi "$LANDING_IMAGE" >/dev/null 2>&1 || true
+  fi
+  if ct ps -a --filter "name=^${LANDING_CONTAINER_NAME}$" --format '{{.Names}}' 2>/dev/null \
+    | grep -qx "$LANDING_CONTAINER_NAME"; then
+    printf 'TRACER_LANDING_TEARDOWN_LEFT container=%s\n' "$LANDING_CONTAINER_NAME"
+    return 0
+  fi
+  printf 'TRACER_LANDING_TEARDOWN_OK\n'
+}
+
+# $1 names the stage, the rest is the stage command. errexit is switched off around the capture and
+# on again inside it, so a failing command in the middle of a stage stops that stage. The box could
+# not be built, an environment fact: the run ends with exit 2 and the orchestrator reruns it.
+landing_stage() {
+  local stage="$1" out rc
+  shift
+  set +e
+  out="$(set -e; "$@" 2>&1)"
+  rc=$?
+  set -e
+  [[ -z "$out" ]] || printf '%s\n' "$out" >>"$LANDING_TRANSCRIPT"
+  if [[ "$rc" -ne 0 ]]; then
+    landing_infeasible "$stage" "$out" | tee -a "$LANDING_TRANSCRIPT"
+    exit 2
+  fi
+}
+
+landing_bootstrap() {
+  landing_stage start start_container replace
+  landing_stage prereqs install_root_prereqs
+  landing_stage tester create_tester
+  landing_stage workspace copy_workspace
+  landing_stage homebrew bootstrap_homebrew
+  landing_stage uv bootstrap_uv
+  landing_stage path write_tester_path
+  landing_stage sync sync_workspace
+}
+
+# The in-container driver over the installer's own code: `landing_driver install opencode`. The
+# tester's login shell supplies its PATH (Homebrew, ~/.local/bin).
+landing_driver() {
+  local args workspace
+  printf -v args '%q ' "$@"
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  exec_tester "cd ${workspace}
+uv run --isolated --no-dev python -m tests.e2e_landing_driver ${args}"
+}
+
+# $1 names the step, the rest is the driver command: its output goes to the console and the
+# transcript. A non-zero exit or a TRACER_*_FAILED / _UNPROVEN line fails the step (return 1); an
+# environmental failure ends the run with exit 2 instead.
+landing_step() {
+  local step="$1" out rc
+  shift
+  set +e
+  out="$(landing_driver "$@" 2>&1)"
+  rc=$?
+  set -e
+  printf '%s\n' "$out" | tee -a "$LANDING_TRANSCRIPT"
+  if [[ "$rc" -ne 0 ]] && landing_environmental "$out"; then
+    landing_infeasible "$step" "$out" | tee -a "$LANDING_TRANSCRIPT"
+    exit 2
+  fi
+  [[ "$rc" -eq 0 ]] || return 1
+  ! printf '%s\n' "$out" | grep -Eq '_(FAILED|UNPROVEN)( |$)'
+}
+
+cmd_audit_landing() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown audit-landing option: $1" ;;
+    esac
+    shift
+  done
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-landing"
+  LANDING_TRANSCRIPT="$PHASE_DIR/landing-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_bootstrap
+  # Every verdict is collected so one transcript shows them all. The order is the edge cases':
+  # the update under a running service leaves it running for the removal that follows, the idle
+  # removal needs a fresh install, and the v1 steps need the box without OpenCode.
+  landing_step install-opencode install opencode || failed=1
+  landing_step latest-opencode latest opencode || failed=1
+  landing_step update-while-running update opencode --with-service || failed=1
+  landing_step remove-with-service remove opencode --with-service || failed=1
+  landing_step reinstall-opencode install opencode || failed=1
+  landing_step remove-idle remove opencode || failed=1
+  landing_step seed-v1 seed-v1 opencode || failed=1
+  landing_step remove-v1 remove-v1 opencode || failed=1
+  landing_step reseed-v1 seed-v1 opencode || failed=1
+  landing_step update-v1 update opencode || failed=1
+  landing_step codegraph-copilot-and-pi codegraph copilot-and-pi || failed=1
+  landing_step codegraph-unregister codegraph unregister || failed=1
+  landing_step codegraph-ide-only codegraph ide-only || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -2690,6 +2843,7 @@ main() {
     all) cmd_all "$@" ;;
     nested) cmd_nested "$@" ;;
     schedules) cmd_schedules "$@" ;;
+    audit-landing) cmd_audit_landing "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
