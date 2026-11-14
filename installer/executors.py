@@ -486,8 +486,8 @@ def _node(method: Method, runner: Runner) -> None:
                 "then run this again"
             )
         raise ExecutorError(
-            "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
-            "is the only pnpm on PATH, re-apply the package-manager policy)"
+            "pnpm not found on PATH — install pnpm (a leftover guard shim named in the launch "
+            "warning does not count; see docs/TROUBLESHOOTING.md)"
         )
     # A space-separated list would give each package its own isolated node_modules
     # and lockfile (pnpm Global Packages documentation) — which is the failure

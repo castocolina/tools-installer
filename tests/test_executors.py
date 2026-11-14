@@ -1236,7 +1236,7 @@ def test_method_smoke_argv_defaults_to_version() -> None:
 _NODE_METHOD = Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"})
 
 
-def test_node_reports_an_absent_pnpm_with_todays_message(
+def test_node_reports_an_absent_pnpm_and_points_at_the_troubleshooting_guide(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -1245,8 +1245,8 @@ def test_node_reports_an_absent_pnpm_with_todays_message(
     with pytest.raises(ExecutorError) as exc_info:
         execute(_NODE_METHOD, runner)
     assert str(exc_info.value) == (
-        "pnpm not found on PATH — install pnpm (or, if this installer's pnpm wrapper "
-        "is the only pnpm on PATH, re-apply the package-manager policy)"
+        "pnpm not found on PATH — install pnpm (a leftover guard shim named in the launch "
+        "warning does not count; see docs/TROUBLESHOOTING.md)"
     )
     assert calls == []
 
