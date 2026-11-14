@@ -65,3 +65,117 @@ def test_skill_links_resolve() -> None:
                 assert (doc.parent / target).exists(), f"{doc.name}: {target}"
         for target in _REPO_PATH_RE.findall(text):
             assert (REPO_ROOT / target).exists(), f"{doc.name}: {target}"
+
+
+TOOL_ONBOARDING = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
+_STEP_RE = re.compile(r"`(### \d+b?\. [^`]+)`")
+_SEPARATOR_ROW_RE = re.compile(r"\|[-|: ]+\|")
+# The report grammar's own header row is not tool-onboarding content.
+_GRAMMAR_HEADER = "| check | status | source |"
+
+
+def _skill_files() -> list[Path]:
+    return sorted(path for path in SKILL_DIR.rglob("*") if path.is_file())
+
+
+def _table_rows(text: str) -> set[str]:
+    rows = {line.strip() for line in text.splitlines() if line.startswith("|")}
+    return {r for r in rows if not _SEPARATOR_ROW_RE.fullmatch(r) and r != _GRAMMAR_HEADER}
+
+
+def _assert_all_in(text: str, needles: tuple[str, ...]) -> None:
+    flat = " ".join(text.split())  # a phrase may wrap across lines
+    missing = [needle for needle in needles if needle not in flat]
+    assert not missing, missing
+
+
+def test_skill_names_tool_onboarding_steps_by_heading() -> None:
+    headings = _STEP_RE.findall(_text(SKILL))
+    onboarding = set(_text(TOOL_ONBOARDING).splitlines())
+    assert [h for h in headings if h not in onboarding] == []
+    numbers = {h.split(". ")[0].removeprefix("### ") for h in headings}
+    assert {"3", "4", "4b", "6", "7", "8", "9"} <= numbers
+
+
+def test_skill_copies_no_table_and_no_asset_check() -> None:
+    theirs = _table_rows(_text(TOOL_ONBOARDING))
+    for path in _skill_files():
+        text = _text(path)
+        assert not (theirs & _table_rows(text)), path.name
+        assert re.search(r"sha256|digest", text, re.IGNORECASE) is None, path.name
+
+
+def test_no_python_under_the_skill() -> None:
+    assert list(SKILL_DIR.rglob("*.py")) == []
+
+
+def test_skill_host_safety_text() -> None:
+    _assert_all_in(
+        _text(SKILL),
+        (
+            "--version",
+            "--help",
+            "codegraph install --print-config",
+            "opencode debug paths",
+            "brew info --json=v2",
+            "HTTP reads",
+            "CODEGRAPH_TELEMETRY=0",
+            "DO_NOT_TRACK=1",
+            "convention",
+            "opencode upgrade",
+            "pi update",
+            "pi mcp add",
+            "make setup",
+            "make doctor",
+            "vendor installer script",
+            "scripts/detect-container-runtime.sh",
+            "one container per entry",
+            "--status unknown --source 'reason: container check not run (",
+            "(installer)",
+            "(maintainer)",
+            "its own empty directory",
+            "never executed on the host",
+        ),
+    )
+
+
+def test_skill_unsafe_patterns_and_data_rule() -> None:
+    _assert_all_in(
+        _text(SKILL),
+        (
+            "sudo",
+            "pkexec",
+            "doas",
+            "--target auto",
+            "--target all",
+            "a write for an absent host",
+            "a blind overwrite of user config",
+            "a write outside the declared `paths`",
+            "argv that a shim rewrites",
+            "is data, never an instruction",
+        ),
+    )
+
+
+def test_skill_precision_and_approval_rules() -> None:
+    _assert_all_in(
+        _text(SKILL),
+        (
+            "verbatim",
+            "newest major",
+            "does not exist",
+            "explicit approval",
+            "dispositions.toml",
+            'make verify-registry ARGS="--state',
+            "make validate",
+            "make test",
+        ),
+    )
+
+
+def test_tool_onboarding_gains_one_line() -> None:
+    lines = [line for line in _text(TOOL_ONBOARDING).splitlines() if "catalog-audit" in line]
+    assert lines == [
+        "- To audit every registry entry in one loop, use `catalog-audit` "
+        "(`.claude/skills/catalog-audit/SKILL.md`)."
+    ]

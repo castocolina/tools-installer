@@ -5,6 +5,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARCHITECTURE = REPO_ROOT / ".claude" / "architecture.md"
 TOOL_ONBOARDING_SKILL = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
+CATALOG_AUDIT_SKILL = REPO_ROOT / ".claude" / "skills" / "catalog-audit" / "SKILL.md"
 
 _TRUNCATION_BANNER_FRAGMENTS = (
     "[Showing lines",
@@ -21,7 +22,9 @@ def _rule_document_paths() -> list[Path]:
         REPO_ROOT / ".claude" / "git-workflow.md",
         REPO_ROOT / ".claude" / "python-tooling.md",
         REPO_ROOT / ".claude" / "testing.md",
-        REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md",
+        TOOL_ONBOARDING_SKILL,
+        CATALOG_AUDIT_SKILL,
+        CATALOG_AUDIT_SKILL.parent / "references" / "report-template.md",
     ]
     paths.extend(sorted(REPO_ROOT.glob("docs/**/*.md")))
     return paths
