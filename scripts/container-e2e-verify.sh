@@ -2880,6 +2880,14 @@ cmd_bun_lifecycle() {
   landing_bootstrap
   # Every verdict is collected so one transcript shows them all.
   landing_step install-mmdc install-mmdc || failed=1
+  landing_step idempotent-mmdc idempotent-mmdc || failed=1
+  landing_step strict-loader strict-loader || failed=1
+  landing_step pi-owner pi-owner || failed=1
+  landing_step kept-peer kept-peer || failed=1
+  landing_step remove-both remove-both || failed=1
+  landing_step fallback fallback || failed=1
+  landing_step floor floor || failed=1
+  landing_step trust trust || failed=1
   return "$failed"
 }
 

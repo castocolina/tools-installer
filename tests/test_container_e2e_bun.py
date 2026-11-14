@@ -11,11 +11,13 @@ import shlex
 import shutil
 import subprocess
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
+from installer.enums import InstallStatus
+from installer.receipts import Receipt, ReceiptMethod
 from tests import e2e_bun_driver as driver
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -381,3 +383,313 @@ def test_bun_driver_refuses_outside_the_container(
     assert driver.main(["nothing"]) == 2
     assert driver.main([]) == 2
     assert "usage" in capsys.readouterr().err
+
+
+# --- Task 2: ownership, fallback, floor, removal and trust verdicts -------------------------------
+
+_MMDC = "@mermaid-js/mermaid-cli"
+
+
+def _receipt(kind: str, package: str | None) -> Receipt:
+    return Receipt(
+        tool="x",
+        at="2026-11-14T00:00:00Z",
+        method=ReceiptMethod(kind=kind, key="k"),
+        package=package,
+        artifacts=(),
+        smoke=None,
+        hooks={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("receipt", "detail"),
+    [
+        (_receipt("bun", "puppeteer"), None),
+        (None, "precondition: no bun receipt for puppeteer"),
+        (_receipt("node", "puppeteer"), "node"),
+        (_receipt("bun", "other"), "other"),
+        (_receipt("bun", None), "no package"),
+    ],
+)
+def test_receipt_detail(receipt: Receipt | None, detail: str | None) -> None:
+    found = driver.receipt_detail(receipt, "bun", "puppeteer")
+    if detail is None:
+        assert found is None
+    else:
+        assert found is not None
+        assert found.startswith("precondition: ")
+        assert detail in found
+
+
+def _tree(**ranges: object) -> dict[str, object]:
+    return {"dependencies": ranges}
+
+
+_PAIR = {_MMDC: "^11", "puppeteer": "^25"}
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "detail"),
+    [
+        (_tree(**_PAIR), _tree(**_PAIR), None),
+        (_tree(**_PAIR), _tree(**{_MMDC: "^11", "puppeteer": "^26"}), "range"),
+        (_tree(**_PAIR), _tree(puppeteer="^25"), _MMDC),
+        (
+            _tree(**_PAIR),
+            {**_tree(**_PAIR), "devDependencies": {"puppeteer": "^25"}},
+            "more than one",
+        ),
+        (None, _tree(**_PAIR), "manifest"),
+    ],
+)
+def test_idempotent_verdict(
+    before: Mapping[str, object] | None, after: Mapping[str, object], detail: str | None
+) -> None:
+    line = driver.idempotent_verdict(before, after)
+    if detail is None:
+        assert line == "TRACER_BUN_IDEMPOTENT_OK"
+    else:
+        assert line.startswith("TRACER_BUN_IDEMPOTENT_FAILED detail=")
+        assert detail in line
+
+
+@pytest.mark.parametrize(
+    ("owner", "current", "installed", "detail"),
+    [
+        ("bun", "1.5.2", "1.5.2", None),
+        ("node", "1.5.2", "1.5.2", "node"),
+        ("bun", "1.5.1", "1.5.2", "1.5.1"),
+        ("bun", None, "1.5.2", "no version"),
+        ("bun", "1.5.2", None, "installed package"),
+    ],
+)
+def test_pi_owner_verdict(
+    owner: str, current: str | None, installed: str | None, detail: str | None
+) -> None:
+    line = driver.pi_owner_verdict(owner, current, installed)
+    if detail is None:
+        assert line == "TRACER_BUN_PI_OWNER_OK version=1.5.2"
+    else:
+        assert line.startswith("TRACER_BUN_PI_OWNER_FAILED detail=")
+        assert detail in line
+
+
+_PNPM_ADD = ("/home/tester/.local/share/pnpm/bin/pnpm", "add", "-g", "--allow-build=puppeteer", "g")
+_BUN_ADD = ("/home/tester/.bun/bin/bun", "add", "-g", "x")
+
+
+@pytest.mark.parametrize(
+    ("hidden", "status", "kind", "argvs", "error", "detail"),
+    [
+        (True, InstallStatus.INSTALLED, "node", [_PNPM_ADD], None, None),
+        (False, InstallStatus.INSTALLED, "node", [_PNPM_ADD], None, "bun was not hidden"),
+        (True, InstallStatus.INSTALLED, "bun", [_PNPM_ADD], None, "bun"),
+        (True, InstallStatus.INSTALLED, "node", [], None, "no pnpm add"),
+        (True, InstallStatus.INSTALLED, "node", [("pnpm", "list", "-g")], None, "no pnpm add"),
+        (True, InstallStatus.INSTALLED, "node", [_PNPM_ADD, _BUN_ADD], None, "bun argv"),
+        (True, InstallStatus.FAILED, "node", [], "pnpm not found on PATH", "pnpm not found"),
+    ],
+)
+def test_fallback_verdict(
+    hidden: bool,
+    status: InstallStatus,
+    kind: str | None,
+    argvs: Sequence[Sequence[str]],
+    error: str | None,
+    detail: str | None,
+) -> None:
+    line = driver.fallback_verdict(hidden, status, kind, argvs, error)
+    if detail is None:
+        assert line == "TRACER_BUN_FALLBACK_OK"
+    else:
+        assert line.startswith("TRACER_BUN_FALLBACK_FAILED detail=")
+        assert detail in line
+
+
+@pytest.mark.parametrize(
+    ("on_path", "installed", "bun_listed", "pnpm_listed", "detail"),
+    [
+        (None, False, False, False, None),
+        ("/home/tester/.bun/bin/mmdc", False, False, False, "/home/tester/.bun/bin/mmdc"),
+        (None, True, False, False, "is_installed"),
+        (None, False, True, False, "bun lists"),
+        (None, False, False, True, "pnpm lists"),
+    ],
+)
+def test_absent_detail(
+    on_path: str | None, installed: bool, bun_listed: bool, pnpm_listed: bool, detail: str | None
+) -> None:
+    found = driver.absent_detail(on_path, installed, bun_listed, pnpm_listed)
+    if detail is None:
+        assert found is None
+    else:
+        assert found is not None
+        assert found.startswith("precondition: ")
+        assert detail in found
+
+
+_FLOOR_ERROR = "node 20.0.0 does not meet the required minimum 22.12.0. Upgrade node."
+_FLOOR_REASON = "needs Node >= 22.12.0; this system has 20.0.0"
+_FAILED = InstallStatus.FAILED
+
+
+@pytest.mark.parametrize(
+    ("status", "errors", "argvs", "reason", "detail"),
+    [
+        (_FAILED, [_FLOOR_ERROR], [], _FLOOR_REASON, None),
+        (InstallStatus.INSTALLED, [], [], _FLOOR_REASON, "FAILED"),
+        (_FAILED, ["something else"], [], _FLOOR_REASON, "floor message"),
+        (_FAILED, [_FLOOR_ERROR], [_BUN_ADD], _FLOOR_REASON, "bun add"),
+        (_FAILED, [_FLOOR_ERROR], [], None, "plan"),
+        (_FAILED, [_FLOOR_ERROR], [], "needs Node", "plan"),
+    ],
+)
+def test_floor_verdict(
+    status: InstallStatus,
+    errors: Sequence[str],
+    argvs: Sequence[Sequence[str]],
+    reason: str | None,
+    detail: str | None,
+) -> None:
+    line = driver.floor_verdict(status, errors, argvs, reason)
+    if detail is None:
+        assert line == "TRACER_BUN_FLOOR_OK"
+    else:
+        assert line.startswith("TRACER_BUN_FLOOR_FAILED detail=")
+        assert detail in line
+
+
+_KEPT = ("puppeteer", "bun kept puppeteer because another global package needs it")
+
+
+@pytest.mark.parametrize(
+    ("failed", "receipt", "detail"),
+    [
+        ([_KEPT], True, None),
+        ([], True, "kept"),
+        ([("puppeteer", "bun not found on PATH")], True, "kept"),
+        ([("mmdc", _KEPT[1])], True, "kept"),
+        ([_KEPT], False, "receipt"),
+    ],
+)
+def test_kept_peer_verdict(
+    failed: Sequence[tuple[str, str]], receipt: bool, detail: str | None
+) -> None:
+    line = driver.kept_peer_verdict(failed, receipt)
+    if detail is None:
+        assert line == "TRACER_BUN_KEPT_PEER_OK"
+    else:
+        assert line.startswith("TRACER_BUN_KEPT_PEER_FAILED detail=")
+        assert detail in line
+
+
+@pytest.mark.parametrize(
+    ("removed", "failed", "in_tree", "detail"),
+    [
+        (["mmdc", "puppeteer"], [], [], None),
+        (["mmdc"], [("puppeteer", "bun kept")], [], "puppeteer"),
+        (["mmdc", "puppeteer"], [], ["puppeteer"], "node_modules"),
+        ([], [], [], "mmdc"),
+    ],
+)
+def test_remove_verdict(
+    removed: Sequence[str],
+    failed: Sequence[tuple[str, str]],
+    in_tree: Sequence[str],
+    detail: str | None,
+) -> None:
+    line = driver.remove_verdict(removed, failed, in_tree)
+    if detail is None:
+        assert line == "TRACER_BUN_REMOVE_OK"
+    else:
+        assert line.startswith("TRACER_BUN_REMOVE_FAILED detail=")
+        assert detail in line
+
+
+_TRUST_ERROR = "puppeteer could not start a browser; run `bun add -g --trust puppeteer@^25`, then"
+_PNPM_AS_FALLBACK = ("/h/pnpm", "add", "-g", "x")
+
+
+@pytest.mark.parametrize(
+    ("status", "kind", "error", "argvs", "trusted", "detail"),
+    [
+        (_FAILED, "bun", _TRUST_ERROR, [_BUN_ADD], ["esbuild"], None),
+        (InstallStatus.INSTALLED, "bun", None, [], ["esbuild"], "FAILED"),
+        (_FAILED, "node", _TRUST_ERROR, [], ["esbuild"], "kind"),
+        (_FAILED, "bun", "some other error", [], ["esbuild"], "trust"),
+        (_FAILED, "bun", _TRUST_ERROR, [_PNPM_AS_FALLBACK], ["esbuild"], "pnpm"),
+        (_FAILED, "bun", _TRUST_ERROR, [], ["esbuild", "puppeteer"], "trustedDependencies"),
+        (_FAILED, "bun", _TRUST_ERROR, [], None, "trustedDependencies"),
+    ],
+)
+def test_trust_verdict(
+    status: InstallStatus,
+    kind: str | None,
+    error: str | None,
+    argvs: Sequence[Sequence[str]],
+    trusted: Sequence[str] | None,
+    detail: str | None,
+) -> None:
+    line = driver.trust_verdict(status, kind, error, argvs, trusted)
+    if detail is None:
+        assert line == "TRACER_BUN_TRUST_OK"
+    else:
+        assert line.startswith("TRACER_BUN_TRUST_FAILED detail=")
+        assert detail in line
+
+
+_ANCESTOR = "/home/tester/e2e/node_modules/puppeteer"
+_ANCESTOR_STDERR = f"puppeteer resolved to {_ANCESTOR}/index.js, outside /home/tester/e2e/t/x"
+
+
+@pytest.mark.parametrize(
+    ("own", "ancestor", "stderr", "unloadable", "plain", "detail"),
+    [
+        (0, 1, _ANCESTOR_STDERR, 1, 0, None),
+        (1, 1, _ANCESTOR_STDERR, 1, 0, "own tree"),
+        (0, 0, "", 1, 0, "ancestor"),
+        (0, 1, "something else", 1, 0, "name the ancestor"),
+        (0, 1, _ANCESTOR_STDERR, 0, 0, "unloadable"),
+        (0, 1, _ANCESTOR_STDERR, 1, 1, "manager-less"),
+    ],
+)
+def test_strict_loader_verdict(
+    own: int, ancestor: int, stderr: str, unloadable: int, plain: int, detail: str | None
+) -> None:
+    line = driver.strict_loader_verdict(
+        own, ancestor, stderr, unloadable, plain, ancestor_path=_ANCESTOR
+    )
+    if detail is None:
+        assert line == "TRACER_BUN_STRICT_LOADER_OK"
+    else:
+        assert line.startswith("TRACER_BUN_STRICT_LOADER_FAILED detail=")
+        assert detail in line
+
+
+# --- the step order -----------------------------------------------------------------------------
+
+_STEP = re.compile(r"^  landing_step (\S+) (\S+) \|\| failed=1$", re.MULTILINE)
+_EXPECTED_STEPS = (
+    "install-mmdc",
+    "idempotent-mmdc",
+    "strict-loader",
+    "pi-owner",
+    "kept-peer",
+    "remove-both",
+    "fallback",
+    "floor",
+    "trust",
+)
+
+
+def test_bun_lifecycle_runs_every_step_in_order() -> None:
+    body = _function("cmd_bun_lifecycle")
+    steps = _STEP.findall(body)
+    assert tuple(verb for _name, verb in steps) == _EXPECTED_STEPS
+    assert [name for name, _verb in steps] == list(_EXPECTED_STEPS)
+    assert body.index("landing_bootstrap") < body.index("landing_step")
+    for verb in _EXPECTED_STEPS:
+        assert driver.accepts([verb]), verb
+    assert not driver.accepts(["install-mmdc", "extra"])
+    assert not driver.accepts([])
