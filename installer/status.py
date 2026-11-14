@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-import installer.guards
+import installer.legacy_guard
 import installer.locations
 from installer.download import DOWNLOAD_KINDS, artifact_paths
 from installer.model import Tool
@@ -84,8 +84,10 @@ def _default_app_roots() -> tuple[Path, ...]:
 
 
 def _is_installer_shim(tool: Tool, path: Path) -> bool:
-    # A ban or redirect shim blocks or forwards the command; it is not the tool (review M9).
-    return tool.cmd in installer.guards.guarded_names() and installer.guards.is_our_shim(path)
+    # A leftover guard shim blocks or forwards the command; it is not the tool (review M9).
+    return tool.cmd in installer.legacy_guard.GUARD_NAMES and installer.legacy_guard.is_our_shim(
+        path
+    )
 
 
 def present_bin_dir(tool: Tool) -> Path | None:
@@ -145,10 +147,10 @@ def is_installed(
     include. `which` and the implicit bin dir are both resolved inside the
     body so runtime patches (tests, the service's managed bin dir) win.
 
-    All three file checks and the PATH hit skip this installer's own ban and
-    redirect shims (review M9, G13): a shim on PATH is not the tool, so the
+    All three file checks and the PATH hit skip a leftover guard shim
+    (review M9, G13): a shim on PATH is not the tool, so the
     hit falls through to the declared-bin_dir, implicit-bin and app checks.
-    The default PATH hit is first looked through this installer's shim (WR2-01,
+    The default PATH hit is first looked through a leftover guard shim (WR2-01,
     D-13): the real binary behind the managed bin dir is presence, and only a
     shim with nothing real behind it falls through. A caller that passes
     `which` already looks through, as the refresh service's does.
@@ -157,16 +159,16 @@ def is_installed(
     implicit = (
         default_bin_dir
         if default_bin_dir is not None
-        # Module-attribute read (the guards.py precedent): the conftest
+        # Module-attribute read (the legacy_guard.py precedent): the conftest
         # sandbox patches locations.bin_dir, so no test ever reads the
         # developer's real ~/.local/bin (checker W2).
         else installer.locations.bin_dir(None)
     )
     resolved = lookup(tool.cmd)
     if which is None and resolved is not None:
-        # On the default lookup, the real binary behind this installer's own
-        # shim in the managed bin dir is the presence (WR2-01, D-13).
-        resolved = installer.guards.look_through_shim(
+        # On the default lookup, the real binary behind a leftover guard shim
+        # in the managed bin dir is the presence (WR2-01, D-13).
+        resolved = installer.legacy_guard.look_through_shim(
             resolved, tool.cmd, shim_dir=implicit, path_value=os.environ.get("PATH", "")
         )
     if (

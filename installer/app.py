@@ -29,11 +29,11 @@ from installer.guards import (
     install_global_redirect_shims,
     install_redirect_shims,
     install_shims,
-    real_pnpm,
     remove_ban_aliases,
     remove_shims,
     write_ban_aliases,
 )
+from installer.legacy_guard import real_pnpm
 from installer.locations import display_path, path_scan_rc_paths
 from installer.model import Tool
 from installer.ownership import listed_name, manager_listing
@@ -895,7 +895,7 @@ def remove_tool(
         if argv:
             command = argv
             if argv[0] == "pnpm":
-                # The PATH shim may be this installer's own wrapper (see guards.real_pnpm).
+                # The PATH shim may be this installer's own wrapper (see legacy_guard.real_pnpm).
                 resolved = real_pnpm()
                 if resolved is None:
                     return ToolRemoval(tool.id, False, "pnpm not found on PATH")

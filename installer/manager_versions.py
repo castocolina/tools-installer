@@ -24,7 +24,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from installer.guards import real_pnpm
+from installer.legacy_guard import real_pnpm
 from installer.run import CommandError, run_query
 
 _BREW_ENV = {"HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_NO_ENV_HINTS": "1"}

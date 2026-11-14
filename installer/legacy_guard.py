@@ -14,8 +14,9 @@ launch's first read warns if the problem persists.
 """
 
 import os
+import shutil
 import stat
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import installer.locations
@@ -31,6 +32,7 @@ _SHIM_MAX_BYTES = 8192
 _RC_MAX_BYTES = 1 << 20  # the cap installer.tweaks reads an rc file with
 
 _Line = tuple[str, str]
+PathLookup = Callable[[str, str], str | None]
 
 
 def _is_leftover(data: bytes) -> bool:
@@ -167,3 +169,96 @@ def remove_guard_shims(bin_dir: Path) -> tuple[_Line, ...]:
     """Remove each sentinel-marked guard shim in bin_dir; one line per removal or failure."""
     lines = (_remove_guard_shim(bin_dir / name) for name in GUARD_NAMES)
     return tuple(line for line in lines if line is not None)
+
+
+def is_our_shim(path: Path) -> bool:
+    """True only for a regular file that `_is_leftover` recognizes as a retired guard shim.
+
+    Never blocks on a FIFO: a FIFO, a directory, an oversize file, a missing path
+    and an unreadable one are all not a leftover.
+    """
+    try:
+        data = read_capped(path, _SHIM_MAX_BYTES, follow_symlinks=True)
+    except OSError:
+        return False
+    if data is None:
+        return False
+    return _is_leftover(data)
+
+
+def which_in_path(name: str, path: str) -> str | None:
+    return shutil.which(name, path=path)
+
+
+def real_binary(
+    name: str,
+    *,
+    shim_dir: Path,
+    path_value: str,
+    lookup: PathLookup = which_in_path,
+) -> str | None:
+    """Resolve `name` from PATH, never a leftover guard shim.
+
+    A sentinel-carrying result is refused. The sentinel, not the directory, marks a
+    leftover: the shim dir IS the managed bin dir (~/.local/bin), and a pnpm installed
+    there (`npm i -g pnpm` with prefix=~/.local, or `corepack enable --install-directory
+    ~/.local/bin`) must stay resolvable. Excluding the whole directory made those setups
+    report "pnpm not found" while `pnpm --version` worked fine.
+
+    The directory is dropped only for the retry, once a leftover has actually won the
+    lookup. The retry drops every spelling of the managed dir. An entry that cannot be
+    resolved (a symlink loop) is kept for the lookup to skip instead of raising.
+    """
+    found = lookup(name, path_value)
+    if found is None or is_our_shim(Path(found)):
+        managed = Path(os.path.realpath(shim_dir))
+        rest = [
+            entry
+            for entry in path_value.split(os.pathsep)
+            if entry and Path(os.path.realpath(entry)) != managed
+        ]
+        found = lookup(name, os.pathsep.join(rest))
+    if found is None or is_our_shim(Path(found)):
+        return None
+    return found
+
+
+def look_through_shim(
+    found: str | None,
+    name: str,
+    *,
+    shim_dir: Path,
+    path_value: str,
+    lookup: PathLookup = which_in_path,
+) -> str | None:
+    """The binary the refresh pass attributes: behind a leftover guard shim in the
+    managed bin dir, the real binary it forwarded to; any other hit as-is (D-13). The
+    managed dir is matched by resolved path because PATH may spell it through a symlinked
+    home or with a trailing slash (IN3-02), while the returned hit keeps PATH's own
+    spelling.
+    """
+    managed_parent = Path(os.path.realpath(shim_dir))
+    found_parent = Path(os.path.realpath(Path(found).parent)) if found is not None else None
+    if found is not None and found_parent == managed_parent and is_our_shim(Path(found)):
+        return real_binary(name, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
+    return found
+
+
+def real_pnpm(
+    *,
+    shim_dir: Path | None = None,
+    path_value: str | None = None,
+    lookup: PathLookup = which_in_path,
+) -> str | None:
+    """Resolve real pnpm, never a leftover wrapper.
+
+    installer/run.py::run_command is subprocess.run(cmd), which resolves a bare program
+    name through the live PATH, so while a leftover pnpm wrapper sits in the managed bin
+    dir every internal invocation must carry an absolute path or it will run the wrapper
+    instead of pnpm.
+    """
+    if shim_dir is None:
+        shim_dir = installer.locations.bin_dir(None)
+    if path_value is None:
+        path_value = os.environ.get("PATH", "")
+    return real_binary("pnpm", shim_dir=shim_dir, path_value=path_value, lookup=lookup)

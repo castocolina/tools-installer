@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from installer import guards
-from installer.guards import REDIRECT_SENTINEL, SHIM_SENTINEL
+from installer import legacy_guard
+from installer.legacy_guard import REDIRECT_SENTINEL, SHIM_SENTINEL
 from installer.model import Method, Tool, load_tools
 from installer.status import (
     MACOS_STUBS,
@@ -775,7 +775,7 @@ def test_installer_shim_is_never_presence(
     def refuse(path: Path) -> bool:
         raise AssertionError(f"shim check opened {path} for a name this installer never shims")
 
-    monkeypatch.setattr(guards, "is_our_shim", refuse)
+    monkeypatch.setattr(legacy_guard, "is_our_shim", refuse)
     (bin_dir / "yq").write_text(f"#!/bin/sh\n{sentinel}\n")
     assert is_installed(tool("yq"), which=_which_none, default_bin_dir=bin_dir) is True
 
@@ -809,7 +809,7 @@ def test_installer_shim_on_path_is_never_presence(
     def refuse(path: Path) -> bool:
         raise AssertionError(f"shim check opened {path} for a name this installer never shims")
 
-    monkeypatch.setattr(guards, "is_our_shim", refuse)
+    monkeypatch.setattr(legacy_guard, "is_our_shim", refuse)
     (bin_dir / "yq").write_text(f"#!/bin/sh\n{sentinel}\n")
     assert is_installed(tool("yq"), which=which, default_bin_dir=bin_dir) is True
 

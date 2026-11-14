@@ -10,7 +10,7 @@ types; installer/executors.py::_node installs through pnpm by design, so every
 kind="node" registry tool is still a pnpm-managed global and still exposed.
 
 Both this module and _node invoke pnpm by an absolute path resolved with
-installer/guards.py::real_pnpm, because installer/run.py::run_command is
+installer/legacy_guard.py::real_pnpm, because installer/run.py::run_command is
 subprocess.run, which resolves a bare program name through the live PATH —
 and after plan 04-03 the first pnpm on that PATH is this installer's own
 argv-conditional wrapper, which would turn add -g into volta install. Naming
@@ -60,7 +60,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from installer.executors import run_smoke_check
-from installer.guards import real_pnpm
+from installer.legacy_guard import real_pnpm
 from installer.model import Method, Tool
 from installer.run import CommandError, OutputRunner, Runner, run_captured, run_output
 from installer.versions import (

@@ -28,14 +28,22 @@ https://docs.astral.sh/uv/pip/compatibility/ and
 
 import os
 import shlex
-import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import installer.locations
-from installer.atomic import atomic_write_text, read_capped
-from installer.legacy_guard import BAN_BEGIN, BAN_END, REDIRECT_SENTINEL, SHIM_SENTINEL
+from installer.atomic import atomic_write_text
+from installer.legacy_guard import (
+    BAN_BEGIN,
+    BAN_END,
+    REDIRECT_SENTINEL,
+    SHIM_SENTINEL,
+    PathLookup,
+    is_our_shim,
+    real_binary,
+    which_in_path,
+)
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
@@ -114,7 +122,6 @@ GLOBAL_REDIRECTED: dict[str, GlobalRedirect] = {
     ),
 }
 EXIT_CODE = 127  # non-zero so the caller sees a hard failure
-PathLookup = Callable[[str, str], str | None]
 
 
 def ban_body(name: str) -> str:
@@ -334,111 +341,6 @@ def global_redirect_shim_script(name: str, *, volta_path: str, passthrough_path:
         "fi\n"
         f"{fallback}"
     )
-
-
-# Every shim this module renders is far below this; a 150 MB AppImage on PATH
-# must never be read to answer "is this our shim".
-_SHIM_MAX_BYTES = 8192
-
-
-def is_our_shim(path: Path) -> bool:
-    """True only for a regular file of at most `_SHIM_MAX_BYTES` carrying our sentinel.
-
-    Never blocks on a FIFO: a FIFO, a directory, an oversize file, a missing path
-    and an unreadable one are all not our shim.
-    """
-    try:
-        data = read_capped(path, _SHIM_MAX_BYTES, follow_symlinks=True)
-    except OSError:
-        return False
-    if data is None:
-        return False
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    return SHIM_SENTINEL in text or REDIRECT_SENTINEL in text
-
-
-def which_in_path(name: str, path: str) -> str | None:
-    return shutil.which(name, path=path)
-
-
-def real_binary(
-    name: str,
-    *,
-    shim_dir: Path,
-    path_value: str,
-    lookup: PathLookup = which_in_path,
-) -> str | None:
-    """Resolve `name` from PATH, never the managed shim.
-
-    Re-resolving the target through the live PATH is how a shim finds itself
-    (04-RESEARCH Pitfall 3), so a sentinel-carrying result is refused. The
-    sentinel — not the directory — is the guard: the shim dir IS the managed bin
-    dir (~/.local/bin), and a pnpm installed there (`npm i -g pnpm` with
-    prefix=~/.local, or `corepack enable --install-directory ~/.local/bin`) must
-    stay resolvable. Excluding the whole directory made those setups report
-    "pnpm not found" while `pnpm --version` worked fine.
-
-    The directory is dropped only for the retry, once our own shim has actually
-    won the lookup. The retry drops every spelling of the managed dir. An
-    entry that cannot be resolved (a symlink loop) is kept for the lookup to
-    skip instead of raising.
-    """
-    found = lookup(name, path_value)
-    if found is None or is_our_shim(Path(found)):
-        managed = Path(os.path.realpath(shim_dir))
-        rest = [
-            entry
-            for entry in path_value.split(os.pathsep)
-            if entry and Path(os.path.realpath(entry)) != managed
-        ]
-        found = lookup(name, os.pathsep.join(rest))
-    if found is None or is_our_shim(Path(found)):
-        return None
-    return found
-
-
-def look_through_shim(
-    found: str | None,
-    name: str,
-    *,
-    shim_dir: Path,
-    path_value: str,
-    lookup: PathLookup = which_in_path,
-) -> str | None:
-    """The binary the refresh pass attributes: behind this installer's own shim
-    in the managed bin dir, the real binary it forwards to; any other hit as-is
-    (D-13). The managed dir is matched by resolved path because PATH may spell
-    it through a symlinked home or with a trailing slash (IN3-02), while the
-    returned hit keeps PATH's own spelling.
-    """
-    managed_parent = Path(os.path.realpath(shim_dir))
-    found_parent = Path(os.path.realpath(Path(found).parent)) if found is not None else None
-    if found is not None and found_parent == managed_parent and is_our_shim(Path(found)):
-        return real_binary(name, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
-    return found
-
-
-def real_pnpm(
-    *,
-    shim_dir: Path | None = None,
-    path_value: str | None = None,
-    lookup: PathLookup = which_in_path,
-) -> str | None:
-    """Resolve real pnpm, never this installer's wrapper.
-
-    installer/run.py::run_command is subprocess.run(cmd), which resolves a
-    bare program name through the live PATH, so once this installer owns a
-    pnpm entry in the managed bin dir every internal invocation must carry
-    an absolute path or it will call our own wrapper instead of pnpm.
-    """
-    if shim_dir is None:
-        shim_dir = installer.locations.bin_dir(None)
-    if path_value is None:
-        path_value = os.environ.get("PATH", "")
-    return real_binary("pnpm", shim_dir=shim_dir, path_value=path_value, lookup=lookup)
 
 
 def shell_path(

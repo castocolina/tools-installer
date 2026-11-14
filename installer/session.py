@@ -18,7 +18,7 @@ from installer.agent_settings import (
 from installer.deps import Blocked, resolve_dependencies
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus, Priority
-from installer.guards import real_binary
+from installer.legacy_guard import real_binary
 from installer.locations import bin_dir, display_path, prepend_path
 from installer.model import ConfigStep, ConfigStepKind, Tool
 from installer.ownership import (

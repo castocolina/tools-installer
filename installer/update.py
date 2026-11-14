@@ -88,8 +88,8 @@ from installer import ownership as ownership_mod
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
-from installer.guards import real_pnpm
 from installer.host_setup import pnpm_add_command
+from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, bin_dir
 from installer.model import Method, Tool
 from installer.ownership import (

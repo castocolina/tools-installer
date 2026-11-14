@@ -59,8 +59,8 @@ from installer import agent_settings, omz, receipts
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
-from installer.guards import look_through_shim, real_pnpm
 from installer.install_ownership import ProbeRunner, native_index
+from installer.legacy_guard import look_through_shim, real_pnpm
 from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import ConfigStep, Method, Tool, method_package
 from installer.ownership import (

@@ -14,8 +14,9 @@ from pathlib import Path
 from shutil import which
 from typing import cast
 
-from installer.guards import real_pnpm, shell_path
+from installer.guards import shell_path
 from installer.host_setup import HOST_SETUPS
+from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, display_path
 from installer.model import Method
 from installer.run import CommandError, Runner, run_output, run_output_with_stderr
