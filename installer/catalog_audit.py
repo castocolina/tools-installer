@@ -1173,14 +1173,24 @@ class Finding:
         return _key(self.entry, self.check, self.cite)
 
 
-def _identity_problems(row: Mapping[str, object], ids: Sequence[str], label: str) -> list[str]:
-    """Problems with a row's entry, check and cite (the key shared by both toml files)."""
+def _identity_problems(
+    row: Mapping[str, object], ids: Sequence[str] | None, label: str
+) -> list[str]:
+    """Problems with a row's entry, check and cite (the key shared by both toml files).
+
+    `ids` is the registry on add; None on read, where an entry the registry no longer has
+    stays as an orphan row (an approved rename must not block `summarize`).
+    """
     entry, check, cite = row.get("entry"), row.get("check"), row.get("cite")
     problems: list[str] = []
     if check not in _ALL_CHECKS:
         problems.append(f"{label}: check must be one of {', '.join(_ALL_CHECKS)}")
     owners = OWNERS if check == SCRIPT else ()
-    if not isinstance(entry, str) or entry not in (*ids, *owners):
+    if not isinstance(entry, str) or not entry:
+        problems.append(f"{label}: entry {entry!r} is not a registry id")
+    elif entry in OWNERS and check != SCRIPT:
+        problems.append(f"{label}: entry {entry!r} is a script owner, for a script row only")
+    elif ids is not None and entry not in (*ids, *owners):
         hint = ", or (installer)/(maintainer) for a script row" if check == SCRIPT else ""
         problems.append(f"{label}: entry {entry!r} is not a registry id{hint}")
     if check == SCRIPT:
@@ -1201,7 +1211,7 @@ def _cited(source: str) -> bool:
 
 
 def _finding_problems(
-    row: Mapping[str, object], ids: Sequence[str], home: Path, label: str
+    row: Mapping[str, object], ids: Sequence[str] | None, home: Path, label: str
 ) -> list[str]:
     problems = _identity_problems(row, ids, label)
     problems += [f"{label}: unknown field {k!r}" for k in sorted(set(row) - _FINDING_FIELDS)]
@@ -1240,23 +1250,23 @@ def _load_table(path: Path, table: str) -> tuple[list[dict[str, object]], list[s
     return cast(list[dict[str, object]], rows), problems
 
 
-def read_findings(run: Path, ids: Sequence[str], home: Path) -> list[Finding]:
+def read_findings(run: Path, home: Path) -> list[Finding]:
     """The validated `findings.toml` rows in file order; any problem refuses the file."""
     rows, problems = _load_table(run / _FINDINGS, "finding")
     for number, row in enumerate(rows, 1):
-        problems += _finding_problems(row, ids, home, f"{_FINDINGS} finding #{number}")
+        problems += _finding_problems(row, None, home, f"{_FINDINGS} finding #{number}")
     if problems:
         raise ReportRefused(problems)
     return [Finding(**{k: str(v) for k, v in row.items()}) for row in rows]
 
 
-def read_dispositions(run: Path, ids: Sequence[str]) -> dict[Key, str]:
+def read_dispositions(run: Path) -> dict[Key, str]:
     """The validated `dispositions.toml` mapping from a drift key to its disposition."""
     rows, problems = _load_table(run / _DISPOSITIONS, "drift")
     found: dict[Key, str] = {}
     for number, row in enumerate(rows, 1):
         label = f"{_DISPOSITIONS} drift #{number}"
-        problems += _identity_problems(row, ids, label)
+        problems += _identity_problems(row, None, label)
         problems += [
             f"{label}: unknown field {k!r}" for k in sorted(set(row) - _DISPOSITION_FIELDS)
         ]
@@ -1289,7 +1299,7 @@ def _findings_toml(rows: Sequence[Finding]) -> str:
 def add_finding(run: Path, tools: Sequence[Tool], home: Path, row: Mapping[str, str]) -> Path:
     """Validate one late finding and append it to the run's `findings.toml` (rewritten whole)."""
     ids = [tool.id for tool in tools]
-    existing = read_findings(run, ids, home)
+    existing = read_findings(run, home)
     problems = _finding_problems(row, ids, home, "finding")
     if problems:
         raise ReportRefused(problems)
@@ -1367,8 +1377,8 @@ def _report_checks(sections: Mapping[str, list[str]]) -> list[tuple[str, str, st
 
 def _model(tools: Sequence[Tool], run: Path, home: Path) -> _Model:
     ids = [tool.id for tool in tools]
-    dispositions = read_dispositions(run, ids)
-    findings = read_findings(run, ids, home)
+    dispositions = read_dispositions(run)
+    findings = read_findings(run, home)
     reports = {
         tool.id: _parse_report(run / f"{tool.id}.md")
         for tool in tools
@@ -1472,7 +1482,9 @@ def summarize(tools: Sequence[Tool], run: Path, *, repo: Path, home: Path | None
         f"complete {model.state.complete}/{model.state.total}",
     ]
     lines.extend(f"missing {entry}" for entry in model.ids if entry not in model.reports)
-    lines.extend(f"orphan {orphan}" for orphan in model.state.orphans)
+    known = {*model.ids, *OWNERS}
+    rowless = {key[0] for key in model.rows if key[0] not in known}
+    lines.extend(f"orphan {orphan}" for orphan in sorted({*model.state.orphans, *rowless}))
     changes = [
         f"- {entry}: {line[2:]}"
         for entry, sections in model.reports.items()

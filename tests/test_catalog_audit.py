@@ -1338,7 +1338,6 @@ def test_summary_reads_dispositions(tmp_path: Path, capsys: pytest.CaptureFixtur
 
 
 _BAD_DISPOSITIONS = [
-    ('entry = "nope"\ncheck = "install method"\ndisposition = "proposed"', "entry"),
     ('entry = "alpha"\ncheck = "nope"\ndisposition = "proposed"', "check"),
     ('entry = "alpha"\ncheck = "script"\ndisposition = "proposed"', "cite"),
     ('entry = "alpha"\ncheck = "install method"\ndisposition = "done"', "disposition"),
@@ -1368,7 +1367,7 @@ def test_summary_refuses_broken_dispositions_and_names_every_problem(
     registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
     (root / DAY / "dispositions.toml").write_text("[[drift\n", encoding="utf-8")
     assert _sum(registry, root, repo, capsys)[0] == catalog_audit.EXIT_REFUSED
-    _dispositions(root, _BAD_DISPOSITIONS[0][0], _BAD_DISPOSITIONS[3][0])
+    _dispositions(root, _BAD_DISPOSITIONS[2][0], _BAD_DISPOSITIONS[3][0])
     code, err = _sum(registry, root, repo, capsys)
     assert code == catalog_audit.EXIT_REFUSED
     assert len([line for line in err.splitlines() if line.startswith("refused: ")]) == 2
@@ -1526,12 +1525,12 @@ def test_summary_script_findings_and_invalid_findings_file(
     row = _script_row(_summary_text(root), "scripts/x.sh:1")
     assert row[1:3] == ["alpha", "drift"]
     (root / DAY / "findings.toml").write_text(
-        '[[finding]]\nentry = "nope"\ncheck = "update argv"\nstatus = "ok"\nsource = "https://e.x/a"\n',
+        '[[finding]]\nentry = "alpha"\ncheck = "update argv"\nstatus = "fine"\nsource = "https://e.x/a"\n',
         encoding="utf-8",
     )
     code, err = _sum(registry, root, repo, capsys)
     assert code == catalog_audit.EXIT_REFUSED
-    assert "entry" in err
+    assert "status" in err
 
 
 def test_scan_only_finding_is_gated(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1851,3 +1850,29 @@ def test_home_alias_is_refused_and_tilded(home: Path, leak: str) -> None:
     problems = catalog_audit.validate_report(report, "alpha", home=home)
     assert any("home path" in problem for problem in problems)
     assert vars(catalog_audit)["_tilde"](leak, home) == "~/.claude"
+
+
+# ---- 24.3 review F8: ids are validated on add; an unknown entry read back is an orphan ----
+
+
+def test_removed_entry_keeps_its_rows_as_orphans(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
+    run = root / DAY
+    (run / "findings.toml").write_text(
+        '[[finding]]\nentry = "gone"\ncheck = "install method"\nstatus = "drift"\n'
+        'source = "https://e.x/a"\n',
+        encoding="utf-8",
+    )
+    _dispositions(root, 'entry = "gone"\ncheck = "install method"\ndisposition = "commit:abc1234"')
+    code, err = _sum(registry, root, repo, capsys, "--require-disposition", "alpha")
+    assert code == 0, err
+    summary = _summary_text(root)
+    assert "orphan gone\n" in summary
+    assert _drift_rows(summary) == [
+        ["gone", "install method", "drift", "https://e.x/a", "commit:abc1234"]
+    ]
+    args = ("--check", "update argv", "--status", "ok", "--source", _PROSE_OK)
+    assert _add(registry, root, capsys, "alpha", *args)[0] == 0
+    assert _add(registry, root, capsys, "gone", *args)[0] == catalog_audit.EXIT_REFUSED
