@@ -148,6 +148,21 @@ def listed_versions() -> dict[str, str | None] | None:
     return None if globals_ is None else {name: item.version for name, item in globals_.items()}
 
 
+def bun_keeps(package: str, cmd: str) -> bool:
+    """Whether bun's tree still holds `package` or its `cmd` bin link.
+
+    bun removes a global's manifest entry but keeps the package directory and its link while
+    another global needs it (live, SPEC Background), so "bun exited 0" does not prove a removal.
+    A dangling link counts. A name that is not a full npm package name is never joined to a path
+    and counts as kept: a removal this check cannot verify is never reported done.
+    """
+    if NPM_PACKAGE_RE.fullmatch(package) is None:
+        return True
+    bin_dir, install_dir = bun_dirs()
+    link = bin_dir / cmd
+    return (install_dir / "node_modules" / package).exists() or link.is_symlink() or link.exists()
+
+
 def method_bin_dir(method: Method) -> Path | None:
     """The directory a method's command lands in: a declared `bin_dir`, else bun's for bun."""
     declared = method.params.get("bin_dir")

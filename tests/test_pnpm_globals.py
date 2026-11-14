@@ -1163,7 +1163,9 @@ def test_audit_re_runs_a_declared_smoke_check_for_an_installed_tool() -> None:
     )
     assert asked == ["puppeteer-browser"]
     assert report.missing == ()
-    assert report.unhealthy == (("puppeteer", "installed browser /x/chrome could not be started."),)
+    assert report.unhealthy == (
+        ("puppeteer", "pnpm audit: installed browser /x/chrome could not be started."),
+    )
 
 
 def test_audit_is_quiet_when_the_smoke_check_passes() -> None:
@@ -1218,7 +1220,7 @@ def test_audit_re_runs_the_smoke_check_on_the_group_aware_path_too() -> None:
         smoke=smoke,
     )
     assert asked == ["puppeteer-browser"]
-    assert report.unhealthy == (("puppeteer", "browser is gone"),)
+    assert report.unhealthy == (("puppeteer", "pnpm audit: browser is gone"),)
 
 
 def test_audit_uses_the_real_smoke_dispatch_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1244,3 +1246,116 @@ def test_audit_uses_the_real_smoke_dispatch_by_default(monkeypatch: pytest.Monke
     assert [tool_id for tool_id, _reason in broken.unhealthy] == ["puppeteer"]
     assert "could not start a browser" in broken.unhealthy[0][1]
     assert "libnss3.so is missing" in broken.unhealthy[0][1]
+
+
+def _bun_tool(tool_id: str, npm_pkg: str, *, smoke: str | None = None) -> Tool:
+    params: dict[str, object] = {"npm_pkg": npm_pkg}
+    if smoke is not None:
+        params["smoke"] = smoke
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="dev",
+        cmd=tool_id,
+        methods=(Method(kind="bun", params=params),),
+    )
+
+
+def _bun_listing(*packages: str) -> Callable[[], frozenset[str] | None]:
+    return lambda: frozenset(packages)
+
+
+def _unreadable() -> None:
+    return None
+
+
+def test_audit_covers_bun_owned_entries() -> None:
+    tools = [
+        _bun_tool("puppeteer", "puppeteer", smoke="puppeteer-browser"),
+        _bun_tool("mmdc", MMDC_PKG),
+    ]
+    report = audit_node_globals(
+        tools,
+        which=lambda _n: "/x/bin",
+        managed=_unreadable,
+        bun_managed=_bun_listing("puppeteer", MMDC_PKG),
+        bun_smoke=lambda _name: "exit 1",
+    )
+    assert report.known is False
+    assert report.unhealthy == ()
+    assert report.bun_unhealthy == (("puppeteer", "bun audit: exit 1"),)
+    assert report.bun_known is True
+
+    unread = audit_node_globals(
+        tools,
+        which=lambda _n: "/x/bin",
+        managed=_unreadable,
+        bun_managed=_unreadable,
+        bun_smoke=lambda _name: "exit 1",
+    )
+    assert unread.bun_known is False
+    assert unread.bun_unhealthy == ()
+
+
+def _both_managers(*, pnpm: str | None, bun: str | None) -> NodeGlobalsReport:
+    tool = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="dev",
+        cmd="mmdc",
+        methods=(Method(kind="bun", params={"npm_pkg": MMDC_PKG, "smoke": "puppeteer-browser"}),),
+    )
+    return audit_node_globals(
+        [tool],
+        which=lambda _n: "/x/mmdc",
+        managed=_managed(MMDC_PKG),
+        smoke=lambda _name: pnpm,
+        bun_managed=_bun_listing(MMDC_PKG),
+        bun_smoke=lambda _name: bun,
+    )
+
+
+def test_findings_name_the_manager_whose_copy_failed() -> None:
+    """Review R2-12 and R3-03: with both copies installed the finding names the audit that
+    raised it, so the user can tell which one is broken."""
+    pnpm_broken = _both_managers(pnpm="exit 1", bun=None)
+    assert pnpm_broken.unhealthy == (("mmdc", "pnpm audit: exit 1"),)
+    assert pnpm_broken.bun_unhealthy == ()
+    bun_broken = _both_managers(pnpm=None, bun="exit 2")
+    assert bun_broken.unhealthy == ()
+    assert bun_broken.bun_unhealthy == (("mmdc", "bun audit: exit 2"),)
+
+
+def test_audit_prefers_the_owning_managers_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.executors as executors
+
+    asked: list[str | None] = []
+
+    def launch(manager: str | None) -> str | None:
+        asked.append(manager)
+        return None
+
+    monkeypatch.setattr(executors, "launch_puppeteer", launch)
+    audit_node_globals(
+        [_bun_tool("puppeteer", "puppeteer", smoke="puppeteer-browser")],
+        which=lambda _n: "/x/bin",
+        managed=_managed("puppeteer"),
+        bun_managed=_bun_listing("puppeteer"),
+    )
+    assert sorted(m or "" for m in asked) == ["bun", "pnpm"]
+
+
+def test_audit_leaves_bun_off_by_default() -> None:
+    """The refresh pass's `_pnpm_missing_facts` relies on this: no bun entry runs a browser."""
+
+    def never(_name: str) -> str | None:
+        raise AssertionError("bun is opt-in")
+
+    report = audit_node_globals(
+        [_bun_tool("puppeteer", "puppeteer", smoke="puppeteer-browser")],
+        which=lambda _n: "/x/bin",
+        managed=_managed("puppeteer"),
+        bun_smoke=never,
+    )
+    assert report.bun_known is False
+    assert report.bun_unhealthy == ()

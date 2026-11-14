@@ -349,6 +349,7 @@ def _inventory(*, formulae: dict[str, str] | None) -> ManagerInventory:
         pnpm_globals=frozenset(),
         uv_tools={},
         brew_prefix=None,
+        bun_globals={},
     )
 
 
@@ -536,6 +537,7 @@ _KIND_METHODS = [
     pytest.param(Method(kind="cask", params={"cask": "kt-cask"}), id="cask"),
     pytest.param(Method(kind="uv-tool", params={"pypi_pkg": "kt"}), id="uv-tool"),
     pytest.param(Method(kind="node", params={"npm_pkg": "@a/kt"}), id="node"),
+    pytest.param(Method(kind="bun", params={"npm_pkg": "kt"}), id="bun"),
 ]
 
 
@@ -553,6 +555,7 @@ def test_every_receipt_kind_installs_and_removes_in_both_directions(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no host binary for any smoke
     monkeypatch.setattr(app_module, "real_pnpm", lambda: "/fake/pnpm")
+    monkeypatch.setattr(app_module, "resolve_bun", lambda: "/fake/bun")
     bin_dir = tmp_path / ".local" / "bin"
     tool = Tool(id="kt", name="kt", category="dev", cmd="kt", methods=(method,))
     calls: list[list[str]] = []

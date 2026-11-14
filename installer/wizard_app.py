@@ -339,6 +339,18 @@ class _BodyStatic(Static):
 _DOCTOR_READ_ERROR = "Could not read the doctor state: "
 
 
+def _smoke_findings(tool_id: str, findings: Sequence[tuple[str, str]]) -> tuple[str, ...]:
+    """The audit's smoke failures for one tool, as Doctor evidence lines.
+
+    Child output: sanitized once here, so every view renders clean text.
+    """
+    return tuple(
+        sanitize_log_line(PNPM_SMOKE_FAILED.format(tool_id=tool_id, reason=reason))
+        for found_id, reason in findings
+        if found_id == tool_id
+    )
+
+
 class DoctorScreen(AppScreen):
     """PATH audit and safe PATH repair in one view."""
 
@@ -956,26 +968,37 @@ class DoctorScreen(AppScreen):
 
     def _record_pnpm_evidence(self, report: NodeGlobalsReport) -> None:
         """Hand the audit's findings to the next pass (D-13); ask for one only
-        when what is stored changed. An unreadable audit stores nothing."""
+        when what is stored changed.
+
+        Each manager's part is stored under its own source, and only when this audit read
+        that manager (`known` for pnpm, `bun_known` for bun): an audit replaces evidence only
+        for the managers it read, so an unreadable manager keeps its earlier findings and an
+        audit that read neither stores nothing.
+        """
         service = self._version_refresh
-        if service is None or not report.known:
+        if service is None:
             return
         changed = False
         for entry in self._node_entries:
-            # Child output: sanitized once here, so every view renders clean text.
-            broken = tuple(
-                sanitize_log_line(PNPM_SMOKE_FAILED.format(tool_id=entry.tool_id, reason=reason))
-                for tool_id, reason in report.unhealthy
-                if tool_id == entry.tool_id
-            )
-            notes = tuple(
-                PNPM_SPLIT_GROUP.format(names=", ".join(group))
-                for group in report.split_groups
-                if entry.npm_pkg in group
-            )
-            changed |= service.record_evidence(
-                entry.tool_id, epoch=self._globals_audit_epoch, broken=broken, notes=notes
-            )
+            if report.known:
+                changed |= service.record_evidence(
+                    entry.tool_id,
+                    epoch=self._globals_audit_epoch,
+                    broken=_smoke_findings(entry.tool_id, report.unhealthy),
+                    notes=tuple(
+                        PNPM_SPLIT_GROUP.format(names=", ".join(group))
+                        for group in report.split_groups
+                        if entry.npm_pkg in group
+                    ),
+                    source="pnpm",
+                )
+            if report.bun_known:
+                changed |= service.record_evidence(
+                    entry.tool_id,
+                    epoch=self._globals_audit_epoch,
+                    broken=_smoke_findings(entry.tool_id, report.bun_unhealthy),
+                    source="bun",
+                )
         if changed and not self.app.quitting:
             self.app.request_refresh()
 

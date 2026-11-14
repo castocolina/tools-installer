@@ -24,7 +24,12 @@ from installer.guidance import disk_pressure_guidance
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.pnpm_globals import PNPM_SPLIT_GROUP, NodeGlobal, NodeGlobalsReport
+from installer.pnpm_globals import (
+    PNPM_SMOKE_FAILED,
+    PNPM_SPLIT_GROUP,
+    NodeGlobal,
+    NodeGlobalsReport,
+)
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.schedules import ReconcileReport
 from installer.session import Disposition, PlanRow, RowOutcome
@@ -3412,3 +3417,99 @@ async def test_a_removal_failure_shown_elsewhere_names_uninstall(
             assert expected in app.catalog.status_text.splitlines()
         finally:
             remover.release.set()
+
+
+async def test_bun_findings_reach_the_tui_doctor_when_pnpm_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Review R1-01: pnpm unreadable (`known` False) must not hide a bun-owned finding."""
+    tool = Tool(
+        id="puppeteer",
+        name="puppeteer",
+        category="search",
+        cmd="puppeteer",
+        methods=(Method(kind="bun", params={"npm_pkg": "puppeteer"}),),
+        priority="P1",
+        audience="both",
+        tier="system",
+        desc="",
+    )
+    reason = "bun audit: exit 1"
+    report = NodeGlobalsReport(
+        entries=(),
+        missing=(),
+        managed=(),
+        known=False,
+        bun_unhealthy=(("puppeteer", reason),),
+        bun_known=True,
+    )
+    service = _real_service(tmp_path)
+    passes = _count_passes(monkeypatch, service)
+    app = _family_app(tools=[tool], version_refresh=service, node_globals=lambda: report)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await wait_until(pilot, lambda: len(passes) == 2)
+        await settle(app, pilot)
+        state = service.state_of("puppeteer")
+        assert state is not None and state.health is Health.BROKEN
+        finding = PNPM_SMOKE_FAILED.format(tool_id="puppeteer", reason=reason)
+        assert f"puppeteer: {finding}" in str(_doctor_text(app))
+
+
+def _two_manager_report(
+    *, pnpm: bool, bun: bool, pnpm_broken: bool = False, bun_broken: bool = False
+) -> NodeGlobalsReport:
+    """What an audit says about mmdc; a manager it could not read is `known`/`bun_known` False."""
+    return NodeGlobalsReport(
+        entries=(NodeGlobal("mmdc", "@mermaid-js/mermaid-cli", "mmdc"),) if pnpm else (),
+        missing=(),
+        managed=("@mermaid-js/mermaid-cli",) if pnpm else (),
+        known=pnpm,
+        split_groups=((("@mermaid-js/mermaid-cli", "puppeteer"),) if pnpm_broken else ()),
+        unhealthy=(("mmdc", "pnpm audit: exit 1"),) if pnpm_broken else (),
+        bun_unhealthy=(("mmdc", "bun audit: exit 2"),) if bun_broken else (),
+        bun_known=bun,
+    )
+
+
+@pytest.mark.parametrize("unreadable", ["pnpm", "bun"])
+async def test_an_audit_keeps_the_findings_of_a_manager_it_could_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unreadable: str
+):
+    """Review R2-03: an audit replaces Doctor evidence only for the managers it read."""
+    first = _two_manager_report(pnpm=True, bun=True, pnpm_broken=True, bun_broken=True)
+    second = (
+        _two_manager_report(pnpm=False, bun=True)
+        if unreadable == "pnpm"
+        else _two_manager_report(pnpm=True, bun=False)
+    )
+    reports = [first, second]
+    asked: list[int] = []
+
+    def audit() -> NodeGlobalsReport:
+        asked.append(1)
+        return reports[min(len(asked), 2) - 1]
+
+    service = _real_service(tmp_path)
+    passes = _count_passes(monkeypatch, service)
+    app = _family_app(tools=[_node_tool()], version_refresh=service, node_globals=audit)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await app.show_view("doctor")
+        await wait_until(pilot, lambda: len(passes) == 2)
+        await settle(app, pilot)
+        text = str(_doctor_text(app))
+        assert "pnpm audit: exit 1" in text and "bun audit: exit 2" in text
+        assert "pnpm is holding" in text
+
+        await _reenter_doctor(app, pilot)
+        await wait_until(pilot, lambda: len(asked) == 2 and len(passes) == 3)
+        await settle(app, pilot)
+        text = str(_doctor_text(app))
+        if unreadable == "pnpm":
+            assert "pnpm audit: exit 1" in text and "pnpm is holding" in text
+            assert "bun audit: exit 2" not in text
+        else:
+            assert "bun audit: exit 2" in text
+            assert "pnpm audit: exit 1" not in text and "pnpm is holding" not in text

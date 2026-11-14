@@ -6,6 +6,7 @@ import pytest
 from installer.bun_globals import (
     BunGlobal,
     bun_dirs,
+    bun_keeps,
     listed_versions,
     method_bin_dir,
     read_bun_globals,
@@ -240,3 +241,29 @@ def test_reader_reports_the_tree_as_bun_left_it_after_an_interrupted_run(
     _plant_member("right-pad", '{"version": "2.0.0"}')
     _plant_member("puppeteer", '{"version": "25.0.0"}')  # a kept peer: in node_modules only
     assert listed_versions() == {"left-pad": None, "right-pad": "2.0.0"}
+
+
+def test_bun_keeps_a_package_whose_directory_is_still_in_the_tree() -> None:
+    _plant_member("puppeteer", '{"version": "25.0.0"}')
+    assert bun_keeps("puppeteer", "puppeteer") is True
+    _plant_member("@mermaid-js/mermaid-cli", '{"version": "11.0.0"}')
+    assert bun_keeps("@mermaid-js/mermaid-cli", "mmdc") is True
+
+
+def test_bun_keeps_a_package_whose_bin_link_remains_even_when_dangling() -> None:
+    link = bun_dirs()[0] / "mmdc"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(bun_dirs()[1] / "node_modules" / "gone" / "cli.js")
+    assert bun_keeps("@mermaid-js/mermaid-cli", "mmdc") is True
+
+
+def test_bun_keeps_nothing_once_the_directory_and_link_are_gone() -> None:
+    assert bun_keeps("puppeteer", "puppeteer") is False
+    bun_dirs()[0].mkdir(parents=True)
+    assert bun_keeps("@mermaid-js/mermaid-cli", "mmdc") is False
+
+
+@pytest.mark.parametrize("package", ["../../etc", "Not/Valid", "", "a b"])
+def test_bun_keeps_a_name_that_is_not_an_npm_package_name(package: str) -> None:
+    """A name it cannot check is never reported removed, and never reaches a path join."""
+    assert bun_keeps(package, "x") is True

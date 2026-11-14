@@ -615,9 +615,9 @@ def _method_pins(method: Method) -> list[str]:
     if method.kind in ("app", "tarball", "sdkman") and version:
         return [f"{version} ({method.kind} version param)"]
     pinned = method.params.get("versions")
-    if method.kind == "node" and isinstance(pinned, dict):
+    if method.kind in ("node", "bun") and isinstance(pinned, dict):
         pairs = cast(dict[str, object], pinned)
-        return [f"{name} {spec} (node versions param)" for name, spec in pairs.items()]
+        return [f"{name} {spec} ({method.kind} versions param)" for name, spec in pairs.items()]
     return []
 
 

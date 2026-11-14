@@ -17,6 +17,7 @@ from rich.console import Console
 from installer import receipts, shellrc
 from installer.agent_settings import ledger_preview, revert_agent
 from installer.atomic import atomic_write_text
+from installer.bun_globals import bun_keeps, resolve_bun
 from installer.cli import Options
 from installer.deps import resolve_dependencies
 from installer.diskusage import DiskPressure
@@ -368,7 +369,13 @@ def run_doctor(
         exists=exists,
     )
     render_doctor(report, console, duplicate_writers(report))
-    render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
+    audit = audit_node_globals(
+        tools,
+        which=which,
+        managed=managed_globals,
+        bun_managed=lambda: manager_listing("bun"),
+    )
+    render_node_globals(audit, console)
     if disk_pressure is not None:
         with contextlib.suppress(OSError, ValueError):
             render_disk_pressure(disk_pressure(), console)
@@ -767,8 +774,10 @@ def remove_tool(
     is proven again here, so the CLI and the TUI share the same post-confirm check: a
     previewed path that moved, a command that changed, or a command whose paths shrank
     refuses the whole tool before anything runs. A manager package that a readable fresh
-    listing no longer shows runs nothing and retires its receipt (`already removed`). A failed
-    undo or command deletes nothing and keeps the receipt, so a later plan still sees the tool."""
+    listing no longer shows runs nothing and retires its receipt (`already removed`). bun's
+    tree is checked too: a package it kept as another global's peer is reported kept, never
+    removed, and its receipt stays. A failed undo or command deletes nothing and keeps the
+    receipt, so a later plan still sees the tool."""
     try:
         fresh = removal_plan(tool, bin_dir, verify=True)
         if fresh.level == "receipt":
@@ -802,8 +811,13 @@ def remove_tool(
         if fresh.level == "manager" and manager is not None:
             # A readable fresh listing that lacks the package proves it is gone (review C-02);
             # e.g. pnpm took a whole group with an earlier member (22-13 D-1). Unknown runs it.
+            # bun's listing is its manifest, which a kept peer has left: the tree must agree.
             listed = manager_listing(manager)
-            if listed is not None and listed_name(manager, argv[-1]) not in listed:
+            if (
+                listed is not None
+                and listed_name(manager, argv[-1]) not in listed
+                and not (manager == "bun" and bun_keeps(argv[-1], tool.cmd))
+            ):
                 receipts.delete(tool.id)
                 return ToolRemoval(tool.id, True, ALREADY_REMOVED, unregistered=fresh.hook_hosts)
         if argv:
@@ -814,6 +828,11 @@ def remove_tool(
                 if resolved is None:
                     return ToolRemoval(tool.id, False, "pnpm not found on PATH")
                 command = (resolved, *argv[1:])
+            elif argv[0] == "bun":
+                bun = resolve_bun()
+                if bun is None:
+                    return ToolRemoval(tool.id, False, "bun not found on PATH")
+                command = (bun, *argv[1:])
             try:
                 runner(list(command))
             except CommandError as exc:
@@ -821,6 +840,9 @@ def remove_tool(
                 if moot is None:
                     return ToolRemoval(tool.id, False, command_error_line(exc))
                 note = moot
+            if manager == "bun" and bun_keeps(argv[-1], tool.cmd):
+                detail = f"bun kept {argv[-1]} because another global package needs it"
+                return ToolRemoval(tool.id, False, detail)
             if fresh.level == "recipe":
                 note = " ".join(filter(None, (note, _drop_service_registration(tool.id))))
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")

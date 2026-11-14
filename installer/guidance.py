@@ -281,7 +281,7 @@ def node_globals_guidance(report: NodeGlobalsReport) -> list[Guidance]:
                 severity=Severity.WARN,
             )
         )
-    for tool_id, reason in report.unhealthy:
+    for tool_id, reason in (*report.unhealthy, *report.bun_unhealthy):
         items.append(
             Guidance(
                 title=f"{tool_id} is installed but does not work",
