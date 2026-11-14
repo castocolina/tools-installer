@@ -64,7 +64,7 @@ from installer import platform as host_platform
 from installer.enums import InstallStatus
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool, load_tools
-from installer.ownership import ManagerOwnership
+from installer.ownership import ManagerOwnership, read_inventory
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, run_captured, run_command
 from installer.sanitize import sanitize_log_line
@@ -88,7 +88,7 @@ _POLL_ATTEMPTS = 20
 _POLL_STEP = 0.5
 
 
-class _Failed(Exception):
+class Failed(Exception):
     """A product failure: the named FAILED line's prefix and its one-line detail."""
 
     def __init__(self, prefix: str, detail: str) -> None:
@@ -106,7 +106,7 @@ def _rc_changes(before: Mapping[str, str], after: Mapping[str, str]) -> list[str
     return sorted(name for name in {*before, *after} if before.get(name) != after.get(name))
 
 
-def _verdict(prefix: str, detail: str) -> str:
+def verdict(prefix: str, detail: str) -> str:
     return f"{prefix} detail={detail}"
 
 
@@ -138,7 +138,7 @@ def install_verdict(
         detail = f"shell rc changed: {', '.join(changed)}"
     else:
         return f"TRACER_OPENCODE_V2_INSTALL_OK version={version}"
-    return _verdict(_INSTALL_FAILED, detail)
+    return verdict(_INSTALL_FAILED, detail)
 
 
 def tuning_verdict(document: Mapping[str, object]) -> str:
@@ -151,7 +151,7 @@ def tuning_verdict(document: Mapping[str, object]) -> str:
         detail = "permissions differs from the allow-all rule"
     else:
         return "TRACER_OPENCODE_V2_TUNING_OK"
-    return _verdict("TRACER_OPENCODE_V2_TUNING_FAILED", detail)
+    return verdict("TRACER_OPENCODE_V2_TUNING_FAILED", detail)
 
 
 def latest_verdict(latest: str | None, source: str | None) -> str:
@@ -165,7 +165,7 @@ def latest_verdict(latest: str | None, source: str | None) -> str:
         detail = f"source {source} is not npm"
     else:
         return f"TRACER_OPENCODE_LATEST_OK latest={version} source=npm"
-    return _verdict("TRACER_OPENCODE_LATEST_FAILED", detail)
+    return verdict("TRACER_OPENCODE_LATEST_FAILED", detail)
 
 
 def _leftovers(
@@ -192,7 +192,7 @@ def remove_verdict(
     never a pass."""
     left = _leftovers(serve_after, files_left, receipt_left, permissions_left)
     if left:
-        return _verdict(_REMOVE_FAILED, "; ".join(left))
+        return verdict(_REMOVE_FAILED, "; ".join(left))
     if not serve_before:
         return (
             "TRACER_OPENCODE_V2_SERVICE_STOP_UNPROVEN "
@@ -227,7 +227,7 @@ def update_while_running_verdict(
         detail = f"the restarted service reports {restarted}, the update left {after}"
     else:
         return "TRACER_OPENCODE_UPDATE_WHILE_RUNNING_OK"
-    return _verdict(_RUNNING_FAILED, detail)
+    return verdict(_RUNNING_FAILED, detail)
 
 
 def stop_idle_verdict(exit_code: int | None) -> str:
@@ -251,7 +251,7 @@ def v1_remove_verdict(
         detail = "removal ran a service command, which OpenCode 1 does not have"
     else:
         return "TRACER_OPENCODE_V1_REMOVE_OK"
-    return _verdict("TRACER_OPENCODE_V1_REMOVE_FAILED", detail)
+    return verdict("TRACER_OPENCODE_V1_REMOVE_FAILED", detail)
 
 
 def v1_update_verdict(
@@ -275,7 +275,7 @@ def v1_update_verdict(
         detail = f"shell rc changed: {', '.join(changed)}"
     else:
         return f"TRACER_OPENCODE_V1_UPDATE_OK from={old} to={new}"
-    return _verdict(_V1_UPDATE_FAILED, detail)
+    return verdict(_V1_UPDATE_FAILED, detail)
 
 
 def _registers_codegraph(config: Mapping[str, object] | None) -> bool:
@@ -293,7 +293,7 @@ def copilot_verdict(config: Mapping[str, object] | None) -> str:
         detail = "codegraph is not registered"
     else:
         return "TRACER_CODEGRAPH_COPILOT_OK"
-    return _verdict("TRACER_CODEGRAPH_COPILOT_FAILED", detail)
+    return verdict("TRACER_CODEGRAPH_COPILOT_FAILED", detail)
 
 
 def pi_gate_verdict(pi_entries: Sequence[str], warning: str | None, marks: Sequence[str]) -> str:
@@ -307,13 +307,13 @@ def pi_gate_verdict(pi_entries: Sequence[str], warning: str | None, marks: Seque
         detail = "a pending mark names Pi"
     else:
         return "TRACER_CODEGRAPH_PI_GATED_OK"
-    return _verdict("TRACER_CODEGRAPH_PI_GATED_FAILED", detail)
+    return verdict("TRACER_CODEGRAPH_PI_GATED_FAILED", detail)
 
 
 def unregister_verdict(config: Mapping[str, object] | None) -> str:
     """After removal, copilot's MCP config no longer holds codegraph."""
     if _registers_codegraph(config):
-        return _verdict("TRACER_CODEGRAPH_UNREGISTER_FAILED", "codegraph is still registered")
+        return verdict("TRACER_CODEGRAPH_UNREGISTER_FAILED", "codegraph is still registered")
     return "TRACER_CODEGRAPH_UNREGISTER_OK"
 
 
@@ -325,7 +325,7 @@ def ide_only_verdict(config_exists: bool, argvs: Sequence[Sequence[str]]) -> str
         detail = "copilot-cli appears in a command"
     else:
         return "TRACER_CODEGRAPH_COPILOT_IDE_ONLY_OK"
-    return _verdict("TRACER_CODEGRAPH_COPILOT_IDE_ONLY_FAILED", detail)
+    return verdict("TRACER_CODEGRAPH_COPILOT_IDE_ONLY_FAILED", detail)
 
 
 def find_serve_pids(cmdlines: Mapping[int, Sequence[str]]) -> list[int]:
@@ -371,7 +371,7 @@ def _digests(home: Path) -> dict[str, str]:
     }
 
 
-def _tool(tool_id: str) -> Tool:
+def tool_by_id(tool_id: str) -> Tool:
     catalog = load_tools(Path(installer.__file__).with_name("registry.toml"))
     found = next((tool for tool in catalog if tool.id == tool_id), None)
     if found is None:
@@ -379,12 +379,12 @@ def _tool(tool_id: str) -> Tool:
     return found
 
 
-def _first_line(text: object) -> str:
+def first_line(text: object) -> str:
     return (sanitize_log_line(str(text)).splitlines() or [""])[0]
 
 
 @dataclass
-class _Recorder:
+class Recorder:
     """A runner that records each command and its exit code, then behaves like `inner`."""
 
     inner: Runner
@@ -404,23 +404,30 @@ class _Recorder:
         return [argv for argv, _code in self.calls]
 
 
-def _no_homebrew_platform() -> host_platform.Platform:
+def no_homebrew_platform() -> host_platform.Platform:
     """The detected platform minus Homebrew: the route a host without Homebrew takes."""
     return dataclasses.replace(host_platform.detect(), has_brew=False)
 
 
-def _install(
+def install_one(
     tool: Tool,
     prefix: str,
     runner: Runner = run_command,
     *,
     platform: host_platform.Platform | None = None,
 ) -> engine.InstallOutcome:
-    """The one-tool install path `make setup` runs for a selected row, hooks and tuning included."""
-    outcome = engine.install_tool(tool, platform or host_platform.detect(), runner)
+    """The one-tool install path `make setup` runs for a selected row, hooks and tuning included.
+
+    It passes the production inventory reader, as `setup.py`'s install closure does: with none the
+    engine counts every brew, node and bun package as already there and writes no receipt, which
+    the bun verbs' removals need. The landing verbs' own installs (script and `github_release`
+    methods) never reach a manager kind, so for them the reader changes nothing."""
+    outcome = engine.install_tool(
+        tool, platform or host_platform.detect(), runner, read_inventory_fn=read_inventory
+    )
     if outcome.status is not InstallStatus.INSTALLED:
-        reason = _first_line(outcome.errors[0]) if outcome.errors else ""
-        raise _Failed(prefix, f"{tool.id} install ended {outcome.status}: {reason}".rstrip(": "))
+        reason = first_line(outcome.errors[0]) if outcome.errors else ""
+        raise Failed(prefix, f"{tool.id} install ended {outcome.status}: {reason}".rstrip(": "))
     return outcome
 
 
@@ -455,20 +462,20 @@ def _update(tool: Tool, prefix: str) -> None:
         resolve_tag=versions.resolve_github_tag,
     )
     if outcome.status != "updated":
-        raise _Failed(prefix, f"update ended {outcome.status}: {_first_line(outcome.detail)}")
+        raise Failed(prefix, f"update ended {outcome.status}: {first_line(outcome.detail)}")
 
 
-def _uninstall(tool: Tool, runner: Runner) -> uninstall.SweepResult:
-    """Remove one tool the way the Uninstall view does: through `app.perform_uninstall`, with a
-    one-tool decision built from the fresh plan (review R1-09, R2-09)."""
+def uninstall_tools(tools: Sequence[Tool], runner: Runner) -> uninstall.SweepResult:
+    """Remove tools the way the Uninstall view does: through `app.perform_uninstall`, with a
+    decision built from each tool's fresh plan (review R1-09, R2-09)."""
     home = Path.home()
     bin_dir = home / ".local" / "bin"
-    plan = uninstall.removal_plan(tool, bin_dir, verify=True)
+    plans = {tool.id: uninstall.removal_plan(tool, bin_dir, verify=True) for tool in tools}
     decision = app.UninstallDecision(
-        tools=(tool,),
-        paths={tool.id: plan.removable},
-        argv={tool.id: plan.argv},
-        unregister={tool.id: plan.unregister},
+        tools=tuple(tools),
+        paths={tool_id: plan.removable for tool_id, plan in plans.items()},
+        argv={tool_id: plan.argv for tool_id, plan in plans.items()},
+        unregister={tool_id: plan.unregister for tool_id, plan in plans.items()},
         remove_path_block=False,
     )
     return app.perform_uninstall(
@@ -484,8 +491,13 @@ def _uninstall(tool: Tool, runner: Runner) -> uninstall.SweepResult:
     )
 
 
+def uninstall_one(tool: Tool, runner: Runner) -> uninstall.SweepResult:
+    """`uninstall_tools` for a single tool."""
+    return uninstall_tools((tool,), runner)
+
+
 def _removal_line(tool: Tool, result: uninstall.SweepResult) -> str:
-    failed = "; ".join(f"{tool_id}: {_first_line(why)}" for tool_id, why in result.remove_failed)
+    failed = "; ".join(f"{tool_id}: {first_line(why)}" for tool_id, why in result.remove_failed)
     removed = ",".join(result.removed) or "-"
     return f"INFO removal of {tool.id}: removed={removed} failed={failed or '-'}"
 
@@ -503,7 +515,7 @@ def _proven_leaf(home: Path, name: str, prefix: str) -> Path:
     """The same, but only a receipt proves it: a service command never runs a guessed path."""
     receipt = receipts.read("opencode")
     if receipt is None or all(artifact.path.name != name for artifact in receipt.artifacts):
-        raise _Failed(prefix, f"no receipt proves the {name} binary")
+        raise Failed(prefix, f"no receipt proves the {name} binary")
     return _leaf(home, name)
 
 
@@ -594,7 +606,7 @@ _Handler = Callable[[Path, bool], list[str]]
 
 def _install_opencode(home: Path, _with_service: bool) -> list[str]:
     before = _digests(home)
-    _install(_tool("opencode"), _INSTALL_FAILED, platform=_no_homebrew_platform())
+    install_one(tool_by_id("opencode"), _INSTALL_FAILED, platform=no_homebrew_platform())
     return [
         install_verdict(
             _version(_leaf(home, "opencode")), _receipt_paths(), before, _digests(home)
@@ -604,7 +616,7 @@ def _install_opencode(home: Path, _with_service: bool) -> list[str]:
 
 
 def _latest_opencode(_home: Path, _with_service: bool) -> list[str]:
-    tool = _tool("opencode")
+    tool = tool_by_id("opencode")
 
     def no_github(tag: str) -> str:
         raise versions.VersionError(f"GitHub was asked for opencode's latest ({tag})")
@@ -636,7 +648,7 @@ def _latest_opencode(_home: Path, _with_service: bool) -> list[str]:
 
 
 def _update_opencode(home: Path, with_service: bool) -> list[str]:
-    tool = _tool("opencode")
+    tool = tool_by_id("opencode")
     if not with_service:
         before, digests = _version(_leaf(home, "opencode")), _digests(home)
         _update(tool, _V1_UPDATE_FAILED)
@@ -675,15 +687,15 @@ def _update_opencode(home: Path, with_service: bool) -> list[str]:
 
 
 def _remove_opencode(home: Path, with_service: bool) -> list[str]:
-    tool = _tool("opencode")
+    tool = tool_by_id("opencode")
     lines: list[str] = []
     serve_before = False
     if with_service:
         serve_before, note = _ensure_service(_proven_leaf(home, "opencode", _REMOVE_FAILED))
         lines.append(f"INFO {note}")
     leaves = [_leaf(home, name) for name in _LEAVES]
-    recorder = _Recorder(run_captured)
-    result = _uninstall(tool, recorder)
+    recorder = Recorder(run_captured)
+    result = uninstall_one(tool, recorder)
     lines.append(_removal_line(tool, result))
     files_left = [leaf.name for leaf in leaves if _present(leaf)]
     receipt_left = receipts.read("opencode") is not None
@@ -699,14 +711,14 @@ def _remove_opencode(home: Path, with_service: bool) -> list[str]:
     return [
         *lines,
         stop_idle_verdict(recipe),
-        *([_verdict(_REMOVE_FAILED, "; ".join(left))] if left else []),
+        *([verdict(_REMOVE_FAILED, "; ".join(left))] if left else []),
     ]
 
 
 def _seed_v1(home: Path, _with_service: bool) -> list[str]:
     """OpenCode 1 as a pre-24.3 installer left it: the v1 script method, a receipt proving only
     `opencode`, and none of the v2 tuning."""
-    shipped = _tool("opencode")
+    shipped = tool_by_id("opencode")
     method = _script_method(shipped)
     kept = {k: v for k, v in method.params.items() if k not in {"remove", "latest_npm", "update"}}
     params = {
@@ -720,18 +732,18 @@ def _seed_v1(home: Path, _with_service: bool) -> list[str]:
         methods=(dataclasses.replace(method, params=params),),
         post_install=(),
     )
-    _install(seeded, _V1_SEED_FAILED)
+    install_one(seeded, _V1_SEED_FAILED)
     version = _semver(_version(_leaf(home, "opencode")))
     if version is None or not version.startswith("1."):
-        raise _Failed(_V1_SEED_FAILED, f"the seeded install reports {version}, not OpenCode 1")
+        raise Failed(_V1_SEED_FAILED, f"the seeded install reports {version}, not OpenCode 1")
     return [f"TRACER_OPENCODE_V1_SEEDED version={version}"]
 
 
 def _remove_v1(home: Path, _with_service: bool) -> list[str]:
-    tool = _tool("opencode")
+    tool = tool_by_id("opencode")
     binary = _leaf(home, "opencode")
-    recorder = _Recorder(run_captured)
-    result = _uninstall(tool, recorder)
+    recorder = Recorder(run_captured)
+    result = uninstall_one(tool, recorder)
     return [
         _removal_line(tool, result),
         v1_remove_verdict(
@@ -767,8 +779,8 @@ def _codegraph_copilot_and_pi(home: Path, _with_service: bool) -> list[str]:
     (home / ".copilot").mkdir(parents=True, exist_ok=True)
     (home / ".copilot" / "settings.json").write_text("{}\n", encoding="utf-8")
     (home / ".pi").mkdir(exist_ok=True)
-    tool = _tool("codegraph")
-    outcome = _install(tool, "TRACER_CODEGRAPH_COPILOT_FAILED")
+    tool = tool_by_id("codegraph")
+    outcome = install_one(tool, "TRACER_CODEGRAPH_COPILOT_FAILED")
     agent = home / ".pi" / "agent"
     entries = sorted(entry.name for entry in agent.iterdir()) if agent.is_dir() else []
     return [
@@ -778,18 +790,18 @@ def _codegraph_copilot_and_pi(home: Path, _with_service: bool) -> list[str]:
 
 
 def _codegraph_unregister(home: Path, _with_service: bool) -> list[str]:
-    tool = _tool("codegraph")
-    result = _uninstall(tool, _Recorder(run_captured))
+    tool = tool_by_id("codegraph")
+    result = uninstall_one(tool, Recorder(run_captured))
     if tool.id not in result.removed:
-        return [_verdict("TRACER_CODEGRAPH_UNREGISTER_FAILED", _removal_line(tool, result))]
+        return [verdict("TRACER_CODEGRAPH_UNREGISTER_FAILED", _removal_line(tool, result))]
     return [unregister_verdict(_copilot_config(home))]
 
 
 def _codegraph_ide_only(home: Path, _with_service: bool) -> list[str]:
     shutil.rmtree(home / ".copilot", ignore_errors=True)
     (home / ".copilot" / "ide").mkdir(parents=True)
-    recorder = _Recorder(run_command)
-    _install(_tool("codegraph"), "TRACER_CODEGRAPH_COPILOT_IDE_ONLY_FAILED", recorder)
+    recorder = Recorder(run_command)
+    install_one(tool_by_id("codegraph"), "TRACER_CODEGRAPH_COPILOT_IDE_ONLY_FAILED", recorder)
     return [ide_only_verdict((home / ".copilot" / "mcp-config.json").exists(), recorder.argvs())]
 
 
@@ -828,7 +840,7 @@ _ENGINE_FILES = (Path("/run/.containerenv"), Path("/.dockerenv"))
 _TESTER_HOME = Path("/home/tester")
 
 
-def _in_container() -> bool:
+def in_container() -> bool:
     """The driver installs and removes real tools: it runs in the harness's container, as its
     tester, or not at all."""
     return (
@@ -847,17 +859,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"usage: e2e_landing_driver {known} (update, remove: [--with-service])", file=sys.stderr
         )
         return 2
-    if not _in_container():
+    if not in_container():
         print("ERROR the landing driver runs only inside the disposable container")
         return 2
     handler, with_service = parsed
     try:
         lines = handler(Path.home(), with_service)
-    except _Failed as failed:
-        print(_verdict(failed.prefix, _first_line(failed.detail)))
+    except Failed as failed:
+        print(verdict(failed.prefix, first_line(failed.detail)))
         return 1
     except (OSError, CommandError, ValueError, versions.VersionError) as error:
-        print(f"ERROR {_first_line(error) or type(error).__name__}")
+        print(f"ERROR {first_line(error) or type(error).__name__}")
         return 1
     print("\n".join(lines))
     return 1 if any("_FAILED" in line for line in lines) else 0

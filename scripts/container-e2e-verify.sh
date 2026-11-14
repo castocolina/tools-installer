@@ -116,6 +116,18 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           line; TRACER_LANDING_INFEASIBLE step=... says the environment failed
                           (a pull, dnf, Homebrew, uv, a vendor download, TLS) and exits 2.
                           Removes the container on every exit, and its image only when this run pulled it.
+  bun-lifecycle [--keep-image]
+                          Orchestrator only: a disposable Fedora container named
+                          tools-installer-e2e-bun-<pid> (whatever --distro says), bootstrapped like
+                          audit-landing, in which the installer's own code proves the bun lifecycle
+                          through tests/e2e_bun_driver.py, as the tester. Prints, in order,
+                          TRACER_BUN_VIA_HOMEBREW_OK, _MANIFEST_OK, _BROWSER_OK and _LOGIN_SHELL_OK
+                          for a catalog install of mmdc, then the other TRACER_BUN_*_OK verdicts; a
+                          product failure prints a named _FAILED line, and
+                          TRACER_LANDING_INFEASIBLE step=... says the environment failed (exit 2).
+                          Ends the transcript .e2e-artifacts/container-bun/bun-transcript.log with
+                          TRACER_LANDING_TEARDOWN_OK once the container is removed on every exit
+                          (and its image only when this run pulled it).
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -2695,6 +2707,8 @@ LANDING_PULLED=0
 # a bare SSL, TLS or "Connection refused" also appears in the product's own output.
 LANDING_ENV_RE='Could not resolve host|Temporary failure in name resolution|Network is unreachable|curl: \([0-9]+\)|Curl error \([0-9]+\)|Error: (initializing source|pulling|reading blob)|[Ff]ailed to download|[Ff]ailed to synchronize'
 LANDING_TRANSCRIPT=
+# The in-container driver module landing_driver runs; the bun-lifecycle verb swaps it.
+LANDING_DRIVER_MODULE=tests.e2e_landing_driver
 
 # $1 names the step, $2 is the failing step's output: the first line naming an error is reported,
 # else the last non-empty one.
@@ -2719,17 +2733,21 @@ landing_note_image() {
 
 # EXIT trap: the container goes on every outcome; the image only when this run pulled it and not
 # with --keep-image. Both removals tolerate absence (a base image another container uses stays).
+# The verdict is printed and also appended to the run's transcript, which the phase gate reads.
 landing_teardown() {
+  local verdict=TRACER_LANDING_TEARDOWN_OK
   ct rm -f "$LANDING_CONTAINER_NAME" >/dev/null 2>&1 || true
   if [[ "$LANDING_KEEP_IMAGE" -ne 1 && "$LANDING_PULLED" -eq 1 ]]; then
     ct rmi "$LANDING_IMAGE" >/dev/null 2>&1 || true
   fi
   if ct ps -a --filter "name=^${LANDING_CONTAINER_NAME}$" --format '{{.Names}}' 2>/dev/null \
     | grep -qx "$LANDING_CONTAINER_NAME"; then
-    printf 'TRACER_LANDING_TEARDOWN_LEFT container=%s\n' "$LANDING_CONTAINER_NAME"
-    return 0
+    verdict="TRACER_LANDING_TEARDOWN_LEFT container=$LANDING_CONTAINER_NAME"
   fi
-  printf 'TRACER_LANDING_TEARDOWN_OK\n'
+  printf '%s\n' "$verdict"
+  # The braces catch the shell's own "No such file" for a directory a failed run never made.
+  [[ -z "${LANDING_TRANSCRIPT:-}" ]] || { printf '%s\n' "$verdict" >>"$LANDING_TRANSCRIPT"; } 2>/dev/null || true
+  return 0
 }
 
 # $1 names the stage, the rest is the stage command. errexit is switched off around the capture and
@@ -2774,7 +2792,7 @@ landing_driver() {
   printf -v args '%q ' "$@"
   printf -v workspace '%q' "$TESTER_WORKSPACE"
   exec_tester "cd ${workspace}
-uv run --isolated --no-dev python -m tests.e2e_landing_driver ${args}"
+uv run --isolated --no-dev python -m ${LANDING_DRIVER_MODULE} ${args}"
 }
 
 # $1 names the step, the rest is the driver command: its output goes to the console and the
@@ -2834,6 +2852,37 @@ cmd_audit_landing() {
   return "$failed"
 }
 
+# --- bun-lifecycle target (24.5-09, PRIO-02/03/06): orchestrator only -------------------------------
+# audit-landing's box and steps with another driver module and its own container: the name embeds
+# this run's PID, so it can never be the shared tools-installer-e2e-<distro> container or another agent's
+# box. start_container, exec_root and exec_tester read CONTAINER_NAME, IMAGE and DISTRO, so all three
+# are set here, before anything touches a container, whatever --distro said.
+cmd_bun_lifecycle() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown bun-lifecycle option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-bun-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_bun_driver
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-bun"
+  LANDING_TRANSCRIPT="$PHASE_DIR/bun-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  # Every verdict is collected so one transcript shows them all.
+  landing_step install-mmdc install-mmdc || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -2865,6 +2914,7 @@ main() {
     nested) cmd_nested "$@" ;;
     schedules) cmd_schedules "$@" ;;
     audit-landing) cmd_audit_landing "$@" ;;
+    bun-lifecycle) cmd_bun_lifecycle "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

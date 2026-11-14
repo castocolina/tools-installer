@@ -20,6 +20,7 @@ import pytest
 from installer import agent_settings
 from installer.engine import InstallOutcome
 from installer.enums import InstallStatus
+from installer.ownership import read_inventory
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from tests import e2e_landing_driver as driver
@@ -527,7 +528,9 @@ def test_install_opencode_takes_the_script_route_on_a_homebrew_box(
     box = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     seen: list[Platform] = []
 
-    def failing_install(tool: object, platform: Platform, *_args: object) -> InstallOutcome:
+    def failing_install(
+        tool: object, platform: Platform, *_args: object, **_kwargs: object
+    ) -> InstallOutcome:
         seen.append(platform)
         return InstallOutcome("opencode", InstallStatus.FAILED)
 
@@ -535,19 +538,44 @@ def test_install_opencode_takes_the_script_route_on_a_homebrew_box(
     monkeypatch.setattr(driver.engine, "install_tool", failing_install)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    with pytest.raises(vars(driver)["_Failed"]):
+    with pytest.raises(driver.Failed):
         vars(driver)["_install_opencode"](tmp_path, False)
 
-    opencode = vars(driver)["_tool"]("opencode")
+    opencode = driver.tool_by_id("opencode")
     assert [platform.has_brew for platform in seen] == [False]
     assert resolve_methods(opencode, seen[0])[0].kind == "script"
     assert resolve_methods(opencode, box)[0].kind == "brew"
 
 
+@pytest.mark.parametrize("keyword", [False, True], ids=["default-platform", "platform-keyword"])
+def test_install_one_passes_the_production_inventory_reader(
+    monkeypatch: pytest.MonkeyPatch, keyword: bool
+) -> None:
+    """R2-01: with no reader the engine writes no brew, node or bun receipt, and the bun verbs'
+    removals through the Uninstall path would find no manager argv."""
+    box = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    seen: list[object] = []
+
+    def recording_install(
+        tool: object, platform: Platform, *_args: object, **kwargs: object
+    ) -> InstallOutcome:
+        seen.append(kwargs.get("read_inventory_fn"))
+        return InstallOutcome("mmdc", InstallStatus.INSTALLED)
+
+    monkeypatch.setattr(driver.host_platform, "detect", lambda: box)
+    monkeypatch.setattr(driver.engine, "install_tool", recording_install)
+    mmdc = driver.tool_by_id("mmdc")
+    if keyword:
+        driver.install_one(mmdc, "X", platform=box)
+    else:
+        driver.install_one(mmdc, "X")
+    assert seen == [read_inventory]
+
+
 def test_the_driver_does_not_run_outside_a_container(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(driver, "_in_container", lambda: False)
+    monkeypatch.setattr(driver, "in_container", lambda: False)
     assert driver.main(["install", "opencode"]) == 2
     assert "only inside the disposable container" in capsys.readouterr().out
 
@@ -589,7 +617,7 @@ def test_the_driver_needs_the_container_the_marker_and_the_tester_home(
 ) -> None:
     """F13: `/run/.containerenv` is also in toolbox and distrobox, which mount the real HOME."""
     _container_files(monkeypatch, tmp_path, engine=engine, marker=marker, home=Path(home))
-    assert vars(driver)["_in_container"]() is runs
+    assert driver.in_container() is runs
     if not runs:
         assert driver.main(["install", "opencode"]) == 2
         assert "only inside the disposable container" in capsys.readouterr().out
