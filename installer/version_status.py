@@ -56,6 +56,7 @@ from typing import Literal, cast
 
 import installer.locations
 from installer import agent_settings, omz, receipts
+from installer.bun_globals import method_bin_dir
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
@@ -446,10 +447,10 @@ def version_argv(
         methods.append(ownership.method)
     methods.extend(tool.methods)
     for method in methods:
-        bin_dir = method.params.get("bin_dir")
-        if not isinstance(bin_dir, str) or not bin_dir:
+        method_dir = method_bin_dir(method)
+        if method_dir is None:
             continue
-        candidate = Path(bin_dir).expanduser() / tool.cmd
+        candidate = method_dir / tool.cmd
         if candidate.is_file() and not is_our_shim(candidate):
             return [str(candidate), "--version"]
     if tool.cmd in GUARD_NAMES:

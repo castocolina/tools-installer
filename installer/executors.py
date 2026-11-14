@@ -1,6 +1,6 @@
 """Per-method-kind executors: build an argv and hand it to the injected runner.
 
-Only command-based kinds live here (script, node, uv-tool, sdkman, brew, cask). Native
+Only command-based kinds live here (script, node, bun, uv-tool, sdkman, brew, cask). Native
 package managers never run here: `needs_manual` hands their command to the user.
 Download-based kinds (github_release, tarball) live in `installer.download`.
 """
@@ -14,6 +14,7 @@ from pathlib import Path
 from shutil import which
 from typing import cast
 
+from installer.bun_globals import bun_dirs, resolve_bun
 from installer.host_setup import HOST_SETUPS
 from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, display_path
@@ -555,6 +556,31 @@ def _node(method: Method, runner: Runner) -> None:
         SMOKE_CHECKS[smoke]()
 
 
+def _bun(method: Method, runner: Runner) -> None:
+    # Shape first, then bun, then the node floor, so a malformed entry is reported as that
+    # bug and a too-old node never reaches `bun add`. No allowance and no trust flag exist
+    # on this path: bun runs no dependency lifecycle script it was not asked to trust.
+    npm_pkg = require_str(method, "npm_pkg")
+    co_install = _opt_pkg_list(method, "co_install")
+    versions = _opt_version_map(method, "versions")
+    smoke = _opt_smoke_name(method)
+    bun = resolve_bun()
+    if bun is None:
+        raise ExecutorError(
+            f"bun not found on PATH or in {display_path(bun_dirs()[0])}; "
+            "install bun from the catalog, then run this again"
+        )
+    min_node = method.params.get("min_node")
+    if isinstance(min_node, str) and min_node:
+        # Bare node on purpose: the installed bins run `#!/usr/bin/env node`.
+        _require_minimum("node", ["node", "--version"], min_node)
+    members = list(dict.fromkeys([npm_pkg, *co_install]))
+    specs = [f"{name}@{versions[name]}" if name in versions else name for name in members]
+    runner([bun, "add", "-g", *specs])
+    if smoke is not None:
+        SMOKE_CHECKS[smoke]()
+
+
 def _uv_tool(method: Method, runner: Runner) -> None:
     pypi_pkg = require_str(method, "pypi_pkg")
     runner(["uv", "tool", "install", pypi_pkg])
@@ -684,6 +710,7 @@ def needs_manual(method: Method, *, writable: Callable[[str], bool]) -> ManualHa
 EXECUTORS: dict[str, Callable[[Method, Runner], None]] = {
     "script": _script,
     "node": _node,
+    "bun": _bun,
     "uv-tool": _uv_tool,
     "sdkman": _sdkman,
     "brew": _brew,

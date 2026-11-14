@@ -3393,3 +3393,93 @@ def test_find_export_an_unterminated_begin_skips_nothing() -> None:
 )
 def test_find_export_comment_words(line: str, expected: bool) -> None:
     assert (find_export(line, _EDITOR_NAMES) is not None) is expected
+
+
+def _bun_tool(tool_id: str = "mmdc") -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="diagram",
+        cmd=tool_id,
+        methods=(Method(kind="bun", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+
+
+def _clear_bun_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_collect_bin_dirs_wires_bun_bin_dir_when_it_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _clear_bun_env(monkeypatch)
+    home = tmp_path / "home"
+    default = home / ".local" / "bin"
+    brew_bun = _tool("bun", None)
+    script_bun = Tool(
+        id="bun",
+        name="bun",
+        category="runtime",
+        cmd="bun",
+        methods=(Method(kind="script", params={"url": "https://bun.sh/install"}),),
+    )
+    for provider in (brew_bun, script_bun):
+        assert collect_bin_dirs([provider, _bun_tool()], _PLATFORM, default, home=home) == [default]
+
+    bun_bin = home / ".bun" / "bin"
+    bun_bin.mkdir(parents=True)
+    for provider in (brew_bun, script_bun):
+        result = collect_bin_dirs([provider, _bun_tool()], _PLATFORM, default, home=home)
+        assert result == [default, bun_bin]
+
+    other = tmp_path / "other"
+    (other / ".bun" / "bin").mkdir(parents=True)
+    injected = collect_bin_dirs([_bun_tool()], _PLATFORM, default, home=other)
+    assert injected == [default, other / ".bun" / "bin"]
+
+
+@pytest.mark.parametrize("unsafe", ['"', "$(touch pwned)", "\x60", "\\", "\n"])
+def test_collect_bin_dirs_skips_a_bun_dir_unsafe_for_the_shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, unsafe: str
+) -> None:
+    _clear_bun_env(monkeypatch)
+    default = tmp_path / "default"
+    bad = tmp_path / f"bin{unsafe}dir"
+    bad.mkdir()
+    monkeypatch.setenv("BUN_INSTALL_BIN", str(bad))
+    skipped: list[Path] = []
+    result = collect_bin_dirs([_bun_tool()], _PLATFORM, default, on_skip=skipped.append)
+    assert result == [default]
+    assert skipped == [bad]
+    assert "pwned" not in managed_block(result)
+
+
+def test_collect_bin_dirs_screens_the_resolved_spelling_of_a_bun_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _clear_bun_env(monkeypatch)
+    default = tmp_path / "default"
+    target = tmp_path / "t$(touch pwned)"
+    target.mkdir()
+    link = tmp_path / "bunbin"
+    link.symlink_to(target, target_is_directory=True)
+    monkeypatch.setenv("BUN_INSTALL_BIN", str(link))
+    skipped: list[Path] = []
+    result = collect_bin_dirs([_bun_tool()], _PLATFORM, default, on_skip=skipped.append)
+    assert result == [default]
+    assert skipped == [link]
+
+
+def test_collect_bin_dirs_wires_a_bun_dir_with_a_space(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _clear_bun_env(monkeypatch)
+    default = tmp_path / "default"
+    spaced = tmp_path / "my bun" / "bin"
+    spaced.mkdir(parents=True)
+    monkeypatch.setenv("BUN_INSTALL_BIN", str(spaced))
+    skipped: list[Path] = []
+    result = collect_bin_dirs([_bun_tool()], _PLATFORM, default, on_skip=skipped.append)
+    assert result == [default, spaced]
+    assert skipped == []

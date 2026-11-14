@@ -9,6 +9,7 @@ from pathlib import Path
 
 import installer.legacy_guard
 import installer.locations
+from installer.bun_globals import method_bin_dir
 from installer.download import DOWNLOAD_KINDS, artifact_paths
 from installer.model import Tool
 from installer.run import CommandError, run_output
@@ -101,10 +102,10 @@ def present_bin_dir(tool: Tool) -> Path | None:
     both answer the same question the same way.
     """
     for method in tool.methods:
-        bin_dir = method.params.get("bin_dir")
-        if not isinstance(bin_dir, str) or not bin_dir:
+        method_dir = method_bin_dir(method)
+        if method_dir is None:
             continue
-        candidate = Path(bin_dir).expanduser() / tool.cmd
+        candidate = method_dir / tool.cmd
         if candidate.is_file() and not _is_installer_shim(tool, candidate):
             return candidate.parent
     return None

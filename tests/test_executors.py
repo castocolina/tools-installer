@@ -138,7 +138,7 @@ def test_unsupported_kind_raises():
 
 
 def test_every_command_kind_has_an_executor():
-    assert set(EXECUTORS) == {"script", "node", "uv-tool", "sdkman", "brew", "cask"}
+    assert set(EXECUTORS) == {"script", "node", "bun", "uv-tool", "sdkman", "brew", "cask"}
 
 
 def test_native_kinds_have_no_executor():
@@ -1297,3 +1297,76 @@ def test_node_runs_pnpm_from_a_bin_dir_with_spaces(
     calls, runner = _record()
     execute(_NODE_METHOD, runner)
     assert calls == [[str(pnpm), "add", "-g", "@mermaid-js/mermaid-cli"]]
+
+
+def _plant_bun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    fake_bun = _plant_executable(tmp_path / "bin", "bun")
+    monkeypatch.setenv("PATH", str(fake_bun.parent))
+    return fake_bun
+
+
+_BUN_PARAMS: dict[str, object] = {
+    "npm_pkg": "@mermaid-js/mermaid-cli",
+    "co_install": ["puppeteer"],
+    "versions": {"puppeteer": "^25"},
+    "min_node": "22.12.0",
+}
+
+
+def test_bun_runs_add_g_by_absolute_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bun = _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "probe_version", _const_probe("v22.23.1"))
+    calls, runner = _record()
+    execute(Method(kind="bun", params=_BUN_PARAMS), runner)
+    assert calls == [[str(bun), "add", "-g", "@mermaid-js/mermaid-cli", "puppeteer@^25"]]
+
+
+def test_bun_floor_runs_before_add(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "probe_version", _const_probe("v20.0.0"))
+    calls, runner = _record()
+    with pytest.raises(ExecutorError, match="does not meet the required minimum 22.12.0"):
+        execute(Method(kind="bun", params=_BUN_PARAMS), runner)
+    assert calls == []
+
+
+def test_bun_missing_fails_with_one_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    calls, runner = _record()
+    with pytest.raises(ExecutorError) as exc_info:
+        execute(Method(kind="bun", params=_BUN_PARAMS), runner)
+    message = str(exc_info.value)
+    assert "\n" not in message
+    assert "bun not found" in message
+    assert ".bun/bin" in message
+    assert calls == []
+
+
+def test_bun_scoped_name_and_range_are_single_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bun = _plant_bun(tmp_path, monkeypatch)
+    calls, runner = _record()
+    params: dict[str, object] = {
+        "npm_pkg": "@scope/pkg",
+        "co_install": ["@other/peer", "plain"],
+        "versions": {"@other/peer": ">=1 <3"},
+    }
+    execute(Method(kind="bun", params=params), runner)
+    assert calls == [[str(bun), "add", "-g", "@scope/pkg", "@other/peer@>=1 <3", "plain"]]
+
+
+def test_bun_never_passes_trust(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "probe_version", _const_probe("v22.23.1"))
+    calls, runner = _record()
+    execute(Method(kind="bun", params=_BUN_PARAMS), runner)
+    execute(Method(kind="bun", params={"npm_pkg": "puppeteer"}), runner)
+    assert calls
+    assert not any("--trust" in call for call in calls)

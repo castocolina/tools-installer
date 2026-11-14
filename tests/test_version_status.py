@@ -2183,6 +2183,19 @@ def test_version_probe_walks_past_a_leftover_outside_the_managed_dir(
     assert argv == [str(real), "--version"]
 
 
+def test_version_argv_finds_a_bun_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    command = tmp_path / ".bun" / "bin" / "mmdc"
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n")
+    command.chmod(0o755)
+    tool = _tool("mmdc", Method(kind="bun", params={"npm_pkg": "@mermaid-js/mermaid-cli"}))
+    assert version_argv(tool, None) == [str(command), "--version"]
+
+
 def test_version_file_is_read_without_a_subprocess_probe(tmp_path: Path) -> None:
     path = tmp_path / "version"
     method = Method(kind="script", params={"version_file": str(path)})

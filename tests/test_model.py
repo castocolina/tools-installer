@@ -2076,3 +2076,54 @@ def test_cargo_distrobox_rejects_a_first_artifact_outside_the_bin_dir(tmp_path: 
 def test_cargo_distrobox_rejects_an_unknown_key(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown key 'flags'"):
         load_tools(_cargo_registry(tmp_path, flags='"--x"'))
+
+
+def _bun_registry(tmp_path: Path, method_extra: str = "", npm_pkg: str = "puppeteer") -> Path:
+    return _write(
+        tmp_path,
+        f"""
+[[tool]]
+id = "demo"
+category = "diagram"
+cmd = "demo"
+tier = "user"
+[[tool.method]]
+kind = "bun"
+npm_pkg = "{npm_pkg}"
+{method_extra}
+""",
+    )
+
+
+def test_bun_pkg_names_are_regex_checked(tmp_path: Path) -> None:
+    for bad in ("-x", "Bad Name"):
+        with pytest.raises(ValueError, match="npm_pkg"):
+            load_tools(_bun_registry(tmp_path, npm_pkg=bad))
+    with pytest.raises(ValueError, match="co_install"):
+        load_tools(_bun_registry(tmp_path, 'co_install = ["--registry=evil"]'))
+    for good in ("@scope/name", "plain"):
+        (tool,) = load_tools(_bun_registry(tmp_path, npm_pkg=good))
+        assert tool.methods[0].params["npm_pkg"] == good
+
+
+def test_bun_method_loads(tmp_path: Path) -> None:
+    extra = (
+        'co_install = ["@other/peer"]\n'
+        'versions = { "@other/peer" = "^1" }\n'
+        'min_node = "22.12.0"\n'
+        'smoke = "puppeteer-browser"\n'
+        'smoke_argv = ["--version"]'
+    )
+    (tool,) = load_tools(_bun_registry(tmp_path, extra))
+    assert tool.methods[0].kind == "bun"
+    assert tool.methods[0].params["min_node"] == "22.12.0"
+
+
+def test_bun_allow_build_is_a_load_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="allow_build"):
+        load_tools(_bun_registry(tmp_path, 'allow_build = ["puppeteer"]'))
+
+
+def test_bun_versions_key_outside_the_install_group_is_a_load_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="versions.*other"):
+        load_tools(_bun_registry(tmp_path, 'versions = { other = "^1" }'))

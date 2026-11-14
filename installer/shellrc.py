@@ -6,6 +6,7 @@ goes through installer/atomic.py, because a truncated rc file is unrecoverable a
 these files are edited read-modify-write.
 """
 
+import contextlib
 import os
 import re
 import stat
@@ -23,6 +24,7 @@ from installer.atomic import (
     snapshot_matches,
     staged_sibling,
 )
+from installer.bun_globals import bun_dirs
 from installer.model import Tool
 from installer.platform import Platform
 from installer.rcclean import PathWriterLine
@@ -48,6 +50,18 @@ def _resolve_home(path: Path, home: Path) -> Path:
     return path
 
 
+# path_export_guard writes a dir inside double quotes, unescaped; these break out of them.
+_SHELL_UNSAFE = frozenset('"$`\\\n')
+
+
+def _shell_safe(directory: Path) -> bool:
+    """True when neither spelling `path_export_guard` emits holds a shell-active character."""
+    spellings = {str(directory)}
+    with contextlib.suppress(OSError):  # the guard keeps the declared spelling alone then too
+        spellings.add(str(directory.resolve()))
+    return not any(char in spelling for spelling in spellings for char in _SHELL_UNSAFE)
+
+
 def collect_bin_dirs(
     tools: list[Tool],
     platform: Platform,
@@ -55,6 +69,7 @@ def collect_bin_dirs(
     exists: Callable[[Path], bool] = Path.is_dir,
     *,
     home: Path | None = None,
+    on_skip: Callable[[Path], None] | None = None,
 ) -> list[Path]:
     """The default bin dir plus each platform-applicable method's existing bin_dir.
 
@@ -67,6 +82,11 @@ def collect_bin_dirs(
     `home`, when given, is used only to resolve a bare `~` or `~/...` default —
     letting a caller inject a non-default home for tests, while every other
     path is unaffected.
+
+    A bun method's bin dir is bun's global bin dir from the environment, so it is
+    wired whether bun came from its script or from Homebrew, unless either spelling
+    of its path holds a character the shell would interpret; `on_skip` is called
+    once with each existing bun dir skipped for that reason.
     """
     resolved_home = Path.home() if home is None else home
     dirs: list[Path] = []
@@ -79,12 +99,23 @@ def collect_bin_dirs(
         seen.add(resolved)
         dirs.append(resolved)
 
+    skipped: set[Path] = set()
     add(default, require_exists=False)
     for tool in tools:
         for method in resolve_methods(tool, platform):
             raw = method.params.get("bin_dir")
             if isinstance(raw, str) and raw:
                 add(Path(raw), require_exists=True)
+            elif method.kind == "bun":
+                bun_bin = bun_dirs(home=resolved_home)[0]
+                if _shell_safe(bun_bin):
+                    add(bun_bin, require_exists=True)
+                elif bun_bin not in skipped and exists(bun_bin):
+                    # Skipped, not quoted: the guard below takes trusted paths only, and
+                    # BUN_INSTALL* is user environment. The engine still prepends it per run.
+                    skipped.add(bun_bin)
+                    if on_skip is not None:
+                        on_skip(bun_bin)
     return dirs
 
 

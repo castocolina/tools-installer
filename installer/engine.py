@@ -8,11 +8,12 @@ from typing import Literal
 
 from installer import apps, cargo_distrobox, download, executors, receipts
 from installer.agent_settings import FileResult
+from installer.bun_globals import method_bin_dir
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.enums import InstallStatus
 from installer.legacy_guard import is_our_shim, real_binary
-from installer.locations import bin_dir, prepend_path
+from installer.locations import prepend_path
 from installer.model import Method, Tool
 from installer.ownership import (
     ManagerInventory,
@@ -51,9 +52,9 @@ def _manager_method(method: Method) -> bool:
 
 
 def _manager_smoke_target(method: Method, cmd: str) -> Path | None:
-    raw_bin_dir = method.params.get("bin_dir")
-    if isinstance(raw_bin_dir, str) and raw_bin_dir:
-        declared = bin_dir(raw_bin_dir) / cmd
+    method_dir = method_bin_dir(method)
+    if method_dir is not None:
+        declared = method_dir / cmd
         # A leftover guard shim is never the method's binary: fall through to the PATH lookup.
         if declared.is_file() and not is_our_shim(declared):
             if os.access(declared, os.X_OK):
@@ -294,9 +295,9 @@ def install_tool(
                     method_kind=method.kind,
                     handoff=handoff,
                 )
-            raw_bin_dir = method.params.get("bin_dir")
-            if isinstance(raw_bin_dir, str) and raw_bin_dir:
-                prepend_path(bin_dir(raw_bin_dir))
+            method_dir = method_bin_dir(method)
+            if method_dir is not None:
+                prepend_path(method_dir)
             try:
                 smoked = _run_manager_smoke(method, tool)
             except executors.ExecutorError as exc:

@@ -955,6 +955,41 @@ def test_configure_path_honors_exists_filter(tmp_path: Path):
     assert str(tmp_path / ".local" / "bin") in text  # default always managed
 
 
+def test_configure_path_names_a_skipped_bun_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import configure_path
+
+    for name in ("BUN_INSTALL", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    unsafe = tmp_path / "bun$dir" / "bin"
+    unsafe.mkdir(parents=True)
+    monkeypatch.setenv("BUN_INSTALL_BIN", str(unsafe))
+    tool = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method(kind="bun", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    myshellrc = tmp_path / ".myshellrc"
+    console, buf = _console()
+
+    configure_path(
+        [tool],
+        console,
+        platform=_platform(),
+        default_bin_dir=tmp_path / ".local" / "bin",
+        myshellrc_path=myshellrc,
+        rc_paths=[],
+    )
+
+    lines = [line for line in buf.getvalue().splitlines() if str(unsafe) in line]
+    assert len(lines) == 1
+    assert "not added" in lines[0]
+    assert str(unsafe) not in myshellrc.read_text()
+
+
 def test_run_uninstall_removes_when_confirmed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from installer.app import run_uninstall
     from installer.shellrc import write_myshellrc

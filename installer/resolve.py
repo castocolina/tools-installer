@@ -15,6 +15,7 @@ _RANK = {
     "host_setup": 15,
     "github_release": 20,
     "node": 20,
+    "bun": 6,
     "uv-tool": 20,
     "sdkman": 20,
     "tarball": 20,
@@ -70,7 +71,7 @@ def _applies(method: Method, platform: Platform) -> bool:
         "host_setup",
     ):
         return True
-    if kind == "node":
+    if kind in ("node", "bun"):
         # Gated by the system node's floor, a fact the version pass re-reads; an unknown
         # node (None) keeps the method so ownership and constant-probe callers are unchanged.
         return _node_ok(method, platform)
@@ -118,7 +119,7 @@ def _rejection(method: Method, platform: Platform) -> str:
     ):
         return "min_os_version"
     kind = method.kind
-    if kind == "node" and not _node_ok(method, platform):
+    if kind in ("node", "bun") and not _node_ok(method, platform):
         return "node"
     if kind == "cargo_distrobox":
         return "tools"

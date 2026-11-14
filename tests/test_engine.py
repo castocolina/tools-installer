@@ -2727,3 +2727,118 @@ def test_release_capture_keeps_the_production_resolver(monkeypatch: pytest.Monke
     written = receipts.read("rg")
     assert written is not None
     assert written.release == "v9.0.0"
+
+
+def test_a_bun_method_installs_by_absolute_path_and_records_a_bun_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    fake_bun = scratch_path_for_manager_smoke / "bun"
+    fake_bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_bun.chmod(0o755)
+
+    def probe(_argv: list[str]) -> str:
+        return "v22.23.1"
+
+    monkeypatch.setattr(executors, "probe_version", probe)
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text(
+        """
+[[tool]]
+id = "mmdc"
+category = "diagram"
+cmd = "mmdc"
+tier = "user"
+verified = 2026-01-01
+[[tool.method]]
+kind = "bun"
+npm_pkg = "@mermaid-js/mermaid-cli"
+co_install = ["puppeteer"]
+versions = { puppeteer = "^25" }
+min_node = "22.12.0"
+""",
+        encoding="utf-8",
+    )
+    (tool,) = load_tools(manifest)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        tool,
+        Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+        runner=calls.append,
+        present=lambda _t: False,
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "bun"
+    assert calls == [[str(fake_bun), "add", "-g", "@mermaid-js/mermaid-cli", "puppeteer@^25"]]
+    assert os.environ["PATH"].startswith(str(home / ".bun" / "bin"))
+    receipt = receipts.read(tool.id)
+    assert receipt is not None
+    assert receipt.method.kind == "bun"
+    assert receipt.package == "@mermaid-js/mermaid-cli"
+
+
+def test_bun_bin_dir_is_prepended_and_smoked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    fake_bun = scratch_path_for_manager_smoke / "bun"
+    fake_bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_bun.chmod(0o755)
+    command = home / ".bun" / "bin" / "rg"
+    smoked: list[Path] = []
+
+    def runner(_argv: list[str]) -> None:
+        command.parent.mkdir(parents=True)
+        command.write_text("#!/bin/sh\n", encoding="utf-8")
+        command.chmod(0o755)
+
+    def record_smoke(path: Path, _argv: tuple[str, ...]) -> None:
+        smoked.append(path)
+
+    monkeypatch.setattr(executors, "smoke_binary", record_smoke)
+    tool = _tool(Method("bun", {"npm_pkg": "ripgrep-npm"}))
+    outcome = install_tool(tool, _platform(), runner=runner, present=lambda _t: False)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert smoked == [command]
+    assert os.environ["PATH"].startswith(str(command.parent))
+
+
+def _bun_then_node_tool() -> Tool:
+    params: dict[str, object] = {"npm_pkg": "@mermaid-js/mermaid-cli"}
+    return _tool(Method("bun", params), Method("node", params))
+
+
+def test_install_tool_falls_through_from_bun_to_pnpm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    calls: list[list[str]] = []
+    failed = install_tool(
+        _bun_then_node_tool(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    assert failed.status == InstallStatus.FAILED
+    assert calls == []
+    first, second = failed.errors
+    assert "bun not found" in str(first)
+    assert "\n" not in str(first)
+    assert "pnpm not found" in str(second)
+
+    pnpm = scratch_path_for_manager_smoke / "pnpm"
+    pnpm.write_text("#!/bin/sh\n", encoding="utf-8")
+    pnpm.chmod(0o755)
+    installed = install_tool(
+        _bun_then_node_tool(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    assert installed.status == InstallStatus.INSTALLED
+    assert installed.method_kind == "node"
+    assert calls == [[str(pnpm), "add", "-g", "@mermaid-js/mermaid-cli"]]
