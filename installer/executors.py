@@ -14,7 +14,7 @@ from pathlib import Path
 from shutil import which
 from typing import cast
 
-from installer.bun_globals import bun_dirs, resolve_bun
+from installer.bun_globals import bun_dirs, resolve_bun, trusted_dependencies
 from installer.host_setup import HOST_SETUPS
 from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, display_path
@@ -36,6 +36,10 @@ _LOADER_ERROR = re.compile(
 
 class ExecutorError(RuntimeError):
     """A method could not be turned into a runnable command."""
+
+
+class MethodLeftInstalled(ExecutorError):
+    """The method ran and left its package installed, so no later method may install it again."""
 
 
 def require_str(method: Method, key: str) -> str:
@@ -595,6 +599,33 @@ def _node(method: Method, runner: Runner) -> None:
         SMOKE_CHECKS[smoke]("pnpm")
 
 
+# The package each declared smoke needs bun to have built, for the trust sentence below.
+_SMOKE_PACKAGE = {"puppeteer-browser": "puppeteer"}
+
+
+def _bun_left_installed_line(
+    exc: ExecutorError, npm_pkg: str, smoke: str, versions: dict[str, str]
+) -> str:
+    """One line for a smoke that failed after `bun add -g` returned.
+
+    The smoke's own reason stays first. When the user's own `trustedDependencies` list exists
+    and lacks the smoke's package, bun probably skipped that package's postinstall, so the exact
+    trust command is named as the likely cause, never as a certainty (D-21). bun's output is not
+    parsed and its manifest is only read.
+    """
+    parts = [str(exc)]
+    package = _SMOKE_PACKAGE.get(smoke)
+    trusted = trusted_dependencies()
+    if package is not None and trusted is not None and package not in trusted:
+        spec = f"{package}@{versions[package]}" if package in versions else package
+        parts.append(
+            f"Your bun global manifest's trustedDependencies does not list {package}, so bun "
+            f"likely skipped its postinstall; run `bun add -g --trust {spec}`, then install again."
+        )
+    parts.append(f"bun left {npm_pkg} installed; remove it with `bun remove --global {npm_pkg}`.")
+    return " ".join(parts)
+
+
 def _bun(method: Method, runner: Runner) -> None:
     # Shape first, then bun, then the node floor, so a malformed entry is reported as that
     # bug and a too-old node never reaches `bun add`. No allowance and no trust flag exist
@@ -617,7 +648,13 @@ def _bun(method: Method, runner: Runner) -> None:
     specs = [f"{name}@{versions[name]}" if name in versions else name for name in members]
     runner([bun, "add", "-g", *specs])
     if smoke is not None:
-        SMOKE_CHECKS[smoke]("bun")
+        try:
+            SMOKE_CHECKS[smoke]("bun")
+        except ExecutorError as exc:
+            # Only the check is wrapped: a failure of `bun add -g` itself falls through.
+            raise MethodLeftInstalled(
+                _bun_left_installed_line(exc, npm_pkg, smoke, versions)
+            ) from exc
 
 
 def _uv_tool(method: Method, runner: Runner) -> None:

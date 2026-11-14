@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from installer.bun_globals import bun_dirs, method_bin_dir, resolve_bun
+from installer.bun_globals import bun_dirs, method_bin_dir, resolve_bun, trusted_dependencies
 from installer.model import Method
 
 _BUN_VARS = ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR")
@@ -107,3 +107,45 @@ def test_method_bin_dir_prefers_a_declared_dir_then_bun_then_none(scratch_home: 
     assert method_bin_dir(declared) == scratch_home / ".local" / "bin"
     assert method_bin_dir(Method("bun", {"npm_pkg": "x"})) == scratch_home / ".bun" / "bin"
     assert method_bin_dir(Method("node", {"npm_pkg": "x"})) is None
+
+
+def _write_manifest(scratch_home: Path, content: str | bytes) -> Path:
+    manifest = bun_dirs()[1] / "package.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, bytes):
+        manifest.write_bytes(content)
+    else:
+        manifest.write_text(content, encoding="utf-8")
+    return manifest
+
+
+def test_trusted_dependencies_reads_only_a_string_list(scratch_home: Path) -> None:
+    assert trusted_dependencies() is None  # no tree at all
+    manifest = _write_manifest(scratch_home, '{"trustedDependencies": ["esbuild", "sharp"]}')
+    assert trusted_dependencies() == ["esbuild", "sharp"]
+    before = manifest.read_bytes()
+    for content in (
+        '{"dependencies": {}}',
+        '{"trustedDependencies": "esbuild"}',
+        '{"trustedDependencies": ["esbuild", 3]}',
+        '["trustedDependencies"]',
+        "not json",
+        b"\xff\xfe",
+    ):
+        _write_manifest(scratch_home, content)
+        assert trusted_dependencies() is None
+    _write_manifest(scratch_home, before)
+    assert trusted_dependencies() == ["esbuild", "sharp"]
+    assert manifest.read_bytes() == before
+
+
+def test_trusted_dependencies_reads_an_unreadable_manifest_as_none(
+    scratch_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_manifest(scratch_home, '{"trustedDependencies": ["esbuild"]}')
+
+    def refuse(_self: Path, *_args: object, **_kwargs: object) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+    assert trusted_dependencies() is None

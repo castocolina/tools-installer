@@ -5,9 +5,12 @@ install, which is exactly when the answer is needed. Importers: engine, executor
 shellrc and version_status; this module imports only `installer.model` so none can cycle.
 """
 
+import json
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from installer.model import Method
 
@@ -47,6 +50,35 @@ def resolve_bun() -> str | None:
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return None
+
+
+def _load_manifest() -> Mapping[str, object] | None:
+    """bun's global `package.json` as an object, `{}` when there is none, else None.
+
+    Read-only, and never raises: a missing file or tree reads as no manifest, while any other
+    `OSError`, invalid UTF-8, invalid JSON and a non-object document read as unknown (None).
+    """
+    try:
+        document: object = json.loads((bun_dirs()[1] / "package.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        return None
+    return cast(dict[str, object], document) if isinstance(document, dict) else None
+
+
+def trusted_dependencies() -> list[str] | None:
+    """The user's `trustedDependencies` list in bun's global manifest, or None when it has none.
+
+    None covers an absent key, a value that is not a list of strings, and an unreadable manifest.
+    The installer only reads this: bun's lifecycle-script trust is the user's to widen.
+    """
+    raw = (_load_manifest() or {}).get("trustedDependencies")
+    if not isinstance(raw, list):
+        return None
+    items = cast(list[object], raw)
+    names = [item for item in items if isinstance(item, str)]
+    return names if len(names) == len(items) else None
 
 
 def method_bin_dir(method: Method) -> Path | None:

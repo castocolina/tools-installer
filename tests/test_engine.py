@@ -14,7 +14,7 @@ import installer.postinstall as postinstall
 from installer import cargo_distrobox, executors, legacy_guard, post_install, receipts, versions
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
-from installer.engine import install_tool
+from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus
 from installer.model import Method, Tool, load_tools
 from installer.omz import owned_plugins
@@ -22,6 +22,7 @@ from installer.ownership import ManagerInventory
 from installer.platform import Platform
 from installer.run import CommandError
 from installer.versions import Release, VersionError
+from tests.launch_doubles import stub_launch
 from tests.test_apps import SHELLED_LINKERS
 from tests.test_cargo_distrobox import FakeBox, alacritty_tool, image_is, immutable_with_tools
 from tests.test_download import fixture_runner
@@ -2842,3 +2843,188 @@ def test_install_tool_falls_through_from_bun_to_pnpm(
     assert installed.status == InstallStatus.INSTALLED
     assert installed.method_kind == "node"
     assert calls == [[str(pnpm), "add", "-g", "@mermaid-js/mermaid-cli"]]
+
+
+# --- the bun method ends the ladder once `bun add -g` has returned -------------------------
+
+_MMDC_BUN_PARAMS: dict[str, object] = {
+    "npm_pkg": "@mermaid-js/mermaid-cli",
+    "co_install": ["puppeteer"],
+    "versions": {"puppeteer": "^25"},
+    "min_node": "22.12.0",
+    "smoke": "puppeteer-browser",
+}
+
+
+def _bun_then_node_mmdc() -> Tool:
+    node_params: dict[str, object] = {**_MMDC_BUN_PARAMS, "allow_build": ["puppeteer"]}
+    return _tool(Method("bun", _MMDC_BUN_PARAMS), Method("node", node_params), tool_id="mmdc")
+
+
+def _bun_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch: Path, *, bun: bool = True
+) -> Path:
+    """A scratch HOME with fake bun and pnpm on PATH and a node that meets every floor."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    names = ("bun", "pnpm") if bun else ("pnpm",)
+    for name in names:
+        (scratch / name).write_text("#!/bin/sh\n", encoding="utf-8")
+        (scratch / name).chmod(0o755)
+
+    def probe(_argv: list[str]) -> str:
+        return "v22.23.1"
+
+    monkeypatch.setattr(executors, "probe_version", probe)
+    return home
+
+
+def _seed_bun_manifest(home: Path, text: str | bytes) -> Path:
+    manifest = home / ".bun" / "install" / "global" / "package.json"
+    manifest.parent.mkdir(parents=True)
+    if isinstance(text, bytes):
+        manifest.write_bytes(text)
+    else:
+        manifest.write_text(text, encoding="utf-8")
+    return manifest
+
+
+_TRUST_LIST_WITHOUT_PUPPETEER = '{"trustedDependencies": ["esbuild"], "dependencies": {}}'
+
+
+def _install_with_failing_browser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch: Path, manifest: str | None
+) -> tuple[InstallOutcome, list[list[str]], Path | None]:
+    home = _bun_host(monkeypatch, tmp_path, scratch)
+    seeded = None if manifest is None else _seed_bun_manifest(home, manifest)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch("libnss3.so is missing"))
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _bun_then_node_mmdc(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    return outcome, calls, seeded
+
+
+def test_a_blocked_postinstall_ends_the_ladder_and_names_the_trust_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    outcome, calls, _ = _install_with_failing_browser(
+        monkeypatch, tmp_path, scratch_path_for_manager_smoke, _TRUST_LIST_WITHOUT_PUPPETEER
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert outcome.method_kind == "bun"
+    assert len(calls) == 1  # the bun argv; the node method's pnpm argv never ran
+    assert calls[0][1:3] == ["add", "-g"]
+    reason = str(outcome.errors[-1])
+    assert "\n" not in reason
+    assert "libnss3.so is missing" in reason
+    assert "likely" in reason
+    assert "bun add -g --trust puppeteer@^25" in reason
+    assert "bun remove --global @mermaid-js/mermaid-cli" in reason
+    assert isinstance(outcome.errors[-1], executors.MethodLeftInstalled)
+
+
+def test_installer_never_writes_the_bun_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    outcome, calls, manifest = _install_with_failing_browser(
+        monkeypatch, tmp_path, scratch_path_for_manager_smoke, _TRUST_LIST_WITHOUT_PUPPETEER
+    )
+    assert manifest is not None
+    assert outcome.status == InstallStatus.FAILED
+    assert manifest.read_text(encoding="utf-8") == _TRUST_LIST_WITHOUT_PUPPETEER
+    assert not any("--trust" in arg for call in calls for arg in call)
+
+
+@pytest.mark.parametrize(
+    "manifest", [None, '{"dependencies": {}}', '{"trustedDependencies": "esbuild"}', "not json"]
+)
+def test_a_browser_failure_without_a_trust_list_keeps_its_own_reason(
+    manifest: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scratch_path_for_manager_smoke: Path,
+) -> None:
+    outcome, calls, _ = _install_with_failing_browser(
+        monkeypatch, tmp_path, scratch_path_for_manager_smoke, manifest
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert len(calls) == 1
+    reason = str(outcome.errors[-1])
+    assert "libnss3.so is missing" in reason
+    assert "shared libraries" in reason
+    assert "--trust" not in reason
+    assert "bun remove --global @mermaid-js/mermaid-cli" in reason
+
+
+def test_a_trust_list_that_names_puppeteer_adds_no_trust_sentence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    outcome, _calls, _ = _install_with_failing_browser(
+        monkeypatch,
+        tmp_path,
+        scratch_path_for_manager_smoke,
+        '{"trustedDependencies": ["puppeteer"]}',
+    )
+    assert "--trust" not in str(outcome.errors[-1])
+
+
+def test_a_failed_bun_add_falls_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _bun_host(monkeypatch, tmp_path, scratch_path_for_manager_smoke)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> None:
+        calls.append(argv)
+        if argv[0].endswith("bun"):
+            raise CommandError(argv, 1)
+
+    outcome = install_tool(
+        _bun_then_node_mmdc(), _platform(), runner=runner, present=lambda _t: False
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "node"
+    assert [call[0].rsplit("/", 1)[-1] for call in calls] == ["bun", "pnpm"]
+
+
+def test_a_failure_before_bun_add_still_falls_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    _bun_host(monkeypatch, tmp_path, scratch_path_for_manager_smoke, bun=False)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _bun_then_node_mmdc(), _platform(), runner=calls.append, present=lambda _t: False
+    )
+    assert outcome.status == InstallStatus.INSTALLED
+    assert outcome.method_kind == "node"
+    assert [call[0].rsplit("/", 1)[-1] for call in calls] == ["pnpm"]
+
+
+def test_a_bun_generic_smoke_failure_also_ends_the_ladder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    home = _bun_host(monkeypatch, tmp_path, scratch_path_for_manager_smoke)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> None:
+        calls.append(argv)
+        if argv[0].endswith("bun"):
+            (home / ".bun" / "bin").mkdir(parents=True)
+            _write_cmd(home / ".bun" / "bin", "rg", 127)
+
+    outcome = install_tool(
+        _bun_then_node_mmdc(), _platform(), runner=runner, present=lambda _t: False
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert outcome.method_kind == "bun"
+    assert len(calls) == 1  # no pnpm argv
+    assert isinstance(outcome.errors[-1], executors.MethodLeftInstalled)
+    assert "bun left rg installed after its smoke run failed" in str(outcome.errors[-1])
+    assert str(home / ".bun" / "bin") not in os.environ["PATH"]

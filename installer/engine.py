@@ -184,6 +184,11 @@ def install_tool(
     manager) hands its exact command off and ends the ladder; nothing runs and the
     next method is never tried.
 
+    A smoke that fails after `bun add -g` returned (the declared one or the generic
+    one below) also ends the ladder, with the bun method's FAILED outcome: the package
+    stays installed, and falling through would install it a second time through pnpm.
+    A failure before or during `bun add -g` still falls through.
+
     A checksum mismatch halts the ladder by default (the security signal must
     not silently degrade to another channel); checksum_policy="continue"
     restores ordinary fall-through and is only ever set by an explicit user
@@ -312,7 +317,17 @@ def install_tool(
                     f"{method.kind} left {tool.cmd} installed after its smoke run failed; {tail}"
                 )
                 leftovers.append(leftover)
-                raise executors.ExecutorError(f"{exc}; {leftover}") from exc
+                # A bun fallback would install the same npm package a second time through pnpm.
+                halt = (
+                    executors.MethodLeftInstalled
+                    if method.kind == "bun"
+                    else executors.ExecutorError
+                )
+                raise halt(f"{exc}; {leftover}") from exc
+        except executors.MethodLeftInstalled as exc:
+            return InstallOutcome(
+                tool.id, InstallStatus.FAILED, method_kind=method.kind, errors=(*errors, exc)
+            )
         except ChecksumMismatch as exc:
             if checksum_policy == "fail":
                 return InstallOutcome(
