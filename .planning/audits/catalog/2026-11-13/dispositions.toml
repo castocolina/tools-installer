@@ -1,0 +1,389 @@
+[[drift]]
+entry = "brew"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "bat"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "eza"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "eza"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "zoxide"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "lazygit"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "gh"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "starship"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "oh-my-zsh"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "direnv"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "gum"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "glow"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "glow"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "xh"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "xh"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "difftastic"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "gitui"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "gitui"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "lazydocker"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "lazydocker"
+check = "postinstall hook"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "docker"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "docker"
+check = "update argv"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "docker"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "docker"
+check = "postinstall hook"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "podman"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "podman"
+check = "update argv"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "podman"
+check = "postinstall hook"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "colima"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "dive"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "duf"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "miller"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "tealdeer"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "fx"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "dasel"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "gron"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "codex"
+check = "update argv"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "opencode"
+check = "install method"
+disposition = "commit:3616e693"
+note = "24.3-06 Task 1: the v2 installer, the homebrew/core brew method and the npm latest. The latest-source gap is resolved by the 24.3-01 resolver commit d5065d8a."
+
+[[drift]]
+entry = "opencode"
+check = "update argv"
+disposition = "commit:3616e693"
+note = "24.3-06 Task 1: update re-runs the v2 installer; the v1-to-v2 route is container-proved."
+
+[[drift]]
+entry = "opencode"
+check = "removal recipe and paths"
+disposition = "commit:3616e693"
+note = "24.3-06 Task 1: both binaries in paths and the `opencode2 service stop` removal recipe."
+
+[[drift]]
+entry = "opencode"
+check = "tuning keys"
+disposition = "commit:bac1682e"
+note = "24.3-07: writes `permissions` and keeps reverting the retired `permission`; 53d2438a recognises the retired key as ours or the user's."
+
+[[drift]]
+entry = "opencode"
+check = "script"
+cite = "installer/agent_settings.py:679"
+disposition = "commit:bac1682e"
+note = "24.3-07: the deprecated `permission` key is no longer the written key."
+
+[[drift]]
+entry = "cursor-agent"
+check = "script"
+cite = "installer/cursor_shim.py:65"
+disposition = "proposed"
+note = "no change: designed rewrite. The shim rewrites argv on purpose (model-injecting or npx redirect shim)."
+
+[[drift]]
+entry = "codegraph"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+note = "~/.codegraph as config_paths and the vendor self-upgrade removal gap."
+
+[[drift]]
+entry = "codegraph"
+check = "postinstall hook"
+disposition = "commit:6f4e9d77"
+note = "24.3-08 Task 2 gates the Pi target (Pi stays dormant until codegraph ships a `pi` target); Task 1 commit 75c684df adds copilot-cli."
+
+[[drift]]
+entry = "codegraph"
+check = "script"
+cite = ".claude/architecture.md:355"
+disposition = "commit:61041118"
+note = "24.3-08 Task 3: the docs name present_hosts() and present_harnesses."
+
+[[drift]]
+entry = "codegraph"
+check = "script"
+cite = ".claude/architecture.md:623"
+disposition = "commit:61041118"
+note = "24.3-08 Task 3: the docs name present_hosts() and present_harnesses."
+
+[[drift]]
+entry = "codegraph"
+check = "script"
+cite = ".claude/skills/tool-onboarding/SKILL.md:176"
+disposition = "commit:61041118"
+note = "24.3-08 Task 3: the docs name present_hosts() and present_harnesses."
+
+[[drift]]
+entry = "graphify"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "zip"
+check = "script"
+cite = "installer/versions.py:211"
+disposition = "backlog:999.16"
+
+[[drift]]
+entry = "sdkman"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "java"
+check = "removal recipe and paths"
+disposition = "proposed"
+note = "no change: designed handoff. The installer prints the exact `sdk uninstall <candidate> <version>` command (installer/ownership.py _REMOVAL_COMMANDS) for the user to run."
+
+[[drift]]
+entry = "groovy"
+check = "removal recipe and paths"
+disposition = "proposed"
+note = "no change: designed handoff. The installer prints the exact `sdk uninstall <candidate> <version>` command (installer/ownership.py _REMOVAL_COMMANDS) for the user to run."
+
+[[drift]]
+entry = "springbootcli"
+check = "removal recipe and paths"
+disposition = "proposed"
+note = "no change: designed handoff. The installer prints the exact `sdk uninstall <candidate> <version>` command (installer/ownership.py _REMOVAL_COMMANDS) for the user to run."
+
+[[drift]]
+entry = "gradle"
+check = "removal recipe and paths"
+disposition = "proposed"
+note = "no change: designed handoff. The installer prints the exact `sdk uninstall <candidate> <version>` command (installer/ownership.py _REMOVAL_COMMANDS) for the user to run."
+
+[[drift]]
+entry = "bun"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "volta"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "vale"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "vale"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "broot"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "vscode"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "mmdc"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "puppeteer"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "kitty"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "wezterm"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "glab"
+check = "install method"
+disposition = "backlog:999.15"
+
+[[drift]]
+entry = "glab"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+
+[[drift]]
+entry = "pi"
+check = "install method"
+disposition = "backlog:999.13"
+note = "The method change (pi.dev installer or npm, `pi update`) stays open in 999.13; the stale entry text was refreshed by the 24.3-06 Task 2 commit c09d90b0."
+
+[[drift]]
+entry = "pi"
+check = "removal recipe and paths"
+disposition = "backlog:999.14"
+note = "Pi's ~/.pi config path and the bun-global owner gap (installer/ownership.py has no bun owner) are part of the grouped footprint item."
+
+[[drift]]
+entry = "drawio-desktop"
+check = "install method"
+disposition = "commit:abb371ff"
+note = "24.3-06 Task 3: the two macOS app pins bumped to 32.6.10."
+
+[[drift]]
+entry = "(installer)"
+check = "script"
+cite = "installer/guards.py:218"
+disposition = "proposed"
+note = "no change: designed rewrite. The shim rewrites argv on purpose (model-injecting or npx redirect shim)."
+
+[[drift]]
+entry = "(installer)"
+check = "script"
+cite = "installer/guards.py:260"
+disposition = "proposed"
+note = "no change: designed rewrite. The shim rewrites argv on purpose (model-injecting or npx redirect shim)."
+
+[[drift]]
+entry = "(installer)"
+check = "script"
+cite = "installer/guards.py:333"
+disposition = "proposed"
+note = "no change: designed rewrite. The shim rewrites argv on purpose (model-injecting or npx redirect shim)."

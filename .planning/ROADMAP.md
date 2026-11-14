@@ -897,7 +897,7 @@ Plans:
 **Goal:** When copilot (added in 23.2) is present, the codegraph and graphify postinstall hooks register for it like the other agent hosts, are recorded in `receipt.hooks`, and unregister on removal.
 **Requirements:** TBD
 **Evidence (live, 2026-11-07, 23.2 analyzer):** codegraph 1.6.2's target id is `copilot-cli` (writes `~/.copilot/mcp-config.json`; `copilot` is rejected); graphify accepts `install --platform copilot`.
-**Why deferred (23.2 D-22):** 23.2 TUNE-06 asks only for `recommends`; adding the host to `_CODEGRAPH_TARGETS` makes codegraph read `≈` on every machine with `~/.copilot`, a behaviour change for existing installs that needs its own spec. Phase 24.3's catalog audit may pick it up. *(amended 2026-11-07, 24.3 SPEC R9: the codegraph half is absorbed by Phase 24.3 — copilot joins `_CODEGRAPH_TARGETS` as `copilot-cli`; graphify stays unregistered because its installs are project-scoped)*
+**Why deferred (23.2 D-22):** 23.2 TUNE-06 asks only for `recommends`; adding the host to `_CODEGRAPH_TARGETS` makes codegraph read `≈` on every machine with `~/.copilot`, a behaviour change for existing installs that needs its own spec. Phase 24.3's catalog audit may pick it up. *(amended 2026-11-07, 24.3 SPEC R9: the codegraph half is absorbed by Phase 24.3 — copilot joins `_CODEGRAPH_TARGETS` as `copilot-cli`; graphify stays unregistered because its installs are project-scoped)* *(closed 2026-11-14: absorbed by Phase 24.3 — copilot joins codegraph's hook as copilot-cli (24.3-08); graphify stays unregistered, its installs being project-scoped)*
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
@@ -906,8 +906,35 @@ Plans:
 
 **Goal:** The catalog installs, updates and removes Pi itself instead of printing a pnpm handoff: a method the installer runs with no privilege escalation (the `node` kind through pnpm with Pi's Node floor, or Pi's own installer only if it can run without `sudo`), with `pi update` or the manager's update as the update route, a receipt, and the scheduled update from Phase 24.2 following it.
 **Requirements:** TBD
-**Evidence (live, 2026-11-07, 24.3 analyzer):** Pi's README now leads with `curl -fsSL https://pi.dev/install.sh | sh` ("pins all dependencies and updates Pi with `pi update`"), with `npm install -g --ignore-scripts` as the alternative; that installer mentions `sudo` six times (Node install) and writes PATH profile lines. npm `@earendil-works/pi-coding-agent` latest 1.5.0, `engines.node >=22.19.0`. The registry entry is a `host_setup` handoff (`installer/host_setup.py:28-41`) whose desc "setup remains interactive" is stale. The host's Pi 1.3.0 is a bun global install.
+**Evidence (live, 2026-11-07, 24.3 analyzer):** Pi's README now leads with `curl -fsSL https://pi.dev/install.sh | sh` ("pins all dependencies and updates Pi with `pi update`"), with `npm install -g --ignore-scripts` as the alternative; that installer mentions `sudo` six times (Node install) and writes PATH profile lines. npm `@earendil-works/pi-coding-agent` latest 1.5.0, `engines.node >=22.19.0`. The registry entry is a `host_setup` handoff (`installer/host_setup.py:28-41`) whose desc "setup remains interactive" is stale. The host's Pi 1.3.0 is a bun global install. *(amended 2026-11-14, 24.3: Pi npm latest 1.5.2; pi.dev/install.sh mentions sudo 15 times; the registry text was refreshed in 24.3-06)*
 **Why deferred (24.3 D-14):** Phase 24.2 D-16 builds Pi's scheduled update around the reviewed host-setup command, and 24.3's scope applies only Pi's MCP finding; changing the method there would make 24.2's path dead code. If this is promoted before 24.2 executes, amend 24.2 D-16 first.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.14: Declare the removal footprint of catalog entries that lack it: config_paths and script paths per the first catalog audit (BACKLOG)
+
+**Goal:** Every catalog entry the 2026-11-13 audit marked "removal recipe and paths" gets its user config, state or data directories declared (`config_paths` with the keep default, `paths` on script methods), so Uninstall lists them and a delete choice reaches them; includes the schema gaps the audit found (an absolute system path such as `/Applications/kitty.app`, a legacy `~/.wezterm.lua` one level under `~`, a per-OS `config_paths` for glow, a bun owner for a global Pi, codegraph's `~/.codegraph` after a vendor self-upgrade).
+**Requirements:** TBD
+**Evidence (live, 2026-11-13, first catalog audit):** `.planning/audits/catalog/2026-11-13/SUMMARY.md` Drift rows with check `removal recipe and paths` (bat, eza, zoxide, lazygit, gh, starship, oh-my-zsh, direnv, glow, xh, gitui, lazydocker, docker, colima, dive, miller, tealdeer, fx, dasel, sdkman, bun, vale, broot, vscode, kitty, wezterm, glab, graphify, pi, codegraph), each with its upstream citation and risk in `dispositions.toml`.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.15: Catalog install-method and update-route currency from the first catalog audit (BACKLOG)
+
+**Goal:** Entries whose install method, update argv or runtime expectation drifted from the vendor's current guidance are brought current or the reason is recorded in `# Verified`: distro packages where current (eza, gum, glow, xh, difftastic, gitui, duf), a checksummed method first (gron), the vendor's apt repo or macOS pkg (docker, podman), glab's supported Linux route, the macOS Homebrew amd64 script method (brew), the `codex update` route, the vale slug, mmdc's Node floor, puppeteer's linux arm64 gate, Volta versus mise, and the daemon or machine expectation of lazydocker, docker and podman.
+**Requirements:** TBD
+**Evidence (live, 2026-11-13, first catalog audit):** `.planning/audits/catalog/2026-11-13/SUMMARY.md` Drift rows with checks `install method`, `update argv` and `postinstall hook` that no 24.3 commit resolved, each with its source in `dispositions.toml`.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.16: Version probe for zip reads the copyright years instead of the version (BACKLOG)
+
+**Goal:** `extract_observed_version` stops reading `1990-2008` from `zip --version`'s first line and reads `Zip 3.0` from the second.
+**Requirements:** TBD
+**Evidence (live, 2026-11-13, first catalog audit):** script finding at `installer/versions.py:211` in `.planning/audits/catalog/2026-11-13/findings.toml`.
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
