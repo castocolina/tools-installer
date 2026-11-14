@@ -1312,14 +1312,22 @@ def _identity_problems(
     return problems
 
 
-def _transcript_problem(run: Path, source: str) -> str | None:
-    """Why a `container: <file>` source is no evidence: the file must be in the run directory."""
+def _transcript_problem(run: Path, source: str, home: Path) -> str | None:
+    """Why a `container: <file>` source is no evidence: the file must be in the run directory,
+    and it is committed with the run, so it passes the same secret and home-path check."""
     if _CONTAINER_RE.fullmatch(source) is None:
         return None
     name = source.removeprefix("container: ")
     path = run / name
     if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(run.resolve()):
         return f"the container transcript {name!r} is not a file inside the run directory"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"the container transcript {name!r} is unreadable: {exc}"
+    problems = _hygiene(text, home)
+    if problems:
+        return f"the container transcript {name!r} fails the report hygiene check: {problems[0]}"
     return None
 
 
@@ -1343,7 +1351,7 @@ def _finding_problems(
         problems.append(f"{label}: the source holds a newline or a control character")
     elif state == "unknown" and not source.startswith("reason: "):
         problems.append(f"{label}: an unknown source starts with 'reason: '")
-    elif (problem := _transcript_problem(run, source)) is not None:
+    elif (problem := _transcript_problem(run, source, home)) is not None:
         problems.append(f"{label}: {problem}")
     elif state in ("ok", "drift") and not (
         (row.get("check") == SCRIPT and _citation(str(row.get("cite")), whole=True))

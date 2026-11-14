@@ -115,7 +115,7 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           _UPDATE_WHILE_RUNNING_UNPROVEN, and a product failure a named _FAILED
                           line; TRACER_LANDING_INFEASIBLE step=... says the environment failed
                           (a pull, dnf, Homebrew, uv, a vendor download, TLS) and exits 2.
-                          Removes the container (and its image unless --keep-image) on every exit.
+                          Removes the container on every exit, and its image only when this run pulled it.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is

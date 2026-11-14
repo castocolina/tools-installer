@@ -1923,6 +1923,22 @@ def test_container_source_needs_a_transcript_in_the_run_dir(
     assert not (run / "findings.toml").exists()
 
 
+def test_a_container_transcript_with_a_secret_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The transcript is committed with the run, so it passes the report hygiene check too.
+    registry, root, _ = _arrange(tmp_path, alpha=_report("alpha"))
+    run = root / DAY
+    (run / "clean.log").write_text("TRACER_CLEAN_INSTALL_OK\n", encoding="utf-8")
+    (run / "leak.log").write_text("token ghp_" + "a" * 36 + "\n", encoding="utf-8")
+    ok = ("--check", "install method", "--status", "ok", "--source", "container: clean.log")
+    assert _add(registry, root, capsys, "alpha", *ok)[0] == 0
+    bad = ("--check", "update argv", "--status", "ok", "--source", "container: leak.log")
+    code, err = _add(registry, root, capsys, "alpha", *bad)
+    assert code == catalog_audit.EXIT_REFUSED, err
+    assert "hygiene" in err
+
+
 def test_a_hand_edited_container_finding_without_a_transcript_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
