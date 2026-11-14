@@ -2,7 +2,11 @@
 
 ``status`` names the next registry entry without a complete report (resume needs no state
 file), ``facts ID`` prints what the registry and the upstreams say about one entry, and
-``write ID`` validates an agent-authored report on stdin and stores it. The tool changes
+``write ID`` validates an agent-authored report on stdin and stores it. ``verify`` records one
+verify-registry run against a scratch ``--state``, ``scan`` lists the script surfaces and their
+mechanical unsafe patterns, ``add-finding`` appends a late finding to ``findings.toml`` and
+``summarize`` rebuilds ``SUMMARY.md`` from the reports, those files and ``dispositions.toml``
+(``--require-disposition IDS`` exits 1 for a drift row nobody mapped). The tool changes
 nothing outside its run directory ``.planning/audits/catalog/<date>/``: it never edits the
 registry, code or scripts, and it never installs, updates or removes anything.
 
@@ -12,7 +16,7 @@ sessions can pick the same entry and date and both pass the completeness check; 
 race, ``os.replace`` keeps whichever whole report lands last. The loop hands entries out
 one at a time, and nothing here claims to prevent that race.
 
-Exit codes: 0 ok; 64 usage error; 70 internal error; 73 report refused.
+Exit codes: 0 ok; 1 unmapped drift; 64 usage error; 70 internal error; 73 report refused.
 """
 
 from __future__ import annotations
@@ -32,8 +36,8 @@ import tomllib
 import traceback
 import urllib.parse
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import NoReturn, cast
@@ -1095,62 +1099,372 @@ def _cell(text: str) -> str:
     return text.replace("|", "\\|")
 
 
-def _script_findings(
-    run: Path, reports: Mapping[str, Mapping[str, list[str]]], repo: Path
+# ---- findings.toml and dispositions.toml (CONTEXT D-04 amendment, review R1-05, R2-03) ----
+
+OWNERS = (INSTALLER_OWNER, MAINTAINER_OWNER)
+SCRIPT = "script"
+_ALL_CHECKS = (*CHECKS, SCRIPT)
+_FINDINGS = "findings.toml"
+_DISPOSITIONS = "dispositions.toml"
+_FINDING_FIELDS = frozenset({"entry", "check", "status", "source", "cite"})
+_DISPOSITION_FIELDS = frozenset({"entry", "check", "cite", "disposition", "note"})
+_DISPOSITION_RE = re.compile(r"commit:[0-9a-f]{7,40}|backlog:999\.\d+|proposed")
+_CONTAINER_RE = re.compile(r"container: \S+")
+
+# (entry, check, cite): the cite is "" except for a script row.
+Key = tuple[str, str, str]
+
+
+def _key(entry: str, check: str, cite: str) -> Key:
+    return (entry, check, cite if check == SCRIPT else "")
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One `findings.toml` row: a finding that arrived after its report was complete."""
+
+    entry: str
+    check: str
+    status: str
+    source: str
+    cite: str = ""
+
+    @property
+    def key(self) -> Key:
+        return _key(self.entry, self.check, self.cite)
+
+
+def _identity_problems(row: Mapping[str, object], ids: Sequence[str], label: str) -> list[str]:
+    """Problems with a row's entry, check and cite (the key shared by both toml files)."""
+    entry, check, cite = row.get("entry"), row.get("check"), row.get("cite")
+    problems: list[str] = []
+    if check not in _ALL_CHECKS:
+        problems.append(f"{label}: check must be one of {', '.join(_ALL_CHECKS)}")
+    owners = OWNERS if check == SCRIPT else ()
+    if not isinstance(entry, str) or entry not in (*ids, *owners):
+        hint = ", or (installer)/(maintainer) for a script row" if check == SCRIPT else ""
+        problems.append(f"{label}: entry {entry!r} is not a registry id{hint}")
+    if check == SCRIPT:
+        if not isinstance(cite, str) or _CITATION_RE.fullmatch(cite) is None:
+            problems.append(f"{label}: a script row needs cite = 'path:line'")
+    elif cite is not None:
+        problems.append(f"{label}: cite belongs to script rows only")
+    return problems
+
+
+def _cited(source: str) -> bool:
+    return bool(
+        "https://" in source
+        or _SPAN_RE.search(source)
+        or _CITATION_RE.search(source)
+        or _CONTAINER_RE.fullmatch(source)
+    )
+
+
+def _finding_problems(
+    row: Mapping[str, object], ids: Sequence[str], home: Path, label: str
 ) -> list[str]:
-    """Scan findings and report rows citing `path:line` with a backticked token, by path."""
-    found: set[tuple[str, int, str, str]] = set()
-    for row in _read_scan(run):
-        if row.status == "finding":
-            found.add((row.path, row.line, row.entry, row.pattern))
-    for entry, sections in reports.items():
-        for check in sections.get("Checks", [])[2:]:
-            _, state, source = _cells(check)
-            cite = _CITATION_RE.search(source)
-            if state == "drift" and cite is not None and _token(source) is not None:
-                name, _, number = cite[0].rpartition(":")
-                found.add((name, int(number), entry, source))
-    lines = ["| location | entry | status | pattern | state |", "|---|---|---|---|---|"]
-    for name, number, entry, pattern in sorted(found):
-        token = _token(pattern)
-        fresh = token is None or _line_has(repo, f"{name}:{number}", token)
-        lines.append(
-            f"| {name}:{number} | {entry} | drift | {_cell(pattern)} | "
-            f"{'current' if fresh else 'stale'} |"
+    problems = _identity_problems(row, ids, label)
+    problems += [f"{label}: unknown field {k!r}" for k in sorted(set(row) - _FINDING_FIELDS)]
+    state, source = row.get("status"), row.get("source")
+    if state not in ("ok", "drift", "unknown"):
+        problems.append(f"{label}: status must be ok, drift or unknown")
+    if not isinstance(source, str) or not source.strip():
+        return [*problems, f"{label}: the source is empty"]
+    problems += [f"{label}: {problem}" for problem in _hygiene(source, home)]
+    if not source.isprintable():
+        problems.append(f"{label}: the source holds a newline or a control character")
+    elif state == "unknown" and not source.startswith("reason: "):
+        problems.append(f"{label}: an unknown source starts with 'reason: '")
+    elif state in ("ok", "drift") and not _cited(source):
+        problems.append(
+            f"{label}: an {state} source needs a URL, a `command`, a repo citation (path:line) "
+            "or 'container: <transcript path>'"
         )
-    return lines if found else ["none"]
+    return problems
 
 
-def summarize(tools: Sequence[Tool], run: Path, *, repo: Path) -> str:
-    """The audit summary: a pure function of the run directory, with no timestamp."""
-    state = status(tools, run)
+def _load_table(path: Path, table: str) -> tuple[list[dict[str, object]], list[str]]:
+    """The `[[table]]` rows of a toml file, or why it cannot be read; absent means none."""
+    if not path.is_file():
+        return [], []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [], [f"{path.name}: {exc}"]
+    problems = [f"{path.name}: unknown key {key!r}" for key in sorted(set(data) - {table})]
+    rows: object = data.get(table, [])
+    if not isinstance(rows, list) or not all(
+        isinstance(row, dict) for row in cast(list[object], rows)
+    ):
+        return [], [*problems, f"{path.name}: {table!r} must be a list of [[{table}]] tables"]
+    return cast(list[dict[str, object]], rows), problems
+
+
+def read_findings(run: Path, ids: Sequence[str], home: Path) -> list[Finding]:
+    """The validated `findings.toml` rows in file order; any problem refuses the file."""
+    rows, problems = _load_table(run / _FINDINGS, "finding")
+    for number, row in enumerate(rows, 1):
+        problems += _finding_problems(row, ids, home, f"{_FINDINGS} finding #{number}")
+    if problems:
+        raise ReportRefused(problems)
+    return [Finding(**{k: str(v) for k, v in row.items()}) for row in rows]
+
+
+def read_dispositions(run: Path, ids: Sequence[str]) -> dict[Key, str]:
+    """The validated `dispositions.toml` mapping from a drift key to its disposition."""
+    rows, problems = _load_table(run / _DISPOSITIONS, "drift")
+    found: dict[Key, str] = {}
+    for number, row in enumerate(rows, 1):
+        label = f"{_DISPOSITIONS} drift #{number}"
+        problems += _identity_problems(row, ids, label)
+        problems += [
+            f"{label}: unknown field {k!r}" for k in sorted(set(row) - _DISPOSITION_FIELDS)
+        ]
+        disposition = row.get("disposition")
+        if not isinstance(disposition, str) or _DISPOSITION_RE.fullmatch(disposition) is None:
+            problems.append(
+                f"{label}: disposition is commit:<7-40 hex>, backlog:999.<n> or proposed"
+            )
+        elif (key := _key(*(str(row.get(k, "")) for k in ("entry", "check", "cite")))) in found:
+            problems.append(f"{label}: {' | '.join(key)} is mapped twice")
+        else:
+            found[key] = disposition
+    if problems:
+        raise ReportRefused(problems)
+    return found
+
+
+def _findings_toml(rows: Sequence[Finding]) -> str:
+    blocks: list[str] = []
+    for row in rows:
+        fields = [("entry", row.entry), ("check", row.check), ("status", row.status)]
+        fields.append(("source", row.source))
+        if row.cite:
+            fields.append(("cite", row.cite))
+        text = "".join(f"{k} = {json.dumps(v, ensure_ascii=False)}\n" for k, v in fields)
+        blocks.append(f"[[finding]]\n{text}")
+    return "\n".join(blocks)
+
+
+def add_finding(run: Path, tools: Sequence[Tool], home: Path, row: Mapping[str, str]) -> Path:
+    """Validate one late finding and append it to the run's `findings.toml` (rewritten whole)."""
+    ids = [tool.id for tool in tools]
+    existing = read_findings(run, ids, home)
+    problems = _finding_problems(row, ids, home, "finding")
+    if problems:
+        raise ReportRefused(problems)
+    return _write_run_file(run, _FINDINGS, _findings_toml([*existing, Finding(**row)]))
+
+
+# ---- summarize: SUMMARY.md rebuilt from what is on disk (SPEC R3, R4, R10) ----
+
+
+@dataclass
+class _Row:
+    """Every source for one key: the report row, the findings in file order, scan rows."""
+
+    report: str | None = None
+    report_source: str = ""
+    findings: list[Finding] = field(default_factory=list[Finding])
+    scan: list[str] = field(default_factory=list[str])
+
+    def drifted(self) -> bool:
+        """Drift is sticky: any source that said drift keeps the key gated."""
+        return bool(
+            self.scan
+            or self.report == "drift"
+            or any(finding.status == "drift" for finding in self.findings)
+        )
+
+    def effective(self) -> str:
+        """The merged status (review R2-03, R3-02); the report itself is never edited."""
+        if self.drifted():
+            return "drift"
+        current = self.report
+        for finding in self.findings:
+            if finding.status == "unknown":
+                current = current or "unknown"
+            elif current is None or (
+                current == "unknown" and _CONTAINER_RE.fullmatch(finding.source)
+            ):
+                current = "ok"
+        return current or "-"
+
+
+@dataclass(frozen=True)
+class _Model:
+    state: Status
+    reports: dict[str, dict[str, list[str]]]
+    rows: dict[Key, _Row]
+    dispositions: dict[Key, str]
+    ids: list[str]
+
+    def rank(self, key: Key) -> tuple[int, int, str]:
+        """Registry order, then the owners; checks in report order, then script rows."""
+        entry, check, cite = key
+        if entry in self.ids:
+            place = self.ids.index(entry)
+        elif entry in OWNERS:
+            place = len(self.ids) + OWNERS.index(entry)
+        else:
+            place = len(self.ids) + len(OWNERS)
+        return place, _ALL_CHECKS.index(check) if check in _ALL_CHECKS else len(_ALL_CHECKS), cite
+
+    def disposition(self, key: Key) -> str:
+        return self.dispositions.get(key, "proposed")
+
+
+def _mapped(disposition: str) -> bool:
+    return disposition.startswith(("commit:", "backlog:"))
+
+
+def _report_checks(sections: Mapping[str, list[str]]) -> list[tuple[str, str, str]]:
+    cells = (_cells(row) for row in sections.get("Checks", [])[2:])
+    return [(c[0], c[1], c[2]) for c in cells if len(c) == 3]
+
+
+def _model(tools: Sequence[Tool], run: Path, home: Path) -> _Model:
+    ids = [tool.id for tool in tools]
+    dispositions = read_dispositions(run, ids)
+    findings = read_findings(run, ids, home)
     reports = {
         tool.id: _parse_report(run / f"{tool.id}.md")
         for tool in tools
         if _is_complete(run / f"{tool.id}.md")
     }
-    lines = [f"# Catalog audit - {run.name}", f"complete {state.complete}/{state.total}"]
-    lines.extend(f"missing {tool.id}" for tool in tools if tool.id not in reports)
-    lines.extend(f"orphan {orphan}" for orphan in state.orphans)
+    rows: dict[Key, _Row] = {}
+    for entry, sections in reports.items():
+        for name, state, source in _report_checks(sections):
+            row = rows.setdefault((entry, name, ""), _Row())
+            row.report, row.report_source = state, source
+    for finding in findings:
+        rows.setdefault(finding.key, _Row()).findings.append(finding)
+    for scanned in _read_scan(run):
+        if scanned.status == "finding":
+            key = (scanned.entry, SCRIPT, f"{scanned.path}:{scanned.line}")
+            rows.setdefault(key, _Row()).scan.append(scanned.pattern)
+    return _Model(status(tools, run), reports, rows, dispositions, ids)
+
+
+def unmapped_drift(
+    tools: Sequence[Tool], run: Path, targets: Collection[str], home: Path
+) -> list[str]:
+    """The drift keys of `targets` that no `commit:` or `backlog:` disposition names (R10).
+
+    Reads the union of every drift source, never only the merged status (review R2-03).
+    """
+    model = _model(tools, run, home)
+    gated = [
+        key
+        for key, row in model.rows.items()
+        if key[0] in targets and row.drifted() and not _mapped(model.disposition(key))
+    ]
+    return [" | ".join(part for part in key if part) for key in sorted(gated, key=model.rank)]
+
+
+def _drift_source(key: Key, row: _Row) -> str:
+    if row.report == "drift":
+        return row.report_source
+    sources = [f.source for f in row.findings if f.status == "drift"] or row.scan
+    return f"{key[2]}: {sources[0]}" if key[1] == SCRIPT else sources[0]
+
+
+def _script_findings(model: _Model, repo: Path) -> list[str]:
+    """Script rows by path then line: scan, `findings.toml` and report rows citing a line."""
+    found: set[tuple[str, int, str, str, str, str, str | None]] = set()
+    for key, row in model.rows.items():
+        entry, check, cite = key
+        if check == SCRIPT:
+            where = cite
+            shown = row.scan[0] if row.scan else row.findings[0].source
+            token = next(
+                (
+                    t
+                    for text in (*row.scan, *(f.source for f in row.findings))
+                    if (t := _token(text))
+                ),
+                None,
+            )
+            status = row.effective()
+        elif (
+            row.report == "drift"
+            and (cited := _CITATION_RE.search(row.report_source)) is not None
+            and _token(row.report_source) is not None
+        ):
+            where, shown, token, status = (
+                cited[0],
+                row.report_source,
+                _token(row.report_source),
+                "drift",
+            )
+        else:
+            continue
+        name, _, number = where.rpartition(":")
+        found.add((name, int(number), entry, status, shown, model.disposition(key), token))
+    lines = [
+        "| location | entry | status | pattern | state | disposition |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name, number, entry, status, shown, disposition, token in sorted(
+        found, key=lambda f: f[:5]
+    ):
+        fresh = token is None or _line_has(repo, f"{name}:{number}", token)
+        state = (
+            "current"
+            if fresh
+            else f"stale (resolved by {disposition})"
+            if _mapped(disposition)
+            else "stale"
+        )
+        lines.append(
+            f"| {name}:{number} | {entry} | {status} | {_cell(shown)} | {state} | {disposition} |"
+        )
+    return lines if found else ["none"]
+
+
+def summarize(tools: Sequence[Tool], run: Path, *, repo: Path, home: Path | None = None) -> str:
+    """The audit summary: a pure function of the run directory, with no timestamp."""
+    model = _model(tools, run, home or Path.home())
+    lines = [
+        f"# Catalog audit - {run.name}",
+        f"complete {model.state.complete}/{model.state.total}",
+    ]
+    lines.extend(f"missing {entry}" for entry in model.ids if entry not in model.reports)
+    lines.extend(f"orphan {orphan}" for orphan in model.state.orphans)
     changes = [
         f"- {entry}: {line[2:]}"
-        for entry, sections in reports.items()
+        for entry, sections in model.reports.items()
         for line in sections.get("Proposed changes", [])
         if line != "- none"
     ]
-    drift = [
-        f"| {entry} | {name} | drift | {source} | proposed |"
-        for entry, sections in reports.items()
-        for name, state_, source in (_cells(row) for row in sections.get("Checks", [])[2:])
-        if state_ == "drift"
-    ]
     lines += ["", "## Proposed changes", *(changes or ["no proposed changes"])]
+    drift = [
+        f"| {key[0]} | {key[1]} | drift | {_cell(_drift_source(key, model.rows[key]))} | "
+        f"{model.disposition(key)} |"
+        for key in sorted(model.rows, key=model.rank)
+        if model.rows[key].drifted()
+    ]
     table = ["| entry | check | status | source | disposition |", "|---|---|---|---|---|"]
     lines += ["", "## Drift", *([*table, *drift] if drift else ["none"])]
+    lines += ["", "## Entries"]
+    for entry in model.ids:
+        keys = [k for k in sorted(model.rows, key=model.rank) if k[0] == entry and k[1] != SCRIPT]
+        if not keys:
+            continue
+        lines += [
+            f"### {entry}",
+            "| check | status | report | findings |",
+            "|---|---|---|---|",
+        ]
+        for key in keys:
+            row = model.rows[key]
+            seen = "; ".join(f"{f.status} ({f.source})" for f in row.findings) or "-"
+            lines.append(f"| {key[1]} | {row.effective()} | {row.report or '-'} | {_cell(seen)} |")
     lines += ["", "## verify-registry", *_verify_lines(run)]
     scanned = [f"- {r.path} {r.entry}: ok" for r in _read_scan(run) if r.status == "ok"]
     lines += ["", "## Script scan", *(scanned or ["not recorded"])]
-    lines += ["", "## Script findings", *_script_findings(run, reports, repo)]
+    lines += ["", "## Script findings", *_script_findings(model, repo)]
     return "\n".join(lines) + "\n"
 
 
@@ -1163,9 +1477,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = _Parser(description="Catalog audit fact gatherer and report writer.")
     parser.add_argument("--registry", type=Path, default=None, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("status", "write", "verify", "scan", "summarize"):
+    for name in ("status", "write", "verify", "scan", "summarize", "add-finding"):
         cmd = sub.add_parser(name)
-        if name == "write":
+        if name in ("write", "add-finding"):
             cmd.add_argument("id")
         cmd.add_argument("--date", required=True)
         cmd.add_argument("--root", type=Path, default=None)
@@ -1175,6 +1489,12 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--state", type=Path, required=True)
         if name == "scan":
             cmd.add_argument("--schema", action="append", default=[], metavar="AGENT=PATH")
+        if name == "summarize":
+            cmd.add_argument("--require-disposition", default=None, metavar="IDS")
+        if name == "add-finding":
+            for flag in ("--check", "--status", "--source"):
+                cmd.add_argument(flag, required=True)
+            cmd.add_argument("--cite", default=None)
     sub.add_parser("facts").add_argument("id")
     return parser
 
@@ -1190,6 +1510,17 @@ def _find(tools: Sequence[Tool], entry_id: str) -> Tool:
         if tool.id == entry_id:
             return tool
     raise UsageError(f"unknown registry id {entry_id!r}")
+
+
+def _targets(spec: str | None, ids: Sequence[str]) -> frozenset[str]:
+    """The entries `--require-disposition` gates; an unknown id is a usage error."""
+    if spec is None:
+        return frozenset()
+    named = [part.strip() for part in spec.split(",") if part.strip()]
+    unknown = [name for name in named if name not in (*ids, *OWNERS)]
+    if not named or unknown:
+        raise UsageError(f"--require-disposition: unknown or empty id list {unknown or spec!r}")
+    return frozenset(named)
 
 
 def _run(
@@ -1230,8 +1561,19 @@ def _run(
         )
         print("wrote scripts.md")
     elif args.cmd == "summarize":
-        _write_run_file(run, "SUMMARY.md", summarize(tools, run, repo=args.repo))
+        targets = _targets(args.require_disposition, [tool.id for tool in tools])
+        _write_run_file(run, "SUMMARY.md", summarize(tools, run, repo=args.repo, home=home))
         print("wrote SUMMARY.md")
+        unmapped = unmapped_drift(tools, run, targets, home) if targets else []
+        for item in unmapped:
+            print(f"unmapped drift: {item}", file=sys.stderr)
+        return 1 if unmapped else 0
+    elif args.cmd == "add-finding":
+        row = {
+            k: getattr(args, k) for k in ("check", "status", "source", "cite") if getattr(args, k)
+        }
+        add_finding(run, tools, home, {"entry": args.id, **row})
+        print(f"added finding {args.id} | {args.check}")
     else:
         tool = _find(tools, args.id)
         write_report(run, tool.id, sys.stdin.read(), home=home)

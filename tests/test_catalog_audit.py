@@ -6,6 +6,7 @@ import io
 import json
 import os
 import sys
+import tomllib
 from collections.abc import Callable, Mapping
 from email.message import Message
 from pathlib import Path
@@ -1217,3 +1218,485 @@ def test_scan_quotes_no_config_values(tmp_path: Path, capsys: pytest.CaptureFixt
     scripts = (root / DAY / "scripts.md").read_text(encoding="utf-8")
     assert "deprecated" in scripts
     assert "canary" not in scripts
+
+
+# ---- 24.3-03 Task 3: findings, dispositions, the merge rule and the landing-set gate ----
+
+_PROSE_OK = "https://example.com/check"
+_CONTAINER_OK = "container: .e2e-artifacts/x.log"
+_NOT_RUN = "reason: container check not run"
+
+
+def _arrange(
+    tmp_path: Path,
+    *,
+    alpha: str | None = None,
+    beta: str | None = None,
+    repo_files: Mapping[str, str] | None = None,
+) -> tuple[Path, Path, Path]:
+    """A two-entry registry, the stored reports, a repo tree and the run directory."""
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    for entry, text in (("alpha", alpha), ("beta", beta)):
+        if text is not None:
+            _store(root, entry, text)
+    _repo(tmp_path, repo_files)
+    (root / DAY).mkdir(parents=True, exist_ok=True)
+    return registry, root, tmp_path / "repo"
+
+
+def _sum(
+    registry: Path,
+    root: Path,
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    *extra: str,
+) -> tuple[int, str]:
+    argv = ["summarize", "--date", DAY, "--root", str(root), "--repo", str(repo), *extra]
+    code, _, err = _main(argv, registry, capsys)
+    return code, err
+
+
+def _summary_text(root: Path) -> str:
+    return (root / DAY / "SUMMARY.md").read_text(encoding="utf-8")
+
+
+def _add(
+    registry: Path,
+    root: Path,
+    capsys: pytest.CaptureFixture[str],
+    entry: str,
+    *args: str,
+) -> tuple[int, str]:
+    argv = ["add-finding", entry, "--date", DAY, "--root", str(root), *args]
+    code, _, err = _main(argv, registry, capsys)
+    return code, err
+
+
+def _dispositions(root: Path, *rows: str) -> None:
+    body = "".join(f"[[drift]]\n{row}\n\n" for row in rows)
+    (root / DAY / "dispositions.toml").write_text(body, encoding="utf-8")
+
+
+def _drift_rows(summary: str) -> list[list[str]]:
+    block = summary.split("## Drift\n", 1)[1].split("\n## ", 1)[0]
+    rows = [line for line in block.splitlines() if line.startswith("| ")][1:]
+    return [[cell.strip() for cell in row.strip("|").split("|")] for row in rows]
+
+
+def _entry_row(summary: str, entry: str, check: str) -> list[str]:
+    block = summary.split(f"### {entry}\n", 1)[1].split("\n#", 1)[0]
+    row = next(line for line in block.splitlines() if line.startswith(f"| {check} |"))
+    return [cell.strip() for cell in row.strip("|").split("|")]
+
+
+_BETA_DRIFT = (
+    *_CHECK_ROWS[:3],
+    "| tuning keys | drift | https://example.invalid/t |",
+    _CHECK_ROWS[4],
+)
+_TWO_DRIFTS = (
+    "| install method | drift | https://example.invalid/x |",
+    "| update argv | drift | `alpha upgrade` |",
+    *_CHECK_ROWS[2:],
+)
+
+
+def test_summary_reads_dispositions(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    beta_rows = _BETA_DRIFT
+    registry, root, repo = _arrange(
+        tmp_path,
+        alpha=_report("alpha", rows=_TWO_DRIFTS),
+        beta=_report("beta", rows=beta_rows),
+    )
+    (root / DAY / "scripts.md").write_text(
+        "| location | entry | status | pattern |\n|---|---|---|---|\n"
+        "| installer/x.py:3 | alpha | finding | `foo` flagged |\n",
+        encoding="utf-8",
+    )
+    _dispositions(
+        root,
+        'entry = "alpha"\ncheck = "install method"\ndisposition = "commit:0123abc"',
+        'entry = "alpha"\ncheck = "update argv"\ndisposition = "backlog:999.13"\nnote = "later"',
+        'entry = "alpha"\ncheck = "script"\ncite = "installer/x.py:3"\n'
+        'disposition = "commit:abcdef0"',
+    )
+    code, err = _sum(registry, root, repo, capsys)
+    assert code == 0, err
+    rows = {(r[0], r[1]): r for r in _drift_rows(_summary_text(root))}
+    assert rows[("alpha", "install method")][4] == "commit:0123abc"
+    assert rows[("alpha", "update argv")][4] == "backlog:999.13"
+    assert rows[("alpha", "script")][4] == "commit:abcdef0"
+    assert rows[("beta", "tuning keys")][4] == "proposed"
+
+
+_BAD_DISPOSITIONS = [
+    ('entry = "nope"\ncheck = "install method"\ndisposition = "proposed"', "entry"),
+    ('entry = "alpha"\ncheck = "nope"\ndisposition = "proposed"', "check"),
+    ('entry = "alpha"\ncheck = "script"\ndisposition = "proposed"', "cite"),
+    ('entry = "alpha"\ncheck = "install method"\ndisposition = "done"', "disposition"),
+    ('entry = "alpha"\ncheck = "install method"\ndisposition = "commit:xyz1234"', "disposition"),
+    ('entry = "alpha"\ncheck = "install method"\ndisposition = "commit:abcdef"', "disposition"),
+    ('entry = "alpha"\ncheck = "install method"\ndisposition = "backlog:12"', "disposition"),
+    ('entry = "(installer)"\ncheck = "update argv"\ndisposition = "proposed"', "entry"),
+]
+
+
+@pytest.mark.parametrize(("row", "word"), _BAD_DISPOSITIONS)
+def test_summary_invalid_dispositions(
+    row: str, word: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
+    _dispositions(root, row)
+    (root / DAY / "SUMMARY.md").write_text("old\n", encoding="utf-8")
+    code, err = _sum(registry, root, repo, capsys)
+    assert code == catalog_audit.EXIT_REFUSED
+    assert word in err
+    assert _summary_text(root) == "old\n"
+
+
+def test_summary_refuses_broken_dispositions_and_names_every_problem(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
+    (root / DAY / "dispositions.toml").write_text("[[drift\n", encoding="utf-8")
+    assert _sum(registry, root, repo, capsys)[0] == catalog_audit.EXIT_REFUSED
+    _dispositions(root, _BAD_DISPOSITIONS[0][0], _BAD_DISPOSITIONS[3][0])
+    code, err = _sum(registry, root, repo, capsys)
+    assert code == catalog_audit.EXIT_REFUSED
+    assert len([line for line in err.splitlines() if line.startswith("refused: ")]) == 2
+    assert not (root / DAY / "SUMMARY.md").exists()
+
+
+def _tree(root: Path) -> dict[str, bytes]:
+    return {str(p): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_add_finding_validates_and_appends(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, _ = _arrange(tmp_path, alpha=_report("alpha"), beta=_report("beta"))
+    run = root / DAY
+    reports = {n: (run / n).read_bytes() for n in ("alpha.md", "beta.md")}
+    code, err = _add(
+        registry,
+        root,
+        capsys,
+        "alpha",
+        *("--check", "install method", "--status", "drift", "--source", _CONTAINER_OK),
+    )
+    assert code == 0, err
+    code, err = _add(
+        registry,
+        root,
+        capsys,
+        "beta",
+        *("--check", "update argv", "--status", "unknown", "--source", _NOT_RUN),
+    )
+    assert code == 0, err
+    rows = tomllib.loads((run / "findings.toml").read_text(encoding="utf-8"))["finding"]
+    assert [(r["entry"], r["check"], r["status"]) for r in rows] == [
+        ("alpha", "install method", "drift"),
+        ("beta", "update argv", "unknown"),
+    ]
+    assert rows[0]["source"] == _CONTAINER_OK
+    good = ("--check", "install method", "--status", "drift", "--source", _CONTAINER_OK)
+    secret = "https://x.example/" + "ghp_" + "a" * 36
+    refusals: list[tuple[str, list[str]]] = [
+        ("nope", list(good)),
+        ("(installer)", list(good)),
+        ("alpha", ["--check", "nope", "--status", "drift", "--source", _CONTAINER_OK]),
+        ("alpha", ["--check", "script", "--status", "drift", "--source", _CONTAINER_OK]),
+        ("alpha", ["--check", "install method", "--status", "fine", "--source", _CONTAINER_OK]),
+        ("alpha", ["--check", "install method", "--status", "ok", "--source", "looks fine"]),
+        ("alpha", ["--check", "install method", "--status", "drift", "--source", secret]),
+        ("alpha", ["--check", "install method", "--status", "ok", "--source", f"{Path.home()}/x"]),
+        ("alpha", ["--check", "update argv", "--status", "unknown", "--source", "no reason"]),
+        ("alpha", ["--check", "update argv", "--status", "ok", "--source", "https://e.x/a\nb"]),
+    ]
+    before = _tree(run)
+    for entry, args in refusals:
+        code, err = _add(registry, root, capsys, entry, *args)
+        assert code == catalog_audit.EXIT_REFUSED, (entry, args, err)
+    assert _tree(run) == before
+    assert {n: (run / n).read_bytes() for n in reports} == reports
+
+
+def test_shared_surface_finding_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    guards = (_INSTALLER / "guards.py").read_text(encoding="utf-8")
+    number = next(
+        n
+        for n, line in enumerate(guards.splitlines(), 1)
+        if 'exec {shlex.quote(target_path)} {quoted_args} "$@"' in line
+    )
+    cite = f"installer/guards.py:{number}"
+    registry, root, repo = _arrange(
+        tmp_path, alpha=_report("alpha"), repo_files={"installer/guards.py": guards}
+    )
+    code, err = _add(
+        registry,
+        root,
+        capsys,
+        "(installer)",
+        *("--check", "script", "--cite", cite, "--status", "drift"),
+        *("--source", f"`exec ` rewrites argv at {cite}"),
+    )
+    assert code == 0, err
+    gate = ("--require-disposition", "(installer)")
+    code, err = _sum(registry, root, repo, capsys, *gate)
+    assert code == 1
+    assert f"(installer) | script | {cite}" in err
+    row = _script_row(_summary_text(root), cite)
+    assert row[1] == "(installer)"
+    assert row[4] == "current"
+    _dispositions(
+        root,
+        f'entry = "(installer)"\ncheck = "script"\ncite = "{cite}"\ndisposition = "commit:1234567"',
+    )
+    code, err = _sum(registry, root, repo, capsys, *gate)
+    assert code == 0, err
+    assert _script_row(_summary_text(root), cite)[5] == "commit:1234567"
+
+
+_MERGE_CASES = [
+    ("unknown", [("ok", _CONTAINER_OK)], "ok", False),
+    ("unknown", [("ok", _PROSE_OK)], "unknown", False),
+    ("drift", [("ok", _CONTAINER_OK)], "drift", True),
+    ("ok", [("unknown", _NOT_RUN)], "ok", False),
+    ("unknown", [("ok", _CONTAINER_OK), ("drift", _PROSE_OK)], "drift", True),
+    ("unknown", [("ok", _CONTAINER_OK), ("unknown", _NOT_RUN)], "ok", False),
+    ("unknown", [("drift", _PROSE_OK)], "drift", True),
+    ("drift", [("unknown", _NOT_RUN)], "drift", True),
+]
+_REPORT_ROWS = {
+    "ok": "| install method | ok | https://example.com/install |",
+    "unknown": f"| install method | unknown | {_NOT_RUN} |",
+    "drift": "| install method | drift | https://example.com/install |",
+}
+
+
+@pytest.mark.parametrize(("reported", "findings", "effective", "gated"), _MERGE_CASES)
+def test_summary_merges_findings(
+    reported: str,
+    findings: list[tuple[str, str]],
+    effective: str,
+    gated: bool,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rows = (_REPORT_ROWS[reported], *_CHECK_ROWS[1:])
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha", rows=rows))
+    for status, source in findings:
+        args = ("--check", "install method", "--status", status, "--source", source)
+        assert _add(registry, root, capsys, "alpha", *args)[0] == 0
+    code, err = _sum(registry, root, repo, capsys, "--require-disposition", "alpha")
+    assert code == (1 if gated else 0), err
+    row = _entry_row(_summary_text(root), "alpha", "install method")
+    assert row[1] == effective
+    assert row[2] == reported
+    assert row[3] == "; ".join(f"{status} ({source})" for status, source in findings)
+
+
+def test_summary_script_findings_and_invalid_findings_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(
+        tmp_path, alpha=_report("alpha"), repo_files={"scripts/x.sh": "echo `sudo`\n"}
+    )
+    args = ("--check", "script", "--cite", "scripts/x.sh:1", "--status", "drift")
+    assert (
+        _add(registry, root, capsys, "alpha", *args, "--source", "`sudo` at scripts/x.sh:1")[0] == 0
+    )
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    row = _script_row(_summary_text(root), "scripts/x.sh:1")
+    assert row[1:3] == ["alpha", "drift"]
+    (root / DAY / "findings.toml").write_text(
+        '[[finding]]\nentry = "nope"\ncheck = "update argv"\nstatus = "ok"\nsource = "https://e.x/a"\n',
+        encoding="utf-8",
+    )
+    code, err = _sum(registry, root, repo, capsys)
+    assert code == catalog_audit.EXIT_REFUSED
+    assert "entry" in err
+
+
+def test_scan_only_finding_is_gated(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    registry = _registry(
+        tmp_path, _tool_toml("opencode", _ALPHA_METHOD), _tool_toml("beta", _BETA_METHOD)
+    )
+    root = _root(tmp_path)
+    repo = _repo(tmp_path)
+    run = root / DAY
+    run.mkdir(parents=True)
+    (run / "scripts.md").write_text(
+        "| location | entry | status | pattern |\n|---|---|---|---|\n"
+        "| installer/agent_settings.py:7 | opencode | finding | `permission` deprecated |\n",
+        encoding="utf-8",
+    )
+    code, err = _sum(registry, root, repo, capsys, "--require-disposition", "opencode")
+    assert code == 1
+    assert "opencode | script | installer/agent_settings.py:7" in err
+    _dispositions(
+        root,
+        'entry = "opencode"\ncheck = "script"\ncite = "installer/agent_settings.py:7"\n'
+        'disposition = "backlog:999.4"',
+    )
+    assert _sum(registry, root, repo, capsys, "--require-disposition", "opencode")[0] == 0
+
+
+def test_late_finding_never_clears_report_drift(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha", rows=_DRIFT_ROWS))
+    gate = ("--require-disposition", "alpha")
+    for status, source in (("ok", _CONTAINER_OK), ("unknown", _NOT_RUN)):
+        args = ("--check", "install method", "--status", status, "--source", source)
+        assert _add(registry, root, capsys, "alpha", *args)[0] == 0
+        code, err = _sum(registry, root, repo, capsys, *gate)
+        assert code == 1
+        assert "alpha | install method" in err
+    _dispositions(root, 'entry = "alpha"\ncheck = "install method"\ndisposition = "commit:abcdef0"')
+    assert _sum(registry, root, repo, capsys, *gate)[0] == 0
+    shared = ("--check", "script", "--cite", "scripts/x.sh:1", "--status", "drift")
+    for source in ("`sudo` at scripts/x.sh:1", "`sudo` again at scripts/x.sh:1"):
+        assert _add(registry, root, capsys, "alpha", *shared, "--source", source)[0] == 0
+    code, err = _sum(registry, root, repo, capsys, *gate)
+    assert code == 1
+    assert err.count("alpha | script | scripts/x.sh:1") == 1
+    _dispositions(
+        root,
+        'entry = "alpha"\ncheck = "install method"\ndisposition = "commit:abcdef0"',
+        'entry = "alpha"\ncheck = "script"\ncite = "scripts/x.sh:1"\ndisposition = "backlog:999.2"',
+    )
+    assert _sum(registry, root, repo, capsys, *gate)[0] == 0
+
+
+def test_summary_require_disposition(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    beta_rows = _BETA_DRIFT
+    registry, root, repo = _arrange(
+        tmp_path,
+        alpha=_report("alpha", rows=_DRIFT_ROWS),
+        beta=_report("beta", rows=beta_rows),
+    )
+    both = ("--require-disposition", "alpha,beta")
+    code, err = _sum(registry, root, repo, capsys, *both)
+    assert code == 1
+    assert "alpha | install method" in err
+    assert "beta | tuning keys" in err
+    _dispositions(root, 'entry = "alpha"\ncheck = "install method"\ndisposition = "proposed"')
+    assert _sum(registry, root, repo, capsys, *both)[0] == 1
+    _dispositions(root, 'entry = "alpha"\ncheck = "install method"\ndisposition = "commit:abcdef0"')
+    code, err = _sum(registry, root, repo, capsys, *both)
+    assert code == 1
+    assert "alpha | install method" not in err
+    assert "beta | tuning keys" in err
+    only_alpha = ("--require-disposition", "alpha")
+    assert _sum(registry, root, repo, capsys, *only_alpha)[0] == 0
+    assert _sum(registry, root, repo, capsys, "--require-disposition", "nope")[0] == 64
+    assert _sum(registry, root, repo, capsys, "--require-disposition", " , ")[0] == 64
+
+
+def test_summary_is_idempotent_and_rebuilt_on_resume(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha", rows=_DRIFT_ROWS))
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    first = _summary_text(root)
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    assert _summary_text(root) == first
+    _store(root, "beta", _report("beta"))
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    second = _summary_text(root)
+    assert second != first
+    old, new = first.splitlines(), second.splitlines()
+    changed = {"complete 1/2", "missing beta"}
+    assert set(old) - set(new) == changed
+    alpha = [text.split("### alpha\n", 1)[1].split("\n#", 1)[0].strip() for text in (first, second)]
+    assert alpha[0] == alpha[1]
+    assert "### beta" in second
+    assert "complete 2/2" in second
+
+
+def test_summary_no_proposed_changes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"), beta=_report("beta"))
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    assert "no proposed changes" in _summary_text(root)
+    change = "- Add a flag; risk: low; evidence: https://example.com/c"
+    proposal = _report("beta").replace("- none", change)
+    (root / DAY / "beta.md").unlink()
+    _store(root, "beta", proposal)
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    summary = _summary_text(root)
+    assert "no proposed changes" not in summary
+    assert "- beta: Add a flag; risk: low; evidence: https://example.com/c" in summary
+
+
+def test_summary_orders_entries_then_scripts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cited = (_CHECK_ROWS[0], "| update argv | drift | `sudo` at scripts/z.sh:1 |", *_CHECK_ROWS[2:])
+    registry, root, repo = _arrange(
+        tmp_path,
+        alpha=_report("alpha"),
+        beta=_report("beta", rows=cited),
+        repo_files={
+            "scripts/a.sh": "x\nsudo y\n",
+            "scripts/z.sh": "sudo q\n",
+            "installer/guards.py": "a\nb\nc = ['sudo']\n",
+        },
+    )
+    (root / DAY / "scripts.md").write_text(
+        "| location | entry | status | pattern |\n|---|---|---|---|\n"
+        "| scripts/a.sh:2 | (maintainer) | finding | `sudo` elevation |\n"
+        "| installer/guards.py:3 | (installer) | finding | `sudo` elevation |\n",
+        encoding="utf-8",
+    )
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    summary = _summary_text(root)
+    assert (
+        summary.index("### alpha") < summary.index("### beta") < summary.index("## Script findings")
+    )
+    block = summary.split("## Script findings\n", 1)[1]
+    where = [line.split("|")[1].strip() for line in block.splitlines() if line.startswith("| ")][1:]
+    assert where == ["installer/guards.py:3", "scripts/a.sh:2", "scripts/z.sh:1"]
+
+
+def test_summary_marks_resolved_stale_findings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(
+        tmp_path, alpha=_report("alpha"), repo_files={"installer/x.py": "a\nb\nmoved = 1\n"}
+    )
+    (root / DAY / "scripts.md").write_text(
+        "| location | entry | status | pattern |\n|---|---|---|---|\n"
+        "| installer/x.py:3 | alpha | finding | `permission` flagged |\n",
+        encoding="utf-8",
+    )
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    assert _script_row(_summary_text(root), "installer/x.py:3")[4] == "stale"
+    _dispositions(
+        root,
+        'entry = "alpha"\ncheck = "script"\ncite = "installer/x.py:3"\n'
+        'disposition = "commit:abc1234"',
+    )
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    row = _script_row(_summary_text(root), "installer/x.py:3")
+    assert row[4] == "stale (resolved by commit:abc1234)"
+    assert row[5] == "commit:abc1234"
+
+
+def test_summary_lists_missing_and_orphans(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
+    (root / DAY / "stray.md").write_text("# stray\n", encoding="utf-8")
+    assert _sum(registry, root, repo, capsys)[0] == 0
+    lines = _summary_text(root).splitlines()
+    assert lines[:5] == [
+        f"# Catalog audit - {DAY}",
+        "complete 1/2",
+        "missing beta",
+        "orphan stray",
+        "",
+    ]
