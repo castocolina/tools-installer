@@ -784,12 +784,17 @@ def _service_process_state(pid: int) -> str:
 service_process_state: Callable[[int], str] = _service_process_state
 
 
-def _opencode_service_pid() -> int | None:
-    """The pid in OpenCode 2's service registration, or None when there is none to read
-    (`$XDG_STATE_HOME/opencode/service.json`, anomalyco/opencode v2.3.0 service-probe.ts)."""
+def _opencode_service_file() -> Path:
+    """OpenCode 2's service registration (`$XDG_STATE_HOME/opencode/service.json`,
+    anomalyco/opencode v2.3.0 service-probe.ts)."""
     state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state) / "opencode" / "service.json"
+
+
+def _opencode_service_pid() -> int | None:
+    """The pid in OpenCode 2's service registration, or None when there is none to read."""
     try:
-        data: object = json.loads((Path(state) / "opencode" / "service.json").read_text("utf-8"))
+        data: object = json.loads(_opencode_service_file().read_text("utf-8"))
     except (OSError, ValueError):
         return None
     pid = cast(dict[str, object], data).get("pid") if isinstance(data, dict) else None
@@ -800,6 +805,8 @@ def _opencode_service_pid() -> int | None:
 # failure is moot when the registered pid is gone or a zombie, so the stop recipe is judged by
 # evidence, not exit code. Make it a registry param if a second vendor ships such a recipe.
 _RECIPE_SERVICE_PID: Mapping[str, Callable[[], int | None]] = {"opencode": _opencode_service_pid}
+# The registration file the stop leaves behind (a dead registration holding a credential).
+_RECIPE_SERVICE_FILE: Mapping[str, Callable[[], Path]] = {"opencode": _opencode_service_file}
 
 
 def _moot_stop_failure(tool_id: str) -> str | None:
@@ -813,6 +820,21 @@ def _moot_stop_failure(tool_id: str) -> str | None:
         return None
     shown = "a zombie its parent never reaped" if state == "zombie" else "already gone"
     return f"{tool_id}: the service (pid {pid}) is {shown}, so its stop failed but nothing runs."
+
+
+def _drop_service_registration(tool_id: str) -> str:
+    """Delete the stopped service's registration file (only that file); a note when it stays."""
+    locate = _RECIPE_SERVICE_FILE.get(tool_id)
+    if locate is None:
+        return ""
+    registration = locate()
+    try:
+        registration.unlink(missing_ok=True)
+    except OSError as exc:
+        return (
+            f"{tool_id}: could not remove {registration} ({first_line(exc)}); delete it yourself."
+        )
+    return ""
 
 
 def remove_tool(
@@ -885,6 +907,8 @@ def remove_tool(
                 if moot is None:
                     return ToolRemoval(tool.id, False, command_error_line(exc))
                 note = moot
+            if fresh.level == "recipe":
+                note = " ".join(filter(None, (note, _drop_service_registration(tool.id))))
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
             # The vendor command may have removed part of what the receipt recorded; only
             # what is still there is re-proven, so a path it already removed is not a refusal.

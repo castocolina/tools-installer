@@ -3956,6 +3956,7 @@ def _opencode_stop_fails(
     *,
     pid: int | None,
     state: str,
+    stop_fails: bool = True,
 ) -> tuple[SweepResult, Path]:
     """Remove a recipe tool named opencode whose `service stop` fails; the registered service
     (state dir `service.json`, vendor v2.3.0) names `pid`, whose process answers `state`."""
@@ -3975,6 +3976,7 @@ def _opencode_stop_fails(
         registration = tmp_path / ".local" / "state" / "opencode" / "service.json"
         registration.parent.mkdir(parents=True)
         registration.write_text(json.dumps({"url": "http://127.0.0.1:1", "pid": pid}))
+        (registration.parent / "opencode.db").write_text("the user's own state")
     asked: list[int] = []
 
     def process_state(asked_pid: int) -> str:
@@ -3985,10 +3987,15 @@ def _opencode_stop_fails(
     plan = removal_plan(tool, bin_dir)
 
     def runner(cmd: list[str]) -> None:
-        raise CommandError(cmd, 1, detail="Server process 4242 is still running")
+        if stop_fails:
+            raise CommandError(cmd, 1, detail="Server process 4242 is still running")
 
     result = _perform(tool, tmp_path, paths=plan.removable, argv=plan.argv, runner=runner)
     return result, bin_dir / "opencode"
+
+
+def _opencode_state(tmp_path: Path) -> Path:
+    return tmp_path / ".local" / "state" / "opencode"
 
 
 @pytest.mark.parametrize("state", ["zombie", "gone"])
@@ -4004,6 +4011,20 @@ def test_a_failed_service_stop_on_a_dead_pid_still_removes_with_a_note(
     assert not binary.exists()
     assert receipts.read("opencode") is None
     assert any("4242" in note and state in note for note in result.receipt_retired)
+    assert not (_opencode_state(tmp_path) / "service.json").exists()
+    assert (_opencode_state(tmp_path) / "opencode.db").is_file()
+
+
+def test_a_successful_service_stop_removes_only_the_registration_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result, binary = _opencode_stop_fails(
+        tmp_path, monkeypatch, pid=4242, state="gone", stop_fails=False
+    )
+    assert result.removed == ("opencode",)
+    assert not binary.exists()
+    assert not (_opencode_state(tmp_path) / "service.json").exists()
+    assert (_opencode_state(tmp_path) / "opencode.db").is_file()
 
 
 def test_a_failed_service_stop_on_a_live_pid_keeps_refusing(
@@ -4015,6 +4036,7 @@ def test_a_failed_service_stop_on_a_live_pid_keeps_refusing(
     assert result.remove_failed == (("opencode", "Server process 4242 is still running"),)
     assert binary.exists()
     assert receipts.receipt_path("opencode").exists()
+    assert (_opencode_state(tmp_path) / "service.json").is_file()  # the service still runs
 
 
 def test_a_failed_service_stop_with_no_registration_keeps_refusing(
