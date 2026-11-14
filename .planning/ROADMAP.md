@@ -643,7 +643,7 @@ Plans:
 The 24-UAT host launch rewrote `~/.local/bin/npx` and dropped `alias npx='pnpm dlx'` from `~/.myshellrc`. Scope: the guard writers, the launch repair, the Policies row, the make targets, the docs and the tests. The repair keeps removing old installer-written blocks and shims.
 **Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05, GUARD-06 *(amended 2026-11-14, 24.4 SPEC)*
 **Depends on:** Phase 24.3
-**Plans:** 5/7 plans executed
+**Plans:** 6/7 plans executed
 
 Plans:
 **Wave 1**
@@ -658,7 +658,7 @@ Plans:
 - [x] 24.4-05-PLAN.md — Doctor and Uninstall no longer report, offer or remove the guard; dead guard parameters dropped (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 24.4-06-PLAN.md — `--guard`/`--unguard` and `make guard`/`make unguard` gone, `installer/guards.py` deleted, GUARD-01 scan and route tests (wave 4)
+- [x] 24.4-06-PLAN.md — `--guard`/`--unguard` and `make guard`/`make unguard` gone, `installer/guards.py` deleted, GUARD-01 scan and route tests (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 24.4-07-PLAN.md — README, TROUBLESHOOTING, AGENTS.md and the architecture rules describe the launch cleanup; link check (wave 5, after 24.4-06 so AGENTS.md keeps its host rule until the targets are gone)
