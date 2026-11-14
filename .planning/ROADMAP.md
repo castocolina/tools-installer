@@ -643,12 +643,12 @@ Plans:
 The 24-UAT host launch rewrote `~/.local/bin/npx` and dropped `alias npx='pnpm dlx'` from `~/.myshellrc`. Scope: the guard writers, the launch repair, the Policies row, the make targets, the docs and the tests. The repair keeps removing old installer-written blocks and shims.
 **Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05, GUARD-06 *(amended 2026-11-14, 24.4 SPEC)*
 **Depends on:** Phase 24.3
-**Plans:** 7 plans
+**Plans:** 2/7 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 24.4-01-PLAN.md — Every launch removes the retired guard: `installer/legacy_guard.py` remover, `_launch_repairs` rewired and run first, `_warnings_only` and the launch rewrites gone (wave 1)
-- [ ] 24.4-02-PLAN.md — Catalog-audit surface list without the guard module plus its existence test; guard-free comments in tweaks, rcclean and registry (wave 1)
+- [x] 24.4-01-PLAN.md — Every launch removes the retired guard: `installer/legacy_guard.py` remover, `_launch_repairs` rewired and run first, `_warnings_only` and the launch rewrites gone (wave 1)
+- [x] 24.4-02-PLAN.md — Catalog-audit surface list without the guard module plus its existence test; guard-free comments in tweaks, rcclean and registry (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 24.4-03-PLAN.md — Leftover-aware lookups move to `legacy_guard`, vendor shells keep the PATH order, schedule-runner sentinel drift test (wave 2)
