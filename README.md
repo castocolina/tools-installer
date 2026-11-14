@@ -305,6 +305,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make doctor`    | audit `PATH` (a report; runs the launch repairs first)          |
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
 | `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode |
+| `make audit-catalog` | maintainer tooling for the catalog-audit skill: prints read-only facts about one registry entry and validates and stores its audit report under `.planning/audits/catalog/<date>/`; subcommand via `ARGS="…"` (`status`, `facts`, `write`); never installs anything |
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |

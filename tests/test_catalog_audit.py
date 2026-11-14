@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from collections.abc import Callable, Mapping
 from email.message import Message
@@ -16,6 +17,7 @@ import pytest
 from installer import catalog_audit
 from installer.catalog_audit import FOOTER, Seams, entry_facts, main
 from installer.model import Method, Tool, load_tools
+from tests.home_fingerprint import fingerprint, fingerprint_diff
 
 DAY = "2026-11-13"
 _ALPHA_URL = "https://api.github.com/repos/o/alpha/releases/latest"
@@ -480,3 +482,290 @@ def test_facts_reads_the_version_file_first() -> None:
 def test_facts_container_runtime(found: str, line: str) -> None:
     seams = _seams(which=lambda name: f"/usr/bin/{name}" if name == found else None)
     assert line in _facts(_tool("demo", Method("brew", {"formula": "x"})), seams=seams)
+
+
+# ---- Task 3: the writer's guards, resume edges, confinement and host safety ----
+
+
+def _write_argv(entry_id: str, root: Path, day: str = DAY) -> list[str]:
+    return ["write", entry_id, "--date", day, "--root", str(root)]
+
+
+def _secret_cases() -> list[tuple[str, str]]:
+    return [
+        ("ghp", "ghp_" + "a" * 36),
+        ("github_pat", "github_pat_" + "A1" * 15),
+        ("sk", "sk-" + "a" * 32),
+        ("xoxb", "xoxb-" + "1234567890-abcdef"),
+        ("akia", "AKIA" + "A" * 16),
+        ("private key", "-----BEGIN OPENSSH PRIVATE KEY-----"),
+        ("bearer", "Bearer " + "a" * 24),
+    ]
+
+
+def _refusal_reports() -> list[tuple[str, str]]:
+    rows = _CHECK_ROWS
+    swapped = (rows[1], rows[0], *rows[2:])
+    cases = {
+        "sixth row": _report(rows=(*rows, "| extra | ok | `x` |")),
+        "missing row": _report(rows=rows[:4]),
+        "rows out of order": _report(rows=swapped),
+        "status fine": _report(rows=(rows[0].replace("| ok |", "| fine |"), *rows[1:])),
+        "n/a without reason": _report(
+            rows=(*rows[:3], "| tuning keys | n/a | no tuning |", rows[4])
+        ),
+        "ok with prose": _report(rows=("| install method | ok | it just works |", *rows[1:])),
+        "all latest unknown": _report(latest="- latest: unknown: HTTPError: HTTP Error 403"),
+        "home path": _report().replace("nothing relevant", "see <HOME>/x"),
+        "footer present": _report(extra=FOOTER + "\n"),
+        "wrong title id": _report("beta"),
+        "wrong title date": _report(day="2026-11-12"),
+        "unknown section": _report().replace("## Changelog", "## Notes"),
+    }
+    for name, secret in _secret_cases():
+        cases[f"secret {name}"] = _report().replace("nothing relevant", f"token {secret}")
+    return list(cases.items())
+
+
+@pytest.mark.parametrize(("name", "report"), _refusal_reports(), ids=lambda v: v[:24])
+def test_write_refusals(
+    name: str,
+    report: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _root(tmp_path)
+    _stdin(monkeypatch, report.replace("<HOME>", str(Path.home())))
+    code, _, err = _run(_write_argv("alpha", root), _two_entry_registry(tmp_path), _seams(), capsys)
+    assert code == catalog_audit.EXIT_REFUSED, name
+    assert err.startswith("refused: ")
+    assert not (root / DAY / "alpha.md").exists()
+    for _, secret in _secret_cases():
+        assert secret not in err
+
+
+def test_write_never_rewrites_a_complete_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    _stdin(monkeypatch, _report())
+    assert _run(_write_argv("alpha", root), registry, _seams(), capsys)[0] == 0
+    target = root / DAY / "alpha.md"
+    before = (target.read_bytes(), target.stat().st_mtime_ns)
+    _stdin(monkeypatch, _report().replace("nothing relevant", "something else"))
+    code, _, err = _run(_write_argv("alpha", root), registry, _seams(), capsys)
+    assert code == catalog_audit.EXIT_REFUSED
+    assert "already complete" in err
+    assert (target.read_bytes(), target.stat().st_mtime_ns) == before
+
+
+def test_write_refuses_a_symlinked_leaf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _root(tmp_path)
+    (root / DAY).mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere.md"
+    (root / DAY / "alpha.md").symlink_to(elsewhere)
+    _stdin(monkeypatch, _report())
+    code, _, err = _run(_write_argv("alpha", root), _two_entry_registry(tmp_path), _seams(), capsys)
+    assert code == catalog_audit.EXIT_REFUSED
+    assert "symlink" in err
+    assert not elsewhere.exists()
+
+
+def _numbered_registry(tmp_path: Path, count: int) -> Path:
+    return _registry(tmp_path, *(_tool_toml(f"t{n}", _BETA_METHOD) for n in range(1, count + 1)))
+
+
+def test_resume_after_entry_k(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _numbered_registry(tmp_path, 5)
+    root = _root(tmp_path)
+    status = ["status", "--date", DAY, "--root", str(root)]
+    for n in (1, 2, 3):
+        _stdin(monkeypatch, _report(f"t{n}"))
+        assert _run(_write_argv(f"t{n}", root), registry, _seams(), capsys)[0] == 0
+    out = _run(status, registry, _seams(), capsys)[1]
+    assert out.splitlines()[:2] == ["next t4", "complete 3/5"]
+    frozen = {n: (root / DAY / f"t{n}.md").read_bytes() for n in (1, 2, 3)}
+    for n in (4, 5):
+        _stdin(monkeypatch, _report(f"t{n}"))
+        assert _run(_write_argv(f"t{n}", root), registry, _seams(), capsys)[0] == 0
+    assert {n: (root / DAY / f"t{n}.md").read_bytes() for n in (1, 2, 3)} == frozen
+    assert _run(status, registry, _seams(), capsys)[1].splitlines()[:2] == ["done", "complete 5/5"]
+
+
+def test_interrupted_write_is_not_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+
+    def boom(_src: object, _dst: object) -> None:
+        raise OSError("disk went away")
+
+    _stdin(monkeypatch, _report())
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "replace", boom)
+        code, _, _ = _run(_write_argv("alpha", root), registry, _seams(), capsys)
+    assert code == catalog_audit.EXIT_INTERNAL
+    assert not (root / DAY / "alpha.md").exists()
+    (root / DAY / "alpha.md.1.abc.tools-installer.tmp").write_text("half", encoding="utf-8")
+    out = _run(["status", "--date", DAY, "--root", str(root)], registry, _seams(), capsys)[1]
+    assert out.splitlines() == ["next alpha", "complete 0/2"]
+
+
+def test_two_writers_same_date(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    run = root / DAY
+    home = Path.home()
+    alpha = catalog_audit.write_report(run, "alpha", _report("alpha"), home=home)
+    beta = catalog_audit.write_report(run, "beta", _report("beta"), home=home)
+    assert alpha.read_text(encoding="utf-8").endswith(FOOTER + "\n")
+    assert beta.read_text(encoding="utf-8").endswith(FOOTER + "\n")
+    before = alpha.read_bytes()
+    with pytest.raises(catalog_audit.ReportRefused, match="already complete"):
+        catalog_audit.write_report(run, "alpha", _report("alpha"), home=home)
+    assert alpha.read_bytes() == before
+
+
+def test_orphan_report_is_listed_not_deleted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    run = root / DAY
+    run.mkdir(parents=True)
+    (run / "gone.md").write_text("# gone\n\n" + FOOTER + "\n", encoding="utf-8")
+    (run / "SUMMARY.md").write_text("summary\n", encoding="utf-8")
+    out = _run(["status", "--date", DAY, "--root", str(root)], registry, _seams(), capsys)[1]
+    assert out.splitlines() == ["next alpha", "complete 0/2", "orphan gone"]
+    assert (run / "gone.md").exists()
+
+
+def _usage_cases(tmp_path: Path) -> list[tuple[list[str], Path]]:
+    root = _root(tmp_path)
+    linked = tmp_path / "linked" / ".planning" / "audits"
+    linked.mkdir(parents=True)
+    (linked / "catalog").symlink_to(tmp_path / "real")
+    run_linked = tmp_path / "rl" / ".planning" / "audits" / "catalog"
+    (run_linked).mkdir(parents=True)
+    (run_linked / DAY).symlink_to(tmp_path / "real")
+    (tmp_path / "real").mkdir()
+    bare = tmp_path / "bare" / "audits" / "catalog"
+    status = ["status", "--date"]
+    return [
+        ([*status, "2026-13-01", "--root", str(root)], root),
+        ([*status, "../x", "--root", str(root)], root),
+        ([*status, "2026-1-1", "--root", str(root)], root),
+        (_write_argv("nope", root), root),
+        (["facts", "nope"], root),
+        (["facts", "a/b"], root),
+        (_write_argv("alpha", linked / "catalog"), linked / "catalog"),
+        (_write_argv("alpha", run_linked), run_linked),
+        (_write_argv("alpha", bare), bare),
+        (["frobnicate"], root),
+    ]
+
+
+def _snapshot(base: Path) -> dict[str, int]:
+    return {
+        str(path): path.lstat().st_mtime_ns
+        for path in [base, *base.rglob("*")]
+        if path.exists() or path.is_symlink()
+    }
+
+
+def test_usage_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    cases = _usage_cases(tmp_path)
+    for argv, _ in cases:
+        _stdin(monkeypatch, _report())
+        before = _snapshot(tmp_path)
+        code, _, err = _run(argv, registry, _seams(), capsys)
+        assert code == catalog_audit.EXIT_USAGE, argv
+        assert err.startswith("catalog-audit: "), argv
+        assert _snapshot(tmp_path) == before, argv
+
+
+def test_cli_confined_to_the_run_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    seams = _seams({_ALPHA_URL: b'{"tag_name": "v1"}'})
+    root.mkdir()
+    before = _snapshot(tmp_path)
+    _run(["status", "--date", DAY, "--root", str(root)], registry, seams, capsys)
+    _run(["facts", "alpha"], registry, seams, capsys)
+    for entry in ("alpha", "beta"):
+        _stdin(monkeypatch, _report(entry))
+        assert _run(_write_argv(entry, root), registry, seams, capsys)[0] == 0
+    after = _snapshot(tmp_path)
+    run = root / DAY
+    changed = {p for p in before.keys() | after.keys() if before.get(p) != after.get(p)}
+    assert changed
+    for path in changed:
+        assert Path(path) == root or Path(path).is_relative_to(run), path
+
+
+def test_facts_hostsafe_fingerprint_and_probe_allowlist(tmp_path: Path) -> None:
+    home = Path.home()
+    config = home / ".config" / "opencode" / "opencode.jsonc"
+    config.parent.mkdir(parents=True)
+    canary = "canary-value-9f3a"
+    config.write_text(json.dumps({"token": canary}), encoding="utf-8")
+    (home / ".local" / "state" / "tools-installer" / "receipts").mkdir(parents=True)
+    recorded: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str | None:
+        recorded.append(argv)
+        return None
+
+    tools = load_tools(catalog_audit.REGISTRY)
+    before = fingerprint(home, {})
+    blocks = [entry_facts(tool, tools, _seams(probe=probe)) for tool in tools]
+    assert fingerprint_diff(before, fingerprint(home, {})) == []
+    assert recorded
+    assert all(len(argv) == 2 and argv[-1] == "--version" for argv in recorded)
+    text = "".join(blocks)
+    assert canary not in text
+    assert str(home) not in text
+
+
+def test_main_never_prints_the_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from installer import versions
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    tokens: list[str | None] = []
+
+    def fake_fetch(url: str, *, token: str | None = None) -> bytes:
+        tokens.append(token)
+        return b'{"tag_name": "v1"}'
+
+    monkeypatch.setattr(versions, "urlopen_fetch", fake_fetch)
+
+    def no_probe(_argv: list[str]) -> str | None:
+        return None
+
+    monkeypatch.setattr(versions, "probe_version_output", no_probe)
+    gh_calls: list[list[str]] = []
+
+    def gh(argv: list[str]) -> str:
+        gh_calls.append(argv)
+        return "secret-token-value"
+
+    code = main(["facts", "alpha"], registry=_two_entry_registry(tmp_path), gh=gh)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert gh_calls == [["gh", "auth", "token"]]
+    assert tokens == ["secret-token-value"]
+    assert "secret-token-value" not in captured.out + captured.err

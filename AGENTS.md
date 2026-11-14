@@ -16,6 +16,7 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 - `make run`       — alias for `make setup`
 - `make uninstall` — remove installed artifacts
 - `make verify-registry` — check registry pins against upstream (read-only; pass `ARGS="--write"` to bump)
+- `make audit-catalog` — the catalog-audit skill's fact gatherer and report writer (read-only facts; writes only `.planning/audits/catalog/<date>/`; pass the subcommand via `ARGS="…"`)
 - `make validate`  — run pre-commit hooks (lint, format check, types, security, dead code)
 - `make test`      — `pytest -n auto` with coverage, capped at ~40% of the host's threads (see [Testing](.claude/testing.md))
 

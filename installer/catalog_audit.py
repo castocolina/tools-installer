@@ -301,6 +301,9 @@ def write_report(run: Path, entry_id: str, text: str, *, home: Path) -> Path:
     Findings that arrive after an entry's report go to the run's `findings.toml`, never here.
     """
     problems = validate_report(text, entry_id, home=home)
+    title = next((line for line in text.splitlines() if line.strip()), "")
+    if not title.endswith(f" - catalog audit {run.name}"):
+        problems.append(f"the title date must be this run's date, {run.name}")
     target = run / f"{entry_id}.md"
     _refuse_symlink_leaf(target)
     if _is_complete(target):
