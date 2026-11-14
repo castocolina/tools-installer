@@ -759,6 +759,10 @@ def _build_app(
     timer_cache: systemd_daemon.TimerStateCache | None = None,
     competing: Callable[..., tuple[systemd_daemon.CompetingUnit, ...]] | None = None,
 ) -> UnifiedApp:
+    # A legacy alias block is stripped at every launch and its notice rides the startup
+    # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
+    # First, so no read below (installed map, doctor data, services) sees a retired guard file.
+    legacy_strip, repairs = _launch_repairs()
     # One resolution, not two independent fallbacks: the routes that supply
     # neither argument (_run_doctor's TTY branch, _run_fix, _run_uninstall)
     # must still share one cache between the daemon Policy and the probe.
@@ -889,9 +893,6 @@ def _build_app(
         platform_os=platform.os,
     )
 
-    # A legacy alias block is stripped at every launch and its notice rides the startup
-    # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
-    legacy_strip, repairs = _launch_repairs()
     startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
     startup_lines += [text for text, _severity in (*legacy_strip.launch_lines(), *repairs)]
     # Launch-time warnings come from this one scan only; the `retired` predicate drops its own.

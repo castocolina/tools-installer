@@ -5049,3 +5049,48 @@ def test_update_route_repairs_only_a_drifted_alacritty_shell_region(
     assert keys_before.group(0) in repaired
     assert repaired.replace(shell.group(0), "") == intact.replace(shell.group(0), "")
     assert repaired.startswith("[font]\nsize = 12\n")
+
+
+def test_build_app_removes_the_guard_before_any_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-10: the TUI app removes the guard before its first read sees a file."""
+    _sandbox(monkeypatch, tmp_path)
+    shim_at_read: list[bool] = []
+
+    def recording_is_installed(_tool: Tool) -> bool:
+        shim_at_read.append((tmp_path / ".local" / "bin" / "npx").exists())
+        return False
+
+    monkeypatch.setattr(setup, "is_installed", recording_is_installed)
+    _seed_retired_guard(tmp_path)
+
+    warning = _wired(monkeypatch, [loop_tool("rg")])["startup_warning"]
+
+    assert shim_at_read
+    assert not any(shim_at_read)
+    assert isinstance(warning, str)
+    assert warning.count(_SHIM_REMOVED) == len(GUARD_NAMES)
+    assert warning.count(_BLOCK_REMOVED) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
+def test_a_read_only_bin_dir_warns_and_keeps_the_exit_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    buffer = io.StringIO()
+    _headless_route_stubs(monkeypatch, buffer)
+    _seed_retired_guard(tmp_path)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.chmod(0o555)
+    try:
+        assert setup.main(["--doctor"]) == 0
+    finally:
+        bin_dir.chmod(0o755)
+
+    shown = buffer.getvalue()
+    for name in GUARD_NAMES:
+        assert f"Could not remove the retired pip/npm guard shim ~/.local/bin/{name}" in shown
+        assert (bin_dir / name).exists()
+    assert f"{_BLOCK_REMOVED} ~/.myshellrc." in shown
