@@ -4,8 +4,10 @@ Run as `python -m tests.e2e_landing_driver <verb>` from the workspace: the conta
 (`scripts/container-e2e-verify.sh audit-landing`) has the installer's own code install, tune,
 update and remove tools, so nothing is hand-written. Verbs:
 
-  install opencode                  install the shipped OpenCode 2 entry; prints the install and
-                                    tuning verdicts (TRACER_OPENCODE_V2_INSTALL_*, _TUNING_*)
+  install opencode                  install the shipped OpenCode 2 entry through its script route,
+                                    the one a host without Homebrew takes (the box bootstraps
+                                    Homebrew and 24.5 ranks Homebrew first); prints the install
+                                    and tuning verdicts (TRACER_OPENCODE_V2_INSTALL_*, _TUNING_*)
   latest opencode                   the latest version the status pass resolves
                                     (TRACER_OPENCODE_LATEST_*)
   update opencode [--with-service]  the installer-owned update; with the flag, while the background
@@ -402,9 +404,20 @@ class _Recorder:
         return [argv for argv, _code in self.calls]
 
 
-def _install(tool: Tool, prefix: str, runner: Runner = run_command) -> engine.InstallOutcome:
+def _no_homebrew_platform() -> host_platform.Platform:
+    """The detected platform minus Homebrew: the route a host without Homebrew takes."""
+    return dataclasses.replace(host_platform.detect(), has_brew=False)
+
+
+def _install(
+    tool: Tool,
+    prefix: str,
+    runner: Runner = run_command,
+    *,
+    platform: host_platform.Platform | None = None,
+) -> engine.InstallOutcome:
     """The one-tool install path `make setup` runs for a selected row, hooks and tuning included."""
-    outcome = engine.install_tool(tool, host_platform.detect(), runner)
+    outcome = engine.install_tool(tool, platform or host_platform.detect(), runner)
     if outcome.status is not InstallStatus.INSTALLED:
         reason = _first_line(outcome.errors[0]) if outcome.errors else ""
         raise _Failed(prefix, f"{tool.id} install ended {outcome.status}: {reason}".rstrip(": "))
@@ -581,7 +594,7 @@ _Handler = Callable[[Path, bool], list[str]]
 
 def _install_opencode(home: Path, _with_service: bool) -> list[str]:
     before = _digests(home)
-    _install(_tool("opencode"), _INSTALL_FAILED)
+    _install(_tool("opencode"), _INSTALL_FAILED, platform=_no_homebrew_platform())
     return [
         install_verdict(
             _version(_leaf(home, "opencode")), _receipt_paths(), before, _digests(home)

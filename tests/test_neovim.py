@@ -6,6 +6,7 @@ curl, tar or git, and the release digest is pinned through `engine.release_resol
 
 import hashlib
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,8 @@ TAG = "v0.12.6"
 ASSET = "nvim-linux-x86_64.tar.gz"
 PAYLOAD = b"fixture neovim tarball"
 DIGEST = hashlib.sha256(PAYLOAD).hexdigest()
-BAZZITE = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
+# Without Homebrew the download stanza is the first method (24.5 ranks Homebrew first).
+BAZZITE = Platform(os="fedora", arch="amd64", immutable=True, has_brew=False)
 SEED_INIT = b'vim.g.mapleader = " "\n'
 
 
@@ -189,23 +191,31 @@ def test_neovim_entry_facts() -> None:
     [
         (
             Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
-            ["github_release", "dnf", "brew"],
+            ["brew", "github_release", "dnf"],
         ),
         (
             Platform(os="debian", arch="amd64", immutable=False, has_brew=True),
-            ["github_release", "apt", "brew"],
+            ["brew", "github_release", "apt"],
         ),
         (
             Platform(os="arch", arch="amd64", immutable=False, has_brew=True),
-            ["github_release", "pacman", "brew"],
+            ["brew", "github_release", "pacman"],
         ),
-        (BAZZITE, ["github_release", "brew"]),
+        (BAZZITE, ["github_release"]),
+        (replace(BAZZITE, has_brew=True), ["brew", "github_release"]),
         (
             Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0"),
-            ["github_release", "brew"],
+            ["brew", "github_release"],
         ),
     ],
-    ids=["fedora-mutable", "debian", "arch", "bazzite-immutable", "macos-arm64"],
+    ids=[
+        "fedora-mutable",
+        "debian",
+        "arch",
+        "bazzite-no-homebrew",
+        "bazzite-homebrew",
+        "macos-arm64",
+    ],
 )
 def test_neovim_resolved_method_order(platform: Platform, kinds: list[str]) -> None:
     assert [method.kind for method in resolve_methods(neovim_tool(), platform)] == kinds

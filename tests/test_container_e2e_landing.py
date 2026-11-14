@@ -18,6 +18,10 @@ from pathlib import Path
 import pytest
 
 from installer import agent_settings
+from installer.engine import InstallOutcome
+from installer.enums import InstallStatus
+from installer.platform import Platform
+from installer.resolve import resolve_methods
 from tests import e2e_landing_driver as driver
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -514,6 +518,30 @@ def test_the_driver_refuses_an_unknown_verb_and_runs_nothing_on_the_host(
     assert driver.main(["install", "opencode", "--with-service"]) == 2
     assert driver.main([]) == 2
     assert "usage" in capsys.readouterr().err
+
+
+def test_install_opencode_takes_the_script_route_on_a_homebrew_box(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The box bootstraps Homebrew, so the driver installs on the platform minus Homebrew."""
+    box = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    seen: list[Platform] = []
+
+    def failing_install(tool: object, platform: Platform, *_args: object) -> InstallOutcome:
+        seen.append(platform)
+        return InstallOutcome("opencode", InstallStatus.FAILED)
+
+    monkeypatch.setattr(driver.host_platform, "detect", lambda: box)
+    monkeypatch.setattr(driver.engine, "install_tool", failing_install)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    with pytest.raises(vars(driver)["_Failed"]):
+        vars(driver)["_install_opencode"](tmp_path, False)
+
+    opencode = vars(driver)["_tool"]("opencode")
+    assert [platform.has_brew for platform in seen] == [False]
+    assert resolve_methods(opencode, seen[0])[0].kind == "script"
+    assert resolve_methods(opencode, box)[0].kind == "brew"
 
 
 def test_the_driver_does_not_run_outside_a_container(

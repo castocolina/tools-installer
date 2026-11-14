@@ -7,15 +7,19 @@ from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.versions import meets_minimum
 
-# Lower rank is tried first. The default ladder:
-#   1) official script  2) userspace install (download/node/sdkman)
-#   3) native pkg manager  4) brew/cask
+# Lower rank is tried first. The ladder: Homebrew (formula or cask) where it applies, then bun,
+# then pnpm on the volta-provided Node runtime, then the official script, userspace downloads
+# (download/sdkman/uv-tool), a Distrobox build and the native package managers. brew needs
+# has_brew and cask needs macOS with brew, so a host without Homebrew keeps the earlier order.
+# Index 0 is install preference, never provenance.
 _RANK = {
+    "brew": 5,
+    "cask": 5,
+    "bun": 6,
+    "node": 7,
     "script": 10,
     "host_setup": 15,
     "github_release": 20,
-    "node": 20,
-    "bun": 6,
     "uv-tool": 20,
     "sdkman": 20,
     "tarball": 20,
@@ -25,8 +29,6 @@ _RANK = {
     "apt": 30,
     "pacman": 30,
     "rpm_ostree": 35,
-    "brew": 40,
-    "cask": 40,
 }
 
 # Which OS each native package manager belongs to.

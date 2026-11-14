@@ -1,10 +1,14 @@
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import installer.resolve as resolve_module
 from installer.assets import arch_tokens, render_asset
+from installer.engine import install_tool
+from installer.enums import InstallStatus
 from installer.model import Method, Tool, load_tools
 from installer.platform import Platform
 from installer.resolve import platform_could_support, resolve_methods, unavailable_reason
@@ -25,10 +29,10 @@ def _tool(*kinds: str) -> Tool:
     )
 
 
-def test_macos_prefers_script_then_brew():
+def test_macos_prefers_brew_then_script():
     platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     tool = _tool("script", "brew", "apt")
-    assert [m.kind for m in resolve_methods(tool, platform)] == ["script", "brew"]
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["brew", "script"]
 
 
 def test_userspace_before_native():
@@ -129,18 +133,21 @@ def test_cask_requires_macos_and_brew() -> None:
     assert resolve_methods(tool, linux_brew) == []
 
 
-def test_app_ranks_with_userspace_downloads_before_cask() -> None:
+def test_cask_ranks_before_the_app_download_and_the_download_stays_the_fallback() -> None:
     app = Method(kind="app", params={"url": "u", "app": "A.app"}, os=("macos",))
     cask = Method(kind="cask", params={"cask": "a"})
-    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(cask, app))
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(app, cask))
     mac = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    assert [m.kind for m in resolve_methods(tool, mac)] == ["app", "cask"]
+    mac_no_brew = replace(mac, has_brew=False)
+    assert [m.kind for m in resolve_methods(tool, mac)] == ["cask", "app"]
+    assert [m.kind for m in resolve_methods(tool, mac_no_brew)] == ["app"]
 
 
-def test_node_is_userspace_ranked_before_brew():
+def test_brew_is_ranked_before_node():
     platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    tool = _tool("brew", "node")
-    assert [m.kind for m in resolve_methods(tool, platform)] == ["node", "brew"]
+    tool = _tool("node", "brew")
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["brew", "node"]
+    assert [m.kind for m in resolve_methods(tool, replace(platform, has_brew=False))] == ["node"]
 
 
 def test_node_applies_on_every_platform():
@@ -149,10 +156,11 @@ def test_node_applies_on_every_platform():
         assert [m.kind for m in resolve_methods(_tool("node"), platform)] == ["node"]
 
 
-def test_uv_tool_is_userspace_ranked_before_brew():
+def test_brew_is_ranked_before_uv_tool():
     platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    tool = _tool("brew", "uv-tool")
-    assert [m.kind for m in resolve_methods(tool, platform)] == ["uv-tool", "brew"]
+    tool = _tool("uv-tool", "brew")
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["brew", "uv-tool"]
+    assert [m.kind for m in resolve_methods(tool, replace(platform, has_brew=False))] == ["uv-tool"]
 
 
 def test_uv_tool_applies_on_every_platform_including_immutable():
@@ -162,10 +170,11 @@ def test_uv_tool_applies_on_every_platform_including_immutable():
             assert [m.kind for m in resolve_methods(_tool("uv-tool"), platform)] == ["uv-tool"]
 
 
-def test_sdkman_is_userspace_ranked_before_brew():
+def test_brew_is_ranked_before_sdkman():
     platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    tool = _tool("brew", "sdkman")
-    assert [m.kind for m in resolve_methods(tool, platform)] == ["sdkman", "brew"]
+    tool = _tool("sdkman", "brew")
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["brew", "sdkman"]
+    assert [m.kind for m in resolve_methods(tool, replace(platform, has_brew=False))] == ["sdkman"]
 
 
 def test_sdkman_applies_on_every_platform_including_immutable():
@@ -533,3 +542,466 @@ def test_node_floor_plans_blocked_not_failed() -> None:
     assert "needs Node 22.12.0 or newer" in rows["mmdc"].reason
     assert "20.19.2" in rows["mmdc"].reason
     assert rows["puppeteer"].disposition is Disposition.BLOCKED
+
+
+# The install ladder (D-01): Homebrew (formula or cask) first, then bun, then pnpm, then the
+# earlier order. Every fixture has node_version=None, no distrobox and no podman.
+_FIXTURES: dict[str, Platform] = {
+    "macos": Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0"),
+    "fedora-mutable": Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+    "fedora-immutable": Platform(os="fedora", arch="amd64", immutable=True, has_brew=True),
+    "debian": Platform(os="debian", arch="amd64", immutable=False, has_brew=False),
+}
+
+# The first method kind of every catalog tool on each fixture, as a literal: a reviewer reads
+# what each tool installs through on four platforms, and a snapshot regenerated without reading
+# pins nothing. None means no method applies there.
+_FIRST_METHOD: dict[str, dict[str, str | None]] = {
+    "macos": {
+        "aichat": "brew",
+        "alacritty": None,
+        "antigravity": "script",
+        "ast-grep": "brew",
+        "bat": "brew",
+        "bottom": "brew",
+        "brew": "script",
+        "broot": "brew",
+        "bun": "brew",
+        "claude": "cask",
+        "codegraph": "github_release",
+        "codex": "cask",
+        "colima": "brew",
+        "container": "brew",
+        "copilot": "cask",
+        "cursor-agent": "script",
+        "dasel": "brew",
+        "delta": "brew",
+        "deno": "brew",
+        "difftastic": "brew",
+        "direnv": "brew",
+        "dive": "brew",
+        "docker": "brew",
+        "drawio-desktop": "app",
+        "duf": "brew",
+        "dust": "brew",
+        "eza": "brew",
+        "fd": "brew",
+        "fnm": "brew",
+        "fx": "brew",
+        "fzf": "brew",
+        "gh": "brew",
+        "git": "brew",
+        "gitleaks": "brew",
+        "gitui": "brew",
+        "glab": "brew",
+        "glow": "brew",
+        "gnu-bash": "brew",
+        "gradle": "sdkman",
+        "graphify": "uv-tool",
+        "gron": "brew",
+        "groovy": "sdkman",
+        "gum": "brew",
+        "herdr": "github_release",
+        "hexyl": "brew",
+        "hyperfine": "brew",
+        "java": "sdkman",
+        "jetbrains-toolbox": "cask",
+        "jless": "brew",
+        "jq": "brew",
+        "just": "brew",
+        "kitty": "cask",
+        "lazydocker": "brew",
+        "lazygit": "brew",
+        "maven": "sdkman",
+        "miller": "brew",
+        "mmdc": "bun",
+        "neovim": "brew",
+        "oh-my-zsh": "script",
+        "opencode": "brew",
+        "pi": "bun",
+        "pnpm": "brew",
+        "podman": "brew",
+        "procs": "brew",
+        "puppeteer": "bun",
+        "rg": "brew",
+        "ruff": "brew",
+        "sd": "brew",
+        "sdkman": "script",
+        "shfmt": "brew",
+        "springbootcli": "sdkman",
+        "starship": "brew",
+        "sublime": "cask",
+        "tealdeer": "brew",
+        "unzip": "brew",
+        "uv": "brew",
+        "vale": "brew",
+        "volta": "brew",
+        "vscode": "cask",
+        "watch": "brew",
+        "wezterm": "cask",
+        "xh": "brew",
+        "yq": "brew",
+        "zip": "brew",
+        "zoxide": "brew",
+        "zsh": "brew",
+    },
+    "fedora-mutable": {
+        "aichat": "brew",
+        "alacritty": "dnf",
+        "antigravity": "script",
+        "ast-grep": "brew",
+        "bat": "brew",
+        "bottom": "brew",
+        "brew": "script",
+        "broot": "brew",
+        "bun": "brew",
+        "claude": "script",
+        "codegraph": "github_release",
+        "codex": "script",
+        "colima": "brew",
+        "container": None,
+        "copilot": "github_release",
+        "cursor-agent": "script",
+        "dasel": "brew",
+        "delta": "brew",
+        "deno": "brew",
+        "difftastic": "brew",
+        "direnv": "brew",
+        "dive": "brew",
+        "docker": "brew",
+        "drawio-desktop": "github_release",
+        "duf": "brew",
+        "dust": "brew",
+        "eza": "brew",
+        "fd": "brew",
+        "fnm": "brew",
+        "fx": "brew",
+        "fzf": "brew",
+        "gh": "brew",
+        "git": "brew",
+        "gitleaks": "brew",
+        "gitui": "brew",
+        "glab": "brew",
+        "glow": "brew",
+        "gnu-bash": None,
+        "gradle": "sdkman",
+        "graphify": "uv-tool",
+        "gron": "brew",
+        "groovy": "sdkman",
+        "gum": "brew",
+        "herdr": "github_release",
+        "hexyl": "brew",
+        "hyperfine": "brew",
+        "java": "sdkman",
+        "jetbrains-toolbox": "tarball",
+        "jless": "brew",
+        "jq": "brew",
+        "just": "brew",
+        "kitty": "script",
+        "lazydocker": "brew",
+        "lazygit": "brew",
+        "maven": "sdkman",
+        "miller": "brew",
+        "mmdc": "bun",
+        "neovim": "brew",
+        "oh-my-zsh": "script",
+        "opencode": "brew",
+        "pi": "bun",
+        "pnpm": "brew",
+        "podman": "brew",
+        "procs": "brew",
+        "puppeteer": "bun",
+        "rg": "brew",
+        "ruff": "brew",
+        "sd": "brew",
+        "sdkman": "script",
+        "shfmt": "brew",
+        "springbootcli": "sdkman",
+        "starship": "brew",
+        "sublime": "tarball",
+        "tealdeer": "brew",
+        "unzip": "brew",
+        "uv": "brew",
+        "vale": "brew",
+        "volta": "brew",
+        "vscode": "tarball",
+        "watch": "brew",
+        "wezterm": "github_release",
+        "xh": "brew",
+        "yq": "brew",
+        "zip": "brew",
+        "zoxide": "brew",
+        "zsh": "brew",
+    },
+    "fedora-immutable": {
+        "aichat": "brew",
+        "alacritty": None,
+        "antigravity": "script",
+        "ast-grep": "brew",
+        "bat": "brew",
+        "bottom": "brew",
+        "brew": "script",
+        "broot": "brew",
+        "bun": "brew",
+        "claude": "script",
+        "codegraph": "github_release",
+        "codex": "script",
+        "colima": "brew",
+        "container": None,
+        "copilot": "github_release",
+        "cursor-agent": "script",
+        "dasel": "brew",
+        "delta": "brew",
+        "deno": "brew",
+        "difftastic": "brew",
+        "direnv": "brew",
+        "dive": "brew",
+        "docker": "brew",
+        "drawio-desktop": "github_release",
+        "duf": "brew",
+        "dust": "brew",
+        "eza": "brew",
+        "fd": "brew",
+        "fnm": "brew",
+        "fx": "brew",
+        "fzf": "brew",
+        "gh": "brew",
+        "git": "brew",
+        "gitleaks": "brew",
+        "gitui": "brew",
+        "glab": "brew",
+        "glow": "brew",
+        "gnu-bash": None,
+        "gradle": "sdkman",
+        "graphify": "uv-tool",
+        "gron": "brew",
+        "groovy": "sdkman",
+        "gum": "brew",
+        "herdr": "github_release",
+        "hexyl": "brew",
+        "hyperfine": "brew",
+        "java": "sdkman",
+        "jetbrains-toolbox": "tarball",
+        "jless": "brew",
+        "jq": "brew",
+        "just": "brew",
+        "kitty": "script",
+        "lazydocker": "brew",
+        "lazygit": "brew",
+        "maven": "sdkman",
+        "miller": "brew",
+        "mmdc": "bun",
+        "neovim": "brew",
+        "oh-my-zsh": "script",
+        "opencode": "brew",
+        "pi": "bun",
+        "pnpm": "brew",
+        "podman": "brew",
+        "procs": "brew",
+        "puppeteer": "bun",
+        "rg": "brew",
+        "ruff": "brew",
+        "sd": "brew",
+        "sdkman": "script",
+        "shfmt": "brew",
+        "springbootcli": "sdkman",
+        "starship": "brew",
+        "sublime": "tarball",
+        "tealdeer": "brew",
+        "unzip": "brew",
+        "uv": "brew",
+        "vale": "brew",
+        "volta": "brew",
+        "vscode": "tarball",
+        "watch": "brew",
+        "wezterm": "github_release",
+        "xh": "brew",
+        "yq": "brew",
+        "zip": "brew",
+        "zoxide": "brew",
+        "zsh": "brew",
+    },
+    "debian": {
+        "aichat": "github_release",
+        "alacritty": "apt",
+        "antigravity": "script",
+        "ast-grep": "github_release",
+        "bat": "github_release",
+        "bottom": "github_release",
+        "brew": "script",
+        "broot": "github_release",
+        "bun": "script",
+        "claude": "script",
+        "codegraph": "github_release",
+        "codex": "script",
+        "colima": None,
+        "container": None,
+        "copilot": "github_release",
+        "cursor-agent": "script",
+        "dasel": "github_release",
+        "delta": "github_release",
+        "deno": "github_release",
+        "difftastic": "github_release",
+        "direnv": "github_release",
+        "dive": "github_release",
+        "docker": "apt",
+        "drawio-desktop": "github_release",
+        "duf": "github_release",
+        "dust": "github_release",
+        "eza": "github_release",
+        "fd": "github_release",
+        "fnm": "script",
+        "fx": "github_release",
+        "fzf": "github_release",
+        "gh": "github_release",
+        "git": "apt",
+        "gitleaks": "github_release",
+        "gitui": "github_release",
+        "glab": "apt",
+        "glow": "github_release",
+        "gnu-bash": None,
+        "gradle": "sdkman",
+        "graphify": "uv-tool",
+        "gron": "github_release",
+        "groovy": "sdkman",
+        "gum": "github_release",
+        "herdr": "github_release",
+        "hexyl": "github_release",
+        "hyperfine": "github_release",
+        "java": "sdkman",
+        "jetbrains-toolbox": "tarball",
+        "jless": "github_release",
+        "jq": "apt",
+        "just": "github_release",
+        "kitty": "script",
+        "lazydocker": "github_release",
+        "lazygit": "github_release",
+        "maven": "sdkman",
+        "miller": "github_release",
+        "mmdc": "bun",
+        "neovim": "github_release",
+        "oh-my-zsh": "script",
+        "opencode": "script",
+        "pi": "bun",
+        "pnpm": "script",
+        "podman": "apt",
+        "procs": "github_release",
+        "puppeteer": "bun",
+        "rg": "github_release",
+        "ruff": "github_release",
+        "sd": "github_release",
+        "sdkman": "script",
+        "shfmt": "github_release",
+        "springbootcli": "sdkman",
+        "starship": "github_release",
+        "sublime": "tarball",
+        "tealdeer": "github_release",
+        "unzip": "apt",
+        "uv": "script",
+        "vale": "github_release",
+        "volta": "script",
+        "vscode": "tarball",
+        "watch": "apt",
+        "wezterm": "github_release",
+        "xh": "github_release",
+        "yq": "github_release",
+        "zip": "apt",
+        "zoxide": "github_release",
+        "zsh": "apt",
+    },
+}
+
+
+def _first_kinds(platform: Platform) -> dict[str, str | None]:
+    result: dict[str, str | None] = {}
+    for tool in load_tools(_REGISTRY):
+        methods = resolve_methods(tool, platform)
+        result[tool.id] = methods[0].kind if methods else None
+    return result
+
+
+@pytest.mark.parametrize("fixture", sorted(_FIXTURES))
+def test_first_method_golden_table(fixture: str) -> None:
+    assert _first_kinds(_FIXTURES[fixture]) == _FIRST_METHOD[fixture]
+
+
+# A frozen copy of the pre-phase ladder, kept here so a host without Homebrew is proven unchanged.
+_PRE_PHASE_RANK = {
+    "script": 10,
+    "host_setup": 15,
+    "github_release": 20,
+    "node": 20,
+    "uv-tool": 20,
+    "sdkman": 20,
+    "tarball": 20,
+    "app": 20,
+    "cargo_distrobox": 25,
+    "dnf": 30,
+    "apt": 30,
+    "pacman": 30,
+    "rpm_ostree": 35,
+    "brew": 40,
+    "cask": 40,
+}
+
+
+@pytest.mark.parametrize("fixture", sorted(_FIXTURES))
+def test_without_homebrew_every_tool_keeps_the_pre_phase_order(fixture: str) -> None:
+    platform = replace(_FIXTURES[fixture], has_brew=False)
+    applies = cast(Callable[[Method, Platform], bool], vars(resolve_module)["_applies"])
+    checked = 0
+    for tool in load_tools(_REGISTRY):
+        if any(m.kind == "bun" for m in tool.methods):
+            continue
+        applicable = [m for m in tool.methods if applies(m, platform)]
+        expected = sorted(applicable, key=lambda m: _PRE_PHASE_RANK[m.kind])
+        assert [m.kind for m in resolve_methods(tool, platform)] == [m.kind for m in expected], (
+            tool.id
+        )
+        checked += 1
+    assert checked > 70
+
+
+def test_rg_first_method_per_platform() -> None:
+    rg = _registry_tool("rg")
+    assert resolve_methods(rg, _FIXTURES["macos"])[0].kind == "brew"
+    assert resolve_methods(rg, _FIXTURES["debian"])[0].kind == "github_release"
+
+
+def test_brew_and_cask_keep_declaration_order() -> None:
+    mac = _FIXTURES["macos"]
+    assert [m.kind for m in resolve_methods(_tool("brew", "cask"), mac)] == ["brew", "cask"]
+    assert [m.kind for m in resolve_methods(_tool("cask", "brew"), mac)] == ["cask", "brew"]
+
+
+def test_equal_rank_methods_keep_registry_order() -> None:
+    first = Method(kind="github_release", params={"repo": "a/a"})
+    second = Method(kind="github_release", params={"repo": "b/b"})
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(first, second))
+    assert resolve_methods(tool, _FIXTURES["debian"]) == [first, second]
+    mac_formula = Method(kind="brew", params={"formula": "m"}, os=("macos",))
+    linux_formula = Method(kind="brew", params={"formula": "l"}, os=("fedora",))
+    split = Tool(id="t", name="t", category="c", cmd="t", methods=(linux_formula, mac_formula))
+    assert resolve_methods(split, _FIXTURES["macos"]) == [mac_formula]
+    assert resolve_methods(split, _FIXTURES["fedora-mutable"]) == [linux_formula]
+
+
+def test_no_applicable_method_reads_no_method() -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("a command ran")
+
+    outcome = install_tool(_tool("brew"), _FIXTURES["debian"], forbidden)
+    assert outcome.status is InstallStatus.NO_METHOD
+
+
+def test_rank_order_is_brew_cask_then_bun_then_node() -> None:
+    rank = cast(dict[str, int], vars(resolve_module)["_RANK"])
+    assert rank["brew"] == rank["cask"] < rank["bun"] < rank["node"] < rank["script"]
+    for kind, value in _PRE_PHASE_RANK.items():
+        if kind not in ("brew", "cask", "node"):
+            assert rank[kind] == value
+    ordered = sorted(
+        (kind for kind in _PRE_PHASE_RANK if kind not in ("brew", "cask", "node")),
+        key=_PRE_PHASE_RANK.__getitem__,
+    )
+    assert sorted(ordered, key=rank.__getitem__) == ordered

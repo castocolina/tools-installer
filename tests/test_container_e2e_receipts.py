@@ -26,8 +26,8 @@ from tests.test_registry import REGISTRY
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "container-e2e-verify.sh"
 
-PROBE_TOOL = "yq"
-PROBE_CATEGORY = "data"
+PROBE_TOOL = "herdr"
+PROBE_CATEGORY = "terminal"
 _FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
 
 _FUNCTIONS = (
@@ -94,7 +94,7 @@ def test_script_receipt_path_matches_the_module(
 
 
 def test_probe_tool_is_raw_download_first_on_fedora() -> None:
-    """The probe is the first registry tool whose first Fedora method is a raw download."""
+    """The probe's first method on the Homebrew-bootstrapped Fedora box is a raw download."""
     tool_id = _probe_tool()
     tools = load_tools(REGISTRY)
     raw_first = [
@@ -105,7 +105,8 @@ def test_probe_tool_is_raw_download_first_on_fedora() -> None:
         and methods[0].params.get("raw") is True
     ]
     assert raw_first, "no raw github_release tool applies first on fedora"
-    assert raw_first[0].id == tool_id == PROBE_TOOL
+    assert tool_id == PROBE_TOOL
+    assert PROBE_TOOL in [tool.id for tool in raw_first]
 
 
 def test_probe_category_matches_the_registry() -> None:
@@ -208,7 +209,7 @@ def test_assert_receipt_functions_in_bash(tmp_path: Path) -> None:
     receipt.parent.mkdir(parents=True)
     binary.parent.mkdir(parents=True)
     receipt.write_text("{}\n", encoding="utf-8")
-    binary.write_bytes(b"yq")
+    binary.write_bytes(b"herdr")
 
     present = _run(_harness("assert_receipt_present") + '\nassert_receipt_present ""\n', scratch)
     assert present.returncode == 0, present.stderr
@@ -570,8 +571,8 @@ def test_receipt_check_is_skipped_for_other_categories(tmp_path: Path) -> None:
     constants = "\n".join(f"{name}={_constant(name)}" for name in _CONSTANTS)
     cases = [
         ("", "yes"),
-        ("core,data", "yes"),
-        ("core, data", "yes"),
+        ("core,terminal", "yes"),
+        ("core, terminal", "yes"),
         ("core,shell", "no"),
         ("database", "no"),
     ]
@@ -695,7 +696,7 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
     monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
     binary = scratch / ".local" / "bin" / PROBE_TOOL
     binary.parent.mkdir(parents=True)
-    binary.write_bytes(b"yq-bytes")
+    binary.write_bytes(b"herdr-bytes")
     target = scratch / "payload"
     target.write_bytes(b"payload")
     receipt = Receipt(
@@ -736,7 +737,7 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
     assert "TRACER_RECEIPT_PRE_UNINSTALL_MISSING" in no_binary.stdout
     assert f".local/bin/{PROBE_TOOL}" in no_binary.stdout
 
-    binary.write_bytes(b"yq-bytes")
+    binary.write_bytes(b"herdr-bytes")
     receipt_file.unlink()
     no_receipt = _run(script, scratch)
     assert no_receipt.returncode != 0
@@ -749,7 +750,7 @@ def test_pre_uninstall_check_requires_binary_and_valid_receipt(
     assert "TRACER_RECEIPT_PRE_UNINSTALL_MISSING" in brace.stdout
     assert "valid receipt" in brace.stdout
 
-    receipt_file.write_text('{"v": 1, "tool": "yq"}\n', encoding="utf-8")
+    receipt_file.write_text('{"v": 1, "tool": "herdr"}\n', encoding="utf-8")
     strings_only = _run(script, scratch)
     assert strings_only.returncode != 0
     assert "TRACER_RECEIPT_PRE_UNINSTALL_MISSING" in strings_only.stdout
@@ -1085,7 +1086,7 @@ def test_pre_uninstall_check_survives_a_spaced_workspace(
     monkeypatch.setattr(receipts, "receipts_dir", receipts.default_receipts_dir)
     binary = scratch / ".local" / "bin" / PROBE_TOOL
     binary.parent.mkdir(parents=True)
-    binary.write_bytes(b"yq-bytes")
+    binary.write_bytes(b"herdr-bytes")
     target = scratch / "payload"
     target.write_bytes(b"payload")
     receipt = Receipt(

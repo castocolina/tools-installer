@@ -148,9 +148,9 @@ def test_falls_through_to_next_method_on_failure(monkeypatch: pytest.MonkeyPatch
 
     def runner(cmd: list[str]) -> None:
         attempted.append(cmd[0])
-        if cmd[0] == "uv":
+        if cmd[0] == "brew":
             raise CommandError(cmd, 1)
-        # brew succeeds
+        # uv succeeds
 
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     outcome = install_tool(
@@ -162,8 +162,8 @@ def test_falls_through_to_next_method_on_failure(monkeypatch: pytest.MonkeyPatch
         runner=runner,
     )
     assert outcome.status == "installed"
-    assert outcome.method_kind == "brew"
-    assert attempted == ["uv", "brew"]
+    assert outcome.method_kind == "uv-tool"
+    assert attempted == ["brew", "uv"]
 
 
 def test_a_native_method_is_handed_off_with_zero_runner_calls(
@@ -176,7 +176,7 @@ def test_a_native_method_is_handed_off_with_zero_runner_calls(
             Method(kind="dnf", params={"package": "ripgrep"}),
             Method(kind="brew", params={"formula": "ripgrep"}),
         ),
-        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
         runner=lambda cmd: calls.append(cmd),
     )
     assert outcome.status is InstallStatus.MANUAL_REQUIRED
@@ -184,6 +184,25 @@ def test_a_native_method_is_handed_off_with_zero_runner_calls(
     assert outcome.handoff == ("sudo dnf install ripgrep",)
     assert outcome.manual_command == "sudo dnf install ripgrep"
     assert calls == []
+
+
+def test_homebrew_outranks_the_native_handoff_on_a_homebrew_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_not_installed(monkeypatch)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _tool(
+            Method(kind="dnf", params={"package": "ripgrep"}),
+            Method(kind="brew", params={"formula": "ripgrep"}),
+        ),
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=True),
+        runner=lambda cmd: calls.append(cmd),
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.method_kind == "brew"
+    assert outcome.handoff == ()
+    assert calls == [["brew", "install", "ripgrep"]]
 
 
 def test_a_native_method_after_a_failed_method_fails_with_the_error_and_the_command(
@@ -653,10 +672,10 @@ def _not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine, "is_installed", fake_not_installed)
 
 
-def _gh_then_brew() -> Tool:
+def _gh_then_uv_tool() -> Tool:
     return _tool(
         Method(kind="github_release", params={"repo": "x/y", "asset": "a", "member": "rg"}),
-        Method(kind="brew", params={"formula": "ripgrep"}),
+        Method(kind="uv-tool", params={"pypi_pkg": "ripgrep"}),
     )
 
 
@@ -664,28 +683,30 @@ def test_checksum_mismatch_halts_the_ladder_by_default(monkeypatch: pytest.Monke
     _not_installed(monkeypatch)
     _mismatching_download(monkeypatch)
     calls: list[list[str]] = []
-    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
-    outcome = install_tool(_gh_then_brew(), platform, runner=lambda cmd: calls.append(cmd))
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
+    outcome = install_tool(_gh_then_uv_tool(), platform, runner=lambda cmd: calls.append(cmd))
     assert outcome.status == "checksum-mismatch"
     assert outcome.method_kind == "github_release"
     assert isinstance(outcome.errors[0], ChecksumMismatch)
-    assert calls == []  # brew was never attempted
+    assert calls == []  # the next method was never attempted
 
 
-def test_checksum_policy_continue_falls_through_to_brew(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_checksum_policy_continue_falls_through_to_the_next_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _not_installed(monkeypatch)
     _mismatching_download(monkeypatch)
     calls: list[list[str]] = []
-    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     outcome = install_tool(
-        _gh_then_brew(),
+        _gh_then_uv_tool(),
         platform,
         runner=lambda cmd: calls.append(cmd),
         checksum_policy="continue",
     )
     assert outcome.status == "installed"
-    assert outcome.method_kind == "brew"
-    assert calls == [["brew", "install", "ripgrep"]]
+    assert outcome.method_kind == "uv-tool"
+    assert calls == [["uv", "tool", "install", "ripgrep"]]
 
 
 def test_installed_outcome_carries_verified_flag(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2686,10 +2707,10 @@ def test_failed_release_attempt_records_no_release(monkeypatch: pytest.MonkeyPat
         raise CommandError(["curl"], 22)
 
     monkeypatch.setattr(engine.download, "install_download", resolves_then_fails)
-    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    platform = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
 
     outcome = install_tool(
-        _gh_then_brew(),
+        _gh_then_uv_tool(),
         platform,
         runner=lambda _cmd: None,
         resolve_tag=lambda _repo: "v1.1.0",
@@ -2697,7 +2718,7 @@ def test_failed_release_attempt_records_no_release(monkeypatch: pytest.MonkeyPat
     )
 
     assert outcome.status == InstallStatus.INSTALLED
-    assert outcome.method_kind == "brew"
+    assert outcome.method_kind == "uv-tool"
     written = receipts.read("rg")
     assert written is not None
     assert written.release is None

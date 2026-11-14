@@ -186,9 +186,10 @@ def test_rg_brew_owned_runs_brew_upgrade_not_github_download(
 ) -> None:
     """A brew-installed rg must not follow resolve_methods ranking.
 
-    installer/registry.toml's rg entry declares github_release (rank 20) and
-    brew (rank 40). Indexing resolve_methods[0] would install a second copy
-    into ~/.local/bin; the update path must dispatch on ownership.owner.
+    installer/registry.toml's rg entry declares github_release and brew; on a
+    host the ladder ranks the download first (here brew is not applicable),
+    indexing resolve_methods[0] would install a second copy into ~/.local/bin,
+    so the update path must dispatch on ownership.owner.
     """
     github = Method(
         kind="github_release",
@@ -197,7 +198,7 @@ def test_rg_brew_owned_runs_brew_upgrade_not_github_download(
     )
     brew = Method(kind="brew", params={"formula": "ripgrep"})
     tool = _tool("rg", github, brew, cmd="rg")
-    platform = _platform()
+    platform = _platform(has_brew=False)
     assert resolve_methods(tool, platform)[0].kind == "github_release"
 
     download_calls: list[object] = []

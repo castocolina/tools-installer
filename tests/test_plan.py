@@ -1,7 +1,7 @@
 import subprocess
 import typing
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import import_module
 from pathlib import Path
 from typing import cast
@@ -956,7 +956,7 @@ def test_an_outdated_off_policy_row_names_both_owners():
 
     assert (row.disposition, row.reason) == (
         Disposition.SKIP,
-        "managed by dnf; the catalog installs it via GitHub release",
+        "managed by dnf; the catalog installs it via Homebrew",
     )
 
 
@@ -971,8 +971,9 @@ def test_off_policy_current_row_names_both_owners(monkeypatch: pytest.MonkeyPatc
         ),
     )
     state_of = _state_of({"rg": plan_state(rg, owner="brew", off_policy=True)})
+    no_homebrew = replace(MACOS, has_brew=False)
 
-    row = build_plan(["rg"], [rg], state_of, MACOS, reinstall=frozenset())[0]
+    row = build_plan(["rg"], [rg], state_of, no_homebrew, reinstall=frozenset())[0]
     assert row.reason == "managed by Homebrew; the catalog installs it via GitHub release"
 
     def unknown_declared_label(_tool: Tool, _platform: Platform) -> None:
@@ -1127,7 +1128,7 @@ def test_a_dependent_of_a_manual_row_is_blocked_at_plan_time():
 
 def test_sdkman_is_blocked_not_attempted_while_unzip_is_missing_on_debian():
     catalog = load_tools(Path(__file__).resolve().parent.parent / "installer" / "registry.toml")
-    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    debian = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
     states = {
         tool.id: plan_state(tool, platform=debian, health=Health.MISSING, present=False)
         for tool in catalog
@@ -1136,7 +1137,7 @@ def test_sdkman_is_blocked_not_attempted_while_unzip_is_missing_on_debian():
     rows = build_plan(["java"], catalog, _state_of(states), debian, reinstall=frozenset())
     by_id = {row.tool_id: row for row in rows}
 
-    # Native apt outranks brew, so both prerequisites are sudo handoffs the installer never runs.
+    # Without Homebrew apt is the only method: both prerequisites are sudo handoffs, never run.
     assert by_id["unzip"].manual_command == "sudo apt-get install unzip"
     assert by_id["zip"].manual_command == "sudo apt-get install zip"
     assert (by_id["sdkman"].disposition, by_id["sdkman"].reason) == (

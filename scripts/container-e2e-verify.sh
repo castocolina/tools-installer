@@ -20,10 +20,10 @@ IMAGE_FEDORA=fedora:latest
 IMAGE_DEBIAN=docker.io/library/debian:trixie
 IMAGE_ARCH=docker.io/library/archlinux:latest
 
-# The first registry tool whose first applicable method on Fedora amd64 is a
-# raw github_release (category data). A constant: never interpolated from input.
-RECEIPT_PROBE_TOOL=yq
-RECEIPT_PROBE_CATEGORY=data
+# A tool whose first method on Fedora with Homebrew is a raw download (category terminal;
+# the box has Homebrew, so a brew-first tool leaves no receipt). A constant, never input.
+RECEIPT_PROBE_TOOL=herdr
+RECEIPT_PROBE_CATEGORY=terminal
 # The user every tester helper runs as, its home and the checkout run_setup_as_tester cds into.
 # The nested target (cmd_nested) sets all three for the nested image's rootless user; the host
 # test overrides them too.

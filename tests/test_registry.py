@@ -4,6 +4,7 @@ import re
 import tomllib
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -532,13 +533,12 @@ def test_fd_resolves_per_platform() -> None:
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     lin = resolve_methods(fd, linux)
-    assert lin[0].kind == "github_release"
-    assert lin[0].params["asset"] == "fd-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
-    assert lin[0].params["strip"] == 1
-    assert [m.kind for m in lin] == ["github_release", "brew"]
+    assert [m.kind for m in lin] == ["brew", "github_release"]
+    assert lin[1].params["asset"] == "fd-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
+    assert lin[1].params["strip"] == 1
     mac = resolve_methods(fd, macos)
-    assert [m.kind for m in mac] == ["github_release", "brew"]
-    assert mac[0].params["asset"] == "fd-v{ver}-{arch.machine}-apple-darwin.tar.gz"
+    assert [m.kind for m in mac] == ["brew", "github_release"]
+    assert mac[1].params["asset"] == "fd-v{ver}-{arch.machine}-apple-darwin.tar.gz"
 
 
 def test_delta_brew_formula_is_git_delta() -> None:
@@ -562,7 +562,7 @@ def test_eza_resolves_to_download_on_linux_and_brew_only_on_macos() -> None:
     eza = next(t for t in load_tools(REGISTRY) if t.id == "eza")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    assert [m.kind for m in resolve_methods(eza, linux)] == ["github_release", "brew"]
+    assert [m.kind for m in resolve_methods(eza, linux)] == ["brew", "github_release"]
     # eza ships no macOS asset, so only brew is left on a Mac.
     assert [m.kind for m in resolve_methods(eza, macos)] == ["brew"]
 
@@ -574,10 +574,12 @@ def test_volta_resolves_to_script_on_linux_and_brew_on_macos() -> None:
     assert volta.cmd == "volta"
     assert volta.audience == "both"
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    assert [m.kind for m in resolve_methods(volta, macos)][:2] == ["script", "brew"]
+    assert [m.kind for m in resolve_methods(volta, macos)][:2] == ["brew", "script"]
     for platform_os in ("debian", "arch", "fedora"):
         linux = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
-        assert [m.kind for m in resolve_methods(volta, linux)][0] == "script"
+        assert [m.kind for m in resolve_methods(volta, linux)][:2] == ["brew", "script"]
+        no_brew = replace(linux, has_brew=False)
+        assert [m.kind for m in resolve_methods(volta, no_brew)][0] == "script"
     assert all(m.params.get("bin_dir") == "~/.volta/bin" for m in volta.methods)
 
 
@@ -650,13 +652,13 @@ def test_puppeteer_entry_states_the_persistent_grant_accurately() -> None:
 
 def test_gh_uses_nested_member_on_linux_and_brew_only_on_macos() -> None:
     gh = next(t for t in load_tools(REGISTRY) if t.id == "gh")
-    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     method = resolve_methods(gh, linux)[0]
     assert method.kind == "github_release"
     assert method.params["member"] == "bin/gh"
     assert method.params["strip"] == 1
-    assert [m.kind for m in resolve_methods(gh, macos)][:2] == ["github_release", "brew"]
+    assert [m.kind for m in resolve_methods(gh, macos)][:2] == ["brew", "github_release"]
 
 
 def test_codegraph_github_release_is_os_split_checksum_verified_and_nested() -> None:
@@ -733,18 +735,18 @@ def test_direnv_is_raw_per_os_download() -> None:
 
 def test_hyperfine_linux_uses_gnu_and_strips() -> None:
     hf = next(t for t in load_tools(REGISTRY) if t.id == "hyperfine")
-    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     method = resolve_methods(hf, linux)[0]
     assert method.params["asset"] == "hyperfine-v{ver}-{arch.machine}-unknown-linux-musl.tar.gz"
     assert method.params["strip"] == 1
 
 
-def test_download_tools_resolve_github_release_then_brew_on_macos() -> None:
+def test_download_tools_resolve_brew_then_github_release_on_macos() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     for tool_id in ("starship", "just", "dust"):
         kinds = [m.kind for m in resolve_methods(tools[tool_id], macos)]
-        assert kinds == ["github_release", "brew"], tool_id
+        assert kinds == ["brew", "github_release"], tool_id
 
 
 # GUI apps with no Linux install method: gnu-bash exists specifically to
@@ -1115,7 +1117,7 @@ def test_bottom_and_difftastic_cmd_differs_from_member_binary() -> None:
     difft = tools["difftastic"]
     assert bottom.cmd == "btm"
     assert difft.cmd == "difft"
-    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
+    linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=False)
     assert resolve_methods(bottom, linux)[0].params["member"] == "btm"
     assert resolve_methods(difft, linux)[0].params["member"] == "difft"
 
@@ -1124,8 +1126,8 @@ def test_charm_tools_use_suffix_arch_token_and_strip() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     # arm64 is the harder arch (suffix=arm64, not aarch64); check both OS families
     # so the Linux_ and Darwin_ asset casing are both pinned.
-    arch_linux = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
-    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
+    arch_linux = Platform(os="arch", arch="arm64", immutable=False, has_brew=False)
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
     for tool_id in ("gum", "glow"):
         for platform, os_word in ((arch_linux, "Linux"), (macos, "Darwin")):
             method = resolve_methods(tools[tool_id], platform)[0]
@@ -1158,7 +1160,7 @@ def test_tealdeer_cmd_is_tldr_with_per_os_naming() -> None:
 
 def test_gron_uses_tgz_with_trailing_version() -> None:
     gron = next(t for t in load_tools(REGISTRY) if t.id == "gron")
-    linux = Platform(os="debian", arch="arm64", immutable=False, has_brew=True)
+    linux = Platform(os="debian", arch="arm64", immutable=False, has_brew=False)
     method = resolve_methods(gron, linux)[0]
     assert method.params["asset"] == "gron-linux-{arch.deb}-{ver}.tgz"
     assert method.params["strip"] == 0
@@ -1275,14 +1277,14 @@ def test_gitui_is_linux_download_and_brew_only_on_macos() -> None:
     gitui = next(t for t in load_tools(REGISTRY) if t.id == "gitui")
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    assert [m.kind for m in resolve_methods(gitui, linux)] == ["github_release", "brew"]
-    assert [m.kind for m in resolve_methods(gitui, macos)][:2] == ["github_release", "brew"]
+    assert [m.kind for m in resolve_methods(gitui, linux)] == ["brew", "github_release"]
+    assert [m.kind for m in resolve_methods(gitui, macos)][:2] == ["brew", "github_release"]
 
 
 def test_miller_cmd_is_mlr_and_strips_nested_member() -> None:
     miller = next(t for t in load_tools(REGISTRY) if t.id == "miller")
     assert miller.cmd == "mlr"
-    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
+    linux = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     method = resolve_methods(miller, linux)[0]
     assert method.params["member"] == "mlr"
     assert method.params["strip"] == 1
@@ -1293,7 +1295,8 @@ def test_zsh_resolves_across_platforms_with_immutable_brew_fallback() -> None:
     fedora = Platform(os="fedora", arch="amd64", immutable=False, has_brew=True)
     bazzite = Platform(os="fedora", arch="amd64", immutable=True, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
-    assert [m.kind for m in resolve_methods(zsh, fedora)] == ["dnf", "brew"]
+    assert [m.kind for m in resolve_methods(zsh, fedora)] == ["brew", "dnf"]
+    assert [m.kind for m in resolve_methods(zsh, replace(fedora, has_brew=False))] == ["dnf"]
     assert [m.kind for m in resolve_methods(zsh, bazzite)] == ["brew"]
     assert [m.kind for m in resolve_methods(zsh, macos)] == ["brew"]
 
@@ -1482,7 +1485,7 @@ def test_fresh_bazzite_without_brew_has_no_method_for_zsh_or_podman_yet() -> Non
 
 def test_hexyl_linux_uses_gnu_and_strips() -> None:
     hexyl = next(t for t in load_tools(REGISTRY) if t.id == "hexyl")
-    linux = Platform(os="arch", arch="arm64", immutable=False, has_brew=True)
+    linux = Platform(os="arch", arch="arm64", immutable=False, has_brew=False)
     method = resolve_methods(hexyl, linux)[0]
     assert method.params["asset"] == "hexyl-v{ver}-{arch.machine}-unknown-linux-gnu.tar.gz"
     assert method.params["strip"] == 1
@@ -1495,7 +1498,7 @@ def test_kitty_has_no_linux_download_fallback() -> None:
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
     assert [m.kind for m in resolve_methods(kitty, fedora)] == ["script", "dnf"]
     assert [m.kind for m in resolve_methods(kitty, bazzite)] == ["script"]
-    assert [m.kind for m in resolve_methods(kitty, macos)] == ["script", "cask"]
+    assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask", "script"]
     assert all(method.kind != "github_release" for method in kitty.methods)
 
 
@@ -1572,7 +1575,7 @@ def test_kitty_cask_blocks_a_too_old_macos_version() -> None:
         os="macos", arch="arm64", immutable=False, has_brew=True, os_version="12.0"
     )
     assert [m.kind for m in resolve_methods(kitty, too_old)] == ["script"]
-    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["script", "cask"]
+    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["cask", "script"]
 
 
 def test_wezterm_appimage_covers_bazzite_where_kitty_cannot() -> None:
@@ -1716,13 +1719,13 @@ def test_zip_runtime_and_tools_resolve_with_archive_zip() -> None:
     for tool_id, (linux_asset, macos_asset, member) in expected.items():
         lin = resolve_methods(tools[tool_id], linux)
         mac = resolve_methods(tools[tool_id], macos)
-        assert [m.kind for m in lin] == ["github_release", "brew"], tool_id
-        assert [m.kind for m in mac] == ["github_release", "brew"], tool_id
-        assert lin[0].params["archive"] == "zip", tool_id
-        assert lin[0].params["asset"] == linux_asset, tool_id
-        assert mac[0].params["asset"] == macos_asset, tool_id
-        assert lin[0].params["member"] == member, tool_id
-        assert "strip" not in lin[0].params, tool_id  # zip ignores strip
+        assert [m.kind for m in lin] == ["brew", "github_release"], tool_id
+        assert [m.kind for m in mac] == ["brew", "github_release"], tool_id
+        assert lin[1].params["archive"] == "zip", tool_id
+        assert lin[1].params["asset"] == linux_asset, tool_id
+        assert mac[1].params["asset"] == macos_asset, tool_id
+        assert lin[1].params["member"] == member, tool_id
+        assert "strip" not in lin[1].params, tool_id  # zip ignores strip
 
 
 def test_ast_grep_cmd_is_ast_grep_not_sg() -> None:
@@ -1753,35 +1756,35 @@ def test_runtime_category_members() -> None:
     ]
 
 
-def test_script_installer_tier_resolves_script_then_brew() -> None:
+def test_script_installer_tier_resolves_brew_then_script() -> None:
     tools = {t.id: t for t in load_tools(REGISTRY)}
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 
-    # bun: one script method (no os filter) applies on both platforms, then brew.
+    # bun: one script method (no os filter) applies on both platforms, behind brew.
     for platform in (linux, macos):
         bun = resolve_methods(tools["bun"], platform)
-        assert [m.kind for m in bun] == ["script", "brew"]
-        assert bun[0].params["url"] == "https://bun.sh/install"
-        assert bun[0].params["shell"] == "bash"
-        assert bun[0].params["bin_dir"] == "~/.bun/bin"
+        assert [m.kind for m in bun] == ["brew", "script"]
+        assert bun[1].params["url"] == "https://bun.sh/install"
+        assert bun[1].params["shell"] == "bash"
+        assert bun[1].params["bin_dir"] == "~/.bun/bin"
 
-    # pnpm: per-OS bin_dir (PNPM_HOME differs by platform), then brew.
+    # pnpm: per-OS bin_dir (PNPM_HOME differs by platform), behind brew.
     pnpm_linux = resolve_methods(tools["pnpm"], linux)
     pnpm_macos = resolve_methods(tools["pnpm"], macos)
-    assert [m.kind for m in pnpm_linux] == ["script", "brew"]
-    assert [m.kind for m in pnpm_macos] == ["script", "brew"]
-    assert pnpm_linux[0].params["url"] == "https://get.pnpm.io/install.sh"
-    assert pnpm_linux[0].params["shell"] == "sh"
-    assert pnpm_linux[0].params["bin_dir"] == "~/.local/share/pnpm/bin"
-    assert pnpm_macos[0].params["bin_dir"] == "~/Library/pnpm/bin"
+    assert [m.kind for m in pnpm_linux] == ["brew", "script"]
+    assert [m.kind for m in pnpm_macos] == ["brew", "script"]
+    assert pnpm_linux[1].params["url"] == "https://get.pnpm.io/install.sh"
+    assert pnpm_linux[1].params["shell"] == "sh"
+    assert pnpm_linux[1].params["bin_dir"] == "~/.local/share/pnpm/bin"
+    assert pnpm_macos[1].params["bin_dir"] == "~/Library/pnpm/bin"
 
-    # fnm: script on Linux, brew-only on macOS (its installer brew-delegates there).
+    # fnm: script on Linux behind brew, brew-only on macOS (its installer brew-delegates there).
     fnm_linux = resolve_methods(tools["fnm"], linux)
-    assert [m.kind for m in fnm_linux] == ["script", "brew"]
-    assert fnm_linux[0].params["url"] == "https://fnm.vercel.app/install"
-    assert fnm_linux[0].params["shell"] == "bash"
-    assert fnm_linux[0].params["bin_dir"] == "~/.local/share/fnm"
+    assert [m.kind for m in fnm_linux] == ["brew", "script"]
+    assert fnm_linux[1].params["url"] == "https://fnm.vercel.app/install"
+    assert fnm_linux[1].params["shell"] == "bash"
+    assert fnm_linux[1].params["bin_dir"] == "~/.local/share/fnm"
     assert [m.kind for m in resolve_methods(tools["fnm"], macos)] == ["brew"]
 
 
@@ -1790,12 +1793,12 @@ def test_broot_is_selective_zip_with_nested_member() -> None:
     linux = Platform(os="debian", arch="amd64", immutable=False, has_brew=True)
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     lin = resolve_methods(broot, linux)
-    assert [m.kind for m in lin] == ["github_release", "brew"]
-    assert lin[0].params["asset"] == "broot_{ver}.zip"
-    assert lin[0].params["archive"] == "zip"
-    assert lin[0].params["member"] == "{arch.machine}-unknown-linux-gnu/broot"
+    assert [m.kind for m in lin] == ["brew", "github_release"]
+    assert lin[1].params["asset"] == "broot_{ver}.zip"
+    assert lin[1].params["archive"] == "zip"
+    assert lin[1].params["member"] == "{arch.machine}-unknown-linux-gnu/broot"
     mac = resolve_methods(broot, macos)
-    assert mac[0].params["member"] == "{arch.machine}-apple-darwin/broot"
+    assert mac[1].params["member"] == "{arch.machine}-apple-darwin/broot"
 
 
 def test_checksum_param_only_on_github_release_methods() -> None:
@@ -1851,17 +1854,17 @@ def test_gitleaks_and_vale_use_new_arch_tokens() -> None:
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
 
     gl_linux = resolve_methods(tools["gitleaks"], linux)
-    assert [m.kind for m in gl_linux] == ["github_release", "brew"]
-    assert gl_linux[0].params["asset"] == "gitleaks_{ver}_linux_{arch.x64}.tar.gz"
-    assert gl_linux[0].params["member"] == "gitleaks"
-    assert resolve_methods(tools["gitleaks"], macos)[0].params["asset"] == (
+    assert [m.kind for m in gl_linux] == ["brew", "github_release"]
+    assert gl_linux[1].params["asset"] == "gitleaks_{ver}_linux_{arch.x64}.tar.gz"
+    assert gl_linux[1].params["member"] == "gitleaks"
+    assert resolve_methods(tools["gitleaks"], macos)[1].params["asset"] == (
         "gitleaks_{ver}_darwin_{arch.x64}.tar.gz"
     )
 
     vale_linux = resolve_methods(tools["vale"], linux)
-    assert [m.kind for m in vale_linux] == ["github_release", "brew"]
-    assert vale_linux[0].params["asset"] == "vale_{ver}_Linux_{arch.bits}.tar.gz"
-    assert resolve_methods(tools["vale"], macos)[0].params["asset"] == (
+    assert [m.kind for m in vale_linux] == ["brew", "github_release"]
+    assert vale_linux[1].params["asset"] == "vale_{ver}_Linux_{arch.bits}.tar.gz"
+    assert resolve_methods(tools["vale"], macos)[1].params["asset"] == (
         "vale_{ver}_macOS_{arch.bits}.tar.gz"
     )
 
@@ -1873,18 +1876,18 @@ def test_vscode_is_arch_split_app_with_cask_fallback() -> None:
     arm = Platform(os="macos", arch="arm64", immutable=False, has_brew=True)
     intel = Platform(os="macos", arch="amd64", immutable=False, has_brew=True)
     arm_methods = resolve_methods(vscode, arm)
-    assert [m.kind for m in arm_methods] == ["app", "cask"]
+    assert [m.kind for m in arm_methods] == ["cask", "app"]
     assert (
-        arm_methods[0].params["url"]
+        arm_methods[1].params["url"]
         == "https://update.code.visualstudio.com/latest/darwin-arm64/stable"
     )
-    assert arm_methods[0].params["app"] == "Visual Studio Code.app"
-    assert arm_methods[0].params["cli"] == "Contents/Resources/app/bin/code"
-    assert arm_methods[1].params["cask"] == "visual-studio-code"
+    assert arm_methods[1].params["app"] == "Visual Studio Code.app"
+    assert arm_methods[1].params["cli"] == "Contents/Resources/app/bin/code"
+    assert arm_methods[0].params["cask"] == "visual-studio-code"
     intel_methods = resolve_methods(vscode, intel)
-    assert [m.kind for m in intel_methods] == ["app", "cask"]
+    assert [m.kind for m in intel_methods] == ["cask", "app"]
     assert (
-        intel_methods[0].params["url"]
+        intel_methods[1].params["url"]
         == "https://update.code.visualstudio.com/latest/darwin/stable"
     )
 
@@ -2019,15 +2022,15 @@ def test_sublime_is_single_universal_app_with_cask_fallback() -> None:
     for arch in ("arm64", "amd64"):  # one universal zip serves both
         mac = Platform(os="macos", arch=arch, immutable=False, has_brew=True)
         methods = resolve_methods(sublime, mac)
-        assert [m.kind for m in methods] == ["app", "cask"]
-        assert "{ver}" in str(methods[0].params["url"])
-        assert pinned_url(methods[0]) == (
+        assert [m.kind for m in methods] == ["cask", "app"]
+        assert "{ver}" in str(methods[1].params["url"])
+        assert pinned_url(methods[1]) == (
             f"https://download.sublimetext.com/sublime_text_build_"
-            f"{methods[0].params['version']}_mac.zip"
+            f"{methods[1].params['version']}_mac.zip"
         )
-        assert methods[0].params["app"] == "Sublime Text.app"
-        assert methods[0].params["cli"] == "Contents/SharedSupport/bin/subl"
-        assert methods[1].params["cask"] == "sublime-text"
+        assert methods[1].params["app"] == "Sublime Text.app"
+        assert methods[1].params["cli"] == "Contents/SharedSupport/bin/subl"
+        assert methods[0].params["cask"] == "sublime-text"
 
 
 def test_every_used_category_has_a_blurb() -> None:
@@ -2390,7 +2393,7 @@ def test_audit_fix_d3_gh_has_a_macos_release() -> None:
     assert release.params["member"] == "gh_{ver}_macOS_{arch.deb}/bin/gh"
     assert release.params["checksum"] == "gh_{ver}_checksums.txt"
     assert "strip" not in release.params
-    assert methods.index(release) < next(i for i, m in enumerate(methods) if m.kind == "brew")
+    assert next(i for i, m in enumerate(methods) if m.kind == "brew") < methods.index(release)
 
 
 def test_audit_fix_d4_gitui_uses_the_org_repo_and_ships_macos() -> None:
@@ -2420,7 +2423,7 @@ def test_audit_fix_d6_ruff_has_a_uv_tool_method_after_its_releases() -> None:
     assert uv_index > max(release_indices)
     assert ruff.methods[uv_index].params["pypi_pkg"] == "ruff"
     ladder = resolve_methods(ruff, Platform("fedora", "amd64", False, True))
-    assert [m.kind for m in ladder] == ["github_release", "uv-tool", "brew"]
+    assert [m.kind for m in ladder] == ["brew", "github_release", "uv-tool"]
 
 
 def test_audit_fix_d7_hyperfine_uses_the_musl_assets() -> None:
@@ -2519,8 +2522,11 @@ def test_audit_fix_e10_glab_has_native_fallbacks() -> None:
     for method in native.values():
         assert method.params["package"] == "glab"
     assert [m.kind for m in resolve_methods(glab, Platform("fedora", "amd64", False, True))] == [
-        "dnf",
         "brew",
+        "dnf",
+    ]
+    assert [m.kind for m in resolve_methods(glab, Platform("fedora", "amd64", False, False))] == [
+        "dnf"
     ]
     assert [m.kind for m in resolve_methods(glab, Platform("fedora", "amd64", True, True))] == [
         "brew"
@@ -2542,8 +2548,8 @@ def test_audit_fix_e8_kitty_script_covers_macos() -> None:
         os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0"
     )
     kinds = [m.kind for m in resolve_methods(kitty, macos_brew)]
-    assert kinds[0] == "script"
-    assert "cask" in kinds
+    assert kinds[0] == "cask"
+    assert "script" in kinds
     linux = next(
         m for m in kitty.methods if m.kind == "script" and m.os == ("debian", "arch", "fedora")
     )

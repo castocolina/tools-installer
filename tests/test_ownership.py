@@ -133,7 +133,8 @@ def _resolve(
 
 def test_rg_brew_owned_even_when_github_release_outranks() -> None:
     tool = _rg()
-    assert resolve_methods(tool, _MAC)[0].kind == "github_release"
+    assert resolve_methods(tool, replace(_MAC, has_brew=False))[0].kind == "github_release"
+    assert resolve_methods(tool, _MAC)[0].kind == "brew"
     result = _resolve(
         tool,
         inventory=_readable(brew_formulae={"ripgrep": "14.1.0"}),
