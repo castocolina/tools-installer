@@ -34,7 +34,8 @@ def test_skill_frontmatter() -> None:
     description = lines[2].removeprefix("description: ")
     assert name == "catalog-audit" == SKILL_DIR.name
     assert len(description) <= 1024
-    assert description.startswith("Use when")
+    assert description.startswith("Audit ")
+    assert "Use when" in description
     assert "tool-onboarding" in description
     assert "make verify-registry" in description
 
@@ -165,7 +166,6 @@ def test_skill_precision_and_approval_rules() -> None:
     _assert_all_in(
         _text(SKILL),
         (
-            "verbatim",
             "newest major",
             "does not exist",
             "explicit approval",
@@ -175,6 +175,30 @@ def test_skill_precision_and_approval_rules() -> None:
             "make test",
         ),
     )
+
+
+def test_report_template_says_verbatim() -> None:
+    assert "verbatim" in _text(TEMPLATE)
+
+
+_MAKE_ARGS_RE = re.compile(r'make \S+ ARGS="[^"\n]*"')
+
+
+def test_no_make_args_string_carries_shell_metacharacters() -> None:
+    # make's recipe shell runs a backtick or $ inside ARGS="..." on the host (judge finding D8-1).
+    for doc in (SKILL, TEMPLATE):
+        for match in _MAKE_ARGS_RE.findall(_text(doc)):
+            assert "`" not in match
+            assert "$" not in match
+
+
+def test_free_text_commands_skip_make() -> None:
+    text = _text(SKILL)
+    assert 'ARGS="add-finding' not in text
+    assert 'ARGS="write' not in text
+    direct = "uv run --isolated --no-dev python -m installer.catalog_audit"
+    assert f"{direct} add-finding '<entry>'" in text
+    assert f"{direct} write '<id>'" in text
 
 
 def test_tool_onboarding_gains_one_line() -> None:

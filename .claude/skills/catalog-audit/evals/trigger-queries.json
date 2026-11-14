@@ -56,8 +56,8 @@
     "should_trigger": false
   },
   {
-    "query": "check the removal recipe of the lazygit entry is correct and fix it",
-    "should_trigger": false
+    "query": "check the removal recipe of the lazygit entry against what its vendor documents today and tell me if it drifted",
+    "should_trigger": true
   },
   {
     "query": "grep installer/ for sudo calls",

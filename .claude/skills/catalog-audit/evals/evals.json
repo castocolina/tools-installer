@@ -7,6 +7,7 @@
       "expected_output": "A run directory under .planning/audits/catalog/<date>/ with one complete report per registry entry, verify-registry.md, scripts.md and SUMMARY.md, reached by status, verify, facts and write per entry, scan and summarize, in that order.",
       "assertions": [
         "The first command is `status --date <date>` and the run's verify step passes a scratch `--state` path, never the default state file in the home directory",
+        "Before the first entry the agent runs `scripts/detect-container-runtime.sh` and tells the user the runtime and the container budget of 10",
         "Every report in the run directory has the five check rows in the fixed order and ends with the tool's completion footer, which the agent never wrote itself",
         "No file outside `.planning/audits/catalog/<date>/` changed (git status shows nothing else modified)",
         "SUMMARY.md exists and was produced by the `summarize` subcommand, not hand-edited"
@@ -58,7 +59,7 @@
         "The vendor schema was saved under the scratch directory and passed as `--schema opencode=<path>`, and it was read as data and never executed",
         "The finding is recorded with `add-finding` with `--check script` and `--cite installer/agent_settings.py:<line>`, not written into a complete report",
         "The finding source names the key in backticks and holds no value of the user's settings",
-        "The agent applies TUNE-04 as written in tool-onboarding: the proposed fix is install-time tuning, never a runtime question or a new Policies row"
+        "The proposed change edits install-time tuning (`installer/agent_settings.py` or the entry's tuning keys); it adds no Policies row and asks the user no runtime question"
       ]
     },
     {
@@ -92,6 +93,28 @@
         "Rows that would need a container read unknown with the source `reason: container check not run (<why>)`, recorded as `--status unknown`",
         "No install, update or removal command runs on the host for the entry",
         "The row is not marked ok on the strength of reading the recipe alone"
+      ]
+    },
+    {
+      "id": "short-path-entry",
+      "prompt": "Audit the zoxide entry for the run dated 2026-11-14. Its facts show installed 0.9.8 and every latest line 0.9.8, `verified` 2026-10-25, and its downloadable row clean in verify-registry.md.",
+      "expected_output": "A complete zoxide report decided on the short path: only the changelog and the removal row are read, and each skipped row carries ok with a citation or unknown with the short-path reason.",
+      "assertions": [
+        "The agent reads only tool-onboarding step 4b and none of steps 3, 4, 6, 7, 8 or 9",
+        "The changelog section and the `removal recipe and paths` row carry a URL, a backticked command or a `path:line`",
+        "Each skipped row reads `ok` citing the `verify-registry.md` line or the `facts zoxide` command, or `unknown` with `reason: short path, not re-read`",
+        "The agent does not take the short path again for an entry whose `verified` date is older than 90 days"
+      ]
+    },
+    {
+      "id": "write-refused-exit-73",
+      "prompt": "`write rg --date 2026-11-14` just exited 73 and printed `refused:` lines: my scratch report has no `postinstall hook` row and the `update argv` row says ok with no source. Get the rg report stored.",
+      "expected_output": "The agent reads every refused reason, fixes the scratch file (adds the row, adds evidence or marks the row unknown), reruns write, and never edits a stored report or works around the tool.",
+      "assertions": [
+        "The agent reads each `refused:` reason before changing anything, and treats exit 73 as input to fix, not as a tool bug",
+        "It edits only the scratch report file and reruns `write rg --date 2026-11-14` with that file on stdin",
+        "The `update argv` row ends with a URL, a backticked command or `path:line`, or reads `unknown` with a `reason:`, never ok on no evidence",
+        "No report already stored in the run directory is rewritten, and the completion footer is not written by hand"
       ]
     }
   ]
