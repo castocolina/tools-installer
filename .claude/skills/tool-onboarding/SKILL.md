@@ -34,6 +34,7 @@ comment above the `[[tool]]` block. It is the only audit trail.
 
 - Adding any `[[tool]]` block; reviewing one against these conventions.
 - Noticing an existing tool lacks a postinstall, a platform, or a removal path.
+- To audit every registry entry in one loop, use `catalog-audit` (`.claude/skills/catalog-audit/SKILL.md`).
 
 ## Steps
 
