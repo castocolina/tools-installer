@@ -581,7 +581,7 @@ def _below_home(directory: str | Path, home: Path) -> bool:
     return Path(os.path.realpath(home)) in Path(directory).parents
 
 
-def _missing_dirs(path: Path, home: Path) -> tuple[str, ...]:
+def missing_dirs(path: Path, home: Path) -> tuple[str, ...]:
     """The directories `write_if_unchanged` will create above `path`, under home, topmost first."""
     missing: list[Path] = []
     for directory in Path(os.path.realpath(path)).parents:
@@ -591,7 +591,7 @@ def _missing_dirs(path: Path, home: Path) -> tuple[str, ...]:
     return tuple(str(d) for d in reversed(missing) if _below_home(d, home))
 
 
-def _remove_created_dirs(dirs: tuple[str, ...], home: Path) -> tuple[str, ...]:
+def remove_created_dirs(dirs: tuple[str, ...], home: Path) -> tuple[str, ...]:
     """rmdir the recorded directories deepest first; the ones still holding anything stay recorded.
     Never rmtree, never a directory outside home or one the ledger does not name."""
     left: list[str] = []
@@ -974,7 +974,7 @@ def _apply_once(
         created = (*created, file)
     dirs = ledger.created_dirs
     if snap is None:
-        dirs = (*dirs, *(d for d in _missing_dirs(path, home) if d not in dirs))
+        dirs = (*dirs, *(d for d in missing_dirs(path, home) if d not in dirs))
     blanks = ledger.blank_files
     if snap is not None and not snap.data.strip() and file not in dict(blanks):
         blanks = (*blanks, (file, snap.data.decode("ascii")))  # restored byte for byte on revert
@@ -1199,7 +1199,7 @@ def _revert_once(
             blank = dict(ledger.blank_files).get(file)
             if snap is not None and file in ledger.created_files and _holds_no_setting(text, fmt):
                 delete_if_unchanged(path, snap)
-                dirs = _remove_created_dirs(dirs, home)
+                dirs = remove_created_dirs(dirs, home)
             elif snap is not None and blank is not None and bare:
                 write_if_unchanged(path, snap, blank)
             else:

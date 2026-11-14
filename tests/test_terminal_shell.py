@@ -1548,6 +1548,7 @@ def test_alacritty_file_the_installer_created_is_deleted_when_only_whitespace_is
 
     _remove_alacritty(tmp_path)
     assert not _alacritty_toml().exists()
+    assert not _alacritty_toml().parent.exists()  # the directory the install created goes too
 
 
 def test_alacritty_created_file_that_gained_user_content_is_kept(tmp_path: Path) -> None:
@@ -1559,6 +1560,28 @@ def test_alacritty_created_file_that_gained_user_content_is_kept(tmp_path: Path)
 
     _remove_alacritty(tmp_path)
     assert tomllib.loads(_alacritty_toml().read_text()) == {"font": {"size": 9}}
+
+
+def test_alacritty_created_file_leaves_a_directory_that_gained_other_files(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    run_post_install(_alacritty_tool(), _platform())
+    (_alacritty_toml().parent / "themes.toml").write_text("x = 1\n")
+
+    _remove_alacritty(tmp_path)
+    assert not _alacritty_toml().exists()
+    assert (_alacritty_toml().parent / "themes.toml").is_file()
+
+
+def test_alacritty_directory_that_existed_before_the_install_is_kept(tmp_path: Path) -> None:
+    from installer.post_install import run_post_install
+
+    _alacritty_toml().parent.mkdir(parents=True)
+    run_post_install(_alacritty_tool(), _platform())
+
+    _remove_alacritty(tmp_path)
+    assert not _alacritty_toml().exists()
+    assert _alacritty_toml().parent.is_dir()
 
 
 def test_alacritty_file_the_user_created_empty_is_kept(tmp_path: Path) -> None:

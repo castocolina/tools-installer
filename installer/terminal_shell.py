@@ -18,8 +18,10 @@ from typing import cast
 from installer.agent_settings import (
     ABSENT,
     apply_value,
+    missing_dirs,
     parse_settings,
     read_settings,
+    remove_created_dirs,
     revert_group,
     same_value,
     settings_file,
@@ -607,6 +609,7 @@ def _commit_alacritty(
     *,
     write: bool,
     created_marker: Path,
+    home: Path,
 ) -> bool:
     """Report whether `updated` differs; write it only when `write`, and only after it re-parses
     and only if the file still is what was read (compare-before-commit)."""
@@ -617,10 +620,13 @@ def _commit_alacritty(
     except tomllib.TOMLDecodeError as exc:
         raise TerminalShellError(f"the edit would not re-parse ({exc}); nothing written") from exc
     if write:
+        created_dirs = missing_dirs(path, home) if before is None else ()
         write_if_unchanged(path, before, updated)
-        if before is None:  # the file is ours: strip may delete it once nothing else is in it
+        if before is None:
+            # The file is ours: strip may delete it once nothing else is in it, and the
+            # directories this write created (listed after the first line) with it.
             created_marker.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(created_marker, "created\n")
+            atomic_write_text(created_marker, "\n".join(("created", *created_dirs)) + "\n")
     return True
 
 
@@ -643,6 +649,7 @@ def _sync_alacritty(
             updated,
             write=write,
             created_marker=_created_marker(home, environ),
+            home=home,
         )
     except OSError as exc:
         return False, False, (f"alacritty: {_first_line(exc)}",)
@@ -686,6 +693,7 @@ def apply_alacritty_keys(
             updated,
             write=True,
             created_marker=_created_marker(home, environ),
+            home=home,
         )
         record.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(record, "written\n")
@@ -727,12 +735,13 @@ def strip_alacritty(home: Path, environ: Mapping[str, str]) -> tuple[str, ...]:
             warnings.append(f"alacritty: {_first_line(exc)}")
     if not warnings:
         _keys_record(home, environ).unlink(missing_ok=True)
-        warnings.extend(_drop_created_config(path, _created_marker(home, environ)))
+        warnings.extend(_drop_created_config(path, _created_marker(home, environ), home))
     return tuple(warnings)
 
 
-def _drop_created_config(path: Path, marker: Path) -> list[str]:
-    """Delete the config file the installer created once nothing but whitespace is left."""
+def _drop_created_config(path: Path, marker: Path, home: Path) -> list[str]:
+    """Delete the config file the installer created once nothing but whitespace is left, then
+    the directories it created for it that are empty now (never one that held anything else)."""
     if not marker.exists():
         return []
     try:
@@ -741,6 +750,7 @@ def _drop_created_config(path: Path, marker: Path) -> list[str]:
             marker.unlink()  # gone, or the user's now: never ours to delete
             return []
         path.unlink(missing_ok=True)
+        remove_created_dirs(tuple(marker.read_text(errors="replace").splitlines()[1:]), home)
         marker.unlink()
     except OSError as exc:
         return [f"alacritty: {_first_line(exc)}"]
