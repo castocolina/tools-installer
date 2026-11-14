@@ -3834,6 +3834,34 @@ async def test_unified_app_hands_the_policy_inputs_probe_to_the_doctor() -> None
 # -- the disk probe travels on PolicyInputs (plan 15.7-06) --
 
 
+async def test_doctor_and_uninstall_entries_read_no_guard_state(tmp_path: Path) -> None:
+    """A leftover planted after the app is built, and removed between entries,
+    changes neither view: no entry reads the guard."""
+    from installer.guards import install_shims, remove_shims
+    from installer.guidance import Guidance
+
+    bin_dir = tmp_path / ".local" / "bin"
+    app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs(has_path_block=True))
+    async with app.run_test(size=(100, 30)) as pilot:
+        install_shims(bin_dir)
+        views: list[tuple[list[Guidance], str, list[str]]] = []
+        for leftover in (True, False):
+            if not leftover:
+                remove_shims(bin_dir)
+            await pilot.press("4")
+            assert isinstance(app.screen, DoctorScreen)
+            guidance, body = list(app.screen.guidance), _doctor_body(app)
+            assert "Package manager guards" not in body
+            await pilot.press("escape")
+            await pilot.press("5")
+            assert isinstance(app.screen, UninstallScreen)
+            keys = _row_keys(app.screen)
+            assert not any("ban" in key for key in keys)
+            views.append((guidance, body, keys))
+            await pilot.press("escape")
+        assert views[0] == views[1]
+
+
 async def test_uninstall_view_has_no_ban_row() -> None:
     import dataclasses
 
