@@ -22,17 +22,6 @@ from installer.deps import resolve_dependencies
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport, audit_path, scan_bin_links
 from installer.engine import install_tool
-from installer.guards import (
-    guard_path_warning,
-    guard_redirect_warning,
-    guard_status,
-    install_global_redirect_shims,
-    install_redirect_shims,
-    install_shims,
-    remove_ban_aliases,
-    remove_shims,
-    write_ban_aliases,
-)
 from installer.legacy_guard import real_pnpm
 from installer.locations import display_path, path_scan_rc_paths
 from installer.model import Tool
@@ -59,7 +48,6 @@ from installer.render import (
     render_competing_mechanisms,
     render_disk_pressure,
     render_doctor,
-    render_guard,
     render_node_globals,
     render_plan,
     render_rc_duplicates,
@@ -286,29 +274,6 @@ def consolidation_refusal_message(
     return f"Managed PATH block was written, but ~/.shellrc consolidation was refused: {reason}"
 
 
-def guard_state(
-    default_bin_dir: Path,
-    path_value: str,
-    which: Callable[[str], str | None] = shutil.which,
-) -> tuple[dict[str, bool], str | None]:
-    """The pip/npm-ban status and the PATH-order warning — the latter shown only
-    when a ban is actually installed (an irrelevant warning otherwise).
-
-    Only `run_guard` still reads it; no Doctor or Uninstall view does.
-    """
-    status = guard_status(default_bin_dir)
-    path_warning = (
-        guard_path_warning(default_bin_dir, path_value, which) if any(status.values()) else None
-    )
-    redirect_warning = guard_redirect_warning(default_bin_dir)
-    warning = (
-        f"{path_warning} {redirect_warning}"
-        if path_warning and redirect_warning
-        else path_warning or redirect_warning
-    )
-    return status, warning
-
-
 def path_writer_lines_for(
     report: DoctorReport,
     *,
@@ -448,54 +413,6 @@ def clean_rc_duplicates(
             continue
         atomic_write_text(rc_path, strip_lines(text, indices))
     return found
-
-
-def run_guard(
-    *,
-    remove: bool,
-    shim_dir: Path,
-    rc_paths: list[Path],
-    path_value: str,
-    console: Console,
-    confirm: Callable[[str], bool],
-    which: Callable[[str], str | None] = shutil.which,
-) -> bool:
-    """Install or remove the pip/npm ban (PATH shims + interactive aliases).
-
-    Previews the targets, confirms, then acts on both layers. Returns whether it
-    acted. The shim dir doubles as the managed bin dir (already on PATH).
-    """
-    targets = ", ".join(str(rc_path) for rc_path in rc_paths)
-    verb = "Remove" if remove else "Install"
-    if not remove:
-        # The consent has to name what installing actually does now: it wraps
-        # the user's own pnpm binary and gives up pnpm's gated postinstalls for
-        # global installs (registry.toml's volta entry, D-06/D-08).
-        console.print(
-            "This wraps npm and pnpm so global installs run `volta install`, which runs "
-            "npm's install scripts unrestricted — keep untrusted packages on a "
-            "project-local `pnpm add`."
-        )
-    if not confirm(f"{verb} the pip/npm ban (shims in {shim_dir} + aliases in {targets})?"):
-        return False
-    if remove:
-        actions = remove_shims(shim_dir)
-        for rc_path in rc_paths:
-            remove_ban_aliases(rc_path)
-        render_guard(actions, None, console, removing=True)
-        return True
-    actions = install_shims(shim_dir)
-    actions.update(install_redirect_shims(shim_dir, path_value=path_value))
-    actions.update(install_global_redirect_shims(shim_dir, path_value=path_value))
-    for rc_path in rc_paths:
-        write_ban_aliases(rc_path)
-    # The same composition the Doctor/TUI path gets from guard_state: the
-    # per-name action lines never explain that npx/npm degraded to hard blocks
-    # because pnpm or volta was unresolvable, so a --guard user installing on a
-    # bare machine would otherwise never see it.
-    _status, warning = guard_state(shim_dir, path_value, which)
-    render_guard(actions, warning, console, removing=False)
-    return True
 
 
 def has_schedule_id(ids: tuple[str, ...]) -> bool:

@@ -33,6 +33,7 @@ from installer.guidance import (
     disk_pressure_guidance,
     doctor_guidance,
 )
+from installer.legacy_guard import SHIM_SENTINEL
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import (
@@ -3834,20 +3835,25 @@ async def test_unified_app_hands_the_policy_inputs_probe_to_the_doctor() -> None
 # -- the disk probe travels on PolicyInputs (plan 15.7-06) --
 
 
+def _plant_leftover_shim(bin_dir: Path) -> None:
+    """A marked pip shim a retired version wrote (a literal plant, no writer needed)."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (bin_dir / "pip").write_text(f"#!/bin/sh\n{SHIM_SENTINEL}\nexit 127\n")
+
+
 async def test_doctor_and_uninstall_entries_read_no_guard_state(tmp_path: Path) -> None:
     """A leftover planted after the app is built, and removed between entries,
     changes neither view: no entry reads the guard."""
-    from installer.guards import install_shims, remove_shims
     from installer.guidance import Guidance
 
     bin_dir = tmp_path / ".local" / "bin"
     app = _app(cases=_rg_rows(), uninstall=_uninstall_inputs(has_path_block=True))
     async with app.run_test(size=(100, 30)) as pilot:
-        install_shims(bin_dir)
+        _plant_leftover_shim(bin_dir)
         views: list[tuple[list[Guidance], str, list[str]]] = []
         for leftover in (True, False):
             if not leftover:
-                remove_shims(bin_dir)
+                (bin_dir / "pip").unlink()
             await pilot.press("4")
             assert isinstance(app.screen, DoctorScreen)
             guidance, body = list(app.screen.guidance), _doctor_body(app)
@@ -3890,9 +3896,7 @@ def test_doctor_view_takes_no_guard_state() -> None:
 async def test_doctor_view_shows_only_path_disk_and_competing_items_with_a_leftover(
     tmp_path: Path,
 ) -> None:
-    from installer.guards import install_shims
-
-    install_shims(tmp_path / ".local" / "bin")  # a marked leftover shim
+    _plant_leftover_shim(tmp_path / ".local" / "bin")  # a marked leftover shim
     app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)

@@ -51,7 +51,7 @@ def _recipes() -> dict[str, tuple[list[str], list[str]]]:
 
 def test_launch_targets_run_without_the_dev_venv() -> None:
     recipes = _recipes()
-    for name in ("setup", "doctor", "fix", "uninstall", "guard", "unguard"):
+    for name in ("setup", "doctor", "fix", "uninstall"):
         _, lines = recipes[name]
         joined = "\n".join(lines)
         assert "uv run --isolated --no-dev setup.py" in joined, name
@@ -64,14 +64,25 @@ def test_run_is_an_alias_of_setup() -> None:
 
 
 def test_every_setup_py_recipe_uses_the_launch_form() -> None:
-    launcher_lines: list[str] = []
-    for _, lines in _recipes().values():
-        for line in lines:
-            if _LAUNCHER_LINE.match(line):
-                launcher_lines.append(line)
-    assert len(launcher_lines) == 6
-    for line in launcher_lines:
-        assert "uv run --isolated --no-dev setup.py" in line
+    launcher_targets: list[str] = []
+    for name, (_, lines) in _recipes().items():
+        launcher_lines = [line for line in lines if _LAUNCHER_LINE.match(line)]
+        if launcher_lines:
+            launcher_targets.append(name)
+        for line in launcher_lines:
+            assert "uv run --isolated --no-dev setup.py" in line
+    assert launcher_targets == ["setup", "doctor", "fix", "uninstall"]
+
+
+def test_retired_guard_targets_are_gone() -> None:
+    makefile = MAKEFILE.read_text()
+    recipes = _recipes()
+    assert "guard" not in recipes
+    assert "unguard" not in recipes
+    phony = makefile.split(".PHONY:")[1].split("\n")[0].split()
+    assert "guard" not in phony
+    assert "unguard" not in phony
+    assert not [line for line in makefile.splitlines() if "##" in line and "guard" in line.lower()]
 
 
 def test_gate_targets_keep_dev_dependencies() -> None:

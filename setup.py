@@ -43,7 +43,6 @@ from installer.app import (
     doctor_data,
     perform_uninstall,
     run_doctor,
-    run_guard,
     run_uninstall,
     run_wizard,
 )
@@ -56,7 +55,6 @@ from installer.install_ownership import run_probe
 from installer.legacy_guard import remove_ban_blocks, remove_guard_shims
 from installer.locations import (
     all_ban_rc_paths,
-    ban_rc_paths,
     drop_project_venv_from_path,
     rc_paths_for_mode,
     zshrc_path,
@@ -974,8 +972,8 @@ def _build_app(
     # An ALLOWLIST, not the initial_view != "uninstall" blocklist that would
     # wrongly reconcile for "doctor"/"policies" too (11-REVIEWS.md cycle 2
     # finding #14) -- make doctor is documented read-only (Makefile:19), and
-    # --guard/--unguard's interactive branch must not silently register a
-    # background timer either. Only _run_interactive_wizard's own call site
+    # no other entry point may silently register a background timer either. Only
+    # _run_interactive_wizard's own call site
     # (the genuine, normal interactive make setup wizard flow) passes
     # apply_schedule_defaults=True; the Schedules view itself is visible from
     # every entry point.
@@ -1329,25 +1327,6 @@ def _teardown_cli(console: Console, platform: Platform, *, assume_yes: bool) -> 
     return 1 if failed else 0
 
 
-def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_yes: bool) -> int:
-    # The caller picks rc_paths: install targets the link-mode location, removal
-    # sweeps every possible location (so it never depends on a link-mode guess).
-    legacy, repairs = _launch_repairs()
-    _print_repairs(console, legacy, repairs)
-    confirm = (lambda _message: True) if assume_yes else ask_confirm
-    acted = run_guard(
-        remove=remove,
-        shim_dir=_DEFAULT_BIN_DIR,
-        rc_paths=rc_paths,
-        path_value=os.environ.get("PATH", ""),
-        console=console,
-        confirm=confirm,
-    )
-    if acted and not remove:
-        console.print("Open a new shell (or run `hash -r`) so cached command paths refresh.")
-    return 0
-
-
 def _verify_and_clean(
     console: Console, tools: list[Tool], platform: Platform, *, assume_yes: bool
 ) -> None:
@@ -1417,31 +1396,6 @@ def main(argv: list[str]) -> int:
         return _run_fix(console, link_mode_option=options.link_mode)
     if options.uninstall:
         return _run_uninstall(console, assume_yes=options.yes)
-    if options.guard or options.unguard:
-        if _has_controlling_tty() and not options.yes:
-            # Honor an explicit --link-mode so the ban's aliases land in the same
-            # rc files as the rest of the wiring; default stays centralized.
-            store, _needs_choice = _settings_store(options.link_mode)
-            with _stdin_on_tty():
-                app = _build_app(
-                    load_tools(_REGISTRY),
-                    detect(),
-                    initial_view="policies",
-                    link_mode=store.link_mode,
-                    settings=store,
-                )
-                app.run()
-            return _session_exit_code(app)
-        if options.guard:
-            store, _needs_choice = _settings_store(options.link_mode, announce_warning=True)
-            return _run_guard(
-                console,
-                remove=False,
-                rc_paths=ban_rc_paths(store.link_mode, _SHELL),
-                assume_yes=options.yes,
-            )
-        # Removal needs no link-mode prompt — it sweeps every rc file.
-        return _run_guard(console, remove=True, rc_paths=all_ban_rc_paths(), assume_yes=options.yes)
     can_proceed = options.all or bool(options.categories) or _has_controlling_tty()
     if not can_proceed:
         console.print(

@@ -14,8 +14,6 @@ class Options:
     doctor: bool = False
     fix: bool = False
     uninstall: bool = False
-    guard: bool = False
-    unguard: bool = False
     link_mode: str | None = None
     run_schedule: str | None = None
     parent_holds_run_lock: bool = False
@@ -50,12 +48,6 @@ def parse_args(argv: list[str]) -> Options:
         "--uninstall", action="store_true", help="remove installed userspace artifacts, then exit"
     )
     parser.add_argument(
-        "--guard",
-        action="store_true",
-        help="install the pip/npm ban (shims + aliases steering to uv/pnpm), then exit",
-    )
-    parser.add_argument("--unguard", action="store_true", help="remove the pip/npm ban, then exit")
-    parser.add_argument(
         "--link-mode",
         choices=["centralized", "single", "split"],
         default=None,
@@ -89,8 +81,6 @@ def parse_args(argv: list[str]) -> Options:
         doctor=ns.doctor,
         fix=ns.fix,
         uninstall=ns.uninstall,
-        guard=ns.guard,
-        unguard=ns.unguard,
         link_mode=ns.link_mode,
         run_schedule=ns.run_schedule,
         parent_holds_run_lock=ns.parent_holds_run_lock,

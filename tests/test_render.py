@@ -22,7 +22,6 @@ from installer.render import (
     plan_row_text,
     render_done_notes,
     render_failure_details,
-    render_guard,
     render_handoff,
     render_hook_lines,
     render_node_globals,
@@ -345,25 +344,6 @@ def test_render_verification_ignores_failed_download_outcome():
     ]
     render_verification(outcomes, console)
     assert console.export_text().strip() == ""
-
-
-def test_render_guard_prints_actions_and_warning():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard({"pip": "created", "npm": "created"}, "watch PATH order", console, removing=False)
-    out = buf.getvalue()
-    assert "Installing the pip/npm ban" in out
-    assert "created: pip" in out
-    assert "watch PATH order" in out
-
-
-def test_render_guard_removing_has_no_warning():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard({"pip": "removed"}, None, console, removing=True)
-    out = buf.getvalue()
-    assert "Removing the pip/npm ban" in out
-    assert "removed: pip" in out
 
 
 def test_render_node_globals_silent_when_healthy() -> None:

@@ -1066,22 +1066,20 @@ def test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_poi
     #14): only the default/no-flag path (_run_interactive_wizard's own call
     site -- the genuine, normal interactive `make setup` wizard flow) ever
     wires a real schedule_defaults callback into UnifiedApp. `--doctor`
-    (read-only, Makefile:19), `--uninstall`, and `--guard`'s interactive
-    Policies view must never auto-apply -- proven against _capture_app's
-    own CAPTURED kwargs, not merely that an injected callback was never
+    (read-only, Makefile:19) and `--uninstall` must never auto-apply -- proven against
+    _capture_app's own CAPTURED kwargs, not merely that an injected callback was never
     invoked (11-REVIEWS.md cycle 2 finding #20)."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
 
     assert setup.main(["--doctor"]) == 0
     assert setup.main(["--uninstall"]) == 0
-    assert setup.main(["--guard"]) == 0
     assert setup.main([]) == 0
 
-    assert len(seen) == 4
-    doctor_kwargs, uninstall_kwargs, policies_kwargs, default_kwargs = seen
+    assert len(seen) == 3
+    doctor_kwargs, uninstall_kwargs, default_kwargs = seen
 
-    for kwargs in (doctor_kwargs, uninstall_kwargs, policies_kwargs):
+    for kwargs in (doctor_kwargs, uninstall_kwargs):
         assert kwargs.get("schedule_defaults") is None
 
     assert callable(default_kwargs["schedule_defaults"])
@@ -1113,10 +1111,10 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_every_tweak(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Enabling a tweak under split link mode also wires ~/.myshellrc sourcing
-    into the split rc files, via the --guard entry point."""
+    into the split rc files, via the default route."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
-    assert setup.main(["--guard", "--link-mode", "split"]) == 0
+    assert setup.main(["--link-mode", "split"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
     codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
@@ -1132,7 +1130,7 @@ def test_the_policies_view_wires_split_mode_myshellrc_sourcing_for_the_cache_red
     written only there was a silent no-op while its row read ON."""
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
-    assert setup.main(["--guard", "--link-mode", "split"]) == 0
+    assert setup.main(["--link-mode", "split"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
     redirect = next(p for p in policies.policies if p.id.startswith("cache-redirect:"))
@@ -1164,7 +1162,7 @@ def test_the_policies_and_doctor_share_one_competing_probe_that_never_mutates(
 
     monkeypatch.setattr(setup.systemd_daemon, "query_systemctl", read_output)
     seen = _capture_app(monkeypatch)
-    assert setup.main(["--guard"]) == 0
+    assert setup.main(["--doctor"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
     probe = policies.competing
@@ -1237,7 +1235,7 @@ def test_the_policies_view_does_not_wire_split_sourcing_under_centralized_mode(
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
-    assert setup.main(["--guard"]) == 0
+    assert setup.main(["--doctor"]) == 0
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
     codex_skip = next(p for p in policies.policies if p.id == "tweak:docker")
@@ -1250,7 +1248,7 @@ def test_the_normal_interactive_flow_wires_split_mode_myshellrc_sourcing_before_
 ) -> None:
     """The phase's own primary, most-used entry point (no flags at all) must
     also thread the real link mode into the catalog/Policies UnifiedApp
-    instance BEFORE it opens — not only the --guard shortcut."""
+    instance BEFORE it opens — not only the --doctor shortcut."""
     _sandbox(monkeypatch, tmp_path)
     _store_link_mode(monkeypatch, tmp_path, "split")
     seen = _capture_app(monkeypatch)
@@ -2172,8 +2170,8 @@ async def _pilot_accepts_the_selection(
 ) -> None:
     """Navigate to the catalog (the one navigation path), mark the fake tool,
     accept, start the run and wait for it to settle. Shared by every route
-    pilot: --doctor/--fix open on doctor, --uninstall on uninstall, --guard
-    on policies, and setup already starts on the catalog (no-op call)."""
+    pilot: --doctor/--fix open on doctor, --uninstall on uninstall, and
+    setup already starts on the catalog (no-op call)."""
     await app.show_view(BASE_VIEW)
     assert app.current_view == BASE_VIEW
     await pilot.pause()
@@ -2239,7 +2237,6 @@ async def test_invalid_settings_file_launches_to_the_first_screen_with_a_warning
         ("doctor", ["--doctor"]),
         ("fix", ["--fix"]),
         ("uninstall", ["--uninstall"]),
-        ("guard", ["--guard"]),
     ],
 )
 async def test_every_tui_route_executes_the_accepted_selection(
@@ -2249,7 +2246,7 @@ async def test_every_tui_route_executes_the_accepted_selection(
     argv: list[str],
 ) -> None:
     """SPEC R9: Enter on a catalog selection executes it on every TUI route
-    (setup, doctor, fix, uninstall, guard)."""
+    (setup, doctor, fix, uninstall)."""
     del route_id
     recorded = _hermetic_route(monkeypatch, tmp_path)
     apps: list[UnifiedApp] = []
@@ -2270,7 +2267,6 @@ async def test_every_tui_route_executes_the_accepted_selection(
         ["--doctor"],
         ["--fix"],
         ["--uninstall"],
-        ["--guard"],
     ],
 )
 def test_tui_routes_exit_1_when_the_session_failed(
@@ -2771,20 +2767,31 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
     assert str(tmp_path / ".myshellrc") in (tmp_path / ".bashrc").read_text()
 
 
-def test_doctor_uninstall_and_guard_wire_the_store_but_never_prompt(
+def test_doctor_and_uninstall_wire_the_store_but_never_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--doctor"]) == 0
     assert setup.main(["--uninstall"]) == 0
-    assert setup.main(["--guard"]) == 0
-    assert len(seen) == 3
+    assert len(seen) == 2
     for kwargs in seen:
         policies = kwargs["policies"]
         assert isinstance(policies, PolicyInputs)
         assert policies.set_link_mode is not None
         assert kwargs.get("prompt_link_mode") is False
+
+
+@pytest.mark.parametrize("flag", ["--guard", "--unguard"])
+def test_setup_refuses_the_retired_guard_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, flag: str
+) -> None:
+    _sandbox(monkeypatch, tmp_path)
+    before = sorted(tmp_path.rglob("*"))
+    with pytest.raises(SystemExit) as raised:
+        setup.main([flag])
+    assert raised.value.code == 2
+    assert sorted(tmp_path.rglob("*")) == before
 
 
 def test_all_yes_and_no_tty_never_prompt_for_link_mode(
@@ -4536,9 +4543,6 @@ def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) 
     ) -> tuple[list[Path], tuple[str, ...]]:
         return [], ()
 
-    def no_guard(**_kwargs: object) -> bool:
-        return False
-
     def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
         return TerminalShellResult()
 
@@ -4549,7 +4553,6 @@ def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) 
     monkeypatch.setattr(setup, "configure_path", noop)
     monkeypatch.setattr(setup, "run_uninstall", uninstalled)
     monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
-    monkeypatch.setattr(setup, "run_guard", no_guard)
     monkeypatch.setattr(setup, "_timer_state_cache", noop)
     monkeypatch.setattr(setup, "_disk_pressure_probe", noop)
     monkeypatch.setattr(setup, "_competitor_probe", noop)
@@ -4589,20 +4592,13 @@ def test_a_doctor_launch_removes_the_retired_guard(
         ["--uninstall", "--yes"],
         ["--doctor"],
         ["--fix"],
-        ["--guard", "--yes"],
-        ["--unguard", "--yes"],
     ],
-    ids=["tui", "uninstall", "doctor", "fix", "guard", "unguard"],
+    ids=["tui", "uninstall", "doctor", "fix"],
 )
 def test_every_route_removes_the_retired_guard_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str] | None
 ) -> None:
-    """Every route's launch repair removes the guard once and names each path (D-09).
-
-    For the `guard` and `unguard` ids this proves only that the launch removal runs on those
-    routes while `_headless_route_stubs` stubs `run_guard`, not what `run_guard` does after it;
-    24.4-06 deletes the two ids together with the routes.
-    """
+    """Every route's launch repair removes the guard once and names each path (D-09)."""
     _sandbox(monkeypatch, tmp_path)
     buffer = io.StringIO()
     if argv is not None:

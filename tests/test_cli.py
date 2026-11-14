@@ -82,21 +82,14 @@ def test_doctor_and_fix_both_parse():
     assert opts.doctor is True and opts.fix is True
 
 
-def test_parse_guard_flag():
-    options = parse_args(["--guard"])
-    assert options.guard is True
-    assert options.unguard is False
-
-
-def test_parse_unguard_flag():
-    options = parse_args(["--unguard"])
-    assert options.unguard is True
-
-
-def test_guard_defaults_false():
-    options = parse_args([])
-    assert options.guard is False
-    assert options.unguard is False
+@pytest.mark.parametrize("flag", ["--guard", "--unguard"])
+def test_retired_guard_flags_are_unknown_options(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        parse_args([flag])
+    assert raised.value.code == 2
+    assert f"unrecognized arguments: {flag}" in capsys.readouterr().err
 
 
 def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
@@ -112,8 +105,6 @@ def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
         "--doctor",
         "--fix",
         "--uninstall",
-        "--guard",
-        "--unguard",
         "--link-mode",
         "--run-schedule",
         "--parent-holds-run-lock",

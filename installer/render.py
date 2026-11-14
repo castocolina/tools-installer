@@ -607,18 +607,6 @@ def render_doctor(
     console.print(guidance_text(doctor_guidance(report, duplicate_writers)))
 
 
-def render_guard(
-    actions: dict[str, str], warning: str | None, console: Console, *, removing: bool
-) -> None:
-    """Print the per-command shim actions, then any PATH-order warning."""
-    verb = "Removing" if removing else "Installing"
-    console.print(f"{verb} the pip/npm ban (shims + interactive aliases):")
-    for name, what in actions.items():
-        console.print(f"  {what}: {name}")
-    if warning:
-        console.print(warning)
-
-
 def render_node_globals(report: NodeGlobalsReport, console: Console) -> None:
     """Read-only doctor lines: silent unless a pnpm-managed global is missing."""
     items = node_globals_guidance(report)

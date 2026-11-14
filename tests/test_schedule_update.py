@@ -210,7 +210,6 @@ def test_setup_routes_run_schedule_first(
         "_run_doctor",
         "_run_fix",
         "_run_uninstall",
-        "_run_guard",
         "_run_interactive_wizard",
         "run_wizard",
     ):

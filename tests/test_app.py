@@ -9,12 +9,13 @@ import pytest
 from rich.console import Console
 
 from installer import shellrc
-from installer.app import UninstallDecision, run_guard, run_wizard
+from installer.app import UninstallDecision, run_wizard
 from installer.checksums import ChecksumMismatch
 from installer.cli import Options
 from installer.diskusage import DiskPressure
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState
+from installer.legacy_guard import SHIM_SENTINEL
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, PolicyResult
@@ -1847,170 +1848,10 @@ def test_wizard_suppresses_on_mismatch_under_yes():
     assert attempts == ["fail"]
 
 
-def test_run_guard_install_writes_shims_and_aliases_and_returns_true(tmp_path: Path):
-    shim_dir = tmp_path / "bin"
-    rc = tmp_path / ".myshellrc"
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    acted = run_guard(
-        remove=False,
-        shim_dir=shim_dir,
-        rc_paths=[rc],
-        path_value=f"{shim_dir}:/usr/bin",
-        console=console,
-        confirm=lambda _m: True,
-        which=lambda _n: None,
-    )
-    assert acted is True
-    assert (shim_dir / "pip").exists()
-    assert (shim_dir / "npx").exists()
-    assert not (shim_dir / "pnpm").exists()
-    assert "tools-installer ban" in rc.read_text()
-    assert "Installing the pip/npm ban" in buf.getvalue()
-
-
-def test_run_guard_reports_the_redirect_degradation_not_just_path_order(tmp_path: Path):
-    # A bare machine (no pnpm, no volta) degrades npx and npm to hard blocks.
-    # The per-name action lines never say so, and the PATH order here is sound,
-    # so without guard_state's composition the CLI user is told nothing.
-    shim_dir = tmp_path / "bin"
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    run_guard(
-        remove=False,
-        shim_dir=shim_dir,
-        rc_paths=[tmp_path / ".myshellrc"],
-        path_value=f"{shim_dir}:/usr/bin",
-        console=console,
-        confirm=lambda _m: True,
-        which=lambda _n: None,
-    )
-    output = buf.getvalue()
-    assert "hard-blocked" in output
-    assert "volta" in output
-
-
-def test_run_guard_states_the_volta_tradeoff_before_asking(tmp_path: Path):
-    # The confirm prompt is the CLI's consent moment: it must say that
-    # installing wraps npm/pnpm and gives up pnpm's gated postinstalls.
-    shim_dir = tmp_path / "bin"
-    buf = io.StringIO()
-    console = Console(file=buf, width=100, no_color=True)
-    asked: list[str] = []
-
-    def confirm(message: str) -> bool:
-        asked.append(buf.getvalue())
-        return False
-
-    run_guard(
-        remove=False,
-        shim_dir=shim_dir,
-        rc_paths=[tmp_path / ".myshellrc"],
-        path_value="",
-        console=console,
-        confirm=confirm,
-        which=lambda _n: None,
-    )
-    assert len(asked) == 1
-    shown = asked[0]
-    assert "volta install" in shown
-    assert "install scripts" in shown
-
-
-def test_run_guard_remove_does_not_repeat_the_install_tradeoff(tmp_path: Path):
-    shim_dir = tmp_path / "bin"
-    buf = io.StringIO()
-    console = Console(file=buf, width=100, no_color=True)
-    run_guard(
-        remove=True,
-        shim_dir=shim_dir,
-        rc_paths=[tmp_path / ".myshellrc"],
-        path_value="",
-        console=console,
-        confirm=lambda _m: False,
-        which=lambda _n: None,
-    )
-    assert "install scripts" not in buf.getvalue()
-
-
-def test_run_guard_declined_does_nothing(tmp_path: Path):
-    shim_dir = tmp_path / "bin"
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    acted = run_guard(
-        remove=False,
-        shim_dir=shim_dir,
-        rc_paths=[tmp_path / ".myshellrc"],
-        path_value="",
-        console=console,
-        confirm=lambda _m: False,
-        which=lambda _n: None,
-    )
-    assert acted is False
-    assert not shim_dir.exists()
-
-
-def test_run_guard_remove_strips_shims_and_aliases(tmp_path: Path):
-    shim_dir = tmp_path / "bin"
-    rc = tmp_path / ".myshellrc"
-    console = Console(file=io.StringIO(), width=100)
-    run_guard(
-        remove=False,
-        shim_dir=shim_dir,
-        rc_paths=[rc],
-        path_value=f"{shim_dir}",
-        console=console,
-        confirm=lambda _m: True,
-        which=lambda _n: None,
-    )
-    run_guard(
-        remove=True,
-        shim_dir=shim_dir,
-        rc_paths=[rc],
-        path_value=f"{shim_dir}",
-        console=console,
-        confirm=lambda _m: True,
-        which=lambda _n: None,
-    )
-    assert not (shim_dir / "pip").exists()
-    assert not (shim_dir / "npx").exists()
-    assert "tools-installer ban" not in rc.read_text()
-
-
-def test_guard_state_folds_redirect_warning(tmp_path: Path) -> None:
-    from installer.app import guard_state
-    from installer.guards import shim_script
-
-    shim_dir = tmp_path / "bin"
-    shim_dir.mkdir()
-    (shim_dir / "npx").write_text(shim_script("npx"))
-    result = guard_state(shim_dir, str(shim_dir), lambda _n: None)
-    assert isinstance(result, tuple) and len(result) == 2
-    status, warning = result
-    assert isinstance(status, dict)
-    assert all(isinstance(value, bool) for value in status.values())
-    assert warning is not None
-    assert "npx" in warning
-    assert "pnpm" in warning
-
-
-def test_guard_state_joins_path_and_redirect_warnings(tmp_path: Path) -> None:
-    from installer.app import guard_state
-    from installer.guards import install_shims
-
-    shim_dir = tmp_path / "bin"
-    install_shims(shim_dir)
-    result = guard_state(
-        shim_dir,
-        f"/usr/bin:{shim_dir}",
-        lambda name: "/usr/bin/pip" if name == "pip" else None,
-    )
-    assert isinstance(result, tuple) and len(result) == 2
-    _status, warning = result
-    assert warning is not None
-    assert "/usr/bin/pip" in warning
-    assert "npx" in warning
-    assert "pnpm" in warning
+def _plant_leftover_shim(bin_dir: Path) -> None:
+    """A marked pip shim a retired version wrote (a literal plant, no writer needed)."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (bin_dir / "pip").write_text(f"#!/bin/sh\n{SHIM_SENTINEL}\nexit 127\n")
 
 
 def _mmdc_tool() -> Tool:
@@ -2115,10 +1956,9 @@ def test_run_doctor_silent_on_healthy_pnpm_globals(
 
 def test_run_doctor_prints_no_guard_section_even_with_a_leftover_shim(tmp_path: Path) -> None:
     from installer.app import run_doctor
-    from installer.guards import install_shims
 
     shim_dir = tmp_path / ".local" / "bin"
-    install_shims(shim_dir)  # a marked leftover, first on PATH
+    _plant_leftover_shim(shim_dir)  # a marked leftover, first on PATH
     outputs: list[str] = []
     for _ in range(2):  # a repeated run prints nothing either (R4 idempotency)
         buf = io.StringIO()
@@ -2357,13 +2197,12 @@ def test_uninstall_preview_never_mentions_a_leftover_guard_shim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from installer.app import run_uninstall
-    from installer.guards import install_shims
     from tests.test_uninstall import plant_removal_fixtures
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     tools = plant_removal_fixtures(tmp_path)
     bin_dir = tmp_path / ".local" / "bin"
-    install_shims(bin_dir)  # a marked leftover in the managed bin dir
+    _plant_leftover_shim(bin_dir)  # a marked leftover in the managed bin dir
     console, buf = _console()
     removed, failed = run_uninstall(
         tools, console, **_uninstall_kwargs(tmp_path, bin_dir, lambda _m: False)
