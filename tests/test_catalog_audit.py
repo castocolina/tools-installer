@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from installer import catalog_audit
+from installer import catalog_audit, verify_registry
 from installer.catalog_audit import FOOTER, Seams, entry_facts, main
 from installer.model import Method, Tool, load_tools
 from tests.home_fingerprint import fingerprint, fingerprint_diff
@@ -769,3 +769,148 @@ def test_main_never_prints_the_token(
     assert gh_calls == [["gh", "auth", "token"]]
     assert tokens == ["secret-token-value"]
     assert "secret-token-value" not in captured.out + captured.err
+
+
+# ---- 24.3-03 Task 1: verify record, script scan, summary ----
+
+
+def _main(
+    argv: list[str],
+    registry: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    verify_main: Callable[[list[str]], int] | None = None,
+) -> tuple[int, str, str]:
+    code = main(argv, registry=registry, seams=_seams(), verify_main=verify_main)
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def _verify_fake(
+    calls: list[list[str]], *, code: int = 1, report: str = "## Drift\n- alpha: newer stable\n"
+) -> Callable[[list[str]], int]:
+    def fake(argv: list[str]) -> int:
+        calls.append(list(argv))
+        print(report, end="")
+        return code
+
+    return fake
+
+
+def _store(root: Path, entry_id: str, text: str) -> None:
+    catalog_audit.write_report(root / DAY, entry_id, text, home=Path.home())
+
+
+_DRIFT_ROWS = (
+    "| install method | drift | https://example.invalid/x |",
+    *_CHECK_ROWS[1:],
+)
+
+
+def _repo(tmp_path: Path, files: Mapping[str, str] | None = None) -> Path:
+    repo = tmp_path / "repo"
+    for name, body in (files or {"scripts/x.sh": "echo hi\n"}).items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(body, encoding="utf-8")
+    return repo
+
+
+def test_verify_scan_summarize_round_trip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    _store(root, "alpha", _report("alpha", rows=_DRIFT_ROWS))
+    _store(root, "beta", _report("beta"))
+    repo = _repo(tmp_path)
+    calls: list[list[str]] = []
+    state = tmp_path / "p243e03-state.json"
+
+    code, _, _ = _main(
+        ["verify", "--date", DAY, "--root", str(root), "--state", str(state)],
+        registry,
+        capsys,
+        verify_main=_verify_fake(calls),
+    )
+    assert code == 0
+    assert calls == [["--state", str(state)]]
+    record = (root / DAY / "verify-registry.md").read_text(encoding="utf-8")
+    assert record.startswith(f"# verify-registry - {DAY}\nexit: 1\n")
+    assert "## Drift\n- alpha: newer stable\n" in record
+
+    argv = ["scan", "--date", DAY, "--root", str(root), "--repo", str(repo)]
+    assert _main(argv, registry, capsys)[0] == 0
+    scripts = (root / DAY / "scripts.md").read_text(encoding="utf-8")
+    assert "| scripts/x.sh | (maintainer) | ok |" in scripts
+
+    argv = ["summarize", "--date", DAY, "--root", str(root), "--repo", str(repo)]
+    assert _main(argv, registry, capsys)[0] == 0
+    summary = (root / DAY / "SUMMARY.md").read_text(encoding="utf-8")
+    assert "alpha | install method | drift | https://example.invalid/x | proposed" in summary
+    assert "exit: 1" in summary
+    assert "- alpha: newer stable" in summary
+    assert "scripts/x.sh (maintainer): ok" in summary
+    assert "no proposed changes" in summary
+
+
+def _verify_cases(tmp_path: Path) -> dict[str, list[str]]:
+    default = verify_registry.default_state_path()
+    link = tmp_path / "p243e03-link.json"
+    link.symlink_to(default)
+    in_repo = Path(catalog_audit.__file__).resolve().parents[1] / "p243e03-state.json"
+    not_json = tmp_path / "p243e03-notjson.json"
+    not_json.write_text("not json", encoding="utf-8")
+    return {
+        "missing": [],
+        "default": ["--state", str(default)],
+        "symlink": ["--state", str(link)],
+        "in-repo": ["--state", str(in_repo)],
+        "non-json": ["--state", str(not_json)],
+    }
+
+
+@pytest.mark.parametrize("kind", ["missing", "default", "symlink", "in-repo", "non-json"])
+def test_verify_requires_a_scratch_state(
+    kind: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    state_argv = _verify_cases(tmp_path)[kind]
+    calls: list[list[str]] = []
+    code, _, err = _main(
+        ["verify", "--date", DAY, "--root", str(root), *state_argv],
+        registry,
+        capsys,
+        verify_main=_verify_fake(calls),
+    )
+    assert code == catalog_audit.EXIT_USAGE, err
+    assert calls == []
+    assert not (root / DAY / "verify-registry.md").exists()
+
+
+def test_verify_copies_the_warm_state_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    warm = verify_registry.default_state_path()
+    warm.parent.mkdir(parents=True)
+    warm.write_text('{"warm": true}', encoding="utf-8")
+    os.utime(warm, ns=(1_000_000_000, 1_000_000_000))
+    before = (warm.read_bytes(), warm.stat().st_mtime_ns)
+    state = tmp_path / "scratch" / "p243e03-state.json"
+    seen: list[bytes] = []
+
+    def fake(argv: list[str]) -> int:
+        seen.append(Path(argv[1]).read_bytes())
+        return 0
+
+    code, _, _ = _main(
+        ["verify", "--date", DAY, "--root", str(root), "--state", str(state)],
+        registry,
+        capsys,
+        verify_main=fake,
+    )
+    assert code == 0
+    assert seen == [before[0]]
+    assert (warm.read_bytes(), warm.stat().st_mtime_ns) == before

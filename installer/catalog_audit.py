@@ -18,8 +18,10 @@ Exit codes: 0 ok; 64 usage error; 70 internal error; 73 report refused.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import http.client
+import io
 import json
 import platform
 import re
@@ -35,9 +37,9 @@ from datetime import date
 from pathlib import Path
 from typing import NoReturn, cast
 
-from installer import versions
+from installer import verify_registry, versions
 from installer.agent_settings import DYNAMIC_KEYS, TUNING_GROUPS, setting_keys
-from installer.atomic import atomic_write_text
+from installer.atomic import atomic_write_bytes, atomic_write_text
 from installer.locations import ensure_dir
 from installer.model import Method, Tool, load_tools, method_package
 from installer.ownership import ManagerOwnership
@@ -55,7 +57,8 @@ from installer.versions import (
 )
 
 REGISTRY = Path(__file__).with_name("registry.toml")
-RUN_ROOT = Path(__file__).resolve().parents[1] / ".planning" / "audits" / "catalog"
+CHECKOUT = Path(__file__).resolve().parents[1]
+RUN_ROOT = CHECKOUT / ".planning" / "audits" / "catalog"
 FOOTER = "<!-- catalog-audit:complete -->"
 CHECKS = (
     "install method",
@@ -199,7 +202,7 @@ def _check_rows(lines: list[str], problems: list[str]) -> dict[str, str]:
     if len(rows) != len(CHECKS):
         problems.append(f"Checks: expected {len(CHECKS)} rows, found {len(rows)}")
     for want, row in zip(CHECKS, rows, strict=False):
-        cells = [cell.strip() for cell in row.strip("|").split("|", 2)]
+        cells = _cells(row)
         if not (row.startswith("|") and row.endswith("|")) or len(cells) != 3:
             problems.append(f"Checks row {row!r}: not a '| check | status | source |' row")
             continue
@@ -236,6 +239,30 @@ def _hygiene(text: str, home: Path) -> list[str]:
     return problems
 
 
+def _split_sections(
+    body: list[tuple[int, str]], problems: list[str]
+) -> tuple[dict[str, list[str]], list[str]]:
+    """The `## ` sections of a report body (numbered non-empty lines) and their order."""
+    sections: dict[str, list[str]] = {}
+    order: list[str] = []
+    current: list[str] | None = None
+    for n, line in body:
+        if line.startswith("## "):
+            name = line[3:].strip()
+            order.append(name)
+            current = sections.setdefault(name, [])
+        elif current is None:
+            problems.append(f"line {n}: text before the first section")
+        else:
+            current.append(line)
+    return sections, order
+
+
+def _cells(row: str) -> list[str]:
+    """The three cells of a `| check | status | source |` row (the source keeps any `|`)."""
+    return [cell.strip() for cell in row.strip("|").split("|", 2)]
+
+
 def validate_report(text: str, entry_id: str, *, home: Path) -> list[str]:
     """Every way `text` breaks the report grammar; an empty list means it is valid."""
     problems = _hygiene(text, home)
@@ -245,18 +272,7 @@ def validate_report(text: str, entry_id: str, *, home: Path) -> list[str]:
         problems.append(f"the first line must be '# {entry_id} - catalog audit YYYY-MM-DD'")
     elif _DATE_RE.fullmatch(title["day"]) is None:
         problems.append(f"the title date {title['day']!r} is not YYYY-MM-DD")
-    sections: dict[str, list[str]] = {}
-    order: list[str] = []
-    current: list[str] | None = None
-    for n, line in body[1:]:
-        if line.startswith("## "):
-            name = line[3:].strip()
-            order.append(name)
-            current = sections.setdefault(name, [])
-        elif current is None:
-            problems.append(f"line {n}: text before the first section")
-        else:
-            current.append(line)
+    sections, order = _split_sections(body[1:], problems)
     if order != list(_SECTIONS):
         problems.append("the sections are exactly " + ", ".join(f"## {s}" for s in _SECTIONS))
     counts: Counter[str] = Counter()
@@ -640,6 +656,195 @@ def entry_facts(
     return _tilde("\n".join(lines) + "\n", seams.home)
 
 
+def _write_run_file(run: Path, name: str, text: str) -> Path:
+    """Write one run-directory file whole; never through a symlink at the leaf."""
+    target = run / name
+    _refuse_symlink_leaf(target)
+    ensure_dir(run)
+    atomic_write_text(target, text)
+    return target
+
+
+# ---- verify: the once-per-run verify-registry record (D-03) ----
+
+
+def _state_refusal(state: Path, repo: Path) -> str | None:
+    """Why `state` is no scratch state for verify-registry, or None.
+
+    verify-registry persists its state during a run even without --write, so it must never
+    be pointed at the default HOME state or at a file the checkout tracks.
+    """
+    resolved = state.resolve()
+    if resolved == verify_registry.default_state_path().resolve():
+        return "--state is verify-registry's default HOME state; name a scratch path"
+    if resolved.is_relative_to(repo.resolve()):
+        return "--state lies inside the repo checkout; name a scratch path"
+    if resolved.exists():
+        try:
+            json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "--state names an existing file that is not JSON"
+    return None
+
+
+def record_verify(
+    run: Path,
+    state: Path,
+    repo: Path,
+    home: Path,
+    verify_main: Callable[[list[str]], int],
+) -> Path:
+    """Run verify-registry once against the scratch `state` and store its report whole.
+
+    A warm HOME state is copied to an absent scratch path first (HOME is only read). The
+    recorded exit code is data; the final gate reads it, so this does not fail on drift.
+    """
+    problem = _state_refusal(state, repo)
+    if problem is not None:
+        raise UsageError(problem)
+    warm = verify_registry.default_state_path()
+    if not state.exists() and warm.is_file():
+        ensure_dir(state.parent)
+        atomic_write_bytes(state, warm.read_bytes())
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        code = verify_main(["--state", str(state)])
+    body = _tilde(captured.getvalue(), home).rstrip("\n")
+    return _write_run_file(
+        run, "verify-registry.md", f"# verify-registry - {run.name}\nexit: {code}\n\n{body}\n"
+    )
+
+
+# ---- scan: the script surfaces and their mechanical unsafe patterns (SPEC R3) ----
+
+_PY_SURFACES = (
+    "installer/postinstall.py",
+    "installer/post_install.py",
+    "installer/agent_settings.py",
+    "installer/guards.py",
+    "installer/env_redirect.py",
+    "installer/cursor_shim.py",
+)
+_SH_SURFACES = ("scripts/*.sh", "scripts/lib/*.sh")
+INSTALLER_OWNER = "(installer)"
+MAINTAINER_OWNER = "(maintainer)"
+
+
+@dataclass(frozen=True, order=True)
+class ScanRow:
+    """One `scripts.md` row: `line` is 0 for an `ok` row (the whole file was read)."""
+
+    path: str
+    line: int
+    entry: str
+    status: str
+    pattern: str
+
+
+def _surfaces(repo: Path) -> list[str]:
+    found = [name for name in _PY_SURFACES if (repo / name).is_file()]
+    for pattern in _SH_SURFACES:
+        found.extend(p.relative_to(repo).as_posix() for p in repo.glob(pattern) if p.is_file())
+    return sorted(found)
+
+
+def _default_entry(path: str) -> str:
+    if path.startswith("scripts/"):
+        return MAINTAINER_OWNER
+    return "cursor-agent" if path == "installer/cursor_shim.py" else INSTALLER_OWNER
+
+
+def scan(repo: Path) -> list[ScanRow]:
+    """One `ok` row per audited surface; the checks that add `finding` rows come in Task 2."""
+    return sorted(ScanRow(path, 0, _default_entry(path), "ok", "") for path in _surfaces(repo))
+
+
+def scan_text(day: str, rows: Sequence[ScanRow]) -> str:
+    lines = [
+        f"# scripts - {day}",
+        "",
+        "| location | entry | status | pattern |",
+        "|---|---|---|---|",
+    ]
+    for row in rows:
+        where = f"{row.path}:{row.line}" if row.line else row.path
+        lines.append(f"| {where} | {row.entry} | {row.status} | {row.pattern} |")
+    return "\n".join(lines) + "\n"
+
+
+def _read_scan(run: Path) -> list[ScanRow]:
+    path = run / "scripts.md"
+    if not path.is_file():
+        return []
+    rows: list[ScanRow] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        cells = [cell.strip() for cell in line.strip("|").split("|", 3)]
+        if not line.startswith("| ") or len(cells) != 4 or cells[2] not in ("ok", "finding"):
+            continue
+        name, _, number = cells[0].partition(":")
+        rows.append(ScanRow(name, int(number) if number.isdigit() else 0, *cells[1:]))
+    return rows
+
+
+# ---- summarize: SUMMARY.md rebuilt from what is on disk (SPEC R4) ----
+
+
+def _parse_report(path: Path) -> dict[str, list[str]]:
+    """The sections of a complete report, without its title and footer."""
+    text = path.read_text(encoding="utf-8")
+    body = [
+        (n, line.rstrip())
+        for n, line in enumerate(text.splitlines(), 1)
+        if line.strip() and line.strip() != FOOTER
+    ]
+    return _split_sections(body[1:], [])[0]
+
+
+def _verify_lines(run: Path) -> list[str]:
+    path = run / "verify-registry.md"
+    if not path.is_file():
+        return ["not recorded"]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    drift: list[str] = []
+    for line in lines[lines.index("## Drift") + 1 :] if "## Drift" in lines else []:
+        if not line.startswith("- "):
+            break
+        drift.append(line)
+    return [next((x for x in lines if x.startswith("exit: ")), "exit: unknown"), *drift]
+
+
+def summarize(tools: Sequence[Tool], run: Path) -> str:
+    """The audit summary: a pure function of the run directory, with no timestamp."""
+    state = status(tools, run)
+    reports = {
+        tool.id: _parse_report(run / f"{tool.id}.md")
+        for tool in tools
+        if _is_complete(run / f"{tool.id}.md")
+    }
+    lines = [f"# Catalog audit - {run.name}", f"complete {state.complete}/{state.total}"]
+    lines.extend(f"missing {tool.id}" for tool in tools if tool.id not in reports)
+    lines.extend(f"orphan {orphan}" for orphan in state.orphans)
+    changes = [
+        f"- {entry}: {line[2:]}"
+        for entry, sections in reports.items()
+        for line in sections.get("Proposed changes", [])
+        if line != "- none"
+    ]
+    drift = [
+        f"| {entry} | {name} | drift | {source} | proposed |"
+        for entry, sections in reports.items()
+        for name, state_, source in (_cells(row) for row in sections.get("Checks", [])[2:])
+        if state_ == "drift"
+    ]
+    lines += ["", "## Proposed changes", *(changes or ["no proposed changes"])]
+    table = ["| entry | check | status | source | disposition |", "|---|---|---|---|---|"]
+    lines += ["", "## Drift", *([*table, *drift] if drift else ["none"])]
+    lines += ["", "## verify-registry", *_verify_lines(run)]
+    scanned = [f"- {r.path} {r.entry}: ok" for r in _read_scan(run) if r.status == "ok"]
+    lines += ["", "## Script scan", *(scanned or ["not recorded"])]
+    return "\n".join(lines) + "\n"
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         raise UsageError(message)
@@ -649,12 +854,16 @@ def _parser() -> argparse.ArgumentParser:
     parser = _Parser(description="Catalog audit fact gatherer and report writer.")
     parser.add_argument("--registry", type=Path, default=None, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("status", "write"):
+    for name in ("status", "write", "verify", "scan", "summarize"):
         cmd = sub.add_parser(name)
         if name == "write":
             cmd.add_argument("id")
         cmd.add_argument("--date", required=True)
         cmd.add_argument("--root", type=Path, default=None)
+        if name in ("verify", "scan", "summarize"):
+            cmd.add_argument("--repo", type=Path, default=CHECKOUT)
+        if name == "verify":
+            cmd.add_argument("--state", type=Path, required=True)
     sub.add_parser("facts").add_argument("id")
     return parser
 
@@ -678,6 +887,7 @@ def _run(
     seams: Seams | None,
     root: Path | None,
     gh: Callable[[list[str]], str] | None,
+    verify_main: Callable[[list[str]], int] | None,
 ) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     registry_path = args.registry if args.registry is not None else registry
@@ -698,9 +908,19 @@ def _run(
         for orphan in state.orphans:
             print(f"orphan {orphan}")
         return 0
-    tool = _find(tools, args.id)
-    write_report(run, tool.id, sys.stdin.read(), home=home)
-    print(f"wrote {tool.id}.md")
+    if args.cmd == "verify":
+        record_verify(run, args.state, args.repo, home, verify_main or verify_registry.main)
+        print("wrote verify-registry.md")
+    elif args.cmd == "scan":
+        _write_run_file(run, "scripts.md", scan_text(args.date, scan(args.repo)))
+        print("wrote scripts.md")
+    elif args.cmd == "summarize":
+        _write_run_file(run, "SUMMARY.md", summarize(tools, run))
+        print("wrote SUMMARY.md")
+    else:
+        tool = _find(tools, args.id)
+        write_report(run, tool.id, sys.stdin.read(), home=home)
+        print(f"wrote {tool.id}.md")
     return 0
 
 
@@ -711,9 +931,10 @@ def main(
     seams: Seams | None = None,
     root: Path | None = None,
     gh: Callable[[list[str]], str] | None = None,
+    verify_main: Callable[[list[str]], int] | None = None,
 ) -> int:
     try:
-        return _run(argv, registry, seams, root, gh)
+        return _run(argv, registry, seams, root, gh, verify_main)
     except UsageError as exc:
         print(f"catalog-audit: {exc}", file=sys.stderr)
         return EXIT_USAGE
