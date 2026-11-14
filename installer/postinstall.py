@@ -81,12 +81,30 @@ HARNESS_PRESENCE: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 }
 
 
+def _copilot_cli_footprint(marker: Path) -> bool:
+    """Whether `~/.copilot` holds anything but `ide/`, the VS Code extension's footprint.
+
+    Mirrors codegraph's own `cliConfigDirPresent` rule for the copilot CLI: an `ide/` dir alone
+    is the editor extension, not the CLI, so registering for it would write for an absent host.
+    """
+    try:
+        return any(entry.name != "ide" for entry in marker.iterdir())
+    except OSError:
+        return False
+
+
+# A marker dir counts for these harnesses only when its check passes too.
+_FOOTPRINT_CHECKS: Mapping[str, Callable[[Path], bool]] = {"copilot": _copilot_cli_footprint}
+
+
 def present_harnesses(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
     """Hosts detectable from PATH or a closed home-relative marker."""
     found: set[str] = set()
     for harness, (commands, markers) in HARNESS_PRESENCE.items():
+        footprint = _FOOTPRINT_CHECKS.get(harness)
         if any(which(command) for command in commands) or any(
-            (home / marker).exists() for marker in markers
+            (home / marker).exists() and (footprint is None or footprint(home / marker))
+            for marker in markers
         ):
             found.add(harness)
     return frozenset(found)
@@ -157,12 +175,14 @@ def _resolve_binary(method: Method, cmd: str) -> str:
 
 
 # codegraph's `--target` ids, keyed by harness id. The catalog id `cursor-agent`
-# is the display name of the `cursor` harness (HOST_CATALOG_IDS).
+# is the display name of the `cursor` harness (HOST_CATALOG_IDS); codegraph calls the copilot
+# CLI `copilot-cli`.
 _CODEGRAPH_TARGETS: Mapping[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor",
+    "copilot": "copilot-cli",
 }
 
 

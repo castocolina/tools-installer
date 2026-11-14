@@ -4793,6 +4793,26 @@ def test_hook_drift_ignores_absent_unsupported_and_receiptless_tools(tmp_path: P
     assert recorded["codegraph"].health is not Health.MISCONFIGURED
 
 
+def test_a_present_copilot_the_receipt_lacks_reads_misconfigured(tmp_path: Path) -> None:
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    service = _hook_service(tmp_path, frozenset({"claude", "copilot"}))
+    codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert codegraph.health is Health.MISCONFIGURED
+    assert codegraph.reasons[0] == "codegraph is not registered for copilot"
+    assert codegraph.unconfigured == (
+        ConfigStep("register codegraph for copilot", "hook_register"),
+    )
+
+
+def test_the_vscode_extension_footprint_alone_reads_nothing_for_copilot(tmp_path: Path) -> None:
+    (tmp_path / "home" / ".copilot" / "ide").mkdir(parents=True)
+    _hook_receipt({"codegraph-mcp-register": ()})
+    service = _hook_service(tmp_path, frozenset())
+    codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert codegraph.unconfigured == ()
+    assert codegraph.health is not Health.MISCONFIGURED
+
+
 _HERDR_PLUGIN_LISTED = (
     '{"id": "cli:plugin", "result": {"type": "plugin_list", "plugins": '
     '[{"plugin_id": "herdr-setup.markers"}]}}'

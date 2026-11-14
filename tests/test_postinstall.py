@@ -24,7 +24,7 @@ _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.tom
 _CODEGRAPH = "codegraph-mcp-register"
 # Harness ids: the keys of every hook target map. `cursor` is the Cursor harness;
 # the catalog id `cursor-agent` is display-only (HOST_CATALOG_IDS).
-_HARNESSES = ("claude", "codex", "opencode", "cursor")
+_HARNESSES = ("claude", "codex", "opencode", "cursor", "copilot")
 _ALL_SUBSETS: list[tuple[str, ...]] = [
     subset for size in range(len(_HARNESSES) + 1) for subset in combinations(_HARNESSES, size)
 ]
@@ -35,6 +35,7 @@ _EXPECTED_TARGET_FOR = {
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor",
+    "copilot": "copilot-cli",
 }
 _GITHUB = Method(kind="github_release", params={})
 _BREW = Method(kind="brew", params={"formula": "codegraph"})
@@ -177,8 +178,8 @@ def test_run_postinstall_unknown_name_is_a_noop() -> None:
 def test_codegraph_hook_matches_expected_argv_for_every_host_presence_subset(
     present_subset: tuple[str, ...],
 ) -> None:
-    """Every one of the 16 subsets of the four harnesses produces either the exact
-    expected argv (never "auto") or a genuine no-op, never anything else."""
+    """Every subset of the codegraph harnesses produces either the exact expected argv
+    (never "auto" or "all") or a genuine no-op, never anything else."""
     calls: list[list[str]] = []
     outcome = pi.run_postinstall(
         _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset(present_subset)
@@ -193,12 +194,13 @@ def test_codegraph_hook_matches_expected_argv_for_every_host_presence_subset(
     assert outcome == (tuple(sorted(present_subset)), None)
     assert calls == [_argv(expected_csv)]
     assert "auto" not in calls[0]
+    assert "all" not in calls[0]
 
 
 def test_codegraph_hook_preserves_declared_host_order() -> None:
     calls: list[list[str]] = []
     pi.run_postinstall(_CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset(_HARNESSES))
-    assert calls[0][calls[0].index("--target") + 1] == "claude,codex,opencode,cursor"
+    assert calls[0][calls[0].index("--target") + 1] == "claude,codex,opencode,cursor,copilot-cli"
 
 
 def test_codegraph_hook_maps_cursor_alone_to_cursor() -> None:
@@ -292,6 +294,80 @@ def test_a_marker_dir_alone_makes_a_host_present(tmp_path: Path) -> None:
     (tmp_path / ".cursor").mkdir()
 
     assert "cursor" in pi.present_harnesses(tmp_path, lambda _command: None)
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+def test_copilot_codegraph_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """24.3-08 tracer (SPEC R9): a copilot CLI footprint registers codegraph as `copilot-cli`,
+    records `copilot`, shows it as `copilot`, and removal's argv names `copilot-cli`."""
+    monkeypatch.setenv("PATH", str(Path.home()))
+    (Path.home() / ".copilot").mkdir()
+    (Path.home() / ".copilot" / "settings.json").write_text("{}", encoding="utf-8")
+    _write_receipt({_CODEGRAPH: ()})
+    calls: list[list[str]] = []
+    outcome = pi.register_hooks(_codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd))
+    assert outcome == (("copilot",), None)
+    assert calls == [_argv("copilot-cli")]
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks == {_CODEGRAPH: ("copilot",)}
+    assert pi.host_labels(("copilot",)) == "copilot"
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("copilot",)) == (
+        _uninstall("copilot-cli"),
+    )
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+@pytest.mark.parametrize(
+    ("entries", "present"),
+    [
+        (("settings.json",), True),
+        (("session-state/",), True),
+        (("ide/", "settings.json"), True),
+        (("ide/",), False),
+        ((), False),
+        (None, False),
+    ],
+    ids=["settings", "session-state", "ide-and-settings", "ide-only", "empty", "no-dir"],
+)
+def test_copilot_presence_needs_a_cli_footprint(
+    monkeypatch: pytest.MonkeyPatch, entries: tuple[str, ...] | None, present: bool
+) -> None:
+    """CONTEXT D-13 amendment: the VS Code extension's `~/.copilot/ide/` alone is not the CLI."""
+    monkeypatch.setenv("PATH", str(Path.home()))
+    if entries is not None:
+        root = Path.home() / ".copilot"
+        root.mkdir()
+        for entry in entries:
+            if entry.endswith("/"):
+                (root / entry).mkdir()
+            else:
+                (root / entry).write_text("{}", encoding="utf-8")
+    assert ("copilot" in pi.present_hosts()) is present
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+def test_copilot_on_path_is_present_without_a_footprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = tmp_path / "copilot"
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    command.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert "copilot" in pi.present_hosts()
+
+
+@pytest.mark.parametrize(
+    "present_subset",
+    [subset for subset in _ALL_SUBSETS if "copilot" not in subset],
+    ids=lambda s: ",".join(s) or "none",
+)
+def test_copilot_absent_never_in_the_csv(present_subset: tuple[str, ...]) -> None:
+    calls: list[list[str]] = []
+    pi.run_postinstall(
+        _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset(present_subset)
+    )
+    assert all("copilot-cli" not in cmd for cmd in calls)
 
 
 def test_no_receipt_means_no_registration() -> None:
