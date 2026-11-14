@@ -895,6 +895,30 @@ def _apply_pass(
     return _Pass(text, tuple(results), tuple(writes), tuple(dropped))
 
 
+def _retired_block(
+    agent: str, setting: str, doc: dict[str, object], ours: Mapping[KeyPath, ConfigWrite]
+) -> tuple[frozenset[KeyPath], tuple[KeyResult, ...]]:
+    """A retired key in the file stands for the group's current keys: the paths to skip and their
+    results. The ledger recording it with the file's value makes it ours (`already`); anything
+    else is the user's (`set_by_you`)."""
+    skip: set[KeyPath] = set()
+    results: list[KeyResult] = []
+    for retired in RETIRED_KEYS.get((agent, setting), ()):
+        current = lookup(doc, retired.path)
+        if current is ABSENT:
+            continue
+        old = ours.get(retired.path)
+        ours_already = old is not None and same_value(current, old.value)
+        for key in _KEYS.get((agent, setting), ()):
+            skip.add(key.path)
+            name = ".".join(key.path)
+            if ours_already:
+                results.append(KeyResult(name, "already", _dump(key.value)))
+            else:
+                results.append(KeyResult(name, "set_by_you", _dump(current)))
+    return frozenset(skip), tuple(results)
+
+
 def _kept_entries(
     entries: tuple[ConfigWrite, ...], setting: str, file: str, step: _Pass
 ) -> tuple[ConfigWrite, ...]:
@@ -934,13 +958,17 @@ def _apply_once(
             for entry in ledger.entries
             if entry.setting == setting and entry.file == file
         }
-        step = _apply_pass(text, fmt, setting, file, keys, recorded, ours)
+        retired_skip, retired_results = _retired_block(
+            agent, setting, parse_settings(text, fmt), ours
+        )
+        step = _apply_pass(text, fmt, setting, file, keys, recorded | retired_skip, ours)
+        keys_out = retired_results + step.keys
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     entries = _kept_entries(ledger.entries, setting, file, step)
     if step.text == text:
         write_ledger(replace(ledger, entries=entries))
-        return FileResult(agent, setting, path, fmt, keys=step.keys)
+        return FileResult(agent, setting, path, fmt, keys=keys_out)
     created = ledger.created_files
     if snap is None and file not in created:
         created = (*created, file)
@@ -971,7 +999,7 @@ def _apply_once(
     except OSError as exc:
         write_ledger(ledger)  # the write did not happen: the previous ledger stands
         return FileResult(agent, setting, path, fmt, refused=str(exc))
-    return FileResult(agent, setting, path, fmt, keys=step.keys)
+    return FileResult(agent, setting, path, fmt, keys=keys_out)
 
 
 def _apply_keys(
@@ -1329,6 +1357,8 @@ def setting_facts(
             raise SettingsUnreadable(path, problem or "unreadable")
         return SettingFacts(path)  # absent stays empty: nothing is readable
     recorded = {entry.key_path for entry in in_file}
+    if any(lookup(doc, key.path) is not ABSENT for key in RETIRED_KEYS.get((agent, setting), ())):
+        return SettingFacts(path)  # a retired key stands for the group: ours or the user's
     absent: list[str] = []
     for key in setting_keys(agent, setting, platform_os):
         if key.path in recorded:
