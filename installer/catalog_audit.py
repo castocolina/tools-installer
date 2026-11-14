@@ -91,7 +91,11 @@ _CHANGE_RE = re.compile(r"- \S.*; risk: (?:low|medium|high); evidence: \S.*")
 _SECRET_RES = tuple(
     re.compile(pattern)
     for pattern in (
-        r"ghp_[A-Za-z0-9]{36}",
+        r"gh[pousr]_[A-Za-z0-9]{36,}",
+        r"npm_[A-Za-z0-9]{36}",
+        r"glpat-[A-Za-z0-9_-]{20,}",
+        r"AIza[0-9A-Za-z_-]{35}",
+        r"(?i)\bauthorization[:=]\s*(?:(?:token|bearer|basic)\s+)?[A-Za-z0-9._~+/=-]{20,}",
         r"github_pat_[A-Za-z0-9_]{22,}",
         r"\bsk-[A-Za-z0-9_-]{32,}",
         r"xox[abprs]-[A-Za-z0-9-]{10,}",
@@ -234,8 +238,16 @@ def _check_rows(lines: list[str], problems: list[str]) -> dict[str, str]:
     return states
 
 
+def _homes(home: Path) -> set[str]:
+    """The home path as written, resolved, and under its `/home` or `/var/home` alias."""
+    found = {str(home), str(home.resolve())}
+    if home.parent in (Path("/home"), Path("/var/home")):
+        found |= {str(Path("/home") / home.name), str(Path("/var/home") / home.name)}
+    return found - {"", "/"}
+
+
 def _hygiene(text: str, home: Path) -> list[str]:
-    homes = {str(home), str(home.resolve())} - {"", "/"}
+    homes = _homes(home)
     problems: list[str] = []
     for n, line in enumerate(text.splitlines(), 1):
         if any(pattern.search(line) for pattern in _SECRET_RES):
@@ -622,7 +634,7 @@ def _repos(tool: Tool) -> set[str]:
 
 def _tilde(text: str, home: Path) -> str:
     """Show the home prefix as `~`, so a committed report holds no absolute home path."""
-    for prefix in sorted({str(home), str(home.resolve())} - {"", "/"}, key=len, reverse=True):
+    for prefix in sorted(_homes(home), key=len, reverse=True):
         text = text.replace(prefix, "~")
     return text
 

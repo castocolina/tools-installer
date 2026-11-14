@@ -500,6 +500,14 @@ def _secret_cases() -> list[tuple[str, str]]:
         ("akia", "AKIA" + "A" * 16),
         ("private key", "-----BEGIN OPENSSH PRIVATE KEY-----"),
         ("bearer", "Bearer " + "a" * 24),
+        ("gho", "gho_" + "a" * 36),
+        ("ghs", "ghs_" + "a" * 36),
+        ("ghu", "ghu_" + "a" * 36),
+        ("ghr", "ghr_" + "a" * 36),
+        ("npm", "npm_" + "a" * 36),
+        ("gitlab", "glpat-" + "a" * 20),
+        ("google", "AIza" + "a" * 35),
+        ("authorization", "Authorization: token " + "a1b2c3d4" * 3),
     ]
 
 
@@ -1826,3 +1834,20 @@ def test_scan_and_verify_never_overwrite_a_run_record(
         assert "new date" in err
         assert (run / name).read_bytes() == before
     assert len(calls) == 1  # the refused verify never ran verify-registry
+
+
+# ---- 24.3 review F15: the /home and /var/home aliases of the home path ----
+
+
+@pytest.mark.parametrize(
+    ("home", "leak"),
+    [
+        (Path("/var/home/p243fAuser"), "/home/p243fAuser/.claude"),
+        (Path("/home/p243fAuser"), "/var/home/p243fAuser/.claude"),
+    ],
+)
+def test_home_alias_is_refused_and_tilded(home: Path, leak: str) -> None:
+    report = _report().replace("nothing relevant", f"see {leak}")
+    problems = catalog_audit.validate_report(report, "alpha", home=home)
+    assert any("home path" in problem for problem in problems)
+    assert vars(catalog_audit)["_tilde"](leak, home) == "~/.claude"
