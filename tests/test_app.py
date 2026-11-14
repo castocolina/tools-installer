@@ -4055,13 +4055,15 @@ def test_service_process_state_reads_gone_zombie_and_alive() -> None:
 
     state = app.service_process_state
     assert state(os.getpid()) == "alive"
+    # Without /proc (macOS) a zombie cannot be told apart and counts as alive, the safe answer.
+    expected = "zombie" if Path("/proc/self/stat").exists() else "alive"
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     try:
-        for _ in range(250):  # exited, not yet waited on: a zombie
-            if state(child.pid) == "zombie":
+        for _ in range(250 if expected == "zombie" else 10):  # exited, unreaped (never poll())
+            if expected == "zombie" and state(child.pid) == "zombie":
                 break
             time.sleep(0.02)
-        assert state(child.pid) == "zombie"
+        assert state(child.pid) == expected
     finally:
         child.wait()
     assert state(child.pid) == "gone"
