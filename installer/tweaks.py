@@ -1,12 +1,11 @@
 """Curated, cross-shell tweak bundles written into ~/.myshellrc as marker blocks.
 
-Mirrors installer.guards' ban exactly: each bundle is one idempotent,
-marker-delimited block managed through shellrc.apply_block / strip_block. Bodies
-are valid in both bash and zsh; wait_time uses printf so its escape
-sequences behave the same across sh/bash/zsh. Bundles are curated in code (like
-guards.BANNED), each surfaced as its own Policy via installer.policy.tweak_policy.
-Every block lands in the same ~/.myshellrc the ban uses, so existing shell
-sourcing covers it with no extra wiring.
+Each bundle is one idempotent, marker-delimited block managed through
+shellrc.apply_block / strip_block. Bodies are valid in both bash and zsh;
+wait_time uses printf so its escape sequences behave the same across
+sh/bash/zsh. Bundles are curated in code, each surfaced as its own Policy via
+installer.policy.tweak_policy. Every block lands in the ~/.myshellrc the shell
+already sources, so existing shell sourcing covers it with no extra wiring.
 """
 
 from dataclasses import dataclass
@@ -264,7 +263,7 @@ def tweak_executables_present(bundle: TweakBundle, bin_dir: Path) -> bool:
 
 
 def tweak_block(bundle: TweakBundle, bin_dir: Path | None = None) -> str:
-    """Marker-delimited block (no trailing newline, like shellrc/guards blocks)."""
+    """Marker-delimited block (no trailing newline, like the other shellrc blocks)."""
     begin, end = _markers(bundle.id)
     return f"{begin}\n{_render_body(bundle, bin_dir)}\n{end}"
 

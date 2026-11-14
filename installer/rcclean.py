@@ -158,7 +158,7 @@ def _condition_references_path(keyword: str, stripped: str) -> bool:
         return False
     if keyword == "case":
         # Known limit: a multi-line case whose word does not reference PATH
-        # (for example case ":$PNPM_HOME:" in) leaves its rows unguarded, so
+        # (for example case ":$PNPM_HOME:" in) leaves its rows unprotected, so
         # they are reported. The real pnpm shape tests PATH.
         match = re.search(r"\bcase\b(.*?)\bin\b", stripped)
         condition = match.group(1) if match else ""

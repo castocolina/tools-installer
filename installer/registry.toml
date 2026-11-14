@@ -2312,7 +2312,7 @@ bin_dir = "~/.volta/bin"
 # Verified 2026-11-08: get.volta.sh runs `volta setup` (line 228, read as text), and Volta's `setup`
 # (src/command/setup.rs) rewrites ~/.profile, ~/.zshenv or ~/.zshrc, ~/.bashrc and ~/.bash_profile with only
 # `export VOLTA_HOME="$HOME/.volta"` and `export PATH="$VOLTA_HOME/bin:$PATH"` (fish: `set -gx`). No line it
-# writes runs the volta binary, so unlike fnm there is no unguarded call to skip; `--skip-setup` stays unused.
+# writes runs the volta binary, so unlike fnm there is no unprotected call to skip; `--skip-setup` stays unused.
 paths = [
     "~/.volta/bin/volta",
     "~/.volta/bin/volta-shim",
@@ -2352,7 +2352,7 @@ bin_dir = "~/.local/share/fnm"
 # to skip its `setup_shell` (lines 165-236), which is its only rc writer. Left on, it appends an `FNM_PATH`
 # block to ~/.bashrc / ~/.zshrc whose `eval "$(fnm env ...)"` is guarded by a directory test, not by the command,
 # and rcclean never strips indented lines. The directory outlives the binary (the node-versions store stays),
-# so every new shell ran `fnm` unguarded once it was gone (`.bashrc: line 45: fnm: command not found`, found
+# so every new shell ran `fnm` unprotected once it was gone (`.bashrc: line 45: fnm: command not found`, found
 # in the Phase 23.1 container e2e). With the flag, fnm's PATH comes from the managed PATH block (this
 # `bin_dir`) and its env from the installer's own `command -v fnm`-guarded shell-init block, written at install.
 # Verified 2026-11-04: fnm.vercel.app/install sets INSTALL_DIR to ~/.local/share/fnm by default (lines 12-19) and
