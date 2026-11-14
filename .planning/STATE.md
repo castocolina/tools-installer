@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: "24.3"
-current_phase_name: Catalog audit skill
+current_phase: 24.3.1
+current_phase_name: Retire the npx, npm and pip guard aliases and redirects
 status: executing
-stopped_at: Phase 23.2 complete, ready to verify Phase 17
-last_updated: "2026-11-14T00:25:15.320Z"
-last_activity: 2026-11-13
-last_activity_desc: Phase 24.3 execution started
-state_head: 077d01834b21364e20dde79b19415e94e56d9c1d
+stopped_at: Phase 24.3 complete, ready to verify Phase 17
+last_updated: "2026-11-14T12:42:38.629Z"
+last_activity: 2026-11-14
+last_activity_desc: Phase 24.3.1 execution started
+state_head: d8acbebfde2152ef317f3c598e971f127951d0cb
 progress:
-  total_phases: 15
-  completed_phases: 3
+  total_phases: 17
+  completed_phases: 7
   total_plans: 240
-  completed_plans: 229
-  percent: 20
+  completed_plans: 240
+  percent: 41
 ---
 
 # Project State
@@ -25,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 24.3 — Catalog audit skill
+**Current focus:** Phase 24.3.1 — Retire the npx, npm and pip guard aliases and redirects
 
 ## Current Position
 
-Phase: 24.3 (Catalog audit skill) — EXECUTING
-Plan: 1 of 11
-Status: Executing Phase 24.3
-Last activity: 2026-11-13 — Phase 24.3 execution started
+Phase: 24.3.1 (Retire the npx, npm and pip guard aliases and redirects) — EXECUTING
+Plan: 1 of 0
+Status: Executing Phase 24.3.1
+Last activity: 2026-11-14 — Phase 24.3.1 execution started
 
-Progress: [██░░░░░░░░] 20%
+Progress: [████░░░░░░] 41%
 
 ## Performance Metrics
 
@@ -51,6 +51,10 @@ Progress: [██░░░░░░░░] 20%
 | 20 | 31 | - | - |
 | 23.1 | 18 | - | - |
 | 23.2 | 8 | - | - |
+| 24 | 9 | - | - |
+| 24.1 | 5 | - | - |
+| 24.2 | 13 | - | - |
+| 24.3 | 11 | - | - |
 
 *Updated after each plan completion*
 
@@ -109,7 +113,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-11-07T23:47:58.922Z
-Stopped at: Phase 23.2 complete, ready to verify Phase 17
+Stopped at: Phase 24.3 complete, ready to verify Phase 17
 Resume file: .planning/phases/23.2-install-time-tuning-instead-of-policies-knobs/23.2-01-PLAN.md
 
 ## Deferred Verification

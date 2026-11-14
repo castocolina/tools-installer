@@ -34,10 +34,10 @@
 - [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
 - [x] **Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e** (INSERTED) - Drop the 8 skill-pack entries; tests and shims can never install on the host; e2e only in containers (completed 2026-11-07)
 - [x] **Phase 23.2: Install-time tuning instead of Policies knobs** (INSERTED) - Agent tuning and zsh plugins/theme applied at install with no question; Policies trimmed; live progress indicator; Copilot CLI in the catalog; present dependencies run from their known path (completed 2026-11-13)
-- [ ] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT
-- [ ] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite
-- [ ] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim
-- [ ] **Phase 24.3: Catalog audit skill** (INSERTED) - Catalog-audit skill looping over every entry; opencode v2 and Pi MCP refresh
+- [x] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT (completed 2026-11-14)
+- [x] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite (completed 2026-11-14)
+- [x] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim (completed 2026-11-14)
+- [x] **Phase 24.3: Catalog audit skill** (INSERTED) - Catalog-audit skill looping over every entry; opencode v2 and Pi MCP refresh (completed 2026-11-14)
 - [ ] **Phase 24.3.1: Retire the npx, npm and pip guard aliases and redirects**
 - [ ] **Phase 24.3.2: JavaScript install priority brew then bun then volta**
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
@@ -504,7 +504,7 @@ Plans:
   4. The tool-onboarding skill covers the new lifecycle params, and its skill-judge score is recorded.
   5. The container e2e runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch with leftovers limited to documented `config_paths`, and a human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall (manual).
 
-**Plans**: 9/9 plans executed
+**Plans**: 9/9 plans complete
 
 Plans:
 **Wave 1**
@@ -537,7 +537,7 @@ Plans:
   2. On Bazzite, Neovim installs to the user's home without a reboot, writes a receipt, shows `✓` on its tier, and Uninstall removes exactly the receipt paths and keeps `~/.config/nvim` unless "delete config too" is chosen (scratch HOME and container).
   3. The asked customizations (Neovim as `EDITOR`/`VISUAL`; kickstart.nvim starter config) are applied only on "yes" *(amended 2026-11-07, 24.1 D-14/D-15, needs confirmation: applied at install with no question — `EDITOR` only when the user set none, kickstart only into an absent or empty dir)*; kickstart is never cloned over an existing `~/.config/nvim` and starts zero LSP processes for Python, Lua, TypeScript, Go and Java files, and `EDITOR` is reverted on removal.
 
-**Plans**: 5/5 plans executed
+**Plans**: 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -565,7 +565,7 @@ Plans:
   3. After a cursor-agent update leaves `~/.local/bin/cursor-agent` as a symlink, the next update run replaces it with the shim; `cursor-agent` without a model runs the default frontier model *(amended 2026-11-07, 24.2 SPEC R7: `gpt-5.6-sol-xhigh`, needs confirmation)*, with a model runs that model, and `agent` is unchanged.
   4. Each run leaves a timestamped log line, and the view shows the last run and its result (container e2e).
 
-**Plans**: 13/13 plans executed
+**Plans**: 13/13 plans complete
 
 Plans:
 **Wave 1**
@@ -606,7 +606,7 @@ Plans:
   2. The opencode v2 and Pi MCP findings are applied to the registry and postinstall steps, with `make verify-registry` green. *(amended 2026-11-07, 24.3 SPEC R9: copilot also joins the codegraph hook, absorbing Backlog 999.12)*
   3. The skill's skill-judge score is recorded.
 
-**Plans**: 11/11 plans executed
+**Plans**: 11/11 plans complete
 
 Plans:
 **Wave 1**
@@ -712,10 +712,10 @@ Plans:
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
-| 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
-| 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
-| 24.2 Schedules view | 13/13 | In Progress | - |
-| 24.3 Catalog audit skill | 11/11 | In Progress | - |
+| 24. Onboarding through the skill and e2e | 9/9 | Complete    | 2026-11-14 |
+| 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | Complete    | 2026-11-14 |
+| 24.2 Schedules view | 13/13 | Complete    | 2026-11-14 |
+| 24.3 Catalog audit skill | 11/11 | Complete    | 2026-11-14 |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 

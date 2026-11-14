@@ -99,16 +99,16 @@
 
 ### Onboarding and end-to-end
 
-- [ ] **ONB-01**: herdr installs as a user-tier binary with an integrations postinstall for present agent hosts (no skill pack: dropped 2026-11-02), reusing only the workspace agent separator and current indicators from herdr-setup [999.11]
-- [ ] **ONB-02**: On immutable Bazzite, Alacritty installs without a reboot by building it with cargo inside a throwaway Distrobox and placing the native binary in `~/.local/bin`; the container and image are deleted afterwards. A newer GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched [999.11, O5: measured 2026-10-13: 35 s build, 12 MB binary, host libs resolve] *(amended 2026-11-07, 24 D-19, needs confirmation: the image is deleted when this run pulled it; a pre-existing image is kept and named; the box uses `--home`/`--no-entry` so nothing lands in the host HOME, 24 D-20)*
-- [ ] **ONB-06**: The Alacritty build also installs its desktop entry, icon and terminfo under `~/.local/share`, so it appears in the system menu and search; all of these are recorded in the receipt and removed on uninstall [O5] *(amended 2026-11-08, 24 D-07: the terminfo goes to `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME; the desktop entry and icon stay under `~/.local/share`)*
-- [ ] **ONB-07**: Alacritty gets the terminal shell sync (zsh, `SHELL`) and the keybinding customizations (word navigation, clear scrollback) [999.11] *(amended 2026-11-07, 24 D-22/D-23, TUNE-04: applied at install with no question and reverted with the tool; no Policies row)*
-- [ ] **ONB-08**: Neovim (`nvim`) is onboarded through the tool-onboarding skill with a researched install and removal for every OS/arch (release tarballs, brew), a no-reboot path on immutable Bazzite, a receipt, and `~/.config/nvim` as `config_paths` [user request 2026-10-13]
-- [ ] **ONB-09**: Installing Neovim asks whether to make it the default `EDITOR`/`VISUAL`; "yes" writes a managed shell line that is removed with the tool [user request 2026-10-13] *(amended 2026-11-07, 24.1 D-14, **needs confirmation**: TUNE-04 "always, no question" — install writes the managed line with no question, only when the user's own shell files export neither `EDITOR` nor `VISUAL` (OS defaults are overridden, a user value is kept and named); removed with the tool)*
-- [ ] **ONB-10**: Installing Neovim offers kickstart.nvim as a starter config (asked), cloned into `~/.config/nvim` only when that directory is absent or empty, never over an existing config, and set up with **no language server**: opening Python, Lua, TypeScript, Go or Java files starts zero LSP processes, and Mason installs no servers. Linting and type checks run on demand through the project's pre-commit (`:!pre-commit run --files %`, named in the install summary together with `:lsp enable <name>` for a one-off session) [user decision 2026-10-13: "sin LSP en nvim"; measured: kickstart 26 MB PSS vs basedpyright +358 MB resident on this repo, 343 MB for 0.74 s on demand] *(amended 2026-11-07, 24.1 D-15/D-16, **needs confirmation**: TUNE-04 "always, no question" — not asked; cloned at install whenever `~/.config/nvim` is absent or empty, never offered again after the user deletes it, kept on removal unless "delete config too")*
+- [x] **ONB-01**: herdr installs as a user-tier binary with an integrations postinstall for present agent hosts (no skill pack: dropped 2026-11-02), reusing only the workspace agent separator and current indicators from herdr-setup [999.11]
+- [x] **ONB-02**: On immutable Bazzite, Alacritty installs without a reboot by building it with cargo inside a throwaway Distrobox and placing the native binary in `~/.local/bin`; the container and image are deleted afterwards. A newer GitHub release shows as an update, and selecting it rebuilds while leaving `~/.config/alacritty` untouched [999.11, O5: measured 2026-10-13: 35 s build, 12 MB binary, host libs resolve] *(amended 2026-11-07, 24 D-19, needs confirmation: the image is deleted when this run pulled it; a pre-existing image is kept and named; the box uses `--home`/`--no-entry` so nothing lands in the host HOME, 24 D-20)*
+- [x] **ONB-06**: The Alacritty build also installs its desktop entry, icon and terminfo under `~/.local/share`, so it appears in the system menu and search; all of these are recorded in the receipt and removed on uninstall [O5] *(amended 2026-11-08, 24 D-07: the terminfo goes to `~/.terminfo`, not `~/.local/share/terminfo`; ncurses 6.6 and Alacritty 0.17 do not search `~/.local/share/terminfo`, reproduced in a scratch HOME; the desktop entry and icon stay under `~/.local/share`)*
+- [x] **ONB-07**: Alacritty gets the terminal shell sync (zsh, `SHELL`) and the keybinding customizations (word navigation, clear scrollback) [999.11] *(amended 2026-11-07, 24 D-22/D-23, TUNE-04: applied at install with no question and reverted with the tool; no Policies row)*
+- [x] **ONB-08**: Neovim (`nvim`) is onboarded through the tool-onboarding skill with a researched install and removal for every OS/arch (release tarballs, brew), a no-reboot path on immutable Bazzite, a receipt, and `~/.config/nvim` as `config_paths` [user request 2026-10-13]
+- [x] **ONB-09**: Installing Neovim asks whether to make it the default `EDITOR`/`VISUAL`; "yes" writes a managed shell line that is removed with the tool [user request 2026-10-13] *(amended 2026-11-07, 24.1 D-14, **needs confirmation**: TUNE-04 "always, no question" — install writes the managed line with no question, only when the user's own shell files export neither `EDITOR` nor `VISUAL` (OS defaults are overridden, a user value is kept and named); removed with the tool)*
+- [x] **ONB-10**: Installing Neovim offers kickstart.nvim as a starter config (asked), cloned into `~/.config/nvim` only when that directory is absent or empty, never over an existing config, and set up with **no language server**: opening Python, Lua, TypeScript, Go or Java files starts zero LSP processes, and Mason installs no servers. Linting and type checks run on demand through the project's pre-commit (`:!pre-commit run --files %`, named in the install summary together with `:lsp enable <name>` for a one-off session) [user decision 2026-10-13: "sin LSP en nvim"; measured: kickstart 26 MB PSS vs basedpyright +358 MB resident on this repo, 343 MB for 0.74 s on demand] *(amended 2026-11-07, 24.1 D-15/D-16, **needs confirmation**: TUNE-04 "always, no question" — not asked; cloned at install whenever `~/.config/nvim` is absent or empty, never offered again after the user deletes it, kept on removal unless "delete config too")*
 - [x] **ONB-03**: The tool-onboarding skill covers the new lifecycle params and is scored with skill-judge [999.5] *(amended 2026-11-07, 24 D-24: the skill also carries TUNE-04's rule, kept verbatim through this phase's edit; the baseline score is a fresh run on the skill as 23.2 leaves it)*
 - [x] **ONB-04**: The container end-to-end runs install all → rerun all (all skipped) → uninstall all on Fedora, Debian and Arch, with leftovers limited to documented config paths [A #3]
-- [ ] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
+- [x] **ONB-05**: A human UAT on the real host confirms Owner on every tier after install and the cleared mark after Uninstall [999.7]
 
 ### Host safety
 
@@ -130,18 +130,18 @@
 
 ### Schedules
 
-- [ ] **SCHED-01**: A Schedules view lists the built-in schedules with name, script, target, state, interval and next run; a schedule is on by default when its target is installed and shown as unavailable when it is not [user request 2026-11-07]
-- [ ] **SCHED-02**: The built-ins are cache cleanup (the known growing caches) and updates for claude, opencode, Pi coding agent, cursor-agent and copilot when installed; the default is every 6 h starting at 00:00, and the user can change the interval and start time [user request 2026-11-07] *(amended 2026-11-07, 24.2 SPEC R2/R4/R9: the tmpdir-cleanup daemon moves from Policies into Schedules as a seventh built-in with its own cadence; cache cleanup runs only the package managers' own prune commands; intervals are whole hours dividing 24)*
-- [ ] **SCHED-03**: Schedules run as user-level timers (systemd user units on Linux, a launchd agent on macOS) with zero sudo, are written atomically and recorded in a receipt, and are removed when turned off or when the installer uninstalls [user request 2026-11-07]
-- [ ] **SCHED-04**: The cursor-agent update job checks `~/.local/bin/cursor-agent`: when it is a symlink again (a fresh update), it is replaced by a shim that passes through when a model is given and otherwise injects the configured default frontier model (requested: gpt-6.1-sol, xhigh, long context; the exact model id is verified against cursor-agent's model list at plan time) before exec'ing the symlink's target in cursor's install dir; `~/.local/bin/agent` is untouched and the shim is removed with cursor-agent [user request 2026-11-07] *(amended 2026-11-07, 24.2 SPEC R7: `cursor-agent --list-models` has no `gpt-6.1-sol`; the default is `gpt-5.6-sol-xhigh` ("GPT-5.6 Sol 1M Extra High"), **needs confirmation**; the shim execs the launcher `~/.local/bin/agent` points to at run time, and turning the schedule off restores the symlink)*
-- [ ] **SCHED-05**: Each schedule run appends a timestamped log line, and the view shows the last run and its result [user request 2026-11-07]
+- [x] **SCHED-01**: A Schedules view lists the built-in schedules with name, script, target, state, interval and next run; a schedule is on by default when its target is installed and shown as unavailable when it is not [user request 2026-11-07]
+- [x] **SCHED-02**: The built-ins are cache cleanup (the known growing caches) and updates for claude, opencode, Pi coding agent, cursor-agent and copilot when installed; the default is every 6 h starting at 00:00, and the user can change the interval and start time [user request 2026-11-07] *(amended 2026-11-07, 24.2 SPEC R2/R4/R9: the tmpdir-cleanup daemon moves from Policies into Schedules as a seventh built-in with its own cadence; cache cleanup runs only the package managers' own prune commands; intervals are whole hours dividing 24)*
+- [x] **SCHED-03**: Schedules run as user-level timers (systemd user units on Linux, a launchd agent on macOS) with zero sudo, are written atomically and recorded in a receipt, and are removed when turned off or when the installer uninstalls [user request 2026-11-07]
+- [x] **SCHED-04**: The cursor-agent update job checks `~/.local/bin/cursor-agent`: when it is a symlink again (a fresh update), it is replaced by a shim that passes through when a model is given and otherwise injects the configured default frontier model (requested: gpt-6.1-sol, xhigh, long context; the exact model id is verified against cursor-agent's model list at plan time) before exec'ing the symlink's target in cursor's install dir; `~/.local/bin/agent` is untouched and the shim is removed with cursor-agent [user request 2026-11-07] *(amended 2026-11-07, 24.2 SPEC R7: `cursor-agent --list-models` has no `gpt-6.1-sol`; the default is `gpt-5.6-sol-xhigh` ("GPT-5.6 Sol 1M Extra High"), **needs confirmation**; the shim execs the launcher `~/.local/bin/agent` points to at run time, and turning the schedule off restores the symlink)*
+- [x] **SCHED-05**: Each schedule run appends a timestamped log line, and the view shows the last run and its result [user request 2026-11-07]
 
 ### Catalog audit
 
-- [ ] **AUDIT-01**: A catalog-audit skill loops over every registry entry and compares the pinned/verified version, the installed version and the latest online release, reads the changelog between them, and checks that install, update, removal and tuning steps still match upstream docs [user request 2026-11-07]
-- [ ] **AUDIT-02**: The skill audits the install and customization scripts (postinstall, shims, tweaks) for drift and unsafe patterns, writes one report per entry plus a summary of proposed registry and script changes, keeps per-entry state so the loop can resume, and changes nothing without approval [user request 2026-11-07]
-- [ ] **AUDIT-03**: Its first run covers opencode v2 and Pi coding agent's MCP support, and the resulting registry and postinstall updates land (e.g. Pi joins the agent-host list for MCP-registering hooks) [user report 2026-11-07] *(amended 2026-11-07, 24.3 SPEC R6-R9: the registry still installs OpenCode 1 through the v1-only installer, so R6 moves it to `opencode.ai/v2/install` and R7 writes v2's `permissions` rule; codegraph 1.6.2 has no `pi` target, so R8 registers Pi only through a supported path and never leaves a dangling `≈`; copilot joins the codegraph hook, absorbing Backlog 999.12)*
-- [ ] **AUDIT-04**: The skill is scored with skill-judge [user request 2026-11-07]
+- [x] **AUDIT-01**: A catalog-audit skill loops over every registry entry and compares the pinned/verified version, the installed version and the latest online release, reads the changelog between them, and checks that install, update, removal and tuning steps still match upstream docs [user request 2026-11-07]
+- [x] **AUDIT-02**: The skill audits the install and customization scripts (postinstall, shims, tweaks) for drift and unsafe patterns, writes one report per entry plus a summary of proposed registry and script changes, keeps per-entry state so the loop can resume, and changes nothing without approval [user request 2026-11-07]
+- [x] **AUDIT-03**: Its first run covers opencode v2 and Pi coding agent's MCP support, and the resulting registry and postinstall updates land (e.g. Pi joins the agent-host list for MCP-registering hooks) [user report 2026-11-07] *(amended 2026-11-07, 24.3 SPEC R6-R9: the registry still installs OpenCode 1 through the v1-only installer, so R6 moves it to `opencode.ai/v2/install` and R7 writes v2's `permissions` rule; codegraph 1.6.2 has no `pi` target, so R8 registers Pi only through a supported path and never leaves a dangling `≈`; copilot joins the codegraph hook, absorbing Backlog 999.12)*
+- [x] **AUDIT-04**: The skill is scored with skill-judge [user request 2026-11-07]
 
 ### Lean
 
@@ -245,16 +245,16 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | CONF-10 | Phase 23 | Pending |
 | CONF-11 | Phase 23 | Pending |
 | CONF-12 | Phase 23 | Pending |
-| ONB-01 | Phase 24 | Pending |
-| ONB-02 | Phase 24 | Pending |
+| ONB-01 | Phase 24 | Complete |
+| ONB-02 | Phase 24 | Complete |
 | ONB-03 | Phase 24 | Complete |
 | ONB-04 | Phase 24 | Complete |
-| ONB-05 | Phase 24 | Pending |
-| ONB-06 | Phase 24 | Pending |
-| ONB-07 | Phase 24 | Pending |
-| ONB-08 | Phase 24.1 | Pending |
-| ONB-09 | Phase 24.1 | Pending |
-| ONB-10 | Phase 24.1 | Pending |
+| ONB-05 | Phase 24 | Complete |
+| ONB-06 | Phase 24 | Complete |
+| ONB-07 | Phase 24 | Complete |
+| ONB-08 | Phase 24.1 | Complete |
+| ONB-09 | Phase 24.1 | Complete |
+| ONB-10 | Phase 24.1 | Complete |
 | HOST-01 | Phase 23.1 | Complete |
 | HOST-02 | Phase 23.1 | Complete |
 | HOST-03 | Phase 23.1 | Complete |
@@ -267,15 +267,15 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | TUNE-05 | Phase 23.2 | Complete |
 | TUNE-06 | Phase 23.2 | Complete |
 | TUNE-07 | Phase 23.2 | Complete |
-| SCHED-01 | Phase 24.2 | Pending |
-| SCHED-02 | Phase 24.2 | Pending |
-| SCHED-03 | Phase 24.2 | Pending |
-| SCHED-04 | Phase 24.2 | Pending |
-| SCHED-05 | Phase 24.2 | Pending |
-| AUDIT-01 | Phase 24.3 | Pending |
-| AUDIT-02 | Phase 24.3 | Pending |
-| AUDIT-03 | Phase 24.3 | Pending |
-| AUDIT-04 | Phase 24.3 | Pending |
+| SCHED-01 | Phase 24.2 | Complete |
+| SCHED-02 | Phase 24.2 | Complete |
+| SCHED-03 | Phase 24.2 | Complete |
+| SCHED-04 | Phase 24.2 | Complete |
+| SCHED-05 | Phase 24.2 | Complete |
+| AUDIT-01 | Phase 24.3 | Complete |
+| AUDIT-02 | Phase 24.3 | Complete |
+| AUDIT-03 | Phase 24.3 | Complete |
+| AUDIT-04 | Phase 24.3 | Complete |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |
