@@ -23,7 +23,13 @@ from tests import e2e_landing_driver as driver
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "container-e2e-verify.sh"
 
-_CONSTANTS = ("IMAGE_FEDORA", "LANDING_IMAGE", "LANDING_CONTAINER_NAME", "LANDING_KEEP_IMAGE")
+_CONSTANTS = (
+    "IMAGE_FEDORA",
+    "LANDING_IMAGE",
+    "LANDING_CONTAINER_NAME",
+    "LANDING_KEEP_IMAGE",
+    "LANDING_PULLED",
+)
 
 # One CALLS line per container call; a case fails a call by naming a fragment of its arguments.
 _CT_STUB = r"""
@@ -186,15 +192,50 @@ def test_a_missing_settings_file_reads_as_an_empty_document(tmp_path: Path) -> N
 # --- teardown -----------------------------------------------------------------------------------
 
 
-def test_landing_teardown_removes_container_and_image(tmp_path: Path) -> None:
-    result = _run(
-        _script("landing_teardown", stubs=_CT_STUB + "landing_teardown"), tmp_path / "removes"
+def test_landing_teardown_removes_the_image_this_run_pulled(tmp_path: Path) -> None:
+    script = _script(
+        "landing_teardown",
+        variables={"LANDING_PULLED": "1"},
+        stubs=_CT_STUB + "landing_teardown",
     )
+    result = _run(script, tmp_path / "removes")
     assert result.returncode == 0, result.stderr
     calls = _calls(tmp_path / "removes")
     assert "ct rm -f tools-installer-e2e-landing" in calls
     assert f"ct rmi {_constant('IMAGE_FEDORA')}" in calls
     assert "TRACER_LANDING_TEARDOWN_OK" in result.stdout
+
+
+def test_landing_teardown_leaves_a_shared_base_image_it_did_not_pull(tmp_path: Path) -> None:
+    """F20: `fedora:latest` is every distro run's base image; a run that found it keeps it."""
+    result = _run(
+        _script("landing_teardown", stubs=_CT_STUB + "landing_teardown"), tmp_path / "shared"
+    )
+    assert result.returncode == 0, result.stderr
+    calls = _calls(tmp_path / "shared")
+    assert "ct rm -f tools-installer-e2e-landing" in calls
+    assert not [call for call in calls if call.startswith("ct rmi")]
+    assert "TRACER_LANDING_TEARDOWN_OK" in result.stdout
+
+
+@pytest.mark.parametrize(("present", "pulled"), [(True, "0"), (False, "1")])
+def test_audit_landing_records_whether_it_pulled_the_image(
+    tmp_path: Path, present: bool, pulled: str
+) -> None:
+    scratch = tmp_path / f"pulled-{pulled}"
+    result = _run(
+        _script(
+            "landing_note_image",
+            variables={"FAIL_CT": "" if present else "image inspect"},
+            stubs=_CT_STUB + "landing_note_image; echo pulled=$LANDING_PULLED",
+        ),
+        scratch,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"pulled={pulled}" in result.stdout
+    assert f"ct image inspect {_constant('IMAGE_FEDORA')}" in _calls(scratch)
+    body = _function("cmd_audit_landing")
+    assert body.index("landing_note_image") < body.index("landing_bootstrap")
 
 
 def test_landing_teardown_keeps_the_image_on_request(tmp_path: Path) -> None:
@@ -483,6 +524,57 @@ def test_the_driver_does_not_run_outside_a_container(
     assert "only inside the disposable container" in capsys.readouterr().out
 
 
+def _container_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, engine: bool, marker: bool, home: Path
+) -> None:
+    """A container whose engine file, harness marker and HOME are as given."""
+    engine_file = tmp_path / "containerenv"
+    if engine:
+        engine_file.write_text("", encoding="utf-8")
+    marker_file = tmp_path / "landing-marker"
+    if marker:
+        marker_file.write_text("audit-landing\n", encoding="utf-8")
+    monkeypatch.setattr(driver, "_ENGINE_FILES", (engine_file,))
+    monkeypatch.setattr(driver, "LANDING_MARKER", marker_file)
+    monkeypatch.setattr(driver, "_TESTER_HOME", Path("/home/tester"))
+    monkeypatch.setenv("HOME", str(home))
+
+
+@pytest.mark.parametrize(
+    ("engine", "marker", "home", "runs"),
+    [
+        (True, True, "/home/tester", True),
+        (False, True, "/home/tester", False),  # no container engine file
+        (True, False, "/home/tester", False),  # toolbox/distrobox: engine file, no harness marker
+        (True, True, "/home/someone", False),  # the real HOME is mounted
+        (True, False, "/home/someone", False),
+    ],
+)
+def test_the_driver_needs_the_container_the_marker_and_the_tester_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    engine: bool,
+    marker: bool,
+    home: str,
+    runs: bool,
+) -> None:
+    """F13: `/run/.containerenv` is also in toolbox and distrobox, which mount the real HOME."""
+    _container_files(monkeypatch, tmp_path, engine=engine, marker=marker, home=Path(home))
+    assert vars(driver)["_in_container"]() is runs
+    if not runs:
+        assert driver.main(["install", "opencode"]) == 2
+        assert "only inside the disposable container" in capsys.readouterr().out
+
+
+def test_the_script_writes_the_marker_the_driver_requires() -> None:
+    writer = _function("write_landing_marker")
+    assert str(driver.LANDING_MARKER) in writer
+    body = _function("landing_bootstrap")
+    assert "landing_stage marker write_landing_marker" in body
+    assert body.index("landing_stage start") < body.index("landing_stage marker")
+
+
 # --- the step order and the shell helpers ---------------------------------------------------------
 
 _STEP = re.compile(r"^  landing_step (\S+) (.+?) \|\| failed=1$", re.MULTILINE)
@@ -562,6 +654,25 @@ def test_landing_step_fails_a_named_failure_without_calling_it_infeasible(
     assert result.returncode == 0, result.stderr
     assert "rc=1" in result.stdout
     assert "INFEASIBLE" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "TRACER_OPENCODE_V2_SERVICE_START_FAILED detail=Connection refused 127.0.0.1:4096",
+        "ERROR OpenSSL 3.2.1 is not the expected build",
+        "ERROR TLS handshake log line from the product",
+        "curl: (6) Could not resolve host: opencode.ai\nTRACER_OPENCODE_V2_INSTALL_FAILED x",
+    ],
+    ids=["refused-port", "openssl", "tls-word", "failed-line-wins"],
+)
+def test_a_product_failure_is_never_infeasible(tmp_path: Path, out: str) -> None:
+    """F21: only an environmental emitter's line ends the run, and never after a FAILED verdict."""
+    scratch = tmp_path / "product"
+    result = _run(_helpers(scratch, out, 1, "landing_step s a b || echo rc=$?"), scratch)
+    assert result.returncode == 0, result.stderr
+    assert "INFEASIBLE" not in result.stdout
+    assert "rc=1" in result.stdout
 
 
 def test_landing_step_ends_the_run_on_an_environmental_failure(tmp_path: Path) -> None:

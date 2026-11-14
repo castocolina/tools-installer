@@ -2,6 +2,7 @@
 
 import contextlib
 import dataclasses
+import json
 import os
 import shlex
 import shutil
@@ -9,6 +10,7 @@ import sys
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from rich.console import Console
 
@@ -761,6 +763,58 @@ def _retired_sentence(tool_id: str, managed: tuple[str, str] | None) -> str:
     )
 
 
+def _service_process_state(pid: int) -> str:
+    """`gone`, `zombie` or `alive` for a pid. A zombie still answers `kill(pid, 0)`, which is all
+    the vendor's own stop polls, so its state comes from /proc (Linux, where a non-reaping
+    PID 1 exists); anywhere /proc is unreadable the process counts as alive."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "gone"
+    except OSError:
+        return "alive"
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return "alive"
+    return "zombie" if stat.rpartition(")")[2].split()[:1] == ["Z"] else "alive"
+
+
+# Replaceable like `codegraph_query`: tests never look at real processes.
+service_process_state: Callable[[int], str] = _service_process_state
+
+
+def _opencode_service_pid() -> int | None:
+    """The pid in OpenCode 2's service registration, or None when there is none to read
+    (`$XDG_STATE_HOME/opencode/service.json`, anomalyco/opencode v2.3.0 service-probe.ts)."""
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    try:
+        data: object = json.loads((Path(state) / "opencode" / "service.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    pid = cast(dict[str, object], data).get("pid") if isinstance(data, dict) else None
+    return pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else None
+
+
+# shortcut: the one recipe that stops a background service (opencode's `service stop`). Its
+# failure is moot when the registered pid is gone or a zombie, so the stop recipe is judged by
+# evidence, not exit code. Make it a registry param if a second vendor ships such a recipe.
+_RECIPE_SERVICE_PID: Mapping[str, Callable[[], int | None]] = {"opencode": _opencode_service_pid}
+
+
+def _moot_stop_failure(tool_id: str) -> str | None:
+    """The note for a failed stop recipe whose service is dead (a zombie or gone), else None."""
+    reader = _RECIPE_SERVICE_PID.get(tool_id)
+    pid = reader() if reader is not None else None
+    if pid is None:
+        return None
+    state = service_process_state(pid)
+    if state == "alive":
+        return None
+    shown = "a zombie its parent never reaped" if state == "zombie" else "already gone"
+    return f"{tool_id}: the service (pid {pid}) is {shown}, so its stop failed but nothing runs."
+
+
 def remove_tool(
     tool: Tool,
     *,
@@ -789,6 +843,7 @@ def remove_tool(
             managed = retired_manager_package(tool.id)
             receipts.delete(tool.id)
             return ToolRemoval(tool.id, True, _retired_sentence(tool.id, managed))
+        note = ""
         named = {*fresh.removable, *fresh.yourself}
         # A command runs only on the proof it was previewed against: with a command, every
         # previewed path must still be removable, not merely named (review R2-02).
@@ -826,7 +881,10 @@ def remove_tool(
             try:
                 runner(list(command))
             except CommandError as exc:
-                return ToolRemoval(tool.id, False, command_error_line(exc))
+                moot = _moot_stop_failure(tool.id) if fresh.level == "recipe" else None
+                if moot is None:
+                    return ToolRemoval(tool.id, False, command_error_line(exc))
+                note = moot
             trees = tuple(p for p in fresh.removable if fresh.artifacts[p].type == "tree")
             # The vendor command may have removed part of what the receipt recorded; only
             # what is still there is re-proven, so a path it already removed is not a refusal.
@@ -840,7 +898,7 @@ def remove_tool(
         if refused:
             return ToolRemoval(tool.id, False, refused[0], refused)
         receipts.delete(tool.id)
-        return ToolRemoval(tool.id, True, unregistered=fresh.hook_hosts)
+        return ToolRemoval(tool.id, True, note, unregistered=fresh.hook_hosts)
     except OSError as exc:
         return ToolRemoval(tool.id, False, first_line(exc))
 
@@ -1260,7 +1318,8 @@ def perform_uninstall(
         unregistered.extend(outcome.unregistered)
         if outcome.removed:
             removed.append(tool.id)
-            if tool.retired and outcome.detail:  # a receipt-only retirement's result sentence
+            # A receipt-only retirement's result sentence, or the note of a removal that went on.
+            if outcome.detail and (tool.retired or outcome.detail != ALREADY_REMOVED):
                 receipt_retired.append(outcome.detail)
             after.append(
                 _after_removal(

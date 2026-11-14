@@ -1570,7 +1570,10 @@ owner_probes = ["pacman"]
 # 102), and `upgrade --major` pipes the v2 installer without --no-modify-path.
 # `remove` stops the background `opencode serve --service` through the v2-only `opencode2` shim
 # before the proven paths go; `service stop` is a no-op without a registration (v2.2.6
-# packages/client/src/effect/service.ts). The head binds only to a receipt-proven `opencode2`, so
+# packages/client/src/effect/service.ts). Its stop polls kill(pid, 0), which a zombie passes, so
+# under a PID 1 that never reaps it times out; app.remove_tool then goes on when the registered pid
+# (state dir service.json) is gone or a zombie, with a note, and refuses while it is alive.
+# The head binds only to a receipt-proven `opencode2`, so
 # an OpenCode 1 receipt (only `opencode` proven) skips the recipe: v1.19.5 has no `service` command
 # (strict yargs, default `$0 [project]`). A user who upgraded OpenCode 1 to 2 outside the installer
 # keeps a receipt without `opencode2`, so the recipe is skipped there too until an installer update
