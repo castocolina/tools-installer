@@ -2581,7 +2581,6 @@ def _fake_script_toolchain(
         script = fake / name
         script.write_text(f"#!{real_bash}\n{body}", encoding="utf-8")
         script.chmod(0o755)
-    monkeypatch.setattr(executors, "shell_path", lambda: str(fake))
     return fake, marker, temp_file
 
 

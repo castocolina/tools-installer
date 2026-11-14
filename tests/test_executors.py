@@ -1,6 +1,5 @@
 import ast
 import os
-import shlex
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -25,17 +24,10 @@ def _record() -> tuple[list[list[str]], Runner]:
 
 
 def _script_of(calls: list[list[str]], shell: str = "sh") -> str:
-    """The shell script of a single `sh -c` call, minus the exported PATH prefix.
-
-    Every shell this installer opens exports a de-shimmed PATH first (WR-06);
-    the prefix is asserted on its own in the tests below, so the pipeline
-    assertions stay about the pipeline.
-    """
+    """The shell script of a single `sh -c` call."""
     assert len(calls) == 1
     assert calls[0][:2] == [shell, "-c"]
-    prefix, separator, rest = calls[0][2].partition("; export PATH; ")
-    assert prefix.startswith("PATH=") and separator
-    return rest
+    return calls[0][2]
 
 
 @pytest.mark.parametrize(
@@ -266,35 +258,23 @@ def test_uv_script_without_args_is_byte_identical() -> None:
         (Method(kind="sdkman", params={"candidate": "java"}), "bash"),
     ],
 )
-def test_spawned_shell_demotes_the_managed_shim_dir_on_path(
+def test_a_vendor_shell_inherits_the_process_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: Method, shell: str
 ):
-    # A vendor install script piped to a shell inherits our PATH. With the ban
-    # active its own npm/npx call would hit our hard-block shim and its
-    # `pnpm add -g` would be rewritten to `volta install`.
+    """GUARD-05, D-03: the shell gets no PATH rewrite, so the child inherits the process PATH
+    in its order, and the argv is identical on every call."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    shim_dir = tmp_path / ".local" / "bin"
-    other = tmp_path / "usr" / "bin"
-    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{other}")
-    calls, runner = _record()
+    monkeypatch.setenv("PATH", f"{tmp_path / '.local' / 'bin'}{os.pathsep}{tmp_path / 'usr'}")
+    first, runner = _record()
     execute(method, runner)
-    assert calls[0][0] == shell
-    exported = calls[0][2].split("; export PATH; ")[0].removeprefix("PATH=")
-    assert shlex.split(exported)[0].split(os.pathsep) == [str(other), str(shim_dir)]
-    # Demoted, never dropped: the shim dir is also the managed bin dir, so a
-    # script that legitimately needs a tool installed there must still find it.
-    assert str(shim_dir) in exported
+    second, again = _record()
+    execute(method, again)
 
-
-def test_spawned_shell_path_is_unchanged_without_the_shim_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
-    calls, runner = _record()
-    execute(Method(kind="script", params={"url": "https://example.test/i.sh"}), runner)
-    exported = calls[0][2].split("; export PATH; ")[0].removeprefix("PATH=")
-    assert shlex.split(exported)[0] == f"/usr/bin{os.pathsep}/bin"
+    assert len(first) == 1
+    assert first[0][:2] == [shell, "-c"]
+    assert "PATH=" not in first[0][2]
+    assert "export PATH" not in first[0][2]
+    assert first == second
 
 
 def test_cask_executor_installs_into_user_applications(

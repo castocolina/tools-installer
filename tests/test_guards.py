@@ -31,7 +31,6 @@ from installer.guards import (
     redirect_shim_script,
     remove_ban_aliases,
     remove_shims,
-    shell_path,
     shim_script,
     write_ban_aliases,
 )
@@ -1058,14 +1057,6 @@ def test_guard_redirect_warning_reports_unresolvable_pnpm_when_the_dir_is_empty(
 
 def test_exec_targets_skips_an_unparseable_exec_line():
     assert exec_targets('exec \'/unbalanced "$@"\n') == ()
-
-
-def test_shell_path_accepts_explicit_arguments():
-    shim_dir = Path("/home/u/.local/bin")
-    path_value = os.pathsep.join([str(shim_dir), "/usr/bin"])
-    assert shell_path(shim_dir=shim_dir, path_value=path_value) == os.pathsep.join(
-        ["/usr/bin", str(shim_dir)]
-    )
 
 
 def test_guard_redirect_warning_none_when_all_global_redirects_live(tmp_path: Path):

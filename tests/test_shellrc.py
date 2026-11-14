@@ -1070,8 +1070,6 @@ def test_no_accumulating_path_build_under_installer_or_setup() -> None:
     conscious decision with a live hit to point at.
 
     TOTAL ASSIGNMENTS OUTSIDE THE NEEDLE (reasoned exclusions, not allowlist):
-    - installer/executors.py:31-38 — sh -c command prefix with complete
-      shell_path() value, never re-sourced.
     - installer/systemd_daemon.py:253-265 — systemd unit Environment= line,
       total assignment, never re-sourced.
 
