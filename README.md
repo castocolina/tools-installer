@@ -153,32 +153,73 @@ Windows is out of scope for v1.
 When a tool can be installed more than one way, the engine walks a **priority
 ladder** (each tool can override it in the registry):
 
-1. **Official `.sh` installer** from the tool's author, when it genuinely resolves
+1. **Homebrew** (a formula, or a cask on macOS) — wherever Homebrew is installed.
+2. **bun** (`kind = "bun"`, `bun add -g`) — the npm-package CLIs (`mmdc`, `puppeteer`, `pi`) install through bun first.
+3. **pnpm** (`kind = "node"`, `pnpm add -g`) on the volta-provided Node runtime — the fallback for those same CLIs.
+4. **Official `.sh` installer** from the tool's author, when it genuinely resolves
    (`uv`, `volta`, …).
-2. **tarball / GitHub release** unpacked into `~/.local/opt/<tool>/` (no sudo) with the
+5. **tarball / GitHub release** unpacked into `~/.local/opt/<tool>/` (no sudo) with the
    binary symlinked into `~/.local/bin`; single-file release binaries land in `~/.local/bin` directly.
    Where the release publishes sha256 checksums, the download is verified before
    extraction; a mismatch stops that tool's install (interactively you may retry,
    skip, or fall back — under `--yes` it hard-fails).
    macOS GUI apps (`.app` from a vendor zip) land in `~/Applications` — never
    `/Applications`, zero sudo — with their CLI symlinked into `~/.local/bin`;
-   their Homebrew-cask fallback also targets `~/Applications` via `--appdir`.
-3. **Native package manager** — `dnf` · `apt` · `pacman` · `rpm-ostree`.
-4. **Homebrew** — last resort.
+   a Homebrew cask for the same app also targets `~/Applications` via `--appdir`.
+6. **Native package manager** — `dnf` · `apt` · `pacman` · `rpm-ostree`.
 
-On **immutable** distros, step 3 is skipped by default (userspace or `brew-linux`
+On **immutable** distros, step 6 is skipped by default (userspace or `brew-linux`
 instead), because `rpm-ostree install` requires a reboot and breaks atomicity.
 
 Homebrew is **an optional package you can install from the wizard** (`brew-mac`,
-`brew-linux`), never a prerequisite — some packages only live there, but if the
-author ships an `.sh` that works, that wins.
+`brew-linux`), never a prerequisite — some packages only live there.
 
-A fifth kind covers npm-package CLIs:
+**Homebrew first changes some installs.** On a host with Homebrew, the catalog shows
+Homebrew as the declared route of every tool whose first method is brew or cask. That
+label is display only: a copy's owner still comes from what actually installed it. The
+owner-visible changes are:
 
-5. **npm package** (`kind = "node"`) — installs the CLI via `pnpm add -g <npm_pkg>`.
-   `pnpm` is used consistently (bare `npm` is never called).
-   Example: `mmdc` (`@mermaid-js/mermaid-cli`) declares `kind = "node"` with
-   `npm_pkg = "@mermaid-js/mermaid-cli"` and `requires = ["pnpm"]`.
+- macOS: `claude`, `codex` and `kitty` now install from their Homebrew casks.
+- Fedora hosts with Linuxbrew: `docker`, `git`, `glab`, `jq`, `podman`, `unzip`, `watch`,
+  `zip` and `zsh` now install from Linuxbrew instead of `dnf`.
+
+On a host without Homebrew no Homebrew step applies, and the rest of the order is what it
+was before. The one difference is that the three npm-package CLIs try bun first.
+
+Example: `mmdc` declares `kind = "bun"` with `npm_pkg = "@mermaid-js/mermaid-cli"`,
+`co_install = ["puppeteer"]` and `versions = { puppeteer = "^25" }`, so one
+`bun add -g @mermaid-js/mermaid-cli puppeteer@^25` installs both packages. Its
+`requires = ["bun", "puppeteer"]` installs bun first, and its `kind = "node"` method is the
+pnpm fallback.
+
+Facts about bun that these installs rely on, all checked against bun 1.3.14:
+
+- Bun-installed CLIs run under node, not under bun. Their bins start with
+  `#!/usr/bin/env node`, so a node must be on PATH. Volta stays the Node runtime; there is
+  no `volta install` method.
+- Bun runs a dependency's lifecycle scripts only for its default allowlist (puppeteer is on
+  it) or for packages named in a `trustedDependencies` list the user wrote. That list
+  replaces the default allowlist instead of extending it. pnpm also blocks such scripts by
+  default, so bun is comparable to pnpm, not stricter.
+- This installer never passes a trust flag and never writes `trustedDependencies`. If a
+  user's list leaves puppeteer out, the browser is not downloaded, the smoke check fails,
+  and the failure line names the command that trusts it: `bun add -g --trust puppeteer@^25`.
+
+**Existing installs stay with their manager.** A tool that pnpm, volta, Homebrew or a
+vendor installer already put on the host keeps that owner. The installer reports it as
+already installed and never reinstalls it to reach the new order. To move such a tool to
+bun, remove the existing copy, then install it again:
+
+- The **Uninstall view** removes a copy this installer installed itself; its receipt is the
+  proof.
+- For a copy another manager owns, the view names that manager. It shows the manager's
+  removal command (for example `pnpm remove --global @mermaid-js/mermaid-cli`) only when it
+  knows the manager and the package. When it knows the manager but not the package, it
+  names the manager alone.
+- For a copy whose owner it cannot tell, such as one a vendor installer put there, the view
+  shows no command. Remove it with whatever installed it.
+- A broken copy shows the repair note (reinstall it from the catalog) instead of any removal
+  command.
 
 ### Tool dependencies (`requires`)
 
