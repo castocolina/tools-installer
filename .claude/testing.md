@@ -23,12 +23,13 @@ Tests run with `pytest` and coverage via `make test`. Configuration lives in
 
 ### Parallel by default
 - `make test` runs `pytest -n auto` (pytest-xdist). Never drop `-n auto` to make a run pass.
-- **Thread budget:** the suite uses at most ~40% of the usable threads, because this project runs on other people's machines and must not starve them. `pytest_xdist_auto_num_workers` in `tests/conftest.py` computes `max(1, round(threads * 0.4))`: 24 → 10, 8 → 3, 3 → 1. Never pass a fixed or higher `-n`. `PYTEST_XDIST_AUTO_NUM_WORKERS` may lower it for one run.
+- **Thread budget:** the suite uses at most ~40% of the usable threads, because this project runs on other people's machines and must not starve them. `pytest_xdist_auto_num_workers` in `tests/conftest.py` computes `max(1, round(threads * 0.4))`: 24 → 10, 8 → 3, 3 → 1. Never pass a fixed or higher `-n`. `PYTEST_XDIST_AUTO_NUM_WORKERS` overrides it for one run; CI sets it to the dedicated runner's CPU count (one macOS worker hit the job timeout).
 - Every test must be xdist-safe. That means:
   - no fixed shared path (use `tmp_path`; an artifact dir needs a per-test file name and `mkdir(exist_ok=True)`);
   - no process-global state left behind (use `monkeypatch` for env, cwd and HOME);
   - no fixed port or socket name;
   - no reliance on another test's order or side effects.
+- A Textual pilot test waits for the state it asserts with `tests/screen_family.wait_until`, never one `pilot.pause()`: a worker or timer can lag on a loaded CI runner. A wall-clock bound in a test leaves that runner room (seconds, not milliseconds).
 - A test that passes serially but fails under `-n auto` is a bug in the test. Fix its isolation. Use `@pytest.mark.xdist_group` (with `--dist loadgroup`) only for a genuinely exclusive resource, with a one-line reason.
 
 ### What to test
