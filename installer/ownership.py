@@ -519,11 +519,14 @@ def owner_dirs(
     }
 
 
-def attribute_path(path: Path | None, dirs: Mapping[Owner, tuple[Path, ...]]) -> frozenset[Owner]:
+def attribute_path(
+    path: Path | None, dirs: Mapping[Owner, tuple[Path, ...]], *, follow_link: bool = True
+) -> frozenset[Owner]:
+    """The owners whose directories hold `path`; `follow_link=False` keeps a final symlink as is."""
     if path is None:
         return frozenset()
     try:
-        resolved = path.resolve()
+        resolved = path.resolve() if follow_link else path.parent.resolve() / path.name
     except OSError:
         resolved = path
     owners: set[Owner] = set()
@@ -629,7 +632,8 @@ def resolve_ownership(
 ) -> ManagerOwnership:
     applicable = _applicable_methods(tool, platform)
     methods = (*applicable, *_ownership_only_methods(tool, platform))
-    active_path = _resolve_active_path(which(tool.cmd))
+    found = which(tool.cmd)
+    active_path = _resolve_active_path(found)
     candidates = _collect_candidates(tool, methods, inventory, artifacts)
     undeclared_brew = False
     pending_shadows: list[OwnershipCandidate] = []
@@ -663,6 +667,10 @@ def resolve_ownership(
         pnpm_globals=inventory.pnpm_globals,
     )
     attributed = attribute_path(active_path, dirs)
+    if found and not any(candidate.owner in attributed for candidate in candidates):
+        # A launcher link that leaves its own dir (claude's ~/.local/bin/claude, brew's bin/brew)
+        # still sits in the dir the install put it in.
+        attributed |= attribute_path(Path(found), dirs, follow_link=False)
     if active_path is not None:
         for candidate in candidates:
             if candidate.owner not in location_dirs or candidate.owner in attributed:

@@ -429,6 +429,76 @@ def test_a_script_tools_declared_path_keeps_its_script_method(
     assert dl_result.method == download
 
 
+def test_a_launcher_link_that_leaves_its_dir_is_still_the_installers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """claude's ~/.local/bin/claude links into ~/.local/share/claude/versions and
+    brew's bin/brew into ../Homebrew/bin: the resolved binary sits outside every
+    declared dir, but the launcher the PATH hit names sits inside one."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    version = tmp_path / ".local" / "share" / "claude" / "versions" / "1"
+    version.parent.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    version.write_text("claude")
+    (bin_dir / "claude").symlink_to(version)
+    script = Method(
+        kind="script", params={"url": "https://x/install.sh", "paths": ["~/.local/bin/claude"]}
+    )
+    claude = Tool(id="claude", name="claude", category="ai", cmd="claude", methods=(script,))
+    result = _resolve(
+        claude,
+        inventory=_empty_readable(),
+        artifacts=plan_uninstall([claude], bin_dir),
+        which=str(bin_dir / "claude"),
+        managed_bin_dir=bin_dir,
+        platform=_LINUX,
+    )
+    assert (result.owner, result.confidence) == ("installer", "direct")
+    assert owner_label(result) == "own installer"
+    # brew: the declared bin_dir holds the link, the Homebrew prefix holds the target.
+    prefix = tmp_path / "linuxbrew"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "Homebrew" / "bin").mkdir(parents=True)
+    (prefix / "Homebrew" / "bin" / "brew").write_text("brew")
+    (prefix / "bin" / "brew").symlink_to(prefix / "Homebrew" / "bin" / "brew")
+    method = Method(
+        kind="script", params={"url": "https://x/install.sh", "bin_dir": str(prefix / "bin")}
+    )
+    brew = Tool(id="brew", name="brew", category="pkg-mgr", cmd="brew", methods=(method,))
+    brew_result = _resolve(
+        brew,
+        inventory=_readable(brew_prefix=prefix),
+        which=str(prefix / "bin" / "brew"),
+        managed_bin_dir=bin_dir,
+        platform=_LINUX,
+    )
+    assert (brew_result.owner, brew_result.confidence) == ("installer", "direct")
+
+
+def test_a_resolved_binary_outside_every_dir_with_no_launcher_dir_stays_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    elsewhere = tmp_path / "elsewhere"
+    bin_dir.mkdir(parents=True)
+    elsewhere.mkdir()
+    (elsewhere / "t").write_text("t")
+    (elsewhere / "link").symlink_to(elsewhere / "t")
+    script = Method(kind="script", params={"url": "https://x/install.sh", "bin_dir": str(bin_dir)})
+    tool = Tool(id="t", name="t", category="dev", cmd="t", methods=(script,))
+    (bin_dir / "t").write_text("t")
+    result = _resolve(
+        tool,
+        inventory=_empty_readable(),
+        which=str(elsewhere / "link"),
+        managed_bin_dir=bin_dir,
+        platform=_LINUX,
+    )
+    assert result.owner == "unknown"
+
+
 def test_mutation_grade_is_exactly_direct_and_by_elimination() -> None:
     assert frozenset({"direct", "by-elimination"}) == MUTATION_GRADE
 
