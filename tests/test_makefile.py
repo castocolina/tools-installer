@@ -165,3 +165,17 @@ def test_e2e_script_appears_in_gates_only_as_a_shellcheck_argument() -> None:
         text = "\n".join([*prereqs, *kept])
         assert "container-e2e-verify.sh" not in text, name
         assert not re.search(r"\be2e\b", text), name
+
+
+def test_audit_catalog_target() -> None:
+    recipes = _recipes()
+    assert "audit-catalog" in recipes
+    _, lines = recipes["audit-catalog"]
+    joined = "\n".join(lines)
+    assert "uv run --isolated --no-dev python -m installer.catalog_audit" in joined
+    assert "$(ARGS)" in joined
+    makefile = MAKEFILE.read_text()
+    assert "audit-catalog" in makefile.split(".PHONY:")[1].split("\n")[0]
+    assert re.search(r"^audit-catalog:.*?## .+$", makefile, re.MULTILINE), (
+        "audit-catalog needs a ## help comment"
+    )

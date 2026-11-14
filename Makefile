@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build setup run doctor fix uninstall guard unguard validate test e2e verify-registry
+.PHONY: help install build setup run doctor fix uninstall guard unguard validate test e2e verify-registry audit-catalog
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -33,6 +33,9 @@ unguard:  ## Remove the pip/npm ban
 
 verify-registry:  ## Check release assets and pins against upstream (read-only; needs network)
 	uv run --isolated --no-dev python -m installer.verify_registry $(ARGS)
+
+audit-catalog:  ## Audit the catalog for the catalog-audit skill (read-only facts; writes only .planning/audits/catalog)
+	uv run --isolated --no-dev python -m installer.catalog_audit $(ARGS)
 
 validate:  ## Lint, format-check, type-check, security, dead-code
 	# setup.py (composition root) is lint/format-gated but stays out of pyright/coverage:
