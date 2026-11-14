@@ -526,7 +526,7 @@ def test_an_unremovable_pnpm_wrapper_is_never_resolved_or_present(
         assert level == "warn"
         assert "pnpm" in message
         assert wrapper.exists()
-        assert real_pnpm(shim_dir=bin_dir, path_value=str(bin_dir)) is None
+        assert real_pnpm(path_value=str(bin_dir)) is None
         assert is_installed(pnpm, default_bin_dir=bin_dir) is False
     finally:
         bin_dir.chmod(0o755)
@@ -538,8 +538,8 @@ def test_a_real_pnpm_elsewhere_is_resolved_and_stable(bin_dir: Path, tmp_path: P
     real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
     path_value = f"{bin_dir}{os.pathsep}{real.parent}"
 
-    first = real_pnpm(shim_dir=bin_dir, path_value=path_value)
-    second = real_pnpm(shim_dir=bin_dir, path_value=path_value)
+    first = real_pnpm(path_value=path_value)
+    second = real_pnpm(path_value=path_value)
 
     assert first == second == str(real)
 
@@ -555,8 +555,8 @@ def test_a_leftover_removed_mid_run_still_resolves_the_real_binary(
     def resolve() -> tuple[str | None, str | None]:
         found = which_in_path("pnpm", path_value)
         return (
-            real_binary("pnpm", shim_dir=bin_dir, path_value=path_value),
-            look_through_shim(found, "pnpm", shim_dir=bin_dir, path_value=path_value),
+            real_binary("pnpm", path_value=path_value),
+            look_through_shim(found, "pnpm", path_value=path_value),
         )
 
     assert resolve() == (str(real), str(real))
@@ -611,7 +611,6 @@ def test_real_binary_skips_shim_dir(tmp_path: Path):
     (real_dir / "pnpm").write_text("real\n")
     found = real_binary(
         "pnpm",
-        shim_dir=shim_dir,
         path_value=f"{shim_dir}{os.pathsep}{real_dir}",
         lookup=lookup,
     )
@@ -629,7 +628,6 @@ def test_real_binary_finds_a_real_binary_living_in_the_shim_dir(tmp_path: Path):
     real.chmod(0o755)
     found = real_binary(
         "pnpm",
-        shim_dir=shim_dir,
         path_value=str(shim_dir),
         lookup=_lookup_existing,
     )
@@ -652,7 +650,6 @@ def test_real_pnpm_skips_shim_dir(tmp_path: Path):
     (shim_dir / "pnpm").write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
     (real_dir / "pnpm").write_text("real\n")
     found = real_pnpm(
-        shim_dir=shim_dir,
         path_value=f"{shim_dir}{os.pathsep}{real_dir}",
         lookup=_lookup_existing,
     )
@@ -671,11 +668,11 @@ def test_real_pnpm_rejects_sentinel_match(tmp_path: Path):
 
     for sentinel in (SHIM_SENTINEL, REDIRECT_SENTINEL):
         fake.write_text(f"#!/bin/sh\n{sentinel}\n")
-        assert real_pnpm(shim_dir=shim_dir, path_value=str(other), lookup=lookup) is None
+        assert real_pnpm(path_value=str(other), lookup=lookup) is None
 
 
 def test_real_pnpm_none_when_nothing_resolves(tmp_path: Path):
-    assert real_pnpm(shim_dir=tmp_path, path_value="", lookup=lambda _n, _p: None) is None
+    assert real_pnpm(path_value="", lookup=lambda _n, _p: None) is None
 
 
 def test_real_pnpm_defaults_read_home_and_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -708,7 +705,6 @@ def test_real_binary_rejects_sentinel_match(tmp_path: Path):
     assert (
         real_binary(
             "pnpm",
-            shim_dir=shim_dir,
             path_value=str(other),
             lookup=lookup,
         )
@@ -728,7 +724,7 @@ def test_look_through_shim_finds_the_real_binary(tmp_path: Path):
     shim = _executable(shim_dir / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
     real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
     path_value = f"{shim_dir}{os.pathsep}{real.parent}"
-    found = look_through_shim(str(shim), "pnpm", shim_dir=shim_dir, path_value=path_value)
+    found = look_through_shim(str(shim), "pnpm", path_value=path_value)
     assert found == str(real)
 
 
@@ -741,7 +737,7 @@ def test_look_through_shim_matches_the_shim_dir_by_resolved_path(tmp_path: Path)
     path_value = f"{alias}/{os.pathsep}{real.parent}"
     found = f"{alias}/pnpm"
 
-    assert look_through_shim(found, "pnpm", shim_dir=shim_dir, path_value=path_value) == str(real)
+    assert look_through_shim(found, "pnpm", path_value=path_value) == str(real)
 
 
 def test_real_binary_drops_every_spelling_of_the_managed_dir(tmp_path: Path):
@@ -752,7 +748,7 @@ def test_real_binary_drops_every_spelling_of_the_managed_dir(tmp_path: Path):
     alias.symlink_to(shim_dir, target_is_directory=True)
     path_value = f"{alias}/{os.pathsep}{shim_dir}{os.pathsep}{real.parent}"
 
-    assert real_binary("pnpm", shim_dir=shim_dir, path_value=path_value) == str(real)
+    assert real_binary("pnpm", path_value=path_value) == str(real)
 
 
 def test_real_binary_survives_a_looping_path_entry(tmp_path: Path):
@@ -763,27 +759,45 @@ def test_real_binary_survives_a_looping_path_entry(tmp_path: Path):
     loop.symlink_to(loop)
     path_value = os.pathsep.join([str(shim_dir), str(real.parent), str(loop)])
 
-    assert real_binary("pnpm", shim_dir=shim_dir, path_value=path_value) == str(real)
+    assert real_binary("pnpm", path_value=path_value) == str(real)
+
+
+def test_real_binary_skips_a_leftover_outside_the_managed_dir(tmp_path: Path):
+    managed = tmp_path / "bin"
+    managed.mkdir()
+    other = _executable(tmp_path / "other" / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    linked = tmp_path / "linked" / "pnpm"
+    linked.parent.mkdir()
+    linked.symlink_to(other)
+    real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
+    path_value = os.pathsep.join([str(linked.parent), str(other.parent), str(real.parent)])
+
+    assert real_binary("pnpm", path_value=path_value) == str(real)
+    assert real_binary("pnpm", path_value=str(other.parent)) is None
+
+
+def test_look_through_shim_skips_a_leftover_outside_the_managed_dir(tmp_path: Path):
+    managed = tmp_path / "bin"
+    managed.mkdir()
+    other = _executable(tmp_path / "other" / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
+    real = _executable(tmp_path / "real" / "pnpm", "#!/bin/sh\n")
+    path_value = f"{other.parent}{os.pathsep}{real.parent}"
+
+    found = look_through_shim(str(other), "pnpm", path_value=path_value)
+
+    assert found == str(real)
 
 
 def test_look_through_shim_keeps_a_non_shim_hit(tmp_path: Path):
     shim_dir = tmp_path / "bin"
     corepack = _executable(shim_dir / "pnpm", "#!/bin/sh\n")
     path_value = str(shim_dir)
-    found = look_through_shim(str(corepack), "pnpm", shim_dir=shim_dir, path_value=path_value)
+    found = look_through_shim(str(corepack), "pnpm", path_value=path_value)
     assert found == str(corepack)
 
 
-def test_look_through_shim_ignores_shims_outside_the_managed_dir(tmp_path: Path):
-    shim_dir = tmp_path / "bin"
-    shim_dir.mkdir()
-    other = _executable(tmp_path / "other" / "pnpm", f"#!/bin/sh\n{REDIRECT_SENTINEL}\n")
-    found = look_through_shim(str(other), "pnpm", shim_dir=shim_dir, path_value=str(other.parent))
-    assert found == str(other)
-
-
 def test_look_through_shim_none_stays_none(tmp_path: Path):
-    assert look_through_shim(None, "pnpm", shim_dir=tmp_path, path_value=str(tmp_path)) is None
+    assert look_through_shim(None, "pnpm", path_value=str(tmp_path)) is None
 
 
 def test_is_our_shim_never_reads_a_large_file(tmp_path: Path):

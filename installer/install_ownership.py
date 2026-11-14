@@ -24,7 +24,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Literal, cast
 
-import installer.locations
 from installer.host_setup import HOST_SETUPS
 from installer.legacy_guard import GUARD_NAMES, real_binary
 from installer.model import Tool
@@ -58,12 +57,7 @@ def run_probe(command: list[str]) -> str:
     (by absolute path) or not at all.
     """
     if command and command[0] in GUARD_NAMES:
-        # Module-attribute read: the conftest sandbox patches locations.bin_dir.
-        real = real_binary(
-            command[0],
-            shim_dir=installer.locations.bin_dir(None),
-            path_value=os.environ.get("PATH", ""),
-        )
+        real = real_binary(command[0], path_value=os.environ.get("PATH", ""))
         if real is None:
             raise FileNotFoundError(command[0])  # what subprocess raises for a missing program
         command = [real, *command[1:]]

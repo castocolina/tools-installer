@@ -112,6 +112,7 @@ from installer.version_status import (
     uninstall_detail,
     uninstall_group,
     uninstall_label,
+    version_argv,
     version_notes,
 )
 from installer.versions import (
@@ -2150,6 +2151,36 @@ def test_version_probe_never_runs_a_leftover(
     monkeypatch.setenv("PATH", f"{leftover.parent}{os.pathsep}{real.parent}")
 
     assert probe_calls() == [[str(real), "--version"]]
+
+
+@pytest.mark.parametrize("route", ["path", "active_path", "unresolved"])
+def test_version_probe_walks_past_a_leftover_outside_the_managed_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, route: str
+) -> None:
+    """A leftover anywhere on PATH is never probed, however the argv is reached; the walk
+    continues to the real binary behind it."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    leftover = tmp_path / "elsewhere" / "pnpm"
+    leftover.parent.mkdir()
+    leftover.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 127\n")
+    leftover.chmod(0o755)
+    real = tmp_path / "real" / "pnpm"
+    real.parent.mkdir()
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{leftover.parent}{os.pathsep}{real.parent}")
+    tool = _tool("pnpm")
+    ownership = replace(_owned(tool, "unknown"), active_path=None, method=None)
+    if route == "active_path":
+        ownership = replace(ownership, active_path=leftover)
+    if route == "unresolved":
+        ownership = replace(ownership, owner="volta")
+
+    argv = version_argv(
+        tool, ownership, unresolved=str(leftover) if route == "unresolved" else None
+    )
+
+    assert argv == [str(real), "--version"]
 
 
 def test_version_file_is_read_without_a_subprocess_probe(tmp_path: Path) -> None:

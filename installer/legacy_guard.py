@@ -195,60 +195,42 @@ def which_in_path(name: str, path: str) -> str | None:
 def real_binary(
     name: str,
     *,
-    shim_dir: Path,
     path_value: str,
     lookup: PathLookup = which_in_path,
 ) -> str | None:
     """Resolve `name` from PATH, never a leftover guard shim.
 
-    A sentinel-carrying result is refused. The sentinel, not the directory, marks a
-    leftover: the shim dir IS the managed bin dir (~/.local/bin), and a pnpm installed
-    there (`npm i -g pnpm` with prefix=~/.local, or `corepack enable --install-directory
-    ~/.local/bin`) must stay resolvable. Excluding the whole directory made those setups
-    report "pnpm not found" while `pnpm --version` worked fine.
-
-    The directory is dropped only for the retry, once a leftover has actually won the
-    lookup. The retry drops every spelling of the managed dir. An entry that cannot be
-    resolved (a symlink loop) is kept for the lookup to skip instead of raising.
+    One walk over the PATH entries: an entry whose hit is a leftover (a file or a symlink to
+    one, in any directory) is skipped, and the walk goes on to the next entry until a real
+    binary is found or PATH ends. The sentinel, not the directory, marks a leftover: the
+    managed bin dir (~/.local/bin) may hold a real pnpm (`npm i -g pnpm` with prefix=~/.local,
+    or `corepack enable --install-directory ~/.local/bin`) and it must stay resolvable.
+    Empty entries are skipped; an entry that cannot be searched (a symlink loop) finds nothing.
     """
-    found = lookup(name, path_value)
-    if found is None or is_our_shim(Path(found)):
-        managed = Path(os.path.realpath(shim_dir))
-        rest = [
-            entry
-            for entry in path_value.split(os.pathsep)
-            if entry and Path(os.path.realpath(entry)) != managed
-        ]
-        found = lookup(name, os.pathsep.join(rest))
-    if found is None or is_our_shim(Path(found)):
-        return None
-    return found
+    for entry in path_value.split(os.pathsep):
+        found = lookup(name, entry) if entry else None
+        if found is not None and not is_our_shim(Path(found)):
+            return found
+    return None
 
 
 def look_through_shim(
     found: str | None,
     name: str,
     *,
-    shim_dir: Path,
     path_value: str,
     lookup: PathLookup = which_in_path,
 ) -> str | None:
-    """The binary the refresh pass attributes: behind a leftover guard shim in the
-    managed bin dir, the real binary it forwarded to; any other hit as-is (D-13). The
-    managed dir is matched by resolved path because PATH may spell it through a symlinked
-    home or with a trailing slash (IN3-02), while the returned hit keeps PATH's own
-    spelling.
+    """The binary the refresh pass attributes: behind a leftover guard shim, the real binary
+    further along PATH; any other hit as-is (D-13).
     """
-    managed_parent = Path(os.path.realpath(shim_dir))
-    found_parent = Path(os.path.realpath(Path(found).parent)) if found is not None else None
-    if found is not None and found_parent == managed_parent and is_our_shim(Path(found)):
-        return real_binary(name, shim_dir=shim_dir, path_value=path_value, lookup=lookup)
+    if found is not None and is_our_shim(Path(found)):
+        return real_binary(name, path_value=path_value, lookup=lookup)
     return found
 
 
 def real_pnpm(
     *,
-    shim_dir: Path | None = None,
     path_value: str | None = None,
     lookup: PathLookup = which_in_path,
 ) -> str | None:
@@ -259,8 +241,6 @@ def real_pnpm(
     dir every internal invocation must carry an absolute path or it will run the wrapper
     instead of pnpm.
     """
-    if shim_dir is None:
-        shim_dir = installer.locations.bin_dir(None)
     if path_value is None:
         path_value = os.environ.get("PATH", "")
-    return real_binary("pnpm", shim_dir=shim_dir, path_value=path_value, lookup=lookup)
+    return real_binary("pnpm", path_value=path_value, lookup=lookup)

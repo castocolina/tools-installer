@@ -169,7 +169,7 @@ def is_installed(
         # On the default lookup, the real binary behind a leftover guard shim
         # in the managed bin dir is the presence (WR2-01, D-13).
         resolved = installer.legacy_guard.look_through_shim(
-            resolved, tool.cmd, shim_dir=implicit, path_value=os.environ.get("PATH", "")
+            resolved, tool.cmd, path_value=os.environ.get("PATH", "")
         )
     if (
         resolved is not None

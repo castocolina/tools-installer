@@ -61,11 +61,11 @@ from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
 from installer.install_ownership import ProbeRunner, native_index
 from installer.legacy_guard import (
+    GUARD_NAMES,
     is_our_shim,
     look_through_shim,
     real_binary,
     real_pnpm,
-    which_in_path,
 )
 from installer.manager_versions import OutdatedReport, read_outdated
 from installer.model import ConfigStep, Method, Tool, method_package
@@ -426,12 +426,20 @@ def version_argv(
     """The probe argv, or None when only a leftover guard shim could answer (never run it)."""
     # A Volta shim or a host-setup launcher resolves to a dispatcher, not the
     # tool: probe the PATH hit itself (19-RESEARCH Pitfall 6).
-    if unresolved is not None and (
-        (ownership is not None and ownership.owner == "volta")
-        or any(method.kind == "host_setup" for method in tool.methods)
+    if (
+        unresolved is not None
+        and not is_our_shim(Path(unresolved))
+        and (
+            (ownership is not None and ownership.owner == "volta")
+            or any(method.kind == "host_setup" for method in tool.methods)
+        )
     ):
         return [unresolved, "--version"]
-    if ownership is not None and ownership.active_path is not None:
+    if (
+        ownership is not None
+        and ownership.active_path is not None
+        and not is_our_shim(ownership.active_path)
+    ):
         return [str(ownership.active_path), "--version"]
     methods: list[Method] = []
     if ownership is not None and ownership.method is not None:
@@ -444,13 +452,10 @@ def version_argv(
         candidate = Path(bin_dir).expanduser() / tool.cmd
         if candidate.is_file() and not is_our_shim(candidate):
             return [str(candidate), "--version"]
-    path_value = os.environ.get("PATH", "")
-    found = which_in_path(tool.cmd, path_value)
-    if found is not None and is_our_shim(Path(found)):
-        # An absolute path: a bare name would let the child resolve the leftover again.
-        real = real_binary(
-            tool.cmd, shim_dir=installer.locations.bin_dir(None), path_value=path_value
-        )
+    if tool.cmd in GUARD_NAMES:
+        # Only these names can be leftovers. An absolute path: a bare name would let the child
+        # resolve a leftover again.
+        real = real_binary(tool.cmd, path_value=os.environ.get("PATH", ""))
         return None if real is None else [real, "--version"]
     return [tool.cmd, "--version"]
 
@@ -1315,9 +1320,7 @@ class VersionRefreshService:
 
     def _looked_through(self, name: str) -> str | None:
         """The `which` hit, or the real binary behind this installer's own shim (D-13)."""
-        return look_through_shim(
-            self._which(name), name, shim_dir=self._managed_bin_dir, path_value=self._path_value()
-        )
+        return look_through_shim(self._which(name), name, path_value=self._path_value())
 
     def mark_pending(self, tool_ids: Collection[str]) -> None:
         """Hide `tool_ids` until the next epoch (the removal start, D-09).

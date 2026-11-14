@@ -59,7 +59,7 @@ def _manager_smoke_target(method: Method, cmd: str) -> Path | None:
             if os.access(declared, os.X_OK):
                 return declared
             return None
-    resolved = real_binary(cmd, shim_dir=bin_dir(None), path_value=os.environ.get("PATH", ""))
+    resolved = real_binary(cmd, path_value=os.environ.get("PATH", ""))
     if resolved is None:
         return None
     return Path(resolved)
