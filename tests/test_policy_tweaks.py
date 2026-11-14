@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 
 from installer.platform import Platform
-from installer.policy import Policy, PolicyResult, ban_policy, tweak_policy
+from installer.policy import Policy, PolicyResult, tweak_policy
 from installer.tweaks import BUNDLES, LEGACY_ALIAS_BUNDLES, applicable_bundles, strip_legacy_aliases
 
 
@@ -120,16 +120,6 @@ def test_tweak_policy_enable_hint_names_source_not_hash_r(tmp_path: Path) -> Non
     assert "source ~/.myshellrc" in result.reload_hint
     assert "hash -r" not in result.reload_hint
 
-    ban_rc = tmp_path / "ban.myshellrc"
-    ban_result = ban_policy(
-        shim_dir=tmp_path / "shim",
-        apply_rc_paths=[ban_rc],
-        remove_rc_paths=[ban_rc],
-        path_value="",
-        which=lambda _name: None,
-    ).apply()
-    assert ban_result.reload_hint is not None and "hash -r" in ban_result.reload_hint
-
 
 def test_tweak_policy_disable_hint_names_new_shell_not_source(tmp_path: Path) -> None:
     rc = tmp_path / ".myshellrc"
@@ -140,16 +130,6 @@ def test_tweak_policy_disable_hint_names_new_shell_not_source(tmp_path: Path) ->
     assert "new shell" in result.reload_hint.lower()
     assert "source ~/.myshellrc" not in result.reload_hint
     assert "hash -r" not in result.reload_hint
-
-    ban_rc = tmp_path / "ban.myshellrc"
-    ban_result = ban_policy(
-        shim_dir=tmp_path / "shim",
-        apply_rc_paths=[ban_rc],
-        remove_rc_paths=[ban_rc],
-        path_value="",
-        which=lambda _name: None,
-    ).remove()
-    assert ban_result.reload_hint is not None and "hash -r" in ban_result.reload_hint
 
 
 def test_tweak_policy_ensure_sourced_from_callable_is_reread_at_apply(

@@ -28,7 +28,7 @@ from installer.postinstall import hook_method, unregister_argvs, unregister_host
 from installer.run import CommandError
 from installer.tweaks import TweakBundle, tweak_executables_present, tweak_present
 
-# No import cycle: installer.policy imports guards, tweaks and omz, none of
+# No import cycle: installer.policy imports tweaks and omz, none of
 # which import uninstall.
 
 
@@ -778,7 +778,7 @@ def active_tweak_ids(
     both things a user can have without this installer ever running.
 
     The ids are Policy ids, never raw TweakBundle ids: `tweak_policy` namespaces
-    a bundle as `tweak:<id>` precisely so it cannot collide with the ban or with
+    a bundle as `tweak:<id>` precisely so it cannot collide with
     another policy, and returning the bare id would both throw that away — the
     Policies view would list `tweak:docker` while the Uninstall row said
     `docker` — and let a future bundle named `omz-plugins` make the two arms

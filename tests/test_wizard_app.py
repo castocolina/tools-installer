@@ -194,23 +194,23 @@ def _uninstall_inputs(
 
 def _ok_result() -> PolicyResult:
     return PolicyResult(
-        layers=(PolicyLayer("Shims", "3 active in /bin"), PolicyLayer("Aliases", "written to /rc")),
-        reload_hint="Open a new shell or run `hash -r` so cached command paths refresh.",
+        layers=(PolicyLayer("First", "3 active in /bin"), PolicyLayer("Second", "written to /rc")),
+        reload_hint="Open a new shell so the sample change is loaded.",
         warning=None,
     )
 
 
 def _fake_policy(
     *,
-    id: str = "ban",
+    id: str = "sample",
     active: bool = False,
     apply: Callable[[], PolicyResult] = _ok_result,
     remove: Callable[[], PolicyResult] = _ok_result,
 ) -> Policy:
     return Policy(
         id=id,
-        label="pip/npm ban",
-        description="blocks bare pip/npm",
+        label="Sample policy",
+        description="sample effect",
         active=active,
         apply=apply,
         remove=remove,
@@ -1979,9 +1979,9 @@ async def test_policy_toggle_enables_inactive_policy() -> None:
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
         assert calls == ["apply"]
-        assert app.screen.active_state["ban"] is True
+        assert app.screen.active_state["sample"] is True
         assert "enabled" in app.screen.status.text
-        assert "Shims:" in app.screen.status.text
+        assert "First:" in app.screen.status.text
 
 
 async def test_policy_state_cell_carries_glyph_for_on_and_off() -> None:
@@ -1995,22 +1995,9 @@ async def test_policy_state_cell_carries_glyph_for_on_and_off() -> None:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         table = screen.query_one(DataTable[Any])
-        assert table.get_cell("ban", "state").plain == "○ [off]"
+        assert table.get_cell("sample", "state").plain == "○ [off]"
         await pilot.press("space")
-        assert table.get_cell("ban", "state").plain == "● [on]"
-
-
-async def test_policy_detail_panel_describes_the_ban_as_it_behaves_now() -> None:
-    # Enabling the ban wraps the user's own pnpm binary and gives up pnpm's
-    # gated postinstalls for global installs. The detail said none of that.
-    app = _app(policies=_policy_inputs([_fake_policy()]))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("6")
-        assert isinstance(app.screen, PoliciesScreen)
-        detail = app.screen.detail_text
-        assert "volta install" in detail
-        assert "pnpm" in detail
-        assert "install scripts" in detail
+        assert table.get_cell("sample", "state").plain == "● [on]"
 
 
 async def test_policy_detail_panel_explains_tweak_rules() -> None:
@@ -2129,9 +2116,9 @@ async def test_policy_with_hard_requires_false_still_enables_when_requires_missi
 
 
 async def test_existing_policies_render_byte_identical_effect_and_detail() -> None:
-    """Every shell-config policy: the Effect-column cell and _policy_detail's own
-    output must stay byte-identical (11-03-PLAN.md's own regression requirement)."""
-    ban = _fake_policy(active=False)
+    """Every shell-config policy, curated or generic, keeps a byte-identical Effect
+    cell and detail (11-03-PLAN.md's own regression requirement)."""
+    sample = _fake_policy(active=False)
     docker = Policy(
         id="tweak:docker",
         label="Docker shortcuts",
@@ -2141,23 +2128,15 @@ async def test_existing_policies_render_byte_identical_effect_and_detail() -> No
         remove=_ok_result,
         requires=("watch",),
     )
-    app = _app(policies=_policy_inputs([ban, docker]), initial_view="policies")
+    app = _app(policies=_policy_inputs([sample, docker]), initial_view="policies")
     async with app.run_test(size=(100, 30)) as pilot:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         table = screen.query_one(DataTable[Any])
-        assert table.get_cell("ban", "effect").plain == "shell config: blocks bare pip/npm"
+        assert table.get_cell("sample", "effect").plain == "shell config: sample effect"
         assert table.get_cell("tweak:docker", "effect").plain == "shell config: docker helpers"
         assert screen.detail_text == (
-            "pip/npm ban — blocks bare pip/npm\n"
-            "Blocks bare pip and pip3, redirects npx to pnpm dlx, and routes"
-            " npm/pnpm global installs to volta install.\n"
-            "Wraps your pnpm binary with a PATH shim: only global adds are"
-            " rerouted, every other pnpm command passes straight through.\n"
-            "Global installs then run npm's install scripts unrestricted, which"
-            " pnpm gates — keep untrusted packages on a project-local pnpm add.\n"
-            "Writes PATH shims plus interactive aliases, then asks for a shell reload.\n"
-            "Use when humans or agents keep reaching for unmanaged package installers."
+            "Sample policy — sample effect\nSpace toggles this reversible shell policy."
         )
         await pilot.press("down")
         assert "Required tool(s): watch" in screen.detail_text
@@ -2492,7 +2471,7 @@ async def test_policy_toggle_disables_active_policy() -> None:
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
         assert calls == ["remove"]
-        assert app.screen.active_state["ban"] is False
+        assert app.screen.active_state["sample"] is False
         assert "disabled" in app.screen.status.text
 
 
@@ -2505,7 +2484,7 @@ async def test_policy_toggle_error_surfaces_and_does_not_crash() -> None:
         await pilot.press("6")
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
-        assert app.screen.active_state["ban"] is False  # unchanged on failure
+        assert app.screen.active_state["sample"] is False  # unchanged on failure
         assert app.screen.error == "permission denied"
         assert "failed" in app.screen.status.text.lower()
 
@@ -2528,9 +2507,9 @@ async def test_policy_summary_includes_warning_when_set() -> None:
 
     def apply_with_warning() -> PolicyResult:
         return PolicyResult(
-            layers=(PolicyLayer("Shims", "2 active"),),
+            layers=(PolicyLayer("First", "2 active"),),
             reload_hint=None,
-            warning="pip found on PATH ahead of shims — move the shim dir earlier.",
+            warning="sample warning — check the sample setting.",
         )
 
     policy = _fake_policy(active=False, apply=apply_with_warning)
@@ -2539,8 +2518,8 @@ async def test_policy_summary_includes_warning_when_set() -> None:
         await pilot.press("6")
         await pilot.press("space")
         assert isinstance(app.screen, PoliciesScreen)
-        assert app.screen.active_state["ban"] is True
-        assert "pip found on PATH" in app.screen.status.text
+        assert app.screen.active_state["sample"] is True
+        assert "sample warning" in app.screen.status.text
 
 
 async def test_policy_enter_does_not_toggle() -> None:
@@ -2551,7 +2530,7 @@ async def test_policy_enter_does_not_toggle() -> None:
         screen = app.screen
         assert isinstance(screen, PoliciesScreen)
         await pilot.press("enter")
-        assert screen.active_state["ban"] is False
+        assert screen.active_state["sample"] is False
 
 
 async def test_doctor_uninstall_and_policies_render_a_footer() -> None:
