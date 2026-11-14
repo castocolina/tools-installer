@@ -3,22 +3,27 @@ import os
 import re
 import tomllib
 from collections import Counter
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from installer import receipts
-from installer.app import remove_tool
+from installer import receipts, uninstall
+from installer.app import UninstallDecision, perform_uninstall, remove_tool
 from installer.catalog_tui import group_tools
 from installer.deps import requires_integrity_errors, resolve_dependencies
 from installer.download import Artifact, artifact_paths, pinned_url
+from installer.manager_versions import OutdatedReport
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
+from installer.ownership import ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.resolve import resolve_methods
 from installer.schedules import SCHEDULES
 from installer.tweaks import SHELL_INIT_TOOLS
-from installer.uninstall import removal_plan
+from installer.uninstall import SweepResult, removal_plan
+from installer.version_status import resolve_status
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -397,7 +402,7 @@ def test_agent_clis_use_supported_install_methods() -> None:
 
     assert [m.kind for m in opencode.methods] == ["script", "pacman", "brew"]
     assert next(m for m in opencode.methods if m.kind == "script").params["url"] == (
-        "https://opencode.ai/install"
+        "https://opencode.ai/v2/install"
     )
 
     cursor_agent = tools["cursor-agent"]
@@ -2562,9 +2567,9 @@ def test_registry_rows_carry_no_dead_attribution_keys() -> None:
 # must equal the registry's script stanzas (test_every_script_stanza_has_lifecycle_data).
 SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[str, object]] = {
     ("opencode", (), ()): {
-        "paths": ["~/.opencode/bin/opencode"],
-        "remove": None,
-        "update": ["opencode", "upgrade"],
+        "paths": ["~/.opencode/bin/opencode", "~/.opencode/bin/opencode2"],
+        "remove": ["opencode2", "service", "stop"],
+        "update": None,
     },
     ("oh-my-zsh", (), ()): {
         "paths": None,
@@ -2702,6 +2707,7 @@ def test_anchor_artifacts_expand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     opencode = _script_stanza("opencode", (), ())
     assert artifact_paths(opencode, tmp_path / ".local" / "bin") == (
         Artifact(tmp_path / ".opencode" / "bin" / "opencode", "leaf"),
+        Artifact(tmp_path / ".opencode" / "bin" / "opencode2", "leaf"),
     )
 
 
@@ -2903,3 +2909,164 @@ def test_schedule_targets_are_catalog_tools():
     targets = {schedule.target for schedule in SCHEDULES if schedule.target is not None}
     assert targets == {"claude", "opencode", "pi", "cursor-agent", "copilot"}
     assert targets <= set(_tools_by_id())
+
+
+def _script_owned(tool: Tool) -> ManagerOwnership:
+    """An installer-owned ownership for the tool's script method (what the installer records)."""
+    method = next(m for m in tool.methods if m.kind == "script")
+    candidate = OwnershipCandidate(
+        owner="installer",
+        method=method,
+        package=None,
+        current_version="v1.19.5",
+        evidence="test",
+    )
+    return ManagerOwnership(
+        tool_id=tool.id,
+        owner="installer",
+        method=method,
+        package=None,
+        current_version="v1.19.5",
+        confidence="direct",
+        shadowed=False,
+        candidates=(candidate,),
+        active_candidate="installer",
+        active_path=Path("/opt/tools/bin") / tool.cmd,
+        unknown_reason=None,
+    )
+
+
+def test_opencode_latest_comes_from_npm_never_github() -> None:
+    opencode = _tools_by_id()["opencode"]
+    packages: list[str] = []
+
+    def resolve_npm(package: str) -> str:
+        packages.append(package)
+        return "2.3.0"
+
+    def resolve_tag(repo: str) -> str:
+        raise AssertionError(f"GitHub resolver called for {repo}")
+
+    status, _entry = resolve_status(
+        opencode,
+        ownership=_script_owned(opencode),
+        outdated=OutdatedReport(brew={}, cask={}, pnpm={}, uv={}),
+        entry=None,
+        now=datetime(2026, 11, 14, tzinfo=UTC),
+        probe_output=lambda argv: "opencode v1.19.5",
+        resolve_tag=resolve_tag,
+        resolve_npm=resolve_npm,
+        platform=Platform(os="macos", arch="arm64", immutable=False, has_brew=True),
+    )
+    assert packages == ["@opencode/cli"]
+    assert (status.installed, status.latest, status.outdated) == ("v1.19.5", "2.3.0", True)
+    assert status.source == "npm"
+
+
+def test_opencode_script_declares_latest_npm_and_no_github_source() -> None:
+    opencode = _tools_by_id()["opencode"]
+    script = next(m for m in opencode.methods if m.kind == "script")
+    assert script.params.get("latest_npm") == "@opencode/cli"
+    assert all(m.kind != "github_release" for m in opencode.methods)
+
+
+def test_opencode_brew_is_the_core_formula_and_pacman_stays() -> None:
+    opencode = _tools_by_id()["opencode"]
+    brew = next(m for m in opencode.methods if m.kind == "brew")
+    pacman = next(m for m in opencode.methods if m.kind == "pacman")
+    assert brew.params["formula"] == "opencode"
+    assert pacman.params["package"] == "opencode"
+
+
+def _opencode_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, shim: bool
+) -> tuple[Tool, Path]:
+    """Plant OpenCode's binary (and the v2 `opencode2` shim when `shim`), record its receipt.
+
+    Only the files present at record time are proven, so `shim=False` is a pre-24.3 receipt."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    opencode = _tools_by_id()["opencode"]
+    script = next(m for m in opencode.methods if m.kind == "script")
+    bin_dir = tmp_path / ".opencode" / "bin"
+    bin_dir.mkdir(parents=True)
+    for name in ("opencode", "opencode2") if shim else ("opencode",):
+        (bin_dir / name).write_text(name)
+    receipts.record(opencode, script, package=None, smoke=None, preexisting=frozenset())
+    return opencode, bin_dir
+
+
+def test_opencode_remove_recipe_binds_to_the_v2_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recipe_argv = vars(uninstall)["_recipe_argv"]
+    opencode, bin_dir = _opencode_recorded(tmp_path, monkeypatch, shim=True)
+    plan = removal_plan(opencode, tmp_path / ".local" / "bin")
+    expected = (str(bin_dir / "opencode2"), "service", "stop")
+    assert recipe_argv(opencode, receipts.read("opencode"), plan) == expected
+    assert plan.argv == expected
+
+
+def test_opencode_v1_receipt_has_no_remove_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # OpenCode 1 (v1.19.5) has no `service` command, so a receipt proving only `opencode` skips it.
+    recipe_argv = vars(uninstall)["_recipe_argv"]
+    opencode, _bin_dir = _opencode_recorded(tmp_path, monkeypatch, shim=False)
+    plan = removal_plan(opencode, tmp_path / ".local" / "bin")
+    assert recipe_argv(opencode, receipts.read("opencode"), plan) == ()
+    assert plan.argv == ()
+
+
+def _remove_opencode(
+    opencode: Tool, bin_dir: Path, home: Path, runner: Callable[[list[str]], None]
+) -> SweepResult:
+    """Remove through the app's own path, with the decision built from a fresh plan."""
+    plan = removal_plan(opencode, bin_dir, verify=True)
+    decision = UninstallDecision(
+        tools=(opencode,),
+        paths={opencode.id: plan.removable},
+        argv={opencode.id: plan.argv},
+        unregister={opencode.id: plan.unregister},
+        remove_ban=False,
+        remove_path_block=False,
+    )
+    return perform_uninstall(
+        decision,
+        bin_dir=bin_dir,
+        myshellrc_path=home / ".myshellrc",
+        rc_paths=[],
+        bundles=(),
+        zshrc_path=home / ".zshrc",
+        extra_policies=(),
+        runner=runner,
+        catalog=(opencode,),
+    )
+
+
+def test_opencode_v1_receipt_removes_without_the_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opencode, _bin_dir = _opencode_recorded(tmp_path, monkeypatch, shim=False)
+    binary = tmp_path / ".opencode" / "bin" / "opencode"
+    calls: list[list[str]] = []
+    result = _remove_opencode(opencode, tmp_path / ".local" / "bin", tmp_path, calls.append)
+    assert calls == []  # the runner never sees a `service` argv
+    assert result.removed == ("opencode",)
+    assert not binary.exists()
+    assert receipts.read("opencode") is None
+
+
+def test_opencode_v2_receipt_stops_the_service_before_any_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opencode, bin_dir = _opencode_recorded(tmp_path, monkeypatch, shim=True)
+    seen: list[tuple[list[str], bool]] = []
+
+    def runner(cmd: list[str]) -> None:
+        seen.append((cmd, (bin_dir / "opencode").exists()))  # the fake stops nothing
+
+    result = _remove_opencode(opencode, tmp_path / ".local" / "bin", tmp_path, runner)
+    assert seen == [([str(bin_dir / "opencode2"), "service", "stop"], True)]
+    assert result.removed == ("opencode",)
+    assert not (bin_dir / "opencode").exists()
+    assert not (bin_dir / "opencode2").exists()
