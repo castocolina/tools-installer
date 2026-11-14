@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
-from installer import agent_settings, receipts
+from installer import agent_settings, receipts, versions
 from installer.locations import bin_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool
 from installer.run import (
@@ -86,24 +86,63 @@ def _copilot_cli_footprint(marker: Path) -> bool:
 
     Mirrors codegraph's own `cliConfigDirPresent` rule for the copilot CLI: an `ide/` dir alone
     is the editor extension, not the CLI, so registering for it would write for an absent host.
+    A dotfile (macOS `.DS_Store`) is Finder's, never the CLI's.
     """
     try:
-        return any(entry.name != "ide" for entry in marker.iterdir())
+        return any(
+            entry.name != "ide" and not entry.name.startswith(".") for entry in marker.iterdir()
+        )
     except OSError:
         return False
 
 
-# A marker dir counts for these harnesses only when its check passes too.
-_FOOTPRINT_CHECKS: Mapping[str, Callable[[Path], bool]] = {"copilot": _copilot_cli_footprint}
+# Any `copilot` on PATH is not GitHub's: the AWS Copilot CLI ships a binary with that exact name.
+# GitHub's prints "GitHub Copilot CLI <version>." for --version (the same line its smoke reads);
+# AWS's prints "copilot version: v1.x". The signature is read through the probe seam with its
+# own timeout, and only a definite answer is remembered (a timeout is asked again).
+_GITHUB_COPILOT_SIGNATURE = "GitHub Copilot CLI"
+_copilot_signatures: dict[tuple[str, int, Callable[[list[str]], str | None]], bool] = {}
 
 
-def present_harnesses(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
-    """Hosts detectable from PATH or a closed home-relative marker."""
+def _is_github_copilot(path: str, probe: Callable[[list[str]], str | None]) -> bool:
+    try:
+        mtime = os.stat(path).st_mtime_ns  # a rebuilt or upgraded binary is asked again
+    except OSError:
+        mtime = -1
+    key = (path, mtime, probe)
+    if key not in _copilot_signatures:
+        output = probe([path, "--version"])
+        if output is None:
+            return False
+        _copilot_signatures[key] = _GITHUB_COPILOT_SIGNATURE in output
+    return _copilot_signatures[key]
+
+
+def _on_path(
+    harness: str,
+    command: str,
+    which: Callable[[str], str | None],
+    probe: Callable[[list[str]], str | None],
+) -> bool:
+    found = which(command)
+    return found is not None and (harness != "copilot" or _is_github_copilot(found, probe))
+
+
+def present_harnesses(
+    home: Path,
+    which: Callable[[str], str | None],
+    probe: Callable[[list[str]], str | None] | None = None,
+) -> frozenset[str]:
+    """Hosts detectable from PATH or a closed home-relative marker.
+
+    `probe` runs `--version` for the one command whose name another tool shares (copilot)."""
+    probe = probe or versions.probe_version_output
     found: set[str] = set()
     for harness, (commands, markers) in HARNESS_PRESENCE.items():
-        footprint = _FOOTPRINT_CHECKS.get(harness)
-        if any(which(command) for command in commands) or any(
-            (home / marker).exists() and (footprint is None or footprint(home / marker))
+        # A copilot marker dir counts only with a CLI footprint (the editor extension is not it).
+        if any(_on_path(harness, command, which, probe) for command in commands) or any(
+            (home / marker).exists()
+            and (harness != "copilot" or _copilot_cli_footprint(home / marker))
             for marker in markers
         ):
             found.add(harness)

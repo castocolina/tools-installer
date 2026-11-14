@@ -385,11 +385,20 @@ def test_copilot_codegraph_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
         (("settings.json",), True),
         (("session-state/",), True),
         (("ide/", "settings.json"), True),
+        ((".DS_Store",), False),
         (("ide/",), False),
         ((), False),
         (None, False),
     ],
-    ids=["settings", "session-state", "ide-and-settings", "ide-only", "empty", "no-dir"],
+    ids=[
+        "settings",
+        "session-state",
+        "ide-and-settings",
+        "ds-store",
+        "ide-only",
+        "empty",
+        "no-dir",
+    ],
 )
 def test_copilot_presence_needs_a_cli_footprint(
     monkeypatch: pytest.MonkeyPatch, entries: tuple[str, ...] | None, present: bool
@@ -407,15 +416,59 @@ def test_copilot_presence_needs_a_cli_footprint(
     assert ("copilot" in pi.present_hosts()) is present
 
 
+def _copilot_binary(directory: Path, first_line: str) -> Path:
+    command = directory / "copilot"
+    command.write_text(f"#!/bin/sh\necho '{first_line}'\n", encoding="utf-8")
+    command.chmod(0o755)
+    return command
+
+
 @pytest.mark.usefixtures("real_present_hosts")
-def test_copilot_on_path_is_present_without_a_footprint(
+def test_github_copilot_on_path_is_present_without_a_footprint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    command = tmp_path / "copilot"
-    command.write_text("#!/bin/sh\n", encoding="utf-8")
-    command.chmod(0o755)
+    _copilot_binary(tmp_path, "GitHub Copilot CLI 1.0.107.")
     monkeypatch.setenv("PATH", str(tmp_path))
     assert "copilot" in pi.present_hosts()
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+def test_an_aws_copilot_binary_is_not_github_copilot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F11: AWS Copilot CLI ships `copilot` too; its --version is not GitHub's signature."""
+    _copilot_binary(tmp_path, "copilot version: v1.34.0")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert "copilot" not in pi.present_hosts()
+
+
+def test_copilot_probe_is_asked_once_per_binary_and_a_failure_is_not_remembered(
+    tmp_path: Path,
+) -> None:
+    command = _copilot_binary(tmp_path, "unused")
+    answers: list[str | None] = [None, "GitHub Copilot CLI 1.0.107.\n"]
+    asked: list[list[str]] = []
+
+    def probe(argv: list[str]) -> str | None:
+        asked.append(argv)
+        return answers.pop(0) if answers else "GitHub Copilot CLI 1.0.107.\n"
+
+    def which(name: str) -> str | None:
+        return str(command) if name == "copilot" else None
+
+    assert "copilot" not in pi.present_harnesses(tmp_path, which, probe)  # timeout: no answer
+    assert "copilot" in pi.present_harnesses(tmp_path, which, probe)
+    assert "copilot" in pi.present_harnesses(tmp_path, which, probe)  # remembered
+    assert asked == [[str(command), "--version"]] * 2
+
+
+def test_a_dotfile_in_the_copilot_dir_is_no_footprint(tmp_path: Path) -> None:
+    root = tmp_path / ".copilot"
+    root.mkdir()
+    (root / ".DS_Store").write_text("x", encoding="utf-8")
+    assert "copilot" not in pi.present_harnesses(tmp_path, lambda _command: None)
+    (root / "settings.json").write_text("{}", encoding="utf-8")
+    assert "copilot" in pi.present_harnesses(tmp_path, lambda _command: None)
 
 
 @pytest.mark.parametrize(

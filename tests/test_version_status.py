@@ -4842,7 +4842,11 @@ def test_hook_fact_has_no_pi_drift_without_support(tmp_path: Path) -> None:
 
 def test_a_present_copilot_the_receipt_lacks_reads_misconfigured(tmp_path: Path) -> None:
     _hook_receipt({"codegraph-mcp-register": ("claude",)})
-    service = _hook_service(tmp_path, frozenset({"claude", "copilot"}))
+    service = _hook_service(
+        tmp_path,
+        frozenset({"claude", "copilot"}),
+        probe_output=lambda _argv: "GitHub Copilot CLI 1.0.107.\n",
+    )
     codegraph = _settled_states(service, [_hook_tool()])["codegraph"]
     assert codegraph.health is Health.MISCONFIGURED
     assert codegraph.reasons[0] == "codegraph is not registered for copilot"
@@ -4952,9 +4956,13 @@ def test_the_pass_calls_present_harnesses_once(
     calls: list[Path] = []
     real = version_status.present_harnesses
 
-    def counted(home: Path, which: Callable[[str], str | None]) -> frozenset[str]:
+    def counted(
+        home: Path,
+        which: Callable[[str], str | None],
+        probe: Callable[[list[str]], str | None],
+    ) -> frozenset[str]:
         calls.append(home)
-        return real(home, which)
+        return real(home, which, probe)
 
     monkeypatch.setattr(version_status, "present_harnesses", counted)
     _hook_receipt({"codegraph-mcp-register": ("claude",)})

@@ -1364,7 +1364,7 @@ class VersionRefreshService:
         """The harness hosts, read once per pass (23-REUSE 07-2). A failure is a note, never
         a failed pass: it returns no hosts and the reason."""
         try:
-            return present_harnesses(self._home, self._looked_through), None
+            return present_harnesses(self._home, self._looked_through, self._probe_output), None
         except Exception as exc:  # a read-only secondary fact must never fail the pass
             return frozenset(), str(exc)
 
