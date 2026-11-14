@@ -15,7 +15,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from installer import catalog_audit, verify_registry
+from installer import catalog_audit, verify_registry, versions
 from installer.catalog_audit import FOOTER, Seams, entry_facts, main
 from installer.model import Method, Tool, load_tools
 from tests.home_fingerprint import fingerprint, fingerprint_diff
@@ -295,7 +295,7 @@ _FORMULA_URL = "https://formulae.brew.sh/api/formula/jq.json"
 _CASK_URL = "https://formulae.brew.sh/api/cask/zed.json"
 _ARCH_URL = "https://archlinux.org/packages/search/json/?name=foo"
 _FEDORA_URL = "https://mdapi.fedoraproject.org/rawhide/pkg/foo"
-_DEBIAN_URL = "https://sources.debian.org/api/src/foo/"
+_DEBIAN_URL = "https://api.ftp-master.debian.org/madison?package=foo&f=json"
 _PYPI_URL = "https://pypi.org/pypi/foo/json"
 _LATEST_CASES: list[tuple[Method, str, object, str]] = [
     (Method("github_release", {"repo": "o/r"}), _GH_URL, {"tag_name": "v9.9.9"}, "v9.9.9"),
@@ -318,8 +318,16 @@ _LATEST_CASES: list[tuple[Method, str, object, str]] = [
     (
         Method("apt", {"package": "foo"}),
         _DEBIAN_URL,
-        {"versions": [{"version": "1.2.3-1"}, {"version": "0.1"}]},
-        "1.2.3-1",
+        [
+            {
+                "foo": {
+                    "oldstable": {"0.1-1": {}},
+                    "stable": {"1.2.3-1+b2": {}},
+                    "testing": {"2.0": {}},
+                }
+            }
+        ],
+        "1.2.3-1+b2 (Debian stable)",
     ),
     (Method("uv-tool", {"pypi_pkg": "foo"}), _PYPI_URL, {"info": {"version": "0.5.1"}}, "0.5.1"),
 ]
@@ -388,12 +396,23 @@ _GH_METHOD = Method("github_release", {"repo": "o/r"})
 @pytest.mark.parametrize(
     ("method", "url", "answer", "needle"),
     [
-        (_GH_METHOD, _GH_URL, _http(403, "rate limit exceeded"), "403"),
-        (_GH_METHOD, _GH_URL, _http(429, "slow down"), "429"),
         (_GH_METHOD, _GH_URL, _http(500, "boom"), "500"),
         (_GH_METHOD, _GH_URL, TimeoutError(), "TimeoutError"),
         (_GH_METHOD, _GH_URL, b"not json", "JSONDecodeError"),
-        (Method("apt", {"package": "foo"}), _DEBIAN_URL, b'{"error": 404}', "404"),
+        (Method("apt", {"package": "foo"}), _DEBIAN_URL, b"[]", "stable"),
+        (
+            Method("apt", {"package": "foo"}),
+            _DEBIAN_URL,
+            b'[{"foo": {"testing": {"2": {}}}}]',
+            "stable",
+        ),
+        (Method("apt", {"package": "foo"}), _DEBIAN_URL, b'{"error": 404}', "stable"),
+        (
+            Method("node", {"npm_pkg": "pkg"}),
+            "https://registry.npmjs.org/-/package/pkg/dist-tags",
+            _http(403, "denied"),
+            "403",
+        ),
         (Method("pacman", {"package": "foo"}), _ARCH_URL, b'{"results": []}', "foo"),
     ],
 )
@@ -2028,3 +2047,52 @@ def test_stale_check_without_a_declared_token_says_unchecked(
     )
     assert _sum(registry, root, repo, capsys)[0] == 0
     assert _script_row(_summary_text(root), "x.py:3")[4] == "unchecked"
+
+
+# ---- 24.3 review F9: a GitHub rate limit is a retry, never a recorded unknown ----
+
+
+def _limited(code: int, **headers: str) -> HTTPError:
+    message = Message()
+    for name, value in headers.items():
+        message[name.replace("_", "-")] = value
+    return HTTPError("https://api.github.com/x", code, "limit", message, None)
+
+
+@pytest.mark.parametrize(
+    ("answer", "needle"),
+    [
+        (_limited(403, X_RateLimit_Reset="1800000000"), "resets at 2027-01-15T08:00:00Z"),
+        (_limited(429, Retry_After="60"), "retry after 60 s"),
+        (_limited(403), "no reset time"),
+    ],
+)
+def test_facts_exits_with_the_retry_code_on_a_github_rate_limit(
+    answer: HTTPError,
+    needle: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    code, out, err = _run(["facts", "alpha"], registry, _seams({_ALPHA_URL: answer}), capsys)
+    assert code == catalog_audit.EXIT_RETRY == 75
+    assert out == ""
+    assert "rate limit" in err
+    assert needle in err
+    assert "GITHUB_TOKEN" in err
+
+
+def test_a_github_server_error_stays_a_recorded_unknown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    code, out, _ = _run(["facts", "alpha"], registry, _seams({_ALPHA_URL: _http(500, "x")}), capsys)
+    assert code == 0
+    assert "- latest: unknown: " in out
+
+
+# ---- 24.3 review F22: one npm dist-tags URL builder ----
+
+
+def test_npm_dist_tags_url_is_shared() -> None:
+    assert versions.npm_dist_tags_url("@scope/pkg") == _NPM_URL

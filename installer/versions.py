@@ -414,13 +414,17 @@ def resolve_github_tag(repo: str, fetch: Fetch = urlopen_fetch) -> str:
     return resolve_github_release(repo, fetch).tag
 
 
+def npm_dist_tags_url(package: str) -> str:
+    """The npm registry URL of `package`'s dist-tags."""
+    return f"https://registry.npmjs.org/-/package/{urllib.parse.quote(package, safe='@')}/dist-tags"
+
+
 def resolve_npm_latest(package: str, fetch: Fetch = urlopen_fetch) -> str:
     """Return the npm registry's `latest` dist-tag for `package`, verbatim."""
     if NPM_PACKAGE_RE.fullmatch(package) is None:
         raise VersionError(f"invalid npm package name {package!r}")
-    url = f"https://registry.npmjs.org/-/package/{urllib.parse.quote(package, safe='@')}/dist-tags"
     try:
-        data = json.loads(fetch(url))
+        data = json.loads(fetch(npm_dist_tags_url(package)))
     except (OSError, http.client.HTTPException, ValueError) as exc:
         raise VersionError(f"failed to resolve npm latest for {package}: {exc}") from exc
     latest = cast(dict[str, object], data).get("latest") if isinstance(data, dict) else None

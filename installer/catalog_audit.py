@@ -16,7 +16,8 @@ sessions can pick the same entry and date and both pass the completeness check; 
 race, ``os.replace`` keeps whichever whole report lands last. The loop hands entries out
 one at a time, and nothing here claims to prevent that race.
 
-Exit codes: 0 ok; 1 unmapped drift; 64 usage error; 70 internal error; 73 report refused.
+Exit codes: 0 ok; 1 unmapped drift; 64 usage error; 70 internal error; 73 report refused;
+75 GitHub rate limit (`facts` only: wait for the reset and run it again).
 """
 
 from __future__ import annotations
@@ -34,11 +35,12 @@ import shutil
 import sys
 import tomllib
 import traceback
+import urllib.error
 import urllib.parse
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import NoReturn, cast
 
@@ -77,6 +79,7 @@ STATUSES = ("ok", "drift", "unknown", "n/a")
 EXIT_USAGE = 64
 EXIT_INTERNAL = 70
 EXIT_REFUSED = 73
+EXIT_RETRY = 75  # EX_TEMPFAIL
 
 # Files a run directory holds that are not one entry's report.
 _NON_ENTRY_STEMS = frozenset({"SUMMARY", "verify-registry", "scripts"})
@@ -120,6 +123,10 @@ _SECRET_RES = tuple(
 
 class UsageError(Exception):
     """A bad argument; exit 64 before anything is written."""
+
+
+class RateLimited(Exception):
+    """GitHub answered 403 or 429; a retry after the reset can succeed, so nothing is recorded."""
 
 
 class ReportRefused(Exception):
@@ -413,7 +420,7 @@ _URLS = {
     "cask": "https://formulae.brew.sh/api/cask/{}.json",
     "arch": "https://archlinux.org/packages/search/json/?name={}",
     "fedora": "https://mdapi.fedoraproject.org/rawhide/pkg/{}",
-    "debian": "https://sources.debian.org/api/src/{}/",
+    "debian": "https://api.ftp-master.debian.org/madison?package={}&f=json",
     "pypi": "https://pypi.org/pypi/{}/json",
 }
 
@@ -422,12 +429,17 @@ def _url(key: str, name: str) -> str:
     return _URLS[key].format(urllib.parse.quote(name, safe=""))
 
 
-def _json_object(url: str, fetch: Fetch) -> dict[str, object]:
-    """A JSON object body; a transport failure, a non-JSON body or an error body raises."""
+def _json_body(url: str, fetch: Fetch) -> object:
+    """A JSON body; a transport failure or a non-JSON body raises."""
     try:
-        data = json.loads(fetch(url))
+        return json.loads(fetch(url))
     except (OSError, http.client.HTTPException, ValueError) as exc:
         raise VersionError(f"could not read {url}") from exc
+
+
+def _json_object(url: str, fetch: Fetch) -> dict[str, object]:
+    """A JSON object body; a transport failure, a non-JSON body or an error body raises."""
+    data = _json_body(url, fetch)
     if not isinstance(data, dict):
         raise VersionError("the answer is not a JSON object")
     body = cast(dict[str, object], data)
@@ -476,10 +488,14 @@ def _fedora_latest(name: str, fetch: Fetch) -> str:
 
 
 def _debian_latest(name: str, fetch: Fetch) -> str:
-    rows = _json_object(_url("debian", name), fetch).get("versions")
-    if not isinstance(rows, list) or not rows:
-        raise VersionError("no versions in the answer")
-    return _dig(cast(list[object], rows)[0], "version")
+    """The stable suite's version of the binary package (madison takes binary names)."""
+    body = _json_body(_url("debian", name), fetch)
+    packages = cast(list[object], body)[0] if isinstance(body, list) and body else None
+    suites = cast(dict[str, object], packages).get(name) if isinstance(packages, dict) else None
+    stable = cast(dict[str, object], suites).get("stable") if isinstance(suites, dict) else None
+    if not isinstance(stable, dict) or not stable:
+        raise VersionError(f"no stable suite for {name!r} in the answer")
+    return f"{next(iter(cast(dict[str, object], stable)))} (Debian stable)"
 
 
 def _pypi_latest(name: str, fetch: Fetch) -> str:
@@ -517,8 +533,7 @@ def _method_source(method: Method) -> _Source | None:
         return _Source("github", url, functools.partial(_github_latest, repo))
     package = _param(method, "npm_pkg") or _param(method, "latest_npm")
     if package:
-        quoted = urllib.parse.quote(package, safe="@")
-        url = f"https://registry.npmjs.org/-/package/{quoted}/dist-tags"
+        url = versions.npm_dist_tags_url(package)
         return _Source("npm", url, functools.partial(resolve_npm_latest, package))
     name = method_package(method)
     if kind in _NAMED_READERS and name:
@@ -550,6 +565,28 @@ def _reason(exc: VersionError) -> str:
     return (lines[0] if lines else type(exc).__name__)[:160]
 
 
+def _github_limit(source: _Source, exc: VersionError) -> str | None:
+    """A message when `exc` is a GitHub 403/429 (rate limit), else None."""
+    cause = exc.__cause__
+    if not (
+        isinstance(cause, urllib.error.HTTPError)
+        and cause.code in (403, 429)
+        and urllib.parse.urlsplit(source.url).hostname == "api.github.com"
+    ):
+        return None
+    reset, wait = cause.headers.get("X-RateLimit-Reset"), cause.headers.get("Retry-After")
+    if reset and reset.isdigit():
+        when = f"resets at {datetime.fromtimestamp(int(reset), UTC):%Y-%m-%dT%H:%M:%SZ}"
+    elif wait and wait.isdigit():
+        when = f"retry after {wait} s"
+    else:
+        when = "no reset time given"
+    return (
+        f"GitHub rate limit (HTTP {cause.code}, {when}); wait, then run facts again. "
+        "Set GITHUB_TOKEN or run `gh auth login` to raise the limit."
+    )
+
+
 def _latest_lines(tool: Tool, fetch: Fetch) -> list[str]:
     lines: list[str] = []
     resolved: list[tuple[str, str]] = []
@@ -558,6 +595,8 @@ def _latest_lines(tool: Tool, fetch: Fetch) -> list[str]:
             value = source.read(fetch)
             resolved.append((source.label, value))
         except VersionError as exc:
+            if (limited := _github_limit(source, exc)) is not None:
+                raise RateLimited(limited) from exc
             value = f"unknown: {_reason(exc)}"
         lines.append(f"- latest: {value}" + (f" ({source.url})" if source.url else ""))
     if not lines:
@@ -1730,6 +1769,9 @@ def main(
     except UsageError as exc:
         print(f"catalog-audit: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    except RateLimited as exc:
+        print(f"catalog-audit: {exc}", file=sys.stderr)
+        return EXIT_RETRY
     except ReportRefused as exc:
         for reason in exc.reasons:
             print(f"refused: {reason}", file=sys.stderr)
