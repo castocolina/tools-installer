@@ -841,6 +841,8 @@ def _hook_fact(
         )
         if wanted not in recorded
     ]
+    if pending and pair.supported is not None:
+        pending = list(pair.supported(binary, probe_output, tuple(pending)))
     if pending and pair.settled is not None and binary is not None:
         settled = pair.settled(binary, probe_output)
         pending = [wanted for wanted in pending if wanted not in settled]

@@ -980,6 +980,31 @@ def test_installing_codex_resyncs_codegraph_for_codex_only(monkeypatch: pytest.M
     assert receipt.hooks["codegraph-mcp-register"] == ("claude", "codex")
 
 
+def test_pi_installed_after_codegraph_is_resynced(monkeypatch: pytest.MonkeyPatch):
+    """SPEC R8 ordering edge: Pi installed after codegraph is registered by the end-of-run sweep."""
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude", "pi"}))
+
+    def supported(_argv: list[str]) -> str | None:
+        return "{}"
+
+    monkeypatch.setattr(postinstall, "codegraph_query", supported)
+    _codegraph_receipt({"codegraph-mcp-register": ("claude",)})
+    argvs: list[list[str]] = []
+    outcomes = execute_plan(
+        [PlanRow("pi", Disposition.INSTALL, "not installed")],
+        _run_context(
+            RunRecorder(),
+            catalog={"codegraph": _codegraph_tool(), "pi": _tool("pi")},
+            runner=lambda command: argvs.append(list(command)),
+        ),
+    )
+    assert [argv[argv.index("--target") + 1] for argv in argvs] == ["pi"]
+    assert outcomes[0].resynced == (("codegraph", ("pi",)),)
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks["codegraph-mcp-register"] == ("claude", "pi")
+
+
 def test_a_run_without_a_host_install_runs_no_sweep(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
 

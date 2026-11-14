@@ -4775,9 +4775,24 @@ def test_an_unrecorded_present_host_reads_misconfigured(tmp_path: Path) -> None:
     )
 
 
+def _gate_probe(*, supports_pi: bool) -> Callable[[list[str]], str | None]:
+    """`--version` answers; the Pi gate's `--print-config pi` answers only when supported."""
+
+    def probe(argv: list[str]) -> str | None:
+        if argv[1:] == ["install", "--print-config", "pi"]:
+            return "{}" if supports_pi else None
+        return "1.0.0"
+
+    return probe
+
+
 def test_hook_drift_ignores_absent_unsupported_and_receiptless_tools(tmp_path: Path) -> None:
     _hook_receipt({"codegraph-mcp-register": ()})
-    only_pi = _settled_states(_hook_service(tmp_path, frozenset({"pi"})), [_hook_tool()])
+    unsupported = _gate_probe(supports_pi=False)
+    only_pi = _settled_states(
+        _hook_service(tmp_path, frozenset({"pi", "codegraph"}), probe_output=unsupported),
+        [_hook_tool()],
+    )
     assert only_pi["codegraph"].unconfigured == ()
     assert only_pi["codegraph"].health is not Health.MISCONFIGURED
 
@@ -4788,9 +4803,41 @@ def test_hook_drift_ignores_absent_unsupported_and_receiptless_tools(tmp_path: P
     assert bare["codegraph-bare"].health is not Health.MISCONFIGURED
 
     _hook_receipt({"codegraph-mcp-register": ("claude", "codex", "opencode", "cursor")})
-    recorded = _settled_states(_hook_service(tmp_path, present_all), [_hook_tool()])
+    recorded = _settled_states(
+        _hook_service(tmp_path, present_all | {"codegraph"}, probe_output=unsupported),
+        [_hook_tool()],
+    )
     assert recorded["codegraph"].unconfigured == ()
     assert recorded["codegraph"].health is not Health.MISCONFIGURED
+
+    supported = _settled_states(
+        _hook_service(
+            tmp_path, present_all | {"codegraph"}, probe_output=_gate_probe(supports_pi=True)
+        ),
+        [_hook_tool()],
+    )
+    assert supported["codegraph"].reasons[0] == "codegraph is not registered for pi"
+
+
+def test_hook_fact_has_no_pi_drift_without_support(tmp_path: Path) -> None:
+    _hook_receipt({"codegraph-mcp-register": ("claude",)})
+    hosts = frozenset({"claude", "pi", "codegraph"})
+    for supports_pi in (False, True):
+        service = _hook_service(tmp_path, hosts, probe_output=_gate_probe(supports_pi=supports_pi))
+        state = _settled_states(service, [_hook_tool()])["codegraph"]
+        if supports_pi:
+            assert state.reasons[0] == "codegraph is not registered for pi"
+            assert state.unconfigured == (ConfigStep("register codegraph for pi", "hook_register"),)
+        else:
+            assert state.unconfigured == ()
+            assert state.health is not Health.MISCONFIGURED
+
+    # No codegraph binary on PATH: the probe has nothing to run, so Pi is dropped too.
+    service = _hook_service(
+        tmp_path, frozenset({"claude", "pi"}), probe_output=_gate_probe(supports_pi=True)
+    )
+    state = _settled_states(service, [_hook_tool()])["codegraph"]
+    assert state.unconfigured == ()
 
 
 def test_a_present_copilot_the_receipt_lacks_reads_misconfigured(tmp_path: Path) -> None:

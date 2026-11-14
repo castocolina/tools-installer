@@ -183,7 +183,43 @@ _CODEGRAPH_TARGETS: Mapping[str, str] = {
     "opencode": "opencode",
     "cursor": "cursor",
     "copilot": "copilot-cli",
+    "pi": "pi",
 }
+
+
+def _run_codegraph_query(argv: list[str]) -> str | None:
+    """Stdout of a read-only codegraph command on exit 0, None on any failure.
+
+    codegraph records telemetry under ~/.codegraph on every run; both opt-outs it honours
+    are set so a capability probe leaves nothing behind.
+    """
+    try:
+        return run_query(argv, env={"CODEGRAPH_TELEMETRY": "0", "DO_NOT_TRACK": "1"})
+    except (CommandError, OSError):
+        return None
+
+
+# Replaceable like `herdr_query`: tests never launch the real codegraph.
+codegraph_query: Callable[[list[str]], str | None] = _run_codegraph_query
+
+
+def _codegraph_supported(
+    binary: str | None, probe: Callable[[list[str]], str | None], wanted: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The ids of `wanted` this codegraph can register.
+
+    One id its `--target` does not know fails the whole call, claude and codex included, so
+    `pi` (not in every release) is kept only when `--print-config pi` exits 0. The probe
+    runs only when `pi` is wanted, and its argv is fixed here, never registry text.
+    """
+    if "pi" not in wanted:
+        return wanted
+    if binary is not None and probe([binary, "install", "--print-config", "pi"]) is not None:
+        return wanted
+    return tuple(known for known in wanted if known != "pi")
+
+
+_PI_SKIPPED = "pi: this codegraph has no pi target, so Pi is not registered"
 
 
 def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) -> HookOutcome:
@@ -194,9 +230,14 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     only: for claude it still writes a UserPromptSubmit hook into settings.json and
     creates ~/.claude/CLAUDE.md, and has no flag to skip them (CLAUDE_EXTRAS).
     """
-    csv = ",".join(_CODEGRAPH_TARGETS[harness] for harness in harnesses)
+    binary = _resolve_binary(method, "codegraph")
+    kept = _codegraph_supported(binary, codegraph_query, harnesses)
+    skipped = _PI_SKIPPED if len(kept) < len(harnesses) else None
+    if not kept:
+        return (), skipped
+    csv = ",".join(_CODEGRAPH_TARGETS[harness] for harness in kept)
     argv = [
-        _resolve_binary(method, "codegraph"),
+        binary,
         "install",
         "--target",
         csv,
@@ -208,8 +249,14 @@ def _codegraph_register(method: Method, runner: Runner, harnesses: tuple[str, ..
     try:
         runner(argv)
     except CommandError as exc:
-        return (), f"codegraph MCP registration failed: {command_error_line(exc)}"
-    return tuple(sorted(harnesses)), None
+        failed = f"codegraph MCP registration failed: {command_error_line(exc)}"
+        return (), f"{failed}; {skipped}" if skipped else failed
+    return tuple(sorted(kept)), skipped
+
+
+# What a tool's own installer writes for pi beyond MCP registration, shown with
+# the registration (the claude counterpart is CLAUDE_EXTRAS).
+PI_EXTRAS: Mapping[str, str] = {"codegraph": "pi: codegraph also adds a block to Pi's AGENTS.md"}
 
 
 # What a tool's own installer writes for claude beyond MCP registration, shown with
@@ -426,13 +473,22 @@ class HookPair:
     it is given; `None` when the hook has no undo. `standalone` maps ids wanted on every
     machine regardless of agent hosts to their vendor source: recorded and undone like a
     host, never a harness (`host_labels` drops them). `settled` is the hook's own read-only
-    status: the ids already satisfied, so the drift fact never reads them as pending."""
+    status: the ids already satisfied, so the drift fact never reads them as pending.
+    `supported` is the ids this binary can register at all: the drift fact uses it so `≈`
+    agrees with what a register would do."""
 
     targets: Mapping[str, str] | None
     register: Callable[[Method, Runner, tuple[str, ...]], HookOutcome]
     unregister: Callable[[str, tuple[str, ...]], tuple[tuple[str, ...], ...]] | None = None
     standalone: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     settled: Callable[[str, Callable[[list[str]], str | None]], frozenset[str]] | None = None
+    supported: (
+        Callable[
+            [str | None, Callable[[list[str]], str | None], tuple[str, ...]],
+            tuple[str, ...],
+        ]
+        | None
+    ) = None
 
 
 POSTINSTALL_HOOKS: dict[str, HookPair] = {
@@ -440,6 +496,7 @@ POSTINSTALL_HOOKS: dict[str, HookPair] = {
         targets=_CODEGRAPH_TARGETS,
         register=_codegraph_register,
         unregister=_codegraph_unregister,
+        supported=_codegraph_supported,
     ),
     "herdr-integration": HookPair(
         targets=_HERDR_TARGETS,
