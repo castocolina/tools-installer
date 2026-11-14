@@ -305,7 +305,7 @@ def tweak_policy(
     installed_tools: Mapping[str, bool] | Callable[[str], bool] | None = None,
     ensure_sourced_from: tuple[Path, ...] | Callable[[], tuple[Path, ...]] = (),
 ) -> Policy:
-    """A curated shell-tweak bundle as a Policy, parallel to Tool.
+    """A curated shell-tweak bundle as a Policy.
 
     apply writes the bundle's marker block into rc_path; remove strips it. `active`
     is "the bundle's block is present in rc_path". Idempotent (reuses tweaks'

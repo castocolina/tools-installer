@@ -2271,10 +2271,9 @@ formula = "pnpm"
 # (github.com/volta-cli/volta, fetched 2026-09-05).
 # Consequence: anything installed through volta runs npm's preinstall/install/
 # postinstall scripts unrestricted, which pnpm has gated behind an opt-in
-# allowlist since pnpm v10 (pnpm.io/supply-chain-security). Routing global
-# installs to volta is therefore a security-for-stability tradeoff the user
-# accepted in D-06/D-08 to fix pnpm's global-package loss on self-update —
-# it is not a clean win.
+# allowlist since pnpm v10 (pnpm.io/supply-chain-security). Historical: an
+# earlier version routed a typed `pnpm add -g` to volta, a security-for-stability
+# tradeoff accepted in D-06/D-08; that redirect is retired, the finding stands.
 # Version caveat: npm v12 flips install scripts to opt-in
 # (github.blog/changelog/2026-06-09-upcoming-breaking-changes-for-npm-v12/).
 # The finding above holds for the npm versions Volta pins today and should be

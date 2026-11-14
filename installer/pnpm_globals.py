@@ -5,17 +5,15 @@ directory, so updating pnpm itself loses the previously installed global set
 (pnpm#11520, pnpm#11587, already researched in
 docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md).
 
-Phase 4's volta redirect fixes this preventively only for commands a user
-types; installer/executors.py::_node installs through pnpm by design, so every
-kind="node" registry tool is still a pnpm-managed global and still exposed.
+installer/executors.py::_node installs through pnpm by design, so every
+kind="node" registry tool is a pnpm-managed global and exposed.
 
 Both this module and _node invoke pnpm by an absolute path resolved with
 installer/legacy_guard.py::real_pnpm, because installer/run.py::run_command is
-subprocess.run, which resolves a bare program name through the live PATH —
-and after plan 04-03 the first pnpm on that PATH is this installer's own
-argv-conditional wrapper, which would turn add -g into volta install. Naming
-the binary by absolute path is what keeps the reinstall on pnpm's
-gated-postinstall model.
+subprocess.run, which resolves a bare program name through the live PATH — and
+that could be a leftover pnpm wrapper from an earlier version, which turned
+add -g into volta install. Naming the binary by absolute path is what keeps the
+reinstall on pnpm's gated-postinstall model.
 
 The snapshot is pnpm's OWN live global list (`pnpm list -g --json`), never the
 registry catalog. A catalog entry is a DECLARATION that a tool CAN be installed
@@ -759,8 +757,8 @@ def reinstall_argv(
     the registry knows; an empty policy keeps today's space-separated argv.
 
     `pnpm` is a required keyword because argv[0] must be an absolute path — a bare
-    program name would be resolved by subprocess.run through a PATH whose first
-    entry is this installer's own pnpm wrapper.
+    program name would be resolved by subprocess.run through the live PATH, where
+    a leftover pnpm wrapper from an earlier version could answer it.
     """
     if not packages:
         raise ValueError(_EMPTY_PREVIEW)

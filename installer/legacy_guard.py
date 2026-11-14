@@ -25,7 +25,7 @@ from installer.atomic import atomic_write_text, read_capped, read_snapshot, snap
 from installer.sanitize import sanitize_log_line
 
 SHIM_SENTINEL = "# tools-installer-ban-shim"
-REDIRECT_SENTINEL: str = "# tools-installer-redirect-shim"
+REDIRECT_SENTINEL = "# tools-installer-redirect-shim"
 BAN_BEGIN = "# >>> tools-installer ban >>>"
 BAN_END = "# <<< tools-installer ban <<<"
 GUARD_NAMES: tuple[str, ...] = ("npm", "npx", "pnpm", "pip", "pip3")

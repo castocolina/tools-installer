@@ -471,8 +471,8 @@ def _node(method: Method, runner: Runner) -> None:
     allow_build = _opt_pkg_list(method, "allow_build")
     versions = _opt_version_map(method, "versions")
     smoke = _opt_smoke_name(method)
-    # pnpm is invoked by absolute path because the managed bin dir may hold this
-    # installer's own argv-conditional pnpm wrapper, and a global install
+    # pnpm is invoked by absolute path because the managed bin dir may still hold
+    # a leftover pnpm wrapper from an earlier version, and a global install
     # performed by this installer must reach real pnpm so its gated postinstall
     # model still applies.
     pnpm = real_pnpm()
@@ -504,7 +504,7 @@ def _node(method: Method, runner: Runner) -> None:
     if co_install or allow_build:
         floor = PNPM_CO_INSTALL_MIN if co_install else PNPM_ALLOW_BUILD_MIN
         # Probe the resolved absolute path, never the bare name: a bare `pnpm`
-        # would be answered by this installer's own argv-conditional wrapper.
+        # could be answered by a leftover wrapper from an earlier version.
         _require_minimum("pnpm", [pnpm, "--version"], floor)
     if isinstance(min_node, str) and min_node:
         # Probe bare `node`: this installer ships no node shim, and the node
