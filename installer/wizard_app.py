@@ -65,7 +65,6 @@ from installer.guidance import (
     competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
-    guard_guidance,
 )
 from installer.locations import bin_dir, display_path
 from installer.model import Tool
@@ -376,7 +375,6 @@ class DoctorScreen(AppScreen):
     def __init__(
         self,
         report: DoctorReport,
-        guard_state: Callable[[], tuple[dict[str, bool], str | None]],
         fix_preview: str | Callable[[], str],
         fix: Callable[[], None],
         *,
@@ -408,9 +406,9 @@ class DoctorScreen(AppScreen):
         self._guard_file = guard_file
         self.guard_results: list[str] = []
         self._pending_guards: list[tuple[Path, tuple[PathWriterLine, ...]]] = []
-        # A predicate, not its result, for the guard_state reason: the
-        # Policies view can enable the background cleanup one navigation step
-        # away, so every entry re-reads it. WR-02: the daemon half of the
+        # A predicate, not its result: the Policies view can enable the
+        # background cleanup one navigation step away, so every entry re-reads
+        # it. WR-02: the daemon half of the
         # blocking read may spawn `systemctl --user is-active` (bounded, but
         # a frozen UI for its duration), so the event loop only ever calls it
         # with blocking=False (TimerStateCache.peek). The blocking read runs in
@@ -421,14 +419,10 @@ class DoctorScreen(AppScreen):
         # disk_pressure: the render path peeks, the worker below does the
         # blocking read that may issue `systemctl list-unit-files`.
         self.competing = competing
-        # A predicate, not its result: the Policies view installs and removes the
-        # pip/npm ban live, one nav step away, and guard_guidance renders exactly
-        # that state. The PATH audit beside it stays a snapshot on purpose — the
-        # process PATH cannot change until the shell restarts.
-        self._guard_state = guard_state
-        # Same predicate-not-its-result reasoning the guard_state parameter
-        # already carries three lines above: the Policies view changes
-        # something the Doctor renders, one navigation step away.
+        # A predicate, not its result, for the same reason as disk_pressure:
+        # the Policies view changes something the Doctor renders, one
+        # navigation step away. The PATH audit stays a snapshot on purpose —
+        # the process PATH cannot change until the shell restarts.
         if callable(fix_preview):
             self._fix_preview = fix_preview
         else:
@@ -472,9 +466,8 @@ class DoctorScreen(AppScreen):
         # Not globals_error: "nothing to reinstall" is not a failure, and the
         # error branch renders "Reinstall failed." in red.
         self.globals_note: str | None = None
-        # The two live reads' failures, and the status line this screen last wrote
-        # for them (cleared only while it still holds that copy).
-        self._guard_error: str | None = None
+        # The live preview read's failure, and the status line this screen last wrote
+        # for it (cleared only while it still holds that copy).
         self._preview_error: str | None = None
         self._read_line: str | None = None
         # Bumped every time an audit worker is actually started; carried on
@@ -491,11 +484,11 @@ class DoctorScreen(AppScreen):
         yield _BodyStatic(id="doctor-body")
 
     def enter_view(self) -> None:
-        """Re-read the ban state on every entry, and re-ask pnpm off the loop.
+        """Re-read the live state on every entry, and re-ask pnpm off the loop.
 
-        Installed screens are suspended, not unmounted: without this, Policies
-        → toggle the ban → Doctor reports the state from before the toggle. The
-        globals audit needs the same freshness but cannot be taken here
+        Installed screens are suspended, not unmounted: without this, a change
+        made in another view would show in Doctor as the state from before it.
+        The globals audit needs the same freshness but cannot be taken here
         synchronously, so it is started as a worker and rendered when it lands.
         The screen is mounted before entry, so the first entry starts it too.
         """
@@ -562,13 +555,9 @@ class DoctorScreen(AppScreen):
     def _refresh_guidance(self) -> None:
         # IO-free by construction. The pnpm findings are not here: they are the
         # published ToolState reasons, rendered by _refresh_body.
-        read, self._guard_error = run_live(self._guard_state)
-        # A failed read contributes nothing: the earlier answer is not kept (B3).
-        status, warning = read if read is not None else ({}, None)
-        # Position is a decision, pinned by a test: disk pressure follows the guard items.
+        # Position is a decision, pinned by a test: disk pressure follows the PATH items.
         self.guidance = (
             doctor_guidance(self._report, self._duplicate_writers, self._writer_lines)
-            + guard_guidance(status, warning)
             + self._disk_pressure_items()
             + self._competing_items()
         )
@@ -689,7 +678,7 @@ class DoctorScreen(AppScreen):
         self._sync_read_status()
 
     def _sync_read_status(self) -> None:
-        error = self._guard_error or self._preview_error
+        error = self._preview_error
         if error is not None:
             self._read_line = f"{_DOCTOR_READ_ERROR}{error.partition(chr(10))[0]}."
             self.status.set(self._read_line, "error")
@@ -3694,7 +3683,6 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         blurbs: Mapping[str, str],
         *,
         report: DoctorReport,
-        guard_state: Callable[[], tuple[dict[str, bool], str | None]],
         fix_preview: str | Callable[[], str],
         fix: Callable[[], None],
         uninstall: UninstallInputs,
@@ -3815,7 +3803,6 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             {
                 "doctor": DoctorScreen(
                     report,
-                    guard_state,
                     fix_preview,
                     fix,
                     duplicate_writers=group_writer_lines(writer_lines),

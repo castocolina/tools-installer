@@ -2016,28 +2016,6 @@ def test_guard_state_joins_path_and_redirect_warnings(tmp_path: Path) -> None:
     assert "pnpm" in warning
 
 
-def test_run_doctor_reports_active_ban(tmp_path: Path):
-    from installer.app import run_doctor
-    from installer.guards import install_shims
-
-    shim_dir = tmp_path / ".local" / "bin"
-    install_shims(shim_dir)
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    run_doctor(
-        [],
-        console,
-        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
-        default_bin_dir=shim_dir,
-        path_value=str(shim_dir),
-        exists=lambda _p: True,
-        which=lambda name: str(shim_dir / name),
-    )
-    out = buf.getvalue()
-    assert "Package manager guards active" in out
-    assert "pip: blocked" in out
-
-
 def _mmdc_tool() -> Tool:
     return Tool(
         id="mmdc",
@@ -2138,34 +2116,36 @@ def test_run_doctor_silent_on_healthy_pnpm_globals(
     assert "pnpm-managed global set is incomplete" not in out
 
 
-def test_run_doctor_reports_npx_redirect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_doctor_prints_no_guard_section_even_with_a_leftover_shim(tmp_path: Path) -> None:
     from installer.app import run_doctor
-    from installer.guards import install_redirect_shims
+    from installer.guards import install_shims
 
-    monkeypatch.setenv("HOME", str(tmp_path))
     shim_dir = tmp_path / ".local" / "bin"
-    real_dir = tmp_path / "real"
-    real_dir.mkdir()
-    pnpm = real_dir / "pnpm"
-    pnpm.write_text("#!/bin/sh\n")
-    pnpm.chmod(0o755)
-
-    def lookup(name: str, _path: str) -> str | None:
-        return str(pnpm) if name == "pnpm" else None
-
-    install_redirect_shims(shim_dir, path_value=str(real_dir), lookup=lookup)
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    run_doctor(
-        [],
-        console,
-        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
-        default_bin_dir=shim_dir,
-        path_value=str(shim_dir),
-        exists=lambda _p: True,
-        which=lambda name: str(shim_dir / name),
-    )
-    assert "npx: redirected to pnpm dlx" in buf.getvalue()
+    install_shims(shim_dir)  # a marked leftover, first on PATH
+    outputs: list[str] = []
+    for _ in range(2):  # a repeated run prints nothing either (R4 idempotency)
+        buf = io.StringIO()
+        run_doctor(
+            [],
+            Console(file=buf, width=100),
+            platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+            default_bin_dir=shim_dir,
+            path_value=str(shim_dir),
+            exists=lambda _p: True,
+            which=lambda name: str(shim_dir / name),
+        )
+        outputs.append(buf.getvalue())
+    for out in outputs:
+        for text in (
+            "Package manager guards",
+            "Volta global installs",
+            "PATH order warning",
+            "so the ban applies",
+            "npm: blocked",
+            "project-local",
+        ):
+            assert text not in out
+    assert outputs[0] == outputs[1]
 
 
 def _present(_path: Path) -> bool:

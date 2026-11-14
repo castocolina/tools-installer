@@ -1339,23 +1339,6 @@ def test_doctor_preview_carries_the_grouped_pinned_allowed_replay(
     assert "--allow-build=puppeteer" in text
 
 
-def test_the_doctor_view_reads_the_ban_state_live(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The Doctor report's ban half is a predicate too: the Policies view
-    installs and removes the ban one nav step away."""
-    _sandbox(monkeypatch, tmp_path)
-    seen = _capture_app(monkeypatch)
-    assert setup.main(["--doctor"]) == 0
-    captured = seen[0]["guard_state"]
-    assert callable(captured)
-    read_guard = cast("Callable[[], tuple[dict[str, bool], str | None]]", captured)
-
-    assert not any(read_guard()[0].values())
-    install_shims(tmp_path / ".local" / "bin")
-    assert any(read_guard()[0].values())
-
-
 def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

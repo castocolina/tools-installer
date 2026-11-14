@@ -24,7 +24,6 @@ from installer import runlock, schedules, wizard_app
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import DaemonState, Severity
-from installer.guards import guard_status
 from installer.model import Method, Tool
 from installer.schedules import SCHEDULES
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, TimerStateCache
@@ -70,7 +69,6 @@ def make_app(
         [tool],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(env.home), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(

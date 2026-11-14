@@ -390,7 +390,6 @@ def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
         catalog,
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(

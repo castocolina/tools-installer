@@ -60,7 +60,6 @@ from installer.render import (
     render_disk_pressure,
     render_doctor,
     render_guard,
-    render_guard_status,
     render_node_globals,
     render_plan,
     render_rc_duplicates,
@@ -295,12 +294,7 @@ def guard_state(
     """The pip/npm-ban status and the PATH-order warning — the latter shown only
     when a ban is actually installed (an irrelevant warning otherwise).
 
-    Split out of `doctor_data` because it is the half that goes STALE inside a
-    running app: the Policies view installs and removes the ban live, one nav
-    step from both the Doctor report that describes it and the Uninstall row
-    that offers to remove it. Those two views re-read this on entry, while the
-    PATH audit stays a build-time snapshot — the process PATH cannot change
-    until the shell restarts, so re-auditing would only re-show "missing".
+    Only `run_guard` still reads it; no Doctor or Uninstall view does.
     """
     status = guard_status(default_bin_dir)
     path_warning = (
@@ -354,15 +348,12 @@ def doctor_data(
     default_bin_dir: Path,
     path_value: str,
     exists: Callable[[Path], bool],
-    which: Callable[[str], str | None] = shutil.which,
-) -> tuple[DoctorReport, dict[str, bool], str | None]:
-    """Assemble the doctor inputs shared by the CLI report and the TUI screen:
-    the PATH audit, the pip/npm-ban status, and the PATH-order warning."""
+) -> DoctorReport:
+    """Assemble the doctor input shared by the CLI report and the TUI screen:
+    the PATH audit plus the broken links in the managed bin dir."""
     bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
     report = audit_path(bin_dirs, path_value, exists)
-    report = dataclasses.replace(report, broken_links=scan_bin_links(default_bin_dir))
-    status, warning = guard_state(default_bin_dir, path_value, which)
-    return report, status, warning
+    return dataclasses.replace(report, broken_links=scan_bin_links(default_bin_dir))
 
 
 def run_doctor(
@@ -393,19 +384,16 @@ def run_doctor(
     15.7-02's D-03b already makes `probe_disk_pressure` total over filesystem
     and probe-conversion failure; the guard below covers the INJECTED
     closure a caller composes around it, which a caller can make fail, rather
-    than re-guarding the probe itself. It is deliberately not a fourth
-    `doctor_data` element: that tuple is destructured positionally.
+    than re-guarding the probe itself.
     """
-    report, status, warning = doctor_data(
+    report = doctor_data(
         tools,
         platform=platform,
         default_bin_dir=default_bin_dir,
         path_value=path_value,
         exists=exists,
-        which=which,
     )
     render_doctor(report, console, duplicate_writers(report))
-    render_guard_status(status, warning, console)
     render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
     if disk_pressure is not None:
         with contextlib.suppress(OSError, ValueError):

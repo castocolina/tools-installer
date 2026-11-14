@@ -87,7 +87,6 @@ def _app(
         tools,
         load_categories(REGISTRY),
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -515,7 +514,6 @@ async def test_a_long_review_scrolls_and_keeps_its_keys_line(tmp_path: Path) -> 
         [gh, mmdc, tsx],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -642,7 +640,6 @@ async def test_uninstall_review_fits_80x20(tmp_path: Path, monkeypatch: pytest.M
         [codegraph],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(

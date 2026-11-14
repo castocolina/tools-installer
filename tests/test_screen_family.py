@@ -20,6 +20,7 @@ from installer.doctor import DoctorReport
 from installer.engine import InstallOutcome
 from installer.enums import MutationHolder, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
+from installer.guidance import disk_pressure_guidance
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
@@ -96,7 +97,6 @@ def _family_app(
     uninstall: UninstallInputs | None = None,
     execute: ExecuteInputs | None = None,
     node_globals: Callable[[], NodeGlobalsReport] | None = None,
-    guard_state: Callable[[], tuple[dict[str, bool], str | None]] | None = None,
     fix_preview: str | Callable[[], str] = "preview",
     policies: PolicyInputs | None = None,
     fix: Callable[[], None] = lambda: None,
@@ -108,7 +108,6 @@ def _family_app(
         list(tools) if tools is not None else [_tool("rg"), _tool("fd")],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=guard_state or (lambda: ({"pip": False, "npm": False}, None)),
         fix_preview=fix_preview,
         fix=fix,
         node_globals=node_globals,
@@ -1652,7 +1651,6 @@ def _policy_app(
         [rg, fd],
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({"pip": False, "npm": False}, None),
         fix_preview="preview",
         fix=fix,
         node_globals=node_globals,
@@ -2584,38 +2582,27 @@ async def test_a_hostile_pnpm_reason_reaches_the_tiers_without_escape_bytes(tmp_
 _STATE_READ = "Could not read the doctor state: rc file locked."
 
 
-@pytest.mark.parametrize("seam", ["guard_state", "fix_preview"])
-async def test_a_failed_doctor_read_shows_the_error(seam: str):
+async def test_a_failed_doctor_read_shows_the_error():
     failing = {"on": False}
 
-    def guard() -> tuple[dict[str, bool], str | None]:
-        if seam == "guard_state" and failing["on"]:
-            raise OSError("rc file locked\nsecond line")
-        return {"pip": True, "npm": False}, None
-
     def preview() -> str:
-        if seam == "fix_preview" and failing["on"]:
+        if failing["on"]:
             raise OSError("rc file locked\nsecond line")
         return "WIRE-THE-RC-FILE"
 
-    app = _family_app(guard_state=guard, fix_preview=preview)
+    app = _family_app(fix_preview=preview)
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         await app.show_view("doctor")
         await settle(app, pilot)
         doctor = app.view("doctor")
-        first = str(_doctor_text(app))
-        assert "WIRE-THE-RC-FILE" in first
-        assert "pip" in first
+        assert "WIRE-THE-RC-FILE" in str(_doctor_text(app))
         assert doctor.status.text == ""
         failing["on"] = True
         await _reenter_doctor(app, pilot)
         second = str(_doctor_text(app))
         assert (doctor.status.text, doctor.status.severity) == (_STATE_READ, Severity.ERROR)
-        if seam == "guard_state":
-            assert "pip" not in second
-        else:
-            assert "WIRE-THE-RC-FILE" not in second
+        assert "WIRE-THE-RC-FILE" not in second
         failing["on"] = False
         await _reenter_doctor(app, pilot)
         assert doctor.status.text == ""
@@ -2662,9 +2649,7 @@ async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
         del blocking
         return at_risk if findings["on"] else healthy
 
-    def guard() -> tuple[dict[str, bool], str | None]:
-        warning = "pip shim is shadowed" if findings["on"] else None
-        return {"pip": findings["on"], "npm": False}, warning
+    [disk_item] = disk_pressure_guidance(at_risk)
 
     def build(directory: Path) -> tuple[UnifiedApp, FrozenStateService]:
         service = frozen_service(directory)
@@ -2672,7 +2657,6 @@ async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
         app = _family_app(
             tools=[tool],
             version_refresh=service,
-            guard_state=guard,
             policies=PolicyInputs(policies=[], disk_pressure=probe),
         )
         return app, service
@@ -2682,7 +2666,7 @@ async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
         await settle(app, pilot)
         await app.show_view("doctor")
         await settle(app, pilot)
-        assert "pip shim is shadowed" in str(_doctor_text(app))
+        assert disk_item.title in str(_doctor_text(app))
         stale = _SMOKE.format(reason="a stale finding")
         service.publish([pass_state(tool, platform=service.platform, broken=(stale,))])
         await _reenter_doctor(app, pilot)
@@ -2698,7 +2682,7 @@ async def test_doctor_with_no_findings_draws_its_empty_copy(tmp_path: Path):
         await settle(fresh_app, pilot)
         fresh = str(_doctor_text(fresh_app))
     assert again == fresh
-    assert "pip shim is shadowed" not in again
+    assert disk_item.title not in again
     assert "a stale finding" not in again
 
 

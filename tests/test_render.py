@@ -23,7 +23,6 @@ from installer.render import (
     render_done_notes,
     render_failure_details,
     render_guard,
-    render_guard_status,
     render_handoff,
     render_hook_lines,
     render_node_globals,
@@ -367,42 +366,6 @@ def test_render_guard_removing_has_no_warning():
     assert "removed: pip" in out
 
 
-def test_render_guard_status_silent_when_inactive():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard_status({"pip": False, "npm": False, "pip3": False}, None, console)
-    assert buf.getvalue() == ""
-
-
-def test_render_guard_status_reports_per_command_labels():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard_status({"npx": True, "pip": True, "npm": False}, None, console)
-    out = buf.getvalue()
-    assert "Package manager guards active" in out
-    assert "npx: redirected to pnpm dlx" in out
-    assert "pip: blocked" in out
-
-
-def test_render_guard_status_warning_only_no_active_shims():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard_status({"pip": False, "npm": False}, "PATH order warning", console)
-    out = buf.getvalue()
-    assert "Package manager guards active" not in out
-    assert "PATH order warning" in out
-
-
-def test_render_guard_status_active_shims_no_warning():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard_status({"pip": True, "npm": False}, None, console)
-    out = buf.getvalue()
-    assert "Package manager guards active" in out
-    assert "pip: blocked" in out
-    assert "guard warning" not in out
-
-
 def test_render_node_globals_silent_when_healthy() -> None:
     buf = io.StringIO()
     console = Console(file=buf, width=100)
@@ -425,14 +388,6 @@ def test_render_node_globals_prints_finding() -> None:
     out = buf.getvalue()
     assert "mmdc" in out
     assert "make setup" in out
-
-
-def test_render_guard_status_includes_reload_next_step():
-    buf = io.StringIO()
-    console = Console(file=buf, width=100)
-    render_guard_status({"npx": True}, None, console)
-    out = buf.getvalue()
-    assert "hash -r" in out
 
 
 def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> None:

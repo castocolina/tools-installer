@@ -13,7 +13,6 @@ from pathlib import Path
 from installer.diskusage import DISK_FREE_WARN_PERCENT, TMP_USED_WARN_PERCENT, DiskPressure
 from installer.doctor import DoctorReport, has_problems
 from installer.enums import DaemonState, Severity
-from installer.guards import GLOBAL_REDIRECTED, REDIRECTED, guard_label, guarded_names
 from installer.pnpm_globals import (
     PNPM_SMOKE_FAILED,
     PNPM_SPLIT_GROUP,
@@ -214,78 +213,6 @@ def doctor_guidance(
                     "clears when you open a new shell. To confirm, run "
                     "`env -i HOME=\"$HOME\" bash -lic 'echo $PATH'` — if it still "
                     "repeats there, an rc file is adding it on every shell."
-                ),
-                severity=Severity.WARN,
-            )
-        )
-    return items
-
-
-def guard_guidance(status: dict[str, bool], warning: str | None) -> list[Guidance]:
-    """Per-command guard labels + PATH-order guidance.
-
-    Empty when nothing is active and there is no warning.
-    """
-    items: list[Guidance] = []
-    active = [name for name in guarded_names() if status.get(name, False)]
-    if active:
-        meaning = "; ".join(f"{name}: {guard_label(name)}" for name in active) + "."
-        # guard_label is deliberately static, so npx still reads as redirected even
-        # on a machine where install_redirect_shims fell back to the hard-block body
-        # because pnpm was unresolvable. That honest signal lives in
-        # guard_redirect_warning, which plan 04-01 folded into guard_state's warning
-        # string — a separate channel a reader could miss. This is the accepted cost
-        # of D-02's "no status enum" constraint, not a defect; the cross-reference
-        # is what keeps the two channels connected on the page. Do not recompute
-        # redirect health here: this function takes a bool dict and a string, and
-        # reading the shim bodies from it would put IO in the wording layer.
-        if warning is not None and any(
-            name in REDIRECTED or name in GLOBAL_REDIRECTED for name in active
-        ):
-            meaning += (
-                " Labels describe the configured redirect; "
-                "the warning below reports anything that degraded."
-            )
-        items.append(
-            Guidance(
-                title="Package manager guards active",
-                meaning=meaning,
-                next_step="Open a new shell or run `hash -r` so cached command paths refresh.",
-                severity=Severity.OK,
-            )
-        )
-    # Either global-redirect name being installed routes global installs to
-    # volta. Gating on pnpm alone missed the normal machine that has volta but
-    # no pnpm — `npm i -g pnpm` is itself redirected now — where the npm wrapper
-    # is written and `npm i -g <pkg>` runs volta's ungated install scripts with
-    # the user told nothing.
-    #
-    # This reads the same bool dict guard_label does, so like guard_label it
-    # describes the CONFIGURED redirect: on a machine where volta was
-    # unresolvable at apply time, npm carries the hard-block body instead and
-    # guard_redirect_warning says so in the warning below. That split is D-02's
-    # "no status enum" cost, and the note above already cross-references it. Do
-    # not read the shim bodies from here: this is the wording layer, not an IO
-    # layer.
-    if status.get("pnpm", False) or status.get("npm", False):
-        items.append(
-            Guidance(
-                title="Volta global installs run npm install scripts",
-                meaning=(
-                    "A global install through volta runs a real `npm install --global`; "
-                    "npm's install scripts are not gated the way pnpm gates them."
-                ),
-                next_step="Keep untrusted packages on a project-local `pnpm add`.",
-                severity=Severity.OK,
-            )
-        )
-    if warning:
-        items.append(
-            Guidance(
-                title="PATH order warning",
-                meaning=warning,
-                next_step=(
-                    "Put the shim dir ahead of the real binary on PATH, then reopen the shell."
                 ),
                 severity=Severity.WARN,
             )

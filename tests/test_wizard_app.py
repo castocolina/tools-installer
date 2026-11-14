@@ -32,7 +32,6 @@ from installer.guidance import (
     competing_mechanism_guidance,
     disk_pressure_guidance,
     doctor_guidance,
-    guard_guidance,
 )
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
@@ -271,8 +270,6 @@ def _probe(
 def _app(
     *,
     report: DoctorReport | None = None,
-    guard_status: dict[str, bool] | Callable[[], dict[str, bool]] | None = None,
-    guard_warning: str | None = None,
     fix_preview: str | Callable[[], str] = "Will wire ~/.local/bin into ~/.zshrc",
     fix: Callable[[], None] = lambda: None,
     uninstall: UninstallInputs | None = None,
@@ -298,12 +295,10 @@ def _app(
     if cases is not None:
         tools = [tool for tool, _state in cases]
     tools = tools if tools is not None else [_tool("rg"), _tool("fd")]
-    read_status = _predicate(guard_status or {"pip": False, "npm": False})
     return UnifiedApp(
         tools,
         {"search": "find things"},
         report=report or DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (read_status(), guard_warning),
         fix_preview=fix_preview,
         fix=fix,
         uninstall=uninstall or _uninstall_inputs(),
@@ -450,12 +445,11 @@ def _guard_doctor(
     writer_lines: Sequence[PathWriterLine] = (),
     rescan: Callable[[], Sequence[PathWriterLine]] | None = None,
     guard_file: Callable[[Path, Sequence[PathWriterLine]], PathGuardOutcome] | None = None,
-    guard_state: Callable[[], tuple[dict[str, bool], str | None]] | None = None,
+    fix_preview: str | Callable[[], str] = "preview",
 ) -> DoctorScreen:
     return DoctorScreen(
         report or DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state or (lambda: ({"pip": False, "npm": False}, None)),
-        "preview",
+        fix_preview,
         fix or (lambda: None),
         node_globals=lambda: NodeGlobalsReport(entries=(), missing=(), managed=()),
         globals_preview=lambda _report: "",
@@ -575,15 +569,15 @@ async def test_doctor_guard_chain_end_reads_the_live_state_once() -> None:
     record = _writer_line(rc)
     reads: list[int] = []
 
-    def guard_state() -> tuple[dict[str, bool], str | None]:
+    def preview() -> str:
         reads.append(1)
-        return {"pip": False, "npm": False}, None
+        return "preview"
 
     screen = _guard_doctor(
         writer_lines=[record],
         rescan=lambda: [record],
         guard_file=lambda _path, _lines: PathGuardOutcome("guarded"),
-        guard_state=guard_state,
+        fix_preview=preview,
     )
     app = _DoctorHost(screen)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -994,22 +988,27 @@ async def test_doctor_screen_adapts_the_body_with_a_frozen_path_note_once_applie
 
 
 async def test_doctor_enter_applies_fix_and_refreshes_guidance() -> None:
-    """A guard reading that flips as a SIDE EFFECT of the fix must be visible in
+    """A reading that flips as a SIDE EFFECT of the fix must be visible in
     the same rendered frame as the success line — action_apply cannot render
     guidance it computed before the fix ran (D-01)."""
     calls: list[str] = []
-    status = {"pip": False, "npm": False}
+    current = [_pressure()]
+    [disk_item] = disk_pressure_guidance(_AT_RISK)
 
     def fix() -> None:
         calls.append("fix")
-        status["pip"] = True
+        current[0] = _AT_RISK
 
-    app = _app(guard_status=lambda: status, fix=fix, initial_view="doctor")
+    app = _app(
+        policies=_policy_inputs(disk_pressure=_probe(lambda: current[0])),
+        fix=fix,
+        initial_view="doctor",
+    )
 
     async with app.run_test(size=(100, 30)) as pilot:
         assert isinstance(app.screen, DoctorScreen)
         body_before = str(app.screen.query_one("#doctor-body", Static).render())
-        assert "Package manager guards active" not in body_before
+        assert disk_item.title not in body_before
         await pilot.press("enter")
         assert calls == ["fix"]
         assert isinstance(app.screen, DoctorScreen)
@@ -1017,21 +1016,26 @@ async def test_doctor_enter_applies_fix_and_refreshes_guidance() -> None:
         assert screen.applied is True
         assert screen.error is None
         body_after = str(screen.query_one("#doctor-body", Static).render())
-        assert "Package manager guards active" in body_after
+        assert disk_item.title in body_after
 
 
 async def test_doctor_enter_applies_failed_fix_still_refreshes_guidance() -> None:
     """The refresh is unconditional, not success-gated: a fix that moves the
-    guard state and then raises must still render the moved state (D-01).
+    live state and then raises must still render the moved state (D-01).
     run_live runs the callable before it maps the exception, so a failed fix
     can already have touched the machine by the time self.error is set."""
-    status = {"pip": False, "npm": False}
+    current = [_pressure()]
+    [disk_item] = disk_pressure_guidance(_AT_RISK)
 
     def fix() -> None:
-        status["pip"] = True
+        current[0] = _AT_RISK
         raise OSError("boom")
 
-    app = _app(guard_status=lambda: status, fix=fix, initial_view="doctor")
+    app = _app(
+        policies=_policy_inputs(disk_pressure=_probe(lambda: current[0])),
+        fix=fix,
+        initial_view="doctor",
+    )
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("enter")
@@ -1041,7 +1045,7 @@ async def test_doctor_enter_applies_failed_fix_still_refreshes_guidance() -> Non
         assert screen.error == "boom"
         body = str(screen.query_one("#doctor-body", Static).render())
         assert "Fix failed." in body
-        assert "Package manager guards active" in body
+        assert disk_item.title in body
 
 
 async def test_initial_view_opens_on_that_view() -> None:
@@ -3098,30 +3102,6 @@ async def test_uninstall_ban_row_disappears_once_the_ban_is_removed_elsewhere() 
         assert "#ban" not in {row.value for row in app.screen.query_one(DataTable[Any]).rows}
 
 
-async def test_doctor_ban_report_follows_a_policies_toggle() -> None:
-    """Installed screens are suspended, not unmounted, so DoctorScreen.on_mount
-    fires once for the life of the app. Without enter_view the report shows the
-    ban state from before the user toggled it one nav step away."""
-    status = {"pip": False, "npm": False}
-    app = _app(guard_status=lambda: status)
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press("4")
-        assert isinstance(app.screen, DoctorScreen)
-        assert all("ban" not in item.title.lower() for item in app.screen.guidance)
-        status["pip"] = True  # PoliciesScreen.action_toggle_policy → ban_policy.apply
-        await pilot.press("escape")
-        await pilot.press("4")
-        assert isinstance(app.screen, DoctorScreen)
-        assert any("guards active" in item.title.lower() for item in app.screen.guidance)
-
-
-async def test_doctor_screen_shows_npx_redirect_label() -> None:
-    app = _app(guard_status={"npx": True}, initial_view="doctor")
-    async with app.run_test(size=(100, 30)):
-        assert isinstance(app.screen, DoctorScreen)
-        assert any("npx: redirected to pnpm dlx" in item.meaning for item in app.screen.guidance)
-
-
 async def test_doctor_screen_shows_missing_pnpm_globals_and_preview() -> None:
     preview = "/real/bin/pnpm add -g @mermaid-js/mermaid-cli"
     app = _app(
@@ -3651,7 +3631,6 @@ def test_unified_app_constructs_without_node_globals_closures() -> None:
         tools,
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({"pip": False}, None),
         fix_preview="preview",
         fix=lambda: None,
         uninstall=_uninstall_inputs(),
@@ -3682,9 +3661,7 @@ async def test_doctor_without_disk_pressure_renders_exactly_as_today() -> None:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         assert app.screen.disk_pressure is None
-        assert app.screen.guidance == doctor_guidance(report) + guard_guidance(
-            {"pip": False, "npm": False}, None
-        )
+        assert app.screen.guidance == doctor_guidance(report)
 
 
 async def test_doctor_shows_the_at_risk_disk_pressure_item() -> None:
@@ -3702,13 +3679,12 @@ async def test_doctor_healthy_disk_pressure_adds_nothing() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert app.screen.guidance == _HEALTHY_DOCTOR + guard_guidance(
-            {"pip": False, "npm": False}, None
-        )
+        assert app.screen.guidance == _HEALTHY_DOCTOR
 
 
-async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_path: Path) -> None:
-    warning = "pip shim is shadowed"
+async def test_doctor_disk_item_follows_the_path_items_and_precedes_pnpm_reasons(
+    tmp_path: Path,
+) -> None:
     mmdc = replace(
         _tool("mmdc"),
         methods=(Method(kind="node", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
@@ -3716,7 +3692,6 @@ async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_pat
     service = frozen_service(tmp_path)
     service.publish([pass_state(mmdc, platform=service.platform, broken=(BROKEN_SHIM_REASON,))])
     app = _app(
-        guard_warning=warning,
         node_globals=lambda: _mmdc_report(),
         policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)),
         initial_view="doctor",
@@ -3726,11 +3701,7 @@ async def test_doctor_disk_item_sits_after_guard_and_before_pnpm_reasons(tmp_pat
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        guard_items = guard_guidance({"pip": False, "npm": False}, warning)
-        assert guard_items
-        assert app.screen.guidance == (
-            _HEALTHY_DOCTOR + guard_items + disk_pressure_guidance(_AT_RISK)
-        )
+        assert app.screen.guidance == _HEALTHY_DOCTOR + disk_pressure_guidance(_AT_RISK)
         body = _doctor_body(app)
         [disk_item] = disk_pressure_guidance(_AT_RISK)
         assert body.index("mmdc: ") > body.index(disk_item.title)
@@ -3892,9 +3863,7 @@ async def test_doctor_survives_a_failing_disk_pressure_closure(error: Exception)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
-        assert app.screen.guidance == _HEALTHY_DOCTOR + guard_guidance(
-            {"pip": False, "npm": False}, None
-        )
+        assert app.screen.guidance == _HEALTHY_DOCTOR
         assert "PATH Doctor" in _doctor_body(app)
 
 
@@ -3910,6 +3879,24 @@ async def test_unified_app_hands_the_policy_inputs_probe_to_the_doctor() -> None
 # -- the disk probe travels on PolicyInputs (plan 15.7-06) --
 
 
+def test_doctor_view_takes_no_guard_state() -> None:
+    assert "guard_state" not in inspect.signature(UnifiedApp.__init__).parameters
+    assert "guard_state" not in inspect.signature(DoctorScreen.__init__).parameters
+
+
+async def test_doctor_view_shows_only_path_disk_and_competing_items_with_a_leftover(
+    tmp_path: Path,
+) -> None:
+    from installer.guards import install_shims
+
+    install_shims(tmp_path / ".local" / "bin")  # a marked leftover shim
+    app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DoctorScreen)
+        assert app.screen.guidance == _HEALTHY_DOCTOR + disk_pressure_guidance(_AT_RISK)
+
+
 def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
     # The probe travels on PolicyInputs.disk_pressure; a parallel UnifiedApp
     # kwarg would make every UnifiedApp(...) construction site grow for a
@@ -3919,7 +3906,6 @@ def test_unified_app_signature_carries_no_disk_pressure_parameter() -> None:
         "tools",
         "blurbs",
         "report",
-        "guard_state",
         "fix_preview",
         "fix",
         "uninstall",
@@ -4038,7 +4024,6 @@ def _reconcile_app(
         [_tool("rg")],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=_uninstall_inputs(remove=remove, tweak_ids=tweak_ids),
@@ -4330,7 +4315,6 @@ def _version_app(
         tools,
         {"search": "find things", "ai": "agents"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=uninstall if uninstall is not None else _uninstall_inputs(),
@@ -5478,7 +5462,6 @@ def _update_app(
         tools,
         {"search": "find things", "ai": "agents", "pkg-mgr": "pkg"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=_uninstall_inputs(),
@@ -6236,7 +6219,6 @@ async def test_a_on_an_all_current_tier_starts_nothing_and_summarizes_n_skipped(
         tools,
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=_uninstall_inputs(),
@@ -6281,7 +6263,6 @@ async def test_a_and_enter_use_the_same_plan_order_as_the_headless_route() -> No
         tools,
         {"search": "find things"},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=_uninstall_inputs(),

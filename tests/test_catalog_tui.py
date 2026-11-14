@@ -111,7 +111,6 @@ def _unified_app(
         tools,
         blurbs,
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(

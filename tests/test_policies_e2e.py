@@ -14,7 +14,6 @@ from textual.widgets import DataTable
 from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
 from installer.enums import Severity
-from installer.guards import guard_status
 from installer.model import Method, Tool
 from installer.policy import (
     Policy,
@@ -62,7 +61,6 @@ def _build_real_app(home: Path) -> tuple[UnifiedApp, Path, Path]:
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -103,7 +101,6 @@ async def test_policies_screen_toggles_a_tweak_bundle_live(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -166,7 +163,6 @@ async def test_policies_screen_toggles_omz_plugins_live(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -214,7 +210,6 @@ def _omz_app(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -345,7 +340,6 @@ async def test_every_policy_detail_fits_the_panel_at_80_columns(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -400,7 +394,6 @@ async def test_cache_redirect_toggles_against_a_sandboxed_home(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -452,7 +445,6 @@ async def test_policies_screen_link_mode_change_moves_active_policies(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -499,12 +491,10 @@ def _mode_app(
     prompt_link_mode: bool = False,
     set_link_mode: Callable[[str], None] | None = None,
 ) -> UnifiedApp:
-    bin_dir = home / ".local" / "bin"
     return UnifiedApp(
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -777,7 +767,6 @@ def _live_app(
         tools if tools is not None else [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: ({}, None),
         fix_preview="",
         fix=lambda: None,
         uninstall=uninstall
@@ -1020,7 +1009,6 @@ def _settings_app(home: Path, *rows: Policy) -> UnifiedApp:
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(home / ".local" / "bin"), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(
@@ -1128,7 +1116,6 @@ async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.Monke
         [_tool()],
         {"search": ""},
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        guard_state=lambda: (guard_status(bin_dir), None),
         fix_preview="",
         fix=lambda: None,
         uninstall=UninstallInputs(

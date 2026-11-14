@@ -777,7 +777,7 @@ def _build_app(
         )
     installed = {tool.id: is_installed(tool) for tool in tools}
     unavailable = {tool.id: unavailable_reason(tool, platform) or False for tool in tools}
-    report, _status, _warning = doctor_data(
+    report = doctor_data(
         tools,
         platform=platform,
         default_bin_dir=_DEFAULT_BIN_DIR,
@@ -1044,7 +1044,6 @@ def _build_app(
         tools,
         load_categories(_REGISTRY),
         report=report,
-        guard_state=_guard_state,
         fix_preview=preview,
         fix=_apply_fix,
         uninstall=uninstall_inputs,
