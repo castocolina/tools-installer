@@ -3986,7 +3986,8 @@ def test_unarmed_collector_wait_returns_immediately() -> None:
     collector = ScheduleDefaultWarnings()
     started = time.monotonic()
     messages, completed = collector.wait(5)
-    assert time.monotonic() - started < 0.2
+    # Far below the 5 s timeout, with room for a loaded CI runner (it once took 0.6 s).
+    assert time.monotonic() - started < 2.0
     assert messages == ()
     assert completed is True
 
