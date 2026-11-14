@@ -61,12 +61,12 @@
     {
       "number": "24.2",
       "name": "Schedules view",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "24.3",
       "name": "Catalog audit skill",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "25",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 12 of 15 · 20% · executing"
+    "reason": "Phase 13 of 15 · 20% · executing"
   },
-  "updated_at": "2026-11-13T16:54:46.666Z"
+  "updated_at": "2026-11-14T00:25:15.328Z"
 }
