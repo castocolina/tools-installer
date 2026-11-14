@@ -326,7 +326,7 @@ tests/                     # pytest suite (offline, deterministic)
 .github/workflows/ci.yml   # CI: make validate + make test on Ubuntu + macOS
 Makefile                   # task interface: install, setup, doctor, build, validate, test
 pyproject.toml             # deps + tool config (ruff, pyright, pytest, coverage, …)
-CLAUDE.md, .claude/        # contributor rules (tooling, testing, git, dev env)
+AGENTS.md, .claude/        # contributor rules (tooling, testing, git, dev env)
 docs/prds/                 # product requirements
 ```
 
