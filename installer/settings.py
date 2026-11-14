@@ -13,8 +13,8 @@ file, so a damaged settings.json costs the user a warning, never the app.
 
 The closed-set check is the mitigation for a tampered or hand-edited state
 file: without it an arbitrary string reaches
-installer.locations.rc_paths_for_mode and ban_rc_paths, which select which of
-the user's shell rc files get written.
+installer.locations.rc_paths_for_mode, which selects which of the user's shell
+rc files get written.
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ class SettingsStore:
         if value not in LINK_MODES:
             raise ValueError(f"rejected link_mode {value!r}")
         # Save FIRST, then update the live mode (17-08): a failed save must
-        # leave self._link_mode on the old value, because the ban/tweak
+        # leave self._link_mode on the old value, because the tweak
         # closures read it live (setup.py::_current_link_mode) and
         # policy.move_link_mode's rollbacks re-apply blocks into the files the
         # LIVE mode selects. Assigning first would point the closures at the
@@ -151,6 +151,6 @@ class SettingsStore:
         save_settings(self._path, Settings(value))
         self._link_mode = value
         # Cleared LAST, after the save: a failed save keeps both the flag and
-        # the old live mode, so the ban/tweak closures keep reading the mode
+        # the old live mode, so the tweak closures keep reading the mode
         # the disk still records (review cycle 2 MEDIUM).
         self._warning = None

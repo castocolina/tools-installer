@@ -4866,6 +4866,123 @@ def test_no_run_option_or_settings_policy_symbols_remain() -> None:
     assert leftovers == []
 
 
+# Whole identifiers of the guard writers, renderers and surfaces 24.4-06 deleted. vulture at
+# min_confidence = 80 would not flag a leftover, so the scan below is the guard.
+_GUARD_IDENTIFIERS = (
+    "ban_alias_block",
+    "write_ban_aliases",
+    "remove_ban_aliases",
+    "shim_script",
+    "redirect_shim_script",
+    "global_redirect_shim_script",
+    "install_shims",
+    "install_redirect_shims",
+    "install_global_redirect_shims",
+    "remove_shims",
+    "guard_status",
+    "guard_label",
+    "guarded_names",
+    "guard_path_warning",
+    "guard_redirect_warning",
+    "exec_targets",
+    "ban_body",
+    "BANNED",
+    "REDIRECTED",
+    "GLOBAL_REDIRECTED",
+    "ban_policy",
+    "run_guard",
+    "_run_guard",
+    "guard_state",
+    "render_guard",
+    "render_guard_status",
+    "guard_guidance",
+    "ban_rc_paths",
+    "shell_path",
+    "_path_prefix",
+    "_warnings_only",
+    "rewrite_outdated_ban_aliases",
+    "rewrite_outdated_npx",
+)
+
+
+def test_no_guard_writer_or_surface_remains() -> None:
+    """No literal sentinel or marker value and no deleted writer identifier is left in the code.
+
+    The literal scan cannot see a new writer that imports a surviving constant; the behavioural
+    proof for the real routes is `test_no_route_writes_a_guard_file`.
+    """
+    root = Path(setup.__file__).parent
+    assert not (root / "installer" / "guards.py").exists()
+    sources = {
+        path: path.read_text() for path in (root / "setup.py", *root.glob("installer/**/*.py"))
+    }
+    allowed = {
+        root / "installer" / "legacy_guard.py",
+        root / "installer" / "helper_assets" / "schedule_runner.py",
+    }
+    needles = (SHIM_SENTINEL, REDIRECT_SENTINEL, BAN_BEGIN, BAN_END)
+    literals = [
+        f"{path.relative_to(root)}: {needle!r}"
+        for path, text in sources.items()
+        if path not in allowed
+        for needle in needles
+        if needle in text
+    ]
+    assert literals == []
+    names = "|".join(re.escape(name) for name in _GUARD_IDENTIFIERS)
+    found = re.compile(rf"\b(?:{names})\b")
+    leftovers = [
+        f"{path.relative_to(root)}: {match.group(0)}"
+        for path, text in sources.items()
+        for match in found.finditer(text)
+    ]
+    assert leftovers == []
+
+
+def _guard_files(home: Path) -> list[Path]:
+    """Every file under the bin dir that holds a sentinel, and every rc file holding a ban block."""
+    found: list[Path] = []
+    bin_dir = home / ".local" / "bin"
+    for path in sorted(bin_dir.iterdir()) if bin_dir.is_dir() else []:
+        if path.is_file() and any(
+            sentinel in path.read_text(errors="replace")
+            for sentinel in (SHIM_SENTINEL, REDIRECT_SENTINEL)
+        ):
+            found.append(path)
+    found.extend(
+        path
+        for path in all_ban_rc_paths()
+        if path.is_file() and BAN_BEGIN in path.read_text(errors="replace")
+    )
+    return found
+
+
+def test_no_route_writes_a_guard_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In a scratch HOME no route and no Policies row writes a sentinel file or a ban block,
+    while an adjacent writer (a tweak row) still writes its own block (R1 adjacency)."""
+    home = Path.home()
+    _sandbox(monkeypatch, home)
+    seen = _capture_app(monkeypatch)
+    assert setup.main(["--uninstall"]) == 0
+    policies = seen[0]["policies"]
+    assert isinstance(policies, PolicyInputs)
+    for policy in policies.policies:
+        policy.apply()
+    assert _guard_files(home) == []
+    assert "tools-installer tweak:docker" in (home / ".myshellrc").read_text()
+
+    buffer = io.StringIO()
+    _headless_route_stubs(monkeypatch, buffer)
+    for argv in (["--doctor"], ["--fix"], ["--uninstall", "--yes"]):
+        assert setup.main(argv) == 0
+    assert _guard_files(home) == []
+
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done])
+    assert setup.main(["--all", "--yes"]) == 0
+    assert _guard_files(home) == []
+
+
 def test_sync_terminals_passes_a_runner_and_drift_does_not(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

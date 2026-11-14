@@ -106,19 +106,11 @@ def rc_paths_for_mode(link_mode: str, shell: str) -> list[Path]:
     return both  # undetectable shell -> wire both
 
 
-def ban_rc_paths(link_mode: str, shell: str) -> list[Path]:
-    """Where to WRITE ban aliases, following the PATH model: centralized/single
-    keep one ~/.myshellrc; split writes into each rc file directly."""
-    if link_mode == "split":
-        return rc_paths_for_mode(link_mode, shell)
-    return [Path.home() / ".myshellrc"]
-
-
 def all_ban_rc_paths() -> list[Path]:
-    """Where to REMOVE aliases from: every file an install could have written to,
-    across all link modes. remove_ban_aliases is a no-op where the block is
-    absent, so removal needs no link-mode guess (which would otherwise strand
-    aliases when the user picks a different mode than they installed with)."""
+    """Every rc file the retired guard could have written its ban block to, across all
+    link modes. The launch remover is a no-op where the block is absent, so removal
+    needs no link-mode guess (which would otherwise strand a block when the user
+    picked a different mode than the guard was installed with)."""
     home = Path.home()
     return [home / ".myshellrc", _zshrc(), home / ".bashrc"]
 
@@ -170,7 +162,7 @@ def path_scan_rc_paths() -> list[Path]:
     to PATH. READ-ONLY: this is the diagnostic set the Doctor scans to explain a
     duplicate PATH entry, never a write target.
 
-    It is deliberately WIDER than `all_ban_rc_paths` (the write set). Two of the
+    It is deliberately WIDER than `all_ban_rc_paths` (the retired guard's removal set). Two of the
     most common duplicate sources are login files this installer never writes:
     a plain prepend in `~/.bash_profile` plus the stock Fedora `~/.bashrc`
     snippet yields exactly the structural 2x that no new terminal clears. A

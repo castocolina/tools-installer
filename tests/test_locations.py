@@ -235,19 +235,6 @@ def test_rc_paths_for_mode_single_follows_the_shell(
     ]
 
 
-def test_ban_rc_paths_follow_the_path_model(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from installer.locations import ban_rc_paths
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    # centralized/single: aliases live in the one managed file
-    assert ban_rc_paths("centralized", "/bin/zsh") == [tmp_path / ".myshellrc"]
-    assert ban_rc_paths("single", "/bin/zsh") == [tmp_path / ".myshellrc"]
-    # split: no ~/.myshellrc exists, write into each rc directly
-    assert ban_rc_paths("split", "/bin/zsh") == [tmp_path / ".zshrc", tmp_path / ".bashrc"]
-
-
 def test_all_ban_rc_paths_cover_every_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from installer.locations import all_ban_rc_paths
 
@@ -314,19 +301,18 @@ def test_zshenv_path_follows_zdotdir(tmp_path: Path) -> None:
 def test_rc_paths_and_ban_sweep_follow_zdotdir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from installer.locations import all_ban_rc_paths, ban_rc_paths, rc_paths_for_mode
+    from installer.locations import all_ban_rc_paths, rc_paths_for_mode
 
     monkeypatch.setenv("HOME", str(tmp_path))
     zdotdir = tmp_path / "zsh"
     zdotdir.mkdir()
     monkeypatch.setenv("ZDOTDIR", str(zdotdir))
-    # The ban aliases and the plugins edit must agree on which .zshrc is real.
+    # The removal sweep and the plugins edit must agree on which .zshrc is real.
     assert rc_paths_for_mode("centralized", "/bin/zsh") == [
         zdotdir / ".zshrc",
         tmp_path / ".bashrc",
     ]
     assert rc_paths_for_mode("single", "/bin/zsh") == [zdotdir / ".zshrc"]
-    assert ban_rc_paths("split", "/bin/zsh") == [zdotdir / ".zshrc", tmp_path / ".bashrc"]
     assert all_ban_rc_paths() == [
         tmp_path / ".myshellrc",
         zdotdir / ".zshrc",
