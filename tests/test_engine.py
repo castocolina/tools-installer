@@ -2781,6 +2781,36 @@ min_node = "22.12.0"
     assert receipt.package == "@mermaid-js/mermaid-cli"
 
 
+def test_bun_bin_dir_is_prepended_and_smoked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scratch_path_for_manager_smoke: Path
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    fake_bun = scratch_path_for_manager_smoke / "bun"
+    fake_bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_bun.chmod(0o755)
+    command = home / ".bun" / "bin" / "rg"
+    smoked: list[Path] = []
+
+    def runner(_argv: list[str]) -> None:
+        command.parent.mkdir(parents=True)
+        command.write_text("#!/bin/sh\n", encoding="utf-8")
+        command.chmod(0o755)
+
+    def record_smoke(path: Path, _argv: tuple[str, ...]) -> None:
+        smoked.append(path)
+
+    monkeypatch.setattr(executors, "smoke_binary", record_smoke)
+    tool = _tool(Method("bun", {"npm_pkg": "ripgrep-npm"}))
+    outcome = install_tool(tool, _platform(), runner=runner, present=lambda _t: False)
+    assert outcome.status == InstallStatus.INSTALLED
+    assert smoked == [command]
+    assert os.environ["PATH"].startswith(str(command.parent))
+
+
 def _bun_then_node_tool() -> Tool:
     params: dict[str, object] = {"npm_pkg": "@mermaid-js/mermaid-cli"}
     return _tool(Method("bun", params), Method("node", params))

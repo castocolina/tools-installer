@@ -301,6 +301,37 @@ def _bin_dir_tool(bin_dir: str, cmd: str = "spring") -> Tool:
     )
 
 
+def test_present_bin_dir_covers_bun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import installer.status as status
+
+    monkeypatch.setattr(status.shutil, "which", _which_none)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    tool = Tool(
+        id="mmdc",
+        name="mmdc",
+        category="diagram",
+        cmd="mmdc",
+        methods=(Method(kind="bun", params={"npm_pkg": "@mermaid-js/mermaid-cli"}),),
+    )
+    assert status.present_bin_dir(tool) is None
+    default_dir = tmp_path / ".bun" / "bin"
+    default_dir.mkdir(parents=True)
+    command = default_dir / "mmdc"
+    command.write_text("#!/bin/sh\n")
+    command.chmod(0o755)
+    assert status.present_bin_dir(tool) == default_dir
+    assert is_installed(tool) is True
+
+    command.unlink()
+    custom = tmp_path / "custom-bin"
+    custom.mkdir()
+    (custom / "mmdc").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("BUN_INSTALL_BIN", str(custom))
+    assert status.present_bin_dir(tool) == custom
+
+
 def test_declared_bin_dir_holding_the_command_counts_as_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -217,7 +217,16 @@ def configure_path(
             stub_shellrc = shellrc_path
         if consolidation.status == "consolidated":
             console.print(f"Consolidated {shellrc_path} into {myshellrc_path}.")
-    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists)
+
+    def name_skipped_dir(path: Path) -> None:
+        console.print(
+            f"{sanitize_log_line(str(path))} was not added to your shell's PATH: its path "
+            "holds a character the shell would interpret; add it yourself.",
+            markup=False,
+            soft_wrap=True,
+        )
+
+    bin_dirs = collect_bin_dirs(tools, platform, default_bin_dir, exists, on_skip=name_skipped_dir)
     if link_mode == "split":
         # Split mode maintains no ~/.myshellrc; consolidating into a file nothing
         # sources would relocate foreign content while reporting a false success.
