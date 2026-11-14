@@ -678,7 +678,7 @@ Research must verify these points before the design is locked:
 - What "brew first" means on Linux hosts without brew.
 **Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.5 SPEC and D-23)*
 **Depends on:** Phase 24.4
-**Plans:** 3/9 plans executed
+**Plans:** 5/9 plans executed
 
 Plans:
 **Wave 1**
@@ -691,8 +691,8 @@ Plans:
 - [x] 24.5-03-PLAN.md — Owner `bun`: file-based inventory, attribution, receipts, labels, the removal argv row, live per-pass read (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 24.5-04-PLAN.md — bun-owned version status (package.json plus npm latest) and `bun update -g` with the exact-pin refusal (wave 4)
-- [ ] 24.5-05-PLAN.md — `bun remove --global` with the kept-peer result; the Doctor's browser audit covers bun-owned tools (wave 4)
+- [x] 24.5-04-PLAN.md — bun-owned version status (package.json plus npm latest) and `bun update -g` with the exact-pin refusal (wave 4)
+- [x] 24.5-05-PLAN.md — `bun remove --global` with the kept-peer result; the Doctor's browser audit covers bun-owned tools (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 24.5-06-PLAN.md — mmdc, puppeteer and pi install through bun first; pnpm fallback; pi leaves host_setup; PRIO-05 fixtures; registry comments (wave 5)
