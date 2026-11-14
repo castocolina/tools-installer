@@ -20,6 +20,10 @@ _LINK_RE = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
 _REPO_PATH_RE = re.compile(r"`((?:\.claude|installer|scripts|tests)/[^\s`*<>:]+)(?::\d+)?`")
 
 
+def _heads() -> frozenset[str]:
+    return catalog_audit.command_heads(catalog_audit.load_tools(catalog_audit.REGISTRY))
+
+
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -45,7 +49,10 @@ def test_report_template_passes_the_writer() -> None:
     assert match is not None
     example = match.group(1)
     assert catalog_audit.FOOTER not in example
-    assert catalog_audit.validate_report(example, "opencode", home=Path("/nonexistent-home")) == []
+    problems = catalog_audit.validate_report(
+        example, "opencode", home=Path("/nonexistent-home"), heads=_heads()
+    )
+    assert problems == []
 
 
 def test_skill_loop_names_the_subcommands() -> None:
@@ -385,7 +392,9 @@ def test_resume_eval_fixture_is_a_partial_run() -> None:
         if path.stem in registry:
             report = body.removesuffix(catalog_audit.FOOTER)
             home = Path("/nonexistent-home")
-            assert catalog_audit.validate_report(report, path.stem, home=home) == [], path.name
+            assert (
+                catalog_audit.validate_report(report, path.stem, home=home, heads=_heads()) == []
+            ), path.name
 
 
 def test_skill_judge_verdicts_are_well_formed() -> None:

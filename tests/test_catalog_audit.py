@@ -21,6 +21,7 @@ from installer.model import Method, Tool, load_tools
 from tests.home_fingerprint import fingerprint, fingerprint_diff
 
 DAY = "2026-11-13"
+_HEADS = catalog_audit.command_heads([]) | {"alpha", "beta"}
 _ALPHA_URL = "https://api.github.com/repos/o/alpha/releases/latest"
 
 
@@ -101,7 +102,7 @@ def _root(tmp_path: Path) -> Path:
 
 _CHECK_ROWS = (
     "| install method | ok | https://example.com/install |",
-    "| update argv | ok | `alpha upgrade` |",
+    "| update argv | ok | `uv tool upgrade alpha` |",
     "| removal recipe and paths | n/a | reason: the vendor ships no uninstaller |",
     "| tuning keys | n/a | reason: no tuning |",
     "| postinstall hook | n/a | reason: no hook |",
@@ -630,13 +631,13 @@ def test_two_writers_same_date(tmp_path: Path) -> None:
     root = _root(tmp_path)
     run = root / DAY
     home = Path.home()
-    alpha = catalog_audit.write_report(run, "alpha", _report("alpha"), home=home)
-    beta = catalog_audit.write_report(run, "beta", _report("beta"), home=home)
+    alpha = catalog_audit.write_report(run, "alpha", _report("alpha"), home=home, heads=_HEADS)
+    beta = catalog_audit.write_report(run, "beta", _report("beta"), home=home, heads=_HEADS)
     assert alpha.read_text(encoding="utf-8").endswith(FOOTER + "\n")
     assert beta.read_text(encoding="utf-8").endswith(FOOTER + "\n")
     before = alpha.read_bytes()
     with pytest.raises(catalog_audit.ReportRefused, match="already complete"):
-        catalog_audit.write_report(run, "alpha", _report("alpha"), home=home)
+        catalog_audit.write_report(run, "alpha", _report("alpha"), home=home, heads=_HEADS)
     assert alpha.read_bytes() == before
 
 
@@ -806,7 +807,7 @@ def _verify_fake(
 
 
 def _store(root: Path, entry_id: str, text: str) -> None:
-    catalog_audit.write_report(root / DAY, entry_id, text, home=Path.home())
+    catalog_audit.write_report(root / DAY, entry_id, text, home=Path.home(), heads=_HEADS)
 
 
 _DRIFT_ROWS = (
@@ -1305,7 +1306,7 @@ _BETA_DRIFT = (
 )
 _TWO_DRIFTS = (
     "| install method | drift | https://example.invalid/x |",
-    "| update argv | drift | `alpha upgrade` |",
+    "| update argv | drift | `uv tool upgrade alpha` |",
     *_CHECK_ROWS[2:],
 )
 
@@ -1848,7 +1849,7 @@ def test_scan_and_verify_never_overwrite_a_run_record(
 )
 def test_home_alias_is_refused_and_tilded(home: Path, leak: str) -> None:
     report = _report().replace("nothing relevant", f"see {leak}")
-    problems = catalog_audit.validate_report(report, "alpha", home=home)
+    problems = catalog_audit.validate_report(report, "alpha", home=home, heads=_HEADS)
     assert any("home path" in problem for problem in problems)
     assert vars(catalog_audit)["_tilde"](leak, home) == "~/.claude"
 
@@ -1910,3 +1911,81 @@ def test_a_hand_edited_container_finding_without_a_transcript_is_refused(
     code, err = _sum(registry, root, repo, capsys)
     assert code == catalog_audit.EXIT_REFUSED
     assert "transcript" in err
+
+
+# ---- 24.3 review F14, F16, F22: what counts as cited evidence ----
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "`looks fine`",
+        "`it works`",
+        "it just works",
+        "see ../x.py:1",
+        "see /abs/x.py:1",
+        "see x:1",
+    ],
+)
+def test_a_report_row_needs_real_evidence(source: str) -> None:
+    rows = (f"| install method | ok | {source} |", *_CHECK_ROWS[1:])
+    problems = catalog_audit.validate_report(
+        _report(rows=rows), "alpha", home=Path.home(), heads=_HEADS
+    )
+    assert any("needs a URL" in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "`alpha upgrade`",
+        "`/usr/bin/alpha --version`",
+        "`facts alpha`",
+        "`make verify-registry`",
+        "`~/.config/alpha/alpha.json`",
+        "https://example.com/x",
+        "installer/x.py:12",
+        "docs/guide.md:3",
+        "AGENTS.md:7",
+        "Makefile:9",
+        "pyproject.toml:5",
+    ],
+)
+def test_a_report_row_accepts_commands_urls_and_any_repo_citation(source: str) -> None:
+    rows = (f"| install method | ok | {source} |", *_CHECK_ROWS[1:])
+    problems = catalog_audit.validate_report(
+        _report(rows=rows), "alpha", home=Path.home(), heads=_HEADS
+    )
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    ("cite", "accepted"),
+    [
+        ("docs/guide.md:12", True),
+        ("AGENTS.md:3", True),
+        ("Makefile:9", True),
+        ("installer/x.py:12", True),
+        ("../x.py:1", False),
+        ("/abs/x.py:1", False),
+        ("x.py:12:3", False),
+        ("x:1", False),
+    ],
+)
+def test_script_finding_cite_forms(
+    cite: str, accepted: bool, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, _ = _arrange(tmp_path, alpha=_report("alpha"))
+    args = ("--check", "script", "--cite", cite, "--status", "drift", "--source", "`sym` is gone")
+    code, err = _add(registry, root, capsys, "alpha", *args)
+    assert code == (0 if accepted else catalog_audit.EXIT_REFUSED), err
+
+
+def test_a_finding_needs_a_cited_command_unless_a_script_cite_stands_in(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, _ = _arrange(tmp_path, alpha=_report("alpha"))
+    bare = ("--check", "update argv", "--status", "ok", "--source", "`looks fine`")
+    assert _add(registry, root, capsys, "alpha", *bare)[0] == catalog_audit.EXIT_REFUSED
+    command = ("--check", "update argv", "--status", "ok", "--source", "`alpha upgrade`")
+    assert _add(registry, root, capsys, "alpha", *command)[0] == 0

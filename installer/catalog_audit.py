@@ -84,8 +84,20 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SECTIONS = ("Versions", "Changelog", "Checks", "Proposed changes")
 _TITLE_RE = re.compile(r"# (?P<id>\S+) - catalog audit (?P<day>\S+)")
 _VERSION_LINE_RE = re.compile(r"- (?P<key>pinned|verified|installed|latest|note): (?P<value>\S.*)")
-_CITATION_RE = re.compile(r"(?:installer|scripts|tests|\.claude)/\S+:\d+")
+# A repo-relative `path:line`: a path with a directory, a root file or the Makefile.
+_CITATION_RE = re.compile(
+    r"(?<![\w./~:-])(?P<path>(?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:md|toml|py|sh|json|ya?ml|txt)|Makefile)"
+    r":(?P<line>\d+)"
+)
 _SPAN_RE = re.compile(r"`[^`]+`")
+# Command words a backticked span may start with, besides the registry's own `tool.cmd`.
+_COMMAND_HEADS = frozenset(
+    {
+        *("make", "uv", "git", "curl", "facts", "brew", "npm", "npx", "pip", "pipx"),
+        *("apt", "dnf", "pacman", "cargo", "go", "docker", "podman", "sh", "bash"),
+        *("python", "python3"),
+    }
+)
 _CHANGE_RE = re.compile(r"- \S.*; risk: (?:low|medium|high); evidence: \S.*")
 # A committed report must hold no credential: refuse anything shaped like one.
 _SECRET_RES = tuple(
@@ -204,7 +216,43 @@ def status(tools: Sequence[Tool], run: Path) -> Status:
     )
 
 
-def _check_rows(lines: list[str], problems: list[str]) -> dict[str, str]:
+def command_heads(tools: Sequence[Tool]) -> frozenset[str]:
+    """The words a backticked command may start with: common tools and every registry `cmd`."""
+    return _COMMAND_HEADS | {tool.cmd for tool in tools}
+
+
+def _citation(text: str, *, whole: bool = False) -> str | None:
+    """The first repo-relative `path:line` in `text` (all of it when `whole`), or None."""
+    found = _CITATION_RE.fullmatch(text) if whole else _CITATION_RE.search(text)
+    return found[0] if found and ".." not in found["path"].split("/") else None
+
+
+def _command_span(span: str, heads: Collection[str] | None) -> bool:
+    """A backticked command (its first word is a known head) or a lone path; None allows any."""
+    words = span[1:-1].split()
+    if heads is None:
+        return bool(words)
+    return bool(words) and (
+        words[0].rsplit("/", 1)[-1] in heads or (len(words) == 1 and "/" in words[0])
+    )
+
+
+def _cited(source: str, heads: Collection[str] | None, *, container: bool = False) -> bool:
+    """True when `source` names a URL, a command, a repo `path:line` or a container run.
+
+    `heads` is None where the entry may be gone from the registry (reading a file back).
+    """
+    return bool(
+        "https://" in source
+        or _citation(source)
+        or any(_command_span(m[0], heads) for m in _SPAN_RE.finditer(source))
+        or (container and _CONTAINER_RE.fullmatch(source))
+    )
+
+
+def _check_rows(
+    lines: list[str], problems: list[str], heads: Collection[str] | None
+) -> dict[str, str]:
     states: dict[str, str] = {}
     if lines[:2] != ["| check | status | source |", "|---|---|---|"]:
         problems.append(
@@ -228,9 +276,7 @@ def _check_rows(lines: list[str], problems: list[str]) -> dict[str, str]:
             problems.append(f"Checks row {row!r}: the source is empty")
         elif state == "n/a" and not source.startswith("reason: "):
             problems.append(f"Checks row {row!r}: an n/a source starts with 'reason: '")
-        elif state in ("ok", "drift") and not (
-            "https://" in source or _SPAN_RE.search(source) or _CITATION_RE.search(source)
-        ):
+        elif state in ("ok", "drift") and not _cited(source, heads):
             problems.append(
                 f"Checks row {row!r}: an {state} source needs a URL, a `command` or a "
                 "repo citation (path:line)"
@@ -283,7 +329,7 @@ def _cells(row: str) -> list[str]:
     return [cell.strip() for cell in row.strip("|").split("|", 2)]
 
 
-def validate_report(text: str, entry_id: str, *, home: Path) -> list[str]:
+def validate_report(text: str, entry_id: str, *, home: Path, heads: Collection[str]) -> list[str]:
     """Every way `text` breaks the report grammar; an empty list means it is valid."""
     problems = _hygiene(text, home)
     body = [(n, line.rstrip()) for n, line in enumerate(text.splitlines(), 1) if line.strip()]
@@ -313,7 +359,7 @@ def validate_report(text: str, entry_id: str, *, home: Path) -> list[str]:
     changelog = sections.get("Changelog", [])
     if not changelog or any(not line.startswith("- ") for line in changelog):
         problems.append("Changelog: one or more '- ' lines")
-    states = _check_rows(sections.get("Checks", []), problems)
+    states = _check_rows(sections.get("Checks", []), problems, heads)
     changes = sections.get("Proposed changes", [])
     unreachable = bool(latest) and all(value.startswith("unknown:") for value in latest)
     if unreachable and "ok" in (states.get(CHECKS[0]), states.get(CHECKS[1])):
@@ -331,12 +377,14 @@ def _refuse_symlink_leaf(path: Path) -> None:
         raise ReportRefused([f"{path.name} is a symlink"])
 
 
-def write_report(run: Path, entry_id: str, text: str, *, home: Path) -> Path:
+def write_report(
+    run: Path, entry_id: str, text: str, *, home: Path, heads: Collection[str]
+) -> Path:
     """Store a valid report whole and append the footer; a complete report is never rewritten.
 
     Findings that arrive after an entry's report go to the run's `findings.toml`, never here.
     """
-    problems = validate_report(text, entry_id, home=home)
+    problems = validate_report(text, entry_id, home=home, heads=heads)
     title = next((line for line in text.splitlines() if line.strip()), "")
     if not title.endswith(f" - catalog audit {run.name}"):
         problems.append(f"the title date must be this run's date, {run.name}")
@@ -1194,20 +1242,11 @@ def _identity_problems(
         hint = ", or (installer)/(maintainer) for a script row" if check == SCRIPT else ""
         problems.append(f"{label}: entry {entry!r} is not a registry id{hint}")
     if check == SCRIPT:
-        if not isinstance(cite, str) or _CITATION_RE.fullmatch(cite) is None:
+        if not isinstance(cite, str) or _citation(cite, whole=True) is None:
             problems.append(f"{label}: a script row needs cite = 'path:line'")
     elif cite is not None:
         problems.append(f"{label}: cite belongs to script rows only")
     return problems
-
-
-def _cited(source: str) -> bool:
-    return bool(
-        "https://" in source
-        or _SPAN_RE.search(source)
-        or _CITATION_RE.search(source)
-        or _CONTAINER_RE.fullmatch(source)
-    )
 
 
 def _transcript_problem(run: Path, source: str) -> str | None:
@@ -1222,7 +1261,12 @@ def _transcript_problem(run: Path, source: str) -> str | None:
 
 
 def _finding_problems(
-    row: Mapping[str, object], ids: Sequence[str] | None, home: Path, label: str, run: Path
+    row: Mapping[str, object],
+    ids: Sequence[str] | None,
+    home: Path,
+    label: str,
+    run: Path,
+    heads: Collection[str] | None,
 ) -> list[str]:
     problems = _identity_problems(row, ids, label)
     problems += [f"{label}: unknown field {k!r}" for k in sorted(set(row) - _FINDING_FIELDS)]
@@ -1238,7 +1282,10 @@ def _finding_problems(
         problems.append(f"{label}: an unknown source starts with 'reason: '")
     elif (problem := _transcript_problem(run, source)) is not None:
         problems.append(f"{label}: {problem}")
-    elif state in ("ok", "drift") and not _cited(source):
+    elif state in ("ok", "drift") and not (
+        (row.get("check") == SCRIPT and _citation(str(row.get("cite")), whole=True))
+        or _cited(source, heads, container=True)
+    ):
         problems.append(
             f"{label}: an {state} source needs a URL, a `command`, a repo citation (path:line) "
             "or 'container: <transcript path>'"
@@ -1267,7 +1314,7 @@ def read_findings(run: Path, home: Path) -> list[Finding]:
     """The validated `findings.toml` rows in file order; any problem refuses the file."""
     rows, problems = _load_table(run / _FINDINGS, "finding")
     for number, row in enumerate(rows, 1):
-        problems += _finding_problems(row, None, home, f"{_FINDINGS} finding #{number}", run)
+        problems += _finding_problems(row, None, home, f"{_FINDINGS} finding #{number}", run, None)
     if problems:
         raise ReportRefused(problems)
     return [Finding(**{k: str(v) for k, v in row.items()}) for row in rows]
@@ -1313,7 +1360,7 @@ def add_finding(run: Path, tools: Sequence[Tool], home: Path, row: Mapping[str, 
     """Validate one late finding and append it to the run's `findings.toml` (rewritten whole)."""
     ids = [tool.id for tool in tools]
     existing = read_findings(run, home)
-    problems = _finding_problems(row, ids, home, "finding", run)
+    problems = _finding_problems(row, ids, home, "finding", run, command_heads(tools))
     if problems:
         raise ReportRefused(problems)
     return _write_run_file(run, _FINDINGS, _findings_toml([*existing, Finding(**row)]))
@@ -1453,11 +1500,11 @@ def _script_findings(model: _Model, repo: Path) -> list[str]:
             status = row.effective()
         elif (
             row.report == "drift"
-            and (cited := _CITATION_RE.search(row.report_source)) is not None
+            and (cited := _citation(row.report_source)) is not None
             and _token(row.report_source) is not None
         ):
             where, shown, token, status = (
-                cited[0],
+                cited,
                 row.report_source,
                 _token(row.report_source),
                 "drift",
@@ -1643,7 +1690,7 @@ def _run(
         print(f"added finding {args.id} | {args.check}")
     else:
         tool = _find(tools, args.id)
-        write_report(run, tool.id, sys.stdin.read(), home=home)
+        write_report(run, tool.id, sys.stdin.read(), home=home, heads=command_heads(tools))
         print(f"wrote {tool.id}.md")
     return 0
 
