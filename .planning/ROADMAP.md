@@ -604,7 +604,7 @@ Plans:
   2. The opencode v2 and Pi MCP findings are applied to the registry and postinstall steps, with `make verify-registry` green. *(amended 2026-11-07, 24.3 SPEC R9: copilot also joins the codegraph hook, absorbing Backlog 999.12)*
   3. The skill's skill-judge score is recorded.
 
-**Plans**: 9/11 plans executed
+**Plans**: 10/11 plans executed
 
 Plans:
 **Wave 1**
@@ -625,7 +625,7 @@ Plans:
 - [x] 24.3-07-PLAN.md — OpenCode 2 `permissions` tuning with the retired-key revert and the ledger-owned `permission` rule (wave 5)
 - [x] 24.3-08-PLAN.md — codegraph hosts: copilot as `copilot-cli` with a CLI-footprint presence rule, Pi behind a capability gate, docs name the real presence functions (wave 5)
 - [x] 24.3-09-PLAN.md — `audit-landing` container target and driver, host-tested only (wave 5)
-- [ ] 24.3-10-PLAN.md — skill-judge rounds to >= 80.0 with first and final verdicts committed (orchestrator checkpoint) (wave 5)
+- [x] 24.3-10-PLAN.md — skill-judge rounds to >= 80.0 with first and final verdicts committed (orchestrator checkpoint) (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 24.3-11-PLAN.md — Phase gate: merged-tree gates, verify-registry green, the orchestrator's landing container check as the wave-5 gate, drift dispositions, 999.12 closed, confirmations (wave 6)
@@ -677,7 +677,7 @@ Plans:
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
 | 24.2 Schedules view | 13/13 | In Progress | - |
-| 24.3 Catalog audit skill | 9/11 | In Progress | - |
+| 24.3 Catalog audit skill | 10/11 | In Progress | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
