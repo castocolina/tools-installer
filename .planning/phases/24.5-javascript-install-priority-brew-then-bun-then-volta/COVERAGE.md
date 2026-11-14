@@ -1,0 +1,1 @@
+No external API integration: the phase changes the installer's own resolver ranks and adds a bun method kind that runs the local bun CLI and reads bun's files; its only network read is the existing npm dist-tag lookup (`versions.resolve_npm_latest`), reused unchanged.
