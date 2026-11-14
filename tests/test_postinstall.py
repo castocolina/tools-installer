@@ -2,6 +2,7 @@ import hashlib
 import shutil
 import tomllib
 from collections.abc import Callable
+from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
 
@@ -24,7 +25,7 @@ _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.tom
 _CODEGRAPH = "codegraph-mcp-register"
 # Harness ids: the keys of every hook target map. `cursor` is the Cursor harness;
 # the catalog id `cursor-agent` is display-only (HOST_CATALOG_IDS).
-_HARNESSES = ("claude", "codex", "opencode", "cursor")
+_HARNESSES = ("claude", "codex", "opencode", "cursor", "copilot", "pi")
 _ALL_SUBSETS: list[tuple[str, ...]] = [
     subset for size in range(len(_HARNESSES) + 1) for subset in combinations(_HARNESSES, size)
 ]
@@ -35,9 +36,40 @@ _EXPECTED_TARGET_FOR = {
     "codex": "codex",
     "opencode": "opencode",
     "cursor": "cursor",
+    "copilot": "copilot-cli",
+    "pi": "pi",
 }
 _GITHUB = Method(kind="github_release", params={})
 _BREW = Method(kind="brew", params={"formula": "codegraph"})
+
+
+def _pi_gate() -> list[str]:
+    return [str(Path.home() / ".local" / "bin" / "codegraph"), "install", "--print-config", "pi"]
+
+
+_PI_SKIPPED = "pi: this codegraph has no pi target, so Pi is not registered"
+
+
+def _answers_config(_argv: list[str]) -> str | None:
+    return "{}"
+
+
+@pytest.fixture(autouse=True)
+def codegraph_supports_pi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Pi gate's probe never launches codegraph: by default it answers a config text."""
+    monkeypatch.setattr(pi, "codegraph_query", _answers_config)
+
+
+def _fake_codegraph(monkeypatch: pytest.MonkeyPatch, *, supports_pi: bool) -> list[list[str]]:
+    """Replace the gate's probe, recording every argv it is asked."""
+    seen: list[list[str]] = []
+
+    def query(argv: list[str]) -> str | None:
+        seen.append(argv)
+        return "{}" if supports_pi else None
+
+    monkeypatch.setattr(pi, "codegraph_query", query)
+    return seen
 
 
 def _codegraph_tool() -> Tool:
@@ -177,8 +209,8 @@ def test_run_postinstall_unknown_name_is_a_noop() -> None:
 def test_codegraph_hook_matches_expected_argv_for_every_host_presence_subset(
     present_subset: tuple[str, ...],
 ) -> None:
-    """Every one of the 16 subsets of the four harnesses produces either the exact
-    expected argv (never "auto") or a genuine no-op, never anything else."""
+    """Every subset of the codegraph harnesses produces either the exact expected argv
+    (never "auto" or "all") or a genuine no-op, never anything else."""
     calls: list[list[str]] = []
     outcome = pi.run_postinstall(
         _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset(present_subset)
@@ -193,12 +225,13 @@ def test_codegraph_hook_matches_expected_argv_for_every_host_presence_subset(
     assert outcome == (tuple(sorted(present_subset)), None)
     assert calls == [_argv(expected_csv)]
     assert "auto" not in calls[0]
+    assert "all" not in calls[0]
 
 
 def test_codegraph_hook_preserves_declared_host_order() -> None:
     calls: list[list[str]] = []
     pi.run_postinstall(_CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset(_HARNESSES))
-    assert calls[0][calls[0].index("--target") + 1] == "claude,codex,opencode,cursor"
+    assert calls[0][calls[0].index("--target") + 1] == "claude,codex,opencode,cursor,copilot-cli,pi"
 
 
 def test_codegraph_hook_maps_cursor_alone_to_cursor() -> None:
@@ -242,11 +275,12 @@ def test_a_host_already_recorded_runs_nothing() -> None:
     assert calls == []
 
 
-@pytest.mark.parametrize("hosts", [frozenset[str](), frozenset({"pi"})], ids=["none", "pi-only"])
-def test_no_present_supported_host_runs_nothing(hosts: frozenset[str]) -> None:
+def test_no_present_supported_host_runs_nothing() -> None:
     _write_receipt()
     calls: list[list[str]] = []
-    outcome = pi.register_hooks(_codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd), hosts)
+    outcome = pi.register_hooks(
+        _codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd), frozenset[str]()
+    )
     assert outcome == ((), None)
     assert calls == []
     receipt = receipts.read("codegraph")
@@ -255,11 +289,40 @@ def test_no_present_supported_host_runs_nothing(hosts: frozenset[str]) -> None:
     assert receipt.hooks == {"codegraph-mcp-register": ()}
 
 
-def test_only_herdr_maps_pi_and_targets_stay_harnesses() -> None:
+def test_a_pi_only_host_registers_when_codegraph_supports_pi() -> None:
+    _write_receipt()
+    calls: list[list[str]] = []
+    outcome = pi.register_hooks(
+        _codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd), frozenset({"pi"})
+    )
+    assert outcome == (("pi",), None)
+    assert calls == [_argv("pi")]
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks == {_CODEGRAPH: ("pi",)}
+
+
+def test_a_pi_only_host_runs_nothing_when_codegraph_lacks_pi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_codegraph(monkeypatch, supports_pi=False)
+    _write_receipt()
+    calls: list[list[str]] = []
+    outcome = pi.register_hooks(
+        _codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd), frozenset({"pi"})
+    )
+    assert outcome == ((), _PI_SKIPPED)
+    assert calls == []
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks == {_CODEGRAPH: ()}
+
+
+def test_only_herdr_and_codegraph_map_pi_and_targets_stay_harnesses() -> None:
     for name, pair in pi.POSTINSTALL_HOOKS.items():
         if pair.targets is None:
             continue
-        assert ("pi" in pair.targets) == (name == "herdr-integration"), name
+        assert ("pi" in pair.targets) == (name in {"herdr-integration", _CODEGRAPH}), name
         assert set(pair.targets) <= set(pi.HARNESS_PRESENCE), name
 
 
@@ -294,6 +357,185 @@ def test_a_marker_dir_alone_makes_a_host_present(tmp_path: Path) -> None:
     assert "cursor" in pi.present_harnesses(tmp_path, lambda _command: None)
 
 
+@pytest.mark.usefixtures("real_present_hosts")
+def test_copilot_codegraph_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """24.3-08 tracer (SPEC R9): a copilot CLI footprint registers codegraph as `copilot-cli`,
+    records `copilot`, shows it as `copilot`, and removal's argv names `copilot-cli`."""
+    monkeypatch.setenv("PATH", str(Path.home()))
+    (Path.home() / ".copilot").mkdir()
+    (Path.home() / ".copilot" / "settings.json").write_text("{}", encoding="utf-8")
+    _write_receipt({_CODEGRAPH: ()})
+    calls: list[list[str]] = []
+    outcome = pi.register_hooks(_codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd))
+    assert outcome == (("copilot",), None)
+    assert calls == [_argv("copilot-cli")]
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks == {_CODEGRAPH: ("copilot",)}
+    assert pi.host_labels(("copilot",)) == "copilot"
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("copilot",)) == (
+        _uninstall("copilot-cli"),
+    )
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+@pytest.mark.parametrize(
+    ("entries", "present"),
+    [
+        (("settings.json",), True),
+        (("session-state/",), True),
+        (("ide/", "settings.json"), True),
+        (("ide/",), False),
+        ((), False),
+        (None, False),
+    ],
+    ids=["settings", "session-state", "ide-and-settings", "ide-only", "empty", "no-dir"],
+)
+def test_copilot_presence_needs_a_cli_footprint(
+    monkeypatch: pytest.MonkeyPatch, entries: tuple[str, ...] | None, present: bool
+) -> None:
+    """CONTEXT D-13 amendment: the VS Code extension's `~/.copilot/ide/` alone is not the CLI."""
+    monkeypatch.setenv("PATH", str(Path.home()))
+    if entries is not None:
+        root = Path.home() / ".copilot"
+        root.mkdir()
+        for entry in entries:
+            if entry.endswith("/"):
+                (root / entry).mkdir()
+            else:
+                (root / entry).write_text("{}", encoding="utf-8")
+    assert ("copilot" in pi.present_hosts()) is present
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+def test_copilot_on_path_is_present_without_a_footprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = tmp_path / "copilot"
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    command.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert "copilot" in pi.present_hosts()
+
+
+@pytest.mark.parametrize(
+    "present_subset",
+    [subset for subset in _ALL_SUBSETS if "copilot" not in subset],
+    ids=lambda s: ",".join(s) or "none",
+)
+def test_copilot_absent_never_in_the_csv(present_subset: tuple[str, ...]) -> None:
+    calls: list[list[str]] = []
+    pi.run_postinstall(
+        _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset(present_subset)
+    )
+    assert all("copilot-cli" not in cmd for cmd in calls)
+
+
+def _pi_home() -> None:
+    """A scratch HOME with Pi and claude footprints and no command on PATH."""
+    (Path.home() / ".pi").mkdir()
+    (Path.home() / ".claude").mkdir()
+
+
+@pytest.mark.usefixtures("real_present_hosts")
+def test_pi_registered_when_codegraph_supports_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_codegraph(monkeypatch, supports_pi=True)
+    monkeypatch.setenv("PATH", str(Path.home()))
+    _pi_home()
+    _write_receipt({_CODEGRAPH: ()})
+    herdr_receipt = replace(
+        _receipt_for("github_release", "test"), tool="herdr", hooks={_HERDR: ("pi",)}
+    )
+    receipts.write(herdr_receipt)
+    calls: list[list[str]] = []
+    outcome = pi.register_hooks(_codegraph_tool(), _GITHUB, lambda cmd: calls.append(cmd))
+    assert outcome == (("claude", "pi"), None)
+    assert seen == [_pi_gate()]
+    assert calls == [_argv("claude,pi")]
+    receipt = receipts.read("codegraph")
+    assert receipt is not None
+    assert receipt.hooks == {_CODEGRAPH: ("claude", "pi")}
+    assert pi.host_labels(("pi",)) == "pi"
+    assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("pi",)) == (_uninstall("pi"),)
+    assert receipts.read("herdr") == herdr_receipt
+
+
+def test_codegraph_query_turns_telemetry_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review R1-13: the gate's probe must not queue codegraph telemetry under ~/.codegraph."""
+    answers: list[object] = ["config", CommandError(["codegraph"], 1), OSError("gone")]
+    envs: list[object] = []
+
+    def fake_run_query(argv: list[str], *, env: dict[str, str] | None = None) -> str:
+        envs.append(env)
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return str(answer)
+
+    monkeypatch.setattr(pi, "run_query", fake_run_query)
+    query = vars(pi)["_run_codegraph_query"]
+    assert [query(["codegraph", "x"]) for _ in range(3)] == ["config", None, None]
+    assert envs == [{"CODEGRAPH_TELEMETRY": "0", "DO_NOT_TRACK": "1"}] * 3
+
+
+def test_unsupported_pi_never_reaches_the_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_codegraph(monkeypatch, supports_pi=False)
+    calls: list[list[str]] = []
+    outcome = pi.run_postinstall(
+        _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset({"claude", "pi"})
+    )
+    assert outcome == (("claude",), _PI_SKIPPED)
+    assert calls == [_argv("claude")]
+
+    calls.clear()
+    outcome = pi.run_postinstall(
+        _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset({"pi"})
+    )
+    assert outcome == ((), _PI_SKIPPED)
+    assert calls == []
+
+
+def test_a_failed_registration_keeps_the_pi_skip_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_codegraph(monkeypatch, supports_pi=False)
+
+    def failing(cmd: list[str]) -> None:
+        raise CommandError(cmd, 1, detail="boom")
+
+    registered, warning = pi.run_postinstall(
+        _CODEGRAPH, _GITHUB, failing, frozenset({"claude", "pi"})
+    )
+    assert registered == ()
+    assert warning is not None
+    assert warning.startswith("codegraph MCP registration failed")
+    assert warning.endswith(_PI_SKIPPED)
+
+
+def test_pi_gate_probes_only_when_pi_is_wanted(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_codegraph(monkeypatch, supports_pi=True)
+    pi.run_postinstall(_CODEGRAPH, _GITHUB, lambda _cmd: None, frozenset({"claude", "copilot"}))
+    assert seen == []
+    pi.run_postinstall(_CODEGRAPH, _GITHUB, lambda _cmd: None, frozenset({"claude", "pi"}))
+    assert seen == [_pi_gate()]
+
+
+def test_pi_agent_dir_is_left_to_codegraph(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """SPEC R8 encoding edge: no Pi path or `auto`/`all` in an argv; nothing written under ~/.pi."""
+    custom = tmp_path / "pi-agent"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(custom))
+    seen = _fake_codegraph(monkeypatch, supports_pi=True)
+    calls: list[list[str]] = []
+    outcome = pi.run_postinstall(
+        _CODEGRAPH, _GITHUB, lambda cmd: calls.append(cmd), frozenset({"claude", "pi"})
+    )
+    undo = pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", outcome[0])
+    for argv in (*calls, *seen, *undo):
+        assert "auto" not in argv
+        assert "all" not in argv
+        assert not any(str(Path.home() / ".pi") in part or str(custom) in part for part in argv)
+    assert not (Path.home() / ".pi").exists()
+    assert not custom.exists()
+
+
 def test_no_receipt_means_no_registration() -> None:
     calls: list[list[str]] = []
     outcome = pi.register_hooks(
@@ -309,6 +551,9 @@ def test_one_host_list_has_no_second_host_table(monkeypatch: pytest.MonkeyPatch)
         text = source.read_text(encoding="utf-8")
         assert "_AGENT_HOST_IDS" not in text, source.name
         assert "present_agent_hosts" not in text, source.name
+    root = Path(pi.__file__).parent.parent / ".claude"
+    for doc in (root / "architecture.md", *root.glob("skills/*/SKILL.md")):
+        assert "present_agent_hosts" not in doc.read_text(encoding="utf-8"), doc.name
 
     seen: list[tuple[Path, object]] = []
 
@@ -390,8 +635,8 @@ def test_codegraph_unregister_targets_only_recorded_hosts() -> None:
 
 
 def test_unregister_drops_unknown_and_tampered_ids() -> None:
-    kept = pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("claude", "all", "../x", "pi"))
-    assert kept == (_uninstall("claude"),)
+    kept = pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("claude", "all", "../x", "nope", "pi"))
+    assert kept == (_uninstall("claude,pi"),)
     assert pi.unregister_argvs(_CODEGRAPH, "/b/codegraph", ("all", "auto")) == ()
     assert pi.unregister_argvs("not-a-real-hook", "/b/codegraph", ("claude",)) == ()
 

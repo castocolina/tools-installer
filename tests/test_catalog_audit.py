@@ -270,9 +270,8 @@ def test_facts_fields() -> None:
     text = _facts(scripted)
     assert "- update: scripted self update" in text
     assert "- remove: scripted uninstall" in text
-    assert (
-        "- postinstall: codegraph-mcp-register (targets: claude, codex, opencode, cursor)" in text
-    )
+    targets = "claude, codex, opencode, cursor, copilot, pi"
+    assert f"- postinstall: codegraph-mcp-register (targets: {targets})" in text
     assert "- post_install: apply_agent_tuning, show_lean_tips" in text
     assert "(os: macos, arch: arm64)" in text
     assert str(home) not in text

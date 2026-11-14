@@ -1346,6 +1346,31 @@ def test_a_codegraph_claude_registration_discloses_its_prompt_hook() -> None:
     ]
 
 
+def test_pi_extras_disclosed() -> None:
+    """24.3-08: codegraph's Pi registration also writes a block into Pi's AGENTS.md; say so."""
+
+    def lines(hooks: tuple[str, ...]) -> list[str]:
+        row = RowOutcome(
+            PlanRow("codegraph", Disposition.INSTALL, "not installed"),
+            "done",
+            install=InstallOutcome("codegraph", InstallStatus.INSTALLED, hooks=hooks),
+        )
+        console, buf = _console()
+        render_hook_lines([row], console)
+        return buf.getvalue().splitlines()[1:]
+
+    assert lines(("claude", "pi")) == [
+        "codegraph: registered for claude, pi",
+        "  claude: codegraph also adds a prompt hook and ~/.claude/CLAUDE.md",
+        "  pi: codegraph also adds a block to Pi's AGENTS.md",
+    ]
+    assert lines(("pi",)) == [
+        "codegraph: registered for pi",
+        "  pi: codegraph also adds a block to Pi's AGENTS.md",
+    ]
+    assert lines(("codex",)) == ["codegraph: registered for codex"]
+
+
 def test_render_done_notes_is_silent_without_extras() -> None:
     successful = RowOutcome(
         PlanRow("rg", Disposition.UPDATE, "new version"),

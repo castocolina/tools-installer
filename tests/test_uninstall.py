@@ -2484,7 +2484,7 @@ def test_a_pre_phase_23_receipt_unregisters_nothing(
 @pytest.mark.parametrize(
     ("recorded", "hosts"),
     [
-        pytest.param(("claude", "all", "../x", "pi"), ("claude",), id="filtered"),
+        pytest.param(("claude", "all", "../x", "nope"), ("claude",), id="filtered"),
         pytest.param(("all",), (), id="nothing-left"),
     ],
 )
