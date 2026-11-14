@@ -2688,9 +2688,12 @@ cmd_schedules() {
 LANDING_CONTAINER_NAME=tools-installer-e2e-landing
 LANDING_IMAGE="$IMAGE_FEDORA"
 LANDING_KEEP_IMAGE=0
+# 1 when this run pulled the base image: only then does teardown remove it.
+LANDING_PULLED=0
 # The checks run into the environment, not the product: a pull, dnf, Homebrew, uv, a vendor
-# download, TLS or DNS.
-LANDING_ENV_RE='Could not resolve host|Temporary failure in name resolution|Network is unreachable|Connection (timed out|refused|reset)|curl: \([0-9]+\)|SSL|TLS|certificate|Error: (initializing source|pulling|reading blob)|[Ff]ailed to download|[Ff]ailed to synchronize'
+# download, DNS or TLS. Only lines a known emitter prints count (curl, dnf, the pull, Homebrew);
+# a bare SSL, TLS or "Connection refused" also appears in the product's own output.
+LANDING_ENV_RE='Could not resolve host|Temporary failure in name resolution|Network is unreachable|curl: \([0-9]+\)|Curl error \([0-9]+\)|Error: (initializing source|pulling|reading blob)|[Ff]ailed to download|[Ff]ailed to synchronize'
 LANDING_TRANSCRIPT=
 
 # $1 names the step, $2 is the failing step's output: the first line naming an error is reported,
@@ -2701,16 +2704,24 @@ landing_infeasible() {
   printf 'TRACER_LANDING_INFEASIBLE step=%s detail=%s\n' "$1" "$detail"
 }
 
-# Whether $1, a step's output, reads as one of the environment's failures.
+# Whether $1, a step's output, reads as one of the environment's failures. A run that already
+# printed a TRACER_*_FAILED verdict is the product's, whatever else the output says.
 landing_environmental() {
-  printf '%s\n' "$1" | grep -Eq "$LANDING_ENV_RE"
+  ! printf '%s\n' "$1" | grep -Eq '^TRACER_[A-Z0-9_]*_FAILED( |$)' \
+    && printf '%s\n' "$1" | grep -Eq "$LANDING_ENV_RE"
 }
 
-# EXIT trap: the container and, unless --keep-image, the image go on every outcome; both removals
-# tolerate absence (a base image another container still uses stays).
+# Whether the base image is already here, so teardown never removes one this run did not pull
+# (every distro target shares fedora:latest).
+landing_note_image() {
+  ct image inspect "$LANDING_IMAGE" >/dev/null 2>&1 || LANDING_PULLED=1
+}
+
+# EXIT trap: the container goes on every outcome; the image only when this run pulled it and not
+# with --keep-image. Both removals tolerate absence (a base image another container uses stays).
 landing_teardown() {
   ct rm -f "$LANDING_CONTAINER_NAME" >/dev/null 2>&1 || true
-  if [[ "$LANDING_KEEP_IMAGE" -ne 1 ]]; then
+  if [[ "$LANDING_KEEP_IMAGE" -ne 1 && "$LANDING_PULLED" -eq 1 ]]; then
     ct rmi "$LANDING_IMAGE" >/dev/null 2>&1 || true
   fi
   if ct ps -a --filter "name=^${LANDING_CONTAINER_NAME}$" --format '{{.Names}}' 2>/dev/null \
@@ -2802,6 +2813,7 @@ cmd_audit_landing() {
   trap landing_teardown EXIT
   ensure_phase_dir
   : >"$LANDING_TRANSCRIPT"
+  landing_note_image
   landing_bootstrap
   # Every verdict is collected so one transcript shows them all. The order is the edge cases':
   # the update under a running service leaves it running for the removal that follows, the idle

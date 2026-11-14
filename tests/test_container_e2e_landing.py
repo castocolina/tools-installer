@@ -23,7 +23,13 @@ from tests import e2e_landing_driver as driver
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "container-e2e-verify.sh"
 
-_CONSTANTS = ("IMAGE_FEDORA", "LANDING_IMAGE", "LANDING_CONTAINER_NAME", "LANDING_KEEP_IMAGE")
+_CONSTANTS = (
+    "IMAGE_FEDORA",
+    "LANDING_IMAGE",
+    "LANDING_CONTAINER_NAME",
+    "LANDING_KEEP_IMAGE",
+    "LANDING_PULLED",
+)
 
 # One CALLS line per container call; a case fails a call by naming a fragment of its arguments.
 _CT_STUB = r"""
@@ -186,15 +192,50 @@ def test_a_missing_settings_file_reads_as_an_empty_document(tmp_path: Path) -> N
 # --- teardown -----------------------------------------------------------------------------------
 
 
-def test_landing_teardown_removes_container_and_image(tmp_path: Path) -> None:
-    result = _run(
-        _script("landing_teardown", stubs=_CT_STUB + "landing_teardown"), tmp_path / "removes"
+def test_landing_teardown_removes_the_image_this_run_pulled(tmp_path: Path) -> None:
+    script = _script(
+        "landing_teardown",
+        variables={"LANDING_PULLED": "1"},
+        stubs=_CT_STUB + "landing_teardown",
     )
+    result = _run(script, tmp_path / "removes")
     assert result.returncode == 0, result.stderr
     calls = _calls(tmp_path / "removes")
     assert "ct rm -f tools-installer-e2e-landing" in calls
     assert f"ct rmi {_constant('IMAGE_FEDORA')}" in calls
     assert "TRACER_LANDING_TEARDOWN_OK" in result.stdout
+
+
+def test_landing_teardown_leaves_a_shared_base_image_it_did_not_pull(tmp_path: Path) -> None:
+    """F20: `fedora:latest` is every distro run's base image; a run that found it keeps it."""
+    result = _run(
+        _script("landing_teardown", stubs=_CT_STUB + "landing_teardown"), tmp_path / "shared"
+    )
+    assert result.returncode == 0, result.stderr
+    calls = _calls(tmp_path / "shared")
+    assert "ct rm -f tools-installer-e2e-landing" in calls
+    assert not [call for call in calls if call.startswith("ct rmi")]
+    assert "TRACER_LANDING_TEARDOWN_OK" in result.stdout
+
+
+@pytest.mark.parametrize(("present", "pulled"), [(True, "0"), (False, "1")])
+def test_audit_landing_records_whether_it_pulled_the_image(
+    tmp_path: Path, present: bool, pulled: str
+) -> None:
+    scratch = tmp_path / f"pulled-{pulled}"
+    result = _run(
+        _script(
+            "landing_note_image",
+            variables={"FAIL_CT": "" if present else "image inspect"},
+            stubs=_CT_STUB + "landing_note_image; echo pulled=$LANDING_PULLED",
+        ),
+        scratch,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"pulled={pulled}" in result.stdout
+    assert f"ct image inspect {_constant('IMAGE_FEDORA')}" in _calls(scratch)
+    body = _function("cmd_audit_landing")
+    assert body.index("landing_note_image") < body.index("landing_bootstrap")
 
 
 def test_landing_teardown_keeps_the_image_on_request(tmp_path: Path) -> None:
@@ -613,6 +654,25 @@ def test_landing_step_fails_a_named_failure_without_calling_it_infeasible(
     assert result.returncode == 0, result.stderr
     assert "rc=1" in result.stdout
     assert "INFEASIBLE" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        "TRACER_OPENCODE_V2_SERVICE_START_FAILED detail=Connection refused 127.0.0.1:4096",
+        "ERROR OpenSSL 3.2.1 is not the expected build",
+        "ERROR TLS handshake log line from the product",
+        "curl: (6) Could not resolve host: opencode.ai\nTRACER_OPENCODE_V2_INSTALL_FAILED x",
+    ],
+    ids=["refused-port", "openssl", "tls-word", "failed-line-wins"],
+)
+def test_a_product_failure_is_never_infeasible(tmp_path: Path, out: str) -> None:
+    """F21: only an environmental emitter's line ends the run, and never after a FAILED verdict."""
+    scratch = tmp_path / "product"
+    result = _run(_helpers(scratch, out, 1, "landing_step s a b || echo rc=$?"), scratch)
+    assert result.returncode == 0, result.stderr
+    assert "INFEASIBLE" not in result.stdout
+    assert "rc=1" in result.stdout
 
 
 def test_landing_step_ends_the_run_on_an_environmental_failure(tmp_path: Path) -> None:
