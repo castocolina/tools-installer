@@ -4,6 +4,7 @@ import http.client
 import inspect
 import io
 import json
+import urllib.error
 import urllib.request
 from email.message import Message
 from pathlib import Path
@@ -26,6 +27,7 @@ from installer.versions import (
     release_resolver,
     resolve_github_release,
     resolve_github_tag,
+    resolve_npm_latest,
     urlopen_fetch,
 )
 
@@ -236,6 +238,66 @@ def test_resolve_github_release_wraps_every_read_failure(fetch_behavior: str) ->
 
     with pytest.raises(VersionError):
         resolve_github_release("o/r", fetch)
+
+
+@pytest.mark.parametrize(
+    ("package", "url", "latest"),
+    [
+        (
+            "@opencode/cli",
+            "https://registry.npmjs.org/-/package/@opencode%2Fcli/dist-tags",
+            "2.3.0",
+        ),
+        ("left-pad", "https://registry.npmjs.org/-/package/left-pad/dist-tags", "v1.0.0-rc.1"),
+    ],
+)
+def test_resolve_npm_latest_url(package: str, url: str, latest: str) -> None:
+    seen: list[str] = []
+
+    def fetch(requested: str) -> bytes:
+        seen.append(requested)
+        return json.dumps({"latest": latest, "next": "9.9.9"}).encode()
+
+    assert resolve_npm_latest(package, fetch) == latest
+    assert seen == [url]
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://x", code, "boom", Message(), None)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        _http_error(404),
+        _http_error(429),
+        TimeoutError("slow"),
+        http.client.IncompleteRead(b""),
+        b"not json",
+        b"[]",
+        b"{}",
+        b'{"latest": ""}',
+        b'{"latest": 7}',
+    ],
+    ids=repr,
+)
+def test_resolve_npm_latest_errors(outcome: BaseException | bytes) -> None:
+    def fetch(url: str) -> bytes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    with pytest.raises(VersionError, match="@scope/pkg"):
+        resolve_npm_latest("@scope/pkg", fetch)
+
+
+@pytest.mark.parametrize("package", ["../x", "@scope", "@/x", "Upper", "a b", "x?y=1", ""])
+def test_resolve_npm_latest_refuses_bad_names(package: str) -> None:
+    def fetch(url: str) -> bytes:
+        raise AssertionError(f"fetched {url}")
+
+    with pytest.raises(VersionError, match="invalid npm package name"):
+        resolve_npm_latest(package, fetch)
 
 
 def test_github_token_is_not_forwarded_on_a_redirect(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1891,6 +1891,45 @@ def test_writable_prefix_is_an_absolute_path(tmp_path: Path, line: str) -> None:
         load_tools(manifest)
 
 
+@pytest.mark.parametrize("package", ["@opencode/cli", "left-pad"])
+def test_latest_npm_param_loads(tmp_path: Path, package: str) -> None:
+    manifest = _write(tmp_path, _script_tool(f'latest_npm = "{package}"'))
+    assert load_tools(manifest)[0].methods[0].params["latest_npm"] == package
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'latest_npm = ""',
+        "latest_npm = 7",
+        'latest_npm = ["x"]',
+        'latest_npm = "../x"',
+        'latest_npm = "@Scope/x"',
+    ],
+)
+def test_latest_npm_param(tmp_path: Path, line: str) -> None:
+    manifest = _write(tmp_path, _script_tool(line))
+    with pytest.raises(ValueError, match="^tool 'demo': method 'script' key 'latest_npm'"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    ("method", "key"),
+    [
+        ('kind = "node"\nnpm_pkg = "cli"', "latest_npm"),
+        ('kind = "script"\nurl = "https://example.test/i.sh"\nshell = "sh"', "npm_pkg"),
+    ],
+)
+def test_latest_npm_borrows_no_other_kinds_key(tmp_path: Path, method: str, key: str) -> None:
+    manifest = _write(
+        tmp_path,
+        f'[[tool]]\nid = "x"\ncategory = "search"\ntier = "user"\n'
+        f'[[tool.method]]\n{method}\n{key} = "cli"\n',
+    )
+    with pytest.raises(ValueError, match=f"has unknown key '{key}'"):
+        load_tools(manifest)
+
+
 def test_unknown_script_key_is_still_rejected(tmp_path: Path) -> None:
     manifest = _write(tmp_path, _script_tool('uninstall_cmd = ["x"]'))
     with pytest.raises(ValueError, match="has unknown key 'uninstall_cmd'"):
