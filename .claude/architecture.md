@@ -151,9 +151,11 @@ nothing about tweaks.
 Uninstall view's row and the removal all read. A preview and its effect cannot
 diverge because they are the same objects, not because they read the same files
 twice: `active_policies` builds the list, `sweep_policies` takes it, and
-`run_uninstall` — which deletes artifacts, strips the managed block and removes
-shims and alias blocks in between — holds that one list across the whole
-teardown. `sweep_tweaks` is the read-then-sweep convenience form, for callers
+`run_uninstall` — which deletes artifacts and strips the managed block in
+between — holds that one list across the whole teardown. The retired pip/npm
+guard's shims and alias blocks are not part of the teardown, because every launch
+removes them first (`installer/legacy_guard.py`), the CLI teardown included, and
+nothing in an uninstall path calls a guard remover any more. `sweep_tweaks` is the read-then-sweep convenience form, for callers
 with nothing in between. The Uninstall view is a separate case: it reads
 `active_tweak_ids` at view entry rather than holding a list, because the
 Policies view can change the answer while the screen is suspended (see the
@@ -181,7 +183,7 @@ event" is a property of the code, not a guard that could rot. A hook's
 failure is carried on `InstallOutcome.postinstall_warning` and never turns a
 successful install into a failed one.
 
-Idempotency is a live check only (`status.is_installed`, `guard_status`,
+Idempotency is a live check only (`status.is_installed`,
 `has_managed_block`'s existing convention): `codegraph`'s own hook calls
 `installer.status.is_installed` directly on the four agent-host catalog
 `Tool` objects (threaded through via `install_tool`'s `tools` parameter,
@@ -716,11 +718,9 @@ stored value.
 
 Every consumer of the link mode re-reads it rather than capturing it at
 construction time — the Doctor preview and fix, the execute screen's
-PATH wiring, `ban_policy`'s alias targets and `tweak_policy`'s source
-targets. A ban enabled after switching to split mode would otherwise
-write aliases into a `~/.myshellrc` nothing sources, with nothing on
-screen to reveal it. This is the same predicate-not-its-result reasoning
-the `guard_state` parameter already carries.
+PATH wiring and `tweak_policy`'s source targets. A tweak enabled after
+switching to split mode would otherwise write its source line into a
+`~/.myshellrc` nothing sources, with nothing on screen to reveal it.
 
 ## Phase 14: update dispatch and the login-shell handoff
 
@@ -918,8 +918,7 @@ and every script under `scripts/`, sharing one definition of a PATH
 expansion with the Python needle. The surviving PATH assignments there
 are classified by a stated property rather than silenced by a bare
 allowlist: each is evaluated once per process and never re-sourced by a
-nested shell — the same property that puts `installer/executors.py`'s
-command prefix outside the Python needle.
+nested shell.
 
 The boundary of the deletion claim is exactly this wide and no wider:
 the deletion removed no PATH behavior. It is NOT true that it removed no
@@ -1119,7 +1118,8 @@ A file that does not match stays unproven and says to reinstall with `r`.
 answers the existing per-path probes by lookup. Declared-package queries
 are memoized per pass rather than batched into one argv. The uv owner
 directory is `uv tool dir`, never `--bin`. A Volta shim resolves to volta,
-and a redirect shim is looked through to the real owner.
+and a leftover guard shim from a retired version is looked through to the real
+owner (`legacy_guard.look_through_shim`).
 
 Every consumer reads the live platform, the update service included
 through `live_platform`, so a brew that appears mid-session makes a

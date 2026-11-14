@@ -80,8 +80,8 @@ def test_architecture_records_phase_13_mechanisms() -> None:
     seam is a documented exception to rule 2, not a violation of it.
     should_continue: weak cancel, never during a tool. settings.py: link
     mode lives here, asked at most once, no new view. nothing sources:
-    every consumer re-reads the mode, or a ban after a split-mode switch
-    writes aliases into a file nothing sources.
+    every consumer re-reads the mode, or a tweak enabled after a split-mode
+    switch writes its source line into a file nothing sources.
     """
     text = ARCHITECTURE.read_text(encoding="utf-8")
     for phrase in _PHASE_13_REQUIRED:
