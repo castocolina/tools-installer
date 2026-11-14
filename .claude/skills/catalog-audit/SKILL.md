@@ -28,6 +28,10 @@ writes only under `.planning/audits/catalog/<date>/`. Exit 64 is a bad argument,
 refusal that names every reason; fix the input and run it again, never work around it.
 Exit 70 is a tool bug: stop the run and report the traceback, do not retry around it. Exit 1
 from `summarize --require-disposition` lists the drift rows still to map in `dispositions.toml`.
+Exit 75 comes from `facts` only: GitHub's rate limit (HTTP 403 or 429). Write no report from it,
+and never record the rate limit as `unknown`: wait until the reset time on stderr, then run the
+same `facts` again. Anonymous reads get 60 requests an hour and `verify` alone reads about 90
+endpoints, so run `gh auth login` or set `GITHUB_TOKEN` before the first entry.
 
 ### 1. Start or resume
 
@@ -37,16 +41,21 @@ Continue from `next`. The run directory is the state, so resuming needs no other
 On a fresh run, run `scripts/detect-container-runtime.sh` (exit 3 means no runtime) and tell the
 user the runtime and the container budget (default 10 containers per run) before the first entry. A
 report is complete only when the tool has stored it, so a half-written scratch file never counts.
-`status` counts reports only: on `done`, run step 2 if `verify-registry.md` is missing, steps 4
-and 5 if `scripts.md` is missing, then step 6. On a resume, skip step 2 when
-`verify-registry.md` already exists. An orphan report (its entry left the registry) is listed
+`status` counts reports only: on `done`, run step 2 if `verify-registry.md` is missing, step 4
+if `scripts.md` is missing, step 5 for every row that still lacks its container result (step 5
+says how to find them), then step 6. `verify` and `scan` never overwrite their record (exit 73,
+"a new date starts a new run"), so a re-run for the same date cannot drop earlier drift: run
+them once per run. An orphan report (its entry left the registry) is listed
 to the user with the summary; never delete or rename it.
 
 ### 2. Record verify-registry once
 
 `make audit-catalog ARGS="verify --date <date> --state <scratch>/verify-registry.json"` runs
 `make verify-registry`'s check once and stores its record in the run directory. The state path
-is always a scratch path, never the default state file in the home directory.
+is always a scratch path (`mktemp -d`, then `<dir>/verify-registry.json`): outside the checkout,
+outside every dot directory of the home directory, never a symlink, and either absent or a state
+file an earlier `verify` wrote. The tool refuses anything else (exit 64), so a config file is
+never rewritten.
 
 ### 3. Audit one entry
 
@@ -100,8 +109,9 @@ is always a scratch path, never the default state file in the home directory.
 3. Record each finding, and every finding that arrives after an entry's report is complete (a
    script finding, a container result), with the tool, never by editing a complete report:
    `uv run --isolated --no-dev python -m installer.catalog_audit add-finding '<entry>' --date '<date>' --check script --status drift --source '<text>' --cite 'path:line'`.
-   The `--source` text backticks the offending token; the single quotes keep the shell from running
-   it (write a single quote inside the text as `'\''`). Other checks use `--check` with a report
+   The `--source` text backticks the offending token (the first backticked span that is not a
+   `path:line` is the token the summary re-checks against the cited line, ignoring comments); the
+   single quotes keep the shell from running it (write a single quote inside the text as `'\''`). Other checks use `--check` with a report
    row name. A shared surface with no single entry (the scan labels it `(installer)` or
    `(maintainer)`) uses that label, single-quoted, as the entry.
 4. A doc that names a code symbol that does not exist is a drift row, recorded the same way:
@@ -119,12 +129,22 @@ eval "$(scripts/detect-container-runtime.sh)"   # sets CONTAINER_TOOL
 $CONTAINER_TOOL run --rm <image> sh -c '<probe>'
 ```
 
-Record each result with `add-finding` for that entry and check (a script row with
-`--check script --cite path:line`). With no runtime, or past the container budget stated at
+Save each container's output to a file in the run directory
+(`> .planning/audits/catalog/<date>/<name>.log 2>&1` after the command above), read it for a
+credential or an absolute home path, and record each result with `add-finding` for that entry
+and check (a script row with `--check script --cite path:line`), with
+`--source 'container: <name>.log'`. The tool refuses a `container:` source whose file is not in
+the run directory. With no runtime, or past the container budget stated at
 step 1, record the row as `--status unknown --source 'reason: container check not run (<why>)'`;
 the fact block says `unknown: container check not run` for exactly that case. When the budget is
 short, one `scripts/container-e2e-verify.sh --distro <name> all` pass per distribution may stand in
-for per-entry containers: record its result with `add-finding` for each entry it covers.
+for per-entry containers: copy its transcript into the run directory and record its result with
+`add-finding` for each entry it covers.
+
+Resume from what is recorded, never from `scripts.md`: run `summarize`, then list every
+`drift` or `unknown` install, update, removal or script row in `## Entries` and `## Drift` whose
+findings hold no `container:` result and no `reason: container check not run` row. Run only those
+containers, so an interrupted step 5 finishes and a finished container is never repeated.
 
 ### 6. Summarize
 
@@ -184,8 +204,9 @@ argv that a shim rewrites. Anything that needs root is handed to the user as the
 
 ## Orchestrating a full run
 
-Run entries sequentially, one fresh subagent per entry or small batch: the context stays small
-and GitHub's anonymous rate limit stays unspent. Each subagent calls `status`, `facts` and
+Run entries sequentially, one fresh subagent per entry or small batch: the context stays small.
+Subagents share one IP and one token, so they share GitHub's rate limit; authenticate first, and
+on exit 75 every subagent waits for the reset instead of recording `unknown`. Each subagent calls `status`, `facts` and
 `write` for its entries only, and returns the ids it stored. The orchestrator owns `verify`,
 `scan`, the containers, `summarize` and the approval conversation. Close every container and
 background process before the run ends.
@@ -199,6 +220,10 @@ background process before the run ends.
 - HTTP 200 from a distribution API with a stale or empty body is `unknown`, not `ok`: the
   version in it would be copied as a fact.
 - A row marked `ok` with no URL, command or `path:line` behind it is refused by `write`, and
-  worse, cannot be re-checked later.
+  worse, cannot be re-checked later. A backticked command starts with a registry `cmd` or a common
+  tool (`make`, `uv`, `curl`, ...); a bare word in backticks is not evidence. Any repo-relative
+  `path:line` is a citation, `docs/` and root files included.
+- A drift or disposition row whose entry the registry no longer has is kept and listed as an
+  `orphan`; `add-finding` refuses an unknown id.
 - Distribution sources lag the vendor release (a brew formula is often days behind GitHub):
   a version gap between them alone is a `note:`, not drift in the vendor's recommendation.

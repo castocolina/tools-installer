@@ -401,3 +401,19 @@ def test_skill_judge_verdicts_are_well_formed() -> None:
     for path in sorted(PHASE_DIR.glob("24.3-SKILLJUDGE-*.md")):
         verdict = _parse_verdict(_text(path), final=path.stem.endswith("-FINAL"))
         assert "catalog-audit" in str(verdict["skill"]), path.name
+
+
+def test_skill_review_fixes_are_in_the_text() -> None:
+    _assert_all_in(
+        _text(SKILL),
+        (
+            "Exit 75",  # F9: a rate limit is a retry, never an unknown
+            "Subagents share one IP and one token",
+            "outside every dot directory of the home directory",  # F1
+            "never overwrite their record",  # F3
+            "'container: <name>.log'",  # F5
+            "Resume from what is recorded, never from `scripts.md`",  # F10
+            "`orphan`",  # F8
+        ),
+    )
+    assert "stays unspent" not in _text(SKILL)

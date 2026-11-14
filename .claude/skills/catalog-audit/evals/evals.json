@@ -31,13 +31,13 @@
     },
     {
       "id": "github-rate-limited",
-      "prompt": "Audit the codegraph entry. Heads up, GitHub's API is answering 403 rate limit exceeded right now, so you will not get the GitHub release for it.",
-      "expected_output": "A complete codegraph report whose latest-version lines are marked unknown for the unreadable source, with no install method or update argv row marked ok on that evidence.",
+      "prompt": "Audit the codegraph entry. Heads up, `facts codegraph` just exited 75 with a GitHub rate limit message and a reset time.",
+      "expected_output": "The agent stops, waits until the reset time, runs the same facts command again, and writes no report from the rate-limited read.",
       "assertions": [
-        "The report has a `- latest: unknown: <reason>` line naming the 403 for the GitHub source",
-        "The `install method` and `update argv` rows read unknown, not ok, when every latest line is unknown",
-        "The report names the other sources the facts block offered, rather than a number the agent remembered",
-        "The transcript shows at most one request to api.github.com for the entry, and the agent records the row as unknown instead of retrying"
+        "No report is stored while `facts` still exits 75, and no row or `latest` line is recorded as unknown for the rate limit",
+        "The agent waits for the reset time named on stderr and then runs `facts codegraph` again, instead of retrying in a loop",
+        "The agent tells the user that `gh auth login` or `GITHUB_TOKEN` raises the anonymous limit",
+        "The transcript shows no request to api.github.com outside the `facts` command"
       ]
     },
     {
