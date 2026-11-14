@@ -59,6 +59,9 @@ Earlier versions installed PATH shims and an alias block for `pip`, `pip3`, `npm
 Then open a new shell, which drops both the old aliases and the cached command
 paths. To fix the current shell instead, run `unalias pip pip3` and then `hash -r`
 (`hash -r` alone only clears the command-path cache and leaves loaded aliases active).
+Also run `alias npx`: an older installer wrote an `npx` alias that points at `pnpm dlx`.
+Run `unalias npx` only when it shows `pnpm dlx`; an `npx` alias you wrote yourself is
+yours, so leave it alone.
 
 If the launch printed a warning, act on the warning's start:
 
