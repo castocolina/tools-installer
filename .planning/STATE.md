@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
 current_phase: "24.4"
-current_phase_name: Retire the npx, npm and pip guard aliases and redirects
+current_phase_name: Retire the npx, npm and pip guard aliases and redirects (INSERTED)
 status: executing
 stopped_at: "Phases 24.4 and 24.5 specced and discussed (renumbered from 24.3.1/24.3.2); next: autonomous execution"
-last_updated: "2026-11-14T14:32:50.732Z"
+last_updated: "2026-11-14T15:46:05.967Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 24.4 execution started
-state_head: 290504aa97ed6a32e48cc0b3e5659418522c00f8
+state_head: 2c413acbd7d094734edf53d1865ea2e3beb58779
 progress:
   total_phases: 17
   completed_phases: 7
-  total_plans: 240
+  total_plans: 247
   completed_plans: 240
   percent: 41
 ---
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 24.4 (Retire the npx, npm and pip guard aliases and redirects) — EXECUTING
+Phase: 24.4 (Retire the npx, npm and pip guard aliases and redirects (INSERTED)) — READY TO EXECUTE
 Plan: 1 of 0
-Status: Executing Phase 24.4
+Status: Ready to execute
 Last activity: 2026-11-14 — Phase 24.4 execution started
 
 Progress: [████░░░░░░] 41%
