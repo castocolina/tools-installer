@@ -142,34 +142,34 @@ source = "reason: container check not run for package currency (the install itse
 entry = "antigravity"
 check = "removal recipe and paths"
 status = "ok"
-source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+source = "container: containers/fedora-pass2-transcript.log"
 
 [[finding]]
 entry = "duf"
 check = "removal recipe and paths"
 status = "ok"
-source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+source = "container: containers/fedora-pass2-transcript.log"
 
 [[finding]]
 entry = "jetbrains-toolbox"
 check = "removal recipe and paths"
 status = "ok"
-source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+source = "container: containers/fedora-pass2-transcript.log"
 
 [[finding]]
 entry = "jless"
 check = "removal recipe and paths"
 status = "ok"
-source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+source = "container: containers/fedora-pass2-transcript.log"
 
 [[finding]]
 entry = "procs"
 check = "removal recipe and paths"
 status = "ok"
-source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+source = "container: containers/fedora-pass2-transcript.log"
 
 [[finding]]
 entry = "sublime"
 check = "removal recipe and paths"
 status = "ok"
-source = "container: .planning/audits/catalog/2026-11-13/containers/fedora-pass2-transcript.log"
+source = "container: containers/fedora-pass2-transcript.log"
