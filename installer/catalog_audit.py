@@ -156,12 +156,15 @@ def run_dir(root: Path, day: str) -> Path:
         date.fromisoformat(day)
     except ValueError:
         raise UsageError(f"--date is not a real date: {day!r}") from None
-    if not any(p.name == ".planning" and p.is_dir() for p in (root, *root.parents)):
+    anchor = next((p for p in (root, *root.parents) if p.name == ".planning" and p.is_dir()), None)
+    if anchor is None:
         raise UsageError(f"{root} is not under an existing .planning directory")
     run = root / day
-    for path in (root, run):
+    for path in (run, *run.parents):  # every component from `.planning` down
         if path.is_symlink():
             raise UsageError(f"{path} is a symlink")
+        if path == anchor:
+            break
     return run
 
 
@@ -673,22 +676,35 @@ def _write_run_file(run: Path, name: str, text: str) -> Path:
 # ---- verify: the once-per-run verify-registry record (D-03) ----
 
 
-def _state_refusal(state: Path, repo: Path) -> str | None:
+def _state_refusal(state: Path, repo: Path, home: Path) -> str | None:
     """Why `state` is no scratch state for verify-registry, or None.
 
-    verify-registry persists its state during a run even without --write, so it must never
-    be pointed at the default HOME state or at a file the checkout tracks.
+    verify-registry rewrites its state whole during a run, even without --write, so the path
+    must be one only this audit owns: no symlink, nothing under a HOME dotdir (agent config
+    lives there), nothing in the checkout (whatever `--repo` says), and an existing file must
+    already be verify-registry's own flat string-to-string JSON object.
     """
+    if state.is_symlink():
+        return "--state is a symlink; name a plain scratch path"
     resolved = state.resolve()
     if resolved == verify_registry.default_state_path().resolve():
         return "--state is verify-registry's default HOME state; name a scratch path"
-    if resolved.is_relative_to(repo.resolve()):
+    for root in {home, home.resolve()}:
+        for path in (state.absolute(), resolved):
+            if path.is_relative_to(root) and path.relative_to(root).parts[0].startswith("."):
+                return "--state lies under a dot directory of the home directory"
+    if any(resolved.is_relative_to(r.resolve()) for r in (repo, CHECKOUT)):
         return "--state lies inside the repo checkout; name a scratch path"
     if resolved.exists():
         try:
-            json.loads(resolved.read_text(encoding="utf-8"))
+            data: object = json.loads(resolved.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return "--state names an existing file that is not JSON"
+        flat = isinstance(data, dict) and all(
+            isinstance(v, str) for v in cast(dict[str, object], data).values()
+        )
+        if not flat:
+            return "--state names a file that is not a verify-registry state (flat string map)"
     return None
 
 
@@ -704,7 +720,7 @@ def record_verify(
     A warm HOME state is copied to an absent scratch path first (HOME is only read). The
     recorded exit code is data; the final gate reads it, so this does not fail on drift.
     """
-    problem = _state_refusal(state, repo)
+    problem = _state_refusal(state, repo, home)
     if problem is not None:
         raise UsageError(problem)
     warm = verify_registry.default_state_path()

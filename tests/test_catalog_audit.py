@@ -1699,3 +1699,101 @@ def test_summary_lists_missing_and_orphans(
         "orphan stray",
         "",
     ]
+
+
+# ---- 24.3 review F1, F7: the --state guard and the symlink walk ----
+
+_STATE_KINDS = (
+    "home config",
+    "absent under a home dotdir",
+    "nested json",
+    "json list",
+    "non-string values",
+    "dangling symlink",
+    "symlink to a valid state",
+    "checkout with --repo elsewhere",
+)
+
+
+def _verify_argv(root: Path, state: Path, *extra: str) -> list[str]:
+    return ["verify", "--date", DAY, "--root", str(root), "--state", str(state), *extra]
+
+
+def _state_cases(tmp_path: Path) -> dict[str, tuple[Path, list[str]]]:
+    home = Path.home()
+    (home / ".claude").mkdir(parents=True)
+    settings = home / ".claude" / "settings.json"
+    settings.write_text('{"permissions": {"allow": ["x"]}}', encoding="utf-8")
+    nested = tmp_path / "p243fA-nested.json"
+    nested.write_text('{"permissions": {"allow": ["x"]}}', encoding="utf-8")
+    listy = tmp_path / "p243fA-list.json"
+    listy.write_text('["a"]', encoding="utf-8")
+    ints = tmp_path / "p243fA-ints.json"
+    ints.write_text('{"a": 1}', encoding="utf-8")
+    dangling = tmp_path / "p243fA-dangling.json"
+    dangling.symlink_to(tmp_path / "p243fA-nowhere.json")
+    target = tmp_path / "p243fA-target.json"
+    target.write_text("{}", encoding="utf-8")
+    good_link = tmp_path / "p243fA-goodlink.json"
+    good_link.symlink_to(target)
+    checkout = Path(catalog_audit.__file__).resolve().parents[1]
+    return {
+        "home config": (settings, []),
+        "absent under a home dotdir": (home / ".local" / "p243fA.json", []),
+        "nested json": (nested, []),
+        "json list": (listy, []),
+        "non-string values": (ints, []),
+        "dangling symlink": (dangling, []),
+        "symlink to a valid state": (good_link, []),
+        "checkout with --repo elsewhere": (
+            checkout / "p243fA-state.json",
+            ["--repo", str(tmp_path / "elsewhere")],
+        ),
+    }
+
+
+@pytest.mark.parametrize("kind", _STATE_KINDS)
+def test_verify_state_guard_refuses(
+    kind: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    root = _root(tmp_path)
+    state, extra = _state_cases(tmp_path)[kind]
+    before = state.read_bytes() if state.is_file() else None
+    calls: list[list[str]] = []
+    code, _, err = _main(
+        _verify_argv(root, state, *extra), registry, capsys, verify_main=_verify_fake(calls)
+    )
+    assert code == catalog_audit.EXIT_USAGE, err
+    assert calls == []
+    assert (state.read_bytes() if state.is_file() else None) == before
+    assert not (root / DAY / "verify-registry.md").exists()
+
+
+def test_verify_state_guard_accepts_a_flat_state_and_an_absent_scratch_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_entry_registry(tmp_path)
+    flat = tmp_path / "p243fA-flat.json"
+    flat.write_text('{"tool:url": "sha"}', encoding="utf-8")
+    absent = Path.home() / "p243fA-scratch.json"  # under HOME, but not under a dotdir
+    for index, state in enumerate((flat, absent)):
+        root = _root(tmp_path / f"r{index}")
+        code, _, err = _main(
+            _verify_argv(root, state), registry, capsys, verify_main=_verify_fake([])
+        )
+        assert code == 0, err
+
+
+@pytest.mark.parametrize("linked", [".planning", "audits", "catalog", DAY])
+def test_run_dir_refuses_a_symlink_at_every_component(linked: str, tmp_path: Path) -> None:
+    parts = [".planning", "audits", "catalog", DAY]
+    index = parts.index(linked)
+    real = tmp_path / "real"
+    real.joinpath(*parts[index + 1 :]).mkdir(parents=True)
+    parent = (tmp_path / "repo").joinpath(*parts[:index])
+    parent.mkdir(parents=True)
+    (parent / linked).symlink_to(real)
+    root = tmp_path / "repo" / ".planning" / "audits" / "catalog"
+    with pytest.raises(catalog_audit.UsageError, match="symlink"):
+        catalog_audit.run_dir(root, DAY)
