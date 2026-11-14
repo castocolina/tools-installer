@@ -1,0 +1,243 @@
+# verify-registry - 2026-11-14
+exit: 0
+
+Unverified at install (no checksum file, pinned sha256 or GitHub digest):
+- `gron` method 0 (github_release): `gron-linux-amd64-0.7.1.tgz`, `gron-linux-arm64-0.7.1.tgz`
+- `gron` method 1 (github_release): `gron-darwin-amd64-0.7.1.tgz`, `gron-darwin-arm64-0.7.1.tgz`
+- `jetbrains-toolbox` method 1 (tarball): `download?platform=linux&code=TBA`
+- `jetbrains-toolbox` method 2 (tarball): `download?platform=linuxARM64&code=TBA`
+- `jless` method 0 (github_release): `jless-v0.9.0-x86_64-unknown-linux-gnu.zip`
+- `jless` method 1 (github_release): `jless-v0.9.0-aarch64-apple-darwin.zip`, `jless-v0.9.0-x86_64-apple-darwin.zip`
+- `vscode` method 0 (app): `stable`
+- `vscode` method 1 (app): `stable`
+- `vscode` method 2 (tarball): `stable`
+- `vscode` method 3 (tarball): `stable`
+## Not checkable
+- `alacritty`
+- `antigravity`
+- `brew`
+- `bun`
+- `claude`
+- `codex`
+- `colima`
+- `container`
+- `cursor-agent`
+- `docker`
+- `fnm`
+- `git`
+- `glab`
+- `gnu-bash`
+- `gradle`
+- `graphify`
+- `groovy`
+- `java`
+- `jq`
+- `kitty`
+- `maven`
+- `mmdc`
+- `oh-my-zsh`
+- `opencode`
+- `pi`
+- `pnpm`
+- `podman`
+- `puppeteer`
+- `sdkman`
+- `springbootcli`
+- `unzip`
+- `uv`
+- `volta`
+- `watch`
+- `zip`
+- `zsh`
+## Notes
+- `sublime: newer stable: no release source`
+- `sublime: newer stable: no release source`
+- `sublime: newer stable: no release source`
+## Passed
+- `aichat` `https://github.com/sigoden/aichat/releases/download/v0.30.0/aichat-v0.30.0-aarch64-apple-darwin.tar.gz` `aichat` (`macos/arm64`)
+- `aichat` `https://github.com/sigoden/aichat/releases/download/v0.30.0/aichat-v0.30.0-aarch64-unknown-linux-musl.tar.gz` `aichat` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `aichat` `https://github.com/sigoden/aichat/releases/download/v0.30.0/aichat-v0.30.0-x86_64-apple-darwin.tar.gz` `aichat` (`macos/amd64`)
+- `aichat` `https://github.com/sigoden/aichat/releases/download/v0.30.0/aichat-v0.30.0-x86_64-unknown-linux-musl.tar.gz` `aichat` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `ast-grep` `https://github.com/ast-grep/ast-grep/releases/download/0.51.2/app-aarch64-apple-darwin.zip` `ast-grep` (`macos/arm64`)
+- `ast-grep` `https://github.com/ast-grep/ast-grep/releases/download/0.51.2/app-aarch64-unknown-linux-gnu.zip` `ast-grep` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `ast-grep` `https://github.com/ast-grep/ast-grep/releases/download/0.51.2/app-x86_64-apple-darwin.zip` `ast-grep` (`macos/amd64`)
+- `ast-grep` `https://github.com/ast-grep/ast-grep/releases/download/0.51.2/app-x86_64-unknown-linux-gnu.zip` `ast-grep` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `bat` `https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-aarch64-apple-darwin.tar.gz` `bat` (`macos/arm64`)
+- `bat` `https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-aarch64-unknown-linux-musl.tar.gz` `bat` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `bat` `https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-apple-darwin.tar.gz` `bat` (`macos/amd64`)
+- `bat` `https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-unknown-linux-musl.tar.gz` `bat` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `bottom` `https://github.com/ClementTsang/bottom/releases/download/0.15.0/bottom_aarch64-apple-darwin.tar.gz` `btm` (`macos/arm64`)
+- `bottom` `https://github.com/ClementTsang/bottom/releases/download/0.15.0/bottom_aarch64-unknown-linux-musl.tar.gz` `btm` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `bottom` `https://github.com/ClementTsang/bottom/releases/download/0.15.0/bottom_x86_64-apple-darwin.tar.gz` `btm` (`macos/amd64`)
+- `bottom` `https://github.com/ClementTsang/bottom/releases/download/0.15.0/bottom_x86_64-unknown-linux-musl.tar.gz` `btm` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `broot` `https://github.com/Canop/broot/releases/download/v1.62.0/broot_1.62.0.zip` `aarch64-apple-darwin/broot` (`macos/arm64`)
+- `broot` `https://github.com/Canop/broot/releases/download/v1.62.0/broot_1.62.0.zip` `aarch64-unknown-linux-gnu/broot` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `broot` `https://github.com/Canop/broot/releases/download/v1.62.0/broot_1.62.0.zip` `x86_64-unknown-linux-gnu/broot` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `codegraph` `https://github.com/colbymchenry/codegraph/releases/download/v1.6.2/codegraph-darwin-arm64.tar.gz` `bin/codegraph` (`macos/arm64`)
+- `codegraph` `https://github.com/colbymchenry/codegraph/releases/download/v1.6.2/codegraph-darwin-x64.tar.gz` `bin/codegraph` (`macos/amd64`)
+- `codegraph` `https://github.com/colbymchenry/codegraph/releases/download/v1.6.2/codegraph-linux-arm64.tar.gz` `bin/codegraph` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `codegraph` `https://github.com/colbymchenry/codegraph/releases/download/v1.6.2/codegraph-linux-x64.tar.gz` `bin/codegraph` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `copilot` `https://github.com/github/copilot-cli/releases/download/v1.0.112/copilot-linux-arm64.tar.gz` `copilot` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `copilot` `https://github.com/github/copilot-cli/releases/download/v1.0.112/copilot-linux-x64.tar.gz` `copilot` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `dasel` `https://github.com/TomWright/dasel/releases/download/v3.11.2/dasel_darwin_amd64` (`macos/amd64`)
+- `dasel` `https://github.com/TomWright/dasel/releases/download/v3.11.2/dasel_darwin_arm64` (`macos/arm64`)
+- `dasel` `https://github.com/TomWright/dasel/releases/download/v3.11.2/dasel_linux_amd64` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `dasel` `https://github.com/TomWright/dasel/releases/download/v3.11.2/dasel_linux_arm64` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `delta` `https://github.com/dandavison/delta/releases/download/0.20.1/delta-0.20.1-aarch64-apple-darwin.tar.gz` `delta` (`macos/arm64`)
+- `delta` `https://github.com/dandavison/delta/releases/download/0.20.1/delta-0.20.1-aarch64-unknown-linux-gnu.tar.gz` `delta` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `delta` `https://github.com/dandavison/delta/releases/download/0.20.1/delta-0.20.1-x86_64-unknown-linux-gnu.tar.gz` `delta` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `deno` `https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-apple-darwin.zip` `deno` (`macos/arm64`)
+- `deno` `https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-unknown-linux-gnu.zip` `deno` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `deno` `https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-apple-darwin.zip` `deno` (`macos/amd64`)
+- `deno` `https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-unknown-linux-gnu.zip` `deno` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `difftastic` `https://github.com/Wilfred/difftastic/releases/download/0.72.0/difft-0.72.0-aarch64-apple-darwin.tar.gz` `difft` (`macos/arm64`)
+- `difftastic` `https://github.com/Wilfred/difftastic/releases/download/0.72.0/difft-0.72.0-aarch64-unknown-linux-gnu.tar.gz` `difft` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `difftastic` `https://github.com/Wilfred/difftastic/releases/download/0.72.0/difft-0.72.0-x86_64-apple-darwin.tar.gz` `difft` (`macos/amd64`)
+- `difftastic` `https://github.com/Wilfred/difftastic/releases/download/0.72.0/difft-0.72.0-x86_64-unknown-linux-gnu.tar.gz` `difft` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `direnv` `https://github.com/direnv/direnv/releases/download/v2.38.2/direnv.darwin-amd64` (`macos/amd64`)
+- `direnv` `https://github.com/direnv/direnv/releases/download/v2.38.2/direnv.darwin-arm64` (`macos/arm64`)
+- `direnv` `https://github.com/direnv/direnv/releases/download/v2.38.2/direnv.linux-amd64` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `direnv` `https://github.com/direnv/direnv/releases/download/v2.38.2/direnv.linux-arm64` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `dive` `https://github.com/wagoodman/dive/releases/download/v0.13.1/dive_0.13.1_darwin_amd64.tar.gz` `dive` (`macos/amd64`)
+- `dive` `https://github.com/wagoodman/dive/releases/download/v0.13.1/dive_0.13.1_darwin_arm64.tar.gz` `dive` (`macos/arm64`)
+- `dive` `https://github.com/wagoodman/dive/releases/download/v0.13.1/dive_0.13.1_linux_amd64.tar.gz` `dive` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `dive` `https://github.com/wagoodman/dive/releases/download/v0.13.1/dive_0.13.1_linux_arm64.tar.gz` `dive` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `drawio-desktop` `https://github.com/jgraph/drawio-desktop/releases/download/v32.6.10/draw.io-arm64-32.6.10.zip` `draw.io.app/Contents/MacOS/draw.io` (`macos/arm64`)
+- `drawio-desktop` `https://github.com/jgraph/drawio-desktop/releases/download/v32.6.10/draw.io-x64-32.6.10.zip` `draw.io.app/Contents/MacOS/draw.io` (`macos/amd64`)
+- `drawio-desktop` `https://github.com/jgraph/drawio-desktop/releases/download/v32.6.10/drawio-arm64-32.6.10.AppImage` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `drawio-desktop` `https://github.com/jgraph/drawio-desktop/releases/download/v32.6.10/drawio-x86_64-32.6.10.AppImage` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `duf` `https://github.com/muesli/duf/releases/download/v0.9.1/duf_0.9.1_darwin_arm64.tar.gz` `duf` (`macos/arm64`)
+- `duf` `https://github.com/muesli/duf/releases/download/v0.9.1/duf_0.9.1_darwin_x86_64.tar.gz` `duf` (`macos/amd64`)
+- `duf` `https://github.com/muesli/duf/releases/download/v0.9.1/duf_0.9.1_linux_arm64.tar.gz` `duf` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `duf` `https://github.com/muesli/duf/releases/download/v0.9.1/duf_0.9.1_linux_x86_64.tar.gz` `duf` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `dust` `https://github.com/bootandy/dust/releases/download/v1.2.7/dust-v1.2.7-aarch64-apple-darwin.tar.gz` `dust` (`macos/arm64`)
+- `dust` `https://github.com/bootandy/dust/releases/download/v1.2.7/dust-v1.2.7-aarch64-unknown-linux-musl.tar.gz` `dust` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `dust` `https://github.com/bootandy/dust/releases/download/v1.2.7/dust-v1.2.7-x86_64-apple-darwin.tar.gz` `dust` (`macos/amd64`)
+- `dust` `https://github.com/bootandy/dust/releases/download/v1.2.7/dust-v1.2.7-x86_64-unknown-linux-musl.tar.gz` `dust` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `eza` `https://github.com/eza-community/eza/releases/download/v0.23.5/eza_aarch64-unknown-linux-gnu.tar.gz` `eza` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `eza` `https://github.com/eza-community/eza/releases/download/v0.23.5/eza_x86_64-unknown-linux-gnu.tar.gz` `eza` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `fd` `https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-aarch64-apple-darwin.tar.gz` `fd` (`macos/arm64`)
+- `fd` `https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-aarch64-unknown-linux-musl.tar.gz` `fd` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `fd` `https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-apple-darwin.tar.gz` `fd` (`macos/amd64`)
+- `fd` `https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-unknown-linux-musl.tar.gz` `fd` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `fx` `https://github.com/antonmedv/fx/releases/download/40.0.1/fx_darwin_amd64` (`macos/amd64`)
+- `fx` `https://github.com/antonmedv/fx/releases/download/40.0.1/fx_darwin_arm64` (`macos/arm64`)
+- `fx` `https://github.com/antonmedv/fx/releases/download/40.0.1/fx_linux_amd64` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `fx` `https://github.com/antonmedv/fx/releases/download/40.0.1/fx_linux_arm64` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `fzf` `https://github.com/junegunn/fzf/releases/download/v0.75.0/fzf-0.75.0-darwin_amd64.tar.gz` `fzf` (`macos/amd64`)
+- `fzf` `https://github.com/junegunn/fzf/releases/download/v0.75.0/fzf-0.75.0-darwin_arm64.tar.gz` `fzf` (`macos/arm64`)
+- `fzf` `https://github.com/junegunn/fzf/releases/download/v0.75.0/fzf-0.75.0-linux_amd64.tar.gz` `fzf` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `fzf` `https://github.com/junegunn/fzf/releases/download/v0.75.0/fzf-0.75.0-linux_arm64.tar.gz` `fzf` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `gh` `https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_linux_amd64.tar.gz` `bin/gh` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `gh` `https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_linux_arm64.tar.gz` `bin/gh` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `gh` `https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_amd64.zip` `gh_2.104.0_macOS_amd64/bin/gh` (`macos/amd64`)
+- `gh` `https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_arm64.zip` `gh_2.104.0_macOS_arm64/bin/gh` (`macos/arm64`)
+- `gitleaks` `https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz` `gitleaks` (`macos/arm64`)
+- `gitleaks` `https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_x64.tar.gz` `gitleaks` (`macos/amd64`)
+- `gitleaks` `https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz` `gitleaks` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `gitleaks` `https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz` `gitleaks` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `gitui` `https://github.com/gitui-org/gitui/releases/download/v0.28.1/gitui-linux-aarch64.tar.gz` `gitui` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `gitui` `https://github.com/gitui-org/gitui/releases/download/v0.28.1/gitui-linux-x86_64.tar.gz` `gitui` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `gitui` `https://github.com/gitui-org/gitui/releases/download/v0.28.1/gitui-mac-x86.tar.gz` `gitui` (`macos/amd64`)
+- `gitui` `https://github.com/gitui-org/gitui/releases/download/v0.28.1/gitui-mac.tar.gz` `gitui` (`macos/arm64`)
+- `glow` `https://github.com/charmbracelet/glow/releases/download/v3.0.0/glow_3.0.0_Darwin_arm64.tar.gz` `glow` (`macos/arm64`)
+- `glow` `https://github.com/charmbracelet/glow/releases/download/v3.0.0/glow_3.0.0_Darwin_x86_64.tar.gz` `glow` (`macos/amd64`)
+- `glow` `https://github.com/charmbracelet/glow/releases/download/v3.0.0/glow_3.0.0_Linux_arm64.tar.gz` `glow` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `glow` `https://github.com/charmbracelet/glow/releases/download/v3.0.0/glow_3.0.0_Linux_x86_64.tar.gz` `glow` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `gron` `https://github.com/tomnomnom/gron/releases/download/v0.7.1/gron-darwin-amd64-0.7.1.tgz` `gron` (`macos/amd64`)
+- `gron` `https://github.com/tomnomnom/gron/releases/download/v0.7.1/gron-darwin-arm64-0.7.1.tgz` `gron` (`macos/arm64`)
+- `gron` `https://github.com/tomnomnom/gron/releases/download/v0.7.1/gron-linux-amd64-0.7.1.tgz` `gron` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `gron` `https://github.com/tomnomnom/gron/releases/download/v0.7.1/gron-linux-arm64-0.7.1.tgz` `gron` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `gum` `https://github.com/charmbracelet/gum/releases/download/v2.0.2/gum_2.0.2_Darwin_arm64.tar.gz` `gum` (`macos/arm64`)
+- `gum` `https://github.com/charmbracelet/gum/releases/download/v2.0.2/gum_2.0.2_Darwin_x86_64.tar.gz` `gum` (`macos/amd64`)
+- `gum` `https://github.com/charmbracelet/gum/releases/download/v2.0.2/gum_2.0.2_Linux_arm64.tar.gz` `gum` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `gum` `https://github.com/charmbracelet/gum/releases/download/v2.0.2/gum_2.0.2_Linux_x86_64.tar.gz` `gum` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `herdr` `https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-aarch64` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `herdr` `https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `herdr` `https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-aarch64` (`macos/arm64`)
+- `herdr` `https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-x86_64` (`macos/amd64`)
+- `hexyl` `https://github.com/sharkdp/hexyl/releases/download/v0.17.0/hexyl-v0.17.0-aarch64-apple-darwin.tar.gz` `hexyl` (`macos/arm64`)
+- `hexyl` `https://github.com/sharkdp/hexyl/releases/download/v0.17.0/hexyl-v0.17.0-aarch64-unknown-linux-gnu.tar.gz` `hexyl` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `hexyl` `https://github.com/sharkdp/hexyl/releases/download/v0.17.0/hexyl-v0.17.0-x86_64-apple-darwin.tar.gz` `hexyl` (`macos/amd64`)
+- `hexyl` `https://github.com/sharkdp/hexyl/releases/download/v0.17.0/hexyl-v0.17.0-x86_64-unknown-linux-gnu.tar.gz` `hexyl` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `hyperfine` `https://github.com/sharkdp/hyperfine/releases/download/v2.0.0/hyperfine-v2.0.0-aarch64-apple-darwin.tar.gz` `hyperfine` (`macos/arm64`)
+- `hyperfine` `https://github.com/sharkdp/hyperfine/releases/download/v2.0.0/hyperfine-v2.0.0-aarch64-unknown-linux-musl.tar.gz` `hyperfine` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `hyperfine` `https://github.com/sharkdp/hyperfine/releases/download/v2.0.0/hyperfine-v2.0.0-x86_64-apple-darwin.tar.gz` `hyperfine` (`macos/amd64`)
+- `hyperfine` `https://github.com/sharkdp/hyperfine/releases/download/v2.0.0/hyperfine-v2.0.0-x86_64-unknown-linux-musl.tar.gz` `hyperfine` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `jetbrains-toolbox` `https://data.services.jetbrains.com/products/download?platform=linux&code=TBA` `bin/jetbrains-toolbox` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `jetbrains-toolbox` `https://data.services.jetbrains.com/products/download?platform=linuxARM64&code=TBA` `bin/jetbrains-toolbox` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `jless` `https://github.com/PaulJuliusMartinez/jless/releases/download/v0.9.0/jless-v0.9.0-aarch64-apple-darwin.zip` `jless` (`macos/arm64`)
+- `jless` `https://github.com/PaulJuliusMartinez/jless/releases/download/v0.9.0/jless-v0.9.0-x86_64-apple-darwin.zip` `jless` (`macos/amd64`)
+- `jless` `https://github.com/PaulJuliusMartinez/jless/releases/download/v0.9.0/jless-v0.9.0-x86_64-unknown-linux-gnu.zip` `jless` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `just` `https://github.com/casey/just/releases/download/1.59.0/just-1.59.0-aarch64-apple-darwin.tar.gz` `just` (`macos/arm64`)
+- `just` `https://github.com/casey/just/releases/download/1.59.0/just-1.59.0-aarch64-unknown-linux-musl.tar.gz` `just` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `just` `https://github.com/casey/just/releases/download/1.59.0/just-1.59.0-x86_64-apple-darwin.tar.gz` `just` (`macos/amd64`)
+- `just` `https://github.com/casey/just/releases/download/1.59.0/just-1.59.0-x86_64-unknown-linux-musl.tar.gz` `just` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `lazydocker` `https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/lazydocker_0.25.2_Darwin_arm64.tar.gz` `lazydocker` (`macos/arm64`)
+- `lazydocker` `https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/lazydocker_0.25.2_Darwin_x86_64.tar.gz` `lazydocker` (`macos/amd64`)
+- `lazydocker` `https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/lazydocker_0.25.2_Linux_arm64.tar.gz` `lazydocker` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `lazydocker` `https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/lazydocker_0.25.2_Linux_x86_64.tar.gz` `lazydocker` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `lazygit` `https://github.com/jesseduffield/lazygit/releases/download/v0.66.3/lazygit_0.66.3_darwin_arm64.tar.gz` `lazygit` (`macos/arm64`)
+- `lazygit` `https://github.com/jesseduffield/lazygit/releases/download/v0.66.3/lazygit_0.66.3_darwin_x86_64.tar.gz` `lazygit` (`macos/amd64`)
+- `lazygit` `https://github.com/jesseduffield/lazygit/releases/download/v0.66.3/lazygit_0.66.3_linux_arm64.tar.gz` `lazygit` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `lazygit` `https://github.com/jesseduffield/lazygit/releases/download/v0.66.3/lazygit_0.66.3_linux_x86_64.tar.gz` `lazygit` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `miller` `https://github.com/johnkerl/miller/releases/download/v6.22.0/miller-6.22.0-darwin-amd64.tar.gz` `mlr` (`macos/amd64`)
+- `miller` `https://github.com/johnkerl/miller/releases/download/v6.22.0/miller-6.22.0-darwin-arm64.tar.gz` `mlr` (`macos/arm64`)
+- `miller` `https://github.com/johnkerl/miller/releases/download/v6.22.0/miller-6.22.0-linux-amd64.tar.gz` `mlr` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `miller` `https://github.com/johnkerl/miller/releases/download/v6.22.0/miller-6.22.0-linux-arm64.tar.gz` `mlr` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `neovim` `https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-arm64.tar.gz` `bin/nvim` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `neovim` `https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-x86_64.tar.gz` `bin/nvim` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `neovim` `https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-macos-arm64.tar.gz` `bin/nvim` (`macos/arm64`)
+- `neovim` `https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-macos-x86_64.tar.gz` `bin/nvim` (`macos/amd64`)
+- `procs` `https://github.com/dalance/procs/releases/download/v0.14.12/procs-v0.14.12-aarch64-linux.zip` `procs` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `procs` `https://github.com/dalance/procs/releases/download/v0.14.12/procs-v0.14.12-aarch64-mac.zip` `procs` (`macos/arm64`)
+- `procs` `https://github.com/dalance/procs/releases/download/v0.14.12/procs-v0.14.12-x86_64-linux.zip` `procs` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `procs` `https://github.com/dalance/procs/releases/download/v0.14.12/procs-v0.14.12-x86_64-mac.zip` `procs` (`macos/amd64`)
+- `rg` `https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz` `rg` (`macos/arm64`)
+- `rg` `https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-unknown-linux-musl.tar.gz` `rg` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `rg` `https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz` `rg` (`macos/amd64`)
+- `rg` `https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz` `rg` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `ruff` `https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-aarch64-apple-darwin.tar.gz` `ruff` (`macos/arm64`)
+- `ruff` `https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-aarch64-unknown-linux-musl.tar.gz` `ruff` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `ruff` `https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-x86_64-apple-darwin.tar.gz` `ruff` (`macos/amd64`)
+- `ruff` `https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-x86_64-unknown-linux-musl.tar.gz` `ruff` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `sd` `https://github.com/chmln/sd/releases/download/v1.1.0/sd-v1.1.0-aarch64-apple-darwin.tar.gz` `sd` (`macos/arm64`)
+- `sd` `https://github.com/chmln/sd/releases/download/v1.1.0/sd-v1.1.0-aarch64-unknown-linux-musl.tar.gz` `sd` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `sd` `https://github.com/chmln/sd/releases/download/v1.1.0/sd-v1.1.0-x86_64-apple-darwin.tar.gz` `sd` (`macos/amd64`)
+- `sd` `https://github.com/chmln/sd/releases/download/v1.1.0/sd-v1.1.0-x86_64-unknown-linux-musl.tar.gz` `sd` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `shfmt` `https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_darwin_amd64` (`macos/amd64`)
+- `shfmt` `https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_darwin_arm64` (`macos/arm64`)
+- `shfmt` `https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_linux_amd64` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `shfmt` `https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_linux_arm64` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `starship` `https://github.com/starship/starship/releases/download/v1.27.0/starship-aarch64-apple-darwin.tar.gz` `starship` (`macos/arm64`)
+- `starship` `https://github.com/starship/starship/releases/download/v1.27.0/starship-aarch64-unknown-linux-musl.tar.gz` `starship` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `starship` `https://github.com/starship/starship/releases/download/v1.27.0/starship-x86_64-apple-darwin.tar.gz` `starship` (`macos/amd64`)
+- `starship` `https://github.com/starship/starship/releases/download/v1.27.0/starship-x86_64-unknown-linux-musl.tar.gz` `starship` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `sublime` `https://download.sublimetext.com/sublime_text_build_4215_arm64.tar.xz` `sublime_text/sublime_text` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `sublime` `https://download.sublimetext.com/sublime_text_build_4215_mac.zip` `Sublime Text.app/Contents/SharedSupport/bin/subl` (`macos/amd64`, `macos/arm64`)
+- `sublime` `https://download.sublimetext.com/sublime_text_build_4215_x64.tar.xz` `sublime_text/sublime_text` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `tealdeer` `https://github.com/tealdeer-rs/tealdeer/releases/download/v1.9.1/tealdeer-linux-aarch64-musl` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `tealdeer` `https://github.com/tealdeer-rs/tealdeer/releases/download/v1.9.1/tealdeer-linux-x86_64-musl` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `tealdeer` `https://github.com/tealdeer-rs/tealdeer/releases/download/v1.9.1/tealdeer-macos-aarch64` (`macos/arm64`)
+- `tealdeer` `https://github.com/tealdeer-rs/tealdeer/releases/download/v1.9.1/tealdeer-macos-x86_64` (`macos/amd64`)
+- `vale` `https://github.com/errata-ai/vale/releases/download/v3.27.0/vale_3.27.0_Linux_64-bit.tar.gz` `vale` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `vale` `https://github.com/errata-ai/vale/releases/download/v3.27.0/vale_3.27.0_Linux_arm64.tar.gz` `vale` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `vale` `https://github.com/errata-ai/vale/releases/download/v3.27.0/vale_3.27.0_macOS_64-bit.tar.gz` `vale` (`macos/amd64`)
+- `vale` `https://github.com/errata-ai/vale/releases/download/v3.27.0/vale_3.27.0_macOS_arm64.tar.gz` `vale` (`macos/arm64`)
+- `vscode` `https://update.code.visualstudio.com/latest/darwin-arm64/stable` `Visual Studio Code.app/Contents/Resources/app/bin/code` (`macos/arm64`)
+- `vscode` `https://update.code.visualstudio.com/latest/darwin/stable` `Visual Studio Code.app/Contents/Resources/app/bin/code` (`macos/amd64`)
+- `vscode` `https://update.code.visualstudio.com/latest/linux-arm64/stable` `bin/code` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `vscode` `https://update.code.visualstudio.com/latest/linux-x64/stable` `bin/code` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `wezterm` `https://github.com/wezterm/wezterm/releases/download/20240203-110809-5046fc22/WezTerm-20240203-110809-5046fc22-Ubuntu20.04.AppImage` (`debian/amd64`, `fedora/amd64`)
+- `xh` `https://github.com/ducaale/xh/releases/download/v0.26.3/xh-v0.26.3-aarch64-apple-darwin.tar.gz` `xh` (`macos/arm64`)
+- `xh` `https://github.com/ducaale/xh/releases/download/v0.26.3/xh-v0.26.3-aarch64-unknown-linux-musl.tar.gz` `xh` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `xh` `https://github.com/ducaale/xh/releases/download/v0.26.3/xh-v0.26.3-x86_64-apple-darwin.tar.gz` `xh` (`macos/amd64`)
+- `xh` `https://github.com/ducaale/xh/releases/download/v0.26.3/xh-v0.26.3-x86_64-unknown-linux-musl.tar.gz` `xh` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `yq` `https://github.com/mikefarah/yq/releases/download/v4.54.3/yq_darwin_amd64` (`macos/amd64`)
+- `yq` `https://github.com/mikefarah/yq/releases/download/v4.54.3/yq_darwin_arm64` (`macos/arm64`)
+- `yq` `https://github.com/mikefarah/yq/releases/download/v4.54.3/yq_linux_amd64` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)
+- `yq` `https://github.com/mikefarah/yq/releases/download/v4.54.3/yq_linux_arm64` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `zoxide` `https://github.com/ajeetdsouza/zoxide/releases/download/v0.10.0/zoxide-0.10.0-aarch64-apple-darwin.tar.gz` `zoxide` (`macos/arm64`)
+- `zoxide` `https://github.com/ajeetdsouza/zoxide/releases/download/v0.10.0/zoxide-0.10.0-aarch64-unknown-linux-musl.tar.gz` `zoxide` (`arch/arm64`, `debian/arm64`, `fedora/arm64`)
+- `zoxide` `https://github.com/ajeetdsouza/zoxide/releases/download/v0.10.0/zoxide-0.10.0-x86_64-apple-darwin.tar.gz` `zoxide` (`macos/amd64`)
+- `zoxide` `https://github.com/ajeetdsouza/zoxide/releases/download/v0.10.0/zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz` `zoxide` (`arch/amd64`, `debian/amd64`, `fedora/amd64`)

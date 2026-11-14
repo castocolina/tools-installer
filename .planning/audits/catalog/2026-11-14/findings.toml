@@ -1,0 +1,5 @@
+[[finding]]
+entry = "lazygit"
+check = "removal recipe and paths"
+status = "ok"
+source = "container: lazygit-config-dir.log"
