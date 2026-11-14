@@ -2180,7 +2180,8 @@ def _read_active_owned(policy: Policy) -> tuple[tuple[bool, bool] | None, str | 
 
 
 class PoliciesScreen(AppScreen):
-    """Toggle environment policies (the pip/npm ban) on/off, applied live.
+    """Toggle environment policies (shell tweaks, cache redirects, the desktop shell) on/off,
+    applied live.
 
     Each toggle is an immediate, idempotent, reversible mutation — there is no
     select-then-commit step. `space` toggles the highlighted policy (matching the
@@ -2374,16 +2375,6 @@ class PoliciesScreen(AppScreen):
     def _policy_detail(self, policy: Policy) -> str:
         missing_requires = self._missing.get(policy.id)
         details = {
-            "ban": (
-                "Blocks bare pip and pip3, redirects npx to pnpm dlx, and routes"
-                " npm/pnpm global installs to volta install.",
-                "Wraps your pnpm binary with a PATH shim: only global adds are"
-                " rerouted, every other pnpm command passes straight through.",
-                "Global installs then run npm's install scripts unrestricted, which"
-                " pnpm gates — keep untrusted packages on a project-local pnpm add.",
-                "Writes PATH shims plus interactive aliases, then asks for a shell reload.",
-                "Use when humans or agents keep reaching for unmanaged package installers.",
-            ),
             "tweak:docker": (
                 "Adds docker-ps, a watch-powered live table of names, status, and ports.",
                 "Adds docker-stats and docker-memory for quick memory inspection.",
@@ -3681,7 +3672,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     ENABLE_COMMAND_PALETTE = False  # replace Textual's dead-ending default palette
     BINDINGS: ClassVar[list[BindingType]] = [
-        # ctrl+c is the hard abort: unguarded, so it quits from anywhere — even on
+        # ctrl+c is the hard abort: unconditional, so it quits from anywhere — even on
         # top of the NavScreen modal; during a removal the first one waits and a
         # second one exits (D-10, C-26). q is the soft quit: priority so it fires on
         # every view, but guarded (see action_abort) to no-op under the palette.
@@ -4394,7 +4385,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def action_abort(self) -> None:
         # The soft quit (q). Guarded so a priority q binding does not quit out from
-        # under the NavScreen palette; ctrl+c (action_hard_abort) stays unguarded.
+        # under the NavScreen palette; ctrl+c (action_hard_abort) stays unconditional.
         if not self._navigable():
             return
         self._quit()

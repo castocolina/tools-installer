@@ -181,7 +181,7 @@ VIEWS: tuple[View, ...] = (
     View(
         name="policies",
         label="Policies",
-        palette="Policies - pip/npm ban and env tweaks",
+        palette="Policies - env tweaks",
         mode="LIVE",
         glyph="*",
         style="yellow",

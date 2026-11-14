@@ -23,7 +23,7 @@ from installer.policy import (
     tweak_policy,
 )
 from installer.tweaks import BUNDLES, TweakBundle, shell_init_bundle, tweak_present
-from installer.ui_common import VIEW_BY_NAME, FooterBar
+from installer.ui_common import VIEW_BY_NAME, FooterBar, highlighted_key
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
     LinkModeScreen,
@@ -1093,6 +1093,22 @@ async def test_retired_alias_rows_show_only_the_generic_detail(
         assert "dangerously-bypass-approvals" not in detail
         assert "--model gpt-5.6-sol-high" not in detail
         assert "--auto" not in detail
+
+
+async def test_policies_opens_on_the_first_remaining_row(tmp_path: Path) -> None:
+    """Policies opens with the table cursor on the first policy's key."""
+    rc = tmp_path / ".myshellrc"
+    docker = tweak_policy(
+        next(b for b in BUNDLES if b.id == "docker"), rc_path=rc, installed_tools={"watch": True}
+    )
+    countdown = tweak_policy(
+        _countdown(), rc_path=rc, bin_dir=tmp_path / "bin", installed_tools={"uv": True}
+    )
+    app = _live_app([docker, countdown])
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        table = app.view("policies").query_one(DataTable[Any])
+        assert highlighted_key(table) == "tweak:docker"
 
 
 async def test_policies_has_no_tmp_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
