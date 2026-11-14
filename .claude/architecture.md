@@ -40,7 +40,7 @@ crosses tiers drags in its dependency exactly like a same-tier one; the
 resolver has no tier-aware branching.
 
 ROADMAP SC#2's original illustrative `claude` -> `pnpm` pair was rewritten
-during plan-review convergence and is proved with the real `mmdc` -> `pnpm`
+during plan-review convergence and is proved with the real `mmdc` -> `bun`
 user->system edge, because `claude` installs via its own script/cask and
 declares no dependency on `pnpm`.
 
@@ -295,12 +295,12 @@ classification is not automated — no lint enforces tier correctness.
 
 **2. Dependency-tree declaration.** Read the tool's own install
 documentation for its real prerequisites — never assume. If it installs via
-`pnpm add -g`/`uv tool install`/an SDKMAN candidate, its `requires` MUST name
-the manager tool (`pnpm`, `uv`, `sdkman`) so `installer/deps.py
+`bun add -g`/`pnpm add -g`/`uv tool install`/an SDKMAN candidate, its `requires` MUST name
+the manager tool (`bun`, `pnpm`, `uv`, `sdkman`) so `installer/deps.py
 ::resolve_dependencies` drags it in automatically; an undeclared real
 dependency silently relies on the user having installed the prerequisite
-through some other path. Worked example: `mmdc.requires = ["pnpm",
-"puppeteer"]` (Phase 5).
+through some other path. Worked example: `mmdc.requires = ["bun",
+"puppeteer"]` (pnpm before Phase 24.5).
 
 **3. Postinstall-per-harness classification.** Ask, in order:
 
@@ -328,7 +328,8 @@ New registry tool needs post-install setup?
 │  -> [[tool.method]] kind = "host_setup", setup_id = "<id>" resolved
 │     through installer/host_setup.py::HOST_SETUPS (a closed registry
 │     of reviewed console handoffs, displayed not executed).
-│     Worked example: pi.
+│     No registry tool uses this kind since 24.5 (pi installs through bun);
+│     Phase 25 retires it.
 │
 └─ None of the above -> no postinstall wiring; the tool is a plain
    binary with nothing further to do.
@@ -394,6 +395,12 @@ package. The `java` entry's own `desc` field already says so, and commit
 but Java-toolchain tools must go through SDKMAN specifically, never a
 native/brew package."
 
+For the npm-package CLIs (`mmdc`, `puppeteer`, `pi`), bun comes first and pnpm on the
+volta-provided Node runtime is the fallback (Phase 24.5). Bun-installed CLIs run under node,
+not under bun, so they need a node on PATH; volta stays that Node runtime. Bun runs a dependency's lifecycle scripts
+only for its default allowlist or the user's `trustedDependencies`, which replaces that
+list; the installer passes no trust flag and writes no `trustedDependencies`.
+
 The general "prefer brew" preference is documented-only — no lint or test
 enforces the preference itself (D-02) — because brew availability differs too
 much per OS/tool for an automated "why isn't this brew" check to avoid noisy
@@ -458,16 +465,21 @@ wrong-`arch` machine.
 ## Phase 12: version-aware status and the update action
 
 `installer/resolve.py::resolve_methods` returns platform-applicable methods
-ordered by the `_RANK` install-preference ladder. That ordering answers
-"which method should we try first when installing", and it is never provenance.
-`rg` declares `github_release` (rank 20) and `brew` (rank 40), so a
+ordered by the `_RANK` install-preference ladder: brew and cask first, then bun,
+then node (pnpm on the volta-provided Node runtime), then the earlier order. That
+ordering answers "which method should we try first when installing", and it is
+never provenance. `rg` declares `github_release` and `brew`; on a Homebrew host
+brew is tried first, so index 0 names the method tried first, not the copy's
+owner. An `rg` this installer downloaded is still installer-owned, and a
 brew-installed `rg` would be misread as a GitHub download by anything that
 treats index 0 as the owning manager.
 
 `installer/ownership.py` answers the different question. Ownership comes
 from installer-artifact presence (`installer/uninstall.py::plan_uninstall`),
 real manager inventory membership (`brew list --versions`, `pnpm list -g
---json` via the existing `pnpm_global_packages`, `uv tool list`), and live
+--json` via the existing `pnpm_global_packages`, `uv tool list`, and bun's global
+tree read as files: the manifest's keys and each `node_modules/<name>/package.json`,
+never bun's CLI), and live
 PATH attribution (`shutil.which` plus each owner's known directories,
 including brew's own `brew --prefix`). An inventory that could not be read
 is `None`, never an empty set, and an unresolvable owner is `unknown` —
@@ -513,6 +525,10 @@ argv would bypass `_node`'s co-install grouping, `--allow-build`
 allowances, version floors, and smoke check. Reusing the install executor
 makes it impossible for the update path and the install path to drift
 apart.
+
+A bun-owned tool updates with `bun update -g <pkg>`, not by re-running `bun add -g`,
+because re-running `bun add -g` keeps an installed version. The declared smoke check
+runs after it.
 
 REQ-pnpm-global-reinstall-mitigation's automatic trigger captures the
 pnpm-managed global set BEFORE the update and replays that captured
@@ -560,7 +576,7 @@ trailing dim marker and its detail line says so. Both halves of
 REQ-cached-timestamped-version-state — the marker and the re-check — are
 user-observable.
 
-Ownership covers this installer, brew, cask, pnpm, and uv only. `dnf`,
+Ownership covers this installer, brew, cask, pnpm, bun and uv only. `dnf`,
 `apt`, `pacman`, and `rpm_ostree` are valid `METHOD_KINDS` but were out of
 scope for Phase 12: a tool installed through a Linux system package
 manager resolves to `owner="unknown"`, renders unknown, and is refused by

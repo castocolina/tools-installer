@@ -83,7 +83,8 @@ removable by this installer:
    the package is current enough. One package name may differ per distro —
    declare one method per manager.
 2. Release asset or tarball with a checksum (`github_release`, `tarball`).
-3. Language-ecosystem install (`node`, `uv-tool`, `sdkman`) with the manager in `requires`.
+3. Language-ecosystem install with the manager in `requires`: `bun` for npm-package CLIs (first),
+   `node` (the pnpm fallback), `uv-tool`, `sdkman`.
 4. Vendor `script` (curl|bash style) ONLY when the vendor offers nothing
    better. A script install is **not** package-manager-owned: declare what it
    creates in `paths` (receipt-proven, L2), its own uninstall argv in `remove`
@@ -103,7 +104,7 @@ one tool-wide recipe or separate per-OS knobs. For each method from step 4:
 
 | Method kind | What you write | What you still verify |
 |---|---|---|
-| `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `node`, `sdkman` | nothing: removal derives from the manager (L1) | the package/candidate name the manager removes is the one installed |
+| `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `bun`, `node`, `sdkman` | nothing: removal derives from the manager (L1) | the package/candidate name the manager removes is the one installed |
 | `github_release`, `tarball`, `app` | nothing: removal is the receipt of the paths the install computed (L2) | install and removal use the same path; nothing else shares that path |
 | `cargo_distrobox` | `repo` (owner/name slug), `image` (fully qualified), `packages` (in-box build deps), `artifacts` (`{box, host}` tables) | the first artifact is the binary under ~/.local/bin; every `host` sits under ~/.local, ~/.config or ~/.terminfo; the box and the image it pulled are deleted on every outcome |
 | `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME` | run the vendor installer in a disposable container and list what it wrote |

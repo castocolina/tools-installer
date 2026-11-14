@@ -563,9 +563,37 @@ def test_readme_states_the_no_homebrew_case_and_the_move_to_bun() -> None:
         assert term in section, f"install-decision section lacks: {term!r}"
 
 
+def _rank_passage(text: str) -> str:
+    """The Phase 12 paragraph that describes the `_RANK` install-preference ladder."""
+    start = text.index("`installer/resolve.py::resolve_methods` returns")
+    return text[start : text.index("\n\n", start)]
+
+
+def test_architecture_rank_passage_names_brew_first() -> None:
+    """PRIO-07 (R1-26 family): the `_RANK` passage names brew, then bun, then pnpm."""
+    passage = _rank_passage(ARCHITECTURE.read_text(encoding="utf-8"))
+    assert passage.index("brew") < passage.index("bun") < passage.index("pnpm"), passage
+    assert "install-preference ladder" in passage
+    assert "never provenance" in passage
+    assert "rank 40" not in passage
+
+
+def test_onboarding_skill_lists_the_bun_kind() -> None:
+    """D-22: the onboarding skill names bun in its method list (step 4) and removal table (4b)."""
+    assert "`bun`" in _skill_section("4")
+    assert "`bun`" in _skill_section("4b")
+
+
+def test_architecture_names_no_stale_pi_host_setup_example() -> None:
+    """R1-26: pi is no longer the host_setup example; the tier note names the mmdc -> bun edge."""
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    assert "Worked example: pi." not in text
+    assert "`mmdc` -> `bun`" in text
+
+
 def test_docs_make_no_overclaim_about_bun() -> None:
     """PRIO-07: bun-installed CLIs are said to run under node; no doc claims otherwise."""
-    for path in [README]:
+    for path in [README, ARCHITECTURE]:
         text = path.read_text(encoding="utf-8").lower()
         rel = path.relative_to(REPO_ROOT)
         assert "run under node" in text, f"{rel}: never says bun-installed CLIs run under node"
