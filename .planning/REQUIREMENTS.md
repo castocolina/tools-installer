@@ -145,11 +145,11 @@
 
 ### Guard retirement
 
-- [ ] **GUARD-01**: No route writes a package-manager guard shim (npm, npx, pnpm, pip, pip3) or the `tools-installer ban` alias block; the writers, renderers and the npx translator are deleted [user request 2026-11-14: "Los alias de npx, npm, pip han demostrado ser un desastre"]
-- [ ] **GUARD-02**: Every route that runs the launch repair removes the installer-written ban block from `~/.myshellrc`, the zshrc and `~/.bashrc` and the sentinel-marked shims from the managed bin dir, naming each path; a failure is a warning, never a crash [user request 2026-11-14]
-- [ ] **GUARD-03**: The cleanup keeps every byte and file it did not write: user aliases, CR line endings, orphan markers, symlinks, unmarked or oversize files, and a marked file swapped for another file before the identity re-check that runs immediately before delete [user request 2026-11-14] *(amended 2026-11-14, 24.4 review cycles 1-2: a marked shim's identity (device, inode and bytes, through an O_NOFOLLOW re-open) is re-verified immediately before unlink, and a file swapped before that re-check is kept; no userspace unlink is atomic against a swap, so a swap between the re-check and the unlink is a documented residual, not excluded)*
-- [ ] **GUARD-04**: The Policies row `ban`, `make guard`/`make unguard`, `--guard`/`--unguard`, the Doctor guard section and the uninstall ban row are gone [user request 2026-11-14]
-- [ ] **GUARD-05**: Installer-spawned shells get PATH in its normal order, and installer lookups still skip a sentinel-marked leftover the launch could not remove [user request 2026-11-14]
+- [x] **GUARD-01**: No route writes a package-manager guard shim (npm, npx, pnpm, pip, pip3) or the `tools-installer ban` alias block; the writers, renderers and the npx translator are deleted [user request 2026-11-14: "Los alias de npx, npm, pip han demostrado ser un desastre"]
+- [x] **GUARD-02**: Every route that runs the launch repair removes the installer-written ban block from `~/.myshellrc`, the zshrc and `~/.bashrc` and the sentinel-marked shims from the managed bin dir, naming each path; a failure is a warning, never a crash [user request 2026-11-14]
+- [x] **GUARD-03**: The cleanup keeps every byte and file it did not write: user aliases, CR line endings, orphan markers, symlinks, unmarked or oversize files, and a marked file swapped for another file before the identity re-check that runs immediately before delete [user request 2026-11-14] *(amended 2026-11-14, 24.4 review cycles 1-2: a marked shim's identity (device, inode and bytes, through an O_NOFOLLOW re-open) is re-verified immediately before unlink, and a file swapped before that re-check is kept; no userspace unlink is atomic against a swap, so a swap between the re-check and the unlink is a documented residual, not excluded)*
+- [x] **GUARD-04**: The Policies row `ban`, `make guard`/`make unguard`, `--guard`/`--unguard`, the Doctor guard section and the uninstall ban row are gone [user request 2026-11-14]
+- [x] **GUARD-05**: Installer-spawned shells get PATH in its normal order, and installer lookups still skip a sentinel-marked leftover the launch could not remove [user request 2026-11-14]
 - [x] **GUARD-06**: Live docs, the architecture rule doc, the catalog-audit surface list, REQUIREMENTS.md and the tests stop describing the guard as a feature [user request 2026-11-14]
 
 ### Install priority
@@ -295,11 +295,11 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | AUDIT-02 | Phase 24.3 | Complete |
 | AUDIT-03 | Phase 24.3 | Complete |
 | AUDIT-04 | Phase 24.3 | Complete |
-| GUARD-01 | Phase 24.4 | Pending |
-| GUARD-02 | Phase 24.4 | Pending |
-| GUARD-03 | Phase 24.4 | Pending |
-| GUARD-04 | Phase 24.4 | Pending |
-| GUARD-05 | Phase 24.4 | Pending |
+| GUARD-01 | Phase 24.4 | Complete |
+| GUARD-02 | Phase 24.4 | Complete |
+| GUARD-03 | Phase 24.4 | Complete |
+| GUARD-04 | Phase 24.4 | Complete |
+| GUARD-05 | Phase 24.4 | Complete |
 | GUARD-06 | Phase 24.4 | Complete |
 | PRIO-01 | Phase 24.5 | Pending |
 | PRIO-02 | Phase 24.5 | Pending |

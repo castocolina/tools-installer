@@ -2,19 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: "24.4"
-current_phase_name: Retire the npx, npm and pip guard aliases and redirects (INSERTED)
+current_phase: "24.5"
 status: executing
-stopped_at: "Phases 24.4 and 24.5 specced and discussed (renumbered from 24.3.1/24.3.2); next: autonomous execution"
-last_updated: "2026-11-14T17:18:32.068Z"
+stopped_at: Phase 24.4 complete; planning Phase 24.5
+last_updated: "2026-11-14T19:32:01.425Z"
 last_activity: 2026-11-14
-last_activity_desc: Phase 24.4 execution started
-state_head: ec0d3bfacf26f9f0b187985fa1987c0558c1b022
+last_activity_desc: Phase 24.5 execution started
+state_head: b456dda93d66c2f3ebe87cb83a47cc4275e2dcf5
 progress:
   total_phases: 17
   completed_phases: 7
   total_plans: 247
-  completed_plans: 240
+  completed_plans: 247
   percent: 41
 ---
 
@@ -25,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-13)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 24.4 — Retire the npx, npm and pip guard aliases and redirects
+**Current focus:** Phase 24.5
 
 ## Current Position
 
-Phase: 24.4 (Retire the npx, npm and pip guard aliases and redirects (INSERTED)) — READY TO EXECUTE
-Plan: 1 of 0
-Status: Ready to execute
-Last activity: 2026-11-14 — Phase 24.4 execution started
+Phase: 24.5 — EXECUTING
+Plan: 1 of ?
+Status: Executing Phase 24.5
+Last activity: 2026-11-14 — Phase 24.5 execution started
 
 Progress: [████░░░░░░] 41%
 
@@ -55,6 +54,7 @@ Progress: [████░░░░░░] 41%
 | 24.1 | 5 | - | - |
 | 24.2 | 13 | - | - |
 | 24.3 | 11 | - | - |
+| 24.4 | 7 | - | - |
 
 *Updated after each plan completion*
 
@@ -112,8 +112,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T14:32:49.637Z
-Stopped at: Phases 24.4 and 24.5 specced and discussed (renumbered from 24.3.1/24.3.2); next: autonomous execution
+Last session: 2026-11-14T19:32:00.015Z
+Stopped at: Phase 24.4 complete; planning Phase 24.5
 Resume file: .planning/phases/24.5-javascript-install-priority-brew-then-bun-then-volta/24.5-CONTEXT.md
 
 ## Deferred Verification

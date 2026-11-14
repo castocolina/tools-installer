@@ -38,7 +38,7 @@
 - [x] **Phase 24.1: Onboard Neovim through the tool-onboarding skill** (INSERTED) - nvim in the catalog, no-reboot path on Bazzite (completed 2026-11-14)
 - [x] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim (completed 2026-11-14)
 - [x] **Phase 24.3: Catalog audit skill** (INSERTED) - Catalog-audit skill looping over every entry; opencode v2 and Pi MCP refresh (completed 2026-11-14)
-- [ ] **Phase 24.4: Retire the npx, npm and pip guard aliases and redirects**
+- [x] **Phase 24.4: Retire the npx, npm and pip guard aliases and redirects** (completed 2026-11-14)
 - [ ] **Phase 24.5: JavaScript install priority brew then bun then volta**
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
 - [ ] **Phase 26: Commit and push quality hooks** - Fast checks on commit, the full test suite on push, installed by `make install`
@@ -643,7 +643,7 @@ Plans:
 The 24-UAT host launch rewrote `~/.local/bin/npx` and dropped `alias npx='pnpm dlx'` from `~/.myshellrc`. Scope: the guard writers, the launch repair, the Policies row, the make targets, the docs and the tests. The repair keeps removing old installer-written blocks and shims.
 **Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05, GUARD-06 *(amended 2026-11-14, 24.4 SPEC)*
 **Depends on:** Phase 24.3
-**Plans:** 7/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1**
