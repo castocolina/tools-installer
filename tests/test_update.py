@@ -2422,3 +2422,126 @@ def test_receipt_backed_alacritty_stays_owned_without_distrobox_and_names_the_pr
     assert outcome.status == "failed"
     assert "needs distrobox and podman" in outcome.detail
     assert runner.calls == []
+
+
+# -- 24.5-04: a bun-owned tool updates through `bun update -g`, inside its declared range. --
+
+_PI_PKG = "@earendil-works/pi-coding-agent"
+_MMDC_PKG = "@mermaid-js/mermaid-cli"
+_BUN_MMDC = Method(
+    kind="bun",
+    params={
+        "npm_pkg": _MMDC_PKG,
+        "co_install": ["puppeteer"],
+        "versions": {"puppeteer": "^25"},
+        "smoke": "puppeteer-browser",
+    },
+)
+_BUN_PI = Method(kind="bun", params={"npm_pkg": _PI_PKG, "min_node": "22.19.0"})
+
+
+def _plant_bun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, present: bool = True) -> Path:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "bun"
+    if present:
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    return fake
+
+
+def _seed_bun_manifest(home: Path, text: str) -> None:
+    manifest = home / ".bun" / "install" / "global" / "package.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(text, encoding="utf-8")
+
+
+def _bun_mmdc_target() -> UpdateTarget:
+    tool = _tool("mmdc", _BUN_MMDC, cmd="mmdc")
+    return _target(tool, "bun", method=_BUN_MMDC, package=_MMDC_PKG)
+
+
+def _bun_pi_target() -> UpdateTarget:
+    tool = _tool("pi", _BUN_PI, cmd="pi")
+    return _target(tool, "bun", method=_BUN_PI, package=_PI_PKG)
+
+
+def test_bun_owned_update_runs_bun_update_then_smoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bun = _plant_bun(tmp_path, monkeypatch)
+    events: list[object] = []
+
+    def launch(manager: str | None) -> None:
+        events.append(("launch", manager))
+
+    monkeypatch.setattr(executors, "launch_puppeteer", launch)
+    target = _bun_mmdc_target()
+    receipts.record(target.tool, _BUN_MMDC, package=_MMDC_PKG, smoke="ok")
+    outcome = _perform(target, events.append)
+    assert outcome.status == "updated"
+    assert events == [[str(bun), "update", "-g", _MMDC_PKG], ("launch", "bun")]
+    refreshed = receipts.read("mmdc")
+    assert refreshed is not None and refreshed.method.kind == "bun"
+
+
+def test_bun_update_never_reinstalls_or_passes_latest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
+    calls: list[list[str]] = []
+    assert _perform(_bun_mmdc_target(), calls.append).status == "updated"
+    flat = [token for argv in calls for token in argv]
+    assert "add" not in flat
+    assert not any(token.startswith("--latest") for token in flat)
+
+
+def test_bun_exact_pin_is_not_updated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    _seed_bun_manifest(tmp_path, json.dumps({"dependencies": {_PI_PKG: "1.5.2"}}))
+    target = _bun_pi_target()
+    calls: list[list[str]] = []
+    outcome = _perform(target, calls.append)
+    assert (outcome.status, outcome.owner) == ("unsupported", "bun")
+    assert "1.5.2" in outcome.detail and "bun's global manifest" in outcome.detail
+    assert calls == []
+    assert update_refusal(target.tool, target.ownership) == outcome
+
+
+@pytest.mark.parametrize(
+    "manifest", [json.dumps({"dependencies": {_PI_PKG: "^1.5.2"}}), "not json"]
+)
+def test_bun_range_or_unreadable_manifest_is_not_a_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest: str
+) -> None:
+    bun = _plant_bun(tmp_path, monkeypatch)
+    _seed_bun_manifest(tmp_path, manifest)
+    calls: list[list[str]] = []
+    assert _perform(_bun_pi_target(), calls.append).status == "updated"
+    assert calls == [[str(bun), "update", "-g", _PI_PKG]]
+
+
+def test_bun_update_without_bun_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _plant_bun(tmp_path, monkeypatch, present=False)
+    calls: list[list[str]] = []
+    outcome = _perform(_bun_pi_target(), calls.append)
+    assert outcome.status == "failed"
+    assert outcome.detail == "bun was not found, so pi cannot be updated"
+    assert calls == []
+
+
+def test_bun_update_reports_a_failed_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch("missing libnss3"))
+    outcome = _perform(_bun_mmdc_target(), lambda _argv: None)
+    assert outcome.status == "failed"
+    assert "missing libnss3" in outcome.detail
+
+
+def test_resolve_update_argv_has_no_argv_for_bun() -> None:
+    assert resolve_update_argv(_bun_pi_target()) is None

@@ -37,6 +37,13 @@ cannot drift apart. A pnpm-owned host-setup tool (Pi) has no node method; it rep
 reviewed `HOST_SETUPS` command through the real pnpm (`host_setup_update_argv`), and a
 host-setup tool without such a command is refused.
 
+A bun-owned update does not reuse the install executor either: live, `bun add -g semver@^7`
+over 7.5.0 kept 7.5.0 even with `--force`, while `bun update -g semver` moved to 7.8.6 and
+rewrote the range to `^7.8.6`, keeping the major. It therefore runs `bun update -g <pkg>` by
+absolute path, then the declared smoke check through bun's own tree, then refreshes the
+receipt. There is no `--latest`: the declared range stays, and a package the user pinned to an
+exact version in bun's global manifest is refused, since bun would keep it anyway.
+
 An installer-owned `script` method is also the vendor's own documented update
 path, and it is the only update mechanism such a tool has, so it reuses
 `executors.execute` rather than inventing a second script runner. A script that
@@ -77,6 +84,7 @@ pays per tool.
 
 from __future__ import annotations
 
+import re
 import shlex
 import threading
 from collections.abc import Callable, Sequence
@@ -85,6 +93,7 @@ from typing import Literal, Protocol, cast
 
 from installer import apps, cargo_distrobox, download, executors, receipts
 from installer import ownership as ownership_mod
+from installer.bun_globals import read_bun_globals, resolve_bun
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
@@ -118,6 +127,8 @@ from installer.versions import (
 PostinstallFn = Callable[[Tool, Method, Runner, frozenset[str] | None], HookOutcome]
 
 _FALLBACK_UNKNOWN = "no manager claimed this tool"
+# A manifest range that names one version: bun keeps it, so the update has nothing to do.
+_EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?")
 # D-14 / ledger Q4: `u` never re-downloads a pinned release (SPEC R7); the review
 # and the catalog key read this same text.
 PINNED_DETAIL = "pinned; update outside or re-pin"
@@ -179,7 +190,7 @@ class UpdateOutcome:
 
 
 def resolve_update_argv(target: UpdateTarget, *, greedy: bool = False) -> list[str] | None:
-    """Manager argv for brew/cask/uv; None for pnpm and installer (sentinels).
+    """Manager argv for brew/cask/uv; None for pnpm, bun and installer (sentinels).
 
     `"unknown"` is never a valid call: `perform_update` short-circuits first.
     `greedy` (LIFE-10) adds `--greedy-auto-updates` to a cask upgrade only; it is
@@ -188,7 +199,7 @@ def resolve_update_argv(target: UpdateTarget, *, greedy: bool = False) -> list[s
     owner = target.ownership.owner
     if owner == "unknown":
         raise UpdateError("resolve_update_argv must not be called with owner='unknown'")
-    if owner in ("pnpm", "installer"):
+    if owner in ("pnpm", "bun", "installer"):
         return None
     package = target.ownership.package
     if not isinstance(package, str) or not package:
@@ -329,6 +340,19 @@ def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | N
                 f"managed by Volta — update it with `volta install {ownership.package or tool.cmd}`"
             ),
         )
+    if ownership.owner == "bun" and ownership.package is not None:
+        # An unreadable manifest is not a pin: the update runs, and bun keeps a real pin anyway.
+        listed = (read_bun_globals() or {}).get(ownership.package)
+        if listed is not None and _EXACT_VERSION.fullmatch(listed.range):
+            return UpdateOutcome(
+                tool_id=tool.id,
+                status="unsupported",
+                owner="bun",
+                detail=(
+                    f"pinned to {listed.range} in bun's global manifest; bun update keeps that "
+                    f"version — change the pin with `bun add -g {ownership.package}@<range>`"
+                ),
+            )
     if ownership.owner == "pnpm" and method is None and host_setup_update_argv(tool) is None:
         # A host-setup tool (pi) whose setup has no reviewed `pnpm add` command: the hint is
         # the fallback, which still carries --ignore-scripts.
@@ -390,6 +414,18 @@ def _perform(
             runner([pnpm, *argv[1:]])
         else:
             executors.execute(method, runner)
+    elif owner == "bun":
+        bun = resolve_bun()
+        if bun is None:
+            raise UpdateError(f"bun was not found, so {target.tool.id} cannot be updated")
+        if ownership.package is None:
+            raise UpdateError(f"ownership.package is required for a bun update of {target.tool.id}")
+        runner([bun, "update", "-g", ownership.package])
+        smoke = method.params.get("smoke") if method is not None else None
+        if isinstance(smoke, str) and smoke in executors.SMOKE_CHECKS:
+            # Manager "bun" selects the own-tree loader: a broken bun copy fails here instead of
+            # another manager's copy answering for it.
+            executors.SMOKE_CHECKS[smoke]("bun")
     elif owner == "installer":
         cleanup_warnings = _update_installer_owned(
             method,
@@ -404,7 +440,8 @@ def _perform(
     # update refreshes only a receipt of the same method kind, so updating
     # someone else's package never makes it ours and a manager update never
     # replaces another kind's receipt (G4: the installer's files stay proven).
-    # Updates run no smoke check.
+    # Only the bun branch runs a smoke check: its update is a different argv than the install,
+    # so nothing else re-proves the browser; the others re-run their install path or a manager.
     if method is not None:
         existing = receipts.read(target.tool.id)
         same_kind = existing is not None and existing.method.kind == method.kind
