@@ -676,7 +676,10 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
         SettingKey(("approval_policy",), "never"),
         SettingKey(("sandbox_mode",), "danger-full-access"),
     ),
-    ("opencode", "auto-approve"): (SettingKey(("permission",), "allow"),),
+    # OpenCode 2's schema deprecates `permission`; `permissions` is an ordered rule array.
+    ("opencode", "auto-approve"): (
+        SettingKey(("permissions",), [{"action": "*", "resource": "*", "effect": "allow"}]),
+    ),
     # The CLI self-repairs a missing approvalMode to "allowlist" (verified 2026-11-08: fresh
     # container install and a long-lived host config), so that value is its default, not a choice.
     ("cursor-agent", "auto-approve"): (
@@ -716,6 +719,12 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
 # ledger entry records it, and a revert takes the recorded value as the one to match.
 DYNAMIC_KEYS: Final[dict[tuple[str, str], tuple[KeyPath, ...]]] = {
     ("herdr", "default-shell"): (("terminal", "default_shell"),),
+}
+
+# Keys an earlier release wrote: never written again, read only to revert their ledger entries
+# and to recognise them in a file. Keep every key a release ever wrote.
+RETIRED_KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
+    ("opencode", "auto-approve"): (SettingKey(("permission",), "allow"),),
 }
 
 # The groups an install writes per tool: explicit because `vscode-lean` is built by
@@ -1214,7 +1223,8 @@ def _revert_file(
     fmt = _format(agent)
     if file not in _agent_files(agent, home=home, platform_os=platform_os, environ=environ):
         return FileResult(agent, setting, Path(file), fmt, refused=NOT_A_SETTINGS_FILE)
-    table = {key.path: key for key in setting_keys(agent, setting, platform_os)}
+    keys = (*setting_keys(agent, setting, platform_os), *RETIRED_KEYS.get((agent, setting), ()))
+    table = {key.path: key for key in keys}
     for _attempt in range(2):
         try:
             return _revert_once(agent, setting, Path(file), fmt, table, home)
