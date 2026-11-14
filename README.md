@@ -39,9 +39,6 @@ wget -qO- https://raw.githubusercontent.com/castocolina/tools-installer/main/ins
 - **Declarative catalog** — every tool is one entry in
   [`installer/registry.toml`](installer/registry.toml). Adding a tool is a data
   change, not code.
-- **Optional pip/npm ban** — `make guard` drops shims + shell aliases that block
-  bare `pip`/`pip3` (use `uv`) and `npm` (use `pnpm`), so the system Python and
-  global node_modules stay clean. Opt-in and fully removable with `make unguard`.
 
 ## Available tools
 
@@ -179,7 +176,7 @@ author ships an `.sh` that works, that wins.
 A fifth kind covers npm-package CLIs:
 
 5. **npm package** (`kind = "node"`) — installs the CLI via `pnpm add -g <npm_pkg>`.
-   `pnpm` is used consistently (bare `npm` is never called, matching the pip/npm ban).
+   `pnpm` is used consistently (bare `npm` is never called).
    Example: `mmdc` (`@mermaid-js/mermaid-cli`) declares `kind = "node"` with
    `npm_pkg = "@mermaid-js/mermaid-cli"` and `requires = ["pnpm"]`.
 
@@ -203,9 +200,17 @@ does not cascade to dependents.
 dirs the installer manages and reports any that are **missing** from PATH,
 **broken** (directory gone), or **duplicated** — then points you at `make fix`.
 Only directories that actually exist on disk are managed, so tools you never
-installed are never reported. Like every launch, it first repairs installer-owned
-leftovers: legacy alias blocks, an outdated guard alias block in your shell rc files
-and an outdated `npx` redirect in the managed bin dir.
+installed are never reported. Like every interactive or CLI launch (the TUI, `make doctor`,
+`make fix`, `make uninstall`, a headless install), it first repairs installer-owned
+leftovers: it strips legacy alias blocks and removes the retired pip/npm guard an earlier
+version wrote (the marked `npm`, `npx`, `pnpm`, `pip` and `pip3` shims in the managed bin
+dir and the alias block in your shell rc files), naming each file it removes. It prints a
+warning naming the file and the fix when its first read of one of those files fails (for
+any reason but a missing file), when it cannot delete a shim, or when it cannot rewrite an
+rc file. It leaves without a message anything it does not recognize as its own (a symlink,
+an unmarked file, a shim over 8 KiB, an rc file over 1 MiB or not valid UTF-8) and any file
+that changed or became unreadable after that first read; the next launch checks again.
+Scheduled background jobs run no cleanup.
 
 `make fix` applies the wiring:
 
@@ -235,31 +240,6 @@ remove them. Your own content is never touched, and the removal always asks firs
 make doctor   # diagnose
 make fix      # apply
 ```
-
-## Banning pip / npm (optional)
-
-The installer can steer you off the unmanaged installers:
-
-```sh
-make guard     # block bare pip/pip3 (-> uv) and npm (-> pnpm)
-make unguard   # remove the ban
-```
-
-Run interactively (a TTY), `make guard` / `make unguard` open the unified app on
-the **policies view**. The pip/npm ban is one row there: **enter** toggles it on
-or off, applied live. The view reports each layer it touched (shims, aliases) and
-reminds you to open a new shell or run `hash -r` so cached command paths refresh.
-Non-interactively (a pipe) or with `--yes`, the same commands run the unchanged
-console flow with no prompt.
-
-The ban works in two layers: PATH shims in `~/.local/bin` (catch every caller,
-including scripts and agents) and interactive-shell aliases (a clearer message at
-the prompt). `make doctor` reports whether the ban is active.
-
-It is **not** a sandbox: `python -m pip install` bypasses the `pip` shim, and a
-real `pip`/`npm` earlier on your `PATH` wins — `make doctor` warns about that
-ordering. The ban is also a toggle in the **uninstall view** (and `make
-uninstall` removes it along with everything else).
 
 ### Shell tweak bundles
 
@@ -309,12 +289,11 @@ workflow has a `make` target so local runs and CI are identical:
 | `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
 | `make test`      | `pytest` with coverage                                          |
 | `make build`     | build the distributable                                         |
-| `make uninstall` | remove userspace artifacts. Interactively (a TTY) this opens the app on the **uninstall view**: toggle which tools to remove, plus independent toggles for the pip/npm ban and the managed `~/.myshellrc` PATH wiring, applied live with reload guidance. Non-interactively / `--yes` it runs the unchanged console flow (previews `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the PATH block, then confirms) |
-| `make guard` / `make unguard` | toggle the pip/npm ban. Interactively (a TTY) opens the app on the **policies view** (enter toggles, applied live); non-interactively / `--yes` runs the unchanged console flow |
+| `make uninstall` | remove userspace artifacts. Interactively (a TTY) this opens the app on the **uninstall view**: toggle which tools to remove, plus an independent toggle for the managed `~/.myshellrc` PATH wiring, applied live with reload guidance. Non-interactively / `--yes` it runs the unchanged console flow (previews `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the PATH block, then confirms) |
 
 Quality gates are not optional and must not be bypassed (`# noqa`, `# type: ignore`,
 skipped tests, lowered coverage floors). The full contributor rules live in
-[`CLAUDE.md`](CLAUDE.md) and [`.claude/`](.claude/): [tooling](.claude/python-tooling.md),
+[`AGENTS.md`](AGENTS.md) and [`.claude/`](.claude/): [tooling](.claude/python-tooling.md),
 [testing](.claude/testing.md), [git workflow](.claude/git-workflow.md), and
 [dev environment](.claude/dev-environment.md).
 

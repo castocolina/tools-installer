@@ -416,3 +416,90 @@ def test_architecture_records_the_install_tuning_rule() -> None:
         assert phrase in text, f"missing install-tuning phrase: {phrase}"
     retired = "a `Policy` produced by `installer/policy.py::omz_plugins_policy`"
     assert retired not in text, "the Oh-My-Zsh paragraph still calls the plugins a Policy row"
+
+
+README = REPO_ROOT / "README.md"
+TROUBLESHOOTING = REPO_ROOT / "docs" / "TROUBLESHOOTING.md"
+
+
+def _outside_fences(text: str) -> str:
+    """The text with fenced code blocks dropped, so a shell comment is never read as a heading."""
+    kept: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _slug(heading: str) -> str:
+    """The GitHub anchor slug of one heading: lowercase, punctuation dropped, spaces to hyphens."""
+    return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+
+
+def _headings(text: str) -> set[str]:
+    """The anchor slugs of every heading in a document's prose (fences excluded)."""
+    found = re.finditer(r"^#{1,6}\s+(.+?)\s*$", _outside_fences(text), re.MULTILINE)
+    return {_slug(match.group(1)) for match in found}
+
+
+def _broken_links(doc: Path) -> list[str]:
+    """Each relative link or anchor in doc that does not resolve, as written.
+
+    A bare `#anchor` must match a heading of doc itself. A relative target resolves
+    from doc's own directory, never the repo root. A `#fragment` on an existing `.md`
+    target must match a heading of that target document.
+    """
+    text = _outside_fences(doc.read_text(encoding="utf-8"))
+    broken: list[str] = []
+    for target in re.findall(r"\]\(([^)\s]+)\)", text):
+        if re.match(r"[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
+            continue  # an external scheme such as https: or mailto:
+        path_part, _, fragment = target.partition("#")
+        if not path_part:
+            if fragment not in _headings(text):
+                broken.append(target)
+            continue
+        dest = doc.parent / path_part
+        if not dest.exists() or _missing_fragment(dest, fragment):
+            broken.append(target)
+    return broken
+
+
+def _missing_fragment(dest: Path, fragment: str) -> bool:
+    """True when a fragment names no heading of an existing Markdown target."""
+    if not fragment or dest.suffix != ".md":
+        return False
+    return fragment not in _headings(dest.read_text(encoding="utf-8"))
+
+
+def test_readme_and_troubleshooting_links_resolve() -> None:
+    """Every anchor and relative link in the two user documents resolves (T-24.4-21)."""
+    for doc in (README, TROUBLESHOOTING):
+        assert _broken_links(doc) == [], f"{doc.relative_to(REPO_ROOT)}: broken links"
+
+
+def test_link_checker_resolves_links_from_the_document_dir(tmp_path: Path) -> None:
+    """A link in docs/ resolves against docs/, so a root-only file is broken there."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "sibling.md").write_text("# Sibling\n", encoding="utf-8")
+    (tmp_path / "root-only.md").write_text("# Root only\n", encoding="utf-8")
+    guide = docs / "guide.md"
+    guide.write_text("[a](sibling.md) [b](root-only.md)\n", encoding="utf-8")
+    assert _broken_links(guide) == ["root-only.md"]
+
+
+def test_link_checker_checks_cross_document_fragments(tmp_path: Path) -> None:
+    """A fragment on an existing target must match one of that target's headings."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "sibling.md").write_text("## Present heading\n", encoding="utf-8")
+    guide = docs / "guide.md"
+    guide.write_text(
+        "[ok](sibling.md#present-heading) [bad](sibling.md#missing-section)\n",
+        encoding="utf-8",
+    )
+    assert _broken_links(guide) == ["sibling.md#missing-section"]

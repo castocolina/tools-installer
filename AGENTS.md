@@ -11,7 +11,7 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 - `make build`     — build the distributable
 - `make setup`     — launch the wizard (`uv run --isolated --no-dev setup.py`; pass flags via `ARGS="…"`)
 - `make doctor`    — audit PATH (a report; like every launch it first repairs installer-owned
-  leftovers: legacy alias blocks, the guard alias block, an outdated npx redirect)
+  leftovers: it removes legacy alias blocks and the retired pip/npm guard shims and alias block)
 - `make fix`       — wire `~/.myshellrc` + shell rc files into your PATH
 - `make run`       — alias for `make setup`
 - `make uninstall` — remove installed artifacts
@@ -31,9 +31,9 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 - **Validate before you commit.** `make validate && make test` must pass on the exact
   tree you are about to commit.
 - **Never mutate the developer's host.** Do not run `make setup`, `make fix`,
-  `make uninstall`, `make doctor`, `make guard` or `make unguard`, or mutating
-  `systemctl --user` commands, on the real machine (every launch route, doctor
-  included, may rewrite the real `~/.myshellrc` and `~/.local/bin/npx`), and
+  `make uninstall`, `make doctor`, or mutating `systemctl --user` commands, on the
+  real machine (every launch route, doctor included, may rewrite the real
+  `~/.myshellrc` and delete leftover guard shims in `~/.local/bin`), and
   never edit the real shell rc or agent settings. Tests use a scratch `HOME`; real
   installs and removals run only in disposable containers
   (`scripts/detect-container-runtime.sh`), which are removed afterwards.

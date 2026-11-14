@@ -52,14 +52,33 @@ official `.sh` installer or a release archive is always preferred when available
 
 ## `pip` or `npm` prints a "banned" message
 
-`make guard` installs PATH shims and shell aliases that redirect bare `pip`,
-`pip3`, and `npm` to their sanctioned replacements (`uv` for Python packages,
-`pnpm` for global node packages). If you need the real tool:
+Earlier versions installed PATH shims and an alias block for `pip`, `pip3`, `npm`,
+`npx` and `pnpm`. An interactive or CLI launch of this version (for example
+`make doctor`) removes the ones it wrote and prints each removed path. Scheduled background jobs do not run this cleanup.
 
-- Run `make unguard` to remove the ban entirely, or
-- Use the sanctioned alternative: `uv add` / `uv pip install` instead of `pip`,
-  and `pnpm add -g` instead of `npm install -g`.
+Then open a new shell, which drops both the old aliases and the cached command
+paths. To fix the current shell instead, run `unalias pip pip3` and then `hash -r`
+(`hash -r` alone only clears the command-path cache and leaves loaded aliases active).
 
-If a real `pip` or `npm` binary resolves before `~/.local/bin` on your `PATH`,
-the shims are silently bypassed — `make doctor` will flag that ordering so you
-can decide whether to adjust it.
+If the launch printed a warning, act on the warning's start:
+
+- A warning that starts `Could not check` names a shim in `~/.local/bin` or a shell rc
+  file. The launch could not read that file, so it has not verified that the file is
+  its own. Fix that file's permissions (or its directory's), then launch again. Do not
+  delete the file because of this warning; the next launch reads it and removes only
+  what carries the installer's marker.
+- A warning that starts `Could not remove the retired pip/npm guard shim` names a shim
+  the launch verified as its own but could not delete. Delete that file yourself, or
+  make its directory writable, then launch again.
+- A warning that starts `Could not remove the retired guard alias block from` names a
+  shell rc file such as `~/.bashrc`, `~/.zshrc` or `~/.myshellrc`. Fix that file's
+  permissions, or open it and delete only the lines from `# >>> tools-installer ban >>>`
+  through `# <<< tools-installer ban <<<`, then launch again. Do not delete the rc file
+  itself: it holds your own shell configuration.
+
+The launch leaves without a message anything it does not recognize as its own (a
+symlink, an unmarked file, a shim over 8 KiB, an rc file over 1 MiB or not valid
+UTF-8) and any file that changed or became unreadable after its first read; the next
+launch checks again. So if `pip` still prints the old message in a new shell and no
+launch warned, run `type pip` to see which file or alias answers. That file is yours
+to remove.
