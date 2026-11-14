@@ -1468,8 +1468,14 @@ _MERGE_CASES = [
     ("unknown", [("ok", _CONTAINER_OK), ("unknown", _NOT_RUN)], "ok", False),
     ("unknown", [("drift", _PROSE_OK)], "drift", True),
     ("drift", [("unknown", _NOT_RUN)], "drift", True),
+    ("n/a", [("unknown", _NOT_RUN)], "unknown", False),
+    ("n/a", [("ok", _CONTAINER_OK)], "ok", False),
+    ("n/a", [("ok", _PROSE_OK)], "ok", False),
+    ("n/a", [("drift", _PROSE_OK)], "drift", True),
+    ("n/a", [("unknown", _NOT_RUN), ("ok", _CONTAINER_OK)], "ok", False),
 ]
 _REPORT_ROWS = {
+    "n/a": "| install method | n/a | reason: the vendor ships no installer |",
     "ok": "| install method | ok | https://example.com/install |",
     "unknown": f"| install method | unknown | {_NOT_RUN} |",
     "drift": "| install method | drift | https://example.com/install |",
@@ -1797,3 +1803,26 @@ def test_run_dir_refuses_a_symlink_at_every_component(linked: str, tmp_path: Pat
     root = tmp_path / "repo" / ".planning" / "audits" / "catalog"
     with pytest.raises(catalog_audit.UsageError, match="symlink"):
         catalog_audit.run_dir(root, DAY)
+
+
+# ---- 24.3 review F3: a run record is never overwritten ----
+
+
+def test_scan_and_verify_never_overwrite_a_run_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry, root, repo = _arrange(tmp_path, alpha=_report("alpha"))
+    run = root / DAY
+    state = tmp_path / "p243fA-state.json"
+    calls: list[list[str]] = []
+    scan = ["scan", "--date", DAY, "--root", str(root), "--repo", str(repo)]
+    verify = _verify_argv(root, state)
+    for argv, name in ((scan, "scripts.md"), (verify, "verify-registry.md")):
+        assert _main(argv, registry, capsys, verify_main=_verify_fake(calls))[0] == 0
+        before = (run / name).read_bytes()
+        (repo / "scripts" / "x.sh").write_text("sudo rm\n", encoding="utf-8")
+        code, _, err = _main(argv, registry, capsys, verify_main=_verify_fake(calls))
+        assert code == catalog_audit.EXIT_REFUSED, err
+        assert "new date" in err
+        assert (run / name).read_bytes() == before
+    assert len(calls) == 1  # the refused verify never ran verify-registry

@@ -664,6 +664,16 @@ def entry_facts(
     return _tilde("\n".join(lines) + "\n", seams.home)
 
 
+def _refuse_existing(run: Path, name: str) -> None:
+    """A run record (scan, verify) is written once: a rewrite could drop drift the gate holds.
+
+    Sticky rows would need a second record of past drift; refusing, like `write` does for a
+    complete report, keeps one source of truth. A new date starts a new run.
+    """
+    if (run / name).exists() or (run / name).is_symlink():
+        raise ReportRefused([f"{name} already exists; a new date starts a new run"])
+
+
 def _write_run_file(run: Path, name: str, text: str) -> Path:
     """Write one run-directory file whole; never through a symlink at the leaf."""
     target = run / name
@@ -723,6 +733,7 @@ def record_verify(
     problem = _state_refusal(state, repo, home)
     if problem is not None:
         raise UsageError(problem)
+    _refuse_existing(run, "verify-registry.md")
     warm = verify_registry.default_state_path()
     if not state.exists() and warm.is_file():
         ensure_dir(state.parent)
@@ -1299,9 +1310,11 @@ class _Row:
             return "drift"
         current = self.report
         for finding in self.findings:
+            # n/a ranks below ok: a finding always applies, and only a container proves ok
+            # over unknown.
             if finding.status == "unknown":
-                current = current or "unknown"
-            elif current is None or (
+                current = "unknown" if current in (None, "n/a") else current
+            elif current in (None, "n/a") or (
                 current == "unknown" and _CONTAINER_RE.fullmatch(finding.source)
             ):
                 current = "ok"
@@ -1570,6 +1583,7 @@ def _run(
         record_verify(run, args.state, args.repo, home, verify_main or verify_registry.main)
         print("wrote verify-registry.md")
     elif args.cmd == "scan":
+        _refuse_existing(run, "scripts.md")
         _write_run_file(
             run,
             "scripts.md",
