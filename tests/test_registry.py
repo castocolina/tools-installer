@@ -3070,3 +3070,28 @@ def test_opencode_v2_receipt_stops_the_service_before_any_delete(
     assert result.removed == ("opencode",)
     assert not (bin_dir / "opencode").exists()
     assert not (bin_dir / "opencode2").exists()
+
+
+def test_pi_entry_text_is_current() -> None:
+    pi = _tools_by_id()["pi"]
+    # Built-in MCP since Pi 0.99.0; the vendor-installer method change waits in Backlog 999.13.
+    assert "setup remains interactive" not in pi.desc
+    assert "MCP" in pi.desc
+    assert len(pi.desc) <= 150
+    assert [m.kind for m in pi.methods] == ["host_setup"]
+    assert pi.methods[0].params["setup_id"] == "pi"
+    assert pi.requires == ("pnpm",)
+    assert pi.owner_probes == ("host-setup",)
+    block = REGISTRY.read_text(encoding="utf-8").split('id = "pi"', 1)[1].split("[[tool]]", 1)[0]
+    assert "verified = 2026-11-14" in block
+    assert "Verified 2026-11-14" in block
+    assert "0.99.0" in block
+
+
+def test_codegraph_note_names_its_copilot_and_pi_hosts() -> None:
+    block = (
+        REGISTRY.read_text(encoding="utf-8").split('id = "codegraph"', 1)[1].split("[[tool]]", 1)[0]
+    )
+    assert "copilot-cli" in block
+    assert "--print-config pi" in block
+    assert "Verified 2026-11-14" in block

@@ -1795,6 +1795,11 @@ desc = "Local code-intelligence knowledge graph CLI and MCP server; ships its ow
 # Verified 2026-11-07 (Phase 23, CONF-02/CONF-03): hosts come from
 # postinstall.present_harnesses (moved there in 23.1-02); receipt.hooks records the registered hosts. The
 # new-host sweep (CONF-02) lands in plan 23-07.
+# Verified 2026-11-14 (audit 2026-11-13, codegraph v1.6.2): from 24.3-08 the hook also targets copilot
+# as codegraph's `copilot-cli` target, and Pi as `pi` only behind a `codegraph install --print-config pi`
+# gate; v1.6.2 has no `pi` target, so Pi stays unregistered until codegraph ships one. Like its claude,
+# codex, opencode and cursor targets, copilot-cli replaces an existing `codegraph` entry in
+# ~/.copilot/mcp-config.json, and its uninstall deletes that entry (review R1-17).
 postinstall = "codegraph-mcp-register"
 [[tool.method]]
 kind = "github_release"
@@ -3211,11 +3216,16 @@ category = "ai"
 cmd = "pi"
 priority = "P1"
 audience = "human"
-desc = "Minimal coding-agent harness; setup remains interactive, and uninstall uses pnpm remove."
+desc = "Minimal coding-agent harness with built-in MCP and its own updater; the host-setup handoff installs it with pnpm."
 tier = "user"
-verified = 2026-11-04
-# Verified 2026-11-04: the host-setup handoff installs @earendil-works/pi-coding-agent through pnpm
-# (installer/host_setup.py); that package is on the npm registry (latest 1.5.0). No script keys.
+verified = 2026-11-14
+# Verified 2026-11-14: MCP is built in since 0.99.0 (CHANGELOG.md): `pi mcp add|remove|list|login|logout`
+# reads ~/.pi/agent/mcp.json, and `pi update` self-updates the install (refused under another package
+# manager such as Nix). The vendor README now leads with `curl -fsSL https://pi.dev/install.sh | sh`,
+# which runs sudo for its Node, npm and xz-utils installs on Debian and Alpine, so the method change
+# waits in Backlog 999.13. Pi requires Node.js >=22.19.0 (npm @earendil-works/pi-coding-agent engines;
+# latest 1.5.2 at verify time). The host-setup handoff still installs the package through pnpm
+# (installer/host_setup.py). No script keys.
 requires = ["pnpm"]
 owner_probes = ["host-setup"]
 [[tool.method]]
