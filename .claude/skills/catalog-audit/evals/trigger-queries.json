@@ -1,0 +1,74 @@
+[
+  {
+    "query": "audit every entry in installer/registry.toml against upstream and tell me which ones have drifted",
+    "should_trigger": true
+  },
+  {
+    "query": "it's been a few weeks, do a full catalog audit before we cut the release and write up what's outdated",
+    "should_trigger": true
+  },
+  {
+    "query": "resume the catalog audit from yesterday, it stopped halfway through the registry",
+    "should_trigger": true
+  },
+  {
+    "query": "are any of our install methods out of date? I want a report per tool with changelog notes between our pinned version and the latest",
+    "should_trigger": true
+  },
+  {
+    "query": "check whether the vendor deprecated any of the config keys our installer tunes for opencode, pi or codegraph, across the whole catalog",
+    "should_trigger": true
+  },
+  {
+    "query": "review every registry entry's update argv and removal recipe against what the vendors say today",
+    "should_trigger": true
+  },
+  {
+    "query": "run the catalog-audit loop and produce the SUMMARY.md with proposed changes and their risk",
+    "should_trigger": true
+  },
+  {
+    "query": "the registry has 60 tools and nobody has looked at their upstream docs in months, scan for registry drift and for unsafe patterns in our install scripts",
+    "should_trigger": true
+  },
+  {
+    "query": "sweep the catalog for entries whose vendor changelog mentions a changed install, update or uninstall flow since we last verified them",
+    "should_trigger": true
+  },
+  {
+    "query": "I want to add ripgrep to the registry, walk me through researching it and writing the entry",
+    "should_trigger": false
+  },
+  {
+    "query": "onboard this new tool, zellij, and decide its tier, install method and removal",
+    "should_trigger": false
+  },
+  {
+    "query": "bump the release pins and check the release assets still resolve for our downloadable tools",
+    "should_trigger": false
+  },
+  {
+    "query": "run make verify-registry and tell me which pins drifted",
+    "should_trigger": false
+  },
+  {
+    "query": "review this PR diff for bugs in the uninstall planner",
+    "should_trigger": false
+  },
+  {
+    "query": "why does the wizard crash when I press escape on the tool list",
+    "should_trigger": false
+  },
+  {
+    "query": "write a unit test for the version cache expiry logic",
+    "should_trigger": false
+  },
+  {
+    "query": "explain what the postinstall hooks table in installer/postinstall.py does",
+    "should_trigger": false
+  },
+  {
+    "query": "update my local pi install to the latest version",
+    "should_trigger": false
+  }
+]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -179,3 +180,35 @@ def test_tool_onboarding_gains_one_line() -> None:
         "- To audit every registry entry in one loop, use `catalog-audit` "
         "(`.claude/skills/catalog-audit/SKILL.md`)."
     ]
+
+
+EVALS = SKILL_DIR / "evals" / "evals.json"
+TRIGGER_QUERIES = SKILL_DIR / "evals" / "trigger-queries.json"
+_NEAR_MISS_RE = re.compile(
+    r"onboard|new tool|release pins?|release assets|PR\b|diff", re.IGNORECASE
+)
+
+
+def test_evals_shape() -> None:
+    data = json.loads(_text(EVALS))
+    assert data["skill_name"] == "catalog-audit"
+    evals = data["evals"]
+    assert len(evals) >= 6
+    assert len({e["id"] for e in evals}) == len(evals)
+    for e in evals:
+        assert len(e["prompt"]) >= 40, e["id"]
+        assert e["expected_output"].strip(), e["id"]
+        assert len(e["assertions"]) >= 2, e["id"]
+        assert all(len(a) >= 20 for a in e["assertions"]), e["id"]
+
+
+def test_trigger_queries_shape() -> None:
+    queries = json.loads(_text(TRIGGER_QUERIES))
+    assert 16 <= len(queries) <= 24
+    assert all(set(q) == {"query", "should_trigger"} for q in queries)
+    assert all(isinstance(q["should_trigger"], bool) for q in queries)
+    positives = [q for q in queries if q["should_trigger"]]
+    negatives = [q for q in queries if not q["should_trigger"]]
+    assert 8 <= len(positives) <= 12
+    assert 8 <= len(negatives) <= 12
+    assert len([q for q in negatives if _NEAR_MISS_RE.search(q["query"])]) >= 3
