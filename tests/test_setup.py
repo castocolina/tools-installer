@@ -4964,18 +4964,19 @@ def test_no_route_writes_a_guard_file(monkeypatch: pytest.MonkeyPatch) -> None:
     _sandbox(monkeypatch, home)
     seen = _capture_app(monkeypatch)
     assert setup.main(["--uninstall"]) == 0
+    assert _guard_files(home) == []
     policies = seen[0]["policies"]
     assert isinstance(policies, PolicyInputs)
     for policy in policies.policies:
         policy.apply()
-    assert _guard_files(home) == []
+        assert _guard_files(home) == [], policy
     assert "tools-installer tweak:docker" in (home / ".myshellrc").read_text()
 
     buffer = io.StringIO()
     _headless_route_stubs(monkeypatch, buffer)
     for argv in (["--doctor"], ["--fix"], ["--uninstall", "--yes"]):
         assert setup.main(argv) == 0
-    assert _guard_files(home) == []
+        assert _guard_files(home) == [], argv
 
     done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
     _headless_main_fixture(monkeypatch, buffer, [done])
