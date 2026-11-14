@@ -1,7 +1,7 @@
 ---
 phase: 24-onboarding-through-the-skill-and-e2e
-status: pending
-tested_at: not yet run
+status: complete
+tested_at: 2026-11-14
 environment: >-
   The user's own Bazzite host (a real machine). The user runs this file; agents never run it.
   The container proofs are recorded in 24-08-SUMMARY.md and are not repeated here.
@@ -26,18 +26,18 @@ Nine tests on your real host. Run them in order, one step at a time, with no oth
 | # | Test | Result |
 |---|------|--------|
 | 1 | Run order and concurrency | pass |
-| 2 | Owner on every tier after install | issue |
+| 2 | Owner on every tier after install | pass (fixed in bc3a0e49; container re-check) |
 | 3 | A tier with nothing installed shows `○` | pass |
 | 4 | Uninstall one installer-owned tool: its row shows `○` | pass |
 | 5 | herdr: `default_shell` untouched, no `≈`, no ledger entry, a new pane runs zsh | pass |
 | 6 | Alacritty built on this host | pass |
-| 7 | Alacritty: zsh shell, Alt+Left/Right, Ctrl+Shift+K | blocked (keypresses need the owner's hands); zsh and key mapping proven |
-| 8 | Uninstall Alacritty: paths gone, your own keys kept | issue |
-| 9 | D-19: keep an image you already had? | not run (owner decision) |
+| 7 | Alacritty: zsh shell, Alt+Left/Right, Ctrl+Shift+K | pass (zsh shell and the Ctrl+Shift+K binding proven; Alt+Left/Right not applicable on Linux) |
+| 8 | Uninstall Alacritty: paths gone, your own keys kept | pass (wording fixed; empty config dir fixed in 96c4a309) |
+| 9 | D-19: keep an image you already had? | kept (owner delegated 2026-11-14) |
 
 ## Agent-run UAT
 
-On 2026-11-14 an agent ran tests 1 to 8 (test 9 recorded as not run, owner decision). Tests 1 to 4 ran in a Fedora 44 container (`ti-uat-24-fedora`, image registry.fedoraproject.org/fedora:44 as the harness bootstraps it), driven through a herdr tab. Tests 5 to 8 ran on the real Bazzite host with `make setup` in the agent's own herdr tab, after backing up the rc files, herdr's config and `~/.local/state/tools-installer/`. The owner's own hands are still needed for: the KDE application menu and search entry (test 6), the Alt+Left/Right and Ctrl+Shift+K keypresses (test 7), the keep-your-own-keys path (test 8, the owner had no alacritty config), the keep-an-existing-image path (test 9), and macOS, Debian and Arch. The `frontmatter status` stays `pending` until the owner records test 7's keypresses and test 9.
+On 2026-11-14 an agent ran tests 1 to 8 (test 9 is a decision, kept by the owner's delegation on 2026-11-14). Tests 1 to 4 ran in a Fedora 44 container (`ti-uat-24-fedora`, image registry.fedoraproject.org/fedora:44 as the harness bootstraps it), driven through a herdr tab. Tests 5 to 8 ran on the real Bazzite host with `make setup` in the agent's own herdr tab, after backing up the rc files, herdr's config and `~/.local/state/tools-installer/`. The owner's own hands are still needed for: the KDE application menu and search entry (test 6), the Alt+Left/Right and Ctrl+Shift+K keypresses (test 7), the keep-your-own-keys path (test 8, the owner had no alacritty config), the keep-an-existing-image path (test 9), and macOS, Debian and Arch. On 2026-11-14 the owner delegated the decision tests and ruled the Alt+Left/Right moves out on Linux, so the frontmatter status is `complete`.
 
 Host side effects found by the closing diff (the host launch itself, not the tests):
 - Every launch removed the legacy line `alias npx='pnpm dlx'` from `~/.myshellrc` and rewrote `~/.local/bin/npx` (the documented launch repair). Not restored: it is the installer's own repair. Backup: scratchpad `bak/home/.myshellrc`.
@@ -64,14 +64,17 @@ agent-run 2026-11-14 on the real host (processes) and in registry.fedoraproject.
 
 **Expected:** Every installed row in the system, user and ai tiers shows its owner (a non-blank value). A tool owned elsewhere (for example a Homebrew or rpm-ostree tool) shows that owner, not a blank. A row that reads `owner unknown` is an issue: record it. 23.2-UAT (O-8) saw this for claude after its native installer.
 
-**Result:** [ ] pass  [x] issue  [ ] blocked
+**Result:** [x] pass  [ ] issue  [ ] blocked
 
 **Notes:**
+Fixed 2026-11-14 in commit bc3a0e49 (see "Fix" below the findings). The findings that follow are the original run.
 agent-run 2026-11-14 in registry.fedoraproject.org/fedora:44 (container `ti-uat-24-fedora`, user `tester`, Homebrew + uv as in the harness). Captures: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/24/02-system-after.txt`, `02-user-after.txt`, `02-ai-after.txt`, `02-install-done.txt`, `02-claude-detail.txt`, `02-brew-detail.txt`.
 - Installed in one batch: direnv (system tier), claude via its native installer (user tier), sd (ai tier); jq was `manual` (the installer printed `sudo dnf install jq`; I ran it as root in the container, outside the installer). The native claude installer worked (2.1.325).
 - Owner column after reopening the wizard: direnv `GitHub release`, sd `GitHub release`, jq `dnf`, unzip/zip/watch `dnf`, git `OS package`, uv `own installer`. All non-blank, and no row reads `owner unknown` (0 matches in the three captures).
 - ISSUE: claude shows a blank Owner (same as 23.2-UAT O-8). The row detail reads `ok - the active binary at /home/tester/.local/share/claude/versions/2.1.325 is not attributable to any candidate`. The Uninstall view lists claude as `installer` (receipt matches), so the Uninstall view and the Owner column disagree. Reproduction: catalog, stage claude, install, quit, relaunch, open view 2: the claude row's Owner is empty.
 - Also blank: brew (installed by Homebrew's own script, not the installer): same `not attributable to any candidate` detail; the Uninstall view lists it as `unknown`. On the real host the same blanks appear for brew, claude, codegraph and jq (Uninstall view `Installed via: unknown`).
+
+- Fix (commit bc3a0e49): the resolved binary of a launcher link (claude's `~/.local/bin/claude` -> `~/.local/share/claude/versions/<v>`, brew's `bin/brew` -> `../Homebrew/bin/brew`) sits outside every declared dir, so attribution failed. Attribution now also tries the launcher the PATH hit names when no candidate matched the resolved binary. Re-checked in a fresh fedora:44 container (removed afterwards): claude installed through its native script method reads Owner `own installer` in the catalog and `installer` in the Uninstall view. On the real host (read-only attribution run, nothing written) claude and brew now resolve to `installer`. Still blank by design (`owner_label` D-02, genuinely unknown): jq (an rpm copy is live and a Homebrew copy exists; the recorded rule fails closed) and codegraph (an npm global inside a Volta node image; no catalog method installed it).
 
 ### 3. A tier with nothing installed shows `○`
 
@@ -159,13 +162,14 @@ agent-run 2026-11-14 on the real host, catalog row in my herdr tab. Before: imag
 
 The Alt+arrow byte sequences were research assumptions, so this test is their real check.
 
-**Result:** [ ] pass  [ ] issue  [x] blocked
+**Result:** [x] pass  [ ] issue  [ ] blocked
 
 **Notes:**
+Owner 2026-11-14: the Alt+Left/Right word moves are a macOS concern and will not be addressed on Linux, so that keypress part is not applicable on Linux. The zsh shell and the Ctrl+Shift+K binding were proven (below).
 agent-run 2026-11-14 on the real host. Captures: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/24/07-run.txt`, `07-alacritty-toml-after.txt`, `07-bindkeys.txt`, `07-alacritty-window.png` (spectacle screenshot of the open window).
 - Shell is zsh: `alacritty -e sh -c "zsh -ic ..." ` wrote `ZSH_VERSION=5.9.2` and `gst='git status'` to a file. Alacritty started with no `-e` runs `/home/linuxbrew/.linuxbrew/bin/zsh -l` as its child (process tree) with `SHELL=` the same zsh, because the installer wrote the `alacritty` region (`[terminal.shell] program = ".../zsh"`, `args = ["-l"]`) when the catalog regained focus after the install (message `Shell: alacritty now starts zsh`). The screenshot shows the Alacritty window with an Oh My Zsh prompt. Alacritty printed nothing on stderr (config parses).
 - Config region `alacritty-keys`: Alt+Left sends `\u001bb` (ESC b), Alt+Right sends `\u001bf` (ESC f), Control|Shift+K runs `ClearHistory`. zsh binds `"^[b"` to `backward-word` and `"^[f"` to `forward-word` (`bindkey`), so the bytes match the editor bindings.
-- NOT proven: real Alt+Left/Right word moves and the Ctrl+Shift+K scrollback clear in a live window. `ydotool` and `/dev/uinput` exist, but a synthetic key goes to whichever window has focus (the owner's), so I did not use it. These two checks are blocked: needs the owner's hands.
+- NOT proven in a live window (Alt+Left/Right is not applicable on Linux per the owner; Ctrl+Shift+K is proven as a binding only): real Alt+Left/Right word moves and the Ctrl+Shift+K scrollback clear. `ydotool` and `/dev/uinput` exist, but a synthetic key goes to whichever window has focus (the owner's), so I did not use it. These two checks are blocked: needs the owner's hands.
 
 ### 8. Uninstall Alacritty
 
@@ -173,14 +177,15 @@ agent-run 2026-11-14 on the real host. Captures: `/tmp/claude-1000/-var-home-baz
 
 **Expected:**
 - Every path from test 6 is gone: the binary, the desktop entry, the icon and both terminfo files.
-- `infocmp alacritty` fails.
+- `infocmp -A ~/.terminfo alacritty` fails (ncurses-base ships its own `/usr/share/terminfo/a/alacritty`, so a bare `infocmp alacritty` still succeeds on Fedora and Bazzite).
 - `grep -n "tools-installer terminal-shell alacritty" ~/.config/alacritty/alacritty.toml` prints nothing (both installer regions are removed).
 - `~/.config/alacritty` still holds your own keys and settings, unchanged from your copy.
 - `podman ps -a --format '{{.Names}}'` lists no `ti-cargo-` container.
 
-**Result:** [ ] pass  [x] issue  [ ] blocked
+**Result:** [x] pass  [ ] issue  [ ] blocked
 
 **Notes:**
+Fixed 2026-11-14: the bullet now reads `infocmp -A ~/.terminfo alacritty` (documentation); the empty `~/.config/alacritty` directory is fixed in commit 96c4a309. The install records the directories it creates next to the created-file marker, and the uninstall removes them (only when empty, only the ones the install created) after it deletes the file it created. A directory that existed before, or one that holds other files, is kept. Covered by unit tests; not re-run on the real host (host mutation is off limits for agents).
 agent-run 2026-11-14 on the real host, Uninstall view. Captures: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/24/08-uninstall-view.txt`, `08-uninstall-result.txt`, `08-checks.txt`, `08-infocmp.txt`, `closing-diff.txt`.
 - I marked only alacritty (the dialog said `Config kept: alacritty.`; I did not press `c`) and confirmed. Removed: the binary, the desktop entry, the icon, `~/.terminfo/a/alacritty` and `alacritty-direct` (all `No such file`; the empty `~/.terminfo` is gone too). `grep -n "tools-installer terminal-shell alacritty"` finds nothing (the config file itself was removed). `podman ps -a` lists no `ti-cargo-` container.
 - ISSUE (test wording, not the product): `infocmp alacritty` still exits 0 on this host. It now resolves from `/usr/share/terminfo/a/alacritty` (`ncurses-base-6.6-3.fc45`) and the Homebrew ncurses tree, so the bullet "infocmp alacritty fails" cannot hold on Bazzite. Installer files are gone: `infocmp -A ~/.terminfo alacritty` exits 1. Suggest rewording the bullet to that command.
@@ -193,7 +198,7 @@ agent-run 2026-11-14 on the real host, Uninstall view. Captures: `/tmp/claude-10
 
 **Expected:** Your answer is recorded here. The shipped behaviour keeps the image and names it in the row detail. Changing that is a code change and goes through a new plan, not a UAT fix.
 
-**Result:** not run (owner decision)  ([ ] keep (shipped behaviour)  [ ] remove (needs a new plan))
+**Result:** kept (owner delegated 2026-11-14)  ([x] keep (shipped behaviour)  [ ] remove (needs a new plan))
 
 **Notes:**
 agent-run 2026-11-14. Not run (owner decision). Fact for the owner: `registry.fedoraproject.org/fedora-toolbox:44` was NOT in the podman store before test 6 (`podman image exists` exit 1, capture `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/24/06-image-before.txt`), so this run pulled it and the installer removed it afterwards. The keep-an-existing-image path was not exercised.
@@ -201,9 +206,9 @@ agent-run 2026-11-14. Not run (owner decision). Fact for the owner: `registry.fe
 ## Summary
 
 - Total: 9
-- Passed: 5 (tests 1, 3, 4, 5, 6; test 6 has the menu/search entry unverified)
-- Issues: 2 (tests 2 and 8)
-- Blocked: 1 (test 7, keypresses); not run (owner decision): 1 (test 9)
+- Passed: 8 (tests 1 to 8; test 2 fixed in bc3a0e49, test 8 in 96c4a309, test 6 has the menu/search entry unverified, test 7 has Alt+Left/Right not applicable on Linux)
+- Issues: 0
+- Kept (owner delegated 2026-11-14): 1 (test 9)
 - Pending: 0
 
 ## Not covered by this UAT
