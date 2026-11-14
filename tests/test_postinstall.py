@@ -551,6 +551,9 @@ def test_one_host_list_has_no_second_host_table(monkeypatch: pytest.MonkeyPatch)
         text = source.read_text(encoding="utf-8")
         assert "_AGENT_HOST_IDS" not in text, source.name
         assert "present_agent_hosts" not in text, source.name
+    root = Path(pi.__file__).parent.parent / ".claude"
+    for doc in (root / "architecture.md", *root.glob("skills/*/SKILL.md")):
+        assert "present_agent_hosts" not in doc.read_text(encoding="utf-8"), doc.name
 
     seen: list[tuple[Path, object]] = []
 

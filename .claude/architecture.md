@@ -352,7 +352,7 @@ host configuration unconditionally — the confirmed real-world precedent is
 GSD's own installer writing `gsd-statusline.js` on Claude Code automatically,
 with no flag to skip it, a genuine risk for any environment running a
 separate custom statusline. Every hook in this project's dispatch table
-gates on live host presence (`present_agent_hosts()`,
+gates on live host presence (`present_hosts()`,
 `installer/postinstall.py`) before writing anything, and every hook's own
 per-host write behavior should be verified merge-safe against pre-existing
 config before shipping — not assumed (12.4-01/12.4-02's live adversarial-seed
@@ -620,9 +620,11 @@ not invent a parallel harness.
 
 ## Phase 12.4: tool onboarding and registry postinstall audit
 
-`installer/postinstall.py::present_agent_hosts(tools)` is the single shared
-computation of which of the four canonical agent-host catalog ids
-(`claude`/`codex`/`opencode`/`cursor-agent`) are actually installed — every
+`installer/postinstall.py::present_hosts()` (which reads
+`present_harnesses(home, which)`) is the single shared computation of which
+agent harness ids are actually present: a command on PATH, or a closed
+home-relative marker dir (copilot's marker counts only with a CLI footprint,
+anything but the VS Code extension's `ide/`). Every
 `postinstall` hook that needs host-presence detection calls it rather than
 re-deriving its own loop over `installer.status.is_installed`. It was
 extracted from `_codegraph_mcp_register`'s original inline loop (Phase 9)

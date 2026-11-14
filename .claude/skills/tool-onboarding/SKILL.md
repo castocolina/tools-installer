@@ -173,7 +173,7 @@ it straddles two branches, name the ambiguity.
 
 A hook is selected by NAME from the closed `POSTINSTALL_HOOKS` table, never a
 command string, and must detect and merge, never blind-overwrite existing
-host config (gate on `present_agent_hosts()`).
+host config (gate on `postinstall.present_hosts()`, live presence through `present_harnesses`).
 
 ### 7. Postinstall and customizations — ask the user, do not assume
 
