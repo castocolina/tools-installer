@@ -1,0 +1,484 @@
+"""GUARD-02 and GUARD-03: the launch remover deletes what an earlier version wrote, nothing else."""
+
+import errno
+import os
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from installer import legacy_guard
+from installer.atomic import FileSnapshot
+from installer.legacy_guard import (
+    BAN_BEGIN,
+    BAN_END,
+    GUARD_NAMES,
+    REDIRECT_SENTINEL,
+    SHIM_SENTINEL,
+    remove_ban_blocks,
+    remove_guard_shims,
+)
+
+_BLOCK = f"{BAN_BEGIN}\nalias pip='echo banned'\n{BAN_END}\n"
+_BAN_SHIM = f"#!/bin/sh\n{SHIM_SENTINEL}\nexit 127\n"
+_REDIRECT_SHIM = f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec /x/pnpm dlx "$@"\n'
+_ROOT_SKIP = pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+_DENIED = PermissionError(13, "Permission denied")
+
+
+@pytest.fixture(autouse=True)
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """HOME is tmp_path so display paths read `~/...`."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def bin_dir(home: Path) -> Path:
+    path = home / ".local" / "bin"
+    path.mkdir(parents=True)
+    return path
+
+
+def _block_removed(name: str) -> tuple[str, str]:
+    return (f"Removed the retired guard alias block from ~/{name}.", "ok")
+
+
+def _shim_removed(name: str) -> tuple[str, str]:
+    return (f"Removed the retired pip/npm guard shim ~/.local/bin/{name}.", "ok")
+
+
+def _rc_not_checked(name: str, reason: str) -> tuple[str, str]:
+    return (
+        f"Could not check ~/{name} for the retired guard alias block: {reason}; "
+        "fix its permissions, then relaunch.",
+        "warn",
+    )
+
+
+def _shim_not_checked(name: str, reason: str) -> tuple[str, str]:
+    return (
+        f"Could not check ~/.local/bin/{name} for the retired pip/npm guard shim: {reason}; "
+        "fix its permissions, then relaunch.",
+        "warn",
+    )
+
+
+def _rc(home: Path, text: str | bytes, name: str = ".myshellrc") -> Path:
+    path = home / name
+    if isinstance(text, bytes):
+        path.write_bytes(text)
+    else:
+        path.write_text(text)
+    return path
+
+
+# -- remove_ban_blocks -------------------------------------------------------------------
+
+
+def test_every_well_formed_block_goes_in_one_pass(home: Path) -> None:
+    rc = _rc(home, f"user1\n{_BLOCK}user2\n{_BLOCK}user3\n")
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_text() == "user1\nuser2\nuser3\n"
+    assert remove_ban_blocks([rc]) == ()
+    assert rc.read_text() == "user1\nuser2\nuser3\n"
+
+
+def test_crlf_and_user_aliases_outside_the_markers_stay(home: Path) -> None:
+    before = b"alias npx='mine'\r\nalias npm='mine'\r\nexport A=1\r\n"
+    after = b"alias pip='mine'\r\n"
+    rc = _rc(home, before + _BLOCK.encode() + after)
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_bytes() == before + after
+
+
+def test_an_orphan_begin_alone_leaves_the_file_byte_identical(home: Path) -> None:
+    text = f"user1\n{BAN_BEGIN}\nuser2\n"
+    rc = _rc(home, text)
+
+    assert remove_ban_blocks([rc]) == ()
+    assert rc.read_text() == text
+
+
+def test_an_orphan_begin_before_a_block_keeps_only_the_orphan_line(home: Path) -> None:
+    rc = _rc(home, f"user1\n{BAN_BEGIN}\nuser2\n{_BLOCK}user3\n")
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_text() == f"user1\n{BAN_BEGIN}\nuser2\nuser3\n"
+
+
+def test_a_block_followed_by_an_orphan_begin_goes_and_the_orphan_stays(home: Path) -> None:
+    rc = _rc(home, f"user1\n{_BLOCK}user2\n{BAN_BEGIN}\nuser3\n")
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_text() == f"user1\nuser2\n{BAN_BEGIN}\nuser3\n"
+
+
+def test_a_crlf_block_goes_with_its_line_endings(home: Path) -> None:
+    block = f"{BAN_BEGIN}\r\nalias pip='echo banned'\r\n{BAN_END}\r\n"
+    rc = _rc(home, f"user1\r\n{block}user2\r\n".encode())
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_bytes() == b"user1\r\nuser2\r\n"
+
+
+def test_an_orphan_end_alone_stays(home: Path) -> None:
+    text = f"user1\n{BAN_END}\nuser2\n"
+    rc = _rc(home, text)
+
+    assert remove_ban_blocks([rc]) == ()
+    assert rc.read_text() == text
+
+
+def test_neighbouring_marker_blocks_stay_byte_identical(home: Path) -> None:
+    around = (
+        "# >>> tools-installer path >>>\nexport PATH=/x:$PATH\n# <<< tools-installer path <<<\n"
+        "# >>> tools-installer tweak:docker >>>\nexport D=1\n"
+        "# <<< tools-installer tweak:docker <<<\n"
+        "# tools-installer shell-init: starship\n"
+        "# >>> tools-installer source >>>\nsource ~/.myshellrc\n# <<< tools-installer source <<<\n"
+    )
+    rc = _rc(home, f"{around}{_BLOCK}")
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_text() == around
+
+
+def _oversize() -> bytes:
+    block = _BLOCK.encode()
+    return block + b"#" * ((1 << 20) + 1 - len(block))
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"\xff\n" + _BLOCK.encode(), _oversize(), None, b""],
+    ids=["non-utf8", "over-1-MiB", "missing", "empty"],
+)
+def test_skips_rc_files_it_cannot_read_safely(home: Path, content: bytes | None) -> None:
+    rc = home / ".myshellrc"
+    if content is not None:
+        rc.write_bytes(content)
+
+    assert remove_ban_blocks([rc]) == ()
+    if content is None:
+        assert not rc.exists()
+    else:
+        assert rc.read_bytes() == content
+
+
+@_ROOT_SKIP
+def test_an_unreadable_rc_file_is_one_warn_line(home: Path) -> None:
+    locked = _rc(home, f"user\n{_BLOCK}", ".myshellrc")
+    other = _rc(home, f"user\n{_BLOCK}", ".bashrc")
+    locked.chmod(0)
+    try:
+        result = remove_ban_blocks([locked, other])
+    finally:
+        locked.chmod(0o644)
+
+    assert result == (_rc_not_checked(".myshellrc", "Permission denied"), _block_removed(".bashrc"))
+    assert locked.read_text() == f"user\n{_BLOCK}"
+    assert other.read_text() == "user\n"
+
+
+def test_an_rc_edited_between_read_and_write_is_skipped(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review H1: a concurrent edit between the read and the write is never overwritten."""
+    rc = _rc(home, f"user\n{_BLOCK}")
+    original = legacy_guard.read_capped
+    calls: list[Path] = []
+
+    def late_edit(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+        calls.append(path)
+        if len(calls) == 2:
+            path.write_bytes(path.read_bytes() + b"export LATE=1\n")
+        return original(path, cap, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(legacy_guard, "read_capped", late_edit)
+    assert remove_ban_blocks([rc]) == ()
+    assert rc.read_text() == f"user\n{_BLOCK}export LATE=1\n"
+
+    monkeypatch.setattr(legacy_guard, "read_capped", original)
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_text() == "user\nexport LATE=1\n"
+
+
+def test_a_failed_rc_write_is_one_warn_line(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    first = _rc(home, f"user\n{_BLOCK}", ".myshellrc")
+    second = _rc(home, f"user\n{_BLOCK}", ".bashrc")
+    original = legacy_guard.atomic_write_text
+
+    def flaky(path: Path, text: str, *, mode: int | None = None) -> None:
+        if path == first:
+            raise _DENIED
+        original(path, text, mode=mode)
+
+    monkeypatch.setattr(legacy_guard, "atomic_write_text", flaky)
+
+    assert remove_ban_blocks([first, second]) == (
+        (
+            "Could not remove the retired guard alias block from ~/.myshellrc: Permission denied; "
+            "fix its permissions, then relaunch.",
+            "warn",
+        ),
+        _block_removed(".bashrc"),
+    )
+    assert first.read_text() == f"user\n{_BLOCK}"
+    assert second.read_text() == "user\n"
+
+
+def test_a_symlinked_rc_is_edited_through_its_link(home: Path) -> None:
+    target = home / "dotfiles" / "myshellrc"
+    target.parent.mkdir()
+    target.write_text(f"user\n{_BLOCK}")
+    link = home / ".myshellrc"
+    link.symlink_to(target)
+
+    assert remove_ban_blocks([link]) == (_block_removed(".myshellrc"),)
+    assert link.is_symlink()
+    assert target.read_text() == "user\n"
+
+
+def test_a_permission_failure_at_the_rc_recheck_is_silent_and_the_next_call_warns(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rc = _rc(home, f"user\n{_BLOCK}")
+    original = legacy_guard.read_capped
+    calls: list[Path] = []
+
+    def denied_after_the_first(path: Path, cap: int, *, follow_symlinks: bool) -> bytes | None:
+        calls.append(path)
+        if len(calls) > 1:
+            raise _DENIED
+        return original(path, cap, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(legacy_guard, "read_capped", denied_after_the_first)
+
+    assert remove_ban_blocks([rc]) == ()
+    assert rc.read_text() == f"user\n{_BLOCK}"
+    assert remove_ban_blocks([rc]) == (_rc_not_checked(".myshellrc", "Permission denied"),)
+
+
+# -- remove_guard_shims --------------------------------------------------------------------
+
+
+def test_each_marked_shim_goes_and_is_named(bin_dir: Path) -> None:
+    bodies = {
+        "npm": _REDIRECT_SHIM,
+        "npx": _REDIRECT_SHIM,
+        "pnpm": f"#!/bin/sh\n# my edit\n{SHIM_SENTINEL}\necho hi\n",
+        "pip": _BAN_SHIM,
+        "pip3": _BAN_SHIM,
+    }
+    for name, body in bodies.items():
+        (bin_dir / name).write_text(body)
+
+    assert remove_guard_shims(bin_dir) == tuple(_shim_removed(name) for name in GUARD_NAMES)
+    assert list(bin_dir.iterdir()) == []
+
+
+def _plant_symlink(path: Path) -> None:
+    target = path.parent.parent / "elsewhere" / "npx-real"
+    target.parent.mkdir()
+    target.write_text(_REDIRECT_SHIM)
+    path.symlink_to(target)
+
+
+def _plant_unmarked(path: Path) -> None:
+    path.write_bytes(b"\x7fELF real pnpm binary\x00")
+
+
+def _plant_oversize(path: Path) -> None:
+    path.write_text(_BAN_SHIM + "#" * (8193 - len(_BAN_SHIM)))
+
+
+def _plant_non_utf8(path: Path) -> None:
+    path.write_bytes(b"\xff" + _BAN_SHIM.encode())
+
+
+def _plant_mention(path: Path) -> None:
+    path.write_text("#!/bin/sh\n# managed by tools-installer? no, mine\nexit 0\n")
+
+
+_PLANTS: dict[str, Callable[[Path], None]] = {
+    "symlink": _plant_symlink,
+    "unmarked": _plant_unmarked,
+    "oversize": _plant_oversize,
+    "fifo": os.mkfifo,
+    "non-utf8": _plant_non_utf8,
+    "zero-byte": Path.touch,
+    "directory": Path.mkdir,
+    "mention": _plant_mention,
+}
+
+
+@pytest.mark.parametrize("kind", list(_PLANTS))
+def test_leaves_what_it_did_not_write(bin_dir: Path, kind: str) -> None:
+    path = bin_dir / "npx"
+    _PLANTS[kind](path)
+    before = os.lstat(path)
+
+    assert remove_guard_shims(bin_dir) == ()
+    after = os.lstat(path)
+    assert (after.st_mode, after.st_ino, after.st_size) == (
+        before.st_mode,
+        before.st_ino,
+        before.st_size,
+    )
+
+
+def test_a_marked_shim_of_exactly_8192_bytes_goes(bin_dir: Path) -> None:
+    (bin_dir / "npm").write_text(_BAN_SHIM + "#" * (8192 - len(_BAN_SHIM)))
+    assert (bin_dir / "npm").stat().st_size == 8192
+
+    assert remove_guard_shims(bin_dir) == (_shim_removed("npm"),)
+    assert not (bin_dir / "npm").exists()
+
+
+def test_a_file_swapped_before_the_identity_recheck_is_not_deleted(
+    bin_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A swap before the re-check is caught. A swap after the re-check and before the unlink is
+    the documented residual (see the `shortcut:` comment in legacy_guard) and is not tested."""
+    npm = bin_dir / "npm"
+    npm.write_text(_BAN_SHIM)
+    original = legacy_guard.snapshot_matches
+
+    def swap_first(path: Path, snapshot: FileSnapshot) -> bool:
+        other = path.with_name("incoming")
+        other.write_text("#!/bin/sh\necho a real npm\n")
+        os.replace(other, path)
+        return original(path, snapshot)
+
+    monkeypatch.setattr(legacy_guard, "snapshot_matches", swap_first)
+
+    assert remove_guard_shims(bin_dir) == ()
+    assert npm.read_text() == "#!/bin/sh\necho a real npm\n"
+
+
+def test_a_shim_another_launch_deleted_is_silent(
+    bin_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = bin_dir / "npm"
+    npm.write_text(_BAN_SHIM)
+
+    def deleted_by_a_rival(_path: Path, _snapshot: FileSnapshot) -> bool:
+        npm.unlink()
+        return True
+
+    monkeypatch.setattr(legacy_guard, "snapshot_matches", deleted_by_a_rival)
+
+    assert remove_guard_shims(bin_dir) == ()
+    assert not npm.exists()
+
+
+@_ROOT_SKIP
+def test_an_unreadable_marked_shim_is_one_warn_line(bin_dir: Path) -> None:
+    for name in GUARD_NAMES:
+        (bin_dir / name).write_text(_BAN_SHIM)
+    (bin_dir / "npm").chmod(0)
+    try:
+        result = remove_guard_shims(bin_dir)
+    finally:
+        (bin_dir / "npm").chmod(0o755)
+
+    assert result == (
+        _shim_not_checked("npm", "Permission denied"),
+        *(_shim_removed(name) for name in GUARD_NAMES[1:]),
+    )
+    assert (bin_dir / "npm").exists()
+
+
+@_ROOT_SKIP
+def test_a_permission_failure_at_the_shim_recheck_is_silent_and_the_next_call_warns(
+    bin_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = bin_dir / "npm"
+    npm.write_text(_BAN_SHIM)
+    original = legacy_guard.snapshot_matches
+
+    def lock_then_check(path: Path, snapshot: FileSnapshot) -> bool:
+        path.chmod(0)
+        return original(path, snapshot)
+
+    monkeypatch.setattr(legacy_guard, "snapshot_matches", lock_then_check)
+    try:
+        assert remove_guard_shims(bin_dir) == ()
+        assert npm.exists()
+        assert remove_guard_shims(bin_dir) == (_shim_not_checked("npm", "Permission denied"),)
+    finally:
+        npm.chmod(0o755)
+
+
+@pytest.mark.parametrize("kind", ["rc", "shim"])
+def test_any_other_first_read_failure_is_one_warn_line(
+    home: Path, bin_dir: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    if kind == "rc":
+        rc = _rc(home, f"user\n{_BLOCK}")
+
+        def eio(_path: Path, _cap: int, *, follow_symlinks: bool) -> bytes | None:
+            del follow_symlinks
+            raise OSError(errno.EIO, "Input/output error")
+
+        monkeypatch.setattr(legacy_guard, "read_capped", eio)
+
+        assert remove_ban_blocks([rc]) == (_rc_not_checked(".myshellrc", "Input/output error"),)
+        assert rc.read_text() == f"user\n{_BLOCK}"
+    else:
+        (bin_dir / "npm").write_text(_BAN_SHIM)
+
+        def emfile(_path: Path) -> FileSnapshot:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(legacy_guard, "read_snapshot", emfile)
+
+        assert remove_guard_shims(bin_dir) == (_shim_not_checked("npm", "Too many open files"),)
+        assert (bin_dir / "npm").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
+def test_a_read_only_bin_dir_gives_one_warn_line_per_shim(bin_dir: Path) -> None:
+    for name in GUARD_NAMES:
+        (bin_dir / name).write_text(_BAN_SHIM)
+    bin_dir.chmod(0o555)
+    try:
+        result = remove_guard_shims(bin_dir)
+    finally:
+        bin_dir.chmod(0o755)
+
+    assert result == tuple(
+        (
+            f"Could not remove the retired pip/npm guard shim ~/.local/bin/{name}: "
+            "Permission denied; delete it yourself or make its directory writable, "
+            "then relaunch.",
+            "warn",
+        )
+        for name in GUARD_NAMES
+    )
+    assert all((bin_dir / name).exists() for name in GUARD_NAMES)
+
+
+def test_a_missing_bin_dir_is_silent(home: Path) -> None:
+    assert remove_guard_shims(home / "no" / "such" / "bin") == ()
+
+
+def test_notice_paths_are_sanitized(home: Path) -> None:
+    odd = home / ".local" / "bin\x1b[31m"
+    odd.mkdir(parents=True)
+    (odd / "npm").write_text(_BAN_SHIM)
+
+    ((message, level),) = remove_guard_shims(odd)
+
+    assert level == "ok"
+    assert "\x1b" not in message
+
+
+def test_a_shim_written_after_a_launch_goes_next_launch(bin_dir: Path) -> None:
+    assert remove_guard_shims(bin_dir) == ()
+    (bin_dir / "pip").write_text(_BAN_SHIM)
+
+    assert remove_guard_shims(bin_dir) == (_shim_removed("pip"),)
