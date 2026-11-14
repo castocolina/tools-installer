@@ -5509,7 +5509,7 @@ def test_group_step_repair_runs_the_grouped_node_install(
 
     monkeypatch.setattr(executors, "_require_minimum", floor_met)
     smoked: list[str] = []
-    monkeypatch.setitem(executors.SMOKE_CHECKS, smoke, lambda: smoked.append(smoke))
+    monkeypatch.setitem(executors.SMOKE_CHECKS, smoke, lambda _manager: smoked.append(smoke))
     calls: list[list[str]] = []
     # The step's contract (review H10): Phase 20 runs the declaring tool's node method.
     executors.execute(method, calls.append)

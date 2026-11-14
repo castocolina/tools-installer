@@ -61,6 +61,7 @@ from installer.versions import (
     release_resolver,
     resolve_github_tag,
 )
+from tests.launch_doubles import stub_launch
 from tests.state_doubles import plan_state
 from tests.test_cargo_distrobox import (
     FakeBox,
@@ -383,7 +384,7 @@ def test_pnpm_owned_update_reuses_node_executor_invariants(
 
     monkeypatch.setattr(executors, "real_pnpm", lambda: "/opt/homebrew/bin/pnpm")
     monkeypatch.setattr(executors, "probe_version", _always_current)
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
     calls: list[list[str]] = []
     outcome = _perform(
         _target(tool, "pnpm", method=method, package="@mermaid-js/mermaid-cli"),

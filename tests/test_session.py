@@ -50,6 +50,7 @@ from installer.session import (
 from installer.update import UpdateOutcome, UpdateService
 from installer.version_status import Health
 from installer.versions import TagResolver
+from tests.launch_doubles import stub_launch
 from tests.state_doubles import RunRecorder, ScriptedUpdates, plan_state
 
 
@@ -1773,7 +1774,7 @@ def test_pnpm_off_path_skip_row_puts_its_bin_dir_on_path_for_mmdc(
     fake_pnpm = _plant_command(tmp_path / ".local" / "share" / "pnpm" / "bin", "pnpm")
     monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
     monkeypatch.setattr(executors, "probe_version", _probe_pnpm_and_node)
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
     calls: list[list[str]] = []
     ctx = RunContext(
         catalog=_shipped_catalog(),
@@ -1806,7 +1807,7 @@ def test_path_repair_ignores_the_installers_own_pnpm_redirect_shim(
     shim.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 1\n")
     monkeypatch.setenv("PATH", str(tmp_path / ".local" / "bin"))
     monkeypatch.setattr(executors, "probe_version", _probe_pnpm_and_node)
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
     calls: list[list[str]] = []
     ctx = RunContext(
         catalog=_shipped_catalog(),

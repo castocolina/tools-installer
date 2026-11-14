@@ -30,6 +30,7 @@ from installer.pnpm_globals import (
 )
 from installer.run import TIMEOUT_CODE, CommandError
 from installer.ui_common import run_live
+from tests.launch_doubles import stub_launch
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
@@ -1230,13 +1231,13 @@ def test_audit_uses_the_real_smoke_dispatch_by_default(monkeypatch: pytest.Monke
     """
     import installer.executors as executors
 
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
     healthy = audit_node_globals(
         load_tools(REGISTRY), which=lambda _n: "/x/bin", managed=_managed("puppeteer")
     )
     assert healthy.unhealthy == ()
 
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: "libnss3.so is missing")
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch("libnss3.so is missing"))
     broken = audit_node_globals(
         load_tools(REGISTRY), which=lambda _n: "/x/bin", managed=_managed("puppeteer")
     )

@@ -210,9 +210,27 @@ _SHIM_TARGET_MARKER = "# cmd-shim-target="
 #
 # `process.argv[1..]` are candidate resolution roots; an empty list falls back to
 # node's ordinary resolution, which is what NODE_PATH and a local install give.
+#
+# A first argument of `own-tree` (a bare word: node rejects a leading-dash word after
+# `-e` as its own option) switches to strict mode for a bun-owned check: the one root
+# after it is the only source, and puppeteer must resolve to a file inside the real path
+# of that root's own `node_modules/puppeteer`. Strict mode has no catch and no plain
+# `require`, because node skips an empty package directory to an ancestor
+# `node_modules`, and the ladder below would hand a broken copy over to another manager's.
 _LAUNCH_SCRIPT = """\
 const roots = process.argv.slice(1);
 function load() {
+  if (roots[0] === 'own-tree') {
+    const root = roots[1];
+    const own = require('fs').realpathSync(
+      require('path').join(root, 'node_modules', 'puppeteer'),
+    );
+    const file = require.resolve('puppeteer', { paths: [root] });
+    if (!file.startsWith(own + require('path').sep)) {
+      throw new Error(`puppeteer resolved to ${file}, outside ${own}`);
+    }
+    return require(file);
+  }
   for (const root of roots) {
     try {
       return require(require.resolve('puppeteer', { paths: [root] }));
@@ -285,7 +303,15 @@ def _pnpm_global_bin() -> Path | None:
     return Path(line) if line else None
 
 
-def _puppeteer_module_roots() -> list[str]:
+def _shim_root(shim: Path | None) -> list[str]:
+    """The directory of the file a global bin shim runs, as a one-item list, or []."""
+    if shim is None or not shim.is_file():
+        return []
+    target = _shim_target(shim)
+    return [] if target is None else [str(target.parent)]
+
+
+def _puppeteer_module_roots(manager: str | None) -> list[str]:
     """Directories node should try to resolve `puppeteer` from, best first.
 
     pnpm v11 gives each global install invocation its own hash-keyed project
@@ -295,25 +321,29 @@ def _puppeteer_module_roots() -> list[str]:
     `node_modules`, from which node's ordinary upward search finds the package
     with the peer resolution that group actually has.
 
-    An empty list is not a failure. It hands the script nothing and lets node
-    resolve `puppeteer` normally, which is the right answer whenever the package
-    is reachable some way this function does not model.
+    bun keeps one shared global tree and no per-invocation groups, so the tree
+    itself is the root; a bun-owned check never borrows another manager's root.
+    The owning manager's roots come first, the others keep their pre-bun order.
+
+    An empty list is not a failure for pnpm or an unknown owner. It hands the
+    script nothing and lets node resolve `puppeteer` normally, which is the right
+    answer whenever the package is reachable some way this function does not
+    model. For bun it means bun's tree holds no puppeteer.
     """
-    candidates: list[Path] = []
+    bun_tree = bun_dirs()[1]
+    bun_roots = [str(bun_tree)] if (bun_tree / "node_modules" / "puppeteer").is_dir() else []
+    if manager == "bun":
+        return bun_roots
     on_path = which("puppeteer")
-    if on_path:
-        candidates.append(Path(on_path))
+    path_roots = _shim_root(Path(on_path) if on_path else None)
     bin_dir = _pnpm_global_bin()
-    if bin_dir is not None:
-        candidates.append(bin_dir / "puppeteer")
-    roots: list[str] = []
-    for shim in candidates:
-        if not shim.is_file():
-            continue
-        target = _shim_target(shim)
-        if target is not None:
-            roots.append(str(target.parent))
-    return list(dict.fromkeys(roots))
+    pnpm_roots = _shim_root(None if bin_dir is None else bin_dir / "puppeteer")
+    ordered = (
+        [*pnpm_roots, *path_roots, *bun_roots]
+        if manager == "pnpm"
+        else [*path_roots, *pnpm_roots, *bun_roots]
+    )
+    return list(dict.fromkeys(ordered))
 
 
 # This text is rendered inside a one-line Doctor warning row, and a Chrome
@@ -326,15 +356,24 @@ def _condensed(detail: str) -> str:
     return text if len(text) <= _DETAIL_LIMIT else f"{text[: _DETAIL_LIMIT - 3]}..."
 
 
-def _default_launch_puppeteer() -> str | None:
+def _default_launch_puppeteer(manager: str | None) -> str | None:
     """Start and close a browser through puppeteer's own launch path.
 
     Returns why it failed, or None when it worked. `node` is invoked bare for
     the reason `min_node` is probed bare: this installer ships no node shim, and
     the node that matters is the one pnpm's postinstall and mmdc itself find on
-    PATH.
+    PATH. `manager` names the owning tree the check starts in; a bun-owned check
+    runs the strict `own-tree` loader, and without bun's puppeteer it fails here,
+    without starting node, because an empty root list would let node's ordinary
+    resolution answer with another manager's copy.
     """
-    argv = ["node", "-e", _LAUNCH_SCRIPT, *_puppeteer_module_roots()]
+    roots = _puppeteer_module_roots(manager)
+    if manager == "bun":
+        if not roots:
+            tree = display_path(bun_dirs()[1])
+            return f"puppeteer is not installed in bun's global tree ({tree})"
+        roots = ["own-tree", *roots]
+    argv = ["node", "-e", _LAUNCH_SCRIPT, *roots]
     try:
         run_output(argv, timeout=BROWSER_LAUNCH_TIMEOUT)
     except CommandError as exc:
@@ -346,10 +385,10 @@ def _default_launch_puppeteer() -> str | None:
 
 # The seam the tests replace. It covers the whole probe — root discovery and the
 # subprocess — so no test reaches a real pnpm, a real node or a real browser.
-launch_puppeteer: Callable[[], str | None] = _default_launch_puppeteer
+launch_puppeteer: Callable[[str | None], str | None] = _default_launch_puppeteer
 
 
-def _smoke_puppeteer_browser() -> None:
+def _smoke_puppeteer_browser(manager: str | None) -> None:
     """Prove puppeteer can actually START a browser on this machine.
 
     NOT `<browser> --version`, which is what this replaced and what made the
@@ -370,7 +409,7 @@ def _smoke_puppeteer_browser() -> None:
     It renders no diagram. A blank page proves the browser runs; mmdc's own
     rendering is not this installer's to verify.
     """
-    detail = launch_puppeteer()
+    detail = launch_puppeteer(manager)
     if detail is None:
         return
     raise ExecutorError(
@@ -380,12 +419,12 @@ def _smoke_puppeteer_browser() -> None:
     )
 
 
-SMOKE_CHECKS: dict[str, Callable[[], None]] = {
+SMOKE_CHECKS: dict[str, Callable[[str | None], None]] = {
     "puppeteer-browser": _smoke_puppeteer_browser,
 }
 
 
-def run_smoke_check(name: str) -> str | None:
+def run_smoke_check(name: str, manager: str | None = None) -> str | None:
     """Run a declared smoke check; return why it failed, or None when it passed.
 
     The non-raising form of the dispatch above, for the Doctor's node-globals
@@ -401,7 +440,7 @@ def run_smoke_check(name: str) -> str | None:
     if check is None:
         return None
     try:
-        check()
+        check(manager)
     except ExecutorError as exc:
         return str(exc)
     return None
@@ -553,7 +592,7 @@ def _node(method: Method, runner: Runner) -> None:
     # alone will still short-circuit on ALREADY_INSTALLED. An update that
     # reuses this executor inherits that same residual.
     if smoke is not None:
-        SMOKE_CHECKS[smoke]()
+        SMOKE_CHECKS[smoke]("pnpm")
 
 
 def _bun(method: Method, runner: Runner) -> None:
@@ -578,7 +617,7 @@ def _bun(method: Method, runner: Runner) -> None:
     specs = [f"{name}@{versions[name]}" if name in versions else name for name in members]
     runner([bun, "add", "-g", *specs])
     if smoke is not None:
-        SMOKE_CHECKS[smoke]()
+        SMOKE_CHECKS[smoke]("bun")
 
 
 def _uv_tool(method: Method, runner: Runner) -> None:

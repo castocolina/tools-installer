@@ -479,8 +479,8 @@ def test_node_versions_bare_string_raises(monkeypatch: pytest.MonkeyPatch) -> No
         execute(Method(kind="node", params={"npm_pkg": "x", "versions": "nope"}), lambda _cmd: None)
 
 
-def _stub_launch(result: str | None) -> Callable[[], str | None]:
-    def launch() -> str | None:
+def _stub_launch(result: str | None) -> Callable[[str | None], str | None]:
+    def launch(_manager: str | None) -> str | None:
         return result
 
     return launch
@@ -708,7 +708,7 @@ def test_node_without_smoke_never_launches_a_browser(
     pnpm = _plant_pnpm(tmp_path, monkeypatch)
     launches = 0
 
-    def counting_launch() -> str | None:
+    def counting_launch(_manager: str | None) -> str | None:
         nonlocal launches
         launches += 1
         return None
@@ -846,7 +846,7 @@ def test_launch_probe_defers_every_browser_choice_to_puppeteer(
     """
     run = _FakeRun()
     _no_shim_anywhere(monkeypatch, run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     argv, timeout = run.node_call
     # Bare `node` for the same reason `min_node` is probed bare: the node that
     # matters is the one pnpm's postinstall and mmdc find on PATH.
@@ -877,7 +877,7 @@ def test_launch_probe_resolves_puppeteer_from_the_shim_on_path(
     monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
     monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     monkeypatch.setattr(executors, "run_output", run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     assert run.node_call[0][3:] == [str(entry.parent)]
 
 
@@ -894,7 +894,7 @@ def test_launch_probe_follows_a_symlinked_shim(
     monkeypatch.setattr(executors, "which", _which_returning(str(link)))
     monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     monkeypatch.setattr(executors, "run_output", run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     assert run.node_call[0][3:] == [str(entry.parent)]
 
 
@@ -914,7 +914,7 @@ def test_launch_probe_asks_pnpm_for_its_bin_dir_when_path_is_stale(
     monkeypatch.setattr(executors, "which", _which_returning(None))
     monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
     monkeypatch.setattr(executors, "run_output", run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     # Absolute path, never a bare `pnpm`: a bare name would be answered by this
     # installer's own argv-conditional wrapper.
     assert run.calls[0][0] == ["/abs/pnpm", "bin", "-g"]
@@ -931,7 +931,7 @@ def test_launch_probe_offers_each_root_once(
     monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
     monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
     monkeypatch.setattr(executors, "run_output", run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     assert run.node_call[0][3:] == [str(entry.parent)]
 
 
@@ -949,7 +949,7 @@ def test_launch_probe_passes_no_root_it_could_not_read(
         monkeypatch.setattr(executors, "which", _which_returning(None))
         monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
         monkeypatch.setattr(executors, "run_output", run)
-        assert executors.launch_puppeteer() is None
+        assert executors.launch_puppeteer(None) is None
         assert run.node_call[0][3:] == []
 
 
@@ -973,7 +973,7 @@ def test_launch_probe_survives_a_shim_it_cannot_open(
     monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
     monkeypatch.setattr(executors, "real_pnpm", lambda: None)
     monkeypatch.setattr(executors, "run_output", run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     assert run.node_call[0][3:] == []
 
 
@@ -992,7 +992,7 @@ def test_launch_probe_ignores_a_pnpm_that_cannot_answer(
     monkeypatch.setattr(executors, "which", _which_returning(None))
     monkeypatch.setattr(executors, "real_pnpm", lambda: "/abs/pnpm")
     monkeypatch.setattr(executors, "run_output", run)
-    assert executors.launch_puppeteer() is None
+    assert executors.launch_puppeteer(None) is None
     assert run.node_call[0][3:] == []
 
 
@@ -1005,7 +1005,7 @@ def test_launch_probe_reports_the_browsers_own_error(
         )
     )
     _no_shim_anywhere(monkeypatch, run)
-    assert executors.launch_puppeteer() == "Failed to launch the browser process! libnss3.so"
+    assert executors.launch_puppeteer(None) == "Failed to launch the browser process! libnss3.so"
 
 
 def test_launch_probe_names_node_when_node_cannot_run(
@@ -1013,7 +1013,7 @@ def test_launch_probe_names_node_when_node_cannot_run(
 ) -> None:
     run = _FakeRun(launch=CommandError(["node"], 127))
     _no_shim_anywhere(monkeypatch, run)
-    assert executors.launch_puppeteer() == "node could not be started to run the launch probe"
+    assert executors.launch_puppeteer(None) == "node could not be started to run the launch probe"
 
 
 def test_launch_probe_falls_back_to_the_exit_code_without_a_detail(
@@ -1021,7 +1021,7 @@ def test_launch_probe_falls_back_to_the_exit_code_without_a_detail(
 ) -> None:
     run = _FakeRun(launch=CommandError(["node"], 3))
     _no_shim_anywhere(monkeypatch, run)
-    assert executors.launch_puppeteer() == "the launch probe exited 3"
+    assert executors.launch_puppeteer(None) == "the launch probe exited 3"
 
 
 def test_launch_probe_reports_a_timeout_rather_than_hanging(
@@ -1029,7 +1029,7 @@ def test_launch_probe_reports_a_timeout_rather_than_hanging(
 ) -> None:
     run = _FakeRun(launch=CommandError(["node"], TIMEOUT_CODE, detail="timed out after 60s"))
     _no_shim_anywhere(monkeypatch, run)
-    assert executors.launch_puppeteer() == "timed out after 60s"
+    assert executors.launch_puppeteer(None) == "timed out after 60s"
 
 
 def test_launch_failure_detail_is_condensed_for_a_one_line_warning(
@@ -1038,7 +1038,7 @@ def test_launch_failure_detail_is_condensed_for_a_one_line_warning(
     """The text lands in a Doctor warning row; a Chrome failure is a paragraph."""
     run = _FakeRun(launch=CommandError(["node"], 1, detail="a\n" + "b" * 900))
     _no_shim_anywhere(monkeypatch, run)
-    detail = executors.launch_puppeteer()
+    detail = executors.launch_puppeteer(None)
     assert detail is not None
     assert len(detail) == 400
     assert detail.endswith("...")
@@ -1076,7 +1076,7 @@ def test_sdkman_without_candidate_raises_executor_error():
 
 
 def test_run_smoke_check_reports_the_failure_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom() -> None:
+    def boom(_manager: str | None) -> None:
         raise ExecutorError("browser could not be started")
 
     monkeypatch.setitem(executors.SMOKE_CHECKS, "puppeteer-browser", boom)
@@ -1086,7 +1086,7 @@ def test_run_smoke_check_reports_the_failure_message(monkeypatch: pytest.MonkeyP
 def test_run_smoke_check_returns_none_when_the_check_passes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(executors.SMOKE_CHECKS, "puppeteer-browser", lambda: None)
+    monkeypatch.setitem(executors.SMOKE_CHECKS, "puppeteer-browser", lambda _manager: None)
     assert executors.run_smoke_check("puppeteer-browser") is None
 
 
@@ -1370,3 +1370,169 @@ def test_bun_never_passes_trust(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     execute(Method(kind="bun", params={"npm_pkg": "puppeteer"}), runner)
     assert calls
     assert not any("--trust" in call for call in calls)
+
+
+def _launch_recorder(
+    order: list[str], result: str | None = None
+) -> tuple[list[str | None], Callable[[str | None], str | None]]:
+    """A launch seam that records the manager it was asked for, and when."""
+    seen: list[str | None] = []
+
+    def launch(manager: str | None) -> str | None:
+        seen.append(manager)
+        order.append("launch")
+        return result
+
+    return seen, launch
+
+
+def test_a_bun_install_smokes_through_bun_s_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "probe_version", _const_probe("v22.23.1"))
+    order: list[str] = []
+    seen, launch = _launch_recorder(order)
+    monkeypatch.setattr(executors, "launch_puppeteer", launch)
+
+    def runner(_cmd: list[str]) -> None:
+        order.append("bun add")
+
+    execute(Method(kind="bun", params={**_BUN_PARAMS, "smoke": "puppeteer-browser"}), runner)
+    assert seen == ["bun"]
+    assert order == ["bun add", "launch"]
+
+
+def test_node_install_smokes_through_pnpm_s_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_pnpm(tmp_path, monkeypatch)
+    seen, launch = _launch_recorder([])
+    monkeypatch.setattr(executors, "launch_puppeteer", launch)
+    execute(
+        Method(kind="node", params={"npm_pkg": "puppeteer", "smoke": "puppeteer-browser"}),
+        _record()[1],
+    )
+    assert seen == ["pnpm"]
+
+
+def test_run_smoke_check_forwards_the_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str | None] = []
+    monkeypatch.setitem(executors.SMOKE_CHECKS, "puppeteer-browser", seen.append)
+    assert executors.run_smoke_check("puppeteer-browser", "bun") is None
+    assert executors.run_smoke_check("puppeteer-browser") is None
+    assert seen == ["bun", None]
+    assert executors.run_smoke_check("not-a-check", "bun") is None
+
+
+def _bun_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, puppeteer: bool) -> Path:
+    """A scratch bun global tree, with or without `node_modules/puppeteer`."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    tree = tmp_path / ".bun" / "install" / "global"
+    if puppeteer:
+        package = tree / "node_modules" / "puppeteer"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+    else:
+        tree.mkdir(parents=True)
+    return tree
+
+
+def _foreign_puppeteer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """A PATH `puppeteer` symlink and a pnpm global bin shim, in two separate groups."""
+    path_entry = _plant_package(tmp_path / "path-group")
+    link_dir = tmp_path / "link-bin"
+    link_dir.mkdir()
+    link = link_dir / "puppeteer"
+    link.symlink_to(path_entry)
+    pnpm_entry = _plant_package(tmp_path / "pnpm-group")
+    pnpm_bin = tmp_path / "pnpm-bin"
+    _plant_shim(pnpm_bin, pnpm_entry)
+    monkeypatch.setattr(executors, "which", _which_returning(str(link)))
+    monkeypatch.setattr(executors, "_pnpm_global_bin", lambda: pnpm_bin)
+    return path_entry.parent, pnpm_entry.parent
+
+
+def test_module_roots_put_the_owning_tree_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = _bun_tree(tmp_path, monkeypatch, puppeteer=True)
+    path_root, pnpm_root = _foreign_puppeteer(tmp_path, monkeypatch)
+    roots = vars(executors)["_puppeteer_module_roots"]
+    assert roots("bun") == [str(tree)]
+    assert roots("pnpm") == [str(pnpm_root), str(path_root), str(tree)]
+    assert roots(None) == [str(path_root), str(pnpm_root), str(tree)]
+
+
+def test_module_roots_skip_a_bun_tree_without_puppeteer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = _bun_tree(tmp_path, monkeypatch, puppeteer=False)
+    path_root, pnpm_root = _foreign_puppeteer(tmp_path, monkeypatch)
+    roots = vars(executors)["_puppeteer_module_roots"]
+    assert roots("bun") == []
+    assert roots("pnpm") == [str(pnpm_root), str(path_root)]
+    assert roots(None) == [str(path_root), str(pnpm_root)]
+    assert str(tree) not in roots("pnpm") + roots(None)
+
+
+def test_module_roots_offer_a_shared_root_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bun_tree(tmp_path, monkeypatch, puppeteer=False)
+    entry = _plant_package(tmp_path / "group")
+    pnpm_bin = tmp_path / "pnpm-bin"
+    shim = _plant_shim(pnpm_bin, entry)
+    monkeypatch.setattr(executors, "which", _which_returning(str(shim)))
+    monkeypatch.setattr(executors, "_pnpm_global_bin", lambda: pnpm_bin)
+    assert vars(executors)["_puppeteer_module_roots"](None) == [str(entry.parent)]
+
+
+def test_a_bun_check_without_bun_s_puppeteer_fails_without_launching(
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bun_tree(tmp_path, monkeypatch, puppeteer=False)
+    _foreign_puppeteer(tmp_path, monkeypatch)
+    run = _FakeRun()
+    monkeypatch.setattr(executors, "run_output", run)
+    detail = vars(executors)["_default_launch_puppeteer"]("bun")
+    assert detail is not None
+    assert "\n" not in detail
+    assert "bun's global tree" in detail
+    assert ".bun/install/global" in detail
+    assert run.calls == []
+    assert vars(executors)["_default_launch_puppeteer"](None) is None
+    assert any(call[0][0] == "node" for call in run.calls)
+
+
+def test_a_bun_check_runs_the_strict_loader(
+    tmp_path: Path, real_launch_probe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = _bun_tree(tmp_path, monkeypatch, puppeteer=True)
+    _foreign_puppeteer(tmp_path, monkeypatch)
+    run = _FakeRun()
+    monkeypatch.setattr(executors, "run_output", run)
+    launch = vars(executors)["_default_launch_puppeteer"]
+    script = vars(executors)["_LAUNCH_SCRIPT"]
+    assert launch("bun") is None
+    assert run.node_call[0] == ["node", "-e", script, "own-tree", str(tree)]
+    for manager in ("pnpm", None):
+        run = _FakeRun()
+        monkeypatch.setattr(executors, "run_output", run)
+        assert launch(manager) is None
+        assert "own-tree" not in run.node_call[0]
+
+
+def test_the_strict_loader_source_has_no_fallback() -> None:
+    """Host-side check: the real script runs under node only in 24.5-09's container verb."""
+    script = cast(str, vars(executors)["_LAUNCH_SCRIPT"])
+    strict = script[script.index("'own-tree'") : script.index("for (const root of roots)")]
+    assert "realpathSync" in strict
+    assert "require.resolve('puppeteer', { paths: [root] })" in strict
+    assert "catch" not in strict
+    assert "require('puppeteer')" not in strict
+    ladder = script[script.index("for (const root of roots)") :]
+    assert "MODULE_NOT_FOUND" in ladder
+    assert "return require('puppeteer')" in ladder

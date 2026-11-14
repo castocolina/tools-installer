@@ -7,6 +7,7 @@ import installer.executors as executors
 from installer.engine import install_tool
 from installer.model import Tool, load_tools
 from installer.platform import Platform
+from tests.launch_doubles import stub_launch
 
 _REGISTRY = "installer/registry.toml"
 
@@ -40,7 +41,7 @@ def _stub_version_probe_and_browser_launch(monkeypatch: pytest.MonkeyPatch) -> N
         return "v24.20.0"
 
     monkeypatch.setattr(executors, "probe_version", fake_probe)
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: None)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
 
 
 def test_installing_mmdc_runs_pnpm_add_global_no_bare_npm(

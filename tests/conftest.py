@@ -27,6 +27,7 @@ import pytest
 
 from installer import app, executors, locations, post_install, postinstall, receipts, status
 from tests.home_fingerprint import fingerprint, fingerprint_diff
+from tests.launch_doubles import stub_launch
 from tests.sandbox import (
     CHILD_GUARD_ROOT_ENV,
     GUARDED_OS_FUNCTIONS,
@@ -62,7 +63,7 @@ _interpreter_dir: Path | None = None
 # Same trick for the puppeteer launch probe: captured before the autouse stub
 # below replaces it, so the tests that ARE the probe can put it back through
 # the `real_launch_probe` fixture without reaching past the module's surface.
-_REAL_LAUNCH_PUPPETEER: Callable[[], str | None] = executors.launch_puppeteer
+_REAL_LAUNCH_PUPPETEER: Callable[[str | None], str | None] = executors.launch_puppeteer
 # The same trick for the host reader, restored by `real_present_hosts`.
 _REAL_PRESENT_HOSTS: Callable[[], frozenset[str]] = postinstall.present_hosts
 _launch_policy: LaunchPolicy | None = None
@@ -398,7 +399,7 @@ def sandboxed_puppeteer_cache(empty_browser_cache: Path, monkeypatch: pytest.Mon
     """
     monkeypatch.setenv("PUPPETEER_CACHE_DIR", str(empty_browser_cache))
     monkeypatch.delenv("PUPPETEER_EXECUTABLE_PATH", raising=False)
-    monkeypatch.setattr(executors, "launch_puppeteer", lambda: NO_BROWSER_DETAIL)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(NO_BROWSER_DETAIL))
 
 
 @pytest.fixture(autouse=True)
