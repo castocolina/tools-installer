@@ -106,10 +106,15 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           Orchestrator only: a disposable Fedora container bootstrapped like
                           `bootstrap` (Homebrew, uv), in which the installer's own code installs,
                           tunes, updates and removes OpenCode 2 and codegraph through
-                          tests/e2e_landing_driver.py, as the tester. Prints
-                          TRACER_OPENCODE_V2_INSTALL_OK and TRACER_OPENCODE_V2_TUNING_OK, or a
-                          named _FAILED line, or TRACER_LANDING_INFEASIBLE step=... when the
-                          environment fails (a pull, dnf, Homebrew, uv, a vendor download, TLS).
+                          tests/e2e_landing_driver.py, as the tester. Prints, in order,
+                          TRACER_OPENCODE_V2_INSTALL_OK, _V2_TUNING_OK, _LATEST_OK,
+                          _UPDATE_WHILE_RUNNING_OK, _V2_REMOVE_OK, _V2_STOP_IDLE_OK,
+                          _V1_REMOVE_OK, _V1_UPDATE_OK and TRACER_CODEGRAPH_COPILOT_OK,
+                          _PI_GATED_OK, _UNREGISTER_OK, _COPILOT_IDE_ONLY_OK. A step that cannot
+                          prove its claim prints _V2_SERVICE_STOP_UNPROVEN or
+                          _UPDATE_WHILE_RUNNING_UNPROVEN, and a product failure a named _FAILED
+                          line; TRACER_LANDING_INFEASIBLE step=... says the environment failed
+                          (a pull, dnf, Homebrew, uv, a vendor download, TLS) and exits 2.
                           Removes the container (and its image unless --keep-image) on every exit.
   -h, --help              Show this help
 
@@ -2789,8 +2794,22 @@ cmd_audit_landing() {
   ensure_phase_dir
   : >"$LANDING_TRANSCRIPT"
   landing_bootstrap
-  # Every verdict is collected so one transcript shows them all.
+  # Every verdict is collected so one transcript shows them all. The order is the edge cases':
+  # the update under a running service leaves it running for the removal that follows, the idle
+  # removal needs a fresh install, and the v1 steps need the box without OpenCode.
   landing_step install-opencode install opencode || failed=1
+  landing_step latest-opencode latest opencode || failed=1
+  landing_step update-while-running update opencode --with-service || failed=1
+  landing_step remove-with-service remove opencode --with-service || failed=1
+  landing_step reinstall-opencode install opencode || failed=1
+  landing_step remove-idle remove opencode || failed=1
+  landing_step seed-v1 seed-v1 opencode || failed=1
+  landing_step remove-v1 remove-v1 opencode || failed=1
+  landing_step reseed-v1 seed-v1 opencode || failed=1
+  landing_step update-v1 update opencode || failed=1
+  landing_step codegraph-copilot-and-pi codegraph copilot-and-pi || failed=1
+  landing_step codegraph-unregister codegraph unregister || failed=1
+  landing_step codegraph-ide-only codegraph ide-only || failed=1
   return "$failed"
 }
 
