@@ -2,6 +2,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from installer.platform import Platform
 from installer.policy import Policy, PolicyResult, tweak_policy
 from installer.tweaks import BUNDLES, LEGACY_ALIAS_BUNDLES, applicable_bundles, strip_legacy_aliases
@@ -227,3 +229,26 @@ def test_policies_list_none_of_the_four_alias_bundles(tmp_path: Path) -> None:
     lines = strip_legacy_aliases(rc).launch_lines()
     assert len(lines) == len(alias_ids)
     assert not any("Policies" in text for text, _severity in lines)
+
+
+def test_tweak_policy_layer_details_collapse_home_to_a_tilde(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc = Path.home() / ".myshellrc"
+    bin_dir = Path.home() / ".local" / "bin"
+    policy = tweak_policy(
+        _bundle("countdown"),
+        rc_path=rc,
+        bin_dir=bin_dir,
+        ensure_sourced_from=(Path.home() / ".zshrc",),
+    )
+
+    details = [
+        layer.detail for result in (policy.apply(), policy.remove()) for layer in result.layers
+    ]
+
+    assert any("~/.myshellrc" in detail for detail in details)
+    assert any("~/.local/bin" in detail for detail in details)
+    assert any("~/.zshrc" in detail for detail in details)
+    assert not any(str(tmp_path) in detail for detail in details)
