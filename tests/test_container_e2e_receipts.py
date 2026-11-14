@@ -1617,7 +1617,7 @@ def test_distro_is_threaded_through_every_command(tmp_path: Path) -> None:
         run = _run(script, direct)
         assert run.returncode == 0, run.stdout + run.stderr
         name = f"tools-installer-e2e-{distro}"
-        assert f"run -d --name {name} {_IMAGES[distro]} sleep infinity" in _calls(direct)
+        assert f"run -d --init --name {name} {_IMAGES[distro]} sleep infinity" in _calls(direct)
         expected = _RELEASE_FIXTURES[distro][2]
         assert f"DISTRO_RELEASE={distro}:{expected}" in run.stdout
 

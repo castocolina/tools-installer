@@ -191,7 +191,9 @@ start_container() {
       return 0
     fi
   fi
-  ct run -d --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
+  # --init gives the container a reaping PID 1: `sleep` never waits, so a detached daemon the
+  # installer stops (opencode's service) would stay a zombie that kill(pid, 0) still finds.
+  ct run -d --init --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
 }
 
 distro_release_record() {
