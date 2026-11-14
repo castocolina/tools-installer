@@ -25,12 +25,13 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
-from installer.guards import (
+from installer.guards import install_shims
+from installer.legacy_guard import (
+    BAN_BEGIN,
     BAN_END,
+    GUARD_NAMES,
     REDIRECT_SENTINEL,
-    ban_alias_block,
-    install_shims,
-    redirect_shim_script,
+    SHIM_SENTINEL,
 )
 from installer.locations import all_ban_rc_paths
 from installer.manager_versions import OutdatedReport
@@ -3857,11 +3858,11 @@ def _no_terminal_sync(_platform: Platform, **_kwargs: bool) -> str | None:
 
 
 @pytest.mark.parametrize(
-    ("selection", "keys", "with_tool", "with_ban", "with_block"),
+    ("selection", "keys", "with_tool", "with_block"),
     [
-        ("tool-only", ("space",), True, False, False),
-        ("env-only", ("space",), False, True, False),
-        ("mixed", ("a",), True, True, True),
+        ("tool-only", ("space",), True, False),
+        ("env-only", ("space",), False, True),
+        ("mixed", ("a",), True, True),
     ],
 )
 async def test_uninstall_screen_passes_the_selected_tools(
@@ -3870,7 +3871,6 @@ async def test_uninstall_screen_passes_the_selected_tools(
     selection: str,
     keys: tuple[str, ...],
     with_tool: bool,
-    with_ban: bool,
     with_block: bool,
 ) -> None:
     """Review H8: the view's decision carries exactly the selected tools, so
@@ -3904,8 +3904,6 @@ async def test_uninstall_screen_passes_the_selected_tools(
         monkeypatch.setattr(setup, "load_tools", _rg_only)
     else:
         monkeypatch.setattr(setup, "load_tools", _no_tools)
-    if with_ban:
-        install_shims(bin_dir)
     if with_block:
         write_myshellrc([bin_dir], tmp_path / ".myshellrc")
     captured: list[UninstallDecision] = []
@@ -3935,7 +3933,6 @@ async def test_uninstall_screen_passes_the_selected_tools(
         await wait_until(pilot, lambda: screen.applied)
     (decision,) = captured
     assert decision.tools == ((rg,) if with_tool else ())
-    assert decision.remove_ban is with_ban
     assert decision.remove_path_block is with_block
 
 
@@ -4525,24 +4522,34 @@ def test_headless_main_strips_only_the_scratch_rc(monkeypatch: pytest.MonkeyPatc
     assert "tools-installer tweak:claude-skip" not in scratch_rc.read_text()
 
 
-_OLD_NPX = f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec /x/pnpm dlx "$@"\n'
-_NPX_NOTICE = "Rewrote the npx redirect at"
+_BAN_LINES = "alias pip='echo banned'\nalias pip3='echo banned'"
+_BAN_BLOCK = f"{BAN_BEGIN}\n{_BAN_LINES}\n{BAN_END}"
+_RC_SEED = f"export A=1\n\n{_BAN_BLOCK}\n\nexport B=2\n"
+_RC_AFTER = "export A=1\n\n\nexport B=2\n"
+_SHIM_REMOVED = "Removed the retired pip/npm guard shim"
+_BLOCK_REMOVED = "Removed the retired guard alias block from"
 
 
-def _scratch_npx(body: str) -> Path:
-    npx = vars(setup)["_DEFAULT_BIN_DIR"] / "npx"
-    npx.parent.mkdir(parents=True, exist_ok=True)
-    npx.write_text(body)
-    return npx
+def _seed_retired_guard(home: Path) -> None:
+    """Plant what an earlier version wrote: five sentinel shims and the ban block (literals)."""
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("npm", "npx", "pnpm"):
+        (bin_dir / name).write_text(f'#!/bin/sh\n{REDIRECT_SENTINEL}\nexec /x/pnpm dlx "$@"\n')
+    for name in ("pip", "pip3"):
+        (bin_dir / name).write_text(f"#!/bin/sh\n{SHIM_SENTINEL}\nexit 127\n")
+    (home / ".myshellrc").write_text(_RC_SEED)
 
 
-def test_headless_launch_rewrites_an_outdated_npx_redirect(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = io.StringIO()
-    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
-    _headless_main_fixture(monkeypatch, buffer, [done, done])
-    npx = _scratch_npx(_OLD_NPX)
+def _guard_footprint(home: Path) -> tuple[dict[Path, bytes | None], list[str]]:
+    """The bytes of every ban-capable rc file plus the bin dir listing."""
+    rcs = {path: path.read_bytes() if path.exists() else None for path in all_ban_rc_paths()}
+    bin_dir = home / ".local" / "bin"
+    return rcs, sorted(p.name for p in bin_dir.iterdir()) if bin_dir.is_dir() else []
+
+
+def _recording_wizard(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) -> list[str]:
+    """Wrap the stubbed headless run_wizard so each call records what was printed before it."""
     printed_before_plan: list[str] = []
     fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
 
@@ -4551,20 +4558,7 @@ def test_headless_launch_rewrites_an_outdated_npx_redirect(
         return fake_run_wizard(*args, **kwargs)
 
     monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
-
-    assert setup.main(["--all", "--yes"]) == 0
-    assert _NPX_NOTICE in printed_before_plan[0]
-    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
-
-    buffer.truncate(0)
-    buffer.seek(0)
-    assert setup.main(["--all", "--yes"]) == 0
-    assert _NPX_NOTICE not in buffer.getvalue()
-    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
-
-
-_OLD_BAN = ban_alias_block().replace(BAN_END, f"alias npx='pnpm dlx'\n{BAN_END}")
-_GUARD_NOTICE = "Rewrote the guard aliases in"
+    return printed_before_plan
 
 
 def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) -> None:
@@ -4598,6 +4592,32 @@ def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) 
     monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=300, no_color=True))
 
 
+def test_a_doctor_launch_removes_the_retired_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The tracer: a launch on an owner-like host removes the guard and names every path."""
+    _sandbox(monkeypatch, tmp_path)
+    buffer = io.StringIO()
+    _headless_route_stubs(monkeypatch, buffer)
+    _seed_retired_guard(tmp_path)
+
+    assert setup.main(["--doctor"]) == 0
+
+    shown = buffer.getvalue()
+    for name in GUARD_NAMES:
+        assert shown.count(f"{_SHIM_REMOVED} ~/.local/bin/{name}.") == 1
+        assert not (tmp_path / ".local" / "bin" / name).exists()
+    assert shown.count(f"{_BLOCK_REMOVED} ~/.myshellrc.") == 1
+    assert (tmp_path / ".myshellrc").read_text() == _RC_AFTER
+
+    footprint = _guard_footprint(tmp_path)
+    buffer.truncate(0)
+    buffer.seek(0)
+    assert setup.main(["--doctor"]) == 0
+    assert "retired" not in buffer.getvalue()
+    assert _guard_footprint(tmp_path) == footprint
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -4610,16 +4630,20 @@ def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) 
     ],
     ids=["tui", "uninstall", "doctor", "fix", "guard", "unguard"],
 )
-def test_every_route_rewrites_an_outdated_npx_once(
+def test_every_route_removes_the_retired_guard_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str] | None
 ) -> None:
+    """Every route's launch repair removes the guard once and names each path (D-09).
+
+    For the `guard` and `unguard` ids this proves only that the launch removal runs on those
+    routes while `_headless_route_stubs` stubs `run_guard`, not what `run_guard` does after it;
+    24.4-06 deletes the two ids together with the routes.
+    """
     _sandbox(monkeypatch, tmp_path)
     buffer = io.StringIO()
     if argv is not None:
         _headless_route_stubs(monkeypatch, buffer)
-    npx = _scratch_npx(_OLD_NPX)
-    rc = tmp_path / ".myshellrc"
-    rc.write_text(f"user\n{_OLD_BAN}\n")
+    _seed_retired_guard(tmp_path)
 
     def shown_notices() -> str:
         if argv is None:
@@ -4631,36 +4655,72 @@ def test_every_route_rewrites_an_outdated_npx_once(
         return buffer.getvalue()
 
     first = shown_notices()
-    # C-13 (IN-04): a route about to remove the guards repairs them silently.
-    shown = 0 if argv in (["--uninstall", "--yes"], ["--unguard", "--yes"]) else 1
-    assert first.count(_NPX_NOTICE) == shown
-    assert first.count(_GUARD_NOTICE) == shown
-    assert npx.read_text() == redirect_shim_script("npx", "/x/pnpm")
-    assert rc.read_text() == f"user\n{ban_alias_block()}\n"
+    assert first.count(_SHIM_REMOVED) == len(GUARD_NAMES)
+    assert first.count(_BLOCK_REMOVED) == 1
+    assert [name for name in GUARD_NAMES if (tmp_path / ".local" / "bin" / name).exists()] == []
+    assert (tmp_path / ".myshellrc").read_text() == _RC_AFTER
     second = shown_notices()
-    assert _NPX_NOTICE not in second
-    assert _GUARD_NOTICE not in second
+    assert _SHIM_REMOVED not in second
+    assert _BLOCK_REMOVED not in second
+
+
+def test_headless_launch_removes_the_retired_guard_before_the_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
+    _headless_main_fixture(monkeypatch, buffer, [done, done])
+    _seed_retired_guard(Path.home())
+    printed_before_plan = _recording_wizard(monkeypatch, buffer)
+
+    assert setup.main(["--all", "--yes"]) == 0
+    assert printed_before_plan[0].count(_SHIM_REMOVED) == len(GUARD_NAMES)
+    assert printed_before_plan[0].count(_BLOCK_REMOVED) == 1
+
+    footprint = _guard_footprint(Path.home())
+    buffer.truncate(0)
+    buffer.seek(0)
+    assert setup.main(["--all", "--yes"]) == 0
+    assert _SHIM_REMOVED not in buffer.getvalue()
+    assert _BLOCK_REMOVED not in buffer.getvalue()
+    assert _guard_footprint(Path.home()) == footprint
 
 
 @pytest.mark.parametrize("route", ["headless", "tui"])
-def test_a_foreign_npx_is_never_touched(
+def test_a_foreign_or_linked_npx_is_never_touched(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, route: str
 ) -> None:
-    foreign = "#!/bin/sh\necho mine\n"
     buffer = io.StringIO()
+    done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
     if route == "headless":
-        done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
-        _headless_main_fixture(monkeypatch, buffer, [done])
-        npx = _scratch_npx(foreign)
-        assert setup.main(["--all", "--yes"]) == 0
-        shown = buffer.getvalue()
+        _headless_main_fixture(monkeypatch, buffer, [done, done])
     else:
         _sandbox(monkeypatch, tmp_path)
-        npx = _scratch_npx(foreign)
+    npx = Path.home() / ".local" / "bin" / "npx"
+    npx.parent.mkdir(parents=True, exist_ok=True)
+
+    def launch() -> str:
+        if route == "headless":
+            buffer.truncate(0)
+            buffer.seek(0)
+            assert setup.main(["--all", "--yes"]) == 0
+            return buffer.getvalue()
         warning = _wired(monkeypatch, [])["startup_warning"]
-        shown = warning if isinstance(warning, str) else ""
+        return warning if isinstance(warning, str) else ""
+
+    foreign = "#!/bin/sh\necho mine\n"
+    npx.write_text(foreign)
+    assert _SHIM_REMOVED not in launch()
     assert npx.read_text() == foreign
-    assert _NPX_NOTICE not in shown
+
+    npx.unlink()
+    target = tmp_path / "elsewhere" / "npx-real"
+    target.parent.mkdir()
+    target.write_text(f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 0\n")
+    npx.symlink_to(target)
+    assert _SHIM_REMOVED not in launch()
+    assert npx.is_symlink()
+    assert target.read_text() == f"#!/bin/sh\n{REDIRECT_SENTINEL}\nexit 0\n"
 
 
 def test_a_launch_never_adds_or_edits_user_rc_lines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4676,38 +4736,62 @@ def test_a_launch_never_adds_or_edits_user_rc_lines(monkeypatch: pytest.MonkeyPa
     assert {path: path.read_text() for path in paths} == plain
 
     myshellrc = Path.home() / ".myshellrc"
-    myshellrc.write_text(f"user1\nuser2\n{_OLD_BAN}\nuser3\nuser4\n")
+    myshellrc.write_text(f"user1\nuser2\n{_BAN_BLOCK}\nuser3\nuser4\n")
     assert setup.main(["--all", "--yes"]) == 0
-    assert myshellrc.read_text() == f"user1\nuser2\n{ban_alias_block()}\nuser3\nuser4\n"
+    assert myshellrc.read_text() == "user1\nuser2\nuser3\nuser4\n"
     assert {path: path.read_text() for path in paths if path != myshellrc} == {
         path: text for path, text in plain.items() if path != myshellrc
     }
 
 
-def test_launch_lines_put_the_alias_notices_before_the_npx_notice(
+def test_launch_lines_put_the_legacy_alias_notice_before_the_guard_notices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     buffer = io.StringIO()
     done = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "done")]
     _headless_main_fixture(monkeypatch, buffer, [done])
     rc = Path.home() / ".myshellrc"
-    rc.write_text(_legacy_alias_block("claude-skip", _CLAUDE_LEGACY) + _OLD_BAN + "\n")
-    _scratch_npx(_OLD_NPX)
-    printed_before_plan: list[str] = []
-    fake_run_wizard = cast("Callable[..., list[RowOutcome] | None]", setup.run_wizard)
-
-    def recording_run_wizard(*args: object, **kwargs: object) -> list[RowOutcome] | None:
-        printed_before_plan.append(buffer.getvalue())
-        return fake_run_wizard(*args, **kwargs)
-
-    monkeypatch.setattr(setup, "run_wizard", recording_run_wizard)
+    rc.write_text(_legacy_alias_block("claude-skip", _CLAUDE_LEGACY) + _BAN_BLOCK + "\n")
+    bin_dir = Path.home() / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "pip").write_text(f"#!/bin/sh\n{SHIM_SENTINEL}\nexit 127\n")
+    printed_before_plan = _recording_wizard(monkeypatch, buffer)
 
     assert setup.main(["--all", "--yes"]) == 0
     shown = printed_before_plan[0]
     legacy = shown.index("Removed the claude-skip alias")
-    guard = shown.index(_GUARD_NOTICE)
-    npx = shown.index(_NPX_NOTICE)
-    assert legacy < guard < npx
+    block = shown.index(_BLOCK_REMOVED)
+    shim = shown.index(_SHIM_REMOVED)
+    assert legacy < block < shim
+
+
+def test_the_cli_teardown_removes_the_guard_before_any_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review cycle 2 M-02: `_teardown_cli` runs the launch repairs before its first read."""
+    _sandbox(monkeypatch, tmp_path)
+    buffer = io.StringIO()
+    _headless_route_stubs(monkeypatch, buffer)
+    shim_at_read: list[bool] = []
+
+    def one_tool(_registry: object) -> list[Tool]:
+        return [loop_tool("rg")]
+
+    monkeypatch.setattr(setup, "load_tools", one_tool)
+
+    def recording_is_installed(_tool: Tool) -> bool:
+        shim_at_read.append((tmp_path / ".local" / "bin" / "npx").exists())
+        return False
+
+    monkeypatch.setattr(setup, "is_installed", recording_is_installed)
+    _seed_retired_guard(tmp_path)
+
+    assert setup.main(["--uninstall", "--yes"]) == 0
+
+    assert shim_at_read
+    assert not any(shim_at_read)
+    assert buffer.getvalue().count(_SHIM_REMOVED) == len(GUARD_NAMES)
+    assert buffer.getvalue().count(_BLOCK_REMOVED) == 1
 
 
 def _linux() -> Platform:

@@ -53,8 +53,8 @@ from installer.diskusage import DiskPressure
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import DaemonState
 from installer.execute_screen import ExecuteInputs, wants_ascii_spinner
-from installer.guards import rewrite_outdated_ban_aliases, rewrite_outdated_npx
 from installer.install_ownership import run_probe
+from installer.legacy_guard import remove_ban_blocks, remove_guard_shims
 from installer.locations import (
     all_ban_rc_paths,
     ban_rc_paths,
@@ -681,20 +681,14 @@ def _desktop_shell_policies(platform: Platform) -> tuple[Policy, ...]:
 def _launch_repairs() -> tuple[LegacyStrip, tuple[tuple[str, str], ...]]:
     """The one repair step every route runs before anything else (D-15).
 
-    Strips legacy alias blocks, rewrites an outdated guard alias block (every rc file a guard
-    could have written to, marker-owned block only) and an outdated npx redirect. Each part
-    never raises and never adds a file or a block.
+    Strips legacy alias blocks and removes the retired guard: the ban block from every rc file
+    a guard could have written to, and the sentinel-marked shims in the managed bin dir. Each
+    part never raises and never adds a file or a block.
     """
     return strip_legacy_aliases(_MYSHELLRC), (
-        *rewrite_outdated_ban_aliases(all_ban_rc_paths()),
-        *rewrite_outdated_npx(_DEFAULT_BIN_DIR),
+        *remove_ban_blocks(all_ban_rc_paths()),
+        *remove_guard_shims(_DEFAULT_BIN_DIR),
     )
-
-
-def _warnings_only(repairs: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
-    """A route about to remove the guards keeps its repairs quiet: a "Rewrote ..." notice just
-    before the same file is removed misleads (review C-13). Warnings still print."""
-    return tuple(line for line in repairs if line[1] != "ok")
 
 
 def _print_repairs(
@@ -1311,20 +1305,21 @@ def _run_uninstall(console: Console, *, assume_yes: bool) -> int:
 
 
 def _teardown_cli(console: Console, platform: Platform, *, assume_yes: bool) -> int:
-    confirm = (lambda _message: True) if assume_yes else ask_confirm
-    tools = load_tools(_REGISTRY)
-    # Mirrors _build_app's own installed computation, the real-installed-status map the
-    # interactive path would use.
-    installed = {tool.id: is_installed(tool) for tool in tools}
-    schedule_ctx = _schedule_context(platform, lambda tool_id: installed.get(tool_id, False))
+    # The launch repairs run before any read, so no read in this teardown sees a guard file.
     legacy, repairs = _launch_repairs()
     notice = legacy.uninstall_line()
     if notice is not None:
         console.print(notice, markup=False, soft_wrap=True)
     for text in legacy.failure_lines():
         console.print(text, markup=False, soft_wrap=True)
-    for text, _severity in _warnings_only(repairs):
+    for text, _severity in repairs:
         console.print(text, markup=False, soft_wrap=True)
+    confirm = (lambda _message: True) if assume_yes else ask_confirm
+    tools = load_tools(_REGISTRY)
+    # Mirrors _build_app's own installed computation, the real-installed-status map the
+    # interactive path would use.
+    installed = {tool.id: is_installed(tool) for tool in tools}
+    schedule_ctx = _schedule_context(platform, lambda tool_id: installed.get(tool_id, False))
     # Retired receipts join the teardown only; `installed` stays catalog-only.
     scan = scan_retired(frozenset(tool.id for tool in tools))
     for text in scan.warnings:
@@ -1361,7 +1356,7 @@ def _run_guard(console: Console, *, remove: bool, rc_paths: list[Path], assume_y
     # The caller picks rc_paths: install targets the link-mode location, removal
     # sweeps every possible location (so it never depends on a link-mode guess).
     legacy, repairs = _launch_repairs()
-    _print_repairs(console, legacy, _warnings_only(repairs) if remove else repairs)
+    _print_repairs(console, legacy, repairs)
     confirm = (lambda _message: True) if assume_yes else ask_confirm
     acted = run_guard(
         remove=remove,

@@ -29,14 +29,13 @@ https://docs.astral.sh/uv/pip/compatibility/ and
 import os
 import shlex
 import shutil
-import stat
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import installer.locations
-from installer.atomic import atomic_write_text, read_capped, read_snapshot, snapshot_matches
-from installer.sanitize import sanitize_log_line
+from installer.atomic import atomic_write_text, read_capped
+from installer.legacy_guard import BAN_BEGIN, BAN_END, REDIRECT_SENTINEL, SHIM_SENTINEL
 from installer.shellrc import apply_block, strip_block
 
 BANNED: dict[str, str] = {
@@ -115,10 +114,6 @@ GLOBAL_REDIRECTED: dict[str, GlobalRedirect] = {
     ),
 }
 EXIT_CODE = 127  # non-zero so the caller sees a hard failure
-SHIM_SENTINEL = "# tools-installer-ban-shim"
-REDIRECT_SENTINEL: str = "# tools-installer-redirect-shim"
-BAN_BEGIN = "# >>> tools-installer ban >>>"
-BAN_END = "# <<< tools-installer ban <<<"
 PathLookup = Callable[[str, str], str | None]
 
 
@@ -664,103 +659,6 @@ def remove_ban_aliases(rc_path: Path) -> None:
     stripped = strip_block(original, BAN_BEGIN, BAN_END)
     if stripped != original:
         atomic_write_text(rc_path, stripped)
-
-
-_RC_MAX_BYTES = 1 << 20  # the cap installer.tweaks reads an rc file with
-
-
-def rewrite_outdated_ban_aliases(rc_paths: Sequence[Path]) -> tuple[tuple[str, str], ...]:
-    """Rewrite each rc file's guard alias block to match ban_alias_block(); report each change.
-
-    Only the marker-owned block is rewritten; every other byte of the file, line endings
-    included, is written back as it was read. A file without a well-formed BAN_BEGIN..BAN_END
-    pair is skipped, so a block is never added, and a missing, unreadable or non-UTF-8 file is
-    skipped silently.
-    A write failure is reported as a warning. It never raises, so a launch cannot fail on it.
-    """
-    expected = ban_alias_block().split("\n")
-    results: list[tuple[str, str]] = []
-    for rc_path in rc_paths:
-        try:
-            data = read_capped(rc_path, _RC_MAX_BYTES, follow_symlinks=True)
-            if data is None:
-                continue
-            text = data.decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        lines = text.split("\n")
-        if BAN_BEGIN not in lines:
-            continue
-        # The same pairing apply_block uses: the last begin marker, then the first end after it.
-        start = max(index for index, line in enumerate(lines) if line == BAN_BEGIN)
-        stops = [index for index in range(start, len(lines)) if lines[index] == BAN_END]
-        if not stops or lines[start : stops[0] + 1] == expected:
-            continue
-        shown = sanitize_log_line(installer.locations.display_path(rc_path))
-        try:
-            # The text already read, not a universal-newline re-read: every byte outside the
-            # block, CR line endings included, is written back unchanged (review C-11).
-            atomic_write_text(
-                rc_path, apply_block(text, ban_alias_block(), begin=BAN_BEGIN, end=BAN_END)
-            )
-        except OSError as exc:
-            first = sanitize_log_line(((exc.strerror or str(exc)).splitlines() or [""])[0])
-            results.append(
-                (
-                    f"Could not rewrite the guard aliases in {shown}: {first}; "
-                    "fix its permissions, then relaunch.",
-                    "warn",
-                )
-            )
-            continue
-        results.append(
-            (f"Rewrote the guard aliases in {shown}: npx now runs through its redirect.", "ok")
-        )
-    return tuple(results)
-
-
-def rewrite_outdated_npx(shim_dir: Path) -> tuple[tuple[str, str], ...]:
-    """Rewrite an installer-written `npx` redirect whose body is not the current one.
-
-    Only `shim_dir / "npx"` is touched, and only a regular file (its own lstat, never a
-    symlink) of at most `_SHIM_MAX_BYTES` that carries REDIRECT_SENTINEL and an `exec` target.
-    It deliberately avoids is_our_shim, which follows symlinks. The new body bakes the target
-    the old body names: pnpm is never re-resolved at launch, so a hand-edited target survives
-    and a launch with pnpm off PATH cannot turn a live redirect into a hard block. Whole-file
-    bytes decide "outdated". It never raises, so a launch cannot fail on it.
-    """
-    path = shim_dir / "npx"
-    try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
-            return ()
-        # One O_NOFOLLOW read bound to the file's identity, re-checked right before the replace.
-        snapshot = read_snapshot(path)
-        data = snapshot.data
-        old = None if len(data) > _SHIM_MAX_BYTES else data.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ()
-    if old is None or REDIRECT_SENTINEL not in old or not exec_targets(old):
-        return ()
-    new = redirect_shim_script("npx", exec_targets(old)[0])
-    if new.encode("utf-8") == data:
-        return ()
-    # A real npx an npm or Volta install dropped here since the read is never replaced (C-15).
-    if not snapshot_matches(path, snapshot):
-        return ()
-    shown = sanitize_log_line(installer.locations.display_path(path))
-    try:
-        atomic_write_text(path, new, mode=0o755)
-    except OSError as exc:
-        first = sanitize_log_line(((exc.strerror or str(exc)).splitlines() or [""])[0])
-        return (
-            (
-                f"Could not rewrite the npx redirect at {shown}: {first}; "
-                "fix the bin dir permissions, then relaunch.",
-                "warn",
-            ),
-        )
-    message = f"Rewrote the npx redirect at {shown}: the old one could run a package's default bin."
-    return ((message, "ok"),)
 
 
 def guard_path_warning(
