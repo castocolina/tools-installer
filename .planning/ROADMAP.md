@@ -604,11 +604,11 @@ Plans:
   2. The opencode v2 and Pi MCP findings are applied to the registry and postinstall steps, with `make verify-registry` green. *(amended 2026-11-07, 24.3 SPEC R9: copilot also joins the codegraph hook, absorbing Backlog 999.12)*
   3. The skill's skill-judge score is recorded.
 
-**Plans**: 11 plans
+**Plans**: 1/11 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 24.3-01-PLAN.md — npm latest source: `resolve_npm_latest`, the validated `latest_npm` script param, the installer-owned npm branch through an explicit `resolve_npm` seam (wave 1)
+- [x] 24.3-01-PLAN.md — npm latest source: `resolve_npm_latest`, the validated `latest_npm` script param, the installer-owned npm branch through an explicit `resolve_npm` seam (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 24.3-02-PLAN.md — `installer/catalog_audit.py` spine: resume `status`, read-only `facts`, the validated report writer, `make audit-catalog` (wave 2)
@@ -677,7 +677,7 @@ Plans:
 | 24. Onboarding through the skill and e2e | 9/9 | In Progress | - |
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | In Progress | - |
 | 24.2 Schedules view | 13/13 | In Progress | - |
-| 24.3 Catalog audit skill | 0/11 | Planned | - |
+| 24.3 Catalog audit skill | 1/11 | In Progress | - |
 | 25. Lean | 0/TBD | Not started | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
