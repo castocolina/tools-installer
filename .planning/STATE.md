@@ -6,10 +6,10 @@ current_phase: "24.4"
 current_phase_name: Retire the npx, npm and pip guard aliases and redirects (INSERTED)
 status: executing
 stopped_at: "Phases 24.4 and 24.5 specced and discussed (renumbered from 24.3.1/24.3.2); next: autonomous execution"
-last_updated: "2026-11-14T16:26:09.615Z"
+last_updated: "2026-11-14T16:57:33.323Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 24.4 execution started
-state_head: de8cfea9895c89654262eb309b317a8da170d493
+state_head: 626dacb4d8d12953ecd19158d1b80da6dd4149ca
 progress:
   total_phases: 17
   completed_phases: 7
