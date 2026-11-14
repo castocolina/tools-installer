@@ -133,6 +133,16 @@ def test_a_crlf_block_goes_with_its_line_endings(home: Path) -> None:
     assert rc.read_bytes() == b"user1\r\nuser2\r\n"
 
 
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_a_block_ending_the_file_without_a_newline_keeps_the_line_before_it_whole(
+    home: Path, eol: str
+) -> None:
+    rc = _rc(home, f"user-line{eol}{BAN_BEGIN}{eol}alias pip='x'{eol}{BAN_END}".encode())
+
+    assert remove_ban_blocks([rc]) == (_block_removed(".myshellrc"),)
+    assert rc.read_bytes() == f"user-line{eol}".encode()
+
+
 def test_an_orphan_end_alone_stays(home: Path) -> None:
     text = f"user1\n{BAN_END}\nuser2\n"
     rc = _rc(home, text)

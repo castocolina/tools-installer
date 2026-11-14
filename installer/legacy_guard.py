@@ -14,6 +14,7 @@ launch's first read warns if the problem persists.
 """
 
 import os
+import re
 import shutil
 import stat
 from collections.abc import Callable, Sequence
@@ -70,8 +71,9 @@ def _strip_ban_blocks(text: str) -> str:
     """
     kept: list[str] = []
     open_at: int | None = None
-    for line in text.split("\n"):
-        marker = line.removesuffix("\r")
+    # Lines keep their own terminator, so dropping a block never touches the bytes around it.
+    for line in re.findall(r"[^\n]*\n|[^\n]+", text):
+        marker = line.removesuffix("\n").removesuffix("\r")
         if marker == BAN_BEGIN:
             open_at = len(kept)
             kept.append(line)
@@ -80,7 +82,7 @@ def _strip_ban_blocks(text: str) -> str:
             open_at = None
         else:
             kept.append(line)
-    return "\n".join(kept)
+    return "".join(kept)
 
 
 def _remove_ban_block(path: Path) -> _Line | None:
