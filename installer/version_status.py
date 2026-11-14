@@ -11,7 +11,7 @@ must never be read as "this is what installed the tool".
 
 A first-run empty cache across ~40 github_release tools would otherwise burn
 most of the unauthenticated 60-requests-per-hour GitHub budget in a single
-view entry, so MAX_FETCHES_PER_REFRESH caps resolve_tag calls per pass.
+view entry, so MAX_FETCHES_PER_REFRESH caps resolve_tag and resolve_npm calls per pass.
 Budget-deferred rows keep their last known comparison with stale=True.
 
 Refresh is blocking and belongs on a Textual thread worker, never the event
@@ -517,7 +517,7 @@ def resolve_status(
     owner = ownership.owner
     if owner == "installer":
         found = github_repo(tool, platform)
-        package = npm_package(tool, platform)
+        npm_pkg = npm_package(tool, platform)
         latest_source: tuple[VersionStatus, VersionCacheEntry | None] | None = None
         if found is not None:
             _method, repo = found
@@ -532,10 +532,10 @@ def resolve_status(
                 ownership=ownership,
                 unresolved=unresolved,
             )
-        elif package is not None:
+        elif npm_pkg is not None:
             latest_source = _latest_status(
                 tool,
-                read_release=lambda: Release(resolve_npm(package), {}),
+                read_release=lambda: Release(resolve_npm(npm_pkg), {}),
                 source="npm",
                 entry=entry,
                 now=now,
@@ -1793,7 +1793,7 @@ class VersionRefreshService:
             would_fetch = (
                 allow_fetch
                 and ownership.owner == "installer"
-                and github_repo(tool, platform) is not None
+                and (github_repo(tool, platform) or npm_package(tool, platform)) is not None
                 and should_fetch(entry, now=now)
             )
             status, new_entry = resolve_status(

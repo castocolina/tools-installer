@@ -556,6 +556,120 @@ def test_github_tag_seam_is_untouched() -> None:
     assert default is resolve_github_tag
 
 
+def _npm_tool(tool_id: str = "cli", *, github: bool = False) -> Tool:
+    methods = [
+        Method(
+            kind="script",
+            params={
+                "url": "https://example.test/i.sh",
+                "shell": "sh",
+                "latest_npm": f"@s/{tool_id}",
+            },
+        )
+    ]
+    if github:
+        methods.insert(0, Method(kind="github_release", params={"repo": f"owner/{tool_id}"}))
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="ai",
+        cmd=tool_id,
+        methods=tuple(methods),
+        priority="P1",
+        audience="both",
+        tier="user",
+    )
+
+
+def _npm_status(
+    tool: Tool,
+    owner: Owner,
+    *,
+    resolve_npm: Callable[[str], str],
+    resolve_tag: Callable[[str], str] = lambda repo: "v0",
+    entry: VersionCacheEntry | None = None,
+    allow_fetch: bool = True,
+    now: datetime = datetime(2026, 11, 13, tzinfo=UTC),
+) -> tuple[VersionStatus, VersionCacheEntry | None]:
+    return resolve_status(
+        tool,
+        ownership=_owned(tool, owner, package=tool.id, current_version="1.0.0"),
+        outdated=OutdatedReport(brew={}, cask={}, pnpm={}, uv={}),
+        entry=entry,
+        now=now,
+        probe_output=lambda argv: "1.0.0",
+        resolve_tag=resolve_tag,
+        resolve_npm=resolve_npm,
+        platform=_platform(),
+        allow_fetch=allow_fetch,
+    )
+
+
+@pytest.mark.parametrize("owner", ["brew", "cask", "pnpm", "uv", "pacman", "unknown"])
+def test_npm_source_only_for_installer_owner(owner: Owner) -> None:
+    status, entry = _npm_status(_npm_tool(), owner, resolve_npm=_forbidden_npm)
+    assert status.source != "npm"
+    assert entry is None
+
+
+def test_github_repo_wins_over_latest_npm() -> None:
+    tool = _npm_tool(github=True)
+    status, _entry = _npm_status(
+        tool, "installer", resolve_npm=_forbidden_npm, resolve_tag=lambda repo: "v3.0.0"
+    )
+    assert (status.source, status.latest) == ("github", "v3.0.0")
+
+
+def test_npm_fetch_failure_keeps_prior_latest() -> None:
+    now = datetime(2026, 11, 13, tzinfo=UTC)
+    prior = VersionCacheEntry(
+        latest_version="2.2.6", checked_at=(now - timedelta(days=8)).isoformat(), failed_at=None
+    )
+
+    def offline(package: str) -> str:
+        raise VersionError("offline")
+
+    status, entry = _npm_status(_npm_tool(), "installer", resolve_npm=offline, entry=prior)
+    assert (status.source, status.latest, status.stale) == ("npm", "2.2.6", True)
+    assert entry is not None
+    assert entry.failed_at is not None
+    assert entry.latest_version == "2.2.6"
+
+
+def test_npm_fetch_respects_backoff_and_allow_fetch() -> None:
+    now = datetime(2026, 11, 13, tzinfo=UTC)
+    fresh = VersionCacheEntry(latest_version="2.2.6", checked_at=now.isoformat(), failed_at=None)
+    tool = _npm_tool()
+    skipped, _ = _npm_status(tool, "installer", resolve_npm=_forbidden_npm, allow_fetch=False)
+    cached, _ = _npm_status(tool, "installer", resolve_npm=_forbidden_npm, entry=fresh)
+    assert skipped.stale is True
+    assert (cached.latest, cached.stale) == ("2.2.6", False)
+
+
+def test_npm_fetches_count_toward_the_refresh_budget(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def resolve_npm(package: str) -> str:
+        calls.append(package)
+        return "2.0.0"
+
+    tools = [_npm_tool(f"tool-{i:02d}") for i in range(MAX_FETCHES_PER_REFRESH + 3)]
+    service = _installer_owned_service(
+        tmp_path / "versions.json",
+        resolve_tag=lambda repo: "v0",
+        probe_output=lambda argv: "1.0.0",
+        now=lambda: datetime(2026, 11, 13, tzinfo=UTC),
+        resolve_npm=resolve_npm,
+    )
+    _versions(service, tools)
+    assert len(calls) == MAX_FETCHES_PER_REFRESH
+
+
+def test_installer_owned_npm_tool_has_no_pin() -> None:
+    status, _entry = _npm_status(_npm_tool(), "installer", resolve_npm=lambda package: "2.0.0")
+    assert (status.source, status.pinned_spec) == ("npm", None)
+
+
 def test_one_service_two_threads_merge_both_tool_ids(tmp_path: Path) -> None:
     now = datetime(2026, 9, 7, tzinfo=UTC)
     inside = threading.Barrier(2)
