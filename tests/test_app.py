@@ -34,6 +34,7 @@ from installer.uninstall import RemovalPlan, SweepResult
 from installer.update import UpdateOutcome
 from installer.version_status import Health
 from installer.versions import TagResolver
+from tests.launch_doubles import stub_launch
 from tests.state_doubles import (
     FrozenStateService,
     ScriptedUpdates,
@@ -6418,3 +6419,43 @@ def test_joint_removal_of_mmdc_and_puppeteer_reports_neither_kept(
     assert result.remove_failed == ()
     assert receipts.read("mmdc") is None
     assert receipts.read("puppeteer") is None
+
+
+def test_cli_doctor_reports_a_broken_bun_owned_puppeteer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import app as app_module
+    from installer import executors
+    from installer.app import run_doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def listing(kind: str) -> frozenset[str] | None:
+        return frozenset({"puppeteer"}) if kind == "bun" else None
+
+    monkeypatch.setattr(app_module, "manager_listing", listing)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch("no browser"))
+    puppeteer = Tool(
+        id="puppeteer",
+        name="puppeteer",
+        category="dev",
+        cmd="puppeteer",
+        methods=(
+            Method(kind="bun", params={"npm_pkg": "puppeteer", "smoke": "puppeteer-browser"}),
+        ),
+    )
+    bin_dir = tmp_path / "bin"
+    console, buf = _console()
+    run_doctor(
+        [puppeteer],
+        console,
+        platform=_platform(),
+        default_bin_dir=bin_dir,
+        path_value=str(bin_dir),
+        exists=lambda _p: True,
+        which=lambda name: "/x/puppeteer" if name == "puppeteer" else None,
+        managed_globals=lambda: None,
+    )
+    out = " ".join(buf.getvalue().split())
+    assert "puppeteer is installed but does not work" in out
+    assert "bun audit: puppeteer could not start a browser: no browser" in out

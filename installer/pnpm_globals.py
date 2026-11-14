@@ -50,11 +50,12 @@ LIMITATIONS of a name-only snapshot:
   user inherits.
 """
 
+import functools
 import json
 import shlex
 import shutil
 from collections.abc import Callable, Collection, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from installer.executors import run_smoke_check
@@ -93,7 +94,7 @@ class PnpmUnavailable(OSError):
 
 @dataclass(frozen=True)
 class NodeGlobal:
-    """A catalog tool that declares a kind="node" install method.
+    """A catalog tool that declares a kind="node" or kind="bun" install method.
 
     `smoke` is the name of the post-install check the method declares, if any.
     It travels with the entry because the check is the only evidence this
@@ -177,6 +178,14 @@ class NodeGlobalsReport:
     `unhealthy` pairs a tool id with why its declared smoke check failed just
     now. `missing` answers "is the command there"; this answers "does the tool
     work", which a command on PATH has never been evidence of.
+
+    `bun_unhealthy` is the same list for the entries bun manages, and `bun_known`
+    is bun's own `known`: True whenever bun's listing was readable on this audit,
+    independent of pnpm's. `unhealthy` stays pnpm's alone, so a consumer can tell
+    which manager's findings an audit can vouch for. Every reason starts with the
+    audit that raised it, `pnpm audit: ` or `bun audit: `: the pnpm check can still
+    be answered by another copy through the manager-less loader, so the label names
+    the audit, never a proven copy.
     """
 
     entries: tuple[NodeGlobal, ...]
@@ -186,17 +195,20 @@ class NodeGlobalsReport:
     split_groups: tuple[tuple[str, ...], ...] = ()
     incomplete_groups: tuple["IncompleteGroup", ...] = ()
     unhealthy: tuple[tuple[str, str], ...] = ()
+    bun_unhealthy: tuple[tuple[str, str], ...] = ()
+    bun_known: bool = False
 
 
 def node_globals(tools: Iterable[Tool]) -> tuple[NodeGlobal, ...]:
-    """Every catalog tool that DECLARES a kind="node" install method.
+    """Every catalog tool that DECLARES a kind="node" or kind="bun" install method.
 
-    A declaration, not an installation: intersect with `pnpm_global_packages`
-    before reporting anything about the user's machine.
+    A declaration, not an installation: intersect with a manager's own listing
+    before reporting anything about the user's machine. Both stanzas carry the same
+    `npm_pkg` and `smoke` (D-18), so the first of either gives the entry.
     """
     found: list[NodeGlobal] = []
     for tool in tools:
-        method = next((m for m in tool.methods if m.kind == "node"), None)
+        method = next((m for m in tool.methods if m.kind in ("node", "bun")), None)
         if method is None:
             continue
         pkg = method.params.get("npm_pkg")
@@ -594,6 +606,7 @@ def _unhealthy(
     entries: tuple[NodeGlobal, ...],
     missing: tuple[str, ...],
     smoke: Callable[[str], str | None],
+    manager: str,
 ) -> tuple[tuple[str, str], ...]:
     """Re-run each present entry's declared smoke check and collect the failures.
 
@@ -608,6 +621,7 @@ def _unhealthy(
 
     Skips an entry already in `missing`: its command does not resolve, the
     report already warns about it, and the check would fail for that reason.
+    Each reason is prefixed `<manager> audit: ` so a finding names the audit that raised it.
     """
     condemned: list[tuple[str, str]] = []
     for entry in entries:
@@ -615,8 +629,13 @@ def _unhealthy(
             continue
         reason = smoke(entry.smoke)
         if reason is not None:
-            condemned.append((entry.tool_id, reason))
+            condemned.append((entry.tool_id, f"{manager} audit: {reason}"))
     return tuple(condemned)
+
+
+# Each audit checks a tool through its own manager's tree (24.5 D-15).
+_PNPM_SMOKE = functools.partial(run_smoke_check, manager="pnpm")
+_BUN_SMOKE = functools.partial(run_smoke_check, manager="bun")
 
 
 def audit_node_globals(
@@ -626,9 +645,37 @@ def audit_node_globals(
     managed: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
     grouped: Callable[[], GlobalGroups | None] = pnpm_global_groups,
     policy: NodeInstallPolicy = _EMPTY_POLICY,
-    smoke: Callable[[str], str | None] = run_smoke_check,
+    smoke: Callable[[str], str | None] = _PNPM_SMOKE,
+    bun_managed: Callable[[], Collection[str] | None] = lambda: None,
+    bun_smoke: Callable[[str], str | None] = _BUN_SMOKE,
 ) -> NodeGlobalsReport:
-    """Report pnpm's live global set, and the catalog commands in it that are broken."""
+    """Report pnpm's live global set and the catalog commands in it that are broken.
+
+    `bun_managed` opts the audit into bun's entries: the packages bun's global tree lists,
+    or None when it cannot be read. Off by default, so the refresh pass runs no bun browser.
+    """
+    tools = tuple(tools)
+    report = _audit_pnpm(tools, which, managed, grouped, policy, smoke)
+    bun_listing = bun_managed()
+    if bun_listing is None:
+        return report
+    entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in bun_listing)
+    missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
+    return replace(
+        report,
+        bun_unhealthy=_unhealthy(entries, missing, bun_smoke, "bun"),
+        bun_known=True,
+    )
+
+
+def _audit_pnpm(
+    tools: tuple[Tool, ...],
+    which: Callable[[str], str | None],
+    managed: Callable[[], tuple[str, ...] | None],
+    grouped: Callable[[], GlobalGroups | None],
+    policy: NodeInstallPolicy,
+    smoke: Callable[[str], str | None],
+) -> NodeGlobalsReport:
     if not policy.groups:
         packages = managed()
         if packages is None:
@@ -642,7 +689,7 @@ def audit_node_globals(
             entries=entries,
             missing=missing,
             managed=packages,
-            unhealthy=_unhealthy(entries, missing, smoke),
+            unhealthy=_unhealthy(entries, missing, smoke, "pnpm"),
         )
     # The two queries answer the same question at different resolutions, and
     # running both would double the Doctor's wait for no new information.
@@ -658,7 +705,7 @@ def audit_node_globals(
         managed=packages,
         split_groups=split_install_groups(policy, live),
         incomplete_groups=incomplete_install_groups(policy, live.packages),
-        unhealthy=_unhealthy(entries, missing, smoke),
+        unhealthy=_unhealthy(entries, missing, smoke, "pnpm"),
     )
 
 

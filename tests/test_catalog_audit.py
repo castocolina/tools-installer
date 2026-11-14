@@ -2128,3 +2128,11 @@ def test_a_github_server_error_stays_a_recorded_unknown(
 
 def test_npm_dist_tags_url_is_shared() -> None:
     assert versions.npm_dist_tags_url("@scope/pkg") == _NPM_URL
+
+
+def test_method_pins_list_bun_versions() -> None:
+    """D-15: a bun method's `versions` pins are listed beside node's."""
+    bun = _tool("bun-tool", Method("bun", {"npm_pkg": "mmdc", "versions": {"puppeteer": "^25"}}))
+    assert "- pinned: puppeteer ^25 (bun versions param)" in _facts(bun)
+    node = _tool("node-tool", Method("node", {"npm_pkg": "mmdc", "versions": {"puppeteer": "^25"}}))
+    assert "- pinned: puppeteer ^25 (node versions param)" in _facts(node)

@@ -1897,3 +1897,27 @@ def test_the_review_offers_pi_an_update_through_its_host_setup() -> None:
     )
     [row] = build_plan(["pi"], [pi], lambda _id: state, platform, reinstall=frozenset())
     assert row.disposition is Disposition.UPDATE
+
+
+def test_pnpm_group_install_runs_the_node_method_when_bun_is_declared_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-15 as amended 2026-11-14: the step repairs a pnpm install group, so a bun method
+    declared first is never the one it runs (`install <names> with pnpm` never runs bun)."""
+    executed: list[Method] = []
+
+    def _execute(method: Method, _runner: object) -> None:
+        executed.append(method)
+
+    monkeypatch.setattr(session_module.executors, "execute", _execute)
+    bun = Method(kind="bun", params={"npm_pkg": "npm-superpowers"})
+    tool = _node_tool(bun, _group_method())
+    step = _ALL_KIND_STEPS["pnpm_group_install"]
+
+    outcome = execute_plan(
+        [_reconfigure_row("superpowers", step)],
+        _run_context(RunRecorder(), catalog={"superpowers": tool}),
+    )[0]
+
+    assert outcome.result == "done"
+    assert executed == [_group_method()]

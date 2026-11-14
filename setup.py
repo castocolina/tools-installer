@@ -60,7 +60,7 @@ from installer.locations import (
     zshrc_path,
 )
 from installer.model import Tool, load_categories, load_tools
-from installer.ownership import read_inventory
+from installer.ownership import manager_listing, read_inventory
 from installer.platform import Platform, detect
 from installer.policy import (
     Policy,
@@ -955,7 +955,9 @@ def _build_app(
     # returned, so this preview and the replay closure there share one object.
 
     def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
-        return pnpm_globals.audit_node_globals(tools, policy=policy)
+        return pnpm_globals.audit_node_globals(
+            tools, policy=policy, bun_managed=lambda: manager_listing("bun")
+        )
 
     def _globals_preview(report: pnpm_globals.NodeGlobalsReport) -> str:
         # Takes the audited report rather than fetching one: fetching would put

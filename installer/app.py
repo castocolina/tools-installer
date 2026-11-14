@@ -369,7 +369,13 @@ def run_doctor(
         exists=exists,
     )
     render_doctor(report, console, duplicate_writers(report))
-    render_node_globals(audit_node_globals(tools, which=which, managed=managed_globals), console)
+    audit = audit_node_globals(
+        tools,
+        which=which,
+        managed=managed_globals,
+        bun_managed=lambda: manager_listing("bun"),
+    )
+    render_node_globals(audit, console)
     if disk_pressure is not None:
         with contextlib.suppress(OSError, ValueError):
             render_disk_pressure(disk_pressure(), console)
