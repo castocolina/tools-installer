@@ -84,6 +84,9 @@ def trusted_dependencies() -> list[str] | None:
     return names if len(names) == len(items) else None
 
 
+# What npm still accepts for old packages (`JSONStream`): uppercase is allowed. Used only to read
+# the manifest, never for a name the installer puts in argv, which keeps `NPM_PACKAGE_RE`.
+_LEGACY_NAME_RE = re.compile(r"(?:@[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*")
 _VERSION_RE = re.compile(r"[0-9A-Za-z.+-]{1,64}")
 
 
@@ -116,8 +119,9 @@ def read_bun_globals() -> dict[str, BunGlobal] | None:
     `package.json`: bun's CLI is not used (`bun list -g --json` prints a text tree and
     `bun outdated -g` lists nothing), and `node_modules` is not scanned because an auto-installed
     peer is not in the manifest. A missing tree is `{}`. An unreadable or invalid manifest, a key
-    that is not an npm package name (it would steer the member path out of the tree) and a
-    non-string range are None; an unreadable member keeps its name with version None.
+    that is not an npm package name, legacy uppercase included (it would steer the member path
+    out of the tree) and a non-string range are None; an unreadable member keeps its name with
+    version None.
     """
     manifest = _load_manifest()
     if manifest is None:
@@ -131,7 +135,8 @@ def read_bun_globals() -> dict[str, BunGlobal] | None:
         if (
             not isinstance(name, str)
             or not isinstance(spec, str)
-            or NPM_PACKAGE_RE.fullmatch(name) is None
+            or _LEGACY_NAME_RE.fullmatch(name) is None
+            or ".." in name
         ):
             return None
         found[name] = BunGlobal(spec, _installed_version(name))

@@ -194,6 +194,10 @@ def test_reader_gives_an_empty_inventory_for_no_tree_or_no_dependencies(
         '{"dependencies": {"left-pad": 1}}',
         '{"dependencies": {"../../etc": "1.0.0"}}',
         '{"dependencies": {"left-pad": "1.0.0", "Not/Valid": "1.0.0"}}',
+        '{"dependencies": {"a..b": "1.0.0"}}',
+        '{"dependencies": {".hidden": "1.0.0"}}',
+        '{"dependencies": {"_x": "1.0.0"}}',
+        '{"dependencies": {"two words": "1.0.0"}}',
     ],
 )
 def test_reader_gives_none_for_an_unreadable_or_untrustworthy_manifest(
@@ -202,6 +206,20 @@ def test_reader_gives_none_for_an_unreadable_or_untrustworthy_manifest(
     _write_manifest(scratch_home, content)
     assert read_bun_globals() is None
     assert listed_versions() is None
+
+
+def test_reader_keeps_a_legacy_uppercase_name_beside_the_catalog_packages(
+    scratch_home: Path,
+) -> None:
+    _write_manifest(
+        scratch_home,
+        '{"dependencies": {"@mermaid-js/mermaid-cli": "^11.0.0", "JSONStream": "^1.3.5"}}',
+    )
+    _plant_member("JSONStream", '{"version": "1.3.5"}')
+    assert read_bun_globals() == {
+        "@mermaid-js/mermaid-cli": BunGlobal("^11.0.0", None),
+        "JSONStream": BunGlobal("^1.3.5", "1.3.5"),
+    }
 
 
 def test_reader_takes_names_from_the_manifest_and_versions_from_the_member(
