@@ -39,13 +39,13 @@
 
 ### Tool state and health
 
-- [ ] **STATE-01**: Each refresh builds one `ToolState` per tool and publishes it in one swap; a refresh overtaken by a newer one publishes nothing [TA §2, AR-04]
-- [ ] **STATE-02**: Every catalog tier shows one health mark per tool (`✓ ok · ↑ update · ≈ config · ! broken · ○ missing`, dim unavailable, `…` checking) with a legend inside the 78×3 budget [TA §1, G R1]
-- [ ] **STATE-03**: Install, update and repair write an atomic receipt per tool recording the artifacts, package and hooks they created [TA §5, 999.2]
-- [ ] **STATE-04**: Owner attribution is correct for uv tools, Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages (memoized probe) [F X4, C G5, B #4, B 15 WR-04/06]
-- [ ] **STATE-05**: Installing a manager (brew) in-session makes its methods available without restarting the app [A T-07-15, C G3]
-- [ ] **STATE-06**: The focused row shows its health reasons and the configuration steps it is missing [TA §7]
-- [ ] **STATE-07**: Skill packs show partial or duplicate installs per harness [F X7]
+- [x] **STATE-01**: Each refresh builds one `ToolState` per tool and publishes it in one swap; a refresh overtaken by a newer one publishes nothing [TA §2, AR-04]
+- [x] **STATE-02**: Every catalog tier shows one health mark per tool (`✓ ok · ↑ update · ≈ config · ! broken · ○ missing`, dim unavailable, `…` checking) with a legend inside the 78×3 budget [TA §1, G R1]
+- [x] **STATE-03**: Install, update and repair write an atomic receipt per tool recording the artifacts, package and hooks they created [TA §5, 999.2]
+- [x] **STATE-04**: Owner attribution is correct for uv tools, Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages (memoized probe) [F X4, C G5, B #4, B 15 WR-04/06]
+- [x] **STATE-05**: Installing a manager (brew) in-session makes its methods available without restarting the app [A T-07-15, C G3]
+- [x] **STATE-06**: The focused row shows its health reasons and the configuration steps it is missing [TA §7]
+- [x] **STATE-07**: Skill packs show partial or duplicate installs per harness [F X7] *(superseded 2026-11-15: Phase 23.1 HOST-01 removed every skill-pack entry and installer/skill_lifecycle.py, so there is nothing left to report)*
 
 ### Install plan
 
@@ -219,13 +219,13 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | REG-08 | Phase 18 | Complete |
 | REG-09 | Phase 18 | Complete |
 | REG-10 | Phase 18 | Complete |
-| STATE-01 | Phase 19 | Pending |
-| STATE-02 | Phase 19 | Pending |
-| STATE-03 | Phase 19 | Pending |
-| STATE-04 | Phase 19 | Pending |
-| STATE-05 | Phase 19 | Pending |
-| STATE-06 | Phase 19 | Pending |
-| STATE-07 | Phase 19 | Pending |
+| STATE-01 | Phase 19 | Complete |
+| STATE-02 | Phase 19 | Complete |
+| STATE-03 | Phase 19 | Complete |
+| STATE-04 | Phase 19 | Complete |
+| STATE-05 | Phase 19 | Complete |
+| STATE-06 | Phase 19 | Complete |
+| STATE-07 | Phase 19 | Superseded (23.1) |
 | PLAN-01 | Phase 20 | Complete |
 | PLAN-02 | Phase 20 | Complete |
 | PLAN-03 | Phase 20 | Complete |

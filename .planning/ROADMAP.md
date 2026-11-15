@@ -27,7 +27,7 @@
 
 - [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
 - [x] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke (completed 2026-11-15)
-- [ ] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install
+- [x] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install (completed 2026-11-15)
 - [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
 - [x] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness (completed 2026-11-15)
@@ -151,7 +151,7 @@ Plans (numbered in creation order; W = execution wave):
   4. graphify (uv) resolves owner uv, and Volta, redirect shims, the implicit `~/.local/bin`, `host_setup` tools and native packages resolve their real owner with the native probe run once per pass; installing brew in-session makes colima installable without restarting the app.
   5. Skill packs show partial or duplicate installs per harness.
 
-**Plans:** 46/46 plans executed
+**Plans:** 46/46 plans complete
 
 Plans (W = execution wave):
 - [x] 19-01-PLAN.md — receipts module and Wave-0 test sandbox for the receipts dir (W1)
@@ -741,7 +741,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 17. Stop the bleeding | 21/21 | In Progress | - |
 | 18. Registry truth and drift guard | 28/28 | Complete    | 2026-11-15 |
-| 19. One tool state with health plus receipts | 46/46 | In Progress | - |
+| 19. One tool state with health plus receipts | 46/46 | Complete    | 2026-11-15 |
 | 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | Complete    | 2026-11-15 |

@@ -16,7 +16,7 @@
     {
       "number": "19",
       "name": "One tool state with health plus receipts",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "20",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 16 of 17 · 59% · executing"
+    "reason": "Phase 16 of 17 · 65% · executing"
   },
-  "updated_at": "2026-11-15T16:34:20.544Z"
+  "updated_at": "2026-11-15T16:42:44.321Z"
 }
