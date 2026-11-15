@@ -5,10 +5,9 @@ milestone_name: Truthful lifecycle
 current_phase: 25
 status: executing
 stopped_at: "Phase 24.5 complete; autonomous run 24.4-24.5 finished. Next: Phase 25 (not planned yet)"
-last_updated: "2026-11-15T03:47:25.486Z"
+last_updated: "2026-11-15T03:53:13.052Z"
 last_activity: 2026-11-15
-last_activity_desc: Phase 25 execution started
-state_head: 112560491461d7b2a8d3af1988bc4f506e300e6c
+state_head: c59489464d2d8a55aa15d9c5f890b30f3e8c09f0
 progress:
   total_phases: 17
   completed_phases: 7
@@ -31,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 Phase: 25 — EXECUTING
 Plan: 1 of ?
 Status: Executing Phase 25
-Last activity: 2026-11-15 — Phase 25 execution started
+Last activity: 2026-11-15
 
 Progress: [████░░░░░░] 41%
 
