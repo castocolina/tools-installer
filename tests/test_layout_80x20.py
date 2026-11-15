@@ -13,22 +13,32 @@ from rich.cells import cell_len
 from rich.console import Console
 from rich.text import Text
 from textual.containers import VerticalScroll
+from textual.geometry import Region
 from textual.screen import Screen
 from textual.widget import Widget
-from textual.widgets import DataTable, Rule
+from textual.widgets import DataTable, Rule, Static
 
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.enums import MutationHolder
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
+from installer.pnpm_globals import NodeGlobalsReport
 from installer.policy import (
     Policy,
+    PolicyLayer,
     PolicyResult,
     desktop_shell_policy,
 )
 from installer.resolve import resolve_methods
-from installer.ui_common import FooterBar, ModeBadge, WayfindingHeader
+from installer.ui_common import (
+    GLOBAL_NAV,
+    VIEWS,
+    FooterBar,
+    ModeBadge,
+    WayfindingHeader,
+    WayfindingTab,
+)
 from installer.uninstall import RemovalPlan, SweepResult
 from installer.version_status import (
     LAYOUT_PROOF_NOTE,
@@ -44,7 +54,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
-from tests.screen_family import settle
+from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     HeldRefreshService,
     absent_state,
@@ -74,6 +84,8 @@ def _app(
     service: VersionRefreshService | None = None,
     policies: list[Policy] | None = None,
     remove: Callable[[UninstallDecision], SweepResult] = lambda _decision: SweepResult(),
+    fix_preview: str = "",
+    node_globals: Callable[[], NodeGlobalsReport] | None = None,
 ) -> UnifiedApp:
     tools = load_tools(REGISTRY)
     if service is None:
@@ -87,7 +99,7 @@ def _app(
         tools,
         load_categories(REGISTRY),
         report=DoctorReport(missing=(), broken=(), duplicated=()),
-        fix_preview="",
+        fix_preview=fix_preview,
         fix=lambda: None,
         uninstall=UninstallInputs(
             has_path_block=lambda: False,
@@ -95,6 +107,7 @@ def _app(
         ),
         policies=PolicyInputs(policies=policies or [], link_mode=lambda: "symlink"),
         version_refresh=service,
+        node_globals=node_globals,
     )
 
 
@@ -195,7 +208,7 @@ async def test_doctor_chrome_at_80x20(tmp_path: Path) -> None:
         body = screen.query_one("#doctor-body")
         # The Doctor card keeps its own `margin: 2 0`: its box starts right under the chrome.
         assert min(rows_of(screen, body)) == 3 + body.styles.margin.top
-        assert screen.get_widget_at(0, 3)[0] is screen
+        assert screen.get_widget_at(0, 3)[0] is screen.query_one("#doctor-scroll")
 
 
 async def test_doctor_status_line_stays_visible_at_80x20(tmp_path: Path) -> None:
@@ -586,7 +599,7 @@ async def test_policies_fit_80x20_with_the_new_rows(
         assert spans["Policy"][1] <= 78, spans
         assert all(cell_len(row.label) <= 28 for row in rows), [row.label for row in rows]
         detail = screen.query_one("#policy-detail")
-        assert detail.size.height == 11  # the panel height the Policies screen declares
+        assert detail.size.height >= 9  # room for the longest detail the rows print
         for index, row in enumerate(rows):
             if index:
                 await pilot.press("down")
@@ -660,3 +673,151 @@ async def test_uninstall_review_fits_80x20(tmp_path: Path, monkeypatch: pytest.M
         status = screen.status.text
         assert "Kept settings you changed since this installer wrote them: claude, codex." in status
         assert screen.query_one(DataTable[Any]).region.height > 0
+
+
+def _painted(widget: Widget) -> str:
+    """What the widget paints on its first row, trailing padding stripped."""
+    return widget.render_lines(Region(0, 0, widget.size.width, 1))[0].text.strip()
+
+
+@pytest.mark.parametrize("view", list(_KEY))
+async def test_every_tab_is_whole_at_80x20(tmp_path: Path, view: str) -> None:
+    """21-todo gap 1: no tab label is cut, on Doctor included (its scrollbar took columns)."""
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, view)
+        for tab in screen.query_one(WayfindingHeader).query(WayfindingTab):
+            last = tab.region.right - 1
+            assert last < 80, (tab.id, tab.region)
+            assert screen.get_widget_at(last, 0)[0] is tab, (tab.id, tab.region)
+
+
+@pytest.mark.parametrize("view", [item.name for item in VIEWS])
+async def test_the_mode_badge_and_footer_are_whole_at_80x20(tmp_path: Path, view: str) -> None:
+    """21-todo gaps 3 and 7: the badge hint is not cut, and the global nav (q quit) shows."""
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, view)
+        badge = screen.query_one(ModeBadge)
+        assert _painted(badge) == badge.render_text().plain.strip()
+        footer = _painted(screen.query_one(FooterBar))
+        assert footer.endswith(GLOBAL_NAV), footer
+
+
+async def test_the_doctor_card_scrolls_by_keyboard_under_fixed_chrome(tmp_path: Path) -> None:
+    """21-todo gap 2: the card is its own focused scroll area; the chrome never scrolls."""
+    app = _app(tmp_path, fix_preview="\n".join(f"wire line {n}" for n in range(30)))
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "doctor")
+        _assert_chrome(screen)
+        scroller = screen.query_one("#doctor-scroll", VerticalScroll)
+        assert screen.focused is scroller
+        assert scroller.max_scroll_y > 0
+        await pilot.press("end")
+        await wait_until(pilot, lambda: scroller.scroll_y == scroller.max_scroll_y)
+        _assert_chrome(screen)
+        assert rows_of(screen, app.view("doctor").status) <= {18}
+
+
+async def test_doctor_does_not_offer_a_reinstall_when_pnpm_could_not_be_read(
+    tmp_path: Path,
+) -> None:
+    """21-todo gap 5: no `Press r to reinstall` right under `could not be read`."""
+    unread = NodeGlobalsReport(entries=(), missing=(), managed=(), known=False)
+    app = _app(tmp_path, node_globals=lambda: unread)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "doctor")
+        body = screen.query_one("#doctor-body", Static)
+        await wait_until(pilot, lambda: "could not be read" in str(body.render()))
+        assert "Press r to reinstall" not in str(body.render())
+
+
+def _toggle_policies(count: int) -> list[Policy]:
+    """`count` policies whose toggle reports three layers: a status of four rows."""
+    state: dict[str, bool] = {}
+
+    def result() -> PolicyResult:
+        layers = tuple(PolicyLayer(f"Layer {n}", f"changed layer {n}") for n in range(3))
+        return PolicyResult(layers=layers, reload_hint=None, warning=None)
+
+    def reader(policy_id: str) -> Callable[[], bool]:
+        return lambda: state.get(policy_id, False)
+
+    def flip(policy_id: str, on: bool) -> Callable[[], PolicyResult]:
+        def run() -> PolicyResult:
+            state[policy_id] = on
+            return result()
+
+        return run
+
+    return [
+        Policy(
+            id=f"row{n}",
+            label=f"policy row {n}",
+            description="what the row does",
+            active=False,
+            apply=flip(f"row{n}", True),
+            remove=flip(f"row{n}", False),
+            is_active=reader(f"row{n}"),
+            owned=reader(f"row{n}"),
+        )
+        for n in range(count)
+    ]
+
+
+async def test_policies_keep_their_rows_and_the_toggled_state_at_80x20(tmp_path: Path) -> None:
+    """21-todo gap 6: several rows show at once, and a four-row status after a toggle
+    does not squeeze the table down to its header (the new `● [on]` stays visible)."""
+    rows = _toggle_policies(6)
+    app = _app(tmp_path, policies=rows)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "policies")
+        table = screen.query_one(DataTable[Any])
+        assert len(rows_of(screen, table)) >= 5, rows_of(screen, table)
+        await pilot.press("space")
+        await wait_until(pilot, lambda: table.get_cell("row0", "state").plain == "● [on]")
+        assert len(app.view("policies").status.text.splitlines()) == 4
+        shown = rows_of(screen, table)
+        assert len(shown) >= 5, shown
+        assert table.region.y + 1 in shown  # the first data row, where the toggled row sits
+        assert rows_of(screen, screen.query_one("#policy-detail"))
+        _assert_chrome(screen)
+
+
+def _table_lines(table: DataTable[Any]) -> list[str]:
+    """The painted rows of the table, scrollbar columns (the last two) cut off."""
+    region = Region(0, 0, table.size.width, 1)
+    return [
+        table.render_lines(region.translate((0, y)))[0].text[: table.size.width - 2]
+        for y in range(table.size.height)
+    ]
+
+
+async def test_the_system_table_keeps_a_cut_what_it_does_column_at_80x20(tmp_path: Path) -> None:
+    """21-todo gap 4: the description column is on screen at 80 columns and ends in `…`
+    where it is cut, instead of starting past the last visible column."""
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "system")
+        table = screen.query_one(DataTable[Any])
+        lines = _table_lines(table)
+        assert "What it" in lines[0], lines[0]
+        assert any(line.rstrip().endswith("…") for line in lines[1:]), lines
+
+
+async def test_the_uninstall_table_cuts_what_gets_removed_with_an_ellipsis(
+    tmp_path: Path,
+) -> None:
+    """The removes column is cut at 80 columns with `…`, in the header and in the cells."""
+    tools = load_tools(REGISTRY)
+    widest = max(tools, key=lambda tool: len(tool.id))
+    long_paths = [Path(f"/home/someone/.local/share/a-long-directory-name/{n}/bin") for n in "abc"]
+    service = frozen_service(tmp_path)
+    service.publish([removable_state(widest, long_paths), managed_state(tools[0])])
+    app = _app(tmp_path, service)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "uninstall")
+        lines = _table_lines(screen.query_one(DataTable[Any]))
+        assert lines[0].rstrip().endswith("…"), lines[0]
+        row = next(line for line in lines if widest.id in line)
+        assert row.rstrip().endswith("…"), row

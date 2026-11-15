@@ -171,7 +171,7 @@ def test_doctor_view_advertises_audit_and_apply() -> None:
     assert doctor.palette == "Doctor - audit PATH and apply the safe fix"
     assert doctor.mode == "AUDIT + APPLY"
     assert doctor.hint == "audit report stays read-only until you press enter"
-    assert doctor.actions == "enter apply | r reinstall pnpm globals"
+    assert doctor.actions == "enter apply | r reinstall globals"
 
 
 def test_global_nav_names_every_view() -> None:
@@ -196,7 +196,7 @@ def test_footer_bar_doctor_shows_apply_actions() -> None:
 
     text = FooterBar("doctor").render_text().plain
     assert "enter apply" in text
-    assert "r reinstall pnpm globals" in text
+    assert "r reinstall globals" in text
     assert text.index("enter apply") < text.index("│")
 
 

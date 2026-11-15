@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -166,7 +167,7 @@ VIEWS: tuple[View, ...] = (
         glyph=">",
         style="yellow",
         hint="audit report stays read-only until you press enter",
-        actions="enter apply | r reinstall pnpm globals",
+        actions="enter apply | r reinstall globals",
     ),
     View(
         name="uninstall",
@@ -175,7 +176,7 @@ VIEWS: tuple[View, ...] = (
         mode="STAGED / DESTRUCTIVE",
         glyph="o",
         style="red",
-        hint="space marks; enter removes marked items (you'll confirm)",
+        hint="space marks; enter removes them (you'll confirm)",
         actions="space mark | enter remove | a all | i invert | c config",
     ),
     View(
@@ -234,15 +235,31 @@ class FooterBar(Static):
         super().__init__()
         self._view = view
 
-    def render_text(self) -> Text:
+    def render_text(self, width: int | None = None) -> Text:
+        """The two zones. Under `width` cells the separator tightens and trailing
+        actions drop, so the global nav (`esc back`, `q quit`) is never the part cut."""
+        parts = VIEW_BY_NAME[self._view].actions.split(" | ")
+        separator = "   │   "
+        if width is not None and cell_len(" | ".join(parts) + separator + GLOBAL_NAV) > width:
+            separator = " │ "
+            while len(parts) > 1 and cell_len(" | ".join(parts) + separator + GLOBAL_NAV) > width:
+                parts.pop()
         text = Text()
-        text.append(VIEW_BY_NAME[self._view].actions)
-        text.append("   │   ", style="dim")
+        text.append(" | ".join(parts))
+        text.append(separator, style="dim")
         text.append(GLOBAL_NAV, style="dim")
         return text
 
+    def _paint(self) -> None:
+        # The width inside `padding: 0 1`; 0 before the first layout means "no fit yet".
+        inner = self.size.width - 2
+        self.update(self.render_text(inner if inner > 0 else None))
+
     def on_mount(self) -> None:
-        self.update(self.render_text())
+        self._paint()
+
+    def on_resize(self) -> None:
+        self._paint()
 
 
 class WayfindingHeader(Horizontal):

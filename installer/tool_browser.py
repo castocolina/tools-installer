@@ -7,15 +7,17 @@ supplied by a `BrowserAdapter`, so a future Uninstall view can reuse the widget
 with its own columns, states, and grouping.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, TypeVar
 
+from rich.cells import cell_len
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.css.query import NoMatches
+from textual.events import Resize
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Tab, Tabs
@@ -29,6 +31,24 @@ T = TypeVar("T")
 # empty title means "no section row" (the flat table view emits a single such
 # group). Members carry the items the adapter knows how to render.
 Section = tuple[str, str, list[T]]
+
+FIT_FLOOR = 12
+SHRINK_FLOOR = 8
+_CELL_PADDING = 2  # DataTable pads each column by one cell on both sides
+
+
+def _width(cell: str | Text) -> int:
+    return cell_len(cell if isinstance(cell, str) else cell.plain)
+
+
+def _ellipsized(cell: str | Text) -> str | Text:
+    """A copy of `cell` that Rich cuts with `…` at the column width instead of wrapping."""
+    if isinstance(cell, str):
+        return cell
+    cut = cell.copy()
+    cut.no_wrap = True
+    cut.overflow = "ellipsis"
+    return cut
 
 
 @dataclass(frozen=True)
@@ -80,6 +100,11 @@ class BrowserAdapter(Generic[T]):
     # The sel cell of a row, for an adapter that adds a marker beyond [x]/[ ] (the
     # Uninstall `[c]`). Absent: every re-stamp uses the shared two-state `mark`.
     mark_cell: Callable[[str, bool], Text] | None = None
+    # Narrow screens (21-todo gap 4): the column KEY that takes the width the others leave,
+    # its cells and header ending in `…` where cut, and the columns that give up width first
+    # (down to `SHRINK_FLOOR` cells) so the fit column keeps `FIT_FLOOR` readable cells.
+    fit_column: str | None = None
+    shrink_columns: tuple[str, ...] = ()
 
 
 def _cut_rows(text: Text, rows: int, width: int, console: Console) -> Text:
@@ -163,6 +188,7 @@ class ToolBrowser(Widget, Generic[T]):
         self._by_id: dict[str | None, T] = {adapter.item_id(item): item for item in adapter.items}
         self._view_for: dict[str | None, str] = {name: name for name in self._view_names}
         self._section_detail: dict[str | None, str] = {}
+        self._fitted_to = 0
 
     def compose(self) -> ComposeResult:
         yield Tabs(*[Tab(label, id=name) for name, label in self._adapter.views])
@@ -197,18 +223,33 @@ class ToolBrowser(Widget, Generic[T]):
         previous_row = table.cursor_row if keep_cursor else 0
         table.clear(columns=True)
         self._section_detail.clear()
-        for label, key in self._adapter.columns:
-            table.add_column(label, key=key)
+        rows: list[tuple[str, Sequence[str | Text]]] = []
         for title, detail, members in self._adapter.groups(self.view):
             if title:
                 # The count guides the eye when narrow columns squeeze the rows.
                 section = Text(f"── {title} ({len(members)}) ", style="bold")
                 cells: list[str | Text] = [""] * len(self._adapter.columns)
                 cells[self._section_cell_index()] = section
-                table.add_row(*cells, key=f"#{title}")
+                rows.append((f"#{title}", cells))
                 self._section_detail[f"#{title}"] = detail
-            for item in members:
-                table.add_row(*self._adapter.row_cells(item), key=self._adapter.item_id(item))
+            rows.extend(
+                (self._adapter.item_id(item), self._adapter.row_cells(item)) for item in members
+            )
+        widths = self._fitted_widths(rows)
+        fixed = [key in widths for _label, key in self._adapter.columns]
+        for (label, key), cut in zip(self._adapter.columns, fixed, strict=True):
+            if cut:
+                table.add_column(_ellipsized(Text(label)), key=key, width=widths[key])
+            else:
+                table.add_column(label, key=key)
+        for row_key, values in rows:
+            table.add_row(
+                *(
+                    _ellipsized(cell) if cut else cell
+                    for cell, cut in zip(values, fixed, strict=True)
+                ),
+                key=row_key,
+            )
         # Restore the cursor to the row the user was on -- a section row that
         # survives the rebuild is a place the user chose (they can already
         # reach one with `up`), so landing back on it is correct, not a bug.
@@ -234,6 +275,41 @@ class ToolBrowser(Widget, Generic[T]):
         # render cycle flushes them (textual 8.2.7), so re-mark every row once
         # the rebuilt table has painted.
         table.call_after_refresh(self.refresh_marks)
+
+    def _fitted_widths(self, rows: Sequence[tuple[str, Sequence[str | Text]]]) -> dict[str, int]:
+        """Fixed content widths for the columns that must give way so the table fits
+        the browser: empty when it fits, or before the first layout. Natural widths are
+        the longest header or cell; the fit column keeps the rest, the shrink columns
+        yield first."""
+        fit = self._adapter.fit_column
+        keys = [key for _label, key in self._adapter.columns]
+        if fit is None or fit not in keys or self.size.width == 0:
+            return {}
+        natural = {
+            key: max([cell_len(label)] + [_width(cells[index]) for _row_key, cells in rows])
+            for index, (label, key) in enumerate(self._adapter.columns)
+        }
+        # Room inside the browser, less the table's vertical scrollbar.
+        available = self.size.width - 2
+        others = sum(natural[key] + _CELL_PADDING for key in keys if key != fit)
+        room = available - others - _CELL_PADDING
+        if room >= natural[fit]:
+            return {}
+        widths: dict[str, int] = {}
+        for key in self._adapter.shrink_columns:
+            give = min(natural[key] - SHRINK_FLOOR, FIT_FLOOR - room)
+            if key in natural and give > 0:
+                widths[key] = natural[key] - give
+                room += give
+        widths[fit] = max(room, 1)
+        return widths
+
+    def on_resize(self, event: Resize) -> None:
+        """A new width re-fits the table; the first layout is the first width it can fit to."""
+        if event.size.width != self._fitted_to:
+            self._fitted_to = event.size.width
+            if self.is_mounted and self.is_attached:
+                self._rebuild()
 
     def reload(self, adapter: BrowserAdapter[T], *, keep_cursor: bool = True) -> None:
         """Swap in a freshly derived adapter and repaint.

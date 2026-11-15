@@ -368,11 +368,16 @@ class DoctorScreen(AppScreen):
     DoctorScreen {
         align: center top;
     }
+    /* The card scrolls inside this area, under the fixed chrome; it takes focus so the
+       keyboard (down, pagedown, end) scrolls it. */
+    DoctorScreen #doctor-scroll {
+        align-horizontal: center;
+    }
     DoctorScreen #doctor-body {
         width: 76;
         max-width: 90%;
         height: auto;
-        margin: 2 0;
+        margin: 1 0;
         padding: 1 2;
         border: round $accent;
     }
@@ -492,7 +497,8 @@ class DoctorScreen(AppScreen):
         self._globals_audit_epoch = 0
 
     def compose_body(self) -> ComposeResult:
-        yield _BodyStatic(id="doctor-body")
+        with VerticalScroll(id="doctor-scroll"):
+            yield _BodyStatic(id="doctor-body")
 
     def enter_view(self) -> None:
         """Re-read the live state on every entry, and re-ask pnpm off the loop.
@@ -504,6 +510,7 @@ class DoctorScreen(AppScreen):
         The screen is mounted before entry, so the first entry starts it too.
         """
         super().enter_view()
+        self.query_one("#doctor-scroll", VerticalScroll).focus()
         self._start_globals_audit()
         self._start_disk_probe()
 
@@ -678,7 +685,7 @@ class DoctorScreen(AppScreen):
             text.append(f"\n{self.globals_error}")
         elif self.globals_note is not None:
             text.append(self.globals_note, style="yellow")
-        else:
+        elif report is None or report.known:  # an unread set has nothing to reinstall
             text.append("Press r to reinstall the pnpm-managed global set.", style="yellow")
         if self.globals_invalidate_error is not None and not self.globals_running:
             text.append(
@@ -1492,6 +1499,7 @@ class UninstallScreen(AppScreen):
             detail_text=lambda entry: entry.detail,
             groups=self._groups,
             views=(("all", "All"),),
+            fit_column="removes",
             detail_is_markup=False,
             selectable=lambda entry: entry.selectable,
             mark_cell=self._mark_cell,
@@ -2165,12 +2173,14 @@ class PoliciesScreen(AppScreen):
         Binding("m", "pick_link_mode", "link mode", show=True),
     ]
     DEFAULT_CSS = """
-    PoliciesScreen DataTable { height: 1fr; }
+    /* The rows size the table (up to 8 cells tall); the detail takes what is left, under
+       the status, and scrolls. A fixed 11-row detail left one table row at 80x20. */
+    PoliciesScreen DataTable { height: auto; max-height: 8; }
     PoliciesScreen #link-mode-line {
         height: auto; padding: 0 1;
     }
     PoliciesScreen #policy-detail {
-        height: 11; padding: 0 1; background: $surface; overflow-y: auto;
+        height: 1fr; min-height: 4; padding: 0 1; background: $surface; overflow-y: auto;
     }
     """
 

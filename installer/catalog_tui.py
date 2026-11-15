@@ -301,6 +301,8 @@ class CatalogScreen(AppScreen):
             groups=self._groups,
             views=tuple((view, _TAB_LABELS[view]) for view in VIEWS),
             legend=_LEGEND,
+            fit_column="desc",
+            shrink_columns=("owner",),
             on_sort=self._sort,
             sortable_in_views=frozenset({"table"}),
             selectable=lambda tool: not self._is_unavailable(tool),
