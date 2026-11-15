@@ -1,8 +1,8 @@
 ---
 phase: 17-stop-the-bleeding
 verified: 2026-10-15T08:55:22Z
-status: human_needed
-score: 24/26 must-haves verified
+status: passed
+score: 26/26 must-haves verified
 covered_files: [".planning/phases/17-stop-the-bleeding/17-01-PLAN.md",".planning/phases/17-stop-the-bleeding/17-01-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-02-PLAN.md",".planning/phases/17-stop-the-bleeding/17-02-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-03-PLAN.md",".planning/phases/17-stop-the-bleeding/17-03-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-04-PLAN.md",".planning/phases/17-stop-the-bleeding/17-04-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-05-PLAN.md",".planning/phases/17-stop-the-bleeding/17-05-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-06-PLAN.md",".planning/phases/17-stop-the-bleeding/17-06-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-07-PLAN.md",".planning/phases/17-stop-the-bleeding/17-07-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-08-PLAN.md",".planning/phases/17-stop-the-bleeding/17-08-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-09-PLAN.md",".planning/phases/17-stop-the-bleeding/17-09-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-10-PLAN.md",".planning/phases/17-stop-the-bleeding/17-10-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-11-PLAN.md",".planning/phases/17-stop-the-bleeding/17-11-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-12-PLAN.md",".planning/phases/17-stop-the-bleeding/17-12-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-13-PLAN.md",".planning/phases/17-stop-the-bleeding/17-13-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-14-PLAN.md",".planning/phases/17-stop-the-bleeding/17-14-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-15-PLAN.md",".planning/phases/17-stop-the-bleeding/17-15-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-16-PLAN.md",".planning/phases/17-stop-the-bleeding/17-16-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-17-PLAN.md",".planning/phases/17-stop-the-bleeding/17-17-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-18-PLAN.md",".planning/phases/17-stop-the-bleeding/17-18-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-19-PLAN.md",".planning/phases/17-stop-the-bleeding/17-19-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-20-PLAN.md",".planning/phases/17-stop-the-bleeding/17-20-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-21-PLAN.md",".planning/phases/17-stop-the-bleeding/17-21-SUMMARY.md","installer/executors.py","installer/policy.py","setup.py"]
 covered_digest: "v4:sha256:664b4ac2a153d9bc7fe299501ebb4096efb316de91e8582d4e6ba9ab8f5c7d67"
 behavior_unverified: 0
@@ -31,7 +31,7 @@ human_verification:
 
 **Phase Goal:** No known host hazard can fire on the user's machine, every failed or crashed run says so, and nothing merges to main without a green check on both OSes.
 **Verified:** 2026-10-15T08:55:22Z
-**Status:** human_needed
+**Status:** passed (CI-02 applied 2026-11-15 with the owner's consent)
 **Re-verification:** Yes, after gap closure (plan 17-21). The previous pass was gaps_found at 22/25 on 6612222; this pass runs on HEAD a107c38.
 
 Plan 17-21 closed the single gap from the first pass. Every automated must-have is now verified. Two items remain, and both are by design: branch protection (CI-02, a user action) and the post-verification main push (orchestrator-owned).
@@ -139,7 +139,7 @@ Step 7c: no `scripts/*/tests/probe-*.sh` exist and no plan declares one. The gra
 | SAFE-08 | 17-11, 17-20 | Non-UTF-8 settings.json does not crash | ✓ SATISFIED | SC3 |
 | SAFE-09 | 17-10, 17-19 | Every catalog route can execute | ✓ SATISFIED | SC3 |
 | CI-01 | 17-01, 17-13..17-18, 17-21 | CI green on Ubuntu and macOS | ✓ SATISFIED | run 38708267552 |
-| CI-02 | 17-13 | Merges require the PR check | ? NEEDS HUMAN | Not applied; command in 17-13-SUMMARY.md |
+| CI-02 | 17-13 | Merges require the PR check | ✓ SATISFIED | Applied 2026-11-15 with the owner's consent; `gh api .../branches/main/protection` lists both CI contexts, enforce_admins false |
 | CI-03 | 17-12 | 16-17..19 re-audited | ✓ SATISFIED | SC5 re-audit evidence |
 
 Orphaned requirements: none.
@@ -191,7 +191,7 @@ jev (ladder) returned `empty_context` for both items, so the verdicts above are 
 
 ### Needs owner confirmation
 
-- CI-02: run the `gh api -X PUT .../branches/main/protection` command from 17-13-SUMMARY.md (both contexts, enforce_admins false).
+- None. CI-02 was applied on 2026-11-15 after the owner chose "apply now".
 
 ### Gaps Summary
 
@@ -201,3 +201,11 @@ There are no remaining gaps. The first pass's only blocker (17-18's own prohibit
 
 _Verified: 2026-10-15T08:55:22Z_
 _Verifier: Claude (gsd-verifier)_
+
+## CI-02 applied (2026-11-15)
+
+The owner was asked and chose to apply branch protection now. The orchestrator ran the 17-13-SUMMARY.md
+`gh api -X PUT repos/castocolina/tools-installer/branches/main/protection` body. Read-back:
+`required_status_checks.contexts` = ["validate & test on ubuntu-latest", "validate & test on macos-latest"],
+`enforce_admins.enabled` = false. SC5 and CI-02 are satisfied; the phase status is `passed`. Undo:
+`gh api -X DELETE repos/castocolina/tools-installer/branches/main/protection`.

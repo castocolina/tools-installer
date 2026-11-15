@@ -90,17 +90,18 @@ evidence: 17-12-SUMMARY; 17-VERIFICATION SC5 (CI-03 satisfied); 16-VALIDATION co
 
 ### 15. Merges to main require the PR check (branch protection)
 expected: main is protected with the two CI contexts required and enforce_admins false.
-result: skipped
+result: pass
 reason: User action by policy (D-17, SPEC R12); this autonomous run records CI-02 as "skip" (RUN-LEDGER) and hands the exact `gh api` command to the user in 17-13-SUMMARY `## Left for the user (CI-02)`; tracked under human_verification.
 reverify: 2026-11-15 at HEAD 21b3b906: still skipped. `gh api repos/castocolina/tools-installer/branches/main/protection` returns 404 and rulesets is []. Owner-only (D-17: a GitHub settings change needs the owner consent).
+resolved: 2026-11-15, the owner chose "apply now"; protection applied and read back with both CI contexts required and enforce_admins false (17-VERIFICATION.md "CI-02 applied").
 
 ## Summary
 
 total: 15
-passed: 14
+passed: 15
 issues: 0
 pending: 0
-skipped: 1
+skipped: 0
 blocked: 0
 
 ## Gaps
