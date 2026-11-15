@@ -676,7 +676,7 @@ unnoticed across three phases.
 The D-04 full-catalog audit this checklist enables ran against all 89
 `registry.toml` entries: zero new postinstall-mechanism gaps found. One
 pre-existing, unrelated finding (`Tool.post_install` plural,
-`POST_INSTALL_ACTIONS`, `SENSITIVE_POST_INSTALL_ACTIONS` — confusingly
+`POST_INSTALL_ACTIONS` — confusingly
 similar name to the live `Tool.postinstall` singular mechanism) was
 logged as a pending todo rather than fixed in-phase; Phase 14 later
 adopted the plural field as a production dispatcher in
@@ -767,11 +767,11 @@ installer never runs the command: it hands off reviewed console
 instructions and never launches them from a worker thread. `App.suspend()` as an in-process
 alternative was considered and deferred, not overlooked.
 
-`execute_plan` binds the sensitive-action confirmation inside its one
-install wrapper, `_with_force`, which also adds `repair=True` for repair and
-reinstall rows. `SensitiveInstall` carries the confirmation keyword at the
-live install seam. Unattended (`--yes`) means no callback on both entry
-points, which the dispatcher treats as skip.
+`execute_plan` wraps the install seam once, in `_with_force`, which adds
+`repair=True` for repair and reinstall rows. No post-install action asks a
+question at install time: the consent machinery was retired in Phase 25
+because no action used it since 23.2, and a future action that needs consent
+must add a reviewed path of its own.
 
 ## Phase 15.2: forcing child output and the silence indicator
 
