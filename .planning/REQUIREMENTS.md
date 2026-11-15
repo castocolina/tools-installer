@@ -8,21 +8,21 @@
 
 ### Safety (stop the bleeding)
 
-- [ ] **SAFE-01**: A download/app method whose member is a directory fails with an error and links nothing; reinstalling over an existing link-to-directory leaves the inner files untouched [TA H1, E gap 1]
-- [ ] **SAFE-02**: Installing or updating graphify writes nothing into the installer's working directory [TA H2, O14]
-- [ ] **SAFE-03**: Uninstall (TUI and `make uninstall --yes`) never deletes an artifact it cannot prove it wrote; foreign files at a matching name are listed as "remove it yourself" [TA H3, F1, AR-01]
-- [ ] **SAFE-04**: Shell rc and shim writes are atomic, and a cleanup refuses a file that changed between preview and confirm [TA H5, F5, AR-02]
-- [ ] **SAFE-05**: A run that crashes mid-way or has any failed install/update shows a red "Failed" status and exits non-zero [TA H6, B 13 WR-01]
-- [ ] **SAFE-06**: Changing the shell link mode keeps every active policy active in the new mode and removes it from the old one [TA H4, B 13 WR-05]
-- [ ] **SAFE-07**: A vendor install script that prompts on the terminal fails fast instead of hanging the TUI [TA H7]
-- [ ] **SAFE-08**: A non-UTF-8 `settings.json` does not crash the app at launch [B 13 WR-06]
-- [ ] **SAFE-09**: Every route that accepts a catalog selection can execute it (no route silently exits with ids) [F2]
+- [x] **SAFE-01**: A download/app method whose member is a directory fails with an error and links nothing; reinstalling over an existing link-to-directory leaves the inner files untouched [TA H1, E gap 1]
+- [x] **SAFE-02**: Installing or updating graphify writes nothing into the installer's working directory [TA H2, O14]
+- [x] **SAFE-03**: Uninstall (TUI and `make uninstall --yes`) never deletes an artifact it cannot prove it wrote; foreign files at a matching name are listed as "remove it yourself" [TA H3, F1, AR-01]
+- [x] **SAFE-04**: Shell rc and shim writes are atomic, and a cleanup refuses a file that changed between preview and confirm [TA H5, F5, AR-02]
+- [x] **SAFE-05**: A run that crashes mid-way or has any failed install/update shows a red "Failed" status and exits non-zero [TA H6, B 13 WR-01]
+- [x] **SAFE-06**: Changing the shell link mode keeps every active policy active in the new mode and removes it from the old one [TA H4, B 13 WR-05]
+- [x] **SAFE-07**: A vendor install script that prompts on the terminal fails fast instead of hanging the TUI [TA H7]
+- [x] **SAFE-08**: A non-UTF-8 `settings.json` does not crash the app at launch [B 13 WR-06]
+- [x] **SAFE-09**: Every route that accepts a catalog selection can execute it (no route silently exits with ids) [F2]
 
 ### CI and verification
 
-- [ ] **CI-01**: CI is green on Ubuntu and macOS [999.7]
+- [x] **CI-01**: CI is green on Ubuntu and macOS [999.7]
 - [ ] **CI-02**: Merges to main require the PR check to pass (branch protection; user action) [999.7]
-- [ ] **CI-03**: Phase 16 gap plans 16-17..19 are re-audited (secure + validate) [999.7]
+- [x] **CI-03**: Phase 16 gap plans 16-17..19 are re-audited (secure + validate) [999.7]
 
 ### Registry truth
 
@@ -197,18 +197,18 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SAFE-01 | Phase 17 | Pending |
-| SAFE-02 | Phase 17 | Pending |
-| SAFE-03 | Phase 17 | Pending |
-| SAFE-04 | Phase 17 | Pending |
-| SAFE-05 | Phase 17 | Pending |
-| SAFE-06 | Phase 17 | Pending |
-| SAFE-07 | Phase 17 | Pending |
-| SAFE-08 | Phase 17 | Pending |
-| SAFE-09 | Phase 17 | Pending |
-| CI-01 | Phase 17 | Pending |
+| SAFE-01 | Phase 17 | Complete |
+| SAFE-02 | Phase 17 | Complete |
+| SAFE-03 | Phase 17 | Complete |
+| SAFE-04 | Phase 17 | Complete |
+| SAFE-05 | Phase 17 | Complete |
+| SAFE-06 | Phase 17 | Complete |
+| SAFE-07 | Phase 17 | Complete |
+| SAFE-08 | Phase 17 | Complete |
+| SAFE-09 | Phase 17 | Complete |
+| CI-01 | Phase 17 | Complete |
 | CI-02 | Phase 17 | Pending |
-| CI-03 | Phase 17 | Pending |
+| CI-03 | Phase 17 | Complete |
 | REG-01 | Phase 18 | Complete |
 | REG-02 | Phase 18 | Complete |
 | REG-03 | Phase 18 | Complete |
