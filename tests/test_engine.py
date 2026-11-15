@@ -759,37 +759,6 @@ def test_app_kind_routes_to_app_executor(monkeypatch: pytest.MonkeyPatch):
     assert seen == ["app"]
 
 
-def test_host_setup_kind_routes_to_host_setup_handoff(monkeypatch: pytest.MonkeyPatch):
-    def fake_not_installed(tool: Tool) -> bool:
-        return False
-
-    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    method = Method(kind="host_setup", params={"setup_id": "pi"})
-    outcome = install_tool(
-        _tool(method),
-        _platform(),
-        runner=lambda cmd: None,
-    )
-    assert outcome.status == InstallStatus.MANUAL_REQUIRED
-    assert outcome.method_kind == "host_setup"
-    assert outcome.handoff == executors.host_setup_handoff(method)
-
-
-def test_a_host_setup_method_still_hands_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SPEC edge R2: host_setup stays the one reviewed handoff kind and runs no command."""
-
-    def fake_not_installed(tool: Tool) -> bool:
-        return False
-
-    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    method = Method(kind="host_setup", params={"setup_id": "pi"})
-    commands: list[list[str]] = []
-    outcome = install_tool(_tool(method), _platform(), runner=commands.append)
-    assert outcome.status == InstallStatus.MANUAL_REQUIRED
-    assert outcome.handoff == executors.host_setup_handoff(method)
-    assert commands == []
-
-
 def test_postinstall_hook_dispatches_after_a_successful_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1153,7 +1122,7 @@ def test_manual_required_login_shell_never_invokes_confirm(
 
     outcome = install_tool(
         _tool(
-            Method(kind="host_setup", params={"setup_id": "pi"}),
+            Method(kind="dnf", params={"package": "ripgrep"}),
             post_install=("set_login_shell",),
             tool_id="oh-my-zsh",
         ),
@@ -1709,25 +1678,6 @@ def test_manager_install_without_a_resolvable_cmd_skips_smoke(
     assert calls == []
 
 
-def test_handoff_kinds_are_never_smoked(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_not_installed(monkeypatch)
-    calls: list[Path] = []
-
-    def fail_if_smoked(
-        path: Path,
-        argv: tuple[str, ...] = ("--version",),
-        **_ignored: object,
-    ) -> None:
-        calls.append(path)
-        raise AssertionError("handoff methods must not be smoked")
-
-    monkeypatch.setattr(executors, "smoke_binary", fail_if_smoked)
-    method = Method(kind="host_setup", params={"setup_id": "pi"})
-    outcome = install_tool(_tool(method), _platform(), runner=lambda _cmd: None)
-    assert outcome.status == InstallStatus.MANUAL_REQUIRED
-    assert calls == []
-
-
 def test_declared_bin_dir_is_searchable_before_the_smoke(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2142,12 +2092,10 @@ def test_archive_install_writes_a_receipt(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def _fake_perform(monkeypatch: pytest.MonkeyPatch, place: Callable[[], None] | None = None) -> None:
-    def fake(
-        _method: Method, _ctx: ExecContext
-    ) -> tuple[bool, None, tuple[str, ...], tuple[str, ...]]:
+    def fake(_method: Method, _ctx: ExecContext) -> tuple[bool, None, tuple[str, ...]]:
         if place is not None:
             place()
-        return False, None, (), ()
+        return False, None, ()
 
     monkeypatch.setattr(engine, "_perform", fake)
 

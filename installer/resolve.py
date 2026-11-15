@@ -18,7 +18,6 @@ _RANK = {
     "bun": 6,
     "node": 7,
     "script": 10,
-    "host_setup": 15,
     "github_release": 20,
     "uv-tool": 20,
     "sdkman": 20,
@@ -70,7 +69,6 @@ def _applies(method: Method, platform: Platform) -> bool:
         "tarball",
         "app",
         "uv-tool",
-        "host_setup",
     ):
         return True
     if kind in ("node", "bun"):

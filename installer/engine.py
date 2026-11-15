@@ -38,17 +38,14 @@ from installer.versions import (
 
 Status = InstallStatus
 ChecksumPolicy = Literal["fail", "continue"]
-_HANDOFF_KINDS = frozenset({"host_setup"})
 
 
 def _manager_method(method: Method) -> bool:
-    if (
+    return not (
         method.kind in download.DOWNLOAD_KINDS
         or method.kind in apps.APP_KINDS
         or method.kind == "cargo_distrobox"
-    ):
-        return False
-    return method.kind not in _HANDOFF_KINDS
+    )
 
 
 def _manager_smoke_target(method: Method, cmd: str) -> Path | None:
@@ -94,8 +91,8 @@ class InstallOutcome:
     # left a package installed (Ledger L-18-16). Never changes `status` away
     # from INSTALLED — the tool's own binary is on PATH and usable regardless.
     postinstall_warning: str | None = None
-    # Only on MANUAL_REQUIRED (a host_setup method): reviewed console
-    # instructions to run after the installer releases the terminal.
+    # Only on MANUAL_REQUIRED (a native-package method): the instruction lines
+    # to run after the installer releases the terminal.
     handoff: tuple[str, ...] = ()
     # Reviewed instruction lines from plural post_install actions. Never
     # executed by the installer; the user runs them after leaving Textual.
@@ -138,32 +135,26 @@ class InstallOutcome:
         object.__setattr__(self, "settings", settings)
 
 
-def _perform(
-    method: Method, ctx: ExecContext
-) -> tuple[bool, str | None, tuple[str, ...], tuple[str, ...]]:
+def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[str, ...]]:
     """Route download kinds to the download executor; everything else to a command executor.
 
-    Returns ``(verified, unverified_reason, handoff, notes)``. `notes` are row notes the
+    Returns ``(verified, unverified_reason, notes)``. `notes` are row notes the
     install carries to `postinstall_warning`; only a source build has any. A source build is
     never sha256-verified and its failures raise like every executor's. `verified` is True when
     the download was sha256-verified (non-download methods are never marked
     verified — their package managers do their own checks; pinned or declared
-    app zips are sha256-verified). A non-empty `handoff` means the reviewed
-    setup must run in a console after the installer releases the terminal (a
-    host_setup method never performs its own install here).
+    app zips are sha256-verified).
     """
     if method.kind in download.DOWNLOAD_KINDS:
         reason = download.install_download(method, ctx)
-        return reason is None, reason, (), ()
+        return reason is None, reason, ()
     if method.kind in apps.APP_KINDS:
         reason = apps.install_app(method, ctx.runner)
-        return reason is None, reason, (), ()
-    if method.kind == "host_setup":
-        return False, None, executors.host_setup_handoff(method), ()
+        return reason is None, reason, ()
     if method.kind == "cargo_distrobox":
-        return False, None, (), cargo_distrobox.install(method, ctx)
+        return False, None, cargo_distrobox.install(method, ctx)
     executors.execute(method, ctx.runner)
-    return False, None, (), ()
+    return False, None, ()
 
 
 def install_tool(
@@ -293,14 +284,7 @@ def install_tool(
         # One context serves the whole ladder: only the method that succeeds may record a release.
         resolved_tags.clear()
         try:
-            verified, unverified_reason, handoff, notes = _perform(method, ctx)
-            if handoff:
-                return InstallOutcome(
-                    tool.id,
-                    InstallStatus.MANUAL_REQUIRED,
-                    method_kind=method.kind,
-                    handoff=handoff,
-                )
+            verified, unverified_reason, notes = _perform(method, ctx)
             method_dir = method_bin_dir(method)
             if method_dir is not None:
                 prepend_path(method_dir)

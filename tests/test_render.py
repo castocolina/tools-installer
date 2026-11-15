@@ -419,7 +419,7 @@ def test_render_handoff_prints_instructions_for_manual_required_outcomes() -> No
         InstallOutcome(
             "pi",
             "manual-required",
-            method_kind="host_setup",
+            method_kind="dnf",
             handoff=(
                 "After leaving the installer, run these Pi setup commands in a console:",
                 "pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent",

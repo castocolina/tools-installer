@@ -3007,80 +3007,10 @@ def test_no_uv_tool_dir_attributes_nothing_to_uv(monkeypatch: pytest.MonkeyPatch
     assert attribute_path(Path("/opt/uv/bin/ruff"), dirs) == frozenset()
 
 
-# -- 19-05/B 15 WR-06: host_setup keeps its verified owner; one package reader.
+# -- pi: the package id the bun-pi and pnpm-pi tests share.
 
 
-_PNPM_LIST = ["pnpm", "list", "--global", "--depth", "0", "--json"]
 _PI_PACKAGE = "@earendil-works/pi-coding-agent"
-
-
-def _pi_tool() -> Tool:
-    return Tool(
-        id="pi",
-        name="Pi",
-        category="ai",
-        cmd="pi",
-        methods=(Method(kind="host_setup", params={"setup_id": "pi"}),),
-        owner_probes=("host-setup",),
-    )
-
-
-def _pnpm_listing(listed: str) -> Callable[[list[str]], str]:
-    def probe(argv: list[str]) -> str:
-        if argv == _PNPM_LIST:
-            return json.dumps({"dependencies": {listed: {"version": "1.0.0"}}})
-        raise CommandError(argv, 1)
-
-    return probe
-
-
-def test_host_setup_tool_resolves_to_its_verified_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
-    result = _resolve(
-        _pi_tool(),
-        inventory=_empty_readable(),
-        which=str(tmp_path / "pnpm" / "pi"),
-        native_probe=_pnpm_listing(_PI_PACKAGE),
-    )
-    assert result.owner == "pnpm"
-    assert result.confidence == "direct"
-    assert result.package == _PI_PACKAGE
-    assert result.method is None
-
-
-def test_host_setup_owner_needs_the_live_path_in_that_owners_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
-    result = _resolve(
-        _pi_tool(),
-        inventory=_empty_readable(),
-        which="/usr/bin/pi",
-        native_probe=_pnpm_listing(_PI_PACKAGE),
-    )
-    assert result.owner != "pnpm"
-    no_live_binary = _resolve(
-        _pi_tool(),
-        inventory=_empty_readable(),
-        which=None,
-        native_probe=_pnpm_listing(_PI_PACKAGE),
-    )
-    assert no_live_binary.owner != "pnpm"
-
-
-def test_host_setup_unverified_probe_stays_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
-    result = _resolve(
-        _pi_tool(),
-        inventory=_empty_readable(),
-        which=str(tmp_path / "pnpm" / "pi"),
-        native_probe=_pnpm_listing("@other/package"),
-    )
-    assert result.owner == "unknown"
 
 
 # The pre-19-05 `method_removal_command` formula, frozen: kind -> (param, template).

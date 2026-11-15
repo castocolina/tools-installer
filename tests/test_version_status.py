@@ -3775,46 +3775,11 @@ def test_volta_tool_version_probes_the_unresolved_path(
     assert calls == [[hit, "--version"]]
 
 
-def test_host_setup_tool_version_probes_the_unresolved_path(tmp_path: Path) -> None:
-    launcher = tmp_path / "lib" / "pi" / "launcher.js"
-    launcher.parent.mkdir(parents=True)
-    launcher.write_text("launcher")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "pi").symlink_to(launcher)
-    hit = str(bin_dir / "pi")
-    tool = _tool("pi", Method(kind="host_setup", params={"setup_id": "pi"}))
-    probe, calls = _recording_probe()
-    service = _owner_pass_service(
-        tmp_path,
-        which=lambda cmd: hit if cmd == "pi" else None,
-        managed=tmp_path / "managed",
-        probe_output=probe,
-    )
-    service.refresh([tool])
-    state = service.state_of("pi")
-    assert state is not None
-    assert state.ownership.active_path == launcher
-    assert calls == [[hit, "--version"]]
-
-
-@pytest.mark.parametrize(
-    "route", ["volta", "host_setup_installer", "host_setup_brew", "host_setup_github"]
-)
-def test_resolve_status_forwards_the_unresolved_path_for_volta_and_host_setup(route: str) -> None:
-    """review C2-M5: every route from `resolve_status` into `version_argv`
+def test_resolve_status_forwards_the_unresolved_path_for_volta() -> None:
+    """review C2-M5: the Volta route from `resolve_status` into `version_argv`
     carries the looked-through hit."""
-    host_setup = Method(kind="host_setup", params={"setup_id": "demo"})
-    if route == "volta":
-        tool = _pnpm_script_tool()
-        ownership = replace(_owned(tool, "volta"), method=None)
-    elif route == "host_setup_github":
-        tool = _tool("demo", host_setup, Method(kind="github_release", params={"repo": "o/demo"}))
-        ownership = _owned(tool, "installer", method=host_setup)
-    else:
-        tool = _tool("demo", host_setup)
-        owner: Owner = "brew" if route == "host_setup_brew" else "installer"
-        ownership = _owned(tool, owner, method=host_setup)
+    tool = _pnpm_script_tool()
+    ownership = replace(_owned(tool, "volta"), method=None)
     ownership = replace(ownership, active_path=Path(f"/resolved/{tool.cmd}"))
 
     def recorded(unresolved: str | None = None) -> list[list[str]]:

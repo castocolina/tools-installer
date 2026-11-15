@@ -34,9 +34,7 @@ pnpm-owned tools do not get a `pnpm update -g` argv, and they do not get
 
 A pnpm-owned update therefore dispatches `executors.execute` with the owning
 `node` method — the same entry point an install takes — so those invariants
-cannot drift apart. A pnpm-owned host-setup tool (Pi) has no node method; it replays the
-reviewed `HOST_SETUPS` command through the real pnpm (`host_setup_update_argv`), and a
-host-setup tool without such a command is refused.
+cannot drift apart. A pnpm-owned tool without a node method is refused.
 
 A bun-owned update does not reuse the install executor either: live, `bun add -g semver@^7`
 over 7.5.0 kept 7.5.0 even with `--force`, while `bun update -g semver` moved to 7.8.6 and
@@ -86,7 +84,6 @@ pays per tool.
 from __future__ import annotations
 
 import re
-import shlex
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -98,8 +95,6 @@ from installer.bun_globals import caret_major, read_bun_globals, resolve_bun
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
-from installer.host_setup import pnpm_add_command
-from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, bin_dir
 from installer.model import Method, Tool
 from installer.ownership import (
@@ -267,20 +262,6 @@ def perform_update(
         )
 
 
-def host_setup_update_argv(tool: Tool) -> list[str] | None:
-    """The reviewed `pnpm add` argv of the tool's first host setup that has one, else None.
-
-    The text comes only from the code-owned `HOST_SETUPS` table, never from the registry.
-    """
-    for method in tool.methods:
-        if method.kind != "host_setup":
-            continue
-        command = pnpm_add_command(str(method.params.get("setup_id")))
-        if command is not None:
-            return shlex.split(command)
-    return None
-
-
 def _bun_range_outside_catalog(method: Method) -> tuple[str, str, str] | None:
     """The first `(name, manifest range, declared range)` whose caret major differs, else None."""
     declared_map = method.params.get("versions")
@@ -388,9 +369,9 @@ def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | N
                     f"`bun add -g {name}@{declared}`"
                 ),
             )
-    if ownership.owner == "pnpm" and method is None and host_setup_update_argv(tool) is None:
-        # A host-setup tool (pi) whose setup has no reviewed `pnpm add` command: the hint is
-        # the fallback, which still carries --ignore-scripts.
+    if ownership.owner == "pnpm" and method is None:
+        # A pnpm-owned tool with no owning node method: the hint is the fallback, which still
+        # carries --ignore-scripts.
         command = f"pnpm add --global --ignore-scripts {ownership.package or tool.cmd}"
         return UpdateOutcome(
             tool_id=tool.id,
@@ -440,15 +421,9 @@ def _perform(
                 )
     elif owner == "pnpm":
         if method is None:
-            # update_refusal let a host-setup tool through: replay its reviewed command (D-16).
-            # update_refusal already refused a tool with no reviewed command, so argv is set.
-            argv = host_setup_update_argv(target.tool) or []
-            pnpm = real_pnpm()
-            if pnpm is None:
-                raise UpdateError(f"pnpm was not found, so {target.tool.id} cannot be updated")
-            runner([pnpm, *argv[1:]])
-        else:
-            executors.execute(method, runner)
+            # Unreachable: update_refusal already refused a pnpm-owned tool with no method.
+            raise UpdateError(f"no node method for the pnpm-owned {target.tool.id}")
+        executors.execute(method, runner)
     elif owner == "bun":
         bun = resolve_bun()
         if bun is None:

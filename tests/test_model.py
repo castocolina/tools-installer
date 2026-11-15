@@ -761,7 +761,7 @@ smoke_argv = {smoke_argv_toml}
 @pytest.mark.parametrize(
     ("kind", "method_body"),
     [
-        ("host_setup", 'setup_id = "pi"'),
+        ("rpm_ostree", 'package = "demo"'),
     ],
 )
 def test_smoke_argv_is_rejected_where_nothing_is_installed(
@@ -1304,7 +1304,7 @@ kind = "skill_pack"
         load_tools(manifest)
 
 
-def test_a_host_setup_method_still_loads(tmp_path: Path) -> None:
+def test_a_retired_host_setup_row_is_rejected_as_an_unknown_kind(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,
         """
@@ -1317,8 +1317,26 @@ kind = "host_setup"
 setup_id = "pi"
 """,
     )
-    (tool,) = load_tools(manifest)
-    assert tool.methods[0].kind == "host_setup"
+    with pytest.raises(ValueError, match="unknown method kind 'host_setup'"):
+        load_tools(manifest)
+
+
+def test_a_retired_host_setup_owner_probe_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        """
+[[tool]]
+id = "demo"
+category = "ai"
+tier = "user"
+owner_probes = ["host-setup"]
+[[tool.method]]
+kind = "brew"
+formula = "demo"
+""",
+    )
+    with pytest.raises(ValueError, match="unknown owner probe 'host-setup'"):
+        load_tools(manifest)
 
 
 def test_a_skill_lifecycle_table_is_refused_by_name(tmp_path: Path) -> None:
@@ -1356,8 +1374,8 @@ category = "ai"
 tier = "user"
 frobnicate = 1
 [[tool.method]]
-kind = "host_setup"
-setup_id = "pi"
+kind = "brew"
+formula = "demo"
 """,
     )
     (tool,) = load_tools(manifest)

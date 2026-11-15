@@ -1328,7 +1328,7 @@ def _mixed_report_install() -> SensitiveInstall:
             return InstallOutcome(
                 tool.id,
                 "manual-required",
-                method_kind="host_setup",
+                method_kind="dnf",
                 handoff=("After leaving the installer, run these Pi setup commands.",),
             )
         if tool.id == "codegraph":

@@ -679,7 +679,6 @@ def test_record_skips_missing_artifacts(tmp_path: Path, monkeypatch: pytest.Monk
         Method(kind="apt", params={"package": "yq"}),
         Method(kind="pacman", params={"package": "yq"}),
         Method(kind="rpm_ostree", params={"package": "yq"}),
-        Method(kind="host_setup", params={"setup_id": "pi"}),
     ],
 )
 def test_receiptless_kinds_write_nothing(method: Method) -> None:

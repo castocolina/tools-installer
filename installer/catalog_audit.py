@@ -543,7 +543,7 @@ def _method_source(method: Method) -> _Source | None:
         return _Source(label, _url(url_key, name), functools.partial(reader, name))
     if kind in ("app", "tarball"):
         return _Source(kind, "", lambda _fetch: f"see verify-registry.md ({kind})")
-    if kind in ("sdkman", "host_setup", "rpm_ostree"):
+    if kind in ("sdkman", "rpm_ostree"):
         return _unread(kind, f"not read by the gatherer ({kind})")
     return None
 

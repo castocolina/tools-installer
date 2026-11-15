@@ -447,15 +447,13 @@ def version_argv(
     tool: Tool, ownership: ManagerOwnership | None, *, unresolved: str | None = None
 ) -> list[str] | None:
     """The probe argv, or None when only a leftover guard shim could answer (never run it)."""
-    # A Volta shim or a host-setup launcher resolves to a dispatcher, not the
-    # tool: probe the PATH hit itself (19-RESEARCH Pitfall 6).
+    # A Volta shim resolves to a dispatcher, not the tool: probe the PATH hit itself
+    # (19-RESEARCH Pitfall 6).
     if (
         unresolved is not None
         and not is_our_shim(Path(unresolved))
-        and (
-            (ownership is not None and ownership.owner == "volta")
-            or any(method.kind == "host_setup" for method in tool.methods)
-        )
+        and ownership is not None
+        and ownership.owner == "volta"
     ):
         return [unresolved, "--version"]
     if (

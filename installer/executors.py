@@ -15,7 +15,6 @@ from shutil import which
 from typing import cast
 
 from installer.bun_globals import bun_dirs, resolve_bun, trusted_dependencies
-from installer.host_setup import HOST_SETUPS
 from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, display_path
 from installer.model import Method
@@ -703,24 +702,6 @@ def _cask(method: Method, runner: Runner) -> None:
     runner(
         ["brew", "install", "--cask", f"--appdir={applications_dir()}", require_str(method, "cask")]
     )
-
-
-def host_setup_handoff(method: Method) -> tuple[str, ...]:
-    """Return reviewed console instructions for a guided host setup."""
-    setup_id = require_str(method, "setup_id")
-    setup = HOST_SETUPS.get(setup_id)
-    if setup is None:
-        raise ExecutorError(f"unknown reviewed host setup '{setup_id}'")
-    return setup.handoff
-
-
-def host_setup_approval_disclosures(method: Method) -> tuple[str, ...]:
-    """Return reviewed effects that must be visible before setup approval."""
-    setup_id = require_str(method, "setup_id")
-    setup = HOST_SETUPS.get(setup_id)
-    if setup is None:
-        raise ExecutorError(f"unknown reviewed host setup '{setup_id}'")
-    return setup.approval_disclosures
 
 
 @dataclass(frozen=True)
