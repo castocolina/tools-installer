@@ -58,6 +58,7 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import cast
 
+from installer.bun_globals import bun_dirs
 from installer.executors import run_smoke_check
 from installer.legacy_guard import real_pnpm
 from installer.model import Method, Tool
@@ -660,10 +661,19 @@ def audit_node_globals(
     if bun_listing is None:
         return report
     entries = tuple(entry for entry in node_globals(tools) if entry.npm_pkg in bun_listing)
-    missing = tuple(entry.tool_id for entry in entries if which(entry.cmd) is None)
+    # A bun tool whose bin dir is off PATH is a finding of its own, and its tree is still
+    # checked: the bun browser check reads bun's tree, not PATH.
+    off_path = tuple(
+        (
+            entry.tool_id,
+            f"bun audit: {entry.cmd} is not on PATH; add {bun_dirs()[0]} to your PATH",
+        )
+        for entry in entries
+        if which(entry.cmd) is None
+    )
     return replace(
         report,
-        bun_unhealthy=_unhealthy(entries, missing, bun_smoke, "bun"),
+        bun_unhealthy=(*off_path, *_unhealthy(entries, (), bun_smoke, "bun")),
         bun_known=True,
     )
 

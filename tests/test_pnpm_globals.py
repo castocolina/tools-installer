@@ -1297,6 +1297,21 @@ def test_audit_covers_bun_owned_entries() -> None:
     assert unread.bun_unhealthy == ()
 
 
+def test_a_bun_tool_off_path_is_reported_and_still_smoke_checked() -> None:
+    tools = [_bun_tool("puppeteer", "puppeteer", smoke="puppeteer-browser")]
+    report = audit_node_globals(
+        tools,
+        which=lambda _n: None,
+        managed=_unreadable,
+        bun_managed=_bun_listing("puppeteer"),
+        bun_smoke=lambda _name: "exit 1",
+    )
+    assert [tool_id for tool_id, _reason in report.bun_unhealthy] == ["puppeteer", "puppeteer"]
+    path_reason, smoke_reason = (reason for _tool, reason in report.bun_unhealthy)
+    assert path_reason.startswith("bun audit: puppeteer is not on PATH")
+    assert smoke_reason == "bun audit: exit 1"
+
+
 def _both_managers(*, pnpm: str | None, bun: str | None) -> NodeGlobalsReport:
     tool = Tool(
         id="mmdc",
