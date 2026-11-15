@@ -30,7 +30,7 @@
 - [ ] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install
 - [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
-- [ ] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness
+- [x] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness (completed 2026-11-15)
 - [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
 - [x] **Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e** (INSERTED) - Drop the 8 skill-pack entries; tests and shims can never install on the host; e2e only in containers (completed 2026-11-07)
 - [x] **Phase 23.2: Install-time tuning instead of Policies knobs** (INSERTED) - Agent tuning and zsh plugins/theme applied at install with no question; Policies trimmed; live progress indicator; Copilot CLI in the catalog; present dependencies run from their known path (completed 2026-11-13)
@@ -339,7 +339,7 @@ Plans:
   4. A brew bootstrap with an unwritable prefix becomes a manual handoff, native dnf/apt/pacman installs are handed off as the exact command, and a grep test finds zero `sudo` argv in any executor.
   5. Uninstall offers "delete config too" only for tools with `config_paths` (default keep; CLI `--yes` never deletes config), a `config_paths` entry under `~/.claude`, `~/.cursor`, `~/.gemini` or `~/.codex` is rejected at load, and the container e2e harness compares file listings before and after uninstall, not only exit codes.
 
-**Plans:** 13/13 plans executed
+**Plans:** 13/13 plans complete
 
 Plans:
 **Wave 1**
@@ -744,7 +744,7 @@ Plans:
 | 19. One tool state with health plus receipts | 46/46 | In Progress | - |
 | 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |
 | 21. One screen family | 21/21 | In Progress | - |
-| 22. Method lifecycle contract | 13/13 | In Progress | - |
+| 22. Method lifecycle contract | 13/13 | Complete    | 2026-11-15 |
 | 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |

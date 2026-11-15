@@ -63,7 +63,7 @@
 - [ ] **UI-01**: After any mutation (install, `u`, removal, policy toggle, Doctor `r`) every view shows the new state on its next entry, and immediately if visible [TA §7, 999.6, G R2]
 - [ ] **UI-02**: Every view clears its transient status on leave and keeps a status written during entry [G R2]
 - [ ] **UI-03**: Uninstall lists removable tools (with proof), managed-elsewhere tools (with their hint) and nothing-to-do tools, from the shared state; an unknown owner is never attributed to a manager [G R3]
-- [ ] **UI-04**: Uninstall offers "delete config too" for tools with `config_paths`; default keeps config, and the CLI never deletes config [TA §6]
+- [x] **UI-04**: Uninstall offers "delete config too" for tools with `config_paths`; default keeps config, and the CLI never deletes config [TA §6]
 - [ ] **UI-05**: Removal runs on a worker with visible progress [F16]
 - [ ] **UI-06**: Policies show live truth on entry (drift, live prerequisites) [F3, F8, AR-08]
 - [ ] **UI-07**: Doctor follows the same lifecycle, its hidden `a` key is removed, and dangling pnpm global shims appear as broken [F17, todo 2026-09-16]
@@ -71,16 +71,16 @@
 
 ### Method lifecycle
 
-- [ ] **LIFE-01**: Script methods declare the paths they write, an update command and optionally a remove command (run from the receipt-proven executable; none ships for opencode, review R2-05); removal deletes only declared paths that exist [TA §4.2, 999.8 L3]
-- [ ] **LIFE-02**: Native package installs (dnf/apt/pacman) are handed off as the exact command; no executor ever runs sudo [O1, D-I]
-- [ ] **LIFE-03**: brew/uv/pnpm uninstall runs only when a receipt proves the installer put the package there; otherwise a hint [O3]
-- [ ] **LIFE-04**: Tools declare `config_paths`; shared harness dirs (`~/.claude`, `~/.cursor`, `~/.gemini`, `~/.codex`) can never be listed [TA §4.2]
-- [ ] **LIFE-05**: `u` is refused for pinned `app` tools with no version source, with the reason [E NEW 1]
-- [ ] **LIFE-06**: Vendor updates use the vendor's own command (Oh-My-Zsh upgrade, `sdk selfupdate`) [C G8]
-- [ ] **LIFE-07**: A bootstrap that needs an unwritable prefix becomes a handoff after a preflight [C G2]
-- [ ] **LIFE-08**: Removing a pnpm package that is part of a co-install group warns about the group [A #6, T-05-22]
-- [ ] **LIFE-09**: The container end-to-end check compares file listings before and after uninstall, not only exit codes [A #3]
-- [ ] **LIFE-10**: On macOS, casks that update themselves (`auto_updates: true`, e.g. VS Code) report and apply updates through `brew outdated --cask --greedy-auto-updates` / `brew upgrade --cask --greedy-auto-updates <cask>`; otherwise they show as current while outdated, and turning off their own updater would leave them stale [found 2026-10-13: Homebrew API reports `visual-studio-code` auto_updates=true; no `greedy` anywhere in installer/]
+- [x] **LIFE-01**: Script methods declare the paths they write, an update command and optionally a remove command (run from the receipt-proven executable; none ships for opencode, review R2-05); removal deletes only declared paths that exist [TA §4.2, 999.8 L3]
+- [x] **LIFE-02**: Native package installs (dnf/apt/pacman) are handed off as the exact command; no executor ever runs sudo [O1, D-I]
+- [x] **LIFE-03**: brew/uv/pnpm uninstall runs only when a receipt proves the installer put the package there; otherwise a hint [O3]
+- [x] **LIFE-04**: Tools declare `config_paths`; shared harness dirs (`~/.claude`, `~/.cursor`, `~/.gemini`, `~/.codex`) can never be listed [TA §4.2]
+- [x] **LIFE-05**: `u` is refused for pinned `app` tools with no version source, with the reason [E NEW 1]
+- [x] **LIFE-06**: Vendor updates use the vendor's own command (Oh-My-Zsh upgrade, `sdk selfupdate`) [C G8]
+- [x] **LIFE-07**: A bootstrap that needs an unwritable prefix becomes a handoff after a preflight [C G2]
+- [x] **LIFE-08**: Removing a pnpm package that is part of a co-install group warns about the group [A #6, T-05-22]
+- [x] **LIFE-09**: The container end-to-end check compares file listings before and after uninstall, not only exit codes [A #3]
+- [x] **LIFE-10**: On macOS, casks that update themselves (`auto_updates: true`, e.g. VS Code) report and apply updates through `brew outdated --cask --greedy-auto-updates` / `brew upgrade --cask --greedy-auto-updates <cask>`; otherwise they show as current while outdated, and turning off their own updater would leave them stale [found 2026-10-13: Homebrew API reports `visual-studio-code` auto_updates=true; no `greedy` anywhere in installer/]
 
 ### Configuration
 
@@ -237,21 +237,21 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | UI-01 | Phase 21 | Pending |
 | UI-02 | Phase 21 | Pending |
 | UI-03 | Phase 21 | Pending |
-| UI-04 | Phase 22 | Pending |
+| UI-04 | Phase 22 | Complete |
 | UI-05 | Phase 21 | Pending |
 | UI-06 | Phase 21 | Pending |
 | UI-07 | Phase 21 | Pending |
 | UI-08 | Phase 21 | Pending |
-| LIFE-01 | Phase 22 | Pending |
-| LIFE-02 | Phase 22 | Pending |
-| LIFE-03 | Phase 22 | Pending |
-| LIFE-04 | Phase 22 | Pending |
-| LIFE-05 | Phase 22 | Pending |
-| LIFE-06 | Phase 22 | Pending |
-| LIFE-07 | Phase 22 | Pending |
-| LIFE-08 | Phase 22 | Pending |
-| LIFE-09 | Phase 22 | Pending |
-| LIFE-10 | Phase 22 | Pending |
+| LIFE-01 | Phase 22 | Complete |
+| LIFE-02 | Phase 22 | Complete |
+| LIFE-03 | Phase 22 | Complete |
+| LIFE-04 | Phase 22 | Complete |
+| LIFE-05 | Phase 22 | Complete |
+| LIFE-06 | Phase 22 | Complete |
+| LIFE-07 | Phase 22 | Complete |
+| LIFE-08 | Phase 22 | Complete |
+| LIFE-09 | Phase 22 | Complete |
+| LIFE-10 | Phase 22 | Complete |
 | CONF-01 | Phase 23 | Pending |
 | CONF-02 | Phase 23 | Pending |
 | CONF-03 | Phase 23 | Pending |

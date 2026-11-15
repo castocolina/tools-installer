@@ -4,16 +4,17 @@ milestone: v0.50.0
 milestone_name: Truthful lifecycle
 current_phase: 25
 status: ready_to_plan
-stopped_at: "Phase 24.5 complete; autonomous run 24.4-24.5 finished. Next: Phase 25 (not planned yet)"
-last_updated: "2026-11-15T04:16:13.414Z"
+stopped_at: "Re-verifying phases 17-23; 22 complete. Next: Phase 25 (not planned yet)"
+last_updated: "2026-11-15T16:21:52.655Z"
 last_activity: 2026-11-15
-state_head: dbc4d5fcf59969d4cefd7bef33244c26237d1f9f
+last_activity_desc: Phase 25 execution started
+state_head: ee763b58733ec23fa3f6ba7fb2e34248e228b1a7
 progress:
   total_phases: 17
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 256
   completed_plans: 256
-  percent: 41
+  percent: 47
 ---
 
 # Project State
@@ -30,9 +31,9 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 Phase: 25 — EXECUTING
 Plan: 1 of ?
 Status: ready_to_plan
-Last activity: 2026-11-15
+Last activity: 2026-11-15 — Phase 25 execution started
 
-Progress: [████░░░░░░] 41%
+Progress: [█████░░░░░] 47%
 
 ## Performance Metrics
 
@@ -55,6 +56,7 @@ Progress: [████░░░░░░] 41%
 | 24.3 | 11 | - | - |
 | 24.4 | 7 | - | - |
 | 24.5 | 9 | - | - |
+| 22 | 13 | - | - |
 
 *Updated after each plan completion*
 
@@ -112,8 +114,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-15T03:47:24.004Z
-Stopped at: Phase 24.5 complete; autonomous run 24.4-24.5 finished. Next: Phase 25 (not planned yet)
+Last session: 2026-11-15T16:21:51.175Z
+Stopped at: Re-verifying phases 17-23; 22 complete. Next: Phase 25 (not planned yet)
 Resume file: .planning/phases/24.5-javascript-install-priority-brew-then-bun-then-volta/24.5-CONTEXT.md
 
 ## Deferred Verification
