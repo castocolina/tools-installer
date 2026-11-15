@@ -806,3 +806,61 @@ async def test_the_settings_row_is_absent_without_a_ledger(
         assert isinstance(screen, UninstallScreen)
         await pilot.press("down", "down", "down", "down", "down")  # clamps at the last row
         assert "reverts only keys" not in screen.detail_text
+
+
+def test_removing_a_tool_drops_the_path_entries_only_it_contributed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The managed PATH block loses a removed tool's own bin dirs on the same run, keeps the
+    default dir, a dir a kept tool also declares, and every dir of a tool that stays."""
+    from installer.engine import install_tool
+    from installer.enums import InstallStatus
+    from installer.shellrc import collect_bin_dirs
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+
+    def scripted(tool_id: str, *dirs: str) -> Tool:
+        method = Method(
+            kind="script",
+            params={
+                "url": f"https://example.invalid/{tool_id}.sh",
+                "paths": [f"~/.local/bin/{tool_id}"],
+                "bin_dir": dirs[0],
+            },
+        )
+        extra = tuple(Method(kind="script", params={"url": "x", "bin_dir": d}) for d in dirs[1:])
+        return Tool(id=tool_id, name=tool_id, category="dev", cmd=tool_id, methods=(method, *extra))
+
+    gone = scripted("gone", "~/.gone/bin", "~/.shared/bin")
+    kept = scripted("kept", "~/.kept/bin", "~/.shared/bin")
+    catalog = [gone, kept]
+    for directory in (".gone/bin", ".kept/bin", ".shared/bin"):
+        (tmp_path / directory).mkdir(parents=True)
+    myshellrc = tmp_path / ".myshellrc"
+    write_myshellrc(collect_bin_dirs(catalog, _LINUX, bin_dir), myshellrc)
+    assert str(tmp_path / ".gone" / "bin") in myshellrc.read_text()
+
+    def vendor_install(_cmd: list[str]) -> None:
+        (bin_dir / "gone").write_text("x")
+
+    outcome = install_tool(gone, _LINUX, vendor_install, present=lambda _tool: False)
+    assert outcome.status is InstallStatus.INSTALLED
+    plan = removal_plan(gone, bin_dir)
+    result = perform_uninstall(
+        UninstallDecision(tools=(gone,), paths={"gone": plan.removable}, remove_path_block=False),
+        bin_dir=bin_dir,
+        myshellrc_path=myshellrc,
+        bundles=(),
+        zshrc_path=tmp_path / ".zshrc",
+        runner=_no_removal_runner,
+        catalog=catalog,
+        extra_policies=(),
+    )
+    assert result.removed == ("gone",)
+    text = myshellrc.read_text()
+    assert str(tmp_path / ".gone" / "bin") not in text
+    for stays in (bin_dir, tmp_path / ".kept" / "bin", tmp_path / ".shared" / "bin"):
+        assert str(stays) in text, stays
+    assert has_managed_block(myshellrc)

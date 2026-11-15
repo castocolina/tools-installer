@@ -72,6 +72,8 @@ from installer.session import (
 )
 from installer.shellrc import (
     collect_bin_dirs,
+    declared_bin_dirs,
+    drop_managed_path_dirs,
     ensure_source,
     remove_managed_block,
     write_managed_path,
@@ -1302,6 +1304,11 @@ def perform_uninstall(
     done = _merge(after)
     if decision.remove_path_block:
         remove_managed_block(myshellrc_path)
+    else:
+        # Only what a removed tool alone declared goes; the default dir and shared dirs stay.
+        gone = declared_bin_dirs([tool for tool in catalog if tool.id in removed])
+        kept_dirs = declared_bin_dirs([tool for tool in catalog if tool.id not in removed])
+        drop_managed_path_dirs(myshellrc_path, gone - kept_dirs - {bin_dir})
     swept = SweepResult()
     if decision.remove_tweaks:
         swept = sweep_tweaks(

@@ -21,6 +21,7 @@ from installer.shellrc import (
     collect_bin_dirs,
     consolidate_shellrc,
     consolidation_refusal,
+    drop_managed_path_dirs,
     ensure_source,
     find_export,
     guard_path_writers,
@@ -314,6 +315,32 @@ def test_strip_block_drops_only_the_blank_that_would_stack_and_keeps_other_bytes
 def test_strip_block_at_the_top_drops_the_separator_that_followed_it() -> None:
     begin, end = "# >>> b >>>", "# <<< b <<<"
     assert strip_block(f"{begin}\ninside\n{end}\n\nrest\n", begin, end) == "rest\n"
+
+
+def test_drop_managed_path_dirs_edits_only_the_guard_lines_of_the_named_dirs(
+    tmp_path: Path,
+) -> None:
+    rc = tmp_path / ".myshellrc"
+    keep, drop = tmp_path / "keep", tmp_path / "drop"
+    write_myshellrc([keep, drop], rc)
+    rc.write_text("# mine\n" + rc.read_text() + "tail  \n")
+    drop_managed_path_dirs(rc, [drop])
+    text = rc.read_text()
+    assert str(drop) not in text and str(keep) in text
+    assert text.startswith("# mine\n# >>> tools-installer path >>>\n") and text.endswith("tail  \n")
+    before = rc.read_bytes()
+    drop_managed_path_dirs(rc, [drop])  # nothing left to drop: no write
+    drop_managed_path_dirs(rc, [])
+    drop_managed_path_dirs(tmp_path / "missing", [drop])
+    assert rc.read_bytes() == before
+
+
+def test_drop_managed_path_dirs_ignores_a_file_without_a_closed_block(tmp_path: Path) -> None:
+    rc = tmp_path / ".myshellrc"
+    for text in ("plain\n", '# >>> tools-installer path >>>\nexport PATH="/x${PATH:+:$PATH}"\n'):
+        rc.write_text(text)
+        drop_managed_path_dirs(rc, [Path("/x")])
+        assert rc.read_text() == text
 
 
 def test_strip_block_absent_marker_is_unchanged():

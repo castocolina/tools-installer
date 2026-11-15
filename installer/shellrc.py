@@ -122,6 +122,20 @@ def collect_bin_dirs(
     return dirs
 
 
+def declared_bin_dirs(tools: Sequence[Tool], home: Path | None = None) -> set[Path]:
+    """Every bin dir the tools' methods declare, on any platform (bun: its global bin dir)."""
+    resolved_home = Path.home() if home is None else home
+    found: set[Path] = set()
+    for tool in tools:
+        for method in tool.methods:
+            raw = method.params.get("bin_dir")
+            if isinstance(raw, str) and raw:
+                found.add(_resolve_home(Path(raw), resolved_home))
+            elif method.kind == "bun":
+                found.add(bun_dirs(home=resolved_home)[0])
+    return found
+
+
 def path_export_guard(directory: Path) -> str:
     """Emit a self-deduping PATH line that adds directory at most once per shell.
 
@@ -258,6 +272,36 @@ def read_record(path: Path, begin: str, end: str, prefix: str) -> tuple[str, ...
         elif inside and line.startswith(prefix):
             names = tuple(line[len(prefix) :].split())
     return record
+
+
+_PATH_EXPORT = re.compile(r'export PATH="(.+)\$\{PATH:\+:\$PATH\}"')
+
+
+def drop_managed_path_dirs(path: Path, dirs: Collection[Path]) -> None:
+    """Remove the managed PATH block's guard line of each dir in `dirs`; every other line stays.
+
+    The block's last well-formed pair is the one edited (as `strip_block` pairs it). A missing
+    file or block, or no matching line, writes nothing.
+    """
+    if not dirs or not path.exists():
+        return
+    original = path.read_text()
+    lines = original.split("\n")
+    if _PATH_BEGIN not in lines:
+        return
+    start = max(index for index, line in enumerate(lines) if line == _PATH_BEGIN)
+    stop = next((i for i in range(start, len(lines)) if lines[i] == _PATH_END), None)
+    if stop is None:
+        return
+    dropped = {str(directory) for directory in dirs}
+    kept = [
+        line
+        for line in lines[start + 1 : stop]
+        if not ((found := _PATH_EXPORT.search(line)) and found.group(1) in dropped)
+    ]
+    rewritten = "\n".join([*lines[: start + 1], *kept, *lines[stop:]])
+    if rewritten != original:
+        atomic_write_text(path, rewritten)
 
 
 def remove_managed_block(path: Path) -> None:
