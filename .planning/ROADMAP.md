@@ -727,7 +727,7 @@ Plans:
 - **LEAN-03 (open).** `installer/wizard_app.py` is 4,438 lines (3,011 when scouted; Phase 22-24.x added `SchedulesScreen`, `CursorModelScreen` and more), with 28 classes and 512 comment lines. 23 lines carry `WR-`/`CR-`/`IN-` review ids and 88 match a wider id pattern. No split modules exist (`modals.py`, `doctor_screen.py`, ...). The 800-line cap now needs more modules than the five in 25-CONTEXT D-07 (`UninstallScreen` is ~980 lines, `PoliciesScreen` ~510, `SchedulesScreen` ~530, `UnifiedApp` ~760, `DoctorScreen` ~680). Review-id comments also sit in `setup.py` (16), `terminal_shell.py` (13), `schedules.py` (13), `ownership.py` (9), `uninstall.py` (8), `systemd_daemon.py` (8), `policy.py` (8); the requirement names only the split modules.
 - **LEAN-04 (open).** `execute_screen.py:431` builds `RichLog(id="execute-log", markup=False, highlight=False, auto_scroll=True)` with no `max_lines`; writes are scattered at `execute_screen.py:869-953`. No dropped-lines notice and no test exist.
 
-**Plans:** 6/11 plans executed
+**Plans:** 7/11 plans executed
 
 Plans:
 **Wave 1**
@@ -743,7 +743,7 @@ Plans:
 - [x] 25-06-PLAN.md — Run log bounded at 5,000 lines with the "N earlier lines dropped" label and one write helper (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 25-07-PLAN.md — Split step 1: `mutation_lock.py` and `modals.py`, verbatim, with `sentence`/`TIMES_LISTED` public in ui_common (wave 4)
+- [x] 25-07-PLAN.md — Split step 1: `mutation_lock.py` and `modals.py`, verbatim, with `sentence`/`TIMES_LISTED` public in ui_common (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 25-08-PLAN.md — Split step 2: `policies_screen.py` and `schedules_screen.py`, verbatim, shared names in one public home (wave 5)
@@ -794,7 +794,7 @@ Plans:
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | Complete    | 2026-11-14 |
 | 24.2 Schedules view | 13/13 | Complete    | 2026-11-14 |
 | 24.3 Catalog audit skill | 11/11 | Complete    | 2026-11-14 |
-| 25. Lean | 6/11 | In Progress | - |
+| 25. Lean | 7/11 | In Progress | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
 ## Backlog
