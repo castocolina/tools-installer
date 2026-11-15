@@ -37,7 +37,6 @@ from installer.session import (
     RowOutcome,
     RunContext,
     SensitiveInstall,
-    build_plan,
     execute_plan,
     exit_code,
     first_line,
@@ -48,10 +47,9 @@ from installer.session import (
     summary_counts,
 )
 from installer.update import UpdateOutcome, UpdateService
-from installer.version_status import Health
 from installer.versions import TagResolver
 from tests.launch_doubles import stub_launch
-from tests.state_doubles import RunRecorder, ScriptedUpdates, plan_state
+from tests.state_doubles import RunRecorder, ScriptedUpdates
 
 
 def _tool(tool_id: str, priority: str = "P3", *, requires: tuple[str, ...] = ()) -> Tool:
@@ -1873,30 +1871,6 @@ def test_path_repair_also_applies_to_a_row_that_ends_done(
 
     assert outcome.result == "done"
     assert os.environ["PATH"].split(os.pathsep)[0] == str(bin_dir)
-
-
-def test_the_review_offers_pi_an_update_through_its_host_setup() -> None:
-    """D-16: a pnpm-owned host-setup Pi is no longer refused, so the review row is an update."""
-    pi = Tool(
-        id="pi",
-        name="Pi",
-        category="ai",
-        cmd="pi",
-        methods=(Method(kind="host_setup", params={"setup_id": "pi"}),),
-        priority="P1",
-        audience="human",
-        tier="user",
-    )
-    platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
-    state = plan_state(
-        pi,
-        platform=platform,
-        health=Health.OUTDATED,
-        owner="pnpm",
-        package="@earendil-works/pi-coding-agent",
-    )
-    [row] = build_plan(["pi"], [pi], lambda _id: state, platform, reinstall=frozenset())
-    assert row.disposition is Disposition.UPDATE
 
 
 def test_pnpm_group_install_runs_the_node_method_when_bun_is_declared_first(

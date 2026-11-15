@@ -12,8 +12,8 @@ are disjoint by design and must stay that way.
 An action in this table returns reviewed instruction lines for the user to
 run themselves (or a `PostInstallOutput` that also carries the settings it wrote)
 and never spawns an interactive child. This follows
-`installer/host_setup.py`'s documented doctrine: setup that needs a real
-terminal is displayed, never launched from the installer's worker thread.
+the installer's doctrine: setup that needs a real terminal is handed off
+as reviewed text, never launched from the installer's worker thread.
 
 The shell-init action (`source_shell_init`) and the Oh-My-Zsh theme and plugin writes
 keep that rule: they write only the installer-owned `~/.myshellrc` block (and,

@@ -928,7 +928,6 @@ def test_first_method_golden_table(fixture: str) -> None:
 # A frozen copy of the pre-phase ladder, kept here so a host without Homebrew is proven unchanged.
 _PRE_PHASE_RANK = {
     "script": 10,
-    "host_setup": 15,
     "github_release": 20,
     "node": 20,
     "uv-tool": 20,

@@ -679,7 +679,6 @@ def test_record_skips_missing_artifacts(tmp_path: Path, monkeypatch: pytest.Monk
         Method(kind="apt", params={"package": "yq"}),
         Method(kind="pacman", params={"package": "yq"}),
         Method(kind="rpm_ostree", params={"package": "yq"}),
-        Method(kind="host_setup", params={"setup_id": "pi"}),
     ],
 )
 def test_receiptless_kinds_write_nothing(method: Method) -> None:
@@ -687,6 +686,29 @@ def test_receiptless_kinds_write_nothing(method: Method) -> None:
     assert receipts.record(_record_tool("yq", method), method, package="yq", smoke=None) is None
     sandbox = receipts.receipts_dir()
     assert not sandbox.exists() or list(sandbox.iterdir()) == []
+
+
+def test_a_receipt_naming_the_retired_host_setup_kind_reads_without_a_crash() -> None:
+    """D-10 compatibility pin: the reader checks that the kind is a string, not that it is live."""
+    path = receipt_path("pi")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "v": 1,
+                "tool": "pi",
+                "at": "2026-10-16T12:00:00+00:00",
+                "method": {"kind": "host_setup", "key": "a" * 64},
+                "package": None,
+                "artifacts": [],
+                "smoke": None,
+                "hooks": {},
+            }
+        )
+    )
+    receipt = receipts.read("pi")
+    assert receipt is not None
+    assert receipt.method == ReceiptMethod(kind="host_setup", key="a" * 64)
 
 
 @pytest.mark.parametrize("tool_id", ["../x", "Yq", "a/b", "-x"])

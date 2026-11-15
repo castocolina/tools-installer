@@ -24,7 +24,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from installer.host_setup import HOST_SETUPS
 from installer.legacy_guard import GUARD_NAMES, real_binary
 from installer.model import Tool
 
@@ -40,10 +39,7 @@ class Ownership:
     # than left buried in `detail` -- `detail` is prose for a human, and a
     # removal COMMAND built by parsing prose is a command built on a
     # formatting accident (Round-3 review HIGH). Defaults to `None` so
-    # `_UNKNOWN` and every pre-existing construction stay valid. Left `None`
-    # by `_host_setup` on purpose: no downstream caller ever builds a native
-    # removal command from that probe, so an absent name there is correct
-    # rather than a gap.
+    # `_UNKNOWN` and every pre-existing construction stay valid.
     package: str | None = None
 
 
@@ -89,25 +85,6 @@ def _run(probe: ProbeRunner, command: list[str]) -> str | None:
         return probe(command)
     except (OSError, RuntimeError, subprocess.SubprocessError):
         return None
-
-
-def _host_setup(tool: Tool, probe: ProbeRunner) -> Ownership | None:
-    setup_ids = _method_values(tool, {"host_setup"}, "setup_id")
-    for setup_id in setup_ids:
-        setup = HOST_SETUPS.get(setup_id)
-        if setup is None:
-            continue
-        for host_probe in setup.probes:
-            output = _run(probe, list(host_probe.argv))
-            if output is not None and (
-                host_probe.contains is None or host_probe.contains in output
-            ):
-                return Ownership(
-                    setup.owner,
-                    "verified",
-                    f"host setup lists {setup_id}",
-                )
-    return None
 
 
 def _brew(tool: Tool, probe: ProbeRunner) -> Ownership | None:
@@ -375,7 +352,6 @@ def _sdkman(tool: Tool, probe: ProbeRunner) -> Ownership | None:
 
 
 _PROBES: dict[str, Callable[[Tool, ProbeRunner], Ownership | None]] = {
-    "host-setup": _host_setup,
     "brew": _brew,
     "apt": _apt,
     "dnf": _dnf,
@@ -436,7 +412,7 @@ class NativeIndex:
     subprocess, so N native tools cost one query per pass, not N (D-11). A path
     the pass did not collect answers unowned -- fail closed -- rather than
     issuing a second query. Every other argv (`rpm-ostree status --json`, the
-    declared-package queries, host-setup probes) reaches the wrapped probe at
+    declared-package queries) reaches the wrapped probe at
     most once per index: its text or its exception is memoized, so two tools
     declaring one package cost one query per pass.
     """

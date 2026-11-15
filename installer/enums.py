@@ -59,7 +59,7 @@ class InstallStatus(StrEnum):
     NO_METHOD = "no-method"
     FAILED = "failed"
     CHECKSUM_MISMATCH = "checksum-mismatch"
-    # A method (host_setup) that hands the user reviewed console
+    # A native-package method that hands the user the reviewed console
     # instructions to run after the installer releases the terminal, rather
     # than performing the install itself.
     MANUAL_REQUIRED = "manual-required"

@@ -350,10 +350,6 @@ def test_facts_latest_sources(method: Method, url: str, body: object, value: str
             Method("sdkman", {"candidate": "java"}),
             "- latest: unknown: not read by the gatherer (sdkman)",
         ),
-        (
-            Method("host_setup", {"setup_id": "x"}),
-            "- latest: unknown: not read by the gatherer (host_setup)",
-        ),
         (Method("app", {"url": "u"}), "- latest: see verify-registry.md (app)"),
         (Method("tarball", {"url": "u"}), "- latest: see verify-registry.md (tarball)"),
         (Method("script", {"url": "u"}), "- latest: unknown: no latest source declared"),

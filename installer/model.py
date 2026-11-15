@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Literal, TypeVar, cast
 
 from installer.enums import Audience, Category, Priority, Tier
-from installer.host_setup import HOST_SETUP_IDS
 from installer.versions import NPM_PACKAGE_RE, parse_declared_version
 
 SMOKE_CHECK_NAMES: frozenset[str] = frozenset({"puppeteer-browser"})
@@ -29,7 +28,6 @@ METHOD_KINDS = (
     "bun",
     "uv-tool",
     "sdkman",
-    "host_setup",
     "github_release",
     "tarball",
     "app",
@@ -68,7 +66,6 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
     "bun": frozenset({"npm_pkg", "co_install", "min_node", "smoke", "versions", "smoke_argv"}),
     "uv-tool": frozenset({"pypi_pkg", "smoke_argv"}),
     "sdkman": frozenset({"candidate", "bin_dir", "version", "smoke_argv"}),
-    "host_setup": frozenset({"setup_id"}),
     "github_release": frozenset(
         {
             "repo",
@@ -146,7 +143,6 @@ POST_INSTALL_ACTIONS = (
 # stays (D-14) and now rejects any value; it has no user and Phase 25 sweeps it (24.1 D-21).
 SENSITIVE_POST_INSTALL_ACTIONS: tuple[str, ...] = ()
 OWNER_PROBES = (
-    "host-setup",
     "brew",
     "apt",
     "dnf",
@@ -809,10 +805,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                     )
             if kind == "cargo_distrobox" and (why := _cargo_distrobox_refusal(params)):
                 raise ValueError(f"tool '{row['id']}': method 'cargo_distrobox' {why}")
-            if kind == "host_setup":
-                setup_id = params.get("setup_id")
-                if not isinstance(setup_id, str) or setup_id not in HOST_SETUP_IDS:
-                    raise ValueError(f"tool '{row['id']}': unknown host setup '{setup_id}'")
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
         context = f"tool '{row['id']}'"
         requires = _parse_id_list(row.get("requires", []), "requires", context)
