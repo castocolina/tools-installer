@@ -29,7 +29,7 @@
 - [x] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke (completed 2026-11-15)
 - [x] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install (completed 2026-11-15)
 - [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
-- [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
+- [x] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state (completed 2026-11-15)
 - [x] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness (completed 2026-11-15)
 - [x] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL` (completed 2026-11-15)
 - [x] **Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e** (INSERTED) - Drop the 8 skill-pack entries; tests and shims can never install on the host; e2e only in containers (completed 2026-11-07)
@@ -270,7 +270,7 @@ Gap closure from 20-REVIEW-CONSOLIDATED-2.md (GW = gap execution wave):
   4. A removal runs on a worker with visible progress; afterwards the tool moves to "nothing to do", its selection is pruned, every tier shows `○`, and Policies shows a removed ban OFF on entry.
   5. Policies and Doctor read live state on entry: installing `watch` unblocks the docker tweak, Doctor's hidden `a` key is inert, and a dangling pnpm global shim shows as broken.
 
-**Plans:** 21/21 plans executed
+**Plans:** 21/21 plans complete
 **UI hint**: yes
 
 Plans:
@@ -743,7 +743,7 @@ Plans:
 | 18. Registry truth and drift guard | 28/28 | Complete    | 2026-11-15 |
 | 19. One tool state with health plus receipts | 46/46 | Complete    | 2026-11-15 |
 | 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |
-| 21. One screen family | 21/21 | In Progress | - |
+| 21. One screen family | 21/21 | Complete    | 2026-11-15 |
 | 22. Method lifecycle contract | 13/13 | Complete    | 2026-11-15 |
 | 23. Configuration as a lifecycle step | 16/16 | Complete    | 2026-11-15 |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |

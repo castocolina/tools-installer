@@ -60,14 +60,14 @@
 
 ### Screens
 
-- [ ] **UI-01**: After any mutation (install, `u`, removal, policy toggle, Doctor `r`) every view shows the new state on its next entry, and immediately if visible [TA §7, 999.6, G R2]
-- [ ] **UI-02**: Every view clears its transient status on leave and keeps a status written during entry [G R2]
-- [ ] **UI-03**: Uninstall lists removable tools (with proof), managed-elsewhere tools (with their hint) and nothing-to-do tools, from the shared state; an unknown owner is never attributed to a manager [G R3]
+- [x] **UI-01**: After any mutation (install, `u`, removal, policy toggle, Doctor `r`) every view shows the new state on its next entry, and immediately if visible [TA §7, 999.6, G R2]
+- [x] **UI-02**: Every view clears its transient status on leave and keeps a status written during entry [G R2]
+- [x] **UI-03**: Uninstall lists removable tools (with proof), managed-elsewhere tools (with their hint) and nothing-to-do tools, from the shared state; an unknown owner is never attributed to a manager [G R3]
 - [x] **UI-04**: Uninstall offers "delete config too" for tools with `config_paths`; default keeps config, and the CLI never deletes config [TA §6]
-- [ ] **UI-05**: Removal runs on a worker with visible progress [F16]
-- [ ] **UI-06**: Policies show live truth on entry (drift, live prerequisites) [F3, F8, AR-08]
-- [ ] **UI-07**: Doctor follows the same lifecycle, its hidden `a` key is removed, and dangling pnpm global shims appear as broken [F17, todo 2026-09-16]
-- [ ] **UI-08**: A selection that is no longer selectable is pruned on reload [F4, 999.1(a)]
+- [x] **UI-05**: Removal runs on a worker with visible progress [F16]
+- [x] **UI-06**: Policies show live truth on entry (drift, live prerequisites) [F3, F8, AR-08]
+- [x] **UI-07**: Doctor follows the same lifecycle, its hidden `a` key is removed, and dangling pnpm global shims appear as broken [F17, todo 2026-09-16]
+- [x] **UI-08**: A selection that is no longer selectable is pruned on reload [F4, 999.1(a)]
 
 ### Method lifecycle
 
@@ -234,14 +234,14 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | PLAN-06 | Phase 20 | Complete |
 | PLAN-07 | Phase 20 | Complete |
 | PLAN-08 | Phase 20 | Complete |
-| UI-01 | Phase 21 | Pending |
-| UI-02 | Phase 21 | Pending |
-| UI-03 | Phase 21 | Pending |
+| UI-01 | Phase 21 | Complete |
+| UI-02 | Phase 21 | Complete |
+| UI-03 | Phase 21 | Complete |
 | UI-04 | Phase 22 | Complete |
-| UI-05 | Phase 21 | Pending |
-| UI-06 | Phase 21 | Pending |
-| UI-07 | Phase 21 | Pending |
-| UI-08 | Phase 21 | Pending |
+| UI-05 | Phase 21 | Complete |
+| UI-06 | Phase 21 | Complete |
+| UI-07 | Phase 21 | Complete |
+| UI-08 | Phase 21 | Complete |
 | LIFE-01 | Phase 22 | Complete |
 | LIFE-02 | Phase 22 | Complete |
 | LIFE-03 | Phase 22 | Complete |
