@@ -1266,7 +1266,7 @@ def test_reconciliation_tier_audit_confirms_all_11_re_added_rows() -> None:
     assert tools["drawio-desktop"].tier == "user"
     assert tools["drawio-desktop"].audience == "both"
 
-    # pi (own coding-agent harness, kind="host_setup") is a standalone,
+    # pi (own coding-agent harness) is a standalone,
     # human-driven agent CLI -- the same shape as claude/codex/opencode/
     # cursor-agent/antigravity/aichat, all tier="user": the human launches
     # and drives it directly, which is what tier="user" now tracks.

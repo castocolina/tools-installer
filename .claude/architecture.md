@@ -323,14 +323,6 @@ New registry tool needs post-install setup?
 │     installer/postinstall.py's closed POSTINSTALL_HOOKS table.
 │     Worked examples: codegraph (Phase 9), tealdeer (Phase 23).
 │
-├─ Setup requires a live terminal or user-selected project target that
-│  cannot be safely scripted from a Textual worker thread?
-│  -> [[tool.method]] kind = "host_setup", setup_id = "<id>" resolved
-│     through installer/host_setup.py::HOST_SETUPS (a closed registry
-│     of reviewed console handoffs, displayed not executed).
-│     No registry tool uses this kind since 24.5 (pi installs through bun);
-│     Phase 25 retires it.
-│
 └─ None of the above -> no postinstall wiring; the tool is a plain
    binary with nothing further to do.
 ```
@@ -771,9 +763,8 @@ block is therefore conservative by necessity rather than by
 preference; relaxing it for a specific atomic variant would require
 re-verifying against that issue, which currently cannot be done. The
 action produces reviewed `chsh -s $(which zsh)` instructions and the
-installer never runs the command, citing the existing host-setup
-doctrine (`installer/host_setup.py`: reviewed console handoffs, never
-launched from a worker thread). `App.suspend()` as an in-process
+installer never runs the command: it hands off reviewed console
+instructions and never launches them from a worker thread. `App.suspend()` as an in-process
 alternative was considered and deferred, not overlooked.
 
 `execute_plan` binds the sensitive-action confirmation inside its one
@@ -1095,7 +1086,7 @@ the reader fails closed: an unknown version, malformed JSON, a file past
 the size cap or an unreadable file is no proof and never a crash. Writes
 go through the existing atomic writer under one lock. `record` is the one
 writer, called after a successful install and after a successful update.
-Native, skill and `host_setup` kinds write none. A failed rewrite deletes
+Native-package kinds write none. A failed rewrite deletes
 the previous receipt and says so, so a receipt never claims bytes it did
 not fingerprint. A reinstall rewrites the receipt and a failed update
 keeps the old one. Tests never touch the real directory: the suite

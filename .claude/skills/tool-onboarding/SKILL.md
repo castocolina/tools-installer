@@ -54,7 +54,7 @@ Answer all of these; they drive every later step.
 | Question | Why it matters |
 |---|---|
 | OS/CLI tool, user-facing app, or LLM tooling? | tier + audience (step 5) |
-| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects `host_setup`, a `postinstall` hook, or a plain binary install; the catalog installs no skills |
+| LLM tooling: plugin, skill, agent pack, MCP server, or harness CLI? | selects a `postinstall` hook or a plain binary install; the catalog installs no skills |
 | Does it have a marketplace/registry entry? | prefer the marketplace route when the host supports it; use symlinks into the host's skills dir only when no marketplace exists or the registry needs a pinned, auditable copy. State the choice and reason. |
 | Does it need other tools at install time or at runtime? | `requires` / `recommends` |
 
@@ -108,7 +108,6 @@ one tool-wide recipe or separate per-OS knobs. For each method from step 4:
 | `github_release`, `tarball`, `app` | nothing: removal is the receipt of the paths the install computed (L2) | install and removal use the same path; nothing else shares that path |
 | `cargo_distrobox` | `repo` (owner/name slug), `image` (fully qualified), `packages` (in-box build deps), `artifacts` (`{box, host}` tables) | the first artifact is the binary under ~/.local/bin; every `host` sits under ~/.local, ~/.config or ~/.terminfo; the box and the image it pulled are deleted on every outcome |
 | `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME` | run the vendor installer in a disposable container and list what it wrote |
-| `host_setup` | an explicit recipe: the files/symlinks/desktop entries it writes | the recipe removes exactly those |
 
 ```toml
 [[tool]]
@@ -169,7 +168,7 @@ dependencies, and postinstall classification" — the canonical decision tree;
 read it rather than reconstructing it. A manager-installed tool names that
 manager in `requires`; a runtime-only expectation the catalog cannot
 guarantee also needs an edge, or a `# Verified` note when unsure. Walk the tree:
-`postinstall` hook / `host_setup` / none. If
+`postinstall` hook / none. If
 it straddles two branches, name the ambiguity.
 
 A hook is selected by NAME from the closed `POSTINSTALL_HOOKS` table, never a

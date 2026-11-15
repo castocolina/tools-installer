@@ -49,7 +49,7 @@ _PRIORITY_RANK = {Priority.P0: 0, Priority.P1: 1, Priority.P2: 2, Priority.P3: 3
 # DEPENDENCY_FAILED is a member of its own set on purpose: that membership,
 # and nothing else, is what carries a failure down a multi-link requires chain.
 # MANUAL_REQUIRED belongs here too: the tool only got as far as reviewed
-# handoff instructions (host_setup), not an actual install, so a
+# handoff instructions (a native-package method), not an actual install, so a
 # dependent naming it in `requires` must be blocked the same as any other
 # not-actually-installed status.
 # A row that starts from an installed tool loses it only when a reinstall ran and failed.
