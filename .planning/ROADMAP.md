@@ -39,7 +39,7 @@
 - [x] **Phase 24.2: Schedules view** (INSERTED) - Schedules view: cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim (completed 2026-11-14)
 - [x] **Phase 24.3: Catalog audit skill** (INSERTED) - Catalog-audit skill looping over every entry; opencode v2 and Pi MCP refresh (completed 2026-11-14)
 - [x] **Phase 24.4: Retire the npx, npm and pip guard aliases and redirects** (completed 2026-11-14)
-- [ ] **Phase 24.5: JavaScript install priority brew then bun then volta**
+- [x] **Phase 24.5: JavaScript install priority brew then bun then volta** (completed 2026-11-15)
 - [ ] **Phase 25: Lean** - Delete ~2,000 lines of dead code and put app composition under pyright and the coverage gate
 - [ ] **Phase 26: Commit and push quality hooks** - Fast checks on commit, the full test suite on push, installed by `make install`
 
@@ -678,7 +678,7 @@ Research must verify these points before the design is locked:
 - What "brew first" means on Linux hosts without brew.
 **Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.5 SPEC and D-23)*
 **Depends on:** Phase 24.4
-**Plans:** 9/9 plans executed
+**Plans:** 9/9 plans complete
 
 Plans:
 **Wave 1**

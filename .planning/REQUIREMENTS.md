@@ -154,13 +154,13 @@
 
 ### Install priority
 
-- [ ] **PRIO-01**: Install-method resolution tries Homebrew (formula or cask) first, then bun, then pnpm on the volta-provided Node runtime, then the earlier order; a host without Homebrew keeps the earlier order [user request 2026-11-14: "prefiero el order sea brew -> bun -> volta y despues lo demas"]
-- [ ] **PRIO-02**: A `bun` method kind installs an npm package with `bun add -g`, checks the declared Node floor (bun-installed CLIs run under node), runs the smoke check and wires bun's global bin dir into PATH [user request 2026-11-14]
-- [ ] **PRIO-03**: mmdc, puppeteer and pi install through bun first; mmdc and puppeteer keep their pnpm fallback; the vendor-installed agent CLIs keep their methods [user request 2026-11-14]
-- [ ] **PRIO-04**: A bun-installed tool gets owner `bun`, receipts, version status (npm registry latest), update within its declared range, `bun remove --global` removal, and the Doctor browser audit [user request 2026-11-14]
-- [ ] **PRIO-05**: Tools already owned by pnpm, volta, brew or a vendor installer keep their owner; nothing reinstalls or moves them [user request 2026-11-14]
-- [ ] **PRIO-06**: The bun method passes no `--trust` and writes no `trustedDependencies`; a blocked postinstall fails the smoke check with the trust command [user request 2026-11-14]
-- [ ] **PRIO-07**: README, the architecture rule doc, registry comments and REQUIREMENTS.md describe the new order and only verified bun claims [user request 2026-11-14]
+- [x] **PRIO-01**: Install-method resolution tries Homebrew (formula or cask) first, then bun, then pnpm on the volta-provided Node runtime, then the earlier order; a host without Homebrew keeps the earlier order [user request 2026-11-14: "prefiero el order sea brew -> bun -> volta y despues lo demas"]
+- [x] **PRIO-02**: A `bun` method kind installs an npm package with `bun add -g`, checks the declared Node floor (bun-installed CLIs run under node), runs the smoke check and wires bun's global bin dir into PATH [user request 2026-11-14]
+- [x] **PRIO-03**: mmdc, puppeteer and pi install through bun first; mmdc and puppeteer keep their pnpm fallback; the vendor-installed agent CLIs keep their methods [user request 2026-11-14]
+- [x] **PRIO-04**: A bun-installed tool gets owner `bun`, receipts, version status (npm registry latest), update within its declared range, `bun remove --global` removal, and the Doctor browser audit [user request 2026-11-14]
+- [x] **PRIO-05**: Tools already owned by pnpm, volta, brew or a vendor installer keep their owner; nothing reinstalls or moves them [user request 2026-11-14]
+- [x] **PRIO-06**: The bun method passes no `--trust` and writes no `trustedDependencies`; a blocked postinstall fails the smoke check with the trust command [user request 2026-11-14]
+- [x] **PRIO-07**: README, the architecture rule doc, registry comments and REQUIREMENTS.md describe the new order and only verified bun claims [user request 2026-11-14]
 
 ### Lean
 
@@ -301,13 +301,13 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | GUARD-04 | Phase 24.4 | Complete |
 | GUARD-05 | Phase 24.4 | Complete |
 | GUARD-06 | Phase 24.4 | Complete |
-| PRIO-01 | Phase 24.5 | Pending |
-| PRIO-02 | Phase 24.5 | Pending |
-| PRIO-03 | Phase 24.5 | Pending |
-| PRIO-04 | Phase 24.5 | Pending |
-| PRIO-05 | Phase 24.5 | Pending |
-| PRIO-06 | Phase 24.5 | Pending |
-| PRIO-07 | Phase 24.5 | Pending |
+| PRIO-01 | Phase 24.5 | Complete |
+| PRIO-02 | Phase 24.5 | Complete |
+| PRIO-03 | Phase 24.5 | Complete |
+| PRIO-04 | Phase 24.5 | Complete |
+| PRIO-05 | Phase 24.5 | Complete |
+| PRIO-06 | Phase 24.5 | Complete |
+| PRIO-07 | Phase 24.5 | Complete |
 | LEAN-01 | Phase 25 | Pending |
 | LEAN-02 | Phase 25 | Pending |
 | LEAN-03 | Phase 25 | Pending |
