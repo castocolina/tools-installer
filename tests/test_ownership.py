@@ -3468,3 +3468,22 @@ def test_owner_from_a_symlinked_home_matches_the_real_path(
             _resolve(_bun_pi(), inventory=inventory, which=command, platform=_DEBIAN).owner
         )
     assert owners == ["bun", "bun"]
+
+
+def test_a_host_without_pnpm_reads_a_bun_pi_off_path_as_bun_owned(bun_home: Path) -> None:
+    # pnpm is not installed at all: that is an empty inventory, not an unreadable one.
+    _seed_bun_pi(bun_home)
+    inventory = read_inventory(
+        has_brew=False, query=_no_query, pnpm_packages=lambda: None, pnpm_installed=lambda: False
+    )
+    result = _resolve(_bun_pi(), inventory=inventory, which=None, platform=_DEBIAN)
+    assert (result.owner, result.confidence) == ("bun", "by-elimination")
+
+
+def test_a_pnpm_that_exists_but_cannot_be_read_stays_unreadable(bun_home: Path) -> None:
+    _seed_bun_pi(bun_home)
+    inventory = read_inventory(
+        has_brew=False, query=_no_query, pnpm_packages=lambda: None, pnpm_installed=lambda: True
+    )
+    assert inventory.pnpm_globals is None
+    assert _resolve(_bun_pi(), inventory=inventory, which=None, platform=_DEBIAN).owner == "unknown"

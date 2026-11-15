@@ -70,6 +70,7 @@ from installer.install_ownership import (
     package_owns_path,
     path_owner_package,
 )
+from installer.legacy_guard import real_pnpm
 from installer.locations import applications_dir, opt_dir
 from installer.model import KIND_PACKAGE_PARAM, Method, Tool, method_package
 from installer.platform import Platform
@@ -404,8 +405,13 @@ def read_inventory(
     query: Callable[..., str] = run_query,
     pnpm_packages: Callable[[], tuple[str, ...] | None] = pnpm_global_packages,
     bun_versions: Callable[[], Mapping[str, str | None] | None] = listed_versions,
+    pnpm_installed: Callable[[], bool] = lambda: real_pnpm() is not None,
 ) -> ManagerInventory:
-    """Ask each manager once. A failed or unparseable query is `None`, never empty."""
+    """Ask each manager once. A failed or unparseable query is `None`, never empty.
+
+    A pnpm that is not installed at all lists nothing (empty); only one that exists and cannot
+    be read is `None`, so a bun-only host does not fail every JavaScript tool closed.
+    """
     brew_prefix: Path | None = None
     brew_formulae: dict[str, str] | None = None
     brew_casks: dict[str, str] | None = None
@@ -414,7 +420,10 @@ def read_inventory(
         brew_formulae = _query_brew_list(query, "--formula")
         brew_casks = _query_brew_list(query, "--cask")
     pnpm_raw = pnpm_packages()
-    pnpm_globals = None if pnpm_raw is None else frozenset(pnpm_raw)
+    if pnpm_raw is None:
+        pnpm_globals = None if pnpm_installed() else frozenset[str]()
+    else:
+        pnpm_globals = frozenset(pnpm_raw)
     uv_tools = _query_uv_tools(query)
     return ManagerInventory(
         brew_formulae=brew_formulae,
