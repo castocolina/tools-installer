@@ -703,6 +703,14 @@ def _off_policy_reason(tool: Tool, ownership: ManagerOwnership, platform: Platfo
     return reason
 
 
+def _other_node_manager_owns(tool: Tool, ownership: ManagerOwnership, platform: Platform) -> bool:
+    """A pnpm or Volta copy the repair ladder would not use: it would install a second copy."""
+    if ownership.owner not in ("pnpm", "volta"):
+        return False
+    methods = resolve_methods(tool, platform)
+    return not (ownership.owner == "pnpm" and methods and methods[0].kind == "node")
+
+
 def _row(
     tool: Tool,
     state: ToolState | None,
@@ -760,6 +768,12 @@ def _row(
             return make(
                 Disposition.BLOCKED,
                 f"{label} owns it; repair needs sudo (never run here)",
+            )
+        if _other_node_manager_owns(tool, state.ownership, platform):
+            label = owner_label(state.ownership) or state.ownership.owner
+            return make(
+                Disposition.BLOCKED,
+                f"{label} owns it; repair it with {label} (a repair would install a second copy)",
             )
         reason = _broken_reason(state)
         if requester is not None:

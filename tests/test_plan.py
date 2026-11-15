@@ -315,6 +315,27 @@ def test_broken_dragged_dependency_is_will_repair_under_its_requester():
     assert [row.tool_id for row in rows].index("node") < [row.tool_id for row in rows].index("mmdc")
 
 
+@pytest.mark.parametrize("owner", ("pnpm", "volta"))
+def test_broken_tool_owned_by_another_node_manager_is_not_repaired_through_bun(owner: Owner):
+    # repair=True runs the bun-first ladder, which would install a second copy beside the owner.
+    mmdc = _tool(
+        "mmdc",
+        methods=(
+            Method(kind="bun", params={"npm_pkg": "mmdc"}),
+            Method(kind="node", params={"npm_pkg": "mmdc"}),
+        ),
+    )
+    state = plan_state(mmdc, health=Health.BROKEN, owner=owner, reasons=("browser check failed",))
+
+    row = build_plan(["mmdc"], [mmdc], _state_of({"mmdc": state}), MACOS, reinstall=frozenset())[0]
+
+    label = owner_label(state.ownership)
+    assert (row.disposition, row.reason) == (
+        Disposition.BLOCKED,
+        f"{label} owns it; repair it with {label} (a repair would install a second copy)",
+    )
+
+
 @pytest.mark.parametrize("owner", sorted(UNMANAGEABLE_OWNERS))
 def test_broken_tool_owned_by_a_native_manager_is_blocked_never_repaired(owner: Owner):
     rg = _tool("rg")
