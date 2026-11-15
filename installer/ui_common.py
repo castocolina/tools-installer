@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from rich.cells import cell_len
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -65,6 +66,34 @@ def highlighted_key(table: DataTable[Any]) -> str | None:
     return cell_key.row_key.value
 
 
+def cut_rows(text: Text, rows: int, width: int, console: Console) -> Text:
+    """`text` word-wrapped to `width`, keeping `rows` lines; the last one kept
+    ends in `…` when anything was dropped. Wrapping first is what bounds the
+    rows: a cut by total cell length cannot (review H11)."""
+    lines = list(text.wrap(console, width))
+    if len(lines) > rows:
+        lines = lines[:rows]
+        lines[-1].append("…")
+        lines[-1].truncate(width, overflow="ellipsis")
+    cut = Text("\n").join(lines)
+    cut.no_wrap = True
+    return cut
+
+
+@dataclass(frozen=True)
+class Rows:
+    """Renders `cut_rows` at paint time, so a resize re-cuts it to the new width."""
+
+    text: Text
+    rows: int
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield cut_rows(self.text, self.rows, options.max_width, console)
+
+
+STATUS_ROWS = 4  # a longer status ends in `…`: the screen never scrolls
+
+
 class StatusLine(Static):
     """A docked status line. Neutral by default; each set() colors by severity.
     Replaces the three near-identical _set_status/_clear_status pairs (and the
@@ -84,7 +113,7 @@ class StatusLine(Static):
     def set(self, text: str, severity: Severity | str) -> None:
         self.text = text
         self.severity = Severity(severity)
-        self.update(Text(text, style=SEVERITY_STYLE[self.severity]))
+        self.update(Rows(Text(text, style=SEVERITY_STYLE[self.severity]), STATUS_ROWS))
 
     def clear(self) -> None:
         self.text = ""

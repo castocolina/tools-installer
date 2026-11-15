@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, TypeVar
 
 from rich.cells import cell_len
-from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.console import Group, RenderableType
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -23,7 +23,7 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Static, Tab, Tabs
 from textual.widgets.data_table import RowDoesNotExist
 
-from installer.ui_common import highlighted_key, mark
+from installer.ui_common import Rows, highlighted_key, mark
 
 T = TypeVar("T")
 
@@ -105,31 +105,6 @@ class BrowserAdapter(Generic[T]):
     # (down to `SHRINK_FLOOR` cells) so the fit column keeps `FIT_FLOOR` readable cells.
     fit_column: str | None = None
     shrink_columns: tuple[str, ...] = ()
-
-
-def _cut_rows(text: Text, rows: int, width: int, console: Console) -> Text:
-    """`text` word-wrapped to `width`, keeping `rows` lines; the last one kept
-    ends in `…` when anything was dropped. Wrapping first is what bounds the
-    rows: a cut by total cell length cannot (review H11)."""
-    lines = list(text.wrap(console, width))
-    if len(lines) > rows:
-        lines = lines[:rows]
-        lines[-1].append("…")
-        lines[-1].truncate(width, overflow="ellipsis")
-    cut = Text("\n").join(lines)
-    cut.no_wrap = True
-    return cut
-
-
-@dataclass(frozen=True)
-class _Rows:
-    """Renders `_cut_rows` at paint time, so a resize re-cuts it to the new width."""
-
-    text: Text
-    rows: int
-
-    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        yield _cut_rows(self.text, self.rows, options.max_width, console)
 
 
 class ToolBrowser(Widget, Generic[T]):
@@ -476,10 +451,10 @@ class ToolBrowser(Widget, Generic[T]):
         self.detail_text = text
         parse = Text.from_markup if self._adapter.detail_is_markup else Text
         identity, newline, health = text.partition("\n")
-        content: RenderableType = _Rows(parse(identity), 3)
+        content: RenderableType = Rows(parse(identity), 3)
         if newline:
             head = parse(identity)
             head.no_wrap = True
             head.overflow = "ellipsis"
-            content = Group(head, _Rows(parse(health), 2))
+            content = Group(head, Rows(parse(health), 2))
         self.query_one("#browser-detail", Static).update(content)

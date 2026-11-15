@@ -732,13 +732,13 @@ async def test_doctor_does_not_offer_a_reinstall_when_pnpm_could_not_be_read(
         assert "Press r to reinstall" not in str(body.render())
 
 
-def _toggle_policies(count: int) -> list[Policy]:
+def _toggle_policies(count: int, detail: str = "changed layer", depth: int = 3) -> list[Policy]:
     """`count` policies whose toggle reports three layers: a status of four rows."""
     state: dict[str, bool] = {}
 
     def result() -> PolicyResult:
-        layers = tuple(PolicyLayer(f"Layer {n}", f"changed layer {n}") for n in range(3))
-        return PolicyResult(layers=layers, reload_hint=None, warning=None)
+        layer_rows = tuple(PolicyLayer(f"Layer {n}", f"{detail} {n}") for n in range(depth))
+        return PolicyResult(layers=layer_rows, reload_hint=None, warning=None)
 
     def reader(policy_id: str) -> Callable[[], bool]:
         return lambda: state.get(policy_id, False)
@@ -821,3 +821,27 @@ async def test_the_uninstall_table_cuts_what_gets_removed_with_an_ellipsis(
         assert lines[0].rstrip().endswith("…"), lines[0]
         row = next(line for line in lines if widest.id in line)
         assert row.rstrip().endswith("…"), row
+
+
+async def test_a_long_status_never_scrolls_the_policies_screen_at_80x20(tmp_path: Path) -> None:
+    """Visual-acceptance R1: a toggle status of a dozen rows is capped with `…`; the screen
+    keeps its fixed chrome, no screen-level scrollbar, and `End` leaves the table in view."""
+    rows = _toggle_policies(
+        6, detail="wrote a long line of settings so the status runs past its rows", depth=6
+    )
+    app = _app(tmp_path, policies=rows)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "policies")
+        table = screen.query_one(DataTable[Any])
+        await pilot.press("space")
+        await wait_until(pilot, lambda: table.get_cell("row0", "state").plain == "● [on]")
+        status = app.view("policies").status
+        await pilot.press("end")
+        await pilot.pause()
+        assert screen.max_scroll_y == 0
+        assert screen.scroll_y == 0
+        assert rows_of(screen, status) <= set(range(15, 19)), rows_of(screen, status)
+        for tab in screen.query_one(WayfindingHeader).query(WayfindingTab):
+            assert tab.region.right <= 80, (tab.id, tab.region)
+        assert rows_of(screen, table)
+        _assert_chrome(screen)
