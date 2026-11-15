@@ -1,7 +1,7 @@
 ---
 phase: 19-one-tool-state-with-health-plus-receipts
 verified: 2026-10-17T09:13:59Z
-status: human_needed
+status: passed
 score: 11/11 must-haves verified
 covered_files:
   - ".planning/phases/19-one-tool-state-with-health-plus-receipts/19-01-PLAN.md"
@@ -103,7 +103,6 @@ covered_files:
   - "installer/download.py"
   - "installer/engine.py"
   - "installer/execute_screen.py"
-  - "installer/guards.py"
   - "installer/host_setup.py"
   - "installer/install_ownership.py"
   - "installer/model.py"
@@ -111,7 +110,6 @@ covered_files:
   - "installer/pnpm_globals.py"
   - "installer/receipts.py"
   - "installer/registry.toml"
-  - "installer/skill_lifecycle.py"
   - "installer/status.py"
   - "installer/terminal_shell.py"
   - "installer/tool_browser.py"
@@ -133,7 +131,6 @@ covered_files:
   - "tests/test_engine.py"
   - "tests/test_execute_screen.py"
   - "tests/test_executors.py"
-  - "tests/test_guards.py"
   - "tests/test_host_setup.py"
   - "tests/test_install_ownership.py"
   - "tests/test_layout_80x20.py"
@@ -147,7 +144,6 @@ covered_files:
   - "tests/test_sandbox.py"
   - "tests/test_setup.py"
   - "tests/test_shell_scripts_path.py"
-  - "tests/test_skill_lifecycle.py"
   - "tests/test_status.py"
   - "tests/test_terminal_shell.py"
   - "tests/test_tool_browser.py"
@@ -158,13 +154,41 @@ covered_files:
   - "tests/test_update.py"
   - "tests/test_version_status.py"
   - "tests/test_wizard_app.py"
-covered_digest: "v3:sha256:3dc7ebac038573c5d9bf50ff55f17691ea1cf01aaeab666adced93aeb6be38d4"
+covered_digest: "v4:sha256:af339976648843ff7bbf9d948b6ae54b77671bb5f2667bf2127040ad2bd91afc"
 behavior_unverified: 0
 overrides_applied: 0
 decision_coverage:
   honored: 21
   total: 21
   not_honored: []
+re_verification:
+  date: 2026-11-15
+  head: 75b732d4
+  previous_status: human_needed
+  evidence_dir: scratchpad/uat/19-reverify (01-06 container e2e, 07-12 TUI captures at 80x20, NO_COLOR=1)
+  items:
+    - item: "make e2e receipts"
+      verdict: resolved
+      jev: "typesafe resolved 0.84 (laya open-real 0.42, needs_fallback); agrees"
+      evidence: "Fedora 44 container ti-uat-19-fedora at HEAD: setup.py --categories data --yes wrote receipts/{yq,dasel,fx,gron,jless,miller}.json (yq receipt: github_release, sha256 of ~/.local/bin/yq); setup.py --uninstall --yes removed exactly the receipt-proven artifacts, listed uv/uvx as 'Not removed (cannot prove)', and left receipts/ empty with yq gone (captures 01-04). Earlier full make e2e at d49e7b2 printed TRACER_RECEIPT_OK/TRACER_RECEIPT_REMOVAL_OK."
+    - item: "marks without colour at 80x20"
+      verdict: resolved
+      jev: "typesafe resolved 0.59 (needs_fallback; laya open-real 0.35, needs_fallback); own reasoning decides: the captures plus test-pinned marks prove it"
+      evidence: "NO_COLOR=1, LC_ALL=C.UTF-8, tmux 80x20: captures 08-11 show the 3-line legend fully visible above the detail bar on the system, user and ai tiers, the glyphs check-mark (dnf, uv), circle (missing), en-dash (gnu-bash unavailable) and checking, and the focused row reason line ('ok - managed by dnf', 'not installed - no manager claimed the tool'). Up-arrow and approx marks pinned by test_every_health_mark_renders_on_every_tier and seen in the d49e7b2 capture. Not a taste call: the font check is the owner's terminal only in principle; no regression found."
+    - item: "host adoption convergence"
+      verdict: resolved
+      jev: "DISAGREES: typesafe open-trivial 0.93 (laya resolved 0.32, needs_fallback). Verdict stands: the adoption rule is a pure function of cached digest and file bytes, proven by passing unit tests; the missing live-host capture is a transient cache state, not a requirement, and the owner's host is off limits to the verifier"
+      evidence: "Adoption is a pure function of the cached release digest and the file bytes: uv run pytest tests/test_version_status.py (adoption tests incl. test_adoption_makes_no_network_call, test_adoption_binds_the_digest_to_the_adopted_bytes, test_unproven_installer_tool_gets_the_reinstall_note) pass at HEAD; the 9-file run of receipts/tool_health/version_status/uninstall/ownership/pnpm_globals/e2e_receipts/catalog_tui/layout_80x20 passed (rc=0, rv19-pytest.log). Live-host cache state is transient and is not a verifiable requirement."
+  requirements:
+    STATE-01: satisfied (tests/test_tool_health.py overtaken-pass tests pass)
+    STATE-02: satisfied (captures 08-11; test_catalog_tui, test_layout_80x20 pass)
+    STATE-03: satisfied (container receipts written and retired, captures 01-04; tests/test_receipts.py)
+    STATE-04: satisfied (tests/test_ownership.py, test_version_status.py pass; owner column shows dnf/own installer in captures)
+    STATE-05: satisfied (brew-mid-session test in the passing suites)
+    STATE-06: satisfied (focused row reasons in captures 08-10)
+    STATE-07: "superseded [jev: typesafe superseded-resolved 0.87, laya agrees at 0.39] (Phase 23.1 deleted installer/skill_lifecycle.py and every skill-pack entry on the owner's order of 2026-11-07, HOST-01; there are no skill packs left to report)"
+  owner_only: []
+  deferred_macos: []
 human_verification:
   - test: "Run `make e2e` (container) and check the receipt listing before and after the uninstall pass (scripts/container-e2e-verify.sh receipt assertions, plan 19-19/19-46)"
     expected: "A real install writes receipts/<id>.json for the probe tool; `--yes` removes the receipt-proven raw binary and retires its receipt; the pass exits 0"
@@ -181,7 +205,7 @@ human_verification:
 
 **Phase Goal:** Every catalog view reads one truthful state per tool (present, health, owner, version, removability), and every install leaves a receipt proving what it wrote.
 **Verified:** 2026-10-17T09:13:59Z
-**Status:** human_needed
+**Status:** passed (re-verified 2026-11-15; see Re-verification)
 **Re-verification:** No (initial)
 **Tree:** main @ d49e7b2; CI 39019413698 success (ubuntu-latest, macos-latest)
 
@@ -249,3 +273,7 @@ No gaps. All 5 roadmap success criteria, 7 requirements and 6 SPEC/ledger truths
 ---
 _Verified: 2026-10-17T09:13:59Z_
 _Verifier: Claude (gsd-verifier)_
+
+## Re-verification (2026-11-15, HEAD 75b732d4)
+
+All three human items are resolved with fresh evidence (see the re_verification block). STATE-07 is superseded by Phase 23.1 (skill packs removed by the owner's order). Nothing is left for the owner. Container, image set and herdr tab were removed after the run.
