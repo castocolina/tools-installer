@@ -634,6 +634,13 @@ class CompetingUnit:
     state: str  # the enablement state list-unit-files reported
 
 
+# The composition root's competing-mechanism probe (WR-10), same
+# call shape and same blocking rule as DiskPressureProbe: blocking=True
+# may issue bounded read-only systemctl queries, blocking=False peeks
+# a memo and never spawns. Read-only in both systemd scopes.
+CompetingProbe = Callable[..., tuple[CompetingUnit, ...]]
+
+
 def parse_unit_files(output: str, names: Collection[str]) -> tuple[tuple[str, str], ...]:
     """Pure parse of a `systemctl list-unit-files` listing into (name, state)
     pairs for only the wanted unit names.

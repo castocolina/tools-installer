@@ -50,6 +50,7 @@ from installer.locations import (
 from installer.model import Tool, load_categories
 from installer.ownership import manager_listing, read_inventory
 from installer.platform import Platform
+from installer.policies_screen import PolicyInputs
 from installer.policy import (
     Policy,
     cache_redirect_policy,
@@ -83,7 +84,7 @@ from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, probe_version_output, resolve_github_tag
-from installer.wizard_app import PolicyInputs, ScheduleInputs, UnifiedApp, UninstallInputs
+from installer.wizard_app import ScheduleInputs, UnifiedApp, UninstallInputs
 
 # The private names setup.py imports back keep their names (D-05); listing them here is what
 # tells pyright they are this module's surface and not unused private functions.

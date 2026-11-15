@@ -32,6 +32,7 @@ from installer.pnpm_globals import (
     NodeGlobal,
     NodeGlobalsReport,
 )
+from installer.policies_screen import PolicyInputs
 from installer.policy import Policy, PolicyLayer, PolicyResult
 from installer.schedules import ReconcileReport
 from installer.session import Disposition, PlanRow, RowOutcome
@@ -49,7 +50,6 @@ from installer.wizard_app import (
     DiskPressureProbed,
     DoctorScreen,
     GlobalsReinstalled,
-    PolicyInputs,
     RefreshPublished,
     ScheduleDefaultsApplied,
     UnifiedApp,

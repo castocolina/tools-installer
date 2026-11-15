@@ -46,6 +46,7 @@ from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
+from installer.policies_screen import PolicyInputs
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
@@ -61,7 +62,7 @@ from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
-from installer.wizard_app import PolicyInputs, UnifiedApp, UninstallInputs
+from installer.wizard_app import UnifiedApp, UninstallInputs
 from tests.screen_family import wait_until
 from tests.state_doubles import (
     FrozenStateService,

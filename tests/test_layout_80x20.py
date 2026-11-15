@@ -25,6 +25,7 @@ from installer.modals import ConfirmUninstall
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport
+from installer.policies_screen import PoliciesScreen, PolicyInputs
 from installer.policy import (
     Policy,
     PolicyLayer,
@@ -47,14 +48,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import (
-    PoliciesScreen,
-    PolicyInputs,
-    SchedulesScreen,
-    UnifiedApp,
-    UninstallInputs,
-    UninstallScreen,
-)
+from installer.wizard_app import SchedulesScreen, UnifiedApp, UninstallInputs, UninstallScreen
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     HeldRefreshService,

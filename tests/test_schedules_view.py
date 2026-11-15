@@ -25,17 +25,12 @@ from installer.doctor import DoctorReport
 from installer.enums import DaemonState, Severity
 from installer.modals import CursorModelScreen, ScheduleTimeScreen
 from installer.model import Method, Tool
+from installer.policies_screen import PolicyInputs
 from installer.schedules import SCHEDULES
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, TimerStateCache
 from installer.ui_common import GLOBAL_NAV, VIEWS, FooterBar, WayfindingTab
 from installer.uninstall import SweepResult
-from installer.wizard_app import (
-    PolicyInputs,
-    ScheduleInputs,
-    SchedulesScreen,
-    UnifiedApp,
-    UninstallInputs,
-)
+from installer.wizard_app import ScheduleInputs, SchedulesScreen, UnifiedApp, UninstallInputs
 from tests.screen_family import settle
 from tests.test_schedules_engine import CLAUDE_BASENAME, Env, Install, make_env
 

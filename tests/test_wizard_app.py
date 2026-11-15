@@ -16,7 +16,7 @@ from textual.widgets import DataTable, Label, ListItem, OptionList, Static
 from installer import receipts
 from installer.app import UninstallDecision, perform_uninstall
 from installer.catalog_tui import CatalogScreen, RefreshRequested, health_cell
-from installer.diskusage import DiskPressure
+from installer.diskusage import DiskPressure, DiskPressureProbe
 from installer.doctor import DoctorReport
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState, MutationHolder, Severity
@@ -46,6 +46,7 @@ from installer.ownership import (
 )
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobal, NodeGlobalsReport, reinstall_preview
+from installer.policies_screen import PoliciesScreen, PolicyInputs
 from installer.policy import (
     Policy,
     PolicyLayer,
@@ -57,7 +58,7 @@ from installer.run import CommandError, Runner
 from installer.schedules import ReconcileReport
 from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
-from installer.systemd_daemon import CompetingUnit
+from installer.systemd_daemon import CompetingProbe, CompetingUnit
 from installer.ui_common import BASE_VIEW, VIEW_BY_NAME
 from installer.uninstall import RemovalPlan, SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
@@ -75,11 +76,7 @@ from installer.version_status import (
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
-    CompetingProbe,
-    DiskPressureProbe,
     DoctorScreen,
-    PoliciesScreen,
-    PolicyInputs,
     RefreshPublished,
     SchedulesScreen,
     UnifiedApp,

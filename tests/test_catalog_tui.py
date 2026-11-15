@@ -48,6 +48,7 @@ from installer.ownership import (
     owner_label,
 )
 from installer.platform import Platform
+from installer.policies_screen import PolicyInputs
 from installer.resolve import UnavailableReason, platform_could_support, unavailable_reason
 from installer.run import CommandError
 from installer.selection import select_tools
@@ -62,7 +63,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import PolicyInputs, RefreshPublished, UnifiedApp, UninstallInputs
+from installer.wizard_app import RefreshPublished, UnifiedApp, UninstallInputs
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     ScriptedUpdates,

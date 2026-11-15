@@ -93,6 +93,15 @@ class DiskPressure:
         return self.under_pressure and self.daemon is DaemonState.INACTIVE
 
 
+# The composition root's disk probe (D-03): callable with no arguments, plus
+# one optional keyword, `blocking`, that picks the daemon-state cache verb.
+# blocking=True (the default) may run one bounded systemd query, right for a
+# Doctor entry; blocking=False never queries at all, which is what a render on
+# the Textual event loop needs. `...` rather than a Protocol spelling out that
+# keyword: a Protocol method's parameter reads as dead code to vulture.
+DiskPressureProbe = Callable[..., DiskPressure]
+
+
 def probe_disk_pressure(
     daemon: DaemonState,
     tmp_threshold: bool,

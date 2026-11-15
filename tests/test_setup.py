@@ -47,6 +47,7 @@ from installer.model import Method, Tool
 from installer.ownership import ManagerOwnership
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
+from installer.policies_screen import PolicyInputs
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import UnavailableReason
 from installer.run import run_captured, run_git_isolated
@@ -62,7 +63,6 @@ from installer.wizard_app import (
     BASE_VIEW,
     DoctorScreen,
     ExecuteScreen,
-    PolicyInputs,
     ScheduleInputs,
     UnifiedApp,
     UninstallInputs,

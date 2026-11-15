@@ -451,3 +451,13 @@ def sentence(text: str) -> str:
     """The first line of `text` as one sentence with a single closing period."""
     lines = sanitize_log_line(text).strip().splitlines()
     return f"{(lines[0] if lines else 'unknown error').rstrip('.')}."
+
+
+def fit(text: str, width: int, *, from_left: bool = False) -> str:
+    """`text` cut to `width` cells with an ellipsis, at the end (or the start with `from_left`)."""
+    if cell_len(text) <= width:
+        return text
+    kept = text
+    while kept and cell_len(kept) > width - 1:
+        kept = kept[1:] if from_left else kept[:-1]
+    return f"…{kept}" if from_left else f"{kept}…"
