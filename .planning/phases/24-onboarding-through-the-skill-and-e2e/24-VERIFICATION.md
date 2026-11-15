@@ -4,7 +4,7 @@ verified: 2026-11-14T12:00:00Z
 status: passed
 score: 7/7 must-haves verified
 covered_files: [".claude/architecture.md",".claude/skills/tool-onboarding/SKILL.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-SUMMARY.md",".pre-commit-config.yaml","Makefile","docs/catalog-unsupported-tools.md","installer/agent_env.py","installer/agent_settings.py","installer/app.py","installer/cargo_distrobox.py","installer/desktop_entry.py","installer/download.py","installer/engine.py","installer/executors.py","installer/model.py","installer/ownership.py","installer/platform.py","installer/post_install.py","installer/postinstall.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/resolve.py","installer/run.py","installer/session.py","installer/terminal_shell.py","installer/uninstall.py","installer/update.py","installer/version_status.py","installer/versions.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","setup.py"]
-covered_digest: "v4:sha256:21ab8b9875ce07b65d03f2151f00739971492b97ac60abf8436685e41742db17"
+covered_digest: "v4:sha256:4183c6e575788b73d03907b5608bceb3bedc4379c1ed5c069485ded98bfdbd0d"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -15,6 +15,15 @@ re_verification:
     - "SC5b / ONB-05: Owner on every tier and ○ after Uninstall (24-UAT.md tests 2-4, pass; test 2 fixed in bc3a0e49)"
   gaps_remaining: []
   regressions: []
+  refresh_2026_11_15:
+    date: 2026-11-15
+    head: c76a9e2b
+    suite: "make validate && make test at HEAD c76a9e2b: 7676 passed, 6 skipped in 57.05s, coverage 96.07%"
+    phase_tests: "own test files from this report's evidence run with uv run pytest -n 0 --no-cov: all passed"
+    verified_commit: 5f1f43ea
+    changed_files: ".claude/architecture.md .claude/skills/tool-onboarding/SKILL.md Makefile installer/app.py installer/engine.py installer/executors.py installer/model.py installer/ownership.py installer/registry.toml installer/render.py installer/resolve.py installer/session.py installer/uninstall.py installer/update.py installer/version_status.py installer/wizard_app.py scripts/container-e2e-verify.sh setup.py"
+    dropped_covered_files: "none"
+    must_haves: "re-checked: unchanged. later edits (24.1-24.5 engine/resolve/executors/registry/uninstall/render) are exercised by the 3 phase test files plus the full suite, all green; the onboarding skill and e2e contract are unchanged in intent."
 prohibitions:
   - statement: "MUST NOT leave a Distrobox container or image after any build outcome"
     verification: test
