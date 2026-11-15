@@ -285,3 +285,30 @@ def test_bun_keeps_nothing_once_the_directory_and_link_are_gone() -> None:
 def test_bun_keeps_a_name_that_is_not_an_npm_package_name(package: str) -> None:
     """A name it cannot check is never reported removed, and never reaches a path join."""
     assert bun_keeps(package, "x") is True
+
+
+def test_resolve_bun_finds_the_install_root_bin_beside_a_relocated_bin_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    planted = _plant_bun(root / "bin")
+    monkeypatch.setenv("BUN_INSTALL", str(root))
+    monkeypatch.setenv("BUN_INSTALL_BIN", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("PATH", "")
+    assert resolve_bun() == str(planted)
+
+
+_DEEP = "[" * 100_000 + "]" * 100_000
+
+
+def test_a_pathologically_nested_manifest_reads_as_unknown(scratch_home: Path) -> None:
+    _write_manifest(scratch_home, _DEEP)
+    assert trusted_dependencies() is None
+    assert read_bun_globals() is None
+    assert listed_versions() is None
+
+
+def test_a_pathologically_nested_member_reads_as_version_none(scratch_home: Path) -> None:
+    _write_manifest(scratch_home, '{"dependencies": {"left-pad": "1.0.0"}}')
+    _plant_member("left-pad", _DEEP)
+    assert read_bun_globals() == {"left-pad": BunGlobal("1.0.0", None)}

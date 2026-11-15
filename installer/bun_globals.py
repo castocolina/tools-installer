@@ -49,9 +49,12 @@ def resolve_bun() -> str | None:
     found = shutil.which("bun", path=absolute)
     if found is not None:
         return found
-    candidate = bun_dirs()[0] / "bun"
-    if candidate.is_file() and os.access(candidate, os.X_OK):
-        return str(candidate)
+    root = _env_dir("BUN_INSTALL")
+    bin_dirs = [bun_dirs()[0], *([root / "bin"] if root is not None else [])]
+    for directory in bin_dirs:  # a relocated BUN_INSTALL_BIN does not hide the root's own bin
+        candidate = directory / "bun"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     return None
 
 
@@ -65,7 +68,7 @@ def _load_manifest() -> Mapping[str, object] | None:
         document: object = json.loads((bun_dirs()[1] / "package.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except (OSError, ValueError):  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+    except (OSError, ValueError, RecursionError):  # nesting too deep is a RecursionError
         return None
     return cast(dict[str, object], document) if isinstance(document, dict) else None
 
@@ -104,7 +107,7 @@ def _installed_version(name: str) -> str | None:
         document: object = json.loads(
             (bun_dirs()[1] / "node_modules" / name / "package.json").read_text(encoding="utf-8")
         )
-    except (OSError, ValueError):  # a missing file, bad UTF-8 and bad JSON all read as unknown
+    except (OSError, ValueError, RecursionError):  # all read as unknown
         return None
     if not isinstance(document, dict):
         return None
