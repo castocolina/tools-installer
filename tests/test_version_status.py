@@ -29,7 +29,7 @@ from installer import (
     version_status,
 )
 from installer.app import run_wizard
-from installer.bun_globals import listed_versions
+from installer.bun_globals import bun_dirs, listed_versions
 from installer.cli import Options
 from installer.engine import InstallOutcome, install_tool
 from installer.enums import InstallStatus, UninstallState
@@ -7351,6 +7351,25 @@ def test_bun_owner_outdated_against_stubbed_registry() -> None:
     assert (status.installed, status.latest, status.outdated) == ("25.10.0", "25.17.0", True)
     assert (status.stale, status.source, status.pinned_spec) == (False, "bun", "puppeteer ^25")
     assert entry is not None and entry.latest_version == "25.17.0"
+
+
+def _seed_bun_range(range_: str) -> None:
+    manifest = bun_dirs()[1] / "package.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"dependencies": {"puppeteer": range_}}), encoding="utf-8")
+
+
+def test_bun_row_is_current_when_the_newest_version_is_another_major() -> None:
+    # `bun update -g` stays inside ^25, so a 26 on npm must not read outdated forever.
+    _seed_bun_range("^25.10.0")
+    status, _entry = _bun_status(resolve_npm=lambda package: "26.1.0")
+    assert (status.installed, status.latest, status.outdated) == ("25.10.0", "26.1.0", False)
+
+
+def test_bun_row_is_outdated_inside_its_own_major() -> None:
+    _seed_bun_range("^25.10.0")
+    status, _entry = _bun_status(resolve_npm=lambda package: "25.17.0")
+    assert status.outdated is True
 
 
 def test_bun_branch_never_reads_the_outdated_map() -> None:

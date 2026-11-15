@@ -94,7 +94,7 @@ from typing import Literal, Protocol, cast
 
 from installer import apps, cargo_distrobox, download, executors, receipts
 from installer import ownership as ownership_mod
-from installer.bun_globals import read_bun_globals, resolve_bun
+from installer.bun_globals import caret_major, read_bun_globals, resolve_bun
 from installer.checksums import ChecksumMismatch
 from installer.download import ExecContext
 from installer.executors import ExecutorError
@@ -281,6 +281,24 @@ def host_setup_update_argv(tool: Tool) -> list[str] | None:
     return None
 
 
+def _bun_range_outside_catalog(method: Method) -> tuple[str, str, str] | None:
+    """The first `(name, manifest range, declared range)` whose caret major differs, else None."""
+    declared_map = method.params.get("versions")
+    if not isinstance(declared_map, dict):
+        return None
+    manifest = read_bun_globals() or {}
+    for name, declared in cast(dict[object, object], declared_map).items():
+        if not isinstance(name, str) or not isinstance(declared, str):
+            continue
+        listed = manifest.get(name)
+        if listed is None:
+            continue
+        wanted, held = caret_major(declared), caret_major(listed.range)
+        if wanted is not None and held is not None and wanted != held:
+            return name, listed.range, declared
+    return None
+
+
 def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | None:
     """The pre-flight refusal `_perform` answers with, or None when an update can run.
 
@@ -352,6 +370,22 @@ def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | N
                 detail=(
                     f"pinned to {listed.range} in bun's global manifest; bun update keeps that "
                     f"version — change the pin with `bun add -g {ownership.package}@<range>`"
+                ),
+            )
+    if ownership.owner == "bun" and method is not None:
+        # `bun update -g` stays inside the manifest range, so a range the catalog never declared
+        # would be updated without a word; the user re-pins it first.
+        outside = _bun_range_outside_catalog(method)
+        if outside is not None:
+            name, listed, declared = outside
+            return UpdateOutcome(
+                tool_id=tool.id,
+                status="unsupported",
+                owner="bun",
+                detail=(
+                    f"bun's global manifest holds {name} {listed}, outside the catalog's "
+                    f"{declared}; bun update would stay there — re-pin it with "
+                    f"`bun add -g {name}@{declared}`"
                 ),
             )
     if ownership.owner == "pnpm" and method is None and host_setup_update_argv(tool) is None:

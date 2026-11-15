@@ -112,6 +112,22 @@ def _installed_version(name: str) -> str | None:
     return version if isinstance(version, str) and _VERSION_RE.fullmatch(version) else None
 
 
+def caret_major(spec: str) -> int | None:
+    """The major of a caret range (`^25`, `^25.17.0`), None for any other spec.
+
+    shortcut: only caret ranges are compared, which is all `bun add` writes and the catalog
+    declares; upgrade when a catalog pin uses `~` or a comparator range.
+    """
+    match = re.fullmatch(r"\^(\d+)(?:\.\d+){0,2}", spec)
+    return int(match.group(1)) if match else None
+
+
+def version_major(version: str) -> int | None:
+    """The leading major of a version string, None when it does not start with digits and a dot."""
+    match = re.match(r"(\d+)\.", version)
+    return int(match.group(1)) if match else None
+
+
 def read_bun_globals() -> dict[str, BunGlobal] | None:
     """The packages bun's global manifest lists, read as files; None when that cannot be trusted.
 

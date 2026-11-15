@@ -56,7 +56,13 @@ from typing import Literal, cast
 
 import installer.locations
 from installer import agent_settings, omz, receipts
-from installer.bun_globals import listed_versions, method_bin_dir
+from installer.bun_globals import (
+    caret_major,
+    listed_versions,
+    method_bin_dir,
+    read_bun_globals,
+    version_major,
+)
 from installer.download import ExecContext, artifact_paths, resolve_target
 from installer.enums import UninstallState
 from installer.executors import ExecutorError, prefix_writable
@@ -626,6 +632,13 @@ def resolve_status(
             unresolved=unresolved,
             installed=ownership.current_version,
         )
+        listed = (read_bun_globals() or {}).get(package)
+        held = None if listed is None else caret_major(listed.range)
+        newest = None if status.latest is None else version_major(status.latest)
+        if status.outdated and held is not None and newest is not None and newest != held:
+            # `bun update -g` never leaves the range, so a newer major is information, not a
+            # pending update; reading it as outdated would loop `u` forever.
+            status = replace(status, outdated=False)
         return replace(status, pinned_spec=pin), new_entry
     if owner in ("brew", "cask", "pnpm", "uv"):
         mapping = {

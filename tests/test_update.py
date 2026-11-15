@@ -2527,6 +2527,47 @@ def test_bun_range_or_unreadable_manifest_is_not_a_pin(
     assert calls == [[str(bun), "update", "-g", _PI_PKG]]
 
 
+_BUN_PINNED_PUPPETEER = Method(
+    kind="bun",
+    params={"npm_pkg": _PI_PKG, "co_install": ["puppeteer"], "versions": {"puppeteer": "^25"}},
+)
+
+
+def _bun_pinned_target() -> UpdateTarget:
+    tool = _tool("pi", _BUN_PINNED_PUPPETEER, cmd="pi")
+    return _target(tool, "bun", method=_BUN_PINNED_PUPPETEER, package=_PI_PKG)
+
+
+def test_bun_update_is_refused_when_the_manifest_range_leaves_the_catalog_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_bun(tmp_path, monkeypatch)
+    _seed_bun_manifest(
+        tmp_path, json.dumps({"dependencies": {_PI_PKG: "^1.5.2", "puppeteer": "^26.1.0"}})
+    )
+    target = _bun_pinned_target()
+    calls: list[list[str]] = []
+    outcome = _perform(target, calls.append)
+    assert (outcome.status, outcome.owner) == ("unsupported", "bun")
+    assert "puppeteer ^26.1.0" in outcome.detail and "^25" in outcome.detail
+    assert "bun add -g puppeteer@^25" in outcome.detail
+    assert calls == []
+    assert update_refusal(target.tool, target.ownership) == outcome
+
+
+def test_bun_update_runs_when_the_manifest_range_is_the_catalog_range_narrowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bun = _plant_bun(tmp_path, monkeypatch)
+    monkeypatch.setattr(executors, "launch_puppeteer", stub_launch(None))
+    _seed_bun_manifest(
+        tmp_path, json.dumps({"dependencies": {_PI_PKG: "^1.5.2", "puppeteer": "^25.17.0"}})
+    )
+    calls: list[list[str]] = []
+    assert _perform(_bun_pinned_target(), calls.append).status == "updated"
+    assert calls == [[str(bun), "update", "-g", _PI_PKG]]
+
+
 def test_bun_update_without_bun_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plant_bun(tmp_path, monkeypatch, present=False)
     calls: list[list[str]] = []
