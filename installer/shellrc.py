@@ -211,6 +211,11 @@ def strip_block(content: str, begin: str, end: str) -> str:
 
     Mirrors apply_block's last-begin pairing, so an orphan begin (no matching
     end) is left untouched rather than eating the rest of the file.
+
+    apply_block puts one blank separator before each block it appends. Where the
+    removal would stack a second blank line on one already there (or leave one at the
+    very top of the file), that one blank line is dropped, so removing every block
+    never piles up blank lines. Every other byte is kept.
     """
     lines = content.split("\n")
     if begin not in lines:
@@ -218,7 +223,11 @@ def strip_block(content: str, begin: str, end: str) -> str:
     start = max(index for index, line in enumerate(lines) if line == begin)
     for stop in range(start, len(lines)):
         if lines[stop] == end:
-            return "\n".join(lines[:start] + lines[stop + 1 :])
+            head, tail = lines[:start], lines[stop + 1 :]
+            # The last element of `tail` is the empty string after the final newline.
+            if (not head or head[-1] == "") and len(tail) > 1 and tail[0] == "":
+                tail = tail[1:]
+            return "\n".join(head + tail)
     return content
 
 

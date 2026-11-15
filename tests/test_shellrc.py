@@ -1,4 +1,5 @@
 import ast
+import itertools
 import os
 import re
 import shutil
@@ -290,6 +291,29 @@ def test_strip_block_removes_the_last_well_formed_block():
     begin, end = "# >>> b >>>", "# <<< b <<<"
     text = f"keep\n{begin}\ninside\n{end}\ntail"
     assert strip_block(text, begin, end) == "keep\ntail"
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(range(4))))
+def test_stripping_every_block_leaves_at_most_one_blank_line(order: tuple[int, ...]) -> None:
+    """F-5: each apply adds a separator; stripping in any order never stacks them."""
+    blocks = [(f"# >>> b{n} >>>", f"# <<< b{n} <<<") for n in range(4)]
+    text = "export EDITOR=vim\n"
+    for begin, end in blocks:
+        text = apply_block(text, f"{begin}\nbody\n{end}", begin, end)
+    for index in order:
+        text = strip_block(text, *blocks[index])
+    assert text == "export EDITOR=vim\n\n"
+
+
+def test_strip_block_drops_only_the_blank_that_would_stack_and_keeps_other_bytes() -> None:
+    begin, end = "# >>> b >>>", "# <<< b <<<"
+    text = f"a\n\n\nuser  \t\n\n{begin}\ninside\n{end}\n\nz\n\n\n"
+    assert strip_block(text, begin, end) == "a\n\n\nuser  \t\n\nz\n\n\n"
+
+
+def test_strip_block_at_the_top_drops_the_separator_that_followed_it() -> None:
+    begin, end = "# >>> b >>>", "# <<< b <<<"
+    assert strip_block(f"{begin}\ninside\n{end}\n\nrest\n", begin, end) == "rest\n"
 
 
 def test_strip_block_absent_marker_is_unchanged():

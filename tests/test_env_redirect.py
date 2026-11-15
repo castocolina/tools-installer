@@ -174,6 +174,19 @@ def test_remove_rc_redirect_strips_only_the_block(tmp_path: Path) -> None:
     assert rc.read_text() == "export EDITOR=vim\n\n"
 
 
+def test_remove_rc_redirect_leaves_one_blank_separator_before_what_followed(
+    tmp_path: Path,
+) -> None:
+    """F-5: the separator before the block and the one after it do not both remain."""
+    home = tmp_path / "home"
+    rc = tmp_path / ".myshellrc"
+    rc.write_text("export EDITOR=vim\n")
+    env_redirect.write_rc_redirect(_bun(), home, rc)
+    rc.write_text(rc.read_text() + "\nalias ll=ls\n")
+    env_redirect.remove_rc_redirect(_bun(), rc)
+    assert rc.read_text() == "export EDITOR=vim\n\nalias ll=ls\n"
+
+
 def test_linux_applied_requires_sentinel_and_the_expected_variable(tmp_path: Path) -> None:
     home = tmp_path / "home"
     conf_dir = tmp_path / "environment.d"
