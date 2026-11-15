@@ -209,3 +209,12 @@ The owner was asked and chose to apply branch protection now. The orchestrator r
 `required_status_checks.contexts` = ["validate & test on ubuntu-latest", "validate & test on macos-latest"],
 `enforce_admins.enabled` = false. SC5 and CI-02 are satisfied; the phase status is `passed`. Undo:
 `gh api -X DELETE repos/castocolina/tools-installer/branches/main/protection`.
+
+## jev classification of the re-verification findings (2026-11-15)
+
+Ladder run 2026-11-15 (jev-fast-decision `ladder`, summaries only; TypeSafe under the 2026-10-14 consent). 
+
+| Finding | Laya | TypeSafe | Verdict |
+|---|---|---|---|
+| CI-02 branch protection | open-real 0.45 (fallback) | resolved 0.97 | resolved (protection read back with both contexts) |
+| Post-verification main push green | resolved 0.36 (fallback) | resolved 0.97 | resolved |

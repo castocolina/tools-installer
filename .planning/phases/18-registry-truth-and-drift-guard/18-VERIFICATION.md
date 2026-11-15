@@ -222,3 +222,14 @@ No gaps. All five ROADMAP success criteria and SPEC R11 are backed by code, by t
 
 _Verified: 2026-10-16T02:10:00Z_
 _Verifier: Claude (gsd-verifier)_
+
+## jev classification of the re-verification findings (2026-11-15)
+
+Ladder run 2026-11-15 (jev-fast-decision `ladder`, summaries only; TypeSafe under the 2026-10-14 consent). 
+
+| Finding | Laya | TypeSafe | Verdict |
+|---|---|---|---|
+| First verify-registry workflow run | open-trivial 0.32 (fallback) | resolved 0.92 | resolved |
+| CI green on ubuntu and macOS | open-real 0.36 (fallback) | resolved 0.97 | resolved |
+| Real-Mac draw.io install | open-real 0.32 (fallback) | open-real 0.88 | deferred, owner rule overrides: macOS with no CI path is deferred (2026-11-14); macOS fixtures pass on the CI macOS leg |
+| registry-drift issue left open after a clean run | open-real 0.55 (fallback) | resolved 0.60 (fallback) | resolved by own reasoning: the new close-on-clean step (93c37ea0) closes it on the next clean run; the owner chose to let the workflow close it |
