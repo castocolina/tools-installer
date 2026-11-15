@@ -43,9 +43,9 @@ class UninstallInputs:
     remove: Callable[[UninstallDecision], SweepResult]
     tweak_ids: Callable[[], tuple[str, ...]] = tuple
     retired: Callable[[], Sequence[Tool]] = tuple
-    # D-01/15.6-06 Task 3: the SAME composition-root closure Policies, the
-    # direct `u` update, unattended installation, the CLI uninstall route,
-    # and interactive ExecuteScreen close already reuse. Called from
+    # The one composition-root closure Policies, the direct `u` update,
+    # unattended installation, the CLI uninstall route, and interactive
+    # ExecuteScreen close share. Called from
     # `on_removal_finished` only after `remove` reports a sweep, so a
     # completed removal always leaves terminal shell configuration in sync
     # (or safely reverted when zsh itself was just removed).
@@ -79,7 +79,7 @@ class UninstallEntry:
     is_settings: bool = False
     tool: Tool | None = None
     group: UninstallState | None = None
-    # The command the row's preview showed (L1/L3); the decision hands it back to the remover.
+    # The command the row's preview showed; the decision hands it back to the remover.
     argv: tuple[str, ...] = ()
     # The hook undo the row's preview showed (D-04); the decision hands it back the same way.
     unregister: tuple[tuple[str, ...], ...] = ()
@@ -97,7 +97,7 @@ STATE_TITLES: tuple[tuple[UninstallState, str], ...] = (
     (UninstallState.ABSENT, "nothing to do"),
     (UninstallState.UNAVAILABLE, "nothing to do"),
 )
-# CR-03: the "What gets removed" cell has a fixed budget because left/right switch
+# The "What gets removed" cell has a fixed budget because left/right switch
 # views, so a too-wide table can never be scrolled on the screen whose Enter
 # deletes files; ConfirmUninstall still lists every path.
 REMOVES_CELL_MAX = 40

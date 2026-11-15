@@ -47,7 +47,7 @@ class GlobalsAudited(Message):
 
 
 class DiskPressureProbed(Message):
-    """The Doctor's threaded blocking disk-pressure read finished (WR-02).
+    """The Doctor's threaded blocking disk-pressure read finished.
 
     Carries nothing: the worker's only job is to warm the shared
     TimerStateCache off the event loop, and the render path then reads the

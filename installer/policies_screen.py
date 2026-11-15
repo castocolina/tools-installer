@@ -36,7 +36,7 @@ class PolicyInputs:
     link_mode: Callable[[], str] | None = None
     set_link_mode: Callable[[str], None] | None = None
     disk_pressure: DiskPressureProbe | None = None
-    # WR-10: the same seam reasoning as disk_pressure -- one closure, both
+    # The same seam reasoning as disk_pressure -- one closure, both
     # the Doctor's durable disclosure and the Schedules detail line.
     competing: CompetingProbe | None = None
 
@@ -243,7 +243,7 @@ class PoliciesScreen(AppScreen):
 
     def _show_read_error(self, error: str) -> None:
         """Over an empty status or this screen's own earlier error only: another
-        writer's result stands, the same rule as the app's state line (RR-03)."""
+        writer's result stands, the same rule as the app's state line."""
         previous, self._read_error = self._read_error, _read_failure(error)
         if not self.status.text or self.status.text == previous:
             self.status.set(self._read_error, "error")
@@ -431,7 +431,7 @@ class PoliciesScreen(AppScreen):
 
     def _summary(self, policy: Policy, verb: str, result: PolicyResult) -> str:
         # One line per outcome: a single joined line overflows the terminal width
-        # and truncates the reload guidance (the Phase 3 fix).
+        # and truncates the reload guidance.
         parts = [f"{policy.label} {verb}."]
         parts.extend(f"{layer.name}: {layer.detail}" for layer in result.layers)
         if result.reload_hint:
@@ -477,7 +477,7 @@ class PoliciesScreen(AppScreen):
         self._refresh_link_mode_line()
 
     def mark_lost_policies_off(self, error: str) -> None:
-        """WR-02: a failed move whose error names policies gone from both
+        """A failed move whose error names policies gone from both
         modes flips their rows OFF, so the table never claims a policy that
         is no longer on disk."""
         for policy_id in lost_policy_ids(error):
@@ -488,7 +488,7 @@ class PoliciesScreen(AppScreen):
 
         The live truth is each policy's own on-disk activity, re-probed at the
         moment of the change through the same predicate the uninstall sweep
-        uses (installer.uninstall.policy_owned; 17-20, opencode H2). The
+        uses (installer.uninstall.policy_owned). The
         cached active_state is only the table's last paint: another view can
         remove a policy without this screen ever hearing about it, and moving
         on a stale cache would resurrect it.
@@ -502,8 +502,8 @@ def link_mode_status(value: str, report: Sequence[PolicyMove], *, old_mode: str)
     """(text, severity) both link-mode pickers show after a move: the saved
     mode, the policies moved, every failure named, and — when the move left
     split mode, whose aliases live in the rc files themselves — the exact
-    action that refreshes the PATH wiring so the shells source ~/.myshellrc
-    (17-20, opencode M1). Severity is warn when any entry failed (the mode
+    action that refreshes the PATH wiring so the shells source ~/.myshellrc.
+    Severity is warn when any entry failed (the mode
     itself was still saved), ok otherwise."""
     parts = [f"Link mode saved: {value}."]
     moved = [entry.policy_id for entry in report if entry.status == "moved"]

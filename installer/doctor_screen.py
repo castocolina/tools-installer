@@ -85,8 +85,8 @@ _POST_APPLY_REWRITES = (
     (GUARD_ENTER_HINT, "The guard is offered again after restarting the installer"),
     (SAFE_FIX_ENTER_HINT, "The safe fix was applied"),
 )
-# The console sentence's own tail names the platform's real one-off command
-# (WR-08), so only its leading clause is rewritten for the TUI -- rebuilding
+# The console sentence's own tail names the platform's real one-off command,
+# so only its leading clause is rewritten for the TUI -- rebuilding
 # the whole sentence here would re-introduce a second, platform-blind copy of
 # that command.
 _DISK_PRESSURE_TUI_PREFIX = "Open the Schedules view and turn on the tmp cleanup row;"
@@ -180,14 +180,14 @@ class DoctorScreen(AppScreen):
         self._pending_guards: list[tuple[Path, tuple[PathWriterLine, ...]]] = []
         # A predicate, not its result: the Policies view can enable the
         # background cleanup one navigation step away, so every entry re-reads
-        # it. WR-02: the daemon half of the
+        # it. The daemon half of the
         # blocking read may spawn `systemctl --user is-active` (bounded, but
         # a frozen UI for its duration), so the event loop only ever calls it
         # with blocking=False (TimerStateCache.peek). The blocking read runs in
         # _probe_disk_pressure_worker, which then asks for a re-render.
         self.disk_pressure = disk_pressure
         self.disk_probing = False
-        # WR-10: read-only competing-mechanism detection. Same split as
+        # Read-only competing-mechanism detection. Same split as
         # disk_pressure: the render path peeks, the worker below does the
         # blocking read that may issue `systemctl list-unit-files`.
         self.competing = competing
@@ -249,7 +249,7 @@ class DoctorScreen(AppScreen):
         # fresher state.
         self._globals_audit_generation = 0
         # The service epoch the current audit started at: its findings are
-        # dropped when a mutation invalidated the cache meanwhile (C-09).
+        # dropped when a mutation invalidated the cache meanwhile.
         self._globals_audit_epoch = 0
 
     def compose_body(self) -> ComposeResult:
@@ -282,7 +282,7 @@ class DoctorScreen(AppScreen):
 
     @work(thread=True, exclusive=True, group="disk-pressure", exit_on_error=False)
     def _probe_disk_pressure_worker(self) -> None:
-        """Take the blocking background-state reads off the event loop (WR-02).
+        """Take the blocking background-state reads off the event loop.
 
         The answer is not carried back: the read's purpose is to refresh the
         shared TimerStateCache, which the render path then peeks. The same
@@ -296,7 +296,7 @@ class DoctorScreen(AppScreen):
                     probe()
             competing = self.competing
             if competing is not None:
-                # WR-10: warmed here for the same reason -- the detection
+                # Warmed here for the same reason -- the detection
                 # spawns bounded read-only systemctl queries.
                 with contextlib.suppress(OSError, ValueError, CommandError):
                     competing()
@@ -339,7 +339,7 @@ class DoctorScreen(AppScreen):
     def _disk_pressure_items(self) -> list[Guidance]:
         if self.disk_pressure is None:
             return []
-        # Plan 15.7-02's D-03b already makes probe_disk_pressure TOTAL over
+        # probe_disk_pressure is already TOTAL over
         # filesystem and probe-conversion failure, and any other exception
         # (a programming error) propagates uncaught. This guard is the
         # documented second layer over the INJECTED closure a caller composes
@@ -354,7 +354,7 @@ class DoctorScreen(AppScreen):
         if self.competing is None:
             return []
         # peek only: this runs on the event loop, and a blocking read here
-        # would spawn the very systemctl queries WR-02 moved off it.
+        # would spawn the very systemctl queries the worker moved off it.
         try:
             units = self.competing(blocking=False)
         except (OSError, ValueError, CommandError):
@@ -495,7 +495,7 @@ class DoctorScreen(AppScreen):
             return
         if self.app.refuse_if_mutating(self):
             return
-        # Never write rc files the user was not shown (T-21-41, C-11): the
+        # Never write rc files the user was not shown (T-21-41): the
         # re-render re-reads the preview, and a failure keeps the error status.
         if self._preview_error is not None:
             self._refresh_body()
@@ -584,7 +584,7 @@ class DoctorScreen(AppScreen):
         if rescan is not None:
             self._adopt_writer_lines(rescan())
         # No render here: this runs from the last modal's callback, and the
-        # resume that follows renders Doctor once (C-08, RR-04).
+        # resume that follows renders Doctor once.
         self.post_message(RefreshRequested())  # the whole mutation has ended
 
     def action_reinstall_globals(self) -> None:
@@ -699,7 +699,7 @@ class DoctorScreen(AppScreen):
             if outcome is not None:
                 report, preview = outcome
         finally:
-            # Always posted, even on an exception run_live does not map (C-13):
+            # Always posted, even on an exception run_live does not map:
             # the handler is what clears globals_auditing.
             self.post_message(GlobalsAudited(report, preview, error, generation))
 

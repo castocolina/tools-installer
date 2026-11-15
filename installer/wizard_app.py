@@ -1,15 +1,11 @@
-"""Unified Textual shell hosting the wizard views behind one app.
-
-The app owns navigation and the screen stack. The base view, doctor, uninstall,
-and policies are all functional views. Execution stays behind the pure
-`installer/` core invoked from `setup.py`, with one deliberate exception: the
-doctor, uninstall, and policies views apply their changes live through
-injected closures. The app's run value stays the catalog decision
-(`list[str] | None`).
+"""The unified Textual app: navigation, the screen stack and the run value.
 
 Textual's empty default screen is the neutral root; every view is installed
 once and reached through `show_view`. Navigation is therefore a stack with the
-root at the bottom: the stack is always `[root, <one view>]` once mounted.
+root at the bottom: the stack is always `[root, <one view>]` once mounted. The
+views, modals and message types live in their own modules, and the closures they
+call are composed in `installer/compose.py`. The app's run value is the catalog
+decision (`list[str] | None`).
 """
 
 import contextlib
@@ -124,7 +120,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         # ctrl+c is the hard abort: unconditional, so it quits from anywhere — even on
         # top of the NavScreen modal; during a removal the first one waits and a
-        # second one exits (D-10, C-26). q is the soft quit: priority so it fires on
+        # second one exits (D-10). q is the soft quit: priority so it fires on
         # every view, but guarded (see action_abort) to no-op under the palette.
         Binding("ctrl+c", "hard_abort", "quit", show=False, priority=True),
         Binding("q", "abort", "quit", show=True, priority=True),
@@ -170,15 +166,15 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._read_link_mode = policies.link_mode
         self._link_mode_prompted = False
         # A first-run pick made while the launch schedule setup held the lock;
-        # on_schedule_defaults_applied moves it (C-18).
+        # on_schedule_defaults_applied moves it.
         self._deferred_link_mode: str | None = None
         # The exit code answers "did everything this session asked for succeed":
         # the latest outcome per tool id wins, so a cancel followed by a retry
         # never leaks an earlier not_attempted. None until the first run finishes.
         self.outcomes: dict[str, RowOutcome] | None = None
-        # A crash or a PATH/verify failure that no row outcome carries (L-20-08).
+        # A crash or a PATH/verify failure that no row outcome carries.
         self.run_errors: list[str] = []
-        # WR-06: set by InstallRunStarted (ExecuteScreen.action_start),
+        # Set by InstallRunStarted (ExecuteScreen.action_start),
         # cleared by on_install_run_finished. A hard abort inside the window
         # exits before the finish message can arrive, so the flag is the only
         # witness that the session was interrupted mid-run -- and the exit
@@ -198,20 +194,18 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # restores), or (None, line, "") while it waits in _pending_warnings.
         # A clean publish clears only its own line, never one a view wrote.
         self._state_line: tuple[AppScreen | None, str, str] | None = None
-        # D-01/15.6-06: the SAME composition-root closure Plans 04/05 wired for
-        # Policies' OMZ-plugin apply and the direct `u` update -- called from
-        # _install_closed on EVERY close event, never only a selected tool id
-        # or a successful outcome. None at every one of the fifteen other
-        # UnifiedApp(...) construction sites outside setup.py, matching the
-        # default-no-op contract every other optional closure here already has.
+        # The one composition-root closure Policies' OMZ-plugin apply and the direct
+        # `u` update share -- called from _install_closed on EVERY close event, never
+        # only a selected tool id or a successful outcome. None when nothing is wired,
+        # the default-no-op contract every other optional closure here has.
         self._terminal_sync = terminal_sync
-        # T-15.6-13: a follow-up warning that arrived while no AppScreen was
+        # A follow-up warning that arrived while no AppScreen was
         # resolvable (current_view names neither a tier nor a registered view)
         # is queued here rather than dropped, and flushed to the next screen
         # that becomes visible (show_view) or the next _install_closed render.
         self._pending_warnings: list[str] = []
-        # D-11: a damaged settings.json reaches the first screen through the
-        # SAME T-15.6-13 queue as every other warning, never a side channel.
+        # A damaged settings.json reaches the first screen through the same
+        # queue as every other warning, never a side channel.
         self._startup_warning = startup_warning
         if startup_warning is not None:
             self._pending_warnings.append(startup_warning)
@@ -240,11 +234,9 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         }
         # Every view, installed on mount and pushed by value (tiers first).
         self._views: dict[str, AppScreen] = dict(self._catalogs)
-        # Fifteen UnifiedApp(...) constructions exist outside setup.py. Required
-        # kwargs would TypeError at every one of them; those modules are
-        # deliberately not edited here. The cost of the default is that a
-        # UnifiedApp built without the closures silently reports a healthy set,
-        # so setup.py wiring is what makes the feature real in production.
+        # Optional on purpose: an app built without the closures silently reports
+        # a healthy set, so the composition in installer/compose.py is what makes
+        # the feature real in production.
         read_node_globals = (
             node_globals
             if node_globals is not None
@@ -298,8 +290,8 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self._schedule_defaults = schedule_defaults
         # Held from construction whenever a real reconcile callback was wired,
         # so there is no window between __init__ and the worker starting in
-        # on_mount where a mutation could slip in (11-REVIEWS.md cycle 2
-        # finding #15). on_schedule_defaults_applied releases it.
+        # on_mount where a mutation could slip in. on_schedule_defaults_applied
+        # releases it.
         if self._schedule_defaults is not None:
             self.begin_mutation(MutationHolder.SCHEDULE_DEFAULTS)
         # True once a quit waits on a running removal: no follow-up pass then.
@@ -414,7 +406,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         *,
         elsewhere: str | None = None,
     ) -> None:
-        """Write a mutation's result where the user is looking (C-28): on the
+        """Write a mutation's result where the user is looking: on the
         current view, which is `origin` unless the user left it meanwhile.
         `elsewhere` replaces `text` on another view when `text` names a key
         only `origin` handles."""
@@ -468,7 +460,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         completion message is ALWAYS posted -- regardless of whether
         self._schedule_defaults() returns normally or raises ANYTHING -- so the
         app mutation lock the constructor (or the install run's end) took can
-        never stay held (11-REVIEWS.md cycle 3 finding #15). An exception
+        never stay held. An exception
         raised inside the try still propagates normally after the finally runs
         and is recorded on the Worker itself (state=ERROR, .error);
         exit_on_error=False is what keeps that from also crashing the app, so
@@ -503,7 +495,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def _announce_startup_line(self, text: str, severity: Severity | str) -> None:
         """The reconcile's lines ride the startup-warning path: over an empty status of the
-        visible view, else queued for the next view that becomes visible (T-15.6-13)."""
+        visible view, else queued for the next view that becomes visible."""
         screen = self._visible_app_screen()
         if screen is None or screen.status.text:
             self._pending_warnings.append(text)
@@ -538,14 +530,14 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         await self.push_screen(target)
         self.current_view = name
         # Flush before entry: a status written by enter_view wins over a queued
-        # warning. T-15.6-13: also where an early warning is finally delivered.
+        # warning. Also where an early warning is finally delivered.
         self._flush_pending_warnings(target)
         target.enter_view()
 
     def _flush_pending_warnings(self, screen: AppScreen, extra: Sequence[str] = ()) -> None:
         """Write the queued warnings (and `extra`) on one line of `screen`. A
-        queued state line moves with them, so a clean publish still retracts it
-        (RR-02), leaving the other warnings standing."""
+        queued state line moves with them, so a clean publish still retracts it,
+        leaving the other warnings standing."""
         parts = [*self._pending_warnings, *extra]
         self._pending_warnings = []
         if not parts:
@@ -597,7 +589,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     def _first_link_mode_picked(self, value: str | None) -> None:
         # make fix opens with initial_view="doctor", so the Doctor AppScreen is
-        # on top and the catalog is hidden. Write D-05.3's explanation onto
+        # on top and the catalog is hidden. Write the explanation onto
         # the screen the user is looking at, never a hard catalog fallback:
         # if a future Textual version fired this callback while LinkModeScreen
         # were still current, self.screen would not be an AppScreen and a hard
@@ -615,7 +607,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
                 f"Link mode unchanged; this run uses {mode}. "
                 f"Press {policies_key} then m to change it later."
             )
-            # D-11: dismissing the one first-run question must not erase the
+            # Dismissing the one first-run question must not erase the
             # only notice that the settings file was ignored. Same separator
             # _flush_pending_warnings uses.
             if self._startup_warning is not None:
@@ -624,7 +616,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             return
         if self._set_link_mode is None:
             return
-        # C-18: the launch daemon apply rewrites ~/.myshellrc as the move does,
+        # The launch daemon apply rewrites ~/.myshellrc as the move does,
         # so the pick waits for it instead of making the user answer again. It
         # is the only holder possible here: the picker opens at launch.
         if self.mutation_in_flight:
@@ -666,7 +658,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         self.push_screen(ExecuteScreen(message.result, self._execute), self._install_closed)
 
     def _install_closed(self, result: list[RowOutcome] | None) -> None:
-        # Only the rows that still need the user stay selected (D-10, L-20-07).
+        # Only the rows that still need the user stay selected (D-10).
         # intersection_update, never a rebind: the tier browsers hold this set.
         # None (closed before a run) leaves the selection untouched.
         if result is not None:
@@ -679,11 +671,11 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # this callback does neither). Presence is re-read by the refresh pass
         # `request_refresh` starts below, never swept here (D-04, see __init__).
         warnings: list[str] = []
-        # D-01/15.6-06 Task 1: the shared terminal synchronizer runs after a
+        # The shared terminal synchronizer runs after a
         # close event that actually changed installed-tool state -- never
-        # only a selected tool id (WR-07: merely opening and dismissing the
+        # only a selected tool id (merely opening and dismissing the
         # Execute screen with nothing selected/changed otherwise rewrote
-        # kitty.conf, created a brand-new wezterm.lua (CR-03), and wrote
+        # kitty.conf, created a brand-new wezterm.lua, and wrote
         # konsolerc for a session that installed nothing). The zsh-removal
         # revert case is independently covered by
         # UninstallScreen.on_removal_finished and _run_uninstall, so this gate
@@ -691,10 +683,10 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # every other live core read this callback triggers (rule 3): an
         # OSError is a secondary, non-fatal warning and must never flip an
         # already-recorded run into a reported failure.
-        # WR-03: not run_live -- terminal_sync_warning IS this seam's live
+        # Not run_live -- terminal_sync_warning IS this seam's live
         # guard, and routing through both produced the one message whose
         # casing had already drifted from the other four call sites.
-        # D-11: the gate is "a row actually ran", so an update counts too.
+        # The gate is "a row actually ran", so an update counts too.
         if result is not None and ran_anything(result):
             sync_warning = terminal_sync_warning(self._terminal_sync)
             if sync_warning:
@@ -709,7 +701,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # callback takes the message pump down instead of degrading. No
         # catalog on top means the warnings go to the visible view below.
         active = self._catalogs.get(self.current_view)
-        # The revealed view renders itself on resume (C-08); ask for the pass
+        # The revealed view renders itself on resume; ask for the pass
         # that publishes what the run changed (A11: only if it ran something).
         if result is not None and ran_anything(result):
             self.request_refresh()
@@ -717,7 +709,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         if self._invalidate_warning is not None:
             warnings.append(self._invalidate_warning)
             self._invalidate_warning = None
-        # WR-08: also checks _pending_warnings, not just this close's own
+        # Also checks _pending_warnings, not just this close's own
         # `warnings` -- __init__'s own documented contract is that a queued
         # warning flushes on "the next _install_closed render", but a close
         # that produces no NEW warning of its own used to return here before
@@ -726,7 +718,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # show_view navigation flushed it.
         if not warnings and not self._pending_warnings:
             return
-        # T-15.6-13: render on WHICHEVER AppScreen is actually visible right
+        # Render on WHICHEVER AppScreen is actually visible right
         # now -- a catalog tier (active, above) or the Doctor/Uninstall/
         # Policies screen the run was launched over -- never dropped merely
         # because current_view names a non-tier key. Only when no AppScreen
@@ -797,7 +789,7 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
             ]
 
     def on_tool_updated(self, message: ToolUpdated) -> None:
-        """opencode H3: a failed DIRECT update (a `u` press on the catalog)
+        """A failed DIRECT update (a `u` press on the catalog)
         never reaches an ExecuteScreen, so nothing else would record it and
         the process would exit 0 after a failed update. The failure is folded
         here as a plan-shaped outcome, so _session_exit_code needs no second
@@ -840,13 +832,13 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
 
     async def action_quit(self) -> None:
         # Textual's inherited ctrl+q calls exit() directly, which would abandon a
-        # removal's daemon delete thread (RR-01); it is the soft quit, like q.
+        # removal's daemon delete thread; it is the soft quit, like q.
         self.action_abort()
 
     def action_hard_abort(self) -> None:
         # The hard quit (ctrl+c): exits from anywhere, including on top of the
         # palette. The first one during a removal waits for it; a second one
-        # stops waiting and says the removal may be partial (D-10, C-26).
+        # stops waiting and says the removal may be partial (D-10).
         if self.quitting and self._mutation_holder is MutationHolder.REMOVAL:
             self.exit(None, message=_REMOVAL_QUIT_CUT)
             return

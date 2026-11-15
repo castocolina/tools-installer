@@ -1,7 +1,7 @@
 """The app's modal screens: each one is pushed over a view and dismisses with its answer.
 
-Moved verbatim from wizard_app.py (D-07). The two names they share with the schedules view
-live in ui_common as `sentence` and `TIMES_LISTED`.
+The two names they share with the schedules view live in ui_common as `sentence` and
+`TIMES_LISTED`.
 """
 
 from collections.abc import Callable, Sequence

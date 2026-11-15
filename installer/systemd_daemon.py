@@ -634,7 +634,7 @@ class CompetingUnit:
     state: str  # the enablement state list-unit-files reported
 
 
-# The composition root's competing-mechanism probe (WR-10), same
+# The composition root's competing-mechanism probe, same
 # call shape and same blocking rule as DiskPressureProbe: blocking=True
 # may issue bounded read-only systemctl queries, blocking=False peeks
 # a memo and never spawns. Read-only in both systemd scopes.

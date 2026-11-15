@@ -93,7 +93,7 @@ class DiskPressure:
         return self.under_pressure and self.daemon is DaemonState.INACTIVE
 
 
-# The composition root's disk probe (D-03): callable with no arguments, plus
+# The composition root's disk probe: callable with no arguments, plus
 # one optional keyword, `blocking`, that picks the daemon-state cache verb.
 # blocking=True (the default) may run one bounded systemd query, right for a
 # Doctor entry; blocking=False never queries at all, which is what a render on

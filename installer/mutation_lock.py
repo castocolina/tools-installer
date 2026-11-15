@@ -49,7 +49,7 @@ class MutationLock:
     ) -> bool:
         """Take the lock; False when a scheduled run holds the run lock (refusal on `screen`)."""
         # Every caller refuses first; a second take would let one end_mutation
-        # release both (C-30), so it is a bug, never a queue.
+        # release both, so it is a bug, never a queue.
         if self._mutation_holder is not None:
             raise RuntimeError(f"{self._mutation_holder} already holds the mutation lock")
         if holder in self._CROSS_PROCESS:

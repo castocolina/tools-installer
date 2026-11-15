@@ -89,7 +89,7 @@ _LINGER_SENTENCE = (
 
 
 def _competing_line(competing: CompetingProbe | None) -> str | None:
-    """WR-10: name a system-scope competitor on the background-cleanup row.
+    """Name a system-scope competitor on the background-cleanup row.
 
     Peek only -- this runs on every row highlight -- so it says nothing
     until the screen's own warm-up worker has landed an answer. Only
@@ -123,8 +123,8 @@ def _temp_usage_line(disk_pressure: DiskPressureProbe | None) -> str | None:
       no process, unlike the pnpm audit the Doctor runs on a worker. A
       worker here would buy nothing and cost a cross-thread hand-off plus a
       stale-value window on a number whose whole point is being current.
-    - The daemon-state half is a `systemctl --user is-active` SUBPROCESS
-      (plan 15.7-01's D-01c), so this path does not run it AT ALL:
+    - The daemon-state half is a `systemctl --user is-active` SUBPROCESS,
+      so this path does not run it AT ALL:
       blocking=False makes the closure read TimerStateCache.peek(), which
       never probes. Memoization alone is not the answer, although "it's
       cached" reads like one: a memo still has a cold first read and a TTL
@@ -133,13 +133,13 @@ def _temp_usage_line(disk_pressure: DiskPressureProbe | None) -> str | None:
       to a worker": the daemon state is not even shown on this line, so a
       worker would add async plumbing to fetch a value nothing renders.
 
-    Failures follow plan 15.7-02's D-03b: probe_disk_pressure is TOTAL over
+    Failures: probe_disk_pressure is TOTAL over
     filesystem and probe-conversion failure, and any other exception
     propagates uncaught. This guard is the documented second layer over the
     injected closure, the same pairing the adjacent reads use.
 
     Only a number the probe actually measured is stated: the temp-directory
-    usage (measured on macOS too, per D-03d), else -- only when the temp
+    usage (measured on macOS too), else -- only when the temp
     mount was unreadable -- the free space on the filesystem holding the
     user's home directory, labelled as such, else no line at all.
     """
@@ -288,7 +288,7 @@ class SchedulesScreen(AppScreen):
     @work(thread=True, exclusive=True, group="schedule-probe", exit_on_error=False)
     def _probe_worker(self) -> None:
         """Ask whether a user timer manager exists, off the event loop (D-24), and warm the
-        competing-mechanism memo the tmp row's detail line only peeks at (WR-02/WR-10)."""
+        competing-mechanism memo the tmp row's detail line only peeks at."""
         reachable = False
         try:
             ctx = self._ctx
@@ -642,7 +642,7 @@ class SchedulesScreen(AppScreen):
         self.app.end_mutation()
         ctx = self._ctx
         if ctx is not None and message.error is None:
-            # Acting here is the user's decision that ends the damaged-state guard (R2-11).
+            # Acting here is the user's decision that ends the damaged-state guard.
             run_live(lambda: schedules.clear_damage(ctx.state_path))
         self.state_refreshed()
         text, severity = self._change_line(message)

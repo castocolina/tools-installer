@@ -480,8 +480,8 @@ class UninstallScreen(AppScreen):
         """The environment predicates another view can change while this one is
         suspended, as one tuple.
 
-        Every one of them touches the FILESYSTEM and can therefore raise
-        (CR-01, 15.4-REVIEW.md): `has_path_block` -> `shellrc.has_managed_block`
+        Every one of them touches the FILESYSTEM and can therefore raise:
+        `has_path_block` -> `shellrc.has_managed_block`
         -> `Path.read_text()`; `tweak_ids` -> `active_tweak_ids` -> the rc files
         and the managed bin dir; the settings files -> the ledgers. That is why this
         tuple is its own seam: every caller evaluates it through `run_live`, so a
@@ -620,7 +620,7 @@ class UninstallScreen(AppScreen):
         if self.app.refuse_if_mutating(self):
             return
         # Built now, before the modal opens, so a publish during the confirm cannot
-        # change what the user confirmed (review R1-20).
+        # change what the user confirmed.
         decision, kept, flagged = self._decision(event.ids)
         self.app.push_screen(
             ConfirmUninstall(
@@ -637,7 +637,7 @@ class UninstallScreen(AppScreen):
     ) -> tuple[Text, ...]:
         """Blocks 3-7 of the review (UI-SPEC, ConfirmUninstall), built from the one snapshot
         `_decision` took: the decision, the `config_split` kept map and the flagged ids. Nothing
-        is recomputed after the confirm (review R1-20). Every id, command and path is data:
+        is recomputed after the confirm. Every id, command and path is data:
         it goes through `sanitize_log_line` and is appended as plain `Text`, never markup."""
         lines: list[Text] = []
         for tool in decision.tools:
@@ -675,10 +675,10 @@ class UninstallScreen(AppScreen):
         ]
         if unflagged:
             lines.append(review_line(sanitize_log_line(f"Config kept: {', '.join(unflagged)}.")))
-        # The frozen decision's argv, like the `runs` lines above (review C-13).
+        # The frozen decision's argv, like the `runs` lines above.
         packages = pnpm_removal_packages(decision.argv.values())
 
-        def present(tool: Tool) -> bool:  # an unknown state counts as present (22-UAT F-3)
+        def present(tool: Tool) -> bool:  # an unknown state counts as present
             return uninstall_group(self._state_of(tool)) is not UninstallState.ABSENT
 
         for warning in co_install_warnings(packages, self._tools, present=present):
@@ -714,7 +714,7 @@ class UninstallScreen(AppScreen):
 
     def _config_refused(self, text: str) -> None:
         """A refusal is a warn line, but it never replaces `Removing…` (D-05): during a removal
-        it shows in the detail bar instead, so the key never looks broken (review C-15)."""
+        it shows in the detail bar instead, so the key never looks broken."""
         if self.app.mutation_holder is not MutationHolder.REMOVAL:
             self.status.set(text, "warn")
         else:
@@ -813,11 +813,10 @@ class UninstallScreen(AppScreen):
             # From the sweep's own result, never from the row's snapshot: the
             # snapshot describes what was offered, not what came off.
             if swept.swept:
-                # Byte-identical to today when no schedule: id is among what was
-                # actually swept. When one is present, name it explicitly and
-                # append the shell-reload hint only if a real, non-schedule
-                # tweak was ALSO swept -- a timer needs no shell reload
-                # at all (11-REVIEWS.md cycle 2 finding #19).
+                # When a schedule: id is among what was actually swept, name it
+                # explicitly and append the shell-reload hint only if a real,
+                # non-schedule tweak was ALSO swept -- a timer needs no shell
+                # reload at all.
                 phrase = schedule_phrase(swept.swept)
                 has_schedule = bool(phrase)
                 has_redirect = any(sid.startswith("cache-redirect:") for sid in swept.swept)
@@ -943,12 +942,11 @@ class UninstallScreen(AppScreen):
             summary_parts.append(applied)
         if message.invalidate_error is not None:
             summary_parts.append(message.invalidate_error)
-        # D-01/15.6-06 Task 3: called unconditionally on every successful
-        # sweep (never gated on tools -- a terminal reapply/reversion is
-        # warranted even when only an env lever came off, since
-        # sync_terminal_shells' own no-zsh branch is exactly what a
-        # zsh-removing sweep needs). WR-03/WR-04: the one shared failure
-        # contract (terminal_sync_warning); a failure renders "warn", never
+        # Called unconditionally on every successful sweep (never gated on
+        # tools -- a terminal reapply/reversion is warranted even when only an
+        # env lever came off, since sync_terminal_shells' own no-zsh branch is
+        # exactly what a zsh-removing sweep needs). The one shared failure
+        # contract (terminal_sync_warning): a failure renders "warn", never
         # the "ok" success color, and never flips `applied`.
         terminal_warning = terminal_sync_warning(self._terminal_sync)
         if terminal_warning:
