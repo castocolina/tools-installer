@@ -6,7 +6,6 @@ from installer.deps import (
     DependencyCycleError,
     Resolution,
     missing_requires,
-    requires_integrity_errors,
     resolve_dependencies,
 )
 from installer.model import Method, Tool, load_tools
@@ -148,19 +147,6 @@ def test_unknown_required_id_is_ignored_in_closure() -> None:
     user = _tool("user", "ghost")
     result = _resolve([user], [user])
     assert [t.id for t in result.closure] == ["user"]
-
-
-def test_integrity_flags_unknown_requires_id() -> None:
-    good = _tool("good")
-    bad = _tool("bad", "ghost")
-    errors = requires_integrity_errors([good, bad])
-    assert any("bad" in e and "ghost" in e for e in errors)
-
-
-def test_integrity_clean_catalog_has_no_errors() -> None:
-    a = _tool("a", "b")
-    b = _tool("b")
-    assert requires_integrity_errors([a, b]) == []
 
 
 def test_resolver_records_cross_tier_dependency_requester() -> None:

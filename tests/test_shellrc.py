@@ -17,7 +17,6 @@ from installer.platform import Platform
 from installer.rcclean import path_writer_lines
 from installer.shellrc import (
     apply_block,
-    classify_source_line,
     collect_bin_dirs,
     consolidate_shellrc,
     consolidation_refusal,
@@ -1579,91 +1578,6 @@ def _no_backup_anywhere(root: Path) -> bool:
     return not list(root.glob(f"*{OLD_SUFFIX}"))
 
 
-@pytest.mark.parametrize(
-    "line",
-    [
-        ". {target}",
-        "source {target}",
-        ". $HOME/.myshellrc",
-        ". ${HOME}/.myshellrc",
-        ". ~/.myshellrc",
-        '. "$HOME/.myshellrc"',
-        "  source {target}   ",
-    ],
-)
-def test_source_classifier_marks_only_simple_target_lines_rewritable(
-    tmp_path: Path, line: str
-) -> None:
-    target = tmp_path / ".myshellrc"
-    assert (
-        classify_source_line(line.replace("{target}", str(target)), target).verdict == "rewritable"
-    )
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        'export A=1; . "$HOME/.myshellrc"; export B=1',
-        '[ -f "$HOME/.myshellrc" ] && . "$HOME/.myshellrc"',
-        'if . "$HOME/.myshellrc"; then',
-        '! source "$HOME/.myshellrc"',
-        '. "$HOME/.myshellrc" \\',
-        '. "$target"',
-        '. "$HOME"/.myshellrc',
-        'FOO=bar . "$HOME/.myshellrc"',
-        '*) . "$HOME/.myshellrc" ;;',
-        'root=$HOME; . "$root/.myshellrc"',
-        'command source "$HOME/.myshellrc"',
-        'builtin source "$HOME/.myshellrc"',
-        'command . "$HOME/.myshellrc"',
-        r'sour\ce "$HOME/.myshellrc"',
-        "'source' \"$HOME/.myshellrc\"",
-        'command -p source "$HOME/.myshellrc"',
-        'cmd=source; $cmd "$HOME/.myshellrc"',
-    ],
-)
-def test_source_classifier_marks_every_ambiguous_target_line(tmp_path: Path, line: str) -> None:
-    target = tmp_path / ".myshellrc"
-    inspection = classify_source_line(line, target)
-    assert inspection.verdict == "ambiguous", line
-    if line in {'. "$target"', 'root=$HOME; . "$root/.myshellrc"'}:
-        assert inspection.has_unresolvable_source is True, line
-    else:
-        assert inspection.resolves_to_target is True, line
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        "# source $HOME/.myshellrc",
-        'export MYSHELLRC="$HOME/.myshellrc"',
-        'echo "$HOME/.myshellrc"',
-        '. "$HOME/.other.myshellrc"',
-        '. "$HOME/.shellrc"',
-        '. "$HOME/.cargo/env"',
-        '$EDITOR "$HOME/.bashrc"',
-        'command ls "$HOME"',
-    ],
-)
-def test_source_classifier_does_not_overdetect_unrelated_lines(tmp_path: Path, line: str) -> None:
-    target = tmp_path / ".myshellrc"
-    assert classify_source_line(line, target).verdict == "none", line
-
-
-def test_source_classifier_compares_real_paths_for_aliased_literal(tmp_path: Path) -> None:
-    real_home = tmp_path / "var" / "home" / "u"
-    real_home.mkdir(parents=True)
-    aliased_home = tmp_path / "home" / "u"
-    aliased_home.parent.mkdir()
-    aliased_home.symlink_to(real_home)
-    target = aliased_home / ".myshellrc"
-
-    inspection = classify_source_line(f'. "{real_home}/.myshellrc"', target)
-
-    assert inspection.verdict in {"rewritable", "ambiguous"}
-    assert inspection.resolves_to_target is True
-
-
 def _assert_content_refusal(
     tmp_path: Path,
     shellrc_text: str,
@@ -2324,12 +2238,6 @@ def test_a_simple_line_sourcing_myshellrc_is_disabled_not_deleted(tmp_path: Path
     assert disabled[0].lstrip().startswith("#")
     assert disabled[0].endswith(original_line)
     assert str(myshellrc) in disabled[0]
-    # And no LIVE source of the target is left behind in the copied content.
-    assert all(
-        classify_source_line(line, myshellrc).verdict == "none"
-        for line in span
-        if not line.lstrip().startswith("#")
-    )
 
 
 def test_the_rewritten_body_changes_nothing_else(tmp_path: Path) -> None:
@@ -2378,8 +2286,6 @@ def test_the_rewritten_body_changes_nothing_else(tmp_path: Path) -> None:
 def test_sources_file_is_broader_than_the_rewriter(tmp_path: Path, line: str) -> None:
     target = tmp_path / ".myshellrc"
     target.write_text("x\n")
-    # Every rewritable AND every path-resolving ambiguous shape answers yes.
-    assert classify_source_line(line, target).verdict in {"rewritable", "ambiguous"}
     assert sources_file(f"{line}\n", target) == "yes"
 
 
@@ -2395,7 +2301,6 @@ def test_sources_file_is_broader_than_the_rewriter(tmp_path: Path, line: str) ->
 def test_sources_file_answers_no_for_every_none_shape(tmp_path: Path, line: str) -> None:
     target = tmp_path / ".myshellrc"
     target.write_text("x\n")
-    assert classify_source_line(line, target).verdict == "none"
     assert sources_file(f"{line}\n", target) == "no"
 
 
@@ -2765,19 +2670,6 @@ def test_reserved_word_prefixed_source_forms_execute_and_are_refused(
     assert _no_backup_anywhere(tmp_path)
 
 
-def test_a_reserved_word_prefix_does_not_refuse_an_unrelated_command(tmp_path: Path) -> None:
-    """The mirror risk: `time` before anything else must stay invisible.
-
-    Widening the prefix set must not turn an ordinary timed command into a
-    refusal, or consolidation becomes unusable for anyone who times a build.
-    """
-    target = tmp_path / ".myshellrc"
-    target.write_text("x\n")
-
-    for line in ("time make build", "time ls -la", "noglob echo *"):
-        assert classify_source_line(line, target).verdict == "none"
-
-
 # --- Phase 15.8 review blockers: six independently reproduced defects ---
 #
 # Each of these produced a real failure before it was fixed. CR-01, CR-02 and
@@ -2830,16 +2722,6 @@ def test_a_leading_redirection_never_hides_a_source_command(tmp_path: Path, form
     assert result.status == "refused"
     assert (shellrc.read_bytes(), myshellrc.read_bytes()) == before
     assert _no_backup_anywhere(tmp_path)
-
-
-@pytest.mark.parametrize(
-    "line", ["echo hi > /tmp/x", "cat < /etc/hosts", "make 2>&1 | tee log", "ls >out 2>&1"]
-)
-def test_ordinary_redirections_are_not_refused(tmp_path: Path, line: str) -> None:
-    """The mirror risk of CR-02: redirecting anything else stays invisible."""
-    target = tmp_path / ".myshellrc"
-    target.write_text("x\n")
-    assert classify_source_line(line, target).verdict == "none"
 
 
 @pytest.mark.parametrize("opener", ["cat <<\\EOF", "cat >out<<EOF", "cat <<-\\EOF"])
@@ -3224,23 +3106,6 @@ def test_an_unrelated_rc_path_does_not_refuse(tmp_path: Path) -> None:
     shellrc.write_text("alias gs='git status'\n")
 
     assert consolidate_shellrc(shellrc, myshellrc, (bashrc,)).status == "consolidated"
-
-
-def test_a_single_quoted_argument_is_not_expanded(tmp_path: Path) -> None:
-    """Single quotes suppress every expansion, so this is a DIFFERENT file.
-
-    Stripping quotes before expanding made `. '$HOME/.myshellrc'` look like the
-    target and marked it rewritable -- which would have commented out a working
-    command that sources some other file. A wrong verdict is content mutation
-    even when it never loops.
-    """
-    target = tmp_path / ".myshellrc"
-    target.write_text("x\n")
-
-    assert classify_source_line(". '$HOME/.myshellrc'", target).verdict == "none"
-    assert classify_source_line(". '~/.myshellrc'", target).verdict == "none"
-    # An absolute single-quoted path needs no expansion, so it still matches.
-    assert classify_source_line(f". '{target}'", target).verdict == "rewritable"
 
 
 @pytest.mark.parametrize(

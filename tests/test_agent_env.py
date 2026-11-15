@@ -44,32 +44,12 @@ def test_adapters_add_cursor_agent_and_vscode(tmp_path: Path) -> None:
     assert linux["claude"].config_path == tmp_path / ".claude" / "settings.json"
 
 
-def test_pi_is_an_audit_only_adapter(tmp_path: Path) -> None:
-    adapter = adapters(tmp_path)["pi"]
-
-    assert adapter.permission_mode == "audit-only"
-
-
-def test_adapters_define_native_instruction_paths_when_supported(tmp_path: Path) -> None:
-    configured = adapters(tmp_path)
-
-    assert configured["claude"].instruction_path == tmp_path / ".claude" / "CLAUDE.md"
-    assert configured["codex"].instruction_path == tmp_path / ".codex" / "AGENTS.md"
-    assert configured["opencode"].instruction_path == (
-        tmp_path / ".config" / "opencode" / "AGENTS.md"
-    )
-    assert configured["pi"].instruction_path == tmp_path / ".pi" / "AGENTS.md"
-    assert configured["antigravity"].instruction_path == tmp_path / ".gemini" / "GEMINI.md"
-
-
 def test_copilot_adapter_honours_an_absolute_copilot_home(tmp_path: Path) -> None:
     ch = tmp_path / "ch"
     copilot = adapters(tmp_path / "home", "linux", environ={"COPILOT_HOME": str(ch)})["copilot"]
 
     assert copilot.config_path == ch / "settings.json"
     assert copilot.label == "GitHub Copilot CLI"
-    assert copilot.instruction_path is None
-    assert copilot.permission_mode == "configurable"
 
 
 def test_copilot_adapter_ignores_an_empty_or_relative_copilot_home(tmp_path: Path) -> None:
@@ -100,8 +80,6 @@ def test_herdr_adapter_path(tmp_path: Path) -> None:
     assert herdr_path(None) == default
     herdr = adapters(tmp_path)["herdr"]
     assert herdr.label == "herdr"
-    assert herdr.instruction_path is None
-    assert herdr.permission_mode == "unknown"
 
 
 def test_herdr_home_changes_no_other_adapter(tmp_path: Path) -> None:

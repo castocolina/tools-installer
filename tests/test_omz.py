@@ -7,7 +7,6 @@ from installer import omz
 from installer.omz import (
     MANAGED_PLUGINS,
     OmzPluginsError,
-    disable_plugins,
     enable_plugins,
     ensure_zshrc_template,
     omz_present,
@@ -48,17 +47,6 @@ def test_enable_is_idempotent_and_never_duplicates() -> None:
     assert from_git.count("git") == 1
 
 
-def test_disable_removes_only_the_managed_names() -> None:
-    src = (
-        'export ZSH="$HOME/.oh-my-zsh"\n'
-        'ZSH_THEME="robbyrussell"\n'
-        "plugins=(z git sudo docker)\n"
-        "source $ZSH/oh-my-zsh.sh\n"
-    )
-    out = disable_plugins(src)
-    assert out == _ZSHRC
-
-
 def test_write_and_remove_round_trip_on_a_real_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -80,14 +68,12 @@ def test_multi_line_array_is_refused_not_parsed() -> None:
     src = "plugins=(\n  git\n  z\n)\nsource x\n"
     with pytest.raises(OmzPluginsError, match=r"plugins=\("):
         enable_plugins(src)
-    assert disable_plugins(src) == src
 
 
 def test_a_zshrc_with_no_plugins_line_raises_on_enable_and_no_ops_on_disable() -> None:
     src = 'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\n'
     with pytest.raises(OmzPluginsError, match=r"plugins=\("):
         enable_plugins(src)
-    assert disable_plugins(src) == src
 
 
 def test_missing_file_gets_the_oh_my_zsh_template_then_enables_plugins(
@@ -170,7 +156,6 @@ def test_commented_out_plugins_line_is_never_matched() -> None:
     src = "# plugins=(git)\nsource $ZSH/oh-my-zsh.sh\n"
     with pytest.raises(OmzPluginsError, match=r"plugins=\("):
         enable_plugins(src)
-    assert disable_plugins(src) == src
 
 
 def test_ensure_zshrc_template_recognizes_the_guarded_source_idiom(tmp_path: Path) -> None:
@@ -278,14 +263,8 @@ def test_disable_on_an_array_without_the_managed_names_changes_nothing(
     monkeypatch.setenv("HOME", str(tmp_path))
     zshrc, state = _sandbox(tmp_path)
     assert plugins_owned(state) is False
-    assert disable_plugins(_ZSHRC) == _ZSHRC
     assert remove_plugins(zshrc, state) == ()
     assert zshrc.read_text() == _ZSHRC
-
-
-def test_disable_removes_a_plugin_the_user_had_before() -> None:
-    src = "plugins=(git z)\n"
-    assert disable_plugins(src) == "plugins=(z)\n"
 
 
 def test_plugins_in_reports_the_array_contents() -> None:
@@ -369,7 +348,6 @@ def test_a_multi_line_array_after_a_single_line_one_is_refused_not_silently_edit
     src = "plugins=(git)\n# later\nplugins=(\n  zsh-autosuggestions\n)\n"
     with pytest.raises(OmzPluginsError, match="multi-line"):
         enable_plugins(src)
-    assert disable_plugins(src) == src
     assert plugins_in("plugins=(git docker)\n# later\nplugins=(\n  z\n)\n") == ()
 
 
@@ -400,7 +378,6 @@ def test_a_crlf_zshrc_is_edited_and_keeps_its_line_endings() -> None:
         'ZSH_THEME="robbyrussell"\r\nplugins=(z git docker)\r\nsource $ZSH/oh-my-zsh.sh\r\n'
     )
     assert set(MANAGED_PLUGINS) <= set(plugins_in(out))
-    assert disable_plugins(out) == src
 
 
 def test_a_crlf_trailing_comment_survives_the_rewrite() -> None:
@@ -414,8 +391,6 @@ def test_quoted_plugin_names_are_recognised_not_duplicated() -> None:
     assert plugins_in('plugins=("git" "docker")\n') == ("git", "docker")
     # A name kept is written back verbatim — quoting style is never restyled.
     assert enable_plugins('plugins=("z")\n') == 'plugins=("z" git docker)\n'
-    # ...and a quoted managed name is still removable.
-    assert disable_plugins('plugins=("git" z docker)\n') == "plugins=(z)\n"
 
 
 def test_the_zshrc_rewrite_is_atomic_and_leaves_no_temp_file(
@@ -662,8 +637,8 @@ def test_removal_raises_rather_than_dropping_the_record_when_the_array_is_shadow
 ) -> None:
     # CR-01: the user enables the policy, then converts their array to the
     # multi-line form (oh-my-zsh's own idiom) -- the single-line array this
-    # module edited is now dead. disable_plugins is total and reports content
-    # unchanged for a shadowed array, which is indistinguishable from "found
+    # module edited is now dead. A total rewrite reports content unchanged for
+    # a shadowed array, which is indistinguishable from "found
     # the array, nothing matched" -- clearing the record on that would report
     # success while `git`/`docker` are still on disk with no record left to
     # take them back out. Removal must raise and leave the record intact.

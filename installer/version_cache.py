@@ -375,17 +375,6 @@ def load_manager_snapshot(path: Path) -> ManagerSnapshot | None:
     return decode_manager_snapshot(_existing_managers(path))
 
 
-def save_manager_snapshot(
-    path: Path,
-    snapshot: ManagerSnapshot | None,
-    *,
-    tools: Mapping[str, VersionCacheEntry] | None = None,
-) -> None:
-    cache = dict(tools) if tools is not None else load_version_cache(path)
-    encoded = encode_manager_snapshot(snapshot) if snapshot is not None else {}
-    save_version_cache(path, cache, managers=encoded)
-
-
 def is_manager_stale(snapshot: ManagerSnapshot | None, *, now: datetime) -> bool:
     if snapshot is None:
         return True

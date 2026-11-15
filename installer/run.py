@@ -75,10 +75,6 @@ def command_error_line(exc: CommandError) -> str:
     return next((ln for ln in exc.detail.splitlines() if ln.strip()), str(exc).splitlines()[0])
 
 
-class InteractiveTerminalUnavailable(RuntimeError):
-    """An approved interactive command has no terminal from which to read."""
-
-
 def run_command(cmd: list[str]) -> None:
     """Real Runner: run argv, raise CommandError on non-zero exit."""
     try:
@@ -87,13 +83,6 @@ def run_command(cmd: list[str]) -> None:
         raise CommandError(cmd, exc.returncode) from exc
     except OSError as exc:
         raise CommandError(cmd, 127) from exc
-
-
-def run_interactive_command(cmd: list[str]) -> None:
-    """Run approved argv with the active terminal available for system prompts."""
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        raise InteractiveTerminalUnavailable
-    run_command(cmd)
 
 
 TIMEOUT_CODE = 124  # what GNU timeout(1) reports, so the number is readable

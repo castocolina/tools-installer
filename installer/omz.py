@@ -235,17 +235,6 @@ def enable_plugins(content: str, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> 
     return rewritten
 
 
-def disable_plugins(content: str, plugins: tuple[str, ...] = MANAGED_PLUGINS) -> str:
-    """Remove managed plugin names from the last single-line plugins=(...) array.
-
-    Disabling and doing nothing is already the correct end state, so a missing
-    array returns content unchanged. Disable must stay total because the
-    full-uninstall sweep calls it against machines that may have no .zshrc at all.
-    """
-    rewritten = _rewrite(content, plugins, enable=False)
-    return content if rewritten is None else rewritten
-
-
 def plugins_in(content: str) -> tuple[str, ...]:
     """The plugin names in the array zsh honors, unquoted; () when there is none.
 
@@ -552,10 +541,9 @@ def remove_plugins(zshrc_path: Path, state_path: Path) -> tuple[str, ...]:
     "nothing removed" rather than raising, because the full-uninstall sweep
     calls this against machines in either state.
 
-    It is NOT total against an array this module cannot parse. `disable_plugins`
-    is total on its own (it must be, since the sweep also calls it in contexts
-    with no record at all), but returning content unchanged there is
-    indistinguishable from "found the array, nothing in it matched" — and a
+    It is NOT total against an array this module cannot parse. Returning content
+    unchanged there is indistinguishable from "found the array, nothing in it
+    matched" — and a
     record we hold means real names of ours may still be on disk. Clearing the
     record on that unverified "unchanged" would report success while a later
     multi-line array (oh-my-zsh's own idiom) shadows the single-line one this
