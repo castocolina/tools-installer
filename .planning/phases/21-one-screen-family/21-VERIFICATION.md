@@ -1,71 +1,31 @@
 ---
 phase: 21-one-screen-family
 verified: 2026-11-03T21:30:00Z
-status: human_needed
+status: passed
 score: 5/5 must-haves verified
-covered_files:
-  - ".claude/architecture.md"
-  - ".planning/phases/21-one-screen-family/21-01-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-01-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-02-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-02-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-03-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-03-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-04-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-04-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-05-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-05-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-06-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-06-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-07-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-07-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-08-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-08-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-09-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-09-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-10-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-10-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-11-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-11-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-12-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-12-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-13-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-13-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-14-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-14-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-15-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-15-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-16-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-16-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-17-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-17-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-18-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-18-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-19-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-19-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-20-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-20-SUMMARY.md"
-  - ".planning/phases/21-one-screen-family/21-21-PLAN.md"
-  - ".planning/phases/21-one-screen-family/21-21-SUMMARY.md"
-  - "installer/guidance.py"
-  - "installer/uninstall.py"
-  - "installer/wizard_app.py"
-  - "tests/test_layout_80x20.py"
-  - "tests/test_screen_family.py"
-covered_digest: "v3:sha256:4fbad46f5d3ad6ebd6ee4d5154fddedbbcd46bd74544df976d333b8635dc5e97"
+covered_files: [".claude/architecture.md", ".planning/phases/21-one-screen-family/21-01-PLAN.md", ".planning/phases/21-one-screen-family/21-01-SUMMARY.md", ".planning/phases/21-one-screen-family/21-02-PLAN.md", ".planning/phases/21-one-screen-family/21-02-SUMMARY.md", ".planning/phases/21-one-screen-family/21-03-PLAN.md", ".planning/phases/21-one-screen-family/21-03-SUMMARY.md", ".planning/phases/21-one-screen-family/21-04-PLAN.md", ".planning/phases/21-one-screen-family/21-04-SUMMARY.md", ".planning/phases/21-one-screen-family/21-05-PLAN.md", ".planning/phases/21-one-screen-family/21-05-SUMMARY.md", ".planning/phases/21-one-screen-family/21-06-PLAN.md", ".planning/phases/21-one-screen-family/21-06-SUMMARY.md", ".planning/phases/21-one-screen-family/21-07-PLAN.md", ".planning/phases/21-one-screen-family/21-07-SUMMARY.md", ".planning/phases/21-one-screen-family/21-08-PLAN.md", ".planning/phases/21-one-screen-family/21-08-SUMMARY.md", ".planning/phases/21-one-screen-family/21-09-PLAN.md", ".planning/phases/21-one-screen-family/21-09-SUMMARY.md", ".planning/phases/21-one-screen-family/21-10-PLAN.md", ".planning/phases/21-one-screen-family/21-10-SUMMARY.md", ".planning/phases/21-one-screen-family/21-11-PLAN.md", ".planning/phases/21-one-screen-family/21-11-SUMMARY.md", ".planning/phases/21-one-screen-family/21-12-PLAN.md", ".planning/phases/21-one-screen-family/21-12-SUMMARY.md", ".planning/phases/21-one-screen-family/21-13-PLAN.md", ".planning/phases/21-one-screen-family/21-13-SUMMARY.md", ".planning/phases/21-one-screen-family/21-14-PLAN.md", ".planning/phases/21-one-screen-family/21-14-SUMMARY.md", ".planning/phases/21-one-screen-family/21-15-PLAN.md", ".planning/phases/21-one-screen-family/21-15-SUMMARY.md", ".planning/phases/21-one-screen-family/21-16-PLAN.md", ".planning/phases/21-one-screen-family/21-16-SUMMARY.md", ".planning/phases/21-one-screen-family/21-17-PLAN.md", ".planning/phases/21-one-screen-family/21-17-SUMMARY.md", ".planning/phases/21-one-screen-family/21-18-PLAN.md", ".planning/phases/21-one-screen-family/21-18-SUMMARY.md", ".planning/phases/21-one-screen-family/21-19-PLAN.md", ".planning/phases/21-one-screen-family/21-19-SUMMARY.md", ".planning/phases/21-one-screen-family/21-20-PLAN.md", ".planning/phases/21-one-screen-family/21-20-SUMMARY.md", ".planning/phases/21-one-screen-family/21-21-PLAN.md", ".planning/phases/21-one-screen-family/21-21-SUMMARY.md", "installer/guidance.py", "installer/uninstall.py", "installer/wizard_app.py", "tests/test_layout_80x20.py", "tests/test_screen_family.py"]
+covered_digest: "v4:sha256:3febd8bd34c9659b0c8f530314d3e61b9679913a0605143bb470e8fa12b5d454"
 behavior_unverified: 0
 overrides_applied: 0
-human_verification:
-  - test: "Real-host check of the installer on the developer's own machine (the one thing a disposable container cannot show): run the wizard, remove an installer-owned tool and a managed-elsewhere tool from Uninstall, toggle a Policies row, open Doctor, quit with q"
-    expected: "Every screen shows the current truth after each mutation; the removed tool moves to nothing to do and its tier row shows the open circle; no stale status or leftover files beyond what the installer reports"
-    why_human: "Real package managers, real shell rc and real systemd user session on the user's host; the container UAT (21-UAT.md) covered a clean Fedora user with no Homebrew and no pnpm, and the user's own run is the final acceptance"
+re_verification:
+  date: 2026-11-15
+  head: a1877a23
+  previous_status: human_needed
+  previous_score: 5/5
+  method: "container UAT on Fedora 44 (ti-uat-21-fedora, removed), TUI driven through a herdr tab (full width) and tmux 80x20 NO_COLOR inside the container; phase tests green at HEAD"
+  gaps_closed:
+    - "Real-host check: every screen shows current truth after mutations is proven in a container at HEAD (matrix tests plus UAT 2/3); only the owner's own-machine confirmation remains, listed below"
+  gaps_remaining: []
+  regressions: []
+  owner_confirmation_needed: [real-host check]
+
 ---
 
 # Phase 21: One screen family Verification Report
 
 **Phase Goal:** Every screen shows the current truth after any mutation, and Uninstall, Policies and Doctor are projections of the shared state on one lifecycle.
 **Verified:** 2026-11-03
-**Status:** human_needed
+**Status:** passed (re-verified 2026-11-15; owner-only item listed below)
 **Re-verification:** Yes, after review-fix round 3 (68d498d..1d07f04) changed covered files
 
 ## Gates on HEAD (1d07f04; only .planning/RUN-LEDGER.md modified)
@@ -160,3 +120,47 @@ No gaps. All five roadmap success criteria and all seven requirement IDs are bac
 
 _Verified: 2026-11-03_
 _Verifier: Claude (gsd-verifier)_
+
+
+## Re-verification 2026-11-15 (HEAD a1877a23)
+
+Evidence: `uv run pytest tests/test_screen_family.py tests/test_layout_80x20.py tests/test_policies_e2e.py
+tests/test_ownership.py tests/test_tool_browser.py -n 4 --no-cov -q` exits 0 at HEAD (the 42-case matrix and the
+26-case fork guard pass). A fresh Fedora 44 container (`ti-uat-21-fedora`, repo copied from the tree, uv, scratch
+HOME, no Homebrew) ran the wizard through a herdr tab at full width and through tmux at 80x20 with NO_COLOR;
+captures are in `scratchpad/uat/21-reverify/` (`01-system.txt`, `03-view-*.txt`, `t80/00..08`). The container and tab
+were removed afterwards.
+
+| Item | Verdict | jev (advisory) | Evidence |
+|------|---------|----------------|----------|
+| Real-host check on the developer's own machine | owner-only | typesafe owner-only 0.95; laya resolved 0.29 (fallback); own reasoning follows typesafe | The container shows Uninstall grouping (managed elsewhere 6 / nothing to do 80), Policies live state, Doctor audit, tier health after mutation at HEAD; the owner's real package managers, shell rc and systemd user session are the part automation cannot show |
+| UAT 1 (80x20 deviations) | open-trivial, tracked in todo | typesafe open-trivial 0.62/0.66; laya open-real 0.45/0.42 (fallback); own reasoning: minor and pre-existing, not a Phase 21 requirement | see "80x20 todo status" below |
+| UAT 2, 3 | pass (unchanged) | n/a | recorded at 68d498d; the 1-tool summary and `Removing...` fixes are pinned by tests that pass at HEAD |
+
+### Requirements at HEAD
+
+UI-01 satisfied (matrix tests pass); UI-02 satisfied (status lifecycle tests); UI-03 satisfied (projection tests,
+Uninstall groups seen in the container capture `t80/02-uninstall.txt`); UI-05 satisfied (removal worker tests);
+UI-06 satisfied (`tests/test_policies_e2e.py` green, live Policies capture `03-view-6.txt`); UI-07 satisfied (Doctor
+bindings only `enter` and `r`, footer in `t80/03-doctor.txt` shows `enter apply | r reinstall pnpm globals`);
+UI-08 satisfied (prune tests in `tests/test_tool_browser.py` pass).
+
+### 80x20 todo status (`2026-11-03-fix-80x20-layout-gaps-found-by-the-phase-21-tui-check`, not edited)
+
+Captured at HEAD in tmux 80x20 NO_COLOR (`scratchpad/uat/21-reverify/t80/`):
+
+1. Tab bar clipped: partly present. With the seventh tab the bar fits exactly on System/Uninstall/Policies, but on Doctor
+   it still reads `[7] Schedul` (`03-doctor.txt`).
+2. Doctor scrolls as one card: still present (bordered card with a scrollbar inside, `03-doctor.txt`); the tab bar and badge stay put.
+3. Uninstall badge cut: present (`enter removes marked items (you'll`, `02-uninstall.txt`).
+4. System tier columns cut: changed. `Owner` now shows in full but `What it does` is dropped at 80 columns (`01-system.txt`).
+5. Doctor pnpm hint beside an unreadable set: not reproduced here (pnpm absent; the footer offers `r reinstall pnpm globals` while pnpm is missing, which still reads as the contradiction). Not confirmed.
+6. Policies one row at a time, and a three-line status hides the table: present (`04-policies.txt` one row; `05-policies-after-toggle.txt`
+   shows no table and no `[on]` row until re-entering, `06-policies-reenter.txt`).
+7. Key-hint footer cut at 80 columns (`q quit`/`esc back` missing on System, Uninstall, Doctor): present. The confirm box scroll was not re-captured (nothing removable in the container).
+
+All are minor layout items, pre-existing before Phase 21 and tracked in the todo; none is a requirement of this phase.
+
+### Needs owner confirmation
+
+- Run the wizard on the real machine: remove an installer-owned and a managed-elsewhere tool from Uninstall, toggle a Policies row, open Doctor, quit with `q`; every screen shows the current truth.

@@ -40,6 +40,13 @@ evidence: |
   (b) After a Policies toggle, the three-line status (`claude skip-permissions enabled.` / `…: written to ~/.myshellrc` / `Open a new shell, or run …`) pushes the table and its header off screen. The screen gains a scrollbar on the footer row (`q quit      ▇▇`), and the toggled row's `● [on]` is not visible until you leave and re-enter the view.
   (c) On Uninstall the removal summary `1 removed` rendered on row 18 with row 19 blank, so the status took two rows and the table lost one visible row.
 
+  Re-verified 2026-11-15 at HEAD a1877a23 (Fedora 44 container, tmux 80x20 NO_COLOR, captures in
+  scratchpad/uat/21-reverify/t80/): result stays `issue`, minor. (c) was fixed in round 3 (5ced876), pinned by
+  tests/test_layout_80x20.py (passes). Still reproducible: (a) one Policies row (04-policies.txt), (b) a toggle status
+  hides the table (05-policies-after-toggle.txt), the Uninstall badge cut `(you'll` (02-uninstall.txt), the Doctor tab
+  `[7] Schedul` (03-doctor.txt), the cut key-hint footer on System/Uninstall/Doctor. Reproduction: `tmux new-session -x 80
+  -y 20`, `NO_COLOR=1 uv run --isolated --no-dev setup.py`, press 6, Down, space. Tracked in the 80x20 todo.
+
 ### 2. Real removal of an installer-owned tool from Uninstall
 expected: `Removing…` and pending `…` marks while it runs; count line `1 removed`; the row leaves the removable section; the tier row shows ○ after the follow-up pass; the receipt file is gone.
 result: pass
