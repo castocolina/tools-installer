@@ -82,3 +82,17 @@ def test_verify_registry_job_reports_drift_with_the_job_token() -> None:
 
 def test_ci_workflow_never_runs_verify_registry() -> None:
     assert "verify-registry" not in CI_WORKFLOW.read_text()
+
+
+def test_verify_registry_job_closes_the_drift_issue_only_after_a_clean_check() -> None:
+    steps = _steps()
+    check = next(s for s in steps if "make verify-registry" in s.get("run", ""))
+    close = next(s for s in steps if "gh issue close" in s.get("run", ""))
+    assert steps.index(close) > steps.index(check)
+    # The check step exits 0 only on a clean run (1 is drift, 2 inconclusive); it is skipped
+    # on the Thursday cron, so a skipped check must not close anything.
+    assert close["if"] == f"steps.{check['id']}.outcome == 'success'"
+    run = close["run"]
+    assert "--label registry-drift" in run and "--state open" in run
+    assert "--comment" in run
+    assert run.index("[ -n") < run.index("gh issue close")  # only when such an issue exists

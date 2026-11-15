@@ -34,9 +34,19 @@ jobs:
           key: verify-registry-${{ github.run_id }}
           restore-keys: verify-registry-
       - name: Check registry drift
+        id: check
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 5 * * 1'
         timeout-minutes: 25
         run: make verify-registry ARGS="--issue"
+      # Exit 0 is a clean run (1 is drift, 2 inconclusive); the step is skipped on the
+      # Thursday cron, so only a check that ran and passed can close the drift issue.
+      - name: Close the drift issue after a clean run
+        if: steps.check.outcome == 'success'
+        run: |
+          number=$(gh issue list --label registry-drift --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue close "$number" --comment "Closing: the latest verify-registry run found no drift."
+          fi
       - name: Save verify-registry state
         if: always()
         uses: actions/cache/save@v4
