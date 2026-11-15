@@ -21,7 +21,6 @@ from installer.model import (
 )
 from installer.ownership import Confidence, ManagerInventory, ManagerOwnership, Owner, removal_hint
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
 from installer.receipts import Receipt
 from installer.run import Runner
 from installer.uninstall import RemovalPlan
@@ -177,7 +176,6 @@ class RunRecorder:
     def __init__(self, outcomes: Mapping[str, InstallOutcome | Exception] | None = None) -> None:
         self.outcomes = outcomes or {}
         self.installs: list[tuple[str, bool]] = []
-        self.confirms: list[ConfirmSensitiveAction | None] = []
         self.argv: list[list[str]] = []
         self.synced = 0
 
@@ -190,12 +188,10 @@ class RunRecorder:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
         del platform, runner, resolve_tag, checksum_policy, tools
         self.installs.append((tool.id, repair))
-        self.confirms.append(confirm_sensitive_action)
         outcome = self.outcomes.get(tool.id, InstallOutcome(tool.id, InstallStatus.INSTALLED))
         if isinstance(outcome, Exception):
             raise outcome

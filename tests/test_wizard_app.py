@@ -49,7 +49,6 @@ from installer.policy import (
     PolicyLayer,
     PolicyResult,
 )
-from installer.post_install import ConfirmSensitiveAction
 from installer.rcclean import PathWriterLine
 from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError, Runner
@@ -2635,9 +2634,8 @@ async def test_ctrl_c_while_a_run_is_in_flight_leaves_the_flag_set() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         started.set()
         assert release.wait(10.0)
         return InstallOutcome(tool.id, "installed")
@@ -4483,9 +4481,8 @@ def _tracking_install(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         on_install(tool)
         return InstallOutcome(tool.id, "installed")
 
@@ -6175,9 +6172,8 @@ def _execute_inputs(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         return InstallOutcome(tool.id, "installed")
 
     return ExecuteInputs(
@@ -6313,9 +6309,8 @@ async def test_enter_with_nothing_selected_runs_nothing() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         installed.append(tool.id)
         return InstallOutcome(tool.id, "installed")
 
@@ -6360,9 +6355,8 @@ async def test_a_cancelled_run_then_a_successful_rerun_is_not_a_failure() -> Non
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         if mode["block"]:
             started.set()
             assert release.wait(10.0)
@@ -6414,9 +6408,8 @@ async def test_two_runs_keep_the_latest_outcome_per_tool() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         return InstallOutcome(tool.id, outcomes[tool.id].pop(0))
 
     app = _app(execute=_execute_inputs(install=sequenced))

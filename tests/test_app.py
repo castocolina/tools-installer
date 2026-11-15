@@ -20,7 +20,6 @@ from installer.legacy_guard import SHIM_SENTINEL
 from installer.model import Method, Tool
 from installer.platform import Platform
 from installer.policy import Policy, PolicyResult
-from installer.post_install import ConfirmSensitiveAction
 from installer.render import display_order
 from installer.run import CommandError, Runner
 from installer.session import (
@@ -94,7 +93,6 @@ def _recording_install() -> tuple[list[str], SensitiveInstall]:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         installed.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="brew")
@@ -614,7 +612,6 @@ def test_an_injected_failing_row_exits_one() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
@@ -702,7 +699,6 @@ def test_failed_install_surfaces_in_summary_without_crashing():
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(tool.id, "failed")
 
@@ -735,7 +731,6 @@ def test_run_wizard_reports_a_skipped_dependent_with_its_reason() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         called.append(tool.id)
         if tool.id == "sdkman":
@@ -1811,7 +1806,6 @@ def _mismatching_install() -> tuple[list[str], SensitiveInstall]:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         attempts.append(checksum_policy)
         return InstallOutcome(
@@ -2335,7 +2329,6 @@ def test_run_wizard_installs_dependencies_before_dependents() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         installed_order.append(tool.id)
         return InstallOutcome(tool.id, "installed", method_kind="node")
@@ -2880,7 +2873,6 @@ def test_run_wizard_surfaces_a_postinstall_warning_on_the_real_path() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         return InstallOutcome(
             tool.id,
@@ -2918,7 +2910,6 @@ def test_run_wizard_install_takes_no_catalog() -> None:
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         seen["ran"] = True
         return InstallOutcome(tool.id, "installed", method_kind="brew")

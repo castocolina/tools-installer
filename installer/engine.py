@@ -22,7 +22,7 @@ from installer.ownership import (
     method_removal_command,
 )
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction, PostInstallOutput, run_post_install
+from installer.post_install import PostInstallOutput, run_post_install
 from installer.postinstall import register_hooks
 from installer.resolve import resolve_methods
 from installer.run import CommandError, MethodAwareRunner, Runner, run_command
@@ -164,7 +164,6 @@ def install_tool(
     resolve_tag: TagResolver = resolve_github_tag,
     *,
     checksum_policy: ChecksumPolicy = "fail",
-    confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     repair: bool = False,
     present: Callable[[Tool], bool] | None = None,
     read_inventory_fn: Callable[..., ManagerInventory] | None = None,
@@ -190,10 +189,7 @@ def install_tool(
     carried on `postinstall_warning` and it never turns this INSTALLED outcome into a failure.
     Declared `post_install` actions are dispatched next, producing reviewed
     instruction lines on `post_install_handoff` and the tool's tuning writes on `settings`.
-    `confirm_sensitive_action` is the optional confirmation callback an action could consult;
-    no action consults it any more (23.2 D-13); it has no user and Phase 25 sweeps it
-    (24.1 D-21). The ALREADY_INSTALLED short-circuit never dispatches postinstall or
-    post_install at all.
+    The ALREADY_INSTALLED short-circuit never dispatches postinstall or post_install at all.
 
     `repair` exists for D-18's broken state. It takes the identical ladder a
     fresh install takes, and is only ever set for a tool the user explicitly
@@ -242,7 +238,7 @@ def install_tool(
 
     for method in methods:
         if installed and repair and method.params.get("refuses_existing") is True:
-            output, warning = _dispatch_post_install(tool, platform, confirm_sensitive_action)
+            output, warning = _dispatch_post_install(tool, platform)
             return InstallOutcome(
                 tool.id,
                 InstallStatus.MANUAL_REQUIRED,
@@ -351,7 +347,7 @@ def install_tool(
                     registered, warning = register_hooks(tool, method, runner)
                 except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
                     warning = f"postinstall hook {tool.postinstall!r} crashed: {exc}"
-            output, crash = _dispatch_post_install(tool, platform, confirm_sensitive_action)
+            output, crash = _dispatch_post_install(tool, platform)
             if crash:
                 warning = f"{warning}; {crash}" if warning else crash
             leftovers.extend(notes)
@@ -434,15 +430,11 @@ def _proves_package(previous: receipts.Receipt | None, method: Method, package: 
     )
 
 
-def _dispatch_post_install(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[PostInstallOutput, str | None]:
+def _dispatch_post_install(tool: Tool, platform: Platform) -> tuple[PostInstallOutput, str | None]:
     if not tool.post_install:
         return PostInstallOutput(), None
     try:
-        output = run_post_install(tool, platform, confirm)
+        output = run_post_install(tool, platform)
         return output, output.warning
     except Exception as exc:  # noqa: BLE001 -- isolation boundary, see design_decisions
         return PostInstallOutput(), f"post-install actions crashed: {exc}"

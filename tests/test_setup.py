@@ -608,11 +608,10 @@ def _recording_install(recorder: list[str]) -> Callable[..., InstallOutcome]:
         *,
         checksum_policy: str = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: object = None,
         present: object = None,
         read_inventory_fn: object = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         del read_inventory_fn
         del present
         recorder.append(tool.id)

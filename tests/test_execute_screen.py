@@ -46,7 +46,6 @@ from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
@@ -221,9 +220,8 @@ def _install_with_output(captured: list[str]) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         captured.append(tool.id)
         _emit_through_runner(runner, tool.id, _OUTPUTS.get(tool.id, ()))
         return InstallOutcome(tool.id, "installed")
@@ -473,9 +471,8 @@ async def test_escape_mid_run_does_not_pop_and_names_ctrl_c_cost() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         started.set()
         assert release.wait(timeout=5)
         return InstallOutcome(tool.id, "installed")
@@ -515,9 +512,8 @@ async def test_a_crashing_install_finishes_the_run_and_names_the_rest_not_attemp
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del tool, platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del tool, platform, runner, resolve_tag, checksum_policy, tools
         raise OSError("disk full")
 
     inputs = _inputs(install=boom)
@@ -589,9 +585,7 @@ async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del confirm_sensitive_action
         return original(
             tool,
             platform,
@@ -629,9 +623,8 @@ def _mismatch_then_ok() -> tuple[list[tuple[str, str]], SensitiveInstall]:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, tools
         seen.append((tool.id, checksum_policy))
         if len([row for row in seen if row[0] == tool.id]) == 1 and checksum_policy == "fail":
             return InstallOutcome(
@@ -835,9 +828,8 @@ def _install_second_fails(captured: list[str]) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         captured.append(tool.id)
         if tool.id == "fd":
             return InstallOutcome(tool.id, "failed")
@@ -877,9 +869,8 @@ async def test_cancel_mid_run_lets_the_in_flight_tool_finish() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         captured.append(tool.id)
         if tool.id == "rg":
             rg_done.set()
@@ -982,9 +973,7 @@ async def test_cancel_is_inert_while_the_mismatch_modal_is_open() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del confirm_sensitive_action
         if tool.id == "rg":
             return mismatch_install(
                 tool,
@@ -1049,9 +1038,8 @@ def _mixed_report_install() -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         if tool.id == "rg":
             return InstallOutcome(tool.id, "installed", method_kind="github_release", verified=True)
         if tool.id == "fd":
@@ -1161,9 +1149,8 @@ def _ansi_bomb_install() -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         error = CommandError(
             [tool.id, "--install"], 1, detail="normal output\x1b[2J\x1b[31mred\x1b]0;pwned\x07"
         )
@@ -1614,9 +1601,8 @@ def _blocking_install_emitting_one_line(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         _emit_through_runner(runner, tool.id, (f"{tool.id} line 1",))
         started.set()
         assert release.wait(timeout=5)
@@ -1747,9 +1733,8 @@ async def test_silence_empty_step_shows_indicator_from_2s_and_heartbeats_at_10s(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         # The opening "-- trying" line is the only output this step ever prints.
         _emit_through_runner(runner, tool.id, ("-- trying cargo --",))
         started.set()
@@ -2310,9 +2295,8 @@ def _two_stage_blocking_install(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         _emit_through_runner(runner, tool.id, (f"{tool.id} line 1",))
         started1.set()
         assert release1.wait(timeout=5)
@@ -2437,9 +2421,8 @@ def _install_first_immediate_second_blocks(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         if tool.id == "rg":
             return InstallOutcome(tool.id, "installed")
         _emit_through_runner(runner, tool.id, (f"{tool.id} line 1",))
@@ -2708,9 +2691,8 @@ async def test_silence_suppressed_while_prompt_open_and_restarts_after_close() -
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         seen.append(tool.id)
         if len(seen) == 1:
             return InstallOutcome(
@@ -2778,9 +2760,8 @@ async def test_install_emitting_nothing_never_shows_an_indicator() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         started.set()
         assert release.wait(timeout=5)
         return InstallOutcome(tool.id, "installed")
@@ -2819,9 +2800,8 @@ async def test_install_driven_through_method_started_shows_the_indicator() -> No
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         method_started = getattr(runner, "method_started", None)
         assert callable(method_started)
         method_started("brew")
@@ -2876,9 +2856,8 @@ async def test_failed_install_with_real_runner_shows_child_tail_and_indicator_on
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         try:
             # The printed text is built from concatenated fragments so the
             # cmd argv itself never contains "boom one"/"boom two" as a
@@ -2973,9 +2952,8 @@ async def test_child_output_reaches_the_widget_while_the_child_is_still_alive(
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, resolve_tag, checksum_policy, tools
         # The runner it was HANDED -- the worker's own StreamingRunner, already
         # set_tool-attributed by the worker's row callback. A freshly constructed one
         # would raise RuntimeError from _current() on its first emitted line.
@@ -3029,9 +3007,8 @@ def _repair_install(calls: list[tuple[str, bool]]) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         calls.append((tool.id, False))
         return InstallOutcome(tool.id, "installed")
 
@@ -3043,7 +3020,6 @@ def _repair_install(calls: list[tuple[str, bool]]) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         **extra: object,
     ) -> InstallOutcome:
         if tool.id != "mmdc":
@@ -3054,7 +3030,6 @@ def _repair_install(calls: list[tuple[str, bool]]) -> SensitiveInstall:
                 resolve_tag,
                 checksum_policy=checksum_policy,
                 tools=tools,
-                confirm_sensitive_action=confirm_sensitive_action,
                 **extra,
             )
         calls.append((tool.id, extra.get("repair") is True))
@@ -3122,9 +3097,8 @@ def _install_raises_after_first(exception: Exception) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         if tool.id == "first":
             return InstallOutcome(tool.id, "installed")
         raise exception
@@ -3269,9 +3243,8 @@ def _failing_install(captured: list[str]) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         captured.append(tool.id)
         return InstallOutcome(tool.id, InstallStatus.FAILED)
 
@@ -3287,9 +3260,8 @@ def _raising_first_install(captured: list[str]) -> SensitiveInstall:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         captured.append(tool.id)
         raise OSError("disk went away")
 
@@ -3509,7 +3481,6 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_chsh_handoff_without_asking
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
         return engine.install_tool(
@@ -3518,7 +3489,6 @@ async def test_r_on_an_installed_oh_my_zsh_shows_the_chsh_handoff_without_asking
             runner=refuse_run,
             resolve_tag=resolve_tag,
             checksum_policy=checksum_policy,
-            confirm_sensitive_action=confirm_sensitive_action,
             repair=repair,
             present=lambda _tool: True,
         )
@@ -3586,7 +3556,6 @@ async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_chsh_handoff_wi
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         return engine.install_tool(
             tool,
@@ -3594,7 +3563,6 @@ async def test_a_fresh_oh_my_zsh_install_in_the_review_shows_the_chsh_handoff_wi
             runner=lambda command: calls.append(command),
             resolve_tag=resolve_tag,
             checksum_policy=checksum_policy,
-            confirm_sensitive_action=confirm_sensitive_action,
             present=lambda _tool: False,
         )
 
@@ -3632,10 +3600,9 @@ async def test_r_then_enter_reinstalls_with_repair() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         calls.append((tool.id, repair))
         return InstallOutcome(tool.id, InstallStatus.INSTALLED)
 
@@ -3745,10 +3712,9 @@ async def test_r_is_inert_while_waiting_running_and_finished(tmp_path: Path) -> 
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         running_calls.append((tool.id, repair))
         running_started.set()
         assert running_release.wait(timeout=5)
@@ -3899,10 +3865,9 @@ async def test_running_layout_gives_the_log_at_least_six_rows() -> None:
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action, repair
+        del platform, runner, resolve_tag, checksum_policy, tools, repair
         started.set()
         assert release.wait(timeout=5)
         return InstallOutcome(tool.id, InstallStatus.INSTALLED)
@@ -4817,9 +4782,8 @@ async def test_install_crash_marks_a_later_update_not_attempted(tmp_path: Path) 
         *,
         checksum_policy: ChecksumPolicy = "fail",
         tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools, confirm_sensitive_action
+        del platform, runner, resolve_tag, checksum_policy, tools
         if tool.id == "a-first":
             raise OSError("installer failed")
         return InstallOutcome(tool.id, "installed")

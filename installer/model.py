@@ -139,9 +139,6 @@ POST_INSTALL_ACTIONS = (
     "clone_nvim_starter",
     "show_nvim_hints",
 )
-# Empty since 23.2 D-13: no action asks. The loader field `default_enabled_sensitive_actions`
-# stays (D-14) and now rejects any value; it has no user and Phase 25 sweeps it (24.1 D-21).
-SENSITIVE_POST_INSTALL_ACTIONS: tuple[str, ...] = ()
 OWNER_PROBES = (
     "brew",
     "apt",
@@ -353,7 +350,6 @@ class Tool:
     # Multi-hook post-install list (see POST_INSTALL_ACTIONS above) --
     # distinct from `postinstall` above.
     post_install: tuple[str, ...] = ()
-    default_enabled_sensitive_actions: tuple[str, ...] = ()
     # Ownership attribution, dispatched by installer/install_ownership.py.
     owner_probes: tuple[str, ...] = ()
     # Declared `~/` config paths, validated by _parse_config_paths at load.
@@ -376,7 +372,6 @@ class Tool:
         recommends: tuple[str, ...] = (),
         postinstall: str | None = None,
         post_install: tuple[str, ...] = (),
-        default_enabled_sensitive_actions: tuple[str, ...] = (),
         owner_probes: tuple[str, ...] = (),
         config_paths: tuple[str, ...] = (),
         retired: bool = False,
@@ -398,9 +393,6 @@ class Tool:
         object.__setattr__(self, "recommends", recommends)
         object.__setattr__(self, "postinstall", postinstall)
         object.__setattr__(self, "post_install", post_install)
-        object.__setattr__(
-            self, "default_enabled_sensitive_actions", default_enabled_sensitive_actions
-        )
         object.__setattr__(self, "owner_probes", owner_probes)
         object.__setattr__(self, "config_paths", config_paths)
         object.__setattr__(self, "retired", retired)
@@ -604,6 +596,11 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             raise ValueError(
                 f"tool '{tool_id}': skill_lifecycle was retired in 23.1; "
                 "remove the [tool.skill_lifecycle] table"
+            )
+        if "default_enabled_sensitive_actions" in row:
+            raise ValueError(
+                f"tool '{tool_id}': default_enabled_sensitive_actions was retired in Phase 25 "
+                "(no action has asked since 23.2); remove the key"
             )
         raw_methods = row.get("method", [])
         if not raw_methods:
@@ -826,18 +823,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             allowed=POST_INSTALL_ACTIONS,
             label="post-install action",
         )
-        default_enabled_sensitive_actions = _parse_closed_string_list(
-            row.get("default_enabled_sensitive_actions", []),
-            tool_id=row["id"],
-            field="default_enabled_sensitive_actions",
-            allowed=SENSITIVE_POST_INSTALL_ACTIONS,
-            label="sensitive post-install action",
-        )
-        if undeclared := set(default_enabled_sensitive_actions).difference(post_install):
-            raise ValueError(
-                f"tool '{row['id']}': default-enabled sensitive action "
-                f"'{next(iter(undeclared))}' is not declared in 'post_install'"
-            )
         owner_probes = _parse_closed_string_list(
             row.get("owner_probes", []),
             tool_id=row["id"],
@@ -860,7 +845,6 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                 recommends=recommends,
                 postinstall=postinstall,
                 post_install=post_install,
-                default_enabled_sensitive_actions=default_enabled_sensitive_actions,
                 owner_probes=owner_probes,
                 config_paths=config_paths,
             )

@@ -1041,23 +1041,16 @@ def test_login_shell_action_dispatches_reviewed_instructions_after_oh_my_zsh_ins
     monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
     _not_installed(monkeypatch)
     omz = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "oh-my-zsh")
-    asked: list[tuple[str, str]] = []
     calls: list[list[str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
 
     outcome = install_tool(
         omz,
         _platform(),
         runner=lambda cmd: calls.append(cmd),
-        confirm_sensitive_action=confirm,
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    assert asked == []
     assert len(calls) == 1
 
 
@@ -1065,35 +1058,23 @@ def test_login_shell_action_is_not_offered_when_tool_declares_no_post_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _not_installed(monkeypatch)
-    asked: list[tuple[str, str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
 
     outcome = install_tool(
         _tool(Method(kind="brew", params={"formula": "ripgrep"})),
         _macos_with_brew(),
         runner=lambda cmd: None,
-        confirm_sensitive_action=confirm,
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff == ()
-    assert asked == []
 
 
-def test_already_installed_login_shell_never_invokes_confirm(
+def test_already_installed_login_shell_prints_no_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_installed(tool: Tool) -> bool:
         return True
 
     monkeypatch.setattr(engine, "is_installed", fake_installed)
-    asked: list[tuple[str, str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
 
     outcome = install_tool(
         _tool(
@@ -1103,22 +1084,15 @@ def test_already_installed_login_shell_never_invokes_confirm(
         ),
         _platform(),
         runner=lambda cmd: None,
-        confirm_sensitive_action=confirm,
     )
     assert outcome.status == InstallStatus.ALREADY_INSTALLED
     assert outcome.post_install_handoff == ()
-    assert asked == []
 
 
-def test_manual_required_login_shell_never_invokes_confirm(
+def test_manual_required_login_shell_prints_no_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _not_installed(monkeypatch)
-    asked: list[tuple[str, str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
 
     outcome = install_tool(
         _tool(
@@ -1128,11 +1102,9 @@ def test_manual_required_login_shell_never_invokes_confirm(
         ),
         _platform(),
         runner=lambda cmd: None,
-        confirm_sensitive_action=confirm,
     )
     assert outcome.status == InstallStatus.MANUAL_REQUIRED
     assert outcome.post_install_handoff == ()
-    assert asked == []
 
 
 def test_a_raising_action_degrades_to_named_warning_not_a_crash(
@@ -1140,7 +1112,7 @@ def test_a_raising_action_degrades_to_named_warning_not_a_crash(
 ) -> None:
     _not_installed(monkeypatch)
 
-    def boom(_tool: Tool, _platform: Platform, _confirm: object) -> tuple[str, ...]:
+    def boom(_tool: Tool, _platform: Platform) -> tuple[str, ...]:
         raise RuntimeError("action exploded")
 
     monkeypatch.setitem(post_install.POST_INSTALL_HOOKS, "set_login_shell", boom)
@@ -1209,7 +1181,6 @@ def test_a_present_tool_whose_installer_refuses_existing_is_not_re_run_on_repair
         ),
         _platform(),
         runner=refuse_run,
-        confirm_sensitive_action=lambda _tool_id, _action: True,
         repair=True,
         present=lambda _tool: True,
     )
@@ -1263,7 +1234,7 @@ def test_a_crashing_post_install_dispatch_leaves_no_settings(
 ) -> None:
     _patch_not_installed(monkeypatch)
 
-    def boom(_tool: Tool, _platform: Platform, _confirm: object) -> tuple[str, ...]:
+    def boom(_tool: Tool, _platform: Platform) -> tuple[str, ...]:
         raise RuntimeError("tuning exploded")
 
     monkeypatch.setitem(post_install.POST_INSTALL_HOOKS, "apply_agent_tuning", boom)
@@ -1324,11 +1295,6 @@ def test_repair_dispatches_post_install_like_a_fresh_install(
         return True
 
     monkeypatch.setattr(engine, "is_installed", fake_installed)
-    asked: list[tuple[str, str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
 
     outcome = install_tool(
         _tool(
@@ -1338,13 +1304,11 @@ def test_repair_dispatches_post_install_like_a_fresh_install(
         ),
         _macos_with_brew(),
         runner=lambda cmd: None,
-        confirm_sensitive_action=confirm,
         repair=True,
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.post_install_handoff
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-    assert asked == []
 
 
 def test_digest_mismatch_fails_with_nothing_linked(
@@ -2424,18 +2388,12 @@ def _omz_present_home(zshrc_text: str | None = None) -> Path:
 
 def test_omz_install_writes_plugins_and_theme_end_to_end() -> None:
     home = _omz_present_home()
-    asked: list[tuple[str, str]] = []
     calls: list[list[str]] = []
-
-    def confirm(tool_id: str, action: str) -> bool:
-        asked.append((tool_id, action))
-        return True
 
     outcome = install_tool(
         _shipped_omz(),
         _platform(),
         runner=lambda cmd: calls.append(cmd),
-        confirm_sensitive_action=confirm,
         present=lambda _tool: False,
     )
 
@@ -2447,7 +2405,6 @@ def test_omz_install_writes_plugins_and_theme_end_to_end() -> None:
     assert owned_plugins(home / ".myshellrc") == ("docker",)
     assert any(line.startswith("Plugins: added docker") for line in outcome.post_install_handoff)
     assert any(line.startswith("Theme: robbyrussell") for line in outcome.post_install_handoff)
-    assert all(action != "set_omz_plugins" for _tool_id, action in asked)
 
 
 def test_omz_refuses_existing_reinstall_dispatches_set_omz_plugins() -> None:

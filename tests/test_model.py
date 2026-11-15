@@ -11,7 +11,6 @@ from installer.model import (
     METHOD_PARAMS,
     POST_INSTALL_ACTIONS,
     POSTINSTALL_HOOK_NAMES,
-    SENSITIVE_POST_INSTALL_ACTIONS,
     SMOKE_CHECK_NAMES,
     TOOL_ID_RE,
     ConfigStep,
@@ -1364,6 +1363,18 @@ source = "https://github.com/example/skills"
         load_tools(manifest)
 
 
+def test_a_retired_default_enabled_sensitive_actions_key_is_rejected(tmp_path: Path) -> None:
+    manifest = _write(
+        tmp_path,
+        _tool_block("demo", "default_enabled_sensitive_actions = []"),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"tool 'demo': default_enabled_sensitive_actions was retired in Phase 25",
+    ):
+        load_tools(manifest)
+
+
 def test_other_unknown_tool_keys_stay_lenient(tmp_path: Path) -> None:
     manifest = _write(
         tmp_path,
@@ -1967,7 +1978,6 @@ def test_post_install_action_names_include_the_new_actions(tmp_path: Path) -> No
         "clone_nvim_starter",
         "show_nvim_hints",
     )
-    assert SENSITIVE_POST_INSTALL_ACTIONS == ()
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["source_shell_init"]'))
     assert load_tools(manifest)[0].post_install == ("source_shell_init",)
 
@@ -1980,20 +1990,6 @@ def test_tool_has_no_dead_attribution_fields(name: str) -> None:
 def test_post_install_rejects_a_deleted_action(tmp_path: Path) -> None:
     manifest = _write(tmp_path, _tool_block("demo", 'post_install = ["pnpm_setup"]'))
     with pytest.raises(ValueError, match="unknown post-install action 'pnpm_setup'"):
-        load_tools(manifest)
-
-
-def test_sensitive_tables_are_empty(tmp_path: Path) -> None:
-    assert SENSITIVE_POST_INSTALL_ACTIONS == ()
-    manifest = _write(
-        tmp_path,
-        _tool_block(
-            "demo",
-            'post_install = ["set_login_shell"]\n'
-            'default_enabled_sensitive_actions = ["set_login_shell"]',
-        ),
-    )
-    with pytest.raises(ValueError, match="unknown sensitive post-install action 'set_login_shell'"):
         load_tools(manifest)
 
 

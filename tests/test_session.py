@@ -23,7 +23,6 @@ from installer.model import (
     load_tools,
 )
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction
 from installer.render import render_done_notes, render_run_report, render_shell_section
 from installer.run import CommandError, Runner
 from installer.session import (
@@ -36,7 +35,6 @@ from installer.session import (
     Result,
     RowOutcome,
     RunContext,
-    SensitiveInstall,
     execute_plan,
     exit_code,
     first_line,
@@ -72,7 +70,6 @@ def _run_context(
     recorder: RunRecorder,
     *,
     catalog: Mapping[str, Tool] | None = None,
-    confirm_sensitive: ConfirmSensitiveAction | None = None,
     on_mismatch: OnMismatch | None = None,
     updates: UpdateService | None = None,
     runner: Runner | None = None,
@@ -89,7 +86,6 @@ def _run_context(
         install=recorder.install,
         updates=updates,
         terminal_sync=recorder.terminal_sync if terminal_sync is None else terminal_sync,
-        confirm_sensitive=confirm_sensitive,
         on_mismatch=on_mismatch,
         should_continue=should_continue,
         on_row_started=on_row_started,
@@ -145,10 +141,8 @@ def test_execute_plan_passes_run_context_dependencies_to_install():
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
         assert checksum_policy == "fail"
-        assert confirm_sensitive_action is None
         seen.append((tool, platform, runner, resolve_tag))
         return InstallOutcome(tool.id, "installed")
 
@@ -192,11 +186,8 @@ def test_repair_and_reinstall_rows_force_repair():
     assert summary_counts(outcomes) == "1 installed, 1 repaired, 1 reinstalled"
 
 
-def test_force_repair_composes_under_sensitive_confirm():
+def test_a_reinstall_row_repairs_while_an_install_row_does_not():
     recorder = RunRecorder()
-
-    def confirm(_tool: str, _action: str) -> bool:
-        return True
 
     outcomes = execute_plan(
         [
@@ -206,12 +197,10 @@ def test_force_repair_composes_under_sensitive_confirm():
         _run_context(
             recorder,
             catalog={tool_id: _tool(tool_id) for tool_id in ("rg", "fd")},
-            confirm_sensitive=confirm,
         ),
     )
     assert [outcome.result for outcome in outcomes] == ["done", "done"]
     assert recorder.installs == [("rg", True), ("fd", False)]
-    assert recorder.confirms == [confirm, confirm]
 
 
 @pytest.mark.parametrize(
@@ -561,7 +550,6 @@ def test_execute_plan_mismatch_retry_skip_and_fallback(
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
         repair: bool = False,
     ) -> InstallOutcome:
         seen.append(checksum_policy)
@@ -1223,74 +1211,6 @@ def _mutable_platform() -> Platform:
     return Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
 
 
-def test_execute_plan_prints_the_login_shell_handoff_whatever_the_confirmation_says(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def fake_which(cmd: str, path: str | None = None) -> str | None:
-        del path
-        return "/usr/bin/chsh" if cmd == "chsh" else None
-
-    monkeypatch.setattr("installer.post_install.shutil.which", fake_which)
-    sandbox = tmp_path / "path-sandbox"
-    sandbox.mkdir()
-    monkeypatch.setenv("PATH", str(sandbox))
-
-    def fake_not_installed(tool: Tool) -> bool:
-        return False
-
-    monkeypatch.setattr(engine, "is_installed", fake_not_installed)
-    tool = _login_shell_tool()
-    platform = _mutable_platform()
-
-    def run(confirm: ConfirmSensitiveAction) -> InstallOutcome | None:
-        context = RunContext(
-            catalog={tool.id: tool},
-            platform=platform,
-            runner=lambda _cmd: None,
-            resolve_tag=lambda _repo: "1.0.0",
-            install=engine.install_tool,
-            confirm_sensitive=confirm,
-        )
-        return execute_plan([PlanRow(tool.id, Disposition.INSTALL, "")], context)[0].install
-
-    yes_outcome = run(lambda _id, _action: True)
-    no_outcome = run(lambda _id, _action: False)
-    assert yes_outcome is not None and yes_outcome.post_install_handoff
-    assert no_outcome is not None and no_outcome.post_install_handoff
-
-
-def test_execute_plan_forwards_the_confirmation_and_unchanged_kwargs() -> None:
-    seen: list[tuple[ChecksumPolicy, ConfirmSensitiveAction | None]] = []
-
-    def recording_install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
-    ) -> InstallOutcome:
-        seen.append((checksum_policy, confirm_sensitive_action))
-        return InstallOutcome(tool.id, "installed", method_kind="brew")
-
-    def confirm(tool_id: str, action: str) -> bool:
-        return True
-
-    catalog = {"rg": _tool("rg")}
-    context = RunContext(
-        catalog=catalog,
-        platform=_platform(),
-        runner=lambda _cmd: None,
-        resolve_tag=lambda _repo: "1.0.0",
-        install=recording_install,
-        confirm_sensitive=confirm,
-    )
-    execute_plan([PlanRow("rg", Disposition.INSTALL, "")], context)
-    assert seen == [("fail", confirm)]
-
-
 def test_execute_plan_without_a_confirmation_still_prints_the_handoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1319,19 +1239,6 @@ def test_execute_plan_without_a_confirmation_still_prints_the_handoff(
     outcome = execute_plan([PlanRow(tool.id, Disposition.INSTALL, "")], context)[0].install
     assert outcome is not None
     assert any("chsh -s" in line for line in outcome.post_install_handoff)
-
-
-def test_sensitive_install_protocol_parameters_are_unchanged() -> None:
-    params = list(inspect.signature(SensitiveInstall.__call__).parameters)
-    assert params == [
-        "self",
-        "tool",
-        "platform",
-        "runner",
-        "resolve_tag",
-        "checksum_policy",
-        "confirm_sensitive_action",
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1753,10 +1660,9 @@ def _install_through_node_method(
     resolve_tag: TagResolver,
     *,
     checksum_policy: ChecksumPolicy = "fail",
-    confirm_sensitive_action: ConfirmSensitiveAction | None = None,
 ) -> InstallOutcome:
     """The node rung of a real install, without the presence check or the postinstall sweep."""
-    del platform, resolve_tag, checksum_policy, confirm_sensitive_action
+    del platform, resolve_tag, checksum_policy
     for method in tool.methods:
         if method.kind == "node":
             executors.execute(method, runner)

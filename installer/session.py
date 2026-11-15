@@ -28,7 +28,7 @@ from installer.ownership import (
     owner_label,
 )
 from installer.platform import Platform
-from installer.post_install import ConfirmSensitiveAction, apply_install_tuning
+from installer.post_install import apply_install_tuning
 from installer.postinstall import hook_method, host_labels, register_hooks
 from installer.receipts import CHANGED_SINCE_INSTALL
 from installer.resolve import resolve_methods
@@ -69,7 +69,7 @@ _UNRESOLVED: frozenset[InstallStatus] = frozenset(
 
 
 class SensitiveInstall(Protocol):
-    """An install callable that also accepts a sensitive-action confirmation."""
+    """The install seam `execute_plan` calls, with the checksum policy keyword."""
 
     def __call__(
         self,
@@ -79,7 +79,6 @@ class SensitiveInstall(Protocol):
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = ...,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = ...,
     ) -> InstallOutcome: ...
 
 
@@ -205,7 +204,6 @@ class RunContext:
     updates: UpdateService | None = None
     terminal_sync: Callable[[], str | None] | None = None
     on_mismatch: OnMismatch | None = None
-    confirm_sensitive: ConfirmSensitiveAction | None = None
     should_continue: Callable[[], bool] | None = None
     on_row_started: Callable[[PlanRow], None] | None = None
     on_outcome: Callable[[RowOutcome], None] | None = None
@@ -277,9 +275,7 @@ def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
 
 
 def _with_force(
-    install: Callable[..., InstallOutcome],
-    force_ids: frozenset[str],
-    confirm: ConfirmSensitiveAction | None,
+    install: Callable[..., InstallOutcome], force_ids: frozenset[str]
 ) -> SensitiveInstall:
     """Pass repair=True only for repair and reinstall plan rows.
 
@@ -294,12 +290,8 @@ def _with_force(
         resolve_tag: TagResolver,
         *,
         checksum_policy: ChecksumPolicy = "fail",
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
     ) -> InstallOutcome:
-        kwargs: dict[str, object] = {
-            "checksum_policy": checksum_policy,
-            "confirm_sensitive_action": confirm,
-        }
+        kwargs: dict[str, object] = {"checksum_policy": checksum_policy}
         if tool.id in force_ids:
             kwargs["repair"] = True
         return install(tool, platform, runner, resolve_tag, **kwargs)
@@ -527,7 +519,7 @@ def execute_plan(rows: Sequence[PlanRow], ctx: RunContext) -> list[RowOutcome]:
         for row in rows
         if row.disposition in {Disposition.REPAIR, Disposition.REINSTALL}
     )
-    install = _with_force(ctx.install, force_ids, ctx.confirm_sensitive)
+    install = _with_force(ctx.install, force_ids)
     unresolved: set[str] = set()
     halted = False
     outcomes: list[RowOutcome] = []

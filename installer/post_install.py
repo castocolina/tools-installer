@@ -43,7 +43,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from installer.agent_settings import (
@@ -79,8 +79,6 @@ from installer.tweaks import (
     user_export,
 )
 
-ConfirmSensitiveAction = Callable[[str, str], bool]
-
 
 @dataclass(frozen=True)
 class PostInstallOutput:
@@ -92,32 +90,7 @@ class PostInstallOutput:
     refused: str | None = None  # why an install-tuning write was refused (RECONFIGURE fails on it)
 
 
-PostInstallAction = Callable[
-    [Tool, Platform, ConfirmSensitiveAction | None], tuple[str, ...] | PostInstallOutput
-]
-
-
-@dataclass(frozen=True)
-class SensitivePrompt:
-    """The consent question one sensitive action asks, with its own choices and headless default."""
-
-    prompt: str
-    yes: str
-    no: str
-    default: bool
-
-
-# No action asks (23.2 D-13), so this machinery has no user and Phase 25 sweeps it (24.1 D-21).
-# `{tool}` is the tool id and `{effect}` the shell-init bundle's description in a prompt.
-SENSITIVE_PROMPTS: dict[str, SensitivePrompt] = {}
-
-
-def sensitive_prompt(tool_id: str, action: str) -> SensitivePrompt:
-    """The prompt for a sensitive action. An action with no entry raises KeyError."""
-    entry = SENSITIVE_PROMPTS[action]
-    bundle = shell_init_bundle(tool_id)
-    effect = "" if bundle is None else bundle.description
-    return replace(entry, prompt=entry.prompt.format(tool=tool_id, effect=effect))
+PostInstallAction = Callable[[Tool, Platform], tuple[str, ...] | PostInstallOutput]
 
 
 def _no_shell_init_sourcing() -> tuple[Path, ...]:
@@ -240,12 +213,8 @@ def _sweep_stale_temp_dirs(config_dir: Path) -> None:
         return  # a sweep that cannot read the directory is not worth failing the install
 
 
-def _clone_nvim_starter(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del tool, confirm
+def _clone_nvim_starter(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    del tool
     home = Path.home()
     config_dir = home / ".config"
     target = config_dir / "nvim"
@@ -301,12 +270,8 @@ def _clone_nvim_starter(
     )
 
 
-def _set_login_shell(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del tool, platform, confirm
+def _set_login_shell(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    del tool, platform
     if shutil.which("chsh") is None:
         return _CHSH_ABSENT_EXPLANATION
     return _SET_LOGIN_SHELL_INSTRUCTIONS
@@ -339,21 +304,12 @@ def _tune_shell_init(tool: Tool, platform: Platform, *, skip_recorded: bool) -> 
     return ("Shell init on: open a new terminal to use it.",)
 
 
-def _source_shell_init(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del confirm
+def _source_shell_init(tool: Tool, platform: Platform) -> tuple[str, ...]:
     return _tune_shell_init(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
-def _set_omz_theme(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del tool, platform, confirm
+def _set_omz_theme(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    del tool, platform
     home = Path.home()
     root = omz_root(home, os.environ)
     if root is None:
@@ -393,12 +349,8 @@ def _tune_omz_plugins(*, skip_recorded: bool) -> PostInstallOutput:
     return PostInstallOutput((f"Plugins: {' and '.join(MANAGED_PLUGINS)} are on.",))
 
 
-def _set_omz_plugins(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del tool, platform, confirm
+def _set_omz_plugins(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    del tool, platform
     return _tune_omz_plugins(skip_recorded=False).lines  # install and reinstall rewrite
 
 
@@ -426,12 +378,7 @@ def _tune_agent(tool: Tool, platform: Platform, *, skip_recorded: bool) -> PostI
     return PostInstallOutput(settings=tuple(results))
 
 
-def _apply_agent_tuning(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> PostInstallOutput:
-    del confirm
+def _apply_agent_tuning(tool: Tool, platform: Platform) -> PostInstallOutput:
     return _tune_agent(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
@@ -443,30 +390,18 @@ def _tune_terminal(*, skip_recorded: bool) -> PostInstallOutput:
     return PostInstallOutput(lines)
 
 
-def _apply_terminal_tuning(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> PostInstallOutput:
-    del tool, platform, confirm
+def _apply_terminal_tuning(tool: Tool, platform: Platform) -> PostInstallOutput:
+    del tool, platform
     return _tune_terminal(skip_recorded=False)  # install and reinstall rewrite
 
 
-def _show_lean_tips(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del tool, platform, confirm
+def _show_lean_tips(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    del tool, platform
     return _LEAN_TIPS
 
 
-def _show_nvim_hints(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None,
-) -> tuple[str, ...]:
-    del tool, platform, confirm
+def _show_nvim_hints(tool: Tool, platform: Platform) -> tuple[str, ...]:
+    del tool, platform
     target = Path.home() / ".config" / "nvim"
     # "Neovim runs no language server" is true of the starter or of no config, not of a config
     # of the user's own; the commands themselves help every setup (D-19).
@@ -514,11 +449,7 @@ def apply_install_tuning(
     return PostInstallOutput(tuple(lines), tuple(settings), refused=refused)
 
 
-def run_post_install(
-    tool: Tool,
-    platform: Platform,
-    confirm: ConfirmSensitiveAction | None = None,
-) -> PostInstallOutput:
+def run_post_install(tool: Tool, platform: Platform) -> PostInstallOutput:
     """Dispatch each declared post-install action in order; skip unknown names."""
     lines: list[str] = []
     settings: list[FileResult] = []
@@ -528,7 +459,7 @@ def run_post_install(
         if action is None:
             continue
         try:
-            produced = action(tool, platform, confirm)
+            produced = action(tool, platform)
         except Exception as exc:  # one action's crash is a warning, never the others' loss
             first = next(iter(str(exc).splitlines()), "") or type(exc).__name__
             crashed.append(f"{name} crashed: {first}")
