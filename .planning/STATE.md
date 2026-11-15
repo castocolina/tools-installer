@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
 current_phase: 25
-status: executing
+status: ready_to_plan
 stopped_at: "Phase 24.5 complete; autonomous run 24.4-24.5 finished. Next: Phase 25 (not planned yet)"
-last_updated: "2026-11-15T03:53:13.052Z"
+last_updated: "2026-11-15T04:16:13.414Z"
 last_activity: 2026-11-15
-state_head: c59489464d2d8a55aa15d9c5f890b30f3e8c09f0
+state_head: dbc4d5fcf59969d4cefd7bef33244c26237d1f9f
 progress:
   total_phases: 17
   completed_phases: 7
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 Phase: 25 — EXECUTING
 Plan: 1 of ?
-Status: Executing Phase 25
+Status: ready_to_plan
 Last activity: 2026-11-15
 
 Progress: [████░░░░░░] 41%
