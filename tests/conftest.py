@@ -183,9 +183,9 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
 def real_home_untouched() -> "object":
     """Fail the run if any test wrote to the developer's real shell files.
 
-    `setup.py` resolves its path constants at IMPORT time (`_MYSHELLRC`,
-    `_SHELLRC`, ...), so `monkeypatch.setenv("HOME", ...)` alone does NOT
-    redirect them -- each one must be patched by name. That makes isolation
+    `setup.py` and `installer/compose.py` resolve their path constants at IMPORT
+    time (`_MYSHELLRC`, `_SHELLRC`, ...), so `monkeypatch.setenv("HOME", ...)` alone
+    does NOT redirect them -- each one must be patched by name. That makes isolation
     opt-in, and an opt-in guarantee is one a future test will eventually forget:
     a single un-redirected constant reaching `configure_path` would consolidate
     the developer's own ~/.shellrc and leave a backup behind.
@@ -283,9 +283,10 @@ def _rerooted(path: Path, real_home: Path, project: Path, scratch: Path) -> Path
     return scratch / resolved.relative_to(real_home)
 
 
-# setup.py resolves its home paths at IMPORT, before any fixture runs, so HOME alone
-# cannot reach them. Re-root every such attribute, generically, so a constant added
-# later is covered too; `real_home_untouched` stays the net underneath (review R1-07).
+# setup.py and installer/compose.py resolve their home paths at IMPORT, before any fixture
+# runs, so HOME alone cannot reach them. Re-root every such attribute of both modules,
+# generically, so a constant added later is covered too; `real_home_untouched` stays the net
+# underneath (review R1-07).
 @pytest.fixture(autouse=True)
 def no_shell_init_sourcing(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test that builds the app injects its split-mode reader; reset it per test (R1-05)."""
@@ -300,27 +301,27 @@ def no_git_runner(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def sandboxed_setup_paths(sandboxed_home: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    setup_module = sys.modules.get("setup")
-    if setup_module is None:
-        return
     real_home = Path(os.path.realpath(_REAL_HOME))
-    project = Path(os.path.realpath(setup_module.__file__ or "."))
-    project = project.parent if project.is_file() else project
+    project = Path(os.path.realpath(Path(__file__).parent.parent))  # the checkout, for both modules
     scratch = Path.home()
-    for name, value in list(vars(setup_module).items()):
-        if isinstance(value, Path):
-            monkeypatch.setattr(setup_module, name, _rerooted(value, real_home, project, scratch))
-        elif isinstance(value, (list, tuple)):
-            items = cast(Sequence[object], value)
-            if items and all(isinstance(item, Path) for item in items):
-                moved = [
-                    _rerooted(item, real_home, project, scratch)
-                    for item in items
-                    if isinstance(item, Path)
-                ]
-                monkeypatch.setattr(
-                    setup_module, name, moved if isinstance(value, list) else tuple(moved)
-                )
+    for module_name in ("setup", "installer.compose"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        for name, value in list(vars(module).items()):
+            if isinstance(value, Path):
+                monkeypatch.setattr(module, name, _rerooted(value, real_home, project, scratch))
+            elif isinstance(value, (list, tuple)):
+                items = cast(Sequence[object], value)
+                if items and all(isinstance(item, Path) for item in items):
+                    moved = [
+                        _rerooted(item, real_home, project, scratch)
+                        for item in items
+                        if isinstance(item, Path)
+                    ]
+                    monkeypatch.setattr(
+                        module, name, moved if isinstance(value, list) else tuple(moved)
+                    )
 
 
 @pytest.fixture(autouse=True)

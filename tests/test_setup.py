@@ -18,7 +18,15 @@ from rich.console import Console
 from textual.pilot import Pilot
 
 import setup
-from installer import pnpm_globals, post_install, postinstall, receipts, schedules, systemd_daemon
+from installer import (
+    compose,
+    pnpm_globals,
+    post_install,
+    postinstall,
+    receipts,
+    schedules,
+    systemd_daemon,
+)
 from installer.app import UninstallDecision
 from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
@@ -1343,6 +1351,7 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
     zdotdir.mkdir()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ZDOTDIR", str(zdotdir))
+    importlib.reload(compose)
     importlib.reload(setup)
     try:
         forwarded: list[dict[str, object]] = []
@@ -1370,6 +1379,7 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
         # setup; re-import under that same contract rather than whatever the
         # developer's shell exports.
         monkeypatch.delenv("ZDOTDIR", raising=False)
+        importlib.reload(compose)
         importlib.reload(setup)
 
 

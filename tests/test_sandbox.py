@@ -19,6 +19,7 @@ import pytest
 from textual.app import App
 
 import setup
+from installer import compose
 from tests.conftest import GuardedPopen, launch_policy
 from tests.sandbox import (
     CHECKOUT,
@@ -280,6 +281,21 @@ def test_no_setup_home_constant_points_at_the_real_home() -> None:
             if isinstance(item, Path) and not Path(os.path.realpath(item)).is_relative_to(project):
                 assert not Path(os.path.realpath(item)).is_relative_to(real_home), name
     assert vars(setup)["_MYSHELLRC"] == Path.home() / ".myshellrc"
+
+
+def test_no_compose_home_constant_points_at_the_real_home() -> None:
+    """compose resolves its home paths at import too; the autouse sandbox must re-root them."""
+    real_home = Path(os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir))
+    # The checkout may sit under HOME (package data such as _REGISTRY); only home paths count.
+    project = Path(os.path.realpath(compose.__file__)).parent.parent
+    for name, value in vars(compose).items():
+        items: Sequence[object] = (
+            cast(Sequence[object], value) if isinstance(value, (list, tuple)) else [value]
+        )
+        for item in items:
+            if isinstance(item, Path) and not Path(os.path.realpath(item)).is_relative_to(project):
+                assert not Path(os.path.realpath(item)).is_relative_to(real_home), name
+    assert vars(compose)["_MYSHELLRC"] == Path.home() / ".myshellrc"
 
 
 # --- the launch allowlist (tests/sandbox.py): pure functions, nothing is launched ---
