@@ -15,10 +15,10 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from rich.cells import cell_len
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -90,6 +90,7 @@ SILENCE_TICK_SECONDS = 1.0
 _BRAILLE_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 _ASCII_FRAMES = ("-", "\\", "|", "/")
 _UPDATE_STARTED = "-- updating --"
+RUN_LOG_MAX_LINES = 5000
 
 
 class ChecksumMismatchScreen(ModalScreen[str | None]):
@@ -300,6 +301,66 @@ class ExecuteInputs:
     ascii_spinner: bool = False
 
 
+def dropped_notice(count: int) -> str:
+    """The one-line notice for `count` trimmed lines (D-12 wording)."""
+    if count == 1:
+        return "1 earlier line dropped"
+    return f"{count} earlier lines dropped"
+
+
+class RunLog(RichLog):
+    """The Execute run log, bounded at RUN_LOG_MAX_LINES stored lines.
+
+    Textual trims silently, so this log reports its trimmed count through
+    `on_dropped` whenever the count moves. The count is refreshed inside
+    `write`, so writes Textual defers and replays also update the notice.
+    """
+
+    def __init__(
+        self,
+        *,
+        on_dropped: Callable[[int], None],
+        id: str | None = None,
+        markup: bool = False,
+        highlight: bool = False,
+        auto_scroll: bool = True,
+    ) -> None:
+        super().__init__(
+            max_lines=RUN_LOG_MAX_LINES,
+            markup=markup,
+            highlight=highlight,
+            auto_scroll=auto_scroll,
+            id=id,
+        )
+        self._on_dropped = on_dropped
+        self._reported_dropped = 0
+
+    @property
+    def dropped(self) -> int:
+        """Cumulative count of stored (rendered) lines Textual has trimmed."""
+        return self._start_line
+
+    def write(
+        self,
+        content: RenderableType | object,
+        width: int | None = None,
+        expand: bool = False,
+        shrink: bool = True,
+        scroll_end: bool | None = None,
+        animate: bool = False,
+    ) -> Self:
+        """Write like RichLog, then report the trimmed count if it moved.
+
+        The bound holds after every write, the empty string included: Textual
+        stores "" as one line, so it is trimmed like any other.
+        """
+        super().write(content, width, expand, shrink, scroll_end, animate)
+        if self.dropped != self._reported_dropped:
+            self._reported_dropped = self.dropped
+            self._on_dropped(self.dropped)
+        return self
+
+
 class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     """Pushed, non-navigable install run over one `build_plan`. ModalScreen, not
     AppScreen: a pushed screen with no view name keeps the [catalog] /
@@ -331,6 +392,8 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     }
     ExecuteScreen #execute-head { height: auto; max-height: 3; padding: 0 1; }
     ExecuteScreen #plan-rows { height: 1fr; }
+    ExecuteScreen #execute-log-dropped { display: none; height: 1; padding: 0 1; }
+    ExecuteScreen #execute-log-dropped.-dropped { display: block; }
     ExecuteScreen #execute-log { display: none; height: 1fr; padding: 0 1; }
     ExecuteScreen #execute-silence {
         display: none;
@@ -377,15 +440,31 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
     def compose(self) -> ComposeResult:
         yield Static(id="execute-head")
         yield OptionList(id="plan-rows")
-        yield RichLog(
+        yield Static(id="execute-log-dropped")
+        yield RunLog(
             id="execute-log",
             markup=False,
             highlight=False,
             auto_scroll=True,
+            on_dropped=self._show_dropped,
         )
         yield Static(id="execute-silence")
         yield self.status
         yield Static(_KEYS_EMPTY, id="execute-keys")
+
+    def _show_dropped(self, count: int) -> None:
+        label = self.query_one("#execute-log-dropped", Static)
+        if count > 0:
+            label.update(dropped_notice(count))
+            label.add_class("-dropped")
+        else:
+            label.remove_class("-dropped")
+
+    def write_log(self, *lines: str) -> None:
+        """The one write path into the run log: every line goes through RunLog.write."""
+        log = self.query_one("#execute-log", RunLog)
+        for line in lines:
+            log.write(line)
 
     def on_mount(self) -> None:
         self._replan()
@@ -801,12 +880,11 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             # between the post and this write. Drop it entirely -- no
             # header, no line -- rather than render a stale reassurance.
             return
-        log = self.query_one("#execute-log", RichLog)
         if message.tool_id != self._last_tool_id:
-            log.write(f"── {message.tool_id} ──")
+            self.write_log(f"── {message.tool_id} ──")
             self._last_tool_id = message.tool_id
         cleaned = sanitize_log_line(message.line)
-        log.write(f"{message.tool_id} │ {cleaned}")
+        self.write_log(f"{message.tool_id} │ {cleaned}")
         if message.line == _DISMISSAL_SKIP.format(tool_id=message.tool_id):
             self.status.set(cleaned, "warn")
         if not message.transient:
@@ -867,22 +945,21 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         still = f" Still selected: {len(kept)}." if kept else ""
         self.status.set(f"{prefix}{still} enter or esc returns to the catalog.", severity)
         self.query_one("#execute-keys", Static).update(_KEYS_FINISHED)
-        log = self.query_one("#execute-log", RichLog)
-        log.write(
+        self.write_log(
             self._render_captured(lambda console: render_run_report(message.outcomes, console))
         )
         if message.path_text:
-            log.write("PATH wiring")
-            log.write(message.path_text)
+            self.write_log("PATH wiring")
+            self.write_log(message.path_text)
         elif message.path_error:
-            log.write(f"PATH wiring could not be completed: {message.path_error}")
+            self.write_log(f"PATH wiring could not be completed: {message.path_error}")
         if message.verify_text:
-            log.write("PATH audit")
-            log.write(message.verify_text)
+            self.write_log("PATH audit")
+            self.write_log(message.verify_text)
         elif message.verify_error:
-            log.write(f"PATH audit could not be completed: {message.verify_error}")
+            self.write_log(f"PATH audit could not be completed: {message.verify_error}")
         if message.run_error:
-            log.write(message.run_error)
+            self.write_log(message.run_error)
         # Do not event.stop(): this message must keep bubbling to UnifiedApp,
         # which records the outcomes for the process exit code.
 

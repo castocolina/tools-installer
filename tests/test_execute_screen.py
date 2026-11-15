@@ -5351,3 +5351,100 @@ async def test_markup_in_review_values_renders_literally(monkeypatch: pytest.Mon
         assert isinstance(screen, ExecuteScreen)
         prompts = _plan_prompts(screen)
         assert any(prompt.startswith(f"○ {markup_id}") for prompt in prompts)
+
+
+# --- Bounded run log (plan 25-06): the 5,000-line bound and the dropped-lines notice ---
+
+
+def _numbered(prefix: str, count: int) -> list[str]:
+    return [f"{prefix} {index}" for index in range(count)]
+
+
+def _run_log(screen: ExecuteScreen) -> "installer.execute_screen.RunLog":
+    return screen.query_one("#execute-log", installer.execute_screen.RunLog)
+
+
+def _notice(screen: ExecuteScreen) -> Static:
+    return screen.query_one("#execute-log-dropped", Static)
+
+
+def _notice_shown(screen: ExecuteScreen) -> bool:
+    return _notice(screen).has_class("-dropped")
+
+
+async def _show_log(screen: ExecuteScreen, pilot: Any) -> None:
+    """Show the log as a started run does (the `-running` class), then wait for its size."""
+    screen.add_class("-running")
+    log = _run_log(screen)
+    await wait_until(pilot, lambda: log.size.width > 0)
+
+
+def test_dropped_notice_wording() -> None:
+    notice = installer.execute_screen.dropped_notice
+    assert notice(1) == "1 earlier line dropped"
+    assert notice(2) == "2 earlier lines dropped"
+    assert notice(1000) == "1000 earlier lines dropped"
+
+
+async def test_the_run_log_keeps_5000_lines_and_names_the_dropped_ones() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _show_log(screen, pilot)
+        log = _run_log(screen)
+        screen.write_log(*_numbered("line", 5000))
+        assert len(log.lines) == 5000
+        assert log.dropped == 0
+        assert not _notice_shown(screen)
+        screen.write_log("line 5000")
+        assert len(log.lines) == 5000
+        assert log.dropped == 1
+        assert _notice_shown(screen)
+        assert str(_notice(screen).content) == "1 earlier line dropped"
+        screen.write_log(*_numbered("tail", 999))
+        assert len(log.lines) == 5000
+        assert log.dropped == 1000
+        assert str(_notice(screen).content) == "1000 earlier lines dropped"
+        assert _log_text(screen).splitlines()[-1] == "tail 998"
+
+
+async def test_an_install_log_line_past_the_bound_updates_the_notice() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _show_log(screen, pilot)
+        screen.write_log(*_numbered("line", 5000))
+        log = _run_log(screen)
+        screen.post_message(InstallLogLine("fd", "fd line 1"))
+        await wait_until(pilot, lambda: log.dropped == 2)
+        assert len(log.lines) == 5000
+        assert str(_notice(screen).content) == "2 earlier lines dropped"
+        assert _log_text(screen).splitlines()[-1] == "fd │ fd line 1"
+
+
+async def test_writes_replayed_after_the_first_resize_update_the_notice() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        log = _run_log(screen)
+        assert log.size.width == 0
+        screen.write_log(*_numbered("line", 5001))
+        assert len(log.lines) == 0
+        assert not _notice_shown(screen)
+        screen.add_class("-running")
+        await wait_until(pilot, lambda: len(log.lines) == 5000)
+        assert _notice_shown(screen)
+        assert str(_notice(screen).content) == "1 earlier line dropped"
+        assert _log_text(screen).splitlines()[-1] == "line 5000"
