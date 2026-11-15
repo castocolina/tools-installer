@@ -1,8 +1,8 @@
 ---
 phase: 25
 reviewers: [opencode-referee-one]
-reviewed_at: 2026-11-15T21:33:02Z
-review_cycle: 2
+reviewed_at: 2026-11-15T21:59:44Z
+review_cycle: 3
 plans_reviewed: [25-01-PLAN.md, 25-02-PLAN.md, 25-03-PLAN.md, 25-04-PLAN.md, 25-05-PLAN.md, 25-06-PLAN.md, 25-07-PLAN.md, 25-08-PLAN.md, 25-09-PLAN.md, 25-10-PLAN.md, 25-11-PLAN.md]
 models:
   opencode-referee-one: "router-env/my-referee-one"
@@ -848,4 +848,420 @@ Plan 25-11 is the final phase gate: it compares the finished tree with the pre-p
 **Overall lane risk: HIGH.** The sequence correctly places comment cleanup and cap enforcement after the screen moves and before the phase gate (`.planning/ROADMAP.md:745-758`). The principal blocker is the final vulture comparison’s mismatch with the composition-move contract; resolving it requires coordinating plans 25-05 and 25-11, not changing the intended production behavior.
 
 **Not checked:** I did not execute the plans, full test suite, or CI. The split destination files do not yet exist at HEAD, so their final imports, sizes, and generated guards could only be assessed against the plans and current source.
+
+
+## Cycle 3 — reviewed at HEAD 67187186 (final cycle)
+
+### Lane run facts
+
+- opencode was launched directly, as in cycles 1-2, over four lanes with the same plan split. The cycle-3 prompt asked reviewers to rule on every R1/R2 id and to report only real blockers.
+- Lane A: exit 0, 16.4 KB. Lane B: exit 0, 22.6 KB. Lane C: exit 0, 14.0 KB. Lane D: exit 0, 33.7 KB. Every lane covered every plan id in its lane, and no failover was needed.
+- Raw output: `.planning/phases/25-lean/.review-diagnostics/20261115T215944Z-cycle3/` (gitignored).
+- After the lanes finished, `~/.claude/gsd-core` and `~/.claude/.gsd-source` were absent and no opencode run was left.
+- The orchestrator verified all four HIGHs directly against the source. Every lane rated its remaining items LOW: the R2-12 and R2-13 notes were already accepted, and the rest were execution-time verification notes. No MEDIUM was raised.
+
+### Verified findings ledger (cycle 3)
+
+| ID | Plan | Raw | Verified | Finding (verified form) | Fix applied by hand (trivial) |
+|----|------|-----|----------|-------------------------|-------------------------------|
+| R3-01 | 04 | HIGH | **HIGH**, trivial | `tests/test_deps.py:5-11` imports `requires_integrity_errors` from `installer.deps`. Task 2 moves the function out of `installer/deps.py` and moves its two tests, but never drops that import, so collection fails with ImportError | Task 2 drops `requires_integrity_errors` from that import list in the same commit, and an acceptance grep proves it is gone |
+| R3-02 | 05 | HIGH | **HIGH**, trivial | `test_the_environment_d_dir_honours_xdg_config_home` runs `import setup; print(setup._ENVIRONMENT_D_DIR)` in a fresh interpreter (`tests/test_setup.py:1221-1222`). Its last production readers (`_cache_redirect_policies`, `_desktop_shell_policies`) move in Task 2, so ruff drops the import-back and the subprocess raises AttributeError. The AST patch audit does not read `-c` strings. This also keeps R1-17 open | Task 2 retargets that string to `import installer.compose as compose; print(compose._ENVIRONMENT_D_DIR)` in the same commit. The assert is unchanged, and the audit also scans string literals for `setup.<name>` of compose-only names |
+| R3-03 | 05 | HIGH | **HIGH**, trivial | Replacing `_build_services._install`'s `**options` with explicit keyword defaults forwards `repair=False` on every row. `session._with_force` deliberately omits `repair` on ordinary rows (`installer/session.py:279-305`), and `_recording_install` (`tests/test_setup.py:602-621`) has no `repair` parameter, so this raises TypeError and breaks the omission contract | Type `**options` as `Unpack[_InstallOptions]`, a `TypedDict(total=False)` in compose with `checksum_policy: ChecksumPolicy` and `repair: bool`, and forward `**options` unchanged, so an omitted key stays omitted. pyright strict accepts this without a suppression |
+| R3-04 | 11 | HIGH | **HIGH**, trivial | The final absence `rg` (`25-11-PLAN.md:112`) matches substrings. The live `_classify_source_lines` (`installer/shellrc.py:708,797,843,894`) and `"defaultPermissionMode"` (`installer/agent_settings.py:692`) would make a correct tree fail | The command uses `rg -nw` (whole words) with explicit names (`HOST_SETUPS`, `HOST_SETUP_IDS`, `_HOST_SETUP_OWNERS`, `_host_setup`, `_host_setup_owner`, `host_setup_handoff`, `host_setup_approval_disclosures`, `host_setup_update_argv`, `confirm_sensitive_action`, ...), so live identifiers that merely contain a retired name no longer match |
+
+CYCLE_SUMMARY: current_high=4 current_actionable=0
+
+**Cap rule (cycle 3 of 3).** All four HIGHs are verified and trivial, meaning each is a plan-text edit with no design question. Under the owner's 2026-11-15 amendment ("when the remaining HIGHs are trivial, fix them by hand and continue the GSD flow at any count"), the orchestrator fixed all four by hand in plans 25-04, 25-05 and 25-11 and recorded them under `### Round 3` in each plan's ledger. After those fixes, unresolved: 0 HIGH and 0 actionable MEDIUM. The accepted LOWs are R2-12 and R2-13.
+
+## OpenCode Review (opencode-referee-one) — cycle 3 raw lanes
+
+### Lane A (`laneA-my-referee-one`)
+
+#### 25-01
+
+##### Summary
+
+The plan adds a permanent AST-based module-reachability guard, including scratch-tree tests for orphaned modules, lazy imports, typing-only imports and relative imports. It also inventories callable dispatch tables and checks the `helper_assets` exemption.
+
+##### Strengths
+
+- The seeded-orphan case makes the guard non-vacuous, while the entry-point check covers the two actual `python -m` launches in `Makefile:28–32` (`.planning/phases/25-lean/25-01-PLAN.md:105–121`).
+- The dispatch inventory now includes `_PATH_QUERIES`, which is both defined and consulted by the ownership probe (`installer/install_ownership.py:213–218,236–240`; `.planning/phases/25-lean/25-01-PLAN.md:147–155`).
+
+##### Concerns
+
+- No new execution-blocking concern was established in the source checked.
+
+##### Prior-review dispositions
+
+- **R1-01 — resolved:** relative imports are resolved, and above-package imports fail by name (`.planning/phases/25-lean/25-01-PLAN.md:149,157`).
+- **R1-02 — resolved:** `_PATH_QUERIES` is listed and the inventory test checks for omitted tables (`.planning/phases/25-lean/25-01-PLAN.md:80,150–155`).
+- **R1-03 — resolved:** the exemption test checks both that the directory is live and that reachable modules do not import it (`.planning/phases/25-lean/25-01-PLAN.md:152`).
+- **R2-01 — resolved:** the revised boundary is fewer than `level` package components, with both invalid and valid two-level examples (`.planning/phases/25-lean/25-01-PLAN.md:149,157`).
+
+##### Suggestions
+
+Keep the scratch cases and table-inventory test in the same commit as the visitor changes, as specified.
+
+##### Risk Assessment
+
+**LOW** for the reviewed contracts. The guard is new code, so its implementation and real-tree behavior still require execution-time verification.
+
+#### 25-02
+
+##### Summary
+
+The plan retires the unused `host_setup` kind in one production commit, preserves native-package handoffs and the pnpm refusal, then adds compatibility pins and removes stale documentation.
+
+##### Strengths
+
+- It preserves the independent native-package handoff: `install_tool` returns `MANUAL_REQUIRED` from `needs_manual` before `_perform` (`installer/engine.py:267–278`; `.planning/phases/25-lean/25-02-PLAN.md:163–170`).
+- The replacement smoke-key case is grounded in the loader’s closed parameters: `rpm_ostree` permits `package` but not `smoke_argv` (`installer/model.py:103–106`), while the existing assertion checks that exact unknown key (`tests/test_model.py:761–784`).
+- The compatibility pin now reflects the actual cache representation: `VersionCacheEntry` has the four stated fields and no method fingerprint (`installer/version_cache.py:54–59`; `.planning/phases/25-lean/25-02-PLAN.md:202–209`).
+
+##### Concerns
+
+- No new execution-blocking concern was established in the source checked.
+
+##### Prior-review dispositions
+
+- **R1-04 — resolved:** the plan’s focused pytest commands no longer name the file created by parallel plan 25-01 (`.planning/phases/25-lean/25-02-PLAN.md:175–177,274–276`).
+- **R1-05 — resolved:** the plan specifies the `rpm_ostree` replacement and preserves the existing assertion (`.planning/phases/25-lean/25-02-PLAN.md:133,179–182`; `installer/model.py:103–106`).
+- **R1-06 — resolved:** the plan keeps `_PI_PACKAGE` and requires a pi-specific pnpm ownership pin (`.planning/phases/25-lean/25-02-PLAN.md:133,202–205`).
+- **R2-03 — resolved:** the old pi cache entry is specified as loading unchanged, rather than as a fingerprint miss (`.planning/phases/25-lean/25-02-PLAN.md:203–204`; `installer/version_cache.py:54–59`).
+- **R2-04 — resolved:** the plan records live ownership resolution and the absence of a persisted ownership-record format (`.planning/phases/25-lean/25-02-PLAN.md:208–209`; `installer/version_status.py:1664–1675`).
+
+##### Suggestions
+
+During execution, retain the full-suite check after the retirement commit: the sample `host_setup` method in `tests/test_engine.py:1144–1166` exercises a live manual-handoff assertion and must be switched in that same commit.
+
+##### Risk Assessment
+
+**MEDIUM.** The documented migration is broad, but the checked handoff and compatibility contracts are explicit. Correctness still depends on completing the test and caller inventory in the retirement commit.
+
+#### 25-04
+
+##### Summary
+
+The plan triages the vulture-60 inventory, removes dead or test-only symbols in individually reversible commits, and moves the registry-integrity helper and its tests out of production.
+
+##### Strengths
+
+- The conditional cascade correctly protects `encode_manager_snapshot`: production still imports and calls it in `installer/version_status.py:123,1997–1999` (`.planning/phases/25-lean/25-04-PLAN.md:111–115`).
+- The `release_tag` plan now accounts for both assignments. The first release lookup occurs in `resolve_target` (`installer/download.py:116–120`), and the second uses the memoized resolver (`installer/verify_registry.py:628–650`).
+- The registry helper’s `_tool` dependency is explicitly included in the relocation commit (`tests/test_deps.py:15–27,153–163`; `.planning/phases/25-lean/25-04-PLAN.md:148`).
+
+##### Concerns
+
+- **HIGH — The helper-relocation instructions leave an import of the deleted production symbol.** Task 2 says to move `requires_integrity_errors` from `installer/deps.py` and change the import in `tests/test_registry.py` (`.planning/phases/25-lean/25-04-PLAN.md:148`), but `tests/test_deps.py` also imports it at lines 5–10. Moving its two callers at `tests/test_deps.py:153–163` does not remove that import. Following the enumerated edits leaves test collection failing with `ImportError` in the required same-commit gate.
+
+##### Prior-review dispositions
+
+- **R1-07 — resolved:** the plan copies `_tool` with the moved tests (`.planning/phases/25-lean/25-04-PLAN.md:148`; `tests/test_deps.py:15–27`).
+- **R1-08 — resolved:** it removes both now-unused `tag` assignments and verifies the registry tests and ruff (`.planning/phases/25-lean/25-04-PLAN.md:115,123–125`; `installer/verify_registry.py:373–389`).
+- **R1-09 — resolved:** framework-dispatched hooks and enum members have an explicit retained category (`.planning/phases/25-lean/25-04-PLAN.md:34–35,188–189`).
+- The verified cycle-2 ledger records no additional finding for 25-04 (`.planning/phases/25-lean/25-REVIEWS.md:454–471`).
+
+##### Suggestions
+
+In Task 2 item 4, explicitly remove `requires_integrity_errors` from **both** `tests/test_deps.py` and `tests/test_registry.py` imports in the relocation commit. Keep the moved tests and assertions unchanged.
+
+##### Risk Assessment
+
+**HIGH.** The prescribed relocation is incomplete and can break collection before its required green commit.
+
+#### Cross-Plan Assessment
+
+**Overall lane risk: HIGH**, driven by the 25-04 relocation import. The declared wave-1 files for 25-01 and 25-02 are disjoint; the declared wave-2 files for 25-03 and 25-04 are also disjoint (`.planning/phases/25-lean/25-01-PLAN.md:5–8`, `.planning/phases/25-lean/25-02-PLAN.md:5–39`, `.planning/phases/25-lean/25-03-PLAN.md:5–24`, `.planning/phases/25-lean/25-04-PLAN.md:5–22`). The downstream composition plan places the home-constant move and sandbox generalization in the same commit (`.planning/phases/25-lean/25-05-PLAN.md:118,123–138`), and the Doctor move explicitly retains the generation-bearing message (`.planning/phases/25-lean/25-09-PLAN.md:98–100,114–131`).
+
+**Review limit:** This was read-only; I did not execute the plans or test gates, and I did not exhaustively read every cited source and test file. The 25-04 import finding is grounded in the current source, not an execution result.
+
+##### Status: Issues Found — fix and re-invoke
+
+### Lane B (`laneB-my-referee-one`)
+
+#### 25-03
+
+##### Summary
+
+The plan retires the sensitive-action prompts first, then removes callback threading, action parameters, and the registry field, followed by a documentation update. It preserves the checksum-mismatch prompt and the repair path.
+
+##### Strengths
+
+- The deletion is grounded in the empty prompt table: `SENSITIVE_PROMPTS` is `{}` in `installer/post_install.py:110-120`. The plan also explicitly rejects the retired registry key rather than relying on unknown-key handling (`.planning/phases/25-lean/25-03-PLAN.md:176-181`).
+- The checksum prompt has independent worker-to-modal plumbing (`installer/execute_screen.py:837-847`), and Task 1 expressly retains it (`.planning/phases/25-lean/25-03-PLAN.md:139-143`).
+- The plan preserves the live `repair=True` forwarding in `_with_force` (`installer/session.py:279-305`; `.planning/phases/25-lean/25-03-PLAN.md:178-181`).
+
+##### Concerns
+
+- No new execution-blocking concern found.
+
+##### Prior-review dispositions
+
+- **R1-10 — resolved.** The plan permits removal of the retired argument inside an assertion while preserving its expected value (`.planning/phases/25-lean/25-03-PLAN.md:116,124`).
+- **R1-11 — resolved.** Mixed post-install tests are classified as STRIP, preserving live handoff assertions such as those in `tests/test_post_install.py:112-120,174-184`; the plan distinguishes them from confirmation-only tests (`.planning/phases/25-lean/25-03-PLAN.md:113-115`).
+- **R1-12 — resolved.** Both action-table doubles are explicitly included in the arity migration (`.planning/phases/25-lean/25-03-PLAN.md:116,181`).
+- **R1-13 — resolved.** Task 1 removes the orphaned prompt imports and corrects the checksum occurrence check (`.planning/phases/25-lean/25-03-PLAN.md:142,151`).
+- **R1-14 — resolved/refuted.** The verified ledger found no requirement for a new negative documentation pin (`.planning/phases/25-lean/25-REVIEWS.md:48`).
+- **R2-05 — resolved.** Task 1 now covers the later modal-helper users in `tests/test_execute_screen.py:5621-5657,5682-5707` (`.planning/phases/25-lean/25-03-PLAN.md:142-154`).
+- **R2-06 — resolved/refuted.** The verified ledger treats removal of the retired argument as a deleted-target change (`.planning/phases/25-lean/25-REVIEWS.md:460`).
+- **R2-08 — resolved.** The two model-test occurrences are assigned to separate classifications (`.planning/phases/25-lean/25-03-PLAN.md:115`).
+
+##### Suggestions
+
+- During execution, retain the plan’s per-test classification and before/after record for assertions containing the retired argument.
+
+##### Risk Assessment
+
+**LOW.** The migration has broad test fan-out, but the identified prompt, dispatch, repair, and documentation dependencies are assigned to the appropriate commits.
+
+#### 25-05
+
+##### Summary
+
+The plan moves composition and import-time constants into `installer/compose.py`, extends the test sandbox, retargets patches and source scans, and adds structural and CLI-assertion guards. Two concrete dependencies remain unresolved in the intermediate helper-move commit.
+
+##### Strengths
+
+- The constant move and sandbox extension are required in the same commit (`.planning/phases/25-lean/25-05-PLAN.md:133-150`), addressing the import-time paths documented in `tests/conftest.py:261-283,301-323`.
+- The schedule checkout correction preserves the existing repository-root calculation (`setup.py:697-707`; `.planning/phases/25-lean/25-05-PLAN.md:166-170`).
+- The two source-inspection tests move with `_build_services`: `tests/test_versions.py:150-160` and `tests/test_setup.py:3540-3545` currently inspect `setup.py`; Task 2 retargets both (`.planning/phases/25-lean/25-05-PLAN.md:170`).
+
+##### Concerns
+
+- **HIGH — The fresh-process `_ENVIRONMENT_D_DIR` lookup loses its binding in Task 2.** The plan imports back only constants still read by setup’s production code and audits Python attribute reads and string-form *patch targets* (`.planning/phases/25-lean/25-05-PLAN.md:101,172-174`). At HEAD, the production reads of `_ENVIRONMENT_D_DIR` are in `_cache_redirect_policies` and `_desktop_shell_policies`, both moved in Task 2 (`setup.py:502-527,666-674`). But `tests/test_setup.py:1212-1230` launches a fresh interpreter with the string `import setup; print(setup._ENVIRONMENT_D_DIR)`. Once ruff removes the now-unused setup import-back, that subprocess raises `AttributeError`; the described AST audit does not inspect Python embedded in `-c` strings. Task 2 therefore cannot satisfy its full-suite green-commit gate as specified.
+
+- **HIGH — Explicitly forwarding `repair=False` breaks an existing install double.** Task 2 replaces `_build_services._install`’s `**options` with explicit keyword parameters and forwards them by name (`.planning/phases/25-lean/25-05-PLAN.md:102,166`). Today `_with_force` deliberately omits `repair` for ordinary rows (`installer/session.py:279-305`), and `_build_services._install` forwards only the supplied options (`setup.py:641-654`). The existing `_recording_install` double has no `repair` parameter (`tests/test_setup.py:602-621`) and is used by the TUI route pilot (`tests/test_setup.py:624-660,2242-2261`). Unconditionally forwarding the default passes `repair=False` to that double, raising `TypeError` on ordinary installs. It also changes the existing omission contract for install seams.
+
+##### Prior-review dispositions
+
+- **R1-15 — resolved.** The moved schedule context is explicitly adjusted to the repository root (`.planning/phases/25-lean/25-05-PLAN.md:168`).
+- **R1-16 — resolved.** Both source-scan changes land in Task 2 with the moved implementation (`.planning/phases/25-lean/25-05-PLAN.md:170`).
+- **R1-17 — still open.** The revised audit covers ordinary module reads, but not the fresh-process string lookup described above: `tests/test_setup.py:1220-1230` reads a binding whose last production users move in Task 2 (`setup.py:502-527,666-674`).
+- **R1-18 — resolved/refuted.** The verified ledger accepts the existing undo-then-reload sequence and the next-test sandbox (`.planning/phases/25-lean/25-REVIEWS.md:52`).
+- **R1-19 — resolved.** The forbidden-import check is now AST-based rather than a prose grep (`.planning/phases/25-lean/25-05-PLAN.md:204`).
+- **R1-20 — resolved.** The specified diff compares the baseline with the working tree (`.planning/phases/25-lean/25-05-PLAN.md:208`).
+- **R1-34 — resolved.** The D-12 guard compares decorators as well as assertion segments (`.planning/phases/25-lean/25-05-PLAN.md:208`).
+- **R2-09 — resolved/refuted.** The verified finding concerned Task 1’s bindings (`.planning/phases/25-lean/25-REVIEWS.md:462`); the new subprocess issue above occurs after Task 2 moves the remaining production readers.
+- **R2-10 — resolved/refuted.** The verified ledger found the flag uses directly in the guarded test functions (`.planning/phases/25-lean/25-REVIEWS.md:463`).
+
+##### Suggestions
+
+1. In Task 2, retarget the fresh-process lookup to `installer.compose`, preserving the existing output assertion, and include embedded subprocess code in the patch/read audit.
+2. Specify an `_install` implementation that preserves omission of `repair` when it was not supplied, while retaining strict typing and `repair=True` for forced rows. Run the existing TUI route pilot and the install-binding tests in that same commit.
+
+##### Risk Assessment
+
+**HIGH.** Both issues affect the required green intermediate commit; the install-wrapper change also alters a documented call contract.
+
+#### 25-06
+
+##### Summary
+
+The plan introduces a bounded `RichLog` subclass, routes streaming and completion writes through one helper in the first commit, and displays Textual’s cumulative trimmed-line count above the log. A second commit adds multiline, empty-write, completion, and layout pins.
+
+##### Strengths
+
+- The callback runs from the `write` override, matching Textual’s deferred replay through `self.write` (`.venv/lib/python3.12/site-packages/textual/widgets/_rich_log.py:132-139,205-213`; `.planning/phases/25-lean/25-06-PLAN.md:106-111`).
+- Both streaming and completion writes are migrated in the commit enabling trimming (`installer/execute_screen.py:862-874,904-953`; `.planning/phases/25-lean/25-06-PLAN.md:111`).
+- The plan tests rendered multiline eviction and the visible 80×20 layout, not just a count of write calls (`.planning/phases/25-lean/25-06-PLAN.md:138-146`).
+
+##### Concerns
+
+- **LOW — Deferred writes remain temporarily unbounded.** Before its first known size, Textual queues writes without applying `max_lines` (`.venv/lib/python3.12/site-packages/textual/widgets/_rich_log.py:205-213`). The plan acknowledges this and tests replay (`.planning/phases/25-lean/25-06-PLAN.md:102,219`). This is the previously accepted low-risk limitation, not a new blocker.
+- **LOW — The implementation relies on Textual internals across dependency upgrades.** The project declares `textual>=8` without an upper bound (`pyproject.toml:6-10`), while the plan reads `_start_line` and relies on replay behavior (`.planning/phases/25-lean/25-06-PLAN.md:76,106-109`). The boundary and replay tests mitigate drift.
+
+##### Prior-review dispositions
+
+- **R1-21 — resolved.** The override observes replayed writes (`.planning/phases/25-lean/25-06-PLAN.md:102,109`).
+- **R1-22 — resolved.** All current writers move with the bound (`.planning/phases/25-lean/25-06-PLAN.md:111`).
+- **R1-23 — resolved, corrected by R2-11.** The plan now states and tests the bound for empty string writes too (`.planning/phases/25-lean/25-06-PLAN.md:28,140`).
+- **R1-24 — resolved.** The completion and post-drop layout paths have explicit tests (`.planning/phases/25-lean/25-06-PLAN.md:141-142`).
+- **R2-11 — resolved/refuted as a blocker.** The corrected empty-string behavior and regression test are specified (`.planning/phases/25-lean/25-06-PLAN.md:140,146`).
+- **R2-12 — still open, accepted LOW.** The pre-size queue remains unbounded as described above.
+- **R2-13 — still open, accepted LOW.** The dependency range remains open-ended as described above.
+
+##### Suggestions
+
+- Keep the replay and empty-string tests in the permanent suite so a Textual upgrade exposes a changed internal contract.
+
+##### Risk Assessment
+
+**LOW.** The planned mechanism addresses the prior notice and ordering failures; remaining risks are the documented transient queue and dependency-internal coupling.
+
+#### Cross-Plan Assessment
+
+**Overall lane risk: HIGH.** Plan 25-05 has two Task 2 green-commit blockers. Plans 25-05 and 25-06 declare disjoint modified files (`.planning/phases/25-lean/25-05-PLAN.md:7-21`; `.planning/phases/25-lean/25-06-PLAN.md:7-9`), and both follow 25-03 in the wave order (`.planning/ROADMAP.md:737-743`). The size-cap work remains assigned to the later split plans, whose projections identify the oversized modules (`.planning/phases/25-lean/25-RESEARCH.md:329-348`). The existing silence-generation check remains outside these lane changes (`installer/execute_screen.py:743-757`).
+
+**Review status: Issues found — revise 25-05.**
+
+**Not checked:** I did not execute the planned refactor or its test gates; the new modules and scratch guards do not yet exist. No matching codebase-memory index was available, so findings rely on source inspection and text searches.
+
+### Lane C (`laneC-my-referee-one`)
+
+#### 25-07
+
+##### Summary
+
+The plan moves the mutation lock and modal screens first, places the two shared schedule names in `ui_common.py`, and introduces the AST move checker reused by the next two plans. The ordering gives later screens stable dependencies without a runtime import back into `wizard_app.py`.
+
+##### Strengths
+
+- The shared-name move addresses real dependencies: `SchedulesScreen` and the modal screens both use `_TIMES_LISTED` and `_sentence` (`installer/wizard_app.py:2642,2656,2953,3139,3416,3514`; `.planning/phases/25-lean/25-07-PLAN.md:133-139`).
+- The mutation-lock move retains the cross-process refusal and release logic (`installer/wizard_app.py:3632-3668`; `.planning/phases/25-lean/25-07-PLAN.md:98-120`).
+- Both tasks require the pilot tests and full gates before their respective commits (`.planning/phases/25-lean/25-07-PLAN.md:111-120,136-146`).
+
+##### Concerns
+
+- No execution-blocking concern confirmed.
+
+##### Prior-review dispositions
+
+- **R1-25: resolved.** The checker specification includes assignment bindings and detects old renamed references in source and targets; the plan also requires lint and strict typing checks (`.planning/phases/25-lean/25-07-PLAN.md:107`).
+- **R2-15: resolved for the verified finding.** The checker must detect a copy newly defined in a target while retained in the source, fail on zero checked names, and run against the pre-commit revision (`.planning/phases/25-lean/25-07-PLAN.md:107,111-113`).
+
+##### Suggestions
+
+- In the task summaries, record the checker’s nonzero comparison count and the revision used, alongside the pilot and full-gate results.
+
+##### Risk Assessment
+
+**LOW.** The named dependencies and intermediate gates are consistent with the current source. The checker is a planned tool, however, so its implementation and self-check remain to be verified during execution.
+
+#### 25-08
+
+##### Summary
+
+The plan moves Policies and Schedules in sequence, first relocating their shared formatting helper and probe aliases, then moving Schedules and retargeting its module-global test accesses.
+
+##### Strengths
+
+- The plan explicitly updates the Schedules calls to `_fit` in the same commit that moves the helper (`installer/wizard_app.py:2850-2856`; `.planning/phases/25-lean/25-08-PLAN.md:116-120`).
+- It addresses both schedule-test global accesses: the silent dictionary-based refresh patch and the columns lookup (`tests/test_schedules_view.py:593-596,673`; `.planning/phases/25-lean/25-08-PLAN.md:141-147`).
+- It distinguishes the app-level `move_link_mode` patch from the moved Policies call, avoiding an indiscriminate retarget (`tests/test_screen_family.py:2951`; `installer/wizard_app.py:2551,4216`; `.planning/phases/25-lean/25-08-PLAN.md:94`).
+
+##### Concerns
+
+- No execution-blocking concern confirmed.
+
+##### Prior-review dispositions
+
+- **R1-26: resolved.** Task 1 explicitly replaces the remaining Schedules `_fit` calls with `fit` in the same commit (`.planning/phases/25-lean/25-08-PLAN.md:117`).
+- **R2-16: resolved for the verified finding.** Both tasks use the revised checker and specify the nonzero-count, retained-copy and revision-timing failure conditions (`.planning/phases/25-lean/25-08-PLAN.md:119-121,144-146`; `.planning/phases/25-lean/25-07-PLAN.md:107`).
+
+##### Suggestions
+
+- Preserve the distinction between the loud `_REFRESH_SECONDS` patch and the existing `vars(...)` lookup for `_SCHEDULE_COLUMNS`, as specified, and verify both in the same commit as the screen move.
+
+##### Risk Assessment
+
+**LOW.** The identified test-patching hazards have explicit same-commit fixes, and the plan follows the prerequisite modal move. Actual new-module bindings still require execution-time validation.
+
+#### 25-09
+
+##### Summary
+
+The plan moves Doctor and Uninstall last, each with a sibling module. It moves Doctor’s worker messages together with their screen, and moves the destructive Uninstall screen together with its review helpers and importers. The final size cap is deliberately delegated to plan 25-10.
+
+##### Strengths
+
+- The generation-bearing message and its handler move together. The current handler rejects stale audit results before applying them (`installer/wizard_app.py:274-287,947-964`; `.planning/phases/25-lean/25-09-PLAN.md:113-126`).
+- The Uninstall screen, review helpers and relevant end-to-end tests are included in one task (`.planning/phases/25-lean/25-09-PLAN.md:138-153`).
+- The removal-quit strings correctly remain with the app rather than moving with the adjacent review constants (`installer/wizard_app.py:1090-1091`; `.planning/phases/25-lean/25-09-PLAN.md:146-147`).
+
+##### Concerns
+
+- No execution-blocking concern confirmed.
+
+##### Prior-review dispositions
+
+- **R1-27: resolved by the recorded refutation.** The screen and renamed review globals move in the same task, with the rename map applied to the moved nodes (`.planning/phases/25-lean/25-09-PLAN.md:146-150`; `.planning/phases/25-lean/25-REVIEWS.md:59-61`).
+- **R2-17: resolved for the verified finding.** The shared checker’s retained-copy rule includes assignment bindings, so the specified retained `_DOCTOR_READ_ERROR` copy is covered (`installer/wizard_app.py:341`; `.planning/phases/25-lean/25-07-PLAN.md:107`; `.planning/phases/25-lean/25-09-PLAN.md:120-125`).
+
+##### Suggestions
+
+- Record the actual post-move module sizes for plan 25-10; do not report the 800-line acceptance as complete at the end of this plan (`.planning/phases/25-lean/25-09-PLAN.md:80-83`; `.planning/phases/25-lean/25-10-PLAN.md:134-155`).
+
+##### Risk Assessment
+
+**LOW for the specified move; phase completion remains dependent on plan 25-10.** The race check and destructive-path coverage are explicitly retained, while the size guard lands in the following wave.
+
+#### Cross-Plan Assessment
+
+**Overall lane risk: LOW**, with no confirmed execution blocker in these three plans. Their shared-file edits are sequential rather than parallel: 25-07, 25-08 and 25-09 occupy waves 4, 5 and 6 respectively (`.planning/ROADMAP.md:745-752`). Plan 25-10 owns the subsequent cleanup, extraction and permanent size guard (`.planning/ROADMAP.md:754-755`).
+
+This was a read-only review: the refactor, checker and test gates were not executed. The future split modules do not yet exist at HEAD, and the source/test review was targeted rather than exhaustive; no matching codebase-memory index was available.
+
+### Lane D (`laneD-my-referee-one`)
+
+#### 25-10
+
+##### Summary
+
+Plan 25-10 finishes the screen split in three commits: it removes review-history prose without changing code, extracts eligible Uninstall helpers until the split modules meet the 800-line cap, and adds permanent size, review-ID and runtime-import guards.
+
+##### Strengths
+
+- The cleanup follows the verbatim moves and uses an AST comparison before its commit, matching the ordering requirement (`.planning/phases/25-lean/25-10-PLAN.md:103-131`; `.planning/phases/25-lean/25-SPEC.md:129-131`).
+- The extraction contract excludes the two known stateful candidates: `_tool_entry` writes `_painted`, and `_with_failure` deletes an entry from `_failed_lines` (`.planning/phases/25-lean/25-10-PLAN.md:141-145`; `installer/wizard_app.py:1303-1305,1323-1337`).
+- The revised plan preserves `_config_lines` at its existing post-removal call site; it currently checks the filesystem when the result is rendered (`.planning/phases/25-lean/25-10-PLAN.md:143`; `installer/wizard_app.py:1853-1863,2005`).
+
+##### Concerns
+
+- No new execution-blocking concern was established from the plan and the current source. Final sizes remain projections until the preceding moves and cleanup are performed (`.planning/phases/25-lean/25-10-PLAN.md:84-86`; `.planning/phases/25-lean/25-RESEARCH.md:329-348`).
+
+##### Prior finding dispositions
+
+- **R1-28 — resolved.** Cleanup and a permanent guard now cover the moved nodes and their attached comments in shared modules (`.planning/phases/25-lean/25-10-PLAN.md:103-120,171-174`; original `WR-10` comment at `installer/wizard_app.py:178-182`).
+- **R1-29 — resolved.** Stateful methods stay on the class and only the specified eligible helpers can move (`.planning/phases/25-lean/25-10-PLAN.md:85-86,141-143`).
+- **R1-30 — resolved.** The fallback explicitly imports all three messages into `wizard_app.py`, where their constructors and handler annotations are used (`.planning/phases/25-lean/25-10-PLAN.md:87,145`; `installer/wizard_app.py:3925-3945,4042-4044`).
+- **R2-18 — resolved.** The disk-reading helper remains at its current call site and cannot be cached or hoisted (`.planning/phases/25-lean/25-10-PLAN.md:143`; `installer/wizard_app.py:1853-1863,2005`).
+
+##### Suggestions
+
+- Record actual post-cleanup and post-extraction line counts in the summary, as the plan requires, rather than relying on the projections (`.planning/phases/25-lean/25-10-PLAN.md:146`).
+
+##### Risk Assessment
+
+**LOW.** The identified stateful-extraction and moved-comment issues are addressed. The remaining uncertainty is the unexecuted split and its measured final sizes.
+
+#### 25-11
+
+##### Summary
+
+Plan 25-11 runs the phase-wide guards and local gates, compares production lines with the pre-phase commit, and reports kept and deleted targets. Its production-scope vulture comparison fixes the cycle-2 scope error, but the final deleted-target grep has two concrete false positives that prevent its stated acceptance criterion from passing.
+
+##### Strengths
+
+- The line-count report uses `installer/` and `setup.py`, excludes tests, and records both revisions (`.planning/phases/25-lean/25-11-PLAN.md:19-20,126-128`; `.planning/phases/25-lean/25-SPEC.md:133-135`).
+- The race check is retained explicitly; the current Doctor handler rejects a stale generation before applying its report (`.planning/phases/25-lean/25-11-PLAN.md:41-43,105-106`; `installer/wizard_app.py:950-964`).
+- Both vulture scans now include `setup.py` and `installer/`, so the comparison includes setup-side callers on both sides (`.planning/phases/25-lean/25-11-PLAN.md:25,98`; `pyproject.toml:62-64`).
+
+##### Concerns
+
+- **HIGH — The final absence grep matches live, unrelated identifiers.** The required command treats each alternative as an arbitrary substring and must print zero (`.planning/phases/25-lean/25-11-PLAN.md:112`). Deleting `shellrc.classify_source_line` still leaves the live `_classify_source_lines` function and its callers (`installer/shellrc.py:703-708,793-797`), which contain `classify_source_line` as a substring. Likewise, deleting the `PermissionMode` alias leaves the real Copilot configuration key `"defaultPermissionMode"` (`installer/agent_settings.py:692`). The earlier triage correctly calls for retaining `_SourceInspection` and the live inspector (`.planning/phases/25-lean/25-04-PLAN.md:137-147`). Consequently, a correct implementation cannot meet this final zero-match criterion without incorrectly changing live code or weakening the stated check.
+
+##### Prior finding dispositions
+
+- **R1-31 — resolved/refuted in the verified ledger.** The plan retains the requirement to record CI results for the pushed phase head; the workflow has Ubuntu and macOS jobs (`.planning/phases/25-lean/25-11-PLAN.md:19,29`; `.github/workflows/ci.yml:3-6,13-21`).
+- **R1-32 — resolved as specified.** The revised guard pairs suppression-bearing lines one-for-one rather than comparing aggregate totals, with the stated retarget normalization (`.planning/phases/25-lean/25-11-PLAN.md:49,98`).
+- **R1-33 — resolved for the recorded finding.** The vulture comparison uses multiset counts of `(kind, name)`, so an additional occurrence of an existing name increases the count (`.planning/phases/25-lean/25-11-PLAN.md:25,98`).
+- **R1-34 — resolved.** The D-12 guard also compares decorator source, covering the parameterized expected values at `tests/test_setup.py:1597-1603` (`.planning/phases/25-lean/25-05-PLAN.md:208`; `.planning/phases/25-lean/25-11-PLAN.md:75,101-102`).
+- **R1-35 — resolved/refuted in the verified ledger.** The phase deletes `installer/host_setup.py`, so an empty production diff would indicate a wrong baseline for this planned phase (`.planning/phases/25-lean/25-11-PLAN.md:190-192`; `.planning/phases/25-lean/25-CONTEXT.md:134-135`).
+- **R2-19 — resolved.** Both baseline and final vulture commands scan the same production scope, including `setup.py` (`.planning/phases/25-lean/25-11-PLAN.md:25,98`).
+- **R2-20 — resolved under the verified ledger’s accepted disposition.** The plan retains the explicitly documented normalization without further change (`.planning/phases/25-lean/25-11-PLAN.md:76,203-204`; `.planning/phases/25-lean/25-REVIEWS.md:470-472`).
+
+##### Suggestions
+
+- Replace the substring-only absence check with identifier-aware checks: for example, use word boundaries for symbol names and separate exact checks for the retired hyphenated kind. Preserve checks for the actual deleted definitions, imports and dispatch keys while allowing `_classify_source_lines` and `"defaultPermissionMode"`.
+
+##### Risk Assessment
+
+**HIGH.** The final phase gate cannot satisfy its prescribed zero-match acceptance on the intended behavior-preserving tree.
+
+#### Cross-Plan Assessment
+
+**Overall lane risk: HIGH**, driven by 25-11’s false-positive final gate. Plans 25-10 and 25-11 are sequential, following the split in 25-09, so their shared files do not create a same-wave conflict (`.planning/ROADMAP.md:751-758`).
+
+The review was read-only. A baseline vulture scan was run; the phase implementation, full test suite and CI were not run. The later-wave split modules and scratch guards do not yet exist at HEAD, so their eventual implementations and final sizes could not be verified.
 
