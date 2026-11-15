@@ -14,7 +14,7 @@ import pytest
 from installer import receipts, uninstall
 from installer.app import UninstallDecision, perform_uninstall, remove_tool
 from installer.catalog_tui import group_tools
-from installer.deps import requires_integrity_errors, resolve_dependencies
+from installer.deps import resolve_dependencies
 from installer.download import Artifact, artifact_paths, pinned_url
 from installer.manager_versions import OutdatedReport
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_categories, load_tools
@@ -35,6 +35,47 @@ def _tools_by_id() -> dict[str, Tool]:
 
 def _ids_by_priority(priority: str) -> set[str]:
     return {tool.id for tool in load_tools(REGISTRY) if tool.priority == priority}
+
+
+def _tool(
+    tool_id: str, *requires: str, tier: str = "user", recommends: tuple[str, ...] = ()
+) -> Tool:
+    return Tool(
+        id=tool_id,
+        name=tool_id,
+        category="c",
+        cmd=tool_id,
+        methods=(Method(kind="node", params={"npm_pkg": f"@x/{tool_id}"}),),
+        requires=tuple(requires),
+        tier=tier,
+        recommends=recommends,
+    )
+
+
+def requires_integrity_errors(catalog: list[Tool]) -> list[str]:
+    """Every `requires` id must resolve to a real catalog tool. Returns a list of
+    human-readable errors (empty = clean). The registry-integrity helper of these
+    tests: a typo'd dependency id fails CI instead of shipping a broken install."""
+    ids = {t.id for t in catalog}
+    errors: list[str] = []
+    for tool in catalog:
+        for dep_id in tool.requires:
+            if dep_id not in ids:
+                errors.append(f"tool '{tool.id}' requires unknown tool '{dep_id}'")
+    return errors
+
+
+def test_integrity_flags_unknown_requires_id() -> None:
+    good = _tool("good")
+    bad = _tool("bad", "ghost")
+    errors = requires_integrity_errors([good, bad])
+    assert any("bad" in e and "ghost" in e for e in errors)
+
+
+def test_integrity_clean_catalog_has_no_errors() -> None:
+    a = _tool("a", "b")
+    b = _tool("b")
+    assert requires_integrity_errors([a, b]) == []
 
 
 def test_registry_loads():
