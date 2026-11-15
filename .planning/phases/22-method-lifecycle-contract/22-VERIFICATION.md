@@ -1,7 +1,7 @@
 ---
 phase: 22-method-lifecycle-contract
-verified: 2026-11-04T10:50:09Z
-status: human_needed
+verified: 2026-11-15T00:00:00Z
+status: passed
 score: 5/5 must-haves verified (1 via override)
 covered_files:
   - ".planning/phases/22-method-lifecycle-contract/22-01-PLAN.md"
@@ -30,7 +30,6 @@ covered_files:
   - ".planning/phases/22-method-lifecycle-contract/22-12-SUMMARY.md"
   - ".planning/phases/22-method-lifecycle-contract/22-13-PLAN.md"
   - ".planning/phases/22-method-lifecycle-contract/22-13-SUMMARY.md"
-  - ".planning/phases/22-method-lifecycle-contract/22-UAT.md"
   - "installer/app.py"
   - "installer/apps.py"
   - "installer/atomic.py"
@@ -42,7 +41,6 @@ covered_files:
   - "installer/enums.py"
   - "installer/execute_screen.py"
   - "installer/executors.py"
-  - "installer/guards.py"
   - "installer/guidance.py"
   - "installer/host_setup.py"
   - "installer/install_ownership.py"
@@ -63,7 +61,6 @@ covered_files:
   - "installer/selection.py"
   - "installer/session.py"
   - "installer/settings.py"
-  - "installer/skill_lifecycle.py"
   - "installer/status.py"
   - "installer/terminal_shell.py"
   - "installer/tool_browser.py"
@@ -82,7 +79,7 @@ covered_files:
   - "scripts/lib/prune-tmp-common.sh"
   - "scripts/prune-tmp-linux.sh"
   - "setup.py"
-covered_digest: "v3:sha256:9774e2fc0785da116ff60c4e2357da60a4a93707c86fe4c074dfd52373efd423"
+covered_digest: "v4:sha256:f03d14741842812a5aaf4dbd8eb7467dd169d3948bf1d24db187ad4d53a3000a"
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
@@ -91,12 +88,46 @@ overrides:
     accepted_by: "orchestrator (RUN-LEDGER 2026-11-04, 22 replan cycle 3, R2-05 sign-off)"
     accepted_at: "2026-11-04T00:00:00Z"
 re_verification:
+  date: 2026-11-15
+  head: d8c469f7
   previous_status: human_needed
   previous_score: 5/5
-  reason: "stale digest: covered files changed by 4727d2f (e2e allowlist) and the UAT fixes eb14872 (F-2), dd73476 (F-3), cae8aa5 (F-1)"
+  reason: "agent-run re-verification at HEAD after phases 23 to 24.5; digest recomputed (installer/guards.py and installer/skill_lifecycle.py no longer exist and are dropped from covered_files)"
   gaps_closed: []
   gaps_remaining: []
   regressions: []
+  human_item_verdicts:
+    - item: 1
+      verdict: resolved
+      evidence: "container ti-uat-22-fedora (Fedora 44), tmux 80x20 NO_COLOR, captures scratchpad/uat/22-reverify/02..07: [c] marker + 'config +' prefix on gh, 'rg declares no config to delete.' on rg, detail sentence 'config deleted too: ~/.config/gh (c keeps it)', confirm modal (runs line, 'Config deleted too:') fits 80x20 unclipped. jev (typesafe) resolved 0.85. Observation, open-trivial: at 80 columns the 'What gets removed' header and cells are cut without an ellipsis; the detail bar carries the full text; fine at 140 columns."
+    - item: 2
+      verdict: owner-only
+      evidence: "mouse selection and clipboard copy of the run-log command in a real terminal emulator; jev (typesafe) owner-only 0.83. The exact command text is proven by tests (test_plan manual command cases) and the container capture of the earlier UAT."
+    - item: 3
+      verdict: deferred (macOS, no CI path)
+      evidence: "real Homebrew greedy casks and tap short names; fake-runner tests test_manager_versions greedy cases and test_update::test_u_on_an_auto_updating_cask_runs_the_greedy_upgrade pass at HEAD; jev (typesafe) owner-only 0.93"
+    - item: 4
+      verdict: deferred (macOS, no CI path)
+      evidence: "bash 3.2 harness run; the guarded array-expansion form is grep-tested; docker.io/library/bash:3.2 image exists locally but the harness needs a macOS toolchain"
+    - item: 5
+      verdict: resolved (container)
+      evidence: "removal of receipt-proven tools gh and mmdc through the Uninstall view in the container: receipts gone (09-disk-after.txt), gh config deleted only with c, glow config kept. A run on the owner's real host is forbidden for agents (owner-only for the host itself)."
+    - item: 6
+      verdict: resolved
+      evidence: "at HEAD mmdc installs through its bun method first (registry.toml), so the pnpm group path is the second method. Real pnpm 12.21.0 in the container re-measured: a comma-joined group 'pnpm add --global is-odd,is-even' then 'pnpm remove --global is-odd' removes the whole group (11-real-pnpm-group.txt), so the group warning copy stays true. F-2/F-3 tests pass at HEAD (test_app group_member and unselected_members_receipt cases, test_pnpm_globals::test_a_member_known_gone_is_not_named, test_wizard_app group warning cases). Container bun removal of mmdc removed only mmdc, the puppeteer receipt and package stayed, consistent. jev (typesafe) open-real 0.85, overruled: the jev premise was that the pnpm path is unreachable, the pnpm semantics themselves were measured and the code paths are unit-tested."
+  requirement_verdicts:
+    LIFE-01: "SATISFIED (override on the opencode clause; tests pass at HEAD)"
+    LIFE-02: "SATISFIED (test_plan manual handoff tests pass; jq/glab/alacritty planned manual with the exact command in the container install)"
+    LIFE-03: "SATISFIED (container: receipt-proven removals only)"
+    LIFE-04: "SATISFIED (test_model config_paths tests pass)"
+    LIFE-05: "SATISFIED (F-1 test passes)"
+    LIFE-06: "SATISFIED (test_update pass)"
+    LIFE-07: "SATISFIED (test_plan, test_engine pass)"
+    LIFE-08: "SATISFIED (real pnpm 12.21.0 group semantics re-measured; F-2/F-3 tests pass)"
+    LIFE-09: "SATISFIED (e2e listing comparison script; test_container_e2e_receipts passes; no fresh make e2e run by this re-verification)"
+    LIFE-10: "SATISFIED (code) / deferred (real macOS)"
+    UI-04: "SATISFIED (container: c toggle, review modal, config deleted for gh and kept for glow)"
+  tests: "uv run pytest app, pnpm_globals, version_status, wizard_app, uninstall, uninstall_e2e, update, container_e2e_receipts, manager_versions, registry, model, plan, executors, receipts: 2244 passed"
 human_verification:
   - test: "Open Uninstall in a NO_COLOR 80x20 tmux pane, press `c` on a row with config_paths (gh, uv, kitty) and on one without (rg); then open the confirm review modal"
     expected: "Flagged row shows the `c` config prefix/suffix; rg shows 'rg declares no config to delete.' in the detail bar; the review modal lists removals, config to delete, config kept, and fits 80x20 without clipping"
@@ -223,6 +254,16 @@ No orphaned requirements: every ID mapped to Phase 22 in REQUIREMENTS.md is clai
 4. **macOS bash 3.2 harness run** — expected no `set -u` unbound errors. Why human: needs bash 3.2.
 5. **Real-host removal of a receipt-proven tool** — expected only receipt paths removed, config kept by default. Why human: agents never mutate the host.
 6. **Real-pnpm group removal after the UAT fixes** — in a disposable container remove only mmdc from the Uninstall view. Expected: `puppeteer: removed with the mmdc group`, puppeteer receipt gone, a later review names no absent member. Why human: the F-2/F-3 fixes postdate the last container runs.
+
+### Re-verification 2026-11-15 (agent-run at d8c469f7)
+
+Human items 1, 5 and 6 are resolved with container captures (scratchpad/uat/22-reverify/) and tests. Items 3 and 4 are deferred (macOS, no CI path).
+
+**Needs owner confirmation:**
+
+- Item 2: copy of the manual-handoff command line by mouse selection in a real terminal emulator.
+- Item 5, host part: a removal of a receipt-proven tool on the owner's real host (agents never mutate it).
+- Taste call: the Uninstall table cuts its last column at 80 columns without an ellipsis (open-trivial).
 
 ### Gaps Summary
 

@@ -1,6 +1,6 @@
 ---
 phase: 22-method-lifecycle-contract
-status: issues_found
+status: complete
 tested_at: 2026-11-04T10:36:00Z
 environment: >-
   Disposable podman container ti-uat-22 (registry.fedoraproject.org/fedora:latest, Fedora 44, amd64),
@@ -212,6 +212,17 @@ and the detail bar carries the full sentence, so test 2 passes.
   non-writable brew prefix (`… is not writable by you; you run: …`).
 - SDKMAN / Oh-My-Zsh vendor updaters on `u` (`updated oh-my-zsh`, `updated sdkman`) and the
   SDKMAN candidate hints, not exercised here.
+
+## Re-verification 2026-11-15 (agent-run at d8c469f7, Fedora 44 container ti-uat-22-fedora, tmux 80x20 NO_COLOR)
+
+Original results above are kept. Findings now resolved:
+
+- F-1 pinned note vs `u` refusal: resolved at cae8aa5, evidence: `test_version_status::test_a_pinned_install_note_matches_the_u_refusal` passes at HEAD.
+- F-2 group member receipt after TUI removal: resolved at eb14872, evidence: the `test_app` group_member and unselected_members_receipt tests pass at HEAD; real pnpm 12.21.0 comma group removal re-measured (scratchpad/uat/22-reverify/11-real-pnpm-group.txt). At HEAD mmdc installs through bun first, so the container Uninstall run removed mmdc alone (puppeteer stayed, consistent with bun).
+- F-3 CLI group warning names an absent member: resolved at dd73476, evidence: `test_pnpm_globals::test_a_member_known_gone_is_not_named` passes at HEAD.
+- Tests 2 and 3 re-run at HEAD: `[c]` marker, `rg declares no config to delete.`, review modal fits 80x20, gh config deleted with `c`, glow config kept (captures 02..09). jev (typesafe) resolved 0.85.
+- Observation, open-trivial (not a Phase 22 change): at 80 columns the Uninstall table header reads `What gets re` and cells are cut at the pane edge without an ellipsis; the detail bar shows the full sentence.
+- Still owner-only: true-colour look, mouse copy of the handoff command, real macOS items, real rpm-ostree host.
 
 ## UAT fixes
 
