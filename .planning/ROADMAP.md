@@ -643,7 +643,7 @@ Plans:
 The 24-UAT host launch rewrote `~/.local/bin/npx` and dropped `alias npx='pnpm dlx'` from `~/.myshellrc`. Scope: the guard writers, the launch repair, the Policies row, the make targets, the docs and the tests. The repair keeps removing old installer-written blocks and shims.
 **Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05, GUARD-06 *(amended 2026-11-14, 24.4 SPEC)*
 **Depends on:** Phase 24.3
-**Plans:** 7/7 plans complete
+**Plans:** 7/7 plans executed
 
 Plans:
 **Wave 1**
