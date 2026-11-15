@@ -92,6 +92,7 @@ evidence: 17-12-SUMMARY; 17-VERIFICATION SC5 (CI-03 satisfied); 16-VALIDATION co
 expected: main is protected with the two CI contexts required and enforce_admins false.
 result: skipped
 reason: User action by policy (D-17, SPEC R12); this autonomous run records CI-02 as "skip" (RUN-LEDGER) and hands the exact `gh api` command to the user in 17-13-SUMMARY `## Left for the user (CI-02)`; tracked under human_verification.
+reverify: 2026-11-15 at HEAD 21b3b906: still skipped. `gh api repos/castocolina/tools-installer/branches/main/protection` returns 404 and rulesets is []. Owner-only (D-17: a GitHub settings change needs the owner consent).
 
 ## Summary
 

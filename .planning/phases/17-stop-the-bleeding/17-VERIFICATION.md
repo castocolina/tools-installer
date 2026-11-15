@@ -3,10 +3,16 @@ phase: 17-stop-the-bleeding
 verified: 2026-10-15T08:55:22Z
 status: human_needed
 score: 24/26 must-haves verified
-covered_files: [".claude/architecture.md",".planning/phases/17-stop-the-bleeding/17-01-PLAN.md",".planning/phases/17-stop-the-bleeding/17-01-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-02-PLAN.md",".planning/phases/17-stop-the-bleeding/17-02-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-03-PLAN.md",".planning/phases/17-stop-the-bleeding/17-03-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-04-PLAN.md",".planning/phases/17-stop-the-bleeding/17-04-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-05-PLAN.md",".planning/phases/17-stop-the-bleeding/17-05-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-06-PLAN.md",".planning/phases/17-stop-the-bleeding/17-06-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-07-PLAN.md",".planning/phases/17-stop-the-bleeding/17-07-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-08-PLAN.md",".planning/phases/17-stop-the-bleeding/17-08-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-09-PLAN.md",".planning/phases/17-stop-the-bleeding/17-09-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-10-PLAN.md",".planning/phases/17-stop-the-bleeding/17-10-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-11-PLAN.md",".planning/phases/17-stop-the-bleeding/17-11-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-12-PLAN.md",".planning/phases/17-stop-the-bleeding/17-12-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-13-PLAN.md",".planning/phases/17-stop-the-bleeding/17-13-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-14-PLAN.md",".planning/phases/17-stop-the-bleeding/17-14-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-15-PLAN.md",".planning/phases/17-stop-the-bleeding/17-15-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-16-PLAN.md",".planning/phases/17-stop-the-bleeding/17-16-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-17-PLAN.md",".planning/phases/17-stop-the-bleeding/17-17-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-18-PLAN.md",".planning/phases/17-stop-the-bleeding/17-18-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-19-PLAN.md",".planning/phases/17-stop-the-bleeding/17-19-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-20-PLAN.md",".planning/phases/17-stop-the-bleeding/17-20-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-21-PLAN.md",".planning/phases/17-stop-the-bleeding/17-21-SUMMARY.md","installer/app.py","installer/apps.py","installer/catalog_tui.py","installer/doctor.py","installer/download.py","installer/execute_screen.py","installer/executors.py","installer/guards.py","installer/guidance.py","installer/model.py","installer/policy.py","installer/postinstall.py","installer/registry.toml","installer/render.py","installer/run.py","installer/session.py","installer/settings.py","installer/tweaks.py","installer/uninstall.py","installer/wizard_app.py","scripts/lib/prune-tmp-common.sh","scripts/prune-tmp-linux.sh","setup.py","tests/conftest.py","tests/test_app.py","tests/test_apps.py","tests/test_atomic.py","tests/test_catalog_tui.py","tests/test_doctor.py","tests/test_download.py","tests/test_engine.py","tests/test_execute_screen.py","tests/test_guards.py","tests/test_guidance.py","tests/test_policies_e2e.py","tests/test_policy.py","tests/test_postinstall.py","tests/test_prune_tmp_linux_sh.py","tests/test_registry.py","tests/test_render.py","tests/test_run.py","tests/test_session.py","tests/test_settings.py","tests/test_setup.py","tests/test_shellrc.py","tests/test_uninstall.py","tests/test_update.py","tests/test_version_status.py","tests/test_wizard_app.py"]
-covered_digest: "v3:sha256:cac196c71255873a4fb6cd5e0758a0cc6e063d4eab17e2868da1c723b0d4f5d9"
+covered_files: [".planning/phases/17-stop-the-bleeding/17-01-PLAN.md",".planning/phases/17-stop-the-bleeding/17-01-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-02-PLAN.md",".planning/phases/17-stop-the-bleeding/17-02-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-03-PLAN.md",".planning/phases/17-stop-the-bleeding/17-03-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-04-PLAN.md",".planning/phases/17-stop-the-bleeding/17-04-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-05-PLAN.md",".planning/phases/17-stop-the-bleeding/17-05-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-06-PLAN.md",".planning/phases/17-stop-the-bleeding/17-06-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-07-PLAN.md",".planning/phases/17-stop-the-bleeding/17-07-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-08-PLAN.md",".planning/phases/17-stop-the-bleeding/17-08-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-09-PLAN.md",".planning/phases/17-stop-the-bleeding/17-09-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-10-PLAN.md",".planning/phases/17-stop-the-bleeding/17-10-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-11-PLAN.md",".planning/phases/17-stop-the-bleeding/17-11-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-12-PLAN.md",".planning/phases/17-stop-the-bleeding/17-12-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-13-PLAN.md",".planning/phases/17-stop-the-bleeding/17-13-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-14-PLAN.md",".planning/phases/17-stop-the-bleeding/17-14-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-15-PLAN.md",".planning/phases/17-stop-the-bleeding/17-15-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-16-PLAN.md",".planning/phases/17-stop-the-bleeding/17-16-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-17-PLAN.md",".planning/phases/17-stop-the-bleeding/17-17-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-18-PLAN.md",".planning/phases/17-stop-the-bleeding/17-18-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-19-PLAN.md",".planning/phases/17-stop-the-bleeding/17-19-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-20-PLAN.md",".planning/phases/17-stop-the-bleeding/17-20-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-21-PLAN.md",".planning/phases/17-stop-the-bleeding/17-21-SUMMARY.md","installer/executors.py","installer/policy.py","setup.py"]
+covered_digest: "v4:sha256:664b4ac2a153d9bc7fe299501ebb4096efb316de91e8582d4e6ba9ab8f5c7d67"
 behavior_unverified: 0
 overrides_applied: 0
+re_verification_2026_11_15:
+  head: 21b3b906
+  result: "SC1-SC4 and SAFE-01..09 re-proven by 56 named tests passing at HEAD; CI green on main at 024817d3; post-verification push item resolved; only CI-02 (branch protection) remains, owner-only"
+  items:
+    - "17-13 post-verification main push: resolved (17-13-SUMMARY run 38710819886 both jobs success; later main runs green, latest 024817d3)"
+    - "CI-02 branch protection: owner-only (gh api branches/main/protection still 404; D-17 needs the owner consent)"
 re_verification:
   previous_status: gaps_found
   previous_score: 22/25
@@ -19,9 +25,6 @@ human_verification:
   - test: "CI-02: apply branch protection on main once the post-verification main push is green: printf '%s' '<body from 17-13-SUMMARY.md>' | gh api -X PUT repos/castocolina/tools-installer/branches/main/protection --input -"
     expected: "gh api repos/castocolina/tools-installer/branches/main/protection returns required_status_checks with exactly 'validate & test on ubuntu-latest' and 'validate & test on macos-latest', and enforce_admins.enabled false (it returns 404 'Branch not protected' as of this verification)"
     why_human: "A GitHub settings change needs the user's in-the-moment consent (D-17); RUN-LEDGER records CI-02 as 'skip', with the command handed to the user"
-  - test: "17-13 backstop truth: after /gsd-verify-work the orchestrator pushes main, watches the CI run for that HEAD, and records both job conclusions under '## Post-verification main push' in 17-13-SUMMARY.md"
-    expected: "Both 'validate & test on ubuntu-latest' and 'validate & test on macos-latest' conclude success for the main HEAD that lands; the section no longer reads 'pending: orchestrator (after /gsd-verify-work)'"
-    why_human: "Orchestrator-owned step after verification (verification: backstop); it cannot exist at verify time, so 'pending' is the expected state now"
 ---
 
 # Phase 17: Stop the bleeding Verification Report
@@ -174,6 +177,21 @@ None.
 **Test:** The orchestrator pushes main after /gsd-verify-work and records the run under `## Post-verification main push` in 17-13-SUMMARY.md.
 **Expected:** Both jobs succeed for the main HEAD that lands.
 **Why human:** This step is orchestrator-owned and runs after verification; "pending" is the expected state now.
+
+### Re-verification 2026-11-15 (HEAD 21b3b906)
+
+| Item | Verdict | Evidence |
+|------|---------|----------|
+| SAFE-01..09, CI-03 | resolved | 56 named tests from SC1-SC4 and the UAT `-k` list pass at HEAD (`uv run pytest tests -k <names> -n 4 --no-cov -q`, all dots); `installer/postinstall.py` still has no graphify hook |
+| CI-01 | resolved | `gh run list --branch main`: CI success for 024817d3, d8c469f7, c597ea42 |
+| Human 2: post-verification main push | resolved | 17-13-SUMMARY `## Post-verification main push`: e412b03, run 38710819886, ubuntu and macos success |
+| Human 1 / CI-02: branch protection | needs owner confirmation | `gh api repos/castocolina/tools-installer/branches/main/protection` -> 404 Branch not protected; `rulesets` -> []. A GitHub settings change needs owner consent (D-17) |
+
+jev (ladder) returned `empty_context` for both items, so the verdicts above are my own reasoning. No screen items exist in this phase, so no container run was needed.
+
+### Needs owner confirmation
+
+- CI-02: run the `gh api -X PUT .../branches/main/protection` command from 17-13-SUMMARY.md (both contexts, enforce_admins false).
 
 ### Gaps Summary
 
