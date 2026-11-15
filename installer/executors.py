@@ -327,7 +327,8 @@ def _puppeteer_module_roots(manager: str | None) -> list[str]:
 
     bun keeps one shared global tree and no per-invocation groups, so the tree
     itself is the root; a bun-owned check never borrows another manager's root.
-    The owning manager's roots come first, the others keep their pre-bun order.
+    The owning manager's roots come first, the others keep their pre-bun order; a pnpm check
+    likewise never borrows bun's tree.
 
     An empty list is not a failure for pnpm or an unknown owner. It hands the
     script nothing and lets node resolve `puppeteer` normally, which is the right
@@ -343,7 +344,7 @@ def _puppeteer_module_roots(manager: str | None) -> list[str]:
     bin_dir = _pnpm_global_bin()
     pnpm_roots = _shim_root(None if bin_dir is None else bin_dir / "puppeteer")
     ordered = (
-        [*pnpm_roots, *path_roots, *bun_roots]
+        [*pnpm_roots, *path_roots]  # a pnpm check never falls through to bun's copy
         if manager == "pnpm"
         else [*path_roots, *pnpm_roots, *bun_roots]
     )

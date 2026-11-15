@@ -1484,7 +1484,7 @@ def test_module_roots_put_the_owning_tree_first(
     path_root, pnpm_root = _foreign_puppeteer(tmp_path, monkeypatch)
     roots = vars(executors)["_puppeteer_module_roots"]
     assert roots("bun") == [str(tree)]
-    assert roots("pnpm") == [str(pnpm_root), str(path_root), str(tree)]
+    assert roots("pnpm") == [str(pnpm_root), str(path_root)]  # never bun's tree
     assert roots(None) == [str(path_root), str(pnpm_root), str(tree)]
 
 
