@@ -1,10 +1,10 @@
 ---
 phase: 23-configuration-as-a-lifecycle-step
 verified: 2026-11-07T12:00:00Z
-status: human_needed
+status: passed
 score: 6/6 must-haves verified
-covered_files: [".planning/phases/23-configuration-as-a-lifecycle-step/23-01-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-01-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-02-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-02-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-03-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-03-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-04-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-04-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-05-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-05-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-06-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-06-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-07-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-07-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-08-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-08-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-09-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-09-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-10-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-10-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-11-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-11-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-12-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-12-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-13-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-13-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-14-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-14-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-15-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-15-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-16-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-16-SUMMARY.md", "installer/agent_env.py", "installer/agent_settings.py", "installer/app.py", "installer/atomic.py", "installer/engine.py", "installer/env_redirect.py", "installer/execute_screen.py", "installer/locations.py", "installer/model.py", "installer/omz.py", "installer/policy.py", "installer/post_install.py", "installer/postinstall.py", "installer/prompt.py", "installer/receipts.py", "installer/registry.toml", "installer/render.py", "installer/run.py", "installer/session.py", "installer/shellrc.py", "installer/terminal_shell.py", "installer/tweaks.py", "installer/uninstall.py", "installer/update.py", "installer/version_status.py", "installer/wizard_app.py", "scripts/container-e2e-verify.sh", "setup.py", "tests/conftest.py", "tests/state_doubles.py", "tests/test_agent_env.py", "tests/test_agent_settings.py", "tests/test_app.py", "tests/test_atomic.py", "tests/test_catalog_tui.py", "tests/test_cli.py", "tests/test_container_e2e_receipts.py", "tests/test_engine.py", "tests/test_env_redirect.py", "tests/test_execute_screen.py", "tests/test_layout_80x20.py", "tests/test_locations.py", "tests/test_model.py", "tests/test_omz.py", "tests/test_ownership.py", "tests/test_policies_e2e.py", "tests/test_policy.py", "tests/test_policy_omz.py", "tests/test_policy_settings.py", "tests/test_policy_tweaks.py", "tests/test_post_install.py", "tests/test_postinstall.py", "tests/test_prompt.py", "tests/test_receipts.py", "tests/test_registry.py", "tests/test_render.py", "tests/test_run.py", "tests/test_sandbox.py", "tests/test_session.py", "tests/test_setup.py", "tests/test_shellrc.py", "tests/test_terminal_shell.py", "tests/test_tweaks.py", "tests/test_uninstall.py", "tests/test_uninstall_e2e.py", "tests/test_update.py", "tests/test_version_status.py", "tests/test_wizard_app.py"]
-covered_digest: "v4:sha256:7a6d0e2cb4c1d014c17089ba8d21d8f68bad37cdb9b8301523927b878dda4d87"
+covered_files: [".planning/phases/23-configuration-as-a-lifecycle-step/23-01-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-01-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-02-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-02-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-03-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-03-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-04-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-04-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-05-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-05-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-06-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-06-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-07-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-07-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-08-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-08-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-09-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-09-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-10-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-10-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-11-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-11-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-12-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-12-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-13-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-13-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-14-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-14-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-15-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-15-SUMMARY.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-16-PLAN.md", ".planning/phases/23-configuration-as-a-lifecycle-step/23-16-SUMMARY.md", "installer/agent_env.py", "installer/agent_settings.py", "installer/app.py", "installer/atomic.py", "installer/engine.py", "installer/env_redirect.py", "installer/execute_screen.py", "installer/locations.py", "installer/model.py", "installer/omz.py", "installer/policy.py", "installer/post_install.py", "installer/postinstall.py", "installer/prompt.py", "installer/receipts.py", "installer/registry.toml", "installer/render.py", "installer/run.py", "installer/session.py", "installer/shellrc.py", "installer/terminal_shell.py", "installer/tweaks.py", "installer/uninstall.py", "installer/update.py", "installer/version_status.py", "installer/wizard_app.py", "scripts/container-e2e-verify.sh", "setup.py"]
+covered_digest: "v4:sha256:580cc4b2024b734a580c81ac81107b7b3f0d9f61a3f55909a1801fbd211638b2"
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
@@ -16,6 +16,22 @@ deferred:
   - truth: "The herdr hook reads the one agent-host list for a real installed herdr (SC1 'codegraph, graphify and herdr hooks')"
     addressed_in: "Phase 24"
     evidence: "Phase 24 SC1: 'In a container, herdr installs, its integrations register for the present agent hosts, and uninstall leaves herdr integration status clean'. herdr has no registry entry yet; the `herdr-integration` HookPair exists and dispatches through run_postinstall over present_harnesses."
+re_verification:
+  date: 2026-11-15
+  head: 024817d3
+  previous_status: human_needed
+  previous_score: 6/6
+  method: "container UAT on Fedora 44 (ti-uat-23-fedora, removed), TUI driven through a herdr tab, 4352 phase tests green at HEAD"
+  gaps_closed:
+    - "H1 container run on a post-fix tree: TUI install/remove of zsh, starship, fzf, zoxide, codex, claude at HEAD (scratchpad/uat/23-reverify/02-17)"
+    - "H4 settings revert with the real claude and codex CLIs: byte-identical (15-byte-compare.txt)"
+    - "H5 layout of the Phase 23 surfaces: tests/test_layout_80x20.py green; the Phase 23 run options and shell-init modal were removed by 23.2 (TUNE-01/02)"
+    - "H9 rtk parenthetical: registry.toml has no rtk entry since 23.1"
+    - "herdr deferred item: registry entry herdr with postinstall = herdr-integration exists (Phase 24)"
+  gaps_remaining: []
+  regressions: []
+  owner_confirmation_needed: [H2, H3, H6, H8]
+  deferred_macos: [H7]
 human_verification:
   - test: "Run `make e2e` (Fedora podman, disposable container) on HEAD a30bb2f"
     expected: "Every TRACER_* line OK, including TRACER_HOOKS_RECORDED / TRACER_HOOKS_UNREGISTERED_OK and the TRACER_SETTINGS_* write/revert lines; the container is removed afterwards"
@@ -50,7 +66,7 @@ human_verification:
 
 **Phase Goal:** Configuration is applied, checked and reversed with its tool: agent-host hooks follow hosts in and out, shell init is offered and removed, and terminals stay on zsh.
 **Verified:** 2026-11-07
-**Status:** human_needed
+**Status:** passed (re-verified 2026-11-15; owner-only items listed below)
 **Re-verification:** No — initial verification (on main @ a30bb2f, after the code review fix loop)
 
 ## Gate runs (this verifier, this tree)
@@ -189,3 +205,46 @@ No blocking gaps. Every roadmap success criterion and every CONF requirement is 
 
 _Verified: 2026-11-07_
 _Verifier: Claude (gsd-verifier)_
+
+
+## Re-verification 2026-11-15 (HEAD 024817d3)
+
+Scope: code moved a lot since a30bb2f (23.1, 23.2, 24 to 24.5). Phase 23.2 (TUNE-01/02) replaced the Phase 23
+run options, the shell-init question and the matching Policies rows with install-time tuning, so several
+human items now apply to different screens. Evidence is a disposable Fedora 44 container
+(`ti-uat-23-fedora`, repo copied from the tree, scratch HOME, Homebrew + uv), the TUI driven through a herdr
+tab, captures in `scratchpad/uat/23-reverify/` (`01-first-screen.txt` .. `20-bash32.txt`).
+`pytest` on the 37 phase test files: 4352 passed (`pytest-phase.txt`); the 10 core files alone: 766 passed.
+
+| Item | Verdict | jev (advisory) | Evidence |
+|------|---------|----------------|----------|
+| H1 container e2e on HEAD | resolved | e2e: typesafe resolved 0.73 (fallback), laya open-real 0.30 (fallback); own reasoning decides | The TUI run at HEAD: zsh reconfigure + starship + fzf + zoxide + codex + claude installed, then removed through Uninstall (02, 03, 06-17). `~/.zshenv` got the managed block, `~/.myshellrc` got `tweak:` blocks with no question, removal removed them, `Shell init turned off for ...` shown. Also 23.2-VERIFICATION: `make e2e` run #9 on eb893c0, EXIT=0 with TRACER_HOOKS/SETTINGS. Caveat: the codegraph hook registration could not be re-run live because the unauthenticated GitHub API answered 403 rate limit (04, 11 show the failure; an environment limit, not a product defect). The register/unregister path is covered by `tests/test_postinstall.py` and `tests/test_container_e2e_receipts.py` (green). |
+| H2 real kitty/WezTerm/Konsole windows run zsh | owner-only | typesafe owner-only 0.97 | Container proves the file side: `env -i SHELL=/bin/bash zsh -c 'echo $SHELL'` printed `/usr/bin/zsh` with the managed block (04-host-state.txt). Only a real desktop terminal launch proves the emulators honour their regions. |
+| H3 VS Code integrated terminal opens zsh | owner-only | (not asked, same class as H2) | VS Code lean/AI-off/ext-update keys: `tests/test_agent_settings.py` (JSONC, comments kept, `defaultProfile.linux = "zsh"`). The real app's JSONC parser and profile resolution need the real app. |
+| H4 settings revert against live CLIs | resolved | (covered by H1 class) | Real claude and codex CLIs in the container, seeded user settings: install wrote `permissions.defaultMode`, `skipDangerousModePermissionPrompt`, `attribution.pr/commit = ""` and codex `approval_policy`, `sandbox_mode` (12-settings-diff.txt, user keys intact, codex file still parses); the confirm listed exactly those keys (13); after Uninstall `cmp` reported CLAUDE_BYTE_IDENTICAL and CODEX_BYTE_IDENTICAL (15). |
+| H5 NO_COLOR 80x20 legibility | resolved for Phase 23 surfaces | (class resolved) | The Phase 23 run options and the shell-init modal no longer exist (23.2). `tests/test_layout_80x20.py` green. The alias-removal notice reads `Removed the claude-skip alias; installing claude writes permissions.defaultMode in its settings instead.` and a second launch is silent (19-alias-strip.txt). The remaining 80x20 gaps (Policies shows one row, cut tab bar) are the already-tracked pre-existing todo `2026-11-03-fix-80x20-layout-gaps...` (T14), severity minor, not a Phase 23 regression (t80/02-policies.txt). |
+| H6 Shell notice colour | owner-only | (colour judgement) | The line exists and is plain-text correct (`Shell: ~/.zshenv now exports SHELL=...`, 03-summary.txt shows the Shell section); the colour on the interactive notice is a visual call. |
+| H7 macOS bash 3.2 / zsh | deferred (macOS, no CI path) | typesafe owner-only 0.79 | Parse part proven: the seven shell-init blocks generated by `tweaks.tweak_block` pass `bash -n` in `docker.io/library/bash:3.2` (3.2.57) and `zsh -n` (20-bash32.txt). Darwin detection, `update.mode=none` and `defaultProfile.osx` need a Mac. |
+| H8 CONF-08 pi clause | owner-only | open-real 0.75 (fallback); not followed | `installer/render.py:357` prints the static `pi: nothing written; pi has no approval setting in its core`; no extension detection exists. Behaviour is not broken (pi writes nothing either way), so this is a requirement-wording decision for the owner: accept via override or schedule detection. |
+| H9 SC1 rtk parenthetical | resolved | n/a | `rg 'id = "rtk"' installer/registry.toml` = 0 hits; 23.1 dropped the entry (ROADMAP 23.1 SC1). The existing override stays accurate history. |
+| Deferred: herdr hook | resolved | n/a | `installer/registry.toml:3219` herdr with `postinstall = "herdr-integration"` (line 3229); Phase 24. |
+
+### Requirements at HEAD
+
+CONF-01 satisfied (codegraph-mcp-register, herdr-integration, tests); CONF-02 satisfied (test_session resync tests); CONF-03 satisfied (one host list, tests); CONF-04 satisfied as amended (blocks written at install and removed with the tool, container 03/06/17); CONF-05 satisfied (managed `~/.zshenv` block, container 04; desktop SHELL stays a Policies row, 05); CONF-06 satisfied (registry `postinstall = "tealdeer-cache"` + tests, not re-run live); CONF-07 satisfied (tests/test_omz.py); CONF-08 satisfied except the pi detection clause (owner, H8); CONF-09 satisfied (container: `attribution.* = ""`); CONF-10 satisfied (container 19); CONF-11 satisfied (23.2 UAT test 5, tests/test_omz.py); CONF-12 satisfied by tests (VS Code live install not re-run, H3).
+
+### Needs owner confirmation
+
+- H2: new kitty, WezTerm and Konsole windows on the real desktop start zsh (`echo $SHELL`).
+- H3: VS Code's integrated terminal opens zsh and VS Code loads the edited settings.json.
+- H6: the post-run `Shell:` notice colour on a real colour terminal.
+- H8: accept the static pi note (CONF-08) or schedule extension detection.
+
+### Deferred (macOS, no CI path)
+
+- H7: darwin detection of the shell-init blocks, `update.mode = none`, `defaultProfile.osx`.
+
+### Residual observations (not gaps)
+
+- F-5 stays: removing the managed blocks leaves blank separator lines in `~/.myshellrc` (four blank lines after removing all blocks, 16-after-all-removed.txt); a byte-exact test pins the separator. Cosmetic, open-trivial.
+- After removing codex, the PATH block in `~/.myshellrc` still listed codex's bin dirs until the PATH wiring row was removed (observation only; the next wiring pass rewrites it).

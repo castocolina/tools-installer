@@ -1,6 +1,6 @@
 ---
 phase: 23-configuration-as-a-lifecycle-step
-status: issues_found
+status: complete
 tested_at: 2026-11-07T10:07:00Z
 environment: >-
   Disposable podman container ti-uat-23 (registry.fedoraproject.org/fedora:latest, Fedora 44, amd64),
@@ -54,7 +54,7 @@ below (two medium, three low) and returned for triage, not fixed here.
 | # | Test | Result |
 |---|------|--------|
 | 1 | Run options in the execute review at 80x20 (`space` toggles; pi note; plan-row and post-start refusals); headless `--yes` sets none and says so | PASS |
-| 2 | Shell-init prompt: default no; yes writes the managed block; `bash -n`/`zsh -n`; removing the tool removes its block | FAIL (F-1: the TUI default is yes; the rest passes) |
+| 2 | Shell-init prompt: default no; yes writes the managed block; `bash -n`/`zsh -n`; removing the tool removes its block | FAIL (F-1: the TUI default is yes; the rest passes). 2026-11-15 re-verification: resolved at 18ab7f2 (modal starts on the declared default, `test_enter_on_open_takes_the_shell_init_default_of_no`), then superseded by 23.2 (no question at all: the block is written at install). Evidence at HEAD 024817d3: fzf/starship/zoxide installed through the TUI wrote `tweak:` blocks that pass `bash -n`/`zsh -n`; removal turned them off (scratchpad/uat/23-reverify/03, 04, 06-08, 16) |
 | 3 | Agent settings: only documented keys added; Policies off reverts; `● [yours]` refuses; uninstall reverts; byte-for-byte back where the user did not edit | PASS |
 | 4 | Legacy alias strip: TUI and headless notices, blocks gone, nothing written to agent settings, second launch silent | PASS |
 | 5 | zsh / SHELL: managed `~/.zshenv` block, `Shell:` lines (TUI report + notice, CLI after report); uninstall never writes `~/.zshenv`; zsh removal strips it | PASS |
@@ -480,3 +480,29 @@ Applied on main after the UAT, each test-first in one commit with its test; `mak
 Not covered: a codegraph claude registration reached through a RECONFIGURE row (not a fresh
 install or a new-host sweep) shows only its row detail `registered for claude`, without the F-2
 disclosure line.
+
+
+## Re-verification 2026-11-15 (agent-run, HEAD 024817d3)
+
+All six tests are resolved. Test 2 (the only FAIL) was fixed at 18ab7f2 and later superseded by 23.2. Tests 1
+(run options) and the shell-init question no longer exist: 23.2 (TUNE-01/02) applies the tuning and the shell
+init at install with no question, and the review at HEAD shows no run options (`02-review.txt`).
+
+Environment: disposable Fedora 44 podman container `ti-uat-23-fedora` (removed), Homebrew + uv, zsh
+preinstalled, repo copied from the tree, TUI driven through a herdr tab (captures in
+`scratchpad/uat/23-reverify/`).
+
+| # | Re-check at HEAD | Result |
+|---|------------------|--------|
+| 1 | review with zsh drift shows `will reconfigure ... export SHELL=/usr/bin/zsh in ~/.zshenv`, no run options (02) | resolved (superseded by 23.2) |
+| 2 | blocks written at install, parse in bash and zsh, removed with the tool (03, 04, 07, 08, 16, 17) | resolved |
+| 3 | claude and codex installed over seeded user settings: documented keys added, user keys kept, confirm lists exactly the keys, uninstall leaves both files byte-identical (11-15) | resolved |
+| 4 | planted `claude-skip` alias block removed with the notice `installing claude writes permissions.defaultMode in its settings instead`; user lines kept; second launch silent (19) | resolved |
+| 5 | `~/.zshenv` block and the `Shell` report section; uninstall of the shell tools never touches `~/.zshenv` while zsh stays installed (03, 04, 16) | resolved |
+| 6 | uninstall confirm lists `turns off its shell init in ~/.myshellrc` and the settings revert keys (07, 13, 17); the hook unregister line could not be re-run live (GitHub API rate limit for codegraph's download, see 11), covered by tests/test_postinstall.py | resolved (hook part by tests) |
+
+Findings F-1 to F-4, O-1 and O-2 are fixed (commits in the Fixes table). F-5 (blank-line residue after a
+block strip) stays a residual cosmetic item: four blank lines remained in `~/.myshellrc` after the managed
+blocks were removed (`16-after-all-removed.txt`); a byte-exact test pins the separator. Host-only gaps that
+remain: real desktop terminals and VS Code (owner), the warn colour of the `Shell:` notice (owner), macOS
+(deferred; the six block texts parse in bash 3.2.57 and zsh, `20-bash32.txt`).
