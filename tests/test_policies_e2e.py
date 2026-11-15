@@ -26,7 +26,8 @@ from installer.policy import (
 from installer.tweaks import BUNDLES, TweakBundle, shell_init_bundle, tweak_present
 from installer.ui_common import VIEW_BY_NAME, FooterBar, highlighted_key
 from installer.uninstall import SweepResult
-from installer.wizard_app import UnifiedApp, UninstallInputs
+from installer.uninstall_review import UninstallInputs
+from installer.wizard_app import UnifiedApp
 from tests.policy_doubles import block_policy
 from tests.screen_family import settle
 from tests.state_doubles import FrozenStateService, absent_state, frozen_service, plan_state

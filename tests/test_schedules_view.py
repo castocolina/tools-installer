@@ -31,7 +31,8 @@ from installer.schedules_screen import ScheduleInputs, SchedulesScreen
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, TimerStateCache
 from installer.ui_common import GLOBAL_NAV, VIEWS, FooterBar, WayfindingTab
 from installer.uninstall import SweepResult
-from installer.wizard_app import UnifiedApp, UninstallInputs
+from installer.uninstall_review import UninstallInputs
+from installer.wizard_app import UnifiedApp
 from tests.screen_family import settle
 from tests.test_schedules_engine import CLAUDE_BASENAME, Env, Install, make_env
 

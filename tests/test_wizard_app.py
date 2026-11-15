@@ -63,6 +63,8 @@ from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingProbe, CompetingUnit
 from installer.ui_common import BASE_VIEW, VIEW_BY_NAME
 from installer.uninstall import RemovalPlan, SweepResult
+from installer.uninstall_review import UninstallInputs, config_split
+from installer.uninstall_screen import UninstallScreen
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import (
     BROKEN_REPAIR_NOTE,
@@ -76,14 +78,7 @@ from installer.version_status import (
     uninstall_label,
 )
 from installer.versions import TagResolver, VersionError
-from installer.wizard_app import (
-    VIEW_ORDER,
-    RefreshPublished,
-    UnifiedApp,
-    UninstallInputs,
-    UninstallScreen,
-    config_split,
-)
+from installer.wizard_app import VIEW_ORDER, RefreshPublished, UnifiedApp
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,

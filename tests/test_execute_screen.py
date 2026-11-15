@@ -59,10 +59,11 @@ from installer.session import (
     ran_anything,
 )
 from installer.uninstall import SweepResult
+from installer.uninstall_review import UninstallInputs
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
 from installer.versions import TagResolver
-from installer.wizard_app import UnifiedApp, UninstallInputs
+from installer.wizard_app import UnifiedApp
 from tests.screen_family import wait_until
 from tests.state_doubles import (
     FrozenStateService,

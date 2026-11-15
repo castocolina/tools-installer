@@ -41,6 +41,8 @@ from installer.session import Disposition, PlanRow, RowOutcome
 from installer.systemd_daemon import DaemonState
 from installer.ui_common import AppScreen
 from installer.uninstall import SweepResult, plan_removal, remove_paths
+from installer.uninstall_review import UninstallInputs
+from installer.uninstall_screen import UninstallScreen
 from installer.update import UpdateOutcome
 from installer.version_status import (
     BROKEN_SHIM_REASON,
@@ -48,13 +50,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import (
-    RefreshPublished,
-    ScheduleDefaultsApplied,
-    UnifiedApp,
-    UninstallInputs,
-    UninstallScreen,
-)
+from installer.wizard_app import RefreshPublished, ScheduleDefaultsApplied, UnifiedApp
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,

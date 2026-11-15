@@ -43,13 +43,15 @@ from installer.ui_common import (
     WayfindingTab,
 )
 from installer.uninstall import RemovalPlan, SweepResult
+from installer.uninstall_review import UninstallInputs
+from installer.uninstall_screen import UninstallScreen
 from installer.version_status import (
     LAYOUT_PROOF_NOTE,
     ToolState,
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import UnifiedApp, UninstallInputs, UninstallScreen
+from installer.wizard_app import UnifiedApp
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     HeldRefreshService,

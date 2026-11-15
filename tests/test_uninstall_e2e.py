@@ -22,8 +22,10 @@ from installer.policy import omz_plugins_policy, tweak_policy
 from installer.shellrc import has_managed_block, write_myshellrc
 from installer.tweaks import BUNDLES
 from installer.uninstall import SweepResult, active_tweak_ids, plan_removal, removal_plan
+from installer.uninstall_review import UninstallInputs
+from installer.uninstall_screen import UninstallScreen
 from installer.version_status import VersionRefreshService
-from installer.wizard_app import UnifiedApp, UninstallInputs, UninstallScreen
+from installer.wizard_app import UnifiedApp
 from tests.screen_family import settle
 from tests.state_doubles import frozen_service, pass_state, removable_state
 from tests.test_uninstall import plant_receipted_tool

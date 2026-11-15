@@ -81,11 +81,12 @@ from installer.tweaks import (
 )
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult, active_tweak_ids
+from installer.uninstall_review import UninstallInputs
 from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, probe_version_output, resolve_github_tag
-from installer.wizard_app import UnifiedApp, UninstallInputs
+from installer.wizard_app import UnifiedApp
 
 # The private names setup.py imports back keep their names (D-05); listing them here is what
 # tells pyright they are this module's surface and not unused private functions.

@@ -55,6 +55,7 @@ from installer.selection import select_tools
 from installer.tool_browser import ToolBrowser
 from installer.ui_common import highlighted_key
 from installer.uninstall import SweepResult
+from installer.uninstall_review import UninstallInputs
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_cache import VersionCacheEntry, save_version_cache
 from installer.version_status import (
@@ -63,7 +64,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import RefreshPublished, UnifiedApp, UninstallInputs
+from installer.wizard_app import RefreshPublished, UnifiedApp
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     ScriptedUpdates,

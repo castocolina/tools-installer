@@ -59,15 +59,11 @@ from installer.shellrc import ShellrcConsolidation, ShellrcRefusal, write_myshel
 from installer.terminal_shell import TerminalShellResult
 from installer.tweaks import BUNDLES, SHELL_INIT_TOOLS, shell_init_bundle
 from installer.uninstall import SweepResult
+from installer.uninstall_review import UninstallInputs
+from installer.uninstall_screen import UninstallScreen
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, VersionRefreshService
-from installer.wizard_app import (
-    BASE_VIEW,
-    ExecuteScreen,
-    UnifiedApp,
-    UninstallInputs,
-    UninstallScreen,
-)
+from installer.wizard_app import BASE_VIEW, ExecuteScreen, UnifiedApp
 from tests.compose_patch import patch_composition
 from tests.screen_family import wait_until
 from tests.state_doubles import (
