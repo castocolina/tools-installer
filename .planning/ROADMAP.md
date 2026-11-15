@@ -25,7 +25,7 @@
 - Integer phases (17–26): Planned milestone work
 - Decimal phases (e.g. 17.1): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
+- [x] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required (completed 2026-11-15)
 - [x] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke (completed 2026-11-15)
 - [x] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install (completed 2026-11-15)
 - [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
@@ -58,7 +58,7 @@
   4. With a ban and a tweak active, changing the shell link mode (centralized → split) removes their blocks from the old mode's rc and writes them where the new mode sources.
   5. CI is green on ubuntu and macOS, merges to main require the PR check (branch protection, user action), and plans 16-17..19 carry secure and validate re-audit records.
 
-**Plans**: 21/21 plans executed
+**Plans**: 21/21 plans complete
 
 Plans:
 - [x] 17-21-PLAN.md
@@ -739,7 +739,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 17. Stop the bleeding | 21/21 | In Progress | - |
+| 17. Stop the bleeding | 21/21 | Complete    | 2026-11-15 |
 | 18. Registry truth and drift guard | 28/28 | Complete    | 2026-11-15 |
 | 19. One tool state with health plus receipts | 46/46 | Complete    | 2026-11-15 |
 | 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |

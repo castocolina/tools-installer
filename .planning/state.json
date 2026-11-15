@@ -6,7 +6,7 @@
     {
       "number": "17",
       "name": "Stop the bleeding",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "18",
@@ -82,7 +82,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 16 of 17 · 71% · executing"
+    "reason": "Phase 16 of 17 · 88% · executing"
   },
-  "updated_at": "2026-11-15T16:45:10.567Z"
+  "updated_at": "2026-11-15T19:17:56.690Z"
 }

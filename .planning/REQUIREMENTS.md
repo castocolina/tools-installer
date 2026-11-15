@@ -21,7 +21,7 @@
 ### CI and verification
 
 - [x] **CI-01**: CI is green on Ubuntu and macOS [999.7]
-- [ ] **CI-02**: Merges to main require the PR check to pass (branch protection; user action) [999.7]
+- [x] **CI-02**: Merges to main require the PR check to pass (branch protection; user action) [999.7]
 - [x] **CI-03**: Phase 16 gap plans 16-17..19 are re-audited (secure + validate) [999.7]
 
 ### Registry truth
@@ -207,7 +207,7 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | SAFE-08 | Phase 17 | Complete |
 | SAFE-09 | Phase 17 | Complete |
 | CI-01 | Phase 17 | Complete |
-| CI-02 | Phase 17 | Pending |
+| CI-02 | Phase 17 | Complete |
 | CI-03 | Phase 17 | Complete |
 | REG-01 | Phase 18 | Complete |
 | REG-02 | Phase 18 | Complete |
