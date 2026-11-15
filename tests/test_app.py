@@ -72,23 +72,15 @@ _BATCH_QUESTION = "Run this plan?"
 
 
 class FakePrompter:
-    def __init__(
-        self,
-        confirm: bool,
-        *,
-        sensitive_confirm: bool | None = None,
-    ) -> None:
+    def __init__(self, confirm: bool) -> None:
         self._confirm = confirm
-        self._sensitive_confirm = confirm if sensitive_confirm is None else sensitive_confirm
         self.confirmed = 0
         self.questions: list[str] = []
 
     def confirm(self, message: str, *, default: bool = True) -> bool:
         self.confirmed += 1
         self.questions.append(message)
-        if message == _BATCH_QUESTION:
-            return self._confirm
-        return self._sensitive_confirm
+        return self._confirm
 
 
 def _recording_install() -> tuple[list[str], SensitiveInstall]:
@@ -2997,30 +2989,6 @@ def test_run_wizard_prints_login_shell_instructions_without_asking(
         assert outcomes[0].result == "done"
         assert "chsh -s" in buf.getvalue()
         assert [q for q in prompter.questions if q != _BATCH_QUESTION] == []
-
-
-def test_run_wizard_never_asks_sensitive_question_without_login_shell_action(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _not_present(monkeypatch, tmp_path)
-    prompter = FakePrompter(confirm=True)
-    tools = [_tool("rg", "search")]
-    console, buf = _console()
-    outcomes = run_wizard(
-        tools,
-        prompter,
-        console,
-        Options(all=True, categories=(), yes=False),
-        runner=_runner,
-        resolve_tag=_resolve_tag,
-        refresh=presence_service(tools),
-        updates=ScriptedUpdates({}),
-    )
-    assert isinstance(outcomes, list)
-    assert outcomes[0].result == "done"
-    assert prompter.questions == [_BATCH_QUESTION]
-    assert "chsh -s" not in buf.getvalue()
 
 
 class _UninstallKwargs(TypedDict):

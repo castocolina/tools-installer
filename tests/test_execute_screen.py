@@ -46,7 +46,7 @@ from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
-from installer.post_install import SENSITIVE_PROMPTS, ConfirmSensitiveAction, SensitivePrompt
+from installer.post_install import ConfirmSensitiveAction
 from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
@@ -58,7 +58,6 @@ from installer.session import (
     SensitiveInstall,
     ran_anything,
 )
-from installer.tweaks import SHELL_INIT_TOOLS, shell_init_bundle
 from installer.uninstall import SweepResult
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, ToolState, VersionRefreshService, VersionStatus
@@ -353,35 +352,6 @@ def _indicator_text(screen: ExecuteScreen) -> str:
 
 def _heartbeat_lines(screen: ExecuteScreen) -> list[str]:
     return [line for line in _log_text(screen).splitlines() if _HEARTBEAT_TAIL in line]
-
-
-@pytest.fixture(autouse=True)
-def legacy_sensitive_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`SENSITIVE_PROMPTS` has been empty since 23.2-06 (D-13), but SensitiveActionScreen stays
-    wired until Phase 25 sweeps it (24.1 D-21); these tests keep driving it with the prompts
-    it used to show."""
-    monkeypatch.setitem(
-        SENSITIVE_PROMPTS,
-        "set_login_shell",
-        SensitivePrompt(
-            "Show a reviewed command to change the login shell to zsh for {tool}, "
-            "which you run in your own terminal after the installer exits?",
-            "Yes, show the reviewed command",
-            "No, skip this",
-            True,
-        ),
-    )
-    monkeypatch.setitem(
-        SENSITIVE_PROMPTS,
-        "source_shell_init",
-        SensitivePrompt(
-            "Turn on {tool} shell init? It adds one guarded block to ~/.myshellrc that {effect}. "
-            "It stays off unless you choose yes; Policies can change it later.",
-            "Yes, turn it on",
-            "No, leave it off",
-            False,
-        ),
-    )
 
 
 def _host(inputs: ExecuteInputs, tools: list[Tool] | None = None) -> UnifiedApp:
@@ -1057,244 +1027,6 @@ async def test_cancel_is_inert_while_the_mismatch_modal_is_open() -> None:
         fd_release.set()
         await _settle_execute(screen, pilot)
         assert seen == [("rg", "fail")]
-
-
-def _recording_sensitive_install() -> tuple[
-    list[ConfirmSensitiveAction | None], list[bool], SensitiveInstall
-]:
-    received: list[ConfirmSensitiveAction | None] = []
-    answers: list[bool] = []
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
-    ) -> InstallOutcome:
-        del platform, runner, resolve_tag, checksum_policy, tools
-        received.append(confirm_sensitive_action)
-        if confirm_sensitive_action is not None:
-            answers.append(confirm_sensitive_action(tool.id, "set_login_shell"))
-        return InstallOutcome(tool.id, "installed")
-
-    return received, answers, install
-
-
-def _sensitive_action_screen() -> type[ModalScreen[str | None]]:
-    from installer import execute_screen as execute_module
-
-    screen_cls = getattr(execute_module, "SensitiveActionScreen", None)
-    assert screen_cls is not None, "D-05 requires SensitiveActionScreen"
-    return screen_cls
-
-
-async def _settle_until_sensitive(app: UnifiedApp, pilot: Pilot[list[str] | None]) -> None:
-    screen_cls = _sensitive_action_screen()
-    for _ in range(400):
-        if isinstance(app.screen, screen_cls):
-            break
-        await pilot.pause()
-    await pilot.pause()
-
-
-def _sensitive_labels(screen: ModalScreen[object]) -> str:
-    parts = [str(label.render()) for label in screen.query(Label)]
-    return "\n".join(parts)
-
-
-def _assert_sensitive_prompt_copy(text: str, tool_id: str) -> None:
-    lowered = text.lower()
-    assert tool_id in text
-    assert "reviewed command" in lowered
-    assert "login shell" in lowered
-    assert "zsh" in lowered
-    assert "after the installer" in lowered or "your own terminal" in lowered
-    assert "will be changed" not in lowered
-
-
-async def test_sensitive_action_screen_names_the_tool_and_the_reviewed_command() -> None:
-    screen_cls = _sensitive_action_screen()
-    captured: list[str | None] = []
-    app = _host(_inputs())
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(screen_cls("oh-my-zsh"), captured.append)
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, screen_cls)
-        _assert_sensitive_prompt_copy(_sensitive_labels(screen), "oh-my-zsh")
-        await pilot.press("enter")
-        await pilot.pause()
-    assert captured == ["yes"]
-
-    captured = []
-    app = _host(_inputs())
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(screen_cls("oh-my-zsh"), captured.append)
-        await pilot.pause()
-        await pilot.press("down", "enter")
-        await pilot.pause()
-    assert captured == ["no"]
-
-    captured = []
-    app = _host(_inputs())
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(screen_cls("oh-my-zsh"), captured.append)
-        await pilot.pause()
-        await pilot.press("escape")
-        await pilot.pause()
-    assert captured == [None]
-
-
-async def test_enter_on_open_takes_the_shell_init_default_of_no() -> None:
-    """F-1: the modal starts on the question's own default; shell init defaults to no."""
-    screen_cls = _sensitive_action_screen()
-    captured: list[str | None] = []
-    app = _host(_inputs())
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(screen_cls("fzf", "source_shell_init"), captured.append)
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-    assert captured == ["no"]
-
-
-async def test_accepting_the_login_shell_prompt_returns_true_to_the_install_seam() -> None:
-    received, answers, install = _recording_sensitive_install()
-    inputs = _inputs(install=install)
-    app = _host(inputs)
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(ExecuteScreen(["rg"], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        await pilot.press("enter")
-        await _settle_until_sensitive(app, pilot)
-        prompt = app.screen
-        assert isinstance(prompt, _sensitive_action_screen())
-        _assert_sensitive_prompt_copy(_sensitive_labels(prompt), "rg")
-        await pilot.press("enter")
-        await _settle_execute(screen, pilot)
-    assert answers == [True]
-    assert received and received[0] is not None
-
-
-async def test_refusing_the_login_shell_prompt_returns_false_to_the_install_seam() -> None:
-    _received, answers, install = _recording_sensitive_install()
-    inputs = _inputs(install=install)
-    app = _host(inputs)
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(ExecuteScreen(["rg"], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        await pilot.press("enter")
-        await _settle_until_sensitive(app, pilot)
-        await pilot.press("down", "enter")
-        await _settle_execute(screen, pilot)
-    assert answers == [False]
-
-
-async def test_escaping_the_login_shell_prompt_returns_false_and_explains() -> None:
-    _received, answers, install = _recording_sensitive_install()
-    inputs = _inputs(install=install)
-    app = _host(inputs)
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(ExecuteScreen(["rg"], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        await pilot.press("enter")
-        await _settle_until_sensitive(app, pilot)
-        await pilot.press("escape")
-        await _settle_execute(screen, pilot)
-        log = _log_text(screen)
-        assert "rg" in log
-        assert "false" in log.lower() or "no" in log.lower() or "refused" in log.lower()
-    assert answers == [False]
-
-
-async def test_sensitive_unattended_never_opens_the_modal_and_passes_no_confirmation() -> None:
-    received, answers, install = _recording_sensitive_install()
-    inputs = _inputs(install=install, unattended=True)
-    app = _host(inputs)
-    screen_cls = _sensitive_action_screen()
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(ExecuteScreen(["rg"], inputs))
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        for _ in range(400):
-            if screen.finished:
-                break
-            assert not isinstance(app.screen, screen_cls)
-            await pilot.pause()
-        await _settle_execute(screen, pilot)
-        assert not isinstance(app.screen, screen_cls)
-    assert answers == []
-    assert received == [None]
-
-
-async def test_cancel_is_inert_while_the_sensitive_prompt_is_open() -> None:
-    fd_started = threading.Event()
-    fd_release = threading.Event()
-    _received, answers, sensitive_install = _recording_sensitive_install()
-
-    def install(
-        tool: Tool,
-        platform: Platform,
-        runner: Runner,
-        resolve_tag: TagResolver,
-        *,
-        checksum_policy: ChecksumPolicy = "fail",
-        tools: Mapping[str, Tool] | None = None,
-        confirm_sensitive_action: ConfirmSensitiveAction | None = None,
-    ) -> InstallOutcome:
-        if tool.id == "rg":
-            return sensitive_install(
-                tool,
-                platform,
-                runner,
-                resolve_tag,
-                checksum_policy=checksum_policy,
-                confirm_sensitive_action=confirm_sensitive_action,
-            )
-        fd_started.set()
-        assert fd_release.wait(timeout=5)
-        return InstallOutcome(tool.id, "installed")
-
-    tools = [_tool("rg"), _tool("fd")]
-    inputs = _inputs(tools=tools, install=install)
-    app = _host(inputs, tools)
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(ExecuteScreen(["rg", "fd"], inputs))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ExecuteScreen)
-        await pilot.press("enter")
-        await _settle_until_sensitive(app, pilot)
-        await pilot.press("c")
-        await pilot.pause()
-        assert not screen.cancel_event.is_set()
-        waiting = screen.status.text.lower()
-        assert waiting
-        assert "prompt" in waiting or "question" in waiting
-        await pilot.press("down", "enter")
-        for _ in range(400):
-            if fd_started.is_set() and not isinstance(app.screen, _sensitive_action_screen()):
-                break
-            await pilot.pause()
-        assert fd_started.is_set()
-        restored = screen.status.text.lower()
-        assert "c" in restored or "cancel" in restored or "stop" in restored
-        await pilot.press("c")
-        await pilot.pause()
-        assert screen.cancel_event.is_set()
-        fd_release.set()
-        await _settle_execute(screen, pilot)
-    assert answers == [False]
 
 
 async def test_execute_keys_name_the_idle_actions_before_a_run() -> None:
@@ -5612,50 +5344,6 @@ async def test_a_skip_only_plan_shows_no_run_options() -> None:
 
 # --- Keyed prompts, unattended lines and the 80x20 fit (plan 23-12, Task 2) ---
 
-_LOGIN_SHELL_TEXT = (
-    "Show a reviewed command to change the login shell to zsh for oh-my-zsh, "
-    "which you run in your own terminal after the installer exits?"
-)
-
-
-@pytest.mark.parametrize("tool_id", SHELL_INIT_TOOLS)
-async def test_each_shell_init_prompt_shows_its_effect(
-    tool_id: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("NO_COLOR", "1")
-    bundle = shell_init_bundle(tool_id)
-    assert bundle is not None
-    screen_cls = _sensitive_action_screen()
-    app = _host(_inputs())
-    async with app.run_test(size=(80, 20)) as pilot:
-        app.push_screen(screen_cls(tool_id, "source_shell_init"))
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, screen_cls)
-        text = _sensitive_labels(screen)
-        assert bundle.description in text
-        assert "Yes, turn it on" in text
-        assert "No, leave it off" in text
-        assert screen.query_one(ListView).region.bottom <= 20
-
-
-async def test_the_login_shell_prompt_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NO_COLOR", "1")
-    screen_cls = _sensitive_action_screen()
-    captured: list[str | None] = []
-    app = _host(_inputs())
-    async with app.run_test(size=(80, 20)) as pilot:
-        app.push_screen(screen_cls("oh-my-zsh", "set_login_shell"), captured.append)
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, screen_cls)
-        assert _sensitive_labels(screen) == "\n".join(
-            (_LOGIN_SHELL_TEXT, "Yes, show the reviewed command", "No, skip this")
-        )
-        await pilot.press("escape")
-        await pilot.pause()
-    assert captured == [None]
-
 
 async def test_unattended_runs_print_no_run_option_notice() -> None:
     codex, starship = _tool("codex"), _tool("starship")
@@ -5691,7 +5379,6 @@ async def test_markup_in_review_values_renders_literally(monkeypatch: pytest.Mon
         ],
     )
 
-    screen_cls = _sensitive_action_screen()
     app = _host(inputs, [codex, markup_tool])
     async with app.run_test(size=(80, 20)) as pilot:
         app.push_screen(ExecuteScreen(["codex", markup_id], inputs))
@@ -5700,8 +5387,3 @@ async def test_markup_in_review_values_renders_literally(monkeypatch: pytest.Mon
         assert isinstance(screen, ExecuteScreen)
         prompts = _plan_prompts(screen)
         assert any(prompt.startswith(f"○ {markup_id}") for prompt in prompts)
-        app.push_screen(screen_cls(markup_id, "source_shell_init"))
-        await pilot.pause()
-        modal = app.screen
-        assert isinstance(modal, screen_cls)
-        assert markup_id in _sensitive_labels(modal)

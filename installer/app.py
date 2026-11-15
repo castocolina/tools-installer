@@ -35,7 +35,6 @@ from installer.pnpm_globals import (
     pnpm_global_packages,
 )
 from installer.policy import Policy, omz_removal_detail
-from installer.post_install import sensitive_prompt
 from installer.postinstall import host_labels
 from installer.prompt import Prompter
 from installer.rcclean import (
@@ -168,10 +167,6 @@ def run_wizard(
         for line in refresh.commit_writes():
             console.print(line, markup=False, highlight=False, soft_wrap=True)
 
-    def confirm_sensitive(tool_id: str, action: str) -> bool:
-        prompt = sensitive_prompt(tool_id, action)
-        return prompter.confirm(prompt.prompt, default=prompt.default)
-
     context = RunContext(
         catalog={tool.id: tool for tool in tools},
         platform=refresh.platform,
@@ -181,7 +176,6 @@ def run_wizard(
         updates=updates,
         terminal_sync=terminal_sync,
         on_mismatch=None if options.yes else on_mismatch,
-        confirm_sensitive=None if options.yes else confirm_sensitive,
     )
     outcomes = execute_plan(rows, context)
     render_run_report(outcomes, console)

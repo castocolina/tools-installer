@@ -34,7 +34,6 @@ from installer.engine import install_tool
 from installer.enums import MutationHolder, Severity
 from installer.model import Tool
 from installer.platform import Platform
-from installer.post_install import sensitive_prompt
 from installer.render import (
     display_order,
     id_width,
@@ -70,9 +69,7 @@ if TYPE_CHECKING:
     from installer.wizard_app import UnifiedApp
 
 _MISMATCH_CHOICES: frozenset[str] = frozenset({"retry", "skip", "fallback"})
-_SENSITIVE_CHOICES: frozenset[str] = frozenset({"yes", "no"})
 _DISMISSAL_SKIP = "{tool_id}: checksum-mismatch prompt dismissed; the tool was therefore skipped."
-_DISMISSAL_SENSITIVE = "{tool_id}: sensitive-action prompt dismissed; the answer was therefore no."
 # UI-SPEC Interaction contract: one keys line per screen state.
 _KEYS_EMPTY = "esc close"
 _KEYS_RUNNING = "c stop after this tool · ctrl+c aborts and can leave a tool half-installed"
@@ -133,54 +130,6 @@ class ChecksumMismatchScreen(ModalScreen[str | None]):
             return
         choice = item_id.removeprefix("opt-")
         if choice not in _MISMATCH_CHOICES:
-            return
-        self.dismiss(choice)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class SensitiveActionScreen(ModalScreen[str | None]):
-    """Yes/no prompt for a sensitive post-install action, keyed by the action (D-11).
-
-    The prompt and choices come from `sensitive_prompt`, so each action asks its
-    own question. Letter-prefixed ListItem ids (`opt-yes`) because a raw value
-    can be an invalid Textual identifier — the same convention ChecksumMismatchScreen
-    uses. Dismisses with the string values the shared worker-to-modal helper
-    is typed for; the screen's ask method converts them to bool.
-    """
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "cancel", "close", show=False),
-    ]
-    DEFAULT_CSS = """
-    SensitiveActionScreen { align: center middle; }
-    SensitiveActionScreen > Label { width: 72; padding: 1 1 0 1; }
-    SensitiveActionScreen > ListView { width: 72; height: 6; border: round $accent; }
-    """
-
-    def __init__(self, tool_id: str, action: str = "set_login_shell") -> None:
-        super().__init__()
-        self.tool_id = tool_id
-        self.action = action
-
-    def compose(self) -> ComposeResult:
-        prompt = sensitive_prompt(self.tool_id, self.action)
-        # Tool ids and effects are data: markup=False keeps a `[red]` in them literal (A32).
-        yield Label(prompt.prompt, markup=False)
-        yield ListView(
-            ListItem(Label(prompt.yes), id="opt-yes"),
-            ListItem(Label(prompt.no), id="opt-no"),
-            # Start on the question's own default, so one enter never opts in by accident (F-1).
-            initial_index=0 if prompt.default else 1,
-        )
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        item_id = event.item.id
-        if item_id is None:
-            return
-        choice = item_id.removeprefix("opt-")
-        if choice not in _SENSITIVE_CHOICES:
             return
         self.dismiss(choice)
 
@@ -682,7 +631,6 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
                     updates=self._inputs.updates,
                     terminal_sync=self._inputs.terminal_sync,
                     on_mismatch=self._ask_mismatch if attended else None,
-                    confirm_sensitive=self._ask_sensitive_action if attended else None,
                     should_continue=self._should_continue,
                     on_row_started=announce_row,
                     on_outcome=record,
@@ -846,19 +794,6 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
         self.post_message(InstallLogLine(tool_id, sentence))
         return "skip"
 
-    def _ask_sensitive_action(self, tool_id: str, action: str) -> bool:
-        self.post_message(PromptOpen(tool_id, True))
-        try:
-            answer = ask_from_worker(self.app, SensitiveActionScreen(tool_id, action))
-        finally:
-            self.post_message(PromptOpen(tool_id, False))
-        if answer == "yes":
-            return True
-        if answer is None:
-            sentence = _DISMISSAL_SENSITIVE.format(tool_id=tool_id)
-            self.post_message(InstallLogLine(tool_id, sentence))
-        return False
-
     def on_install_log_line(self, message: InstallLogLine) -> None:
         if message.transient and not self._transient_is_current(message):
             # A transient's world has moved on: a real line, a terminal
@@ -872,10 +807,7 @@ class ExecuteScreen(ModalScreen[list[RowOutcome] | None]):
             self._last_tool_id = message.tool_id
         cleaned = sanitize_log_line(message.line)
         log.write(f"{message.tool_id} │ {cleaned}")
-        dismissed = message.line == _DISMISSAL_SKIP.format(
-            tool_id=message.tool_id
-        ) or message.line == _DISMISSAL_SENSITIVE.format(tool_id=message.tool_id)
-        if dismissed:
+        if message.line == _DISMISSAL_SKIP.format(tool_id=message.tool_id):
             self.status.set(cleaned, "warn")
         if not message.transient:
             self._note_output(message.tool_id)
