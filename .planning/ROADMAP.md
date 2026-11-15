@@ -31,7 +31,7 @@
 - [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
 - [x] **Phase 22: Method lifecycle contract** - Per-method update and removal with receipts as proof, native installs handed off, `config_paths`, a leftover-checking e2e harness (completed 2026-11-15)
-- [ ] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL`
+- [x] **Phase 23: Configuration as a lifecycle step** - Reversible agent-host hooks that follow hosts, shell init offered at install, terminals kept on zsh with `SHELL` (completed 2026-11-15)
 - [x] **Phase 23.1: Host safety: drop the skill-pack catalog entries, sandboxed tests, container-only e2e** (INSERTED) - Drop the 8 skill-pack entries; tests and shims can never install on the host; e2e only in containers (completed 2026-11-07)
 - [x] **Phase 23.2: Install-time tuning instead of Policies knobs** (INSERTED) - Agent tuning and zsh plugins/theme applied at install with no question; Policies trimmed; live progress indicator; Copilot CLI in the catalog; present dependencies run from their known path (completed 2026-11-13)
 - [x] **Phase 24: Onboarding through the skill and e2e** - herdr and Alacritty onboarded through the skill; three-distro container e2e with leftover checks; real-host UAT (completed 2026-11-14)
@@ -383,7 +383,7 @@ Plans:
   5. Choosing auto-approval and no-attribution at install writes the documented keys into Claude, Codex, opencode and cursor-agent settings (scratch HOME, comments and unrelated keys preserved), turning them off reverts exactly those keys, the four alias bundles are gone from Policies with an enabled alias migrated, and the chosen prompt (Oh-My-Zsh theme or starship) is the only one active. *(superseded 2026-11-07, 23.2 R1/R7: the keys are written at install with no question; removal is the revert path; the run options and agent Policies rows are removed)*
   6. VS Code lean mode writes only absent keys into a JSONC `settings.json` with comments and the user's own keys intact, opt-out removes exactly those keys, and the integrated terminal opens zsh (scratch HOME). *(superseded 2026-11-07, 23.2 R6: written at install with no question; removal reverts)*
 
-**Plans:** 16/16 plans executed (7 waves)
+**Plans:** 16/16 plans complete (7 waves)
 
 Plans:
 **Wave 1**
@@ -745,7 +745,7 @@ Plans:
 | 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |
 | 21. One screen family | 21/21 | In Progress | - |
 | 22. Method lifecycle contract | 13/13 | Complete    | 2026-11-15 |
-| 23. Configuration as a lifecycle step | 16/16 | In Progress | - |
+| 23. Configuration as a lifecycle step | 16/16 | Complete    | 2026-11-15 |
 | 23.1 Host safety | 18/18 | Complete    | 2026-11-07 |
 | 23.2 Install-time tuning | 8/8 | Complete    | 2026-11-13 |
 | 24. Onboarding through the skill and e2e | 9/9 | Complete    | 2026-11-14 |
