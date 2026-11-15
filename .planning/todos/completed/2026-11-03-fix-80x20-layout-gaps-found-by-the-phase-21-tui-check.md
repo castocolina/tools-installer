@@ -40,3 +40,7 @@ Make the Doctor card its own focusable scroll container under fixed chrome (head
 shorten or wrap the tab labels and the Uninstall badge to fit 80 columns, let the System table shrink its
 Owner/OS columns at 80 columns, and show the reinstall hint only when the global set was read. Pin each with
 an 80x20 backstop in `tests/test_layout_80x20.py`.
+
+## Resolved
+
+Resolved 2026-11-15: gaps 1, 2, 3, 5 and the footer part of 7 in d3bd30c1, gap 6 in 37b3916a, gap 4 in 81ef77e4 (each pinned in tests/test_layout_80x20.py). The other clauses of 7 (detail bar `to configure:`, removal confirm scroll, Policies Effect) were not seen in the 2026-11-15 captures; the confirm scroll is already pinned by test_a_long_review_scrolls_and_keeps_its_keys_line.
