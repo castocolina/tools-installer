@@ -3274,6 +3274,20 @@ def test_bun_owned_pi_reads_owner_and_version(bun_home: Path) -> None:
     assert result.package == _PI_PACKAGE
 
 
+def test_a_pnpm_installed_pi_resolves_owner_pnpm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-10 compatibility pin: pi in its bun-plus-node shape, installed through pnpm."""
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pnpm"))
+    result = _resolve(
+        _bun_pi(),
+        inventory=_readable(pnpm_globals=frozenset({_PI_PACKAGE})),
+        which=str(tmp_path / "pnpm" / "pi"),
+        platform=_DEBIAN,
+    )
+    assert result.owner == "pnpm"
+
+
 def test_bun_s_own_binary_is_not_bun_owned(bun_home: Path) -> None:
     dirs = owner_dirs(inventory=_readable(), managed_bin_dir=_MANAGED, platform=_DEBIAN)
     assert attribute_path(bun_home / ".bun" / "bin" / "bun", dirs) == frozenset()

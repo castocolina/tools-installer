@@ -688,6 +688,29 @@ def test_receiptless_kinds_write_nothing(method: Method) -> None:
     assert not sandbox.exists() or list(sandbox.iterdir()) == []
 
 
+def test_a_receipt_naming_the_retired_host_setup_kind_reads_without_a_crash() -> None:
+    """D-10 compatibility pin: the reader checks that the kind is a string, not that it is live."""
+    path = receipt_path("pi")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "v": 1,
+                "tool": "pi",
+                "at": "2026-10-16T12:00:00+00:00",
+                "method": {"kind": "host_setup", "key": "a" * 64},
+                "package": None,
+                "artifacts": [],
+                "smoke": None,
+                "hooks": {},
+            }
+        )
+    )
+    receipt = receipts.read("pi")
+    assert receipt is not None
+    assert receipt.method == ReceiptMethod(kind="host_setup", key="a" * 64)
+
+
 @pytest.mark.parametrize("tool_id", ["../x", "Yq", "a/b", "-x"])
 def test_receipt_ids_follow_the_registry_rule(tool_id: str) -> None:
     assert receipts.TOOL_ID_RE is model.TOOL_ID_RE

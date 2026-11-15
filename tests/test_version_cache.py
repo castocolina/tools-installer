@@ -142,6 +142,25 @@ def test_digests_round_trip_through_the_cache_file(tmp_path: Path) -> None:
     assert loaded["codegraph"].digests == {"asset.tar.gz": digest}
 
 
+def test_an_old_pi_version_cache_entry_loads_unchanged(tmp_path: Path) -> None:
+    """D-10 compatibility pin: the cache is keyed by tool id and stores no method kind,
+    so the entry an earlier install of pi left behind is still a hit."""
+    path = tmp_path / "versions.json"
+    fields: dict[str, object] = {
+        "latest_version": "v0.9.0",
+        "checked_at": "2026-09-01T00:00:00+00:00",
+        "failed_at": None,
+        "digests": {},
+    }
+    path.write_text(json.dumps({"version": 1, "tools": {"pi": fields}, "managers": {}}))
+    assert load_version_cache(path)["pi"] == VersionCacheEntry(
+        latest_version="v0.9.0",
+        checked_at="2026-09-01T00:00:00+00:00",
+        failed_at=None,
+        digests={},
+    )
+
+
 def test_stale_drawio_cli_cache_entry_is_ignored(tmp_path: Path) -> None:
     registry = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
     path = tmp_path / "versions.json"
