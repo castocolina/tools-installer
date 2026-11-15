@@ -147,7 +147,7 @@ then volta install priority). The phase files record these gates:
 - Convergence cap. At plan-review cycle 3 with fewer than 4 critical+HIGH concerns left, fix them (actionable
   MEDIUM/LOW included), run a checker pass, commit and execute, with no question. With 4 or more, escalate.
   Owner, 2026-11-07: "If you reach 3 reviews and the criticals and highs are fewer than 4, you can fix them and
-  execute from here on." Source: M:feedback_convergence_cap_rule. Three cycles ran in 24.4 and 24.5 (P:24.4, P:24.5).
+  execute from here on." Amended 2026-11-15: trivial HIGHs are fixed and the flow continues at any count (see 3.1). Source: M:feedback_convergence_cap_rule. Three cycles ran in 24.4 and 24.5 (P:24.4, P:24.5).
 - Convergence hand-back. A convergence subagent can return while its nested opencode review still runs. The brief
   must say to wait on a background `until ! kill -0 <pid>` loop, or report the PID and log path. Only one agent
   writes `<phase>-REVIEWS.md` per cycle. Source: M:project_gsd_run_quirks.
@@ -222,8 +222,10 @@ Source: the orchestrating session transcript, 2026-11-14/15.
 - **Cap-rule boundary.** At 24.4 plan-review cycle 3, exactly 4 verified HIGHs remained. The rule says to escalate at
   4 or more. All 4 were trivial and already fixed in the plans: a warning text, an unused local, a grep gate that
   contradicted its own test, and a `real_binary` lookup. A checker had passed. The orchestrator proceeded and told
-  the owner it had done so, with the reasons, and invited a correction. No ruling has been given yet. Until there
-  is one, treat "4 or more, all fixed and checker-green" as proceed-and-report, never a silent proceed.
+  the owner, with its reasons. Asked on 2026-11-15, the owner ruled: "fix them by hand if you say they are trivial
+  and follow the GSD flow" (translated). Rule: trivial remaining HIGHs are fixed and the flow continues at any count.
+  The report names them. Only a design question or an unfixable HIGH escalates
+  (M:feedback_convergence_cap_rule, amended).
 - **Silent UAT rewrite.** The orchestrator rewrote a UAT criterion and flipped its result without saying so. The
   owner asked which criterion had been changed and why. The rule is now in memory (M:feedback_uat_done_criteria):
   report a conflict first, then rewrite.
@@ -239,6 +241,40 @@ Source: the orchestrating session transcript, 2026-11-14/15.
   referee-two or referee-three on an outage and never stops a run because a lane is down. It launches opencode
   directly, with stdin closed and paths passed instead of file contents, and checks after every run that
   `~/.claude/gsd-core` and `~/.claude/.gsd-source` are absent. No GSD path appeared in this run.
+
+### 3.2 Earlier directives in the same session (2026-11-03 to 2026-11-13)
+
+The session began on 2026-11-03, before this run's phases were planned. Its owner messages, checked one by one
+against this report, add the following. Source: the session transcript.
+
+- **Where 23.1 came from (2026-11-07).** The owner asked to drop eight catalog packages: rtk, matt-pocock-skills,
+  opengsd, ponytail, superpowers, softaworks-agent-toolkit, openspec and speckit. The owner also suspected that unit
+  and e2e tests ran on the real machine, because opengsd kept reappearing globally. The rule became: e2e tests run in
+  containers and unit tests are sandboxed. Both points are Phase 23.1 (P:23.1).
+- **Where 24's Alacritty work came from (2026-11-07).** Alacritty showed grey in the catalog. That was correct, since
+  it was not yet installable, and the work went into Phase 24.
+- **Status drift (2026-11-07).** The orchestrator reported "0%" while 7 phases had already executed. Rule: update
+  ROADMAP and STATE progress at each wave and phase close, and re-read them before reporting progress.
+- **Scripts over complex commands (2026-11-07).** Subagents kept trying long compound shell commands. The owner
+  said: write a script with the Write tool, then run it. Every brief in this run carried the rule
+  (M:feedback_scripts_over_complex_commands).
+- **Executor model (2026-11-04).** gsd-executor runs on haiku at high effort, and genuinely heavy plans run on sonnet,
+  never opus. Phases 24.4 and 24.5 ran 3 plans on haiku and 13 on sonnet (M:project_executor_model_override,
+  M:feedback_file_count_not_effort).
+- **Lane availability changes (2026-11-07, 2026-11-13).** The owner said "referee-two is also available" and later
+  "referee-one is back". Lanes come and go during a run. Probe a lane before use, fail over, and switch back when the
+  default returns (M:project_phase16_cross_ai_execution).
+- **Run pacing.** The owner asked to "stop after research and push", then to "stop after current phase". A cron
+  wake every 5 h was set up and later deleted on request. Honour stop points literally, and delete wake-ups and
+  crons once they are no longer needed.
+- **Todos captured, not implemented.** These were captured as todos and not built:
+  - `gh extension install https://github.com/github/gh-stack`, with the full github.com URL because the host's gh
+    may point at a GHE server, at
+    `.planning/todos/pending/2026-11-03-add-the-gh-stack-extension-through-the-tool-onboarding-skill.md`.
+  - Replacing codegraph with codebase-memory-mcp in the catalog, at
+    `.planning/todos/pending/2026-11-14-replace-codegraph-with-codebase-memory-mcp.md`.
+
+  Rule: a "please add a todo" request produces a todo file and nothing more.
 
 ## 4. Per-phase highlights
 
