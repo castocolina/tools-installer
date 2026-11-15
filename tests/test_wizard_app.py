@@ -36,6 +36,7 @@ from installer.guidance import (
 from installer.legacy_guard import SHIM_SENTINEL
 from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
+from installer.mutation_lock import MutationLock
 from installer.ownership import (
     ManagerInventory,
     ManagerOwnership,
@@ -78,7 +79,6 @@ from installer.wizard_app import (
     DiskPressureProbe,
     DoctorScreen,
     LinkModeScreen,
-    MutationLock,
     NavScreen,
     PoliciesScreen,
     PolicyInputs,

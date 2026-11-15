@@ -22,6 +22,7 @@ from installer.enums import MutationHolder, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.guidance import disk_pressure_guidance
 from installer.model import Method, Tool
+from installer.mutation_lock import MutationLock
 from installer.ownership import ManagerInventory, ManagerOwnership, OwnershipCandidate
 from installer.platform import Platform
 from installer.pnpm_globals import (
@@ -48,7 +49,6 @@ from installer.wizard_app import (
     DoctorScreen,
     GlobalsReinstalled,
     LinkModeScreen,
-    MutationLock,
     NavScreen,
     PolicyInputs,
     RefreshPublished,

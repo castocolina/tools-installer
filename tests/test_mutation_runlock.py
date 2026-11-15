@@ -18,9 +18,9 @@ from installer.enums import InstallStatus, MutationHolder, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
 from installer.locations import ensure_dir
 from installer.model import Tool
+from installer.mutation_lock import SCHEDULED_RUN_REFUSAL, MutationLock
 from installer.platform import Platform
 from installer.uninstall import SweepResult
-from installer.wizard_app import SCHEDULED_RUN_REFUSAL, MutationLock
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import presence_service
 
