@@ -93,6 +93,68 @@ Out of scope:
 
 ### Folded Todos
 None.
+
+### Amendment 2026-11-15 (pre-plan re-measure at HEAD 572d30fd, orchestrator)
+
+Phases 17 to 24.5 ran after this file was written, so the facts under several locked decisions moved. Each entry below keeps the decision's intent and replaces only its facts. Source: the dated "Pre-phase check 2026-11-15" note under Phase 25 in `.planning/ROADMAP.md`, re-measured at HEAD 572d30fd. Decision rule unchanged: best over easy. Line numbers are the planner's starting point, not a contract; plans re-check them.
+
+- **D-01 (intent kept: a permanent AST reachability test).** Still needed. `vulture` at confidence 80 is silent, and at 60 it prints about 251 lines. That shows a symbol-level scan cannot replace an import-graph check. Re-derive the string-keyed dispatch tables at plan time. Names such as `POSTINSTALL_HOOKS` and `BUNDLES` predate 19 to 24.5, and the probe table is `install_ownership.py`'s keyed dict (`"host-setup": _host_setup`, :378). Use the vulture-60 output as a triage list for D-02, not as proof.
+- **D-02 (intent kept: delete what nothing reaches, list kept targets with their caller).** These targets are already gone and need nothing more than a line in the summary: `installer/audit.py`, `agent_policy.py`, `agent_guidance.py`, `guards.py`, `policy.agent_environment_policy`/`compose_agent_environment_policy`, and the `Tool.source`/`owner`/`uninstall` fields. `agent_env.py` stays live: `agent_settings.py` imports it. Phase 25 also takes over two dead subsystems from earlier phases (D-10, D-11 below). The vulture-60 candidates are triaged one by one, each with its caller or its deletion: `AgentAdapter.instruction_path`/`permission_mode`, `diskusage.probe_disk_pressure`, `receipts.scan_retired`, `render.render_troubleshooting`, `deps.requires_integrity_errors`, `schedules.sweep_adapters`. Functions whose only caller is `setup.py` count as live, because vulture scans `installer/` only.
+- **D-03 (intent kept: no live chooser deleted by mistake).** The questionary checkbox chooser (`_ask_checkbox`, `select_categories`, `select_tools`) is already gone. `setup.py` keeps `ask_confirm` (:286), `_ask_select` (:295) and `_ask_mismatch` (:309). `app._choose_tools` is the live `--all`/`--categories` filter and stays. No re-trace or deletion is left; the summary records the check.
+- **D-04 (intent kept: judge each Message by its post site, epochs stay).** `DaemonDefaultApplied`, `CompetingProbed` and `PolicyToggled` no longer exist. The remaining set in `wizard_app.py` is `GlobalsReinstalled` (:252), `GlobalsAudited` (:265), `DiskPressureProbed` (:291), `ScheduleChanged` (:312), `ScheduleManagerProbed` (:325), `RemovalFinished` (:1162), `CursorModelsRead` (:3446), `ScheduleDefaultsApplied` (:3572), `RefreshPublished` (:3587) and `RefreshFinished` (:3597). A Message that carries a generation or epoch, or that a supersede check reads, stays (AR-04).
+- **D-05 (intent kept: narrow move, names kept, compose under the gates, no questionary in compose).** `_build_app` is at `setup.py:743` and `_execute_inputs` at `:1062`. `setup.py` is 1,489 lines. `_build_daemon_policy` and `_which_with_brew` no longer exist. The move set is defined by a rule rather than a stale list: `_build_app`, `_execute_inputs`, and the transitive closure of the `setup.py` private helpers and classes they call that touch neither questionary nor prompt_toolkit. At HEAD that is `_timer_state_cache` (:320), `_CompetitorProbe`/`_competitor_probe` (:348/:373), `_DiskProbe`/`_disk_pressure_probe` (:395/:472), `_cache_redirect_policies` (:502), `_sync_terminals` (:532), `_sync_terminals_and_report` (:562), `_build_services` (:580), `_split_sourced_from`, `_desktop_shell_policies`, `_schedule_context`, `_invalidating`, `_schedule_removed_lines` and `_reconcile_headless`; the plan confirms the closure.
+  - A moved helper that a `_run_*` route also calls moves too, and `setup.py` imports it back from `installer.compose`. Best over easy: leaving shared composition outside the gates would defeat LEAN-02.
+  - A questionary-backed callback, such as `_ask_mismatch` or `ask_confirm`, reaches compose only as a parameter injected by `setup.py`.
+  - `setup.py` keeps `main`, the `_run_*` dispatch, tty/questionary plumbing and argument parsing (architecture rule 4).
+- **D-06 (intent kept: one definition of the path and env constants, `installer/` never imports `setup.py`).** The constants block is now `setup.py:112-136`. It adds `_DAEMON_PLIST_PATH`, `_LINUX_DAEMON_UNIT_DIR`, `_ENVIRONMENT_D_DIR` and `_WARN_CONSOLE` to the D-06 list. Every constant the moved code reads gets its one definition in `compose.py`, and `setup.py` imports back what it still uses. `_STYLE` (questionary) stays in `setup.py`.
+- **D-07 (intent kept: per-screen modules, every file ≤ 800 lines, verbatim move first and comment cleanup second, no shim, F14 merge excluded).** `wizard_app.py` is 4,438 lines with 28 classes. Five modules cannot meet the cap. The measured blocks at HEAD, imports and header excluded:
+  - the shared inputs and messages: :139-355, about 215 lines;
+  - `DoctorScreen` with `_BodyStatic`/`_smoke_findings`: :333-1031, about 700;
+  - the uninstall block: :1032-2049, about 1,018, of which the `UninstallScreen` class alone is :1180-2049, about 870;
+  - `PoliciesScreen` with its helpers: :2050-2581, about 530;
+  - `SchedulesScreen` with its constants: :2582-3201, about 620;
+  - the modals: :3202-3565, about 364 (`ConfirmGuardFile`, `ConfirmUninstall`, `NavScreen`, `LinkModeScreen`, `ScheduleTimeScreen`, `CursorModelsRead`/`CursorModelScreen`);
+  - the app block: :3566-4438, about 873, of which `MutationLock` is :3605-3676 and `UnifiedApp` is :3677-4438, about 762.
+
+  The amended target set is one module per screen, plus modals, plus the app, plus siblings wherever a block alone breaks the cap:
+  - `doctor_screen.py`;
+  - `uninstall_screen.py`, with a sibling (for example `uninstall_review.py`) that takes `UninstallInputs`, `_UninstallEntry`, `config_split`, the `_review_line`/`_retired_*` helpers and any pure non-widget helpers that `UninstallScreen` needs to get under 800;
+  - `policies_screen.py`;
+  - `schedules_screen.py`;
+  - `modals.py`;
+  - `mutation_lock.py`, with `MutationLock`, `MUTATION_REFUSAL` and `SCHEDULED_RUN_REFUSAL`;
+  - `wizard_app.py`, with `UnifiedApp` and its app-level messages.
+
+  Each split module carries the inputs, messages and constants that only it uses. Something two or more modules share gets one home that the others import, and the import graph has no cycle: a screen imports `wizard_app` only under `TYPE_CHECKING`. When a class body is still over the cap after the verbatim move and the comment cleanup, pure helpers move into module-level functions in its sibling. A widget method keeps its behaviour and its name on the class. The planner may rename the siblings. Call sites in `setup.py`, `installer/` (`catalog_tui.py`, `execute_screen.py`, `terminal_shell.py`, `ui_common.py`) and tests are updated in the commit that moves the symbol.
+  - Tests that cover moved code may move into a per-module test file. They change only their import path, never an assertion.
+  - The pilot safety net (`tests/test_layout_80x20.py`, `tests/test_screen_family.py`, `tests/test_wizard_app.py`) stays green at every intermediate commit.
+- **D-08 (intent kept: `max_lines=5000`, one write helper, a dropped-lines label above the log, newest line last).** The `RichLog` is at `execute_screen.py:431` with no `max_lines`. The writes are scattered over about :869-953. The plan re-locates every `#execute-log` write.
+- **D-09.** Unchanged. The "before" SHA for the net-line report is the last commit before the first Phase 25 code commit, so this amendment and the plans are not counted.
+
+**D-10 (new, inherited from 24.5 D-17): retire the `host_setup` method kind.** pi moved to a bun method plus an executed pnpm `node` fallback, so `rg host_setup installer/registry.toml` finds nothing and the kind has no registry user.
+- Delete `installer/host_setup.py` (`HOST_SETUPS`, `HOST_SETUP_IDS`, `pnpm_add_command`) and every branch that exists only for it:
+  - `model.py`: the kind in the closed kinds set (:32), its `METHOD_PARAMS` entry (:71) and the `setup_id` validation (:812-814);
+  - `engine.py`: `_HANDOFF_KINDS` and the `host_setup` branch (:41, :161);
+  - `executors.py`: `host_setup_handoff` and the unused `host_setup_approval_disclosures` (:708-720);
+  - `update.py`: `host_setup_update_argv` and its two call sites (:270-276, :391, :445);
+  - `ownership.py`: `_HOST_SETUP_OWNERS`, `_host_setup_owner` and its dispatch (:139-140, :945, :1009-1027);
+  - `install_ownership.py`: `_host_setup` and its `"host-setup"` probe key (:94, :378);
+  - `resolve.py`: the `host_setup` rank and the list entry (:21, :73);
+  - `version_status.py:457`, `receipts.py:42` (`RECEIPTLESS_KINDS`), `catalog_audit.py:546`, and the doc comments in `session.py:52`, `post_install.py:15` and `enums.py:62`.
+- `InstallStatus.MANUAL_REQUIRED` stays, because native-package handoffs still use it (`engine.py:103`).
+- Behaviour after the change: a registry row that declares `kind = "host_setup"` is rejected by the closed-kind loader like any other unknown kind (18-01). No shipped row declares it.
+- Compatibility: the plan checks that a receipt, version-cache entry or ownership record written by an earlier host_setup install of pi is still read without a crash. pi installed through pnpm keeps resolving owner pnpm through the pnpm globals evidence (24.5).
+- Tests that exist only for the kind are deleted with it. Tests that use it as a sample kind switch to a live kind without weakening their assertion.
+
+**D-11 (new, inherited from 23.2 D-13 and 24.1 D-21): retire the empty sensitive-action machinery.** `SENSITIVE_POST_INSTALL_ACTIONS` is `()` and `SENSITIVE_PROMPTS` is `{}`. The comment at `post_install.py:110` already hands the sweep to Phase 25.
+- Delete:
+  - `ConfirmSensitiveAction`, `SensitivePrompt`, `SENSITIVE_PROMPTS` and `sensitive_prompt` (`post_install.py`), and the `confirm` parameter that every `PostInstallAction` receives only to `del` it;
+  - `SENSITIVE_POST_INSTALL_ACTIONS` and the loader field `default_enabled_sensitive_actions` (`model.py:145-147, :360-406, :837-871`);
+  - `SensitiveActionScreen`, `_ask_sensitive_action` and `_DISMISSAL_SENSITIVE` (`execute_screen.py:143`, :850);
+  - the `confirm_sensitive_action`/`confirm_sensitive` threading through `engine.py` (:176, :456), `session.py` (:31, :82, :208, :282, :297) and the test doubles.
+- The `.claude/architecture.md:779` paragraph on the sensitive-action confirmation is updated in the same plan.
+- No registry row declares `default_enabled_sensitive_actions`.
+- Behaviour is unchanged, because no action ever asks.
 </decisions>
 
 <canonical_refs>
