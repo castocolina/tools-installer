@@ -727,12 +727,12 @@ Plans:
 - **LEAN-03 (open).** `installer/wizard_app.py` is 4,438 lines (3,011 when scouted; Phase 22-24.x added `SchedulesScreen`, `CursorModelScreen` and more), with 28 classes and 512 comment lines. 23 lines carry `WR-`/`CR-`/`IN-` review ids and 88 match a wider id pattern. No split modules exist (`modals.py`, `doctor_screen.py`, ...). The 800-line cap now needs more modules than the five in 25-CONTEXT D-07 (`UninstallScreen` is ~980 lines, `PoliciesScreen` ~510, `SchedulesScreen` ~530, `UnifiedApp` ~760, `DoctorScreen` ~680). Review-id comments also sit in `setup.py` (16), `terminal_shell.py` (13), `schedules.py` (13), `ownership.py` (9), `uninstall.py` (8), `systemd_daemon.py` (8), `policy.py` (8); the requirement names only the split modules.
 - **LEAN-04 (open).** `execute_screen.py:431` builds `RichLog(id="execute-log", markup=False, highlight=False, auto_scroll=True)` with no `max_lines`; writes are scattered at `execute_screen.py:869-953`. No dropped-lines notice and no test exist.
 
-**Plans:** 11 plans
+**Plans:** 2/11 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 25-01-PLAN.md — Permanent AST import-reachability guard from setup.py and the Makefile entry modules, with lazy imports, typing-only imports, dispatch tables and a seeded orphan (wave 1)
-- [ ] 25-02-PLAN.md — Retire the `host_setup` method kind: loader rejects it, eleven modules and its tests cleaned, old records still read, docs and skill updated (wave 1)
+- [x] 25-01-PLAN.md — Permanent AST import-reachability guard from setup.py and the Makefile entry modules, with lazy imports, typing-only imports, dispatch tables and a seeded orphan (wave 1)
+- [x] 25-02-PLAN.md — Retire the `host_setup` method kind: loader rejects it, eleven modules and its tests cleaned, old records still read, docs and skill updated (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 25-03-PLAN.md — Retire the sensitive-action machinery: prompts cut at both entry points, threading and types deleted, retired loader key rejected, architecture doc updated (wave 2)
@@ -794,7 +794,7 @@ Plans:
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | Complete    | 2026-11-14 |
 | 24.2 Schedules view | 13/13 | Complete    | 2026-11-14 |
 | 24.3 Catalog audit skill | 11/11 | Complete    | 2026-11-14 |
-| 25. Lean | 0/11 | Planned | - |
+| 25. Lean | 2/11 | In Progress | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
 ## Backlog
