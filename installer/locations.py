@@ -124,6 +124,8 @@ def ensure_dir(directory: Path) -> Path:
 def prepend_path(directory: Path) -> None:
     """Put `directory` first on the process PATH, without duplicating it."""
     entry = str(directory)
+    if os.pathsep in entry:  # it would become two PATH entries
+        return
     parts = os.environ.get("PATH", "").split(os.pathsep)
     parts = [p for p in parts if p and p != entry]
     os.environ["PATH"] = os.pathsep.join([entry, *parts])

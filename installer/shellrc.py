@@ -50,8 +50,9 @@ def _resolve_home(path: Path, home: Path) -> Path:
     return path
 
 
-# path_export_guard writes a dir inside double quotes, unescaped; these break out of them.
-_SHELL_UNSAFE = frozenset('"$`\\\n')
+# path_export_guard writes a dir inside double quotes, unescaped; these break out of them, and
+# the path separator would turn one entry into two.
+_SHELL_UNSAFE = frozenset('"$`\\\n' + os.pathsep)
 
 
 def _shell_safe(directory: Path) -> bool:
@@ -105,17 +106,19 @@ def collect_bin_dirs(
         for method in resolve_methods(tool, platform):
             raw = method.params.get("bin_dir")
             if isinstance(raw, str) and raw:
-                add(Path(raw), require_exists=True)
+                candidate = _resolve_home(Path(raw), resolved_home)
             elif method.kind == "bun":
-                bun_bin = bun_dirs(home=resolved_home)[0]
-                if _shell_safe(bun_bin):
-                    add(bun_bin, require_exists=True)
-                elif bun_bin not in skipped and exists(bun_bin):
-                    # Skipped, not quoted: the guard below takes trusted paths only, and
-                    # BUN_INSTALL* is user environment. The engine still prepends it per run.
-                    skipped.add(bun_bin)
-                    if on_skip is not None:
-                        on_skip(bun_bin)
+                candidate = bun_dirs(home=resolved_home)[0]
+            else:
+                continue
+            if _shell_safe(candidate):
+                add(candidate, require_exists=True)
+            elif candidate not in skipped and exists(candidate):
+                # Skipped, not quoted: the guard below takes trusted paths only, and
+                # BUN_INSTALL* is user environment. The engine still prepends it per run.
+                skipped.add(candidate)
+                if on_skip is not None:
+                    on_skip(candidate)
     return dirs
 
 

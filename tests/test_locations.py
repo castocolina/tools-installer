@@ -185,6 +185,14 @@ def test_prepend_path_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert parts.count(str(tmp_path)) == 1
 
 
+def test_prepend_path_refuses_a_directory_holding_the_separator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    prepend_path(tmp_path / f"a{os.pathsep}b")  # would put two entries on PATH
+    assert os.environ["PATH"] == "/usr/bin"
+
+
 def test_prepend_path_drops_empty_entries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("PATH", "")
     prepend_path(tmp_path)

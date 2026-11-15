@@ -3439,7 +3439,7 @@ def test_collect_bin_dirs_wires_bun_bin_dir_when_it_exists(
     assert injected == [default, other / ".bun" / "bin"]
 
 
-@pytest.mark.parametrize("unsafe", ['"', "$(touch pwned)", "\x60", "\\", "\n"])
+@pytest.mark.parametrize("unsafe", ['"', "$(touch pwned)", "\x60", "\\", "\n", ":"])
 def test_collect_bin_dirs_skips_a_bun_dir_unsafe_for_the_shell(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, unsafe: str
 ) -> None:
@@ -3453,6 +3453,23 @@ def test_collect_bin_dirs_skips_a_bun_dir_unsafe_for_the_shell(
     assert result == [default]
     assert skipped == [bad]
     assert "pwned" not in managed_block(result)
+
+
+def test_collect_bin_dirs_skips_a_declared_bin_dir_unsafe_for_the_shell(tmp_path: Path) -> None:
+    default = tmp_path / "default"
+    home = tmp_path / "ho$me"
+    (home / ".bun" / "bin").mkdir(parents=True)
+    script_bun = Tool(
+        id="bun",
+        name="Bun",
+        category="runtime",
+        cmd="bun",
+        methods=(Method(kind="script", params={"url": "x", "bin_dir": "~/.bun/bin"}),),
+    )
+    skipped: list[Path] = []
+    result = collect_bin_dirs([script_bun], _PLATFORM, default, home=home, on_skip=skipped.append)
+    assert result == [default]
+    assert skipped == [home / ".bun" / "bin"]
 
 
 def test_collect_bin_dirs_screens_the_resolved_spelling_of_a_bun_dir(
