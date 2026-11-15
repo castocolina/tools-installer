@@ -69,3 +69,17 @@ Agent-run at HEAD c76a9e2b: Fedora 44 container `ti-uat-80x20-fedora` (`--init`,
 - **Owner-only:** none.
 
 Other note: a fresh HOME opens the link-mode modal over the System table first (`/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/80x20-after/00-start-system.txt`); it covers the table until answered. That is first-run behavior, not a layout gap.
+
+## Visual recheck 2026-11-15 (after 7e9f2edb)
+
+Agent-run at HEAD 1cc6953e in container `ti-uat-80x20b-fedora` (Fedora 44, `--init`, user tester, repo from `git archive HEAD`), wizard in tmux at exactly 80x20, `NO_COLOR=1`, fresh HOME. The first-run link-mode modal was answered with Enter (default: centralized) before any other key. Captures: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/80x20-after2/` (jev answers: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/rv80b-jev.out`).
+
+| Finding | Verdict | Evidence | jev (advisory) |
+| --- | --- | --- | --- |
+| R1: real Policies toggle scrolls the screen, cuts the tab bar, `End` scrolls the table away | resolved | `06c-toggle-5s.txt`, `06d-toggle-end.txt`, `06e-toggle-8s.txt`, `06f-toggle-home.txt` (Countdown helper on), `06g-toggle-back-5s.txt`, `06h-toggle-back-8s.txt` (off again). Tab bar whole to `[7] Schedules`, no screen scrollbar, five table rows stay in view, footer whole, status capped at 4 rows ending in `…`; `End` and `Home` change nothing visible. | typesafe resolved 0.83 (laya low, fallback) |
+| R3: Policies `Effect` column cut | resolved | `06-policies.txt`: every cut Effect cell ends in `…` | typesafe resolved 0.65 (needs_fallback, I decide) |
+| R3: Schedules detail panel cut | resolved | `07-schedules.txt`, `07b-schedules-down.txt`: last detail line ends in `…` for two selected rows | typesafe open-trivial 0.32 (needs_fallback; I decide resolved from the captures) |
+| No regression in other views | resolved | `01-system.txt`, `02-user.txt`, `03-ai.txt`, `04-doctor-top.txt`, `04b-doctor-down.txt`, `04c-doctor-end.txt`, `04d-doctor-home.txt`, `05-uninstall.txt`: tab bar and footer whole; the Doctor box scrolls inside itself | typesafe resolved 1.0 |
+| Residual: the 4-row status cap replaces the tail of the last sentence with `…` (for example the advice to open a new shell), unreadable at 80x20 | open-trivial | `06c-toggle-5s.txt`, `06g-toggle-back-5s.txt`. This is the intended cap from 7e9f2edb, and the outcome lines stay visible. | typesafe open-real 0.75; I disagree: no layout defect, only advice text clipped at the smallest size |
+
+Not re-captured: the removal confirm box (needs an installed removable tool; see the earlier section). Owner-only: none.

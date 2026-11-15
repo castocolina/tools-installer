@@ -4,7 +4,7 @@ verified: 2026-11-14T12:00:00Z
 status: passed
 score: 7/7 must-haves verified
 covered_files: [".claude/architecture.md",".claude/skills/tool-onboarding/SKILL.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-SUMMARY.md",".pre-commit-config.yaml","Makefile","docs/catalog-unsupported-tools.md","installer/agent_env.py","installer/agent_settings.py","installer/app.py","installer/cargo_distrobox.py","installer/desktop_entry.py","installer/download.py","installer/engine.py","installer/executors.py","installer/model.py","installer/ownership.py","installer/platform.py","installer/post_install.py","installer/postinstall.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/resolve.py","installer/run.py","installer/session.py","installer/terminal_shell.py","installer/uninstall.py","installer/update.py","installer/version_status.py","installer/versions.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","setup.py"]
-covered_digest: "v4:sha256:4183c6e575788b73d03907b5608bceb3bedc4379c1ed5c069485ded98bfdbd0d"
+covered_digest: "v4:sha256:7345ede519617456fe00fb8eacb4b5459733d177515ba568b470207192e1909d"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -24,6 +24,15 @@ re_verification:
     changed_files: ".claude/architecture.md .claude/skills/tool-onboarding/SKILL.md Makefile installer/app.py installer/engine.py installer/executors.py installer/model.py installer/ownership.py installer/registry.toml installer/render.py installer/resolve.py installer/session.py installer/uninstall.py installer/update.py installer/version_status.py installer/wizard_app.py scripts/container-e2e-verify.sh setup.py"
     dropped_covered_files: "none"
     must_haves: "re-checked: unchanged. later edits (24.1-24.5 engine/resolve/executors/registry/uninstall/render) are exercised by the 3 phase test files plus the full suite, all green; the onboarding skill and e2e contract are unchanged in intent."
+  refresh_2026_11_15b:
+    date: 2026-11-15
+    head: 1cc6953e
+    suite: "make validate && make test at HEAD 1cc6953e: 7679 passed, 6 skipped in 57.04s, coverage 96.09%"
+    phase_tests: "own test files from this report's evidence run with uv run pytest -n 0 --no-cov: all passed"
+    verified_commit: ed04c454
+    changed_files: "installer/wizard_app.py"
+    dropped_covered_files: "none"
+    must_haves: "re-checked: unchanged. 7e9f2edb and 42ed8cd4 (merge 1cc6953e) only cap the status line at four rows, end the Policies Effect column and the Schedules detail in an ellipsis, and move cut_rows/Rows into ui_common (installer/ui_common.py, tool_browser.py, wizard_app.py, tests/test_layout_80x20.py, tests/test_schedules_view.py); layout and status-line code only, no behavior contract changed; this phase's test files are green."
 prohibitions:
   - statement: "MUST NOT leave a Distrobox container or image after any build outcome"
     verification: test

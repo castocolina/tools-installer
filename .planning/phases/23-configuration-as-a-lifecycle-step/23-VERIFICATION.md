@@ -4,7 +4,7 @@ verified: 2026-11-07T12:00:00Z
 status: passed
 score: 6/6 must-haves verified
 covered_files: [".planning/phases/23-configuration-as-a-lifecycle-step/23-01-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-01-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-02-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-02-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-03-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-03-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-04-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-04-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-05-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-05-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-06-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-06-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-07-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-07-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-08-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-08-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-09-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-09-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-10-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-10-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-11-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-11-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-12-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-12-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-13-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-13-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-14-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-14-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-15-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-15-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-16-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-16-SUMMARY.md","installer/agent_env.py","installer/agent_settings.py","installer/app.py","installer/atomic.py","installer/engine.py","installer/env_redirect.py","installer/execute_screen.py","installer/locations.py","installer/model.py","installer/omz.py","installer/policy.py","installer/post_install.py","installer/postinstall.py","installer/prompt.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/run.py","installer/session.py","installer/shellrc.py","installer/terminal_shell.py","installer/tweaks.py","installer/uninstall.py","installer/update.py","installer/version_status.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","setup.py"]
-covered_digest: "v4:sha256:c2e3bb0d4efaca7e3040803c76f6a35c366ac8a205eec9273753376f63cec78c"
+covered_digest: "v4:sha256:5b5de0324395ebe09e07591b84e75567768dd04c3ac2eefa9fe59c40cc6d6a46"
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
@@ -41,6 +41,15 @@ re_verification:
     changed_files: "installer/app.py installer/shellrc.py installer/wizard_app.py"
     dropped_covered_files: "none"
     must_haves: "re-checked: unchanged. the strip_block blank-line fix (0e8cf604) and the uninstall PATH-entry fix (d113b87f) only change what is removed on uninstall; shellrc apply_block, the config lifecycle and its idempotence are unchanged (tests/test_shellrc.py and the 4 other files are green). the 80x20 layout fix (a8c37dc2) only reflowed widgets and added height guards."
+  refresh_2026_11_15b:
+    date: 2026-11-15
+    head: 1cc6953e
+    suite: "make validate && make test at HEAD 1cc6953e: 7679 passed, 6 skipped in 57.04s, coverage 96.09%"
+    phase_tests: "own test files from this report's evidence run with uv run pytest -n 0 --no-cov: all passed"
+    verified_commit: ed04c454
+    changed_files: "installer/wizard_app.py"
+    dropped_covered_files: "none"
+    must_haves: "re-checked: unchanged. 7e9f2edb and 42ed8cd4 (merge 1cc6953e) only cap the status line at four rows, end the Policies Effect column and the Schedules detail in an ellipsis, and move cut_rows/Rows into ui_common (installer/ui_common.py, tool_browser.py, wizard_app.py, tests/test_layout_80x20.py, tests/test_schedules_view.py); layout and status-line code only, no behavior contract changed; this phase's test files are green."
 human_verification:
   - test: "Run `make e2e` (Fedora podman, disposable container) on HEAD a30bb2f"
     expected: "Every TRACER_* line OK, including TRACER_HOOKS_RECORDED / TRACER_HOOKS_UNREGISTERED_OK and the TRACER_SETTINGS_* write/revert lines; the container is removed afterwards"

@@ -4,7 +4,7 @@ verified: 2026-11-03T21:30:00Z
 status: passed
 score: 5/5 must-haves verified
 covered_files: [".claude/architecture.md",".planning/phases/21-one-screen-family/21-01-PLAN.md",".planning/phases/21-one-screen-family/21-01-SUMMARY.md",".planning/phases/21-one-screen-family/21-02-PLAN.md",".planning/phases/21-one-screen-family/21-02-SUMMARY.md",".planning/phases/21-one-screen-family/21-03-PLAN.md",".planning/phases/21-one-screen-family/21-03-SUMMARY.md",".planning/phases/21-one-screen-family/21-04-PLAN.md",".planning/phases/21-one-screen-family/21-04-SUMMARY.md",".planning/phases/21-one-screen-family/21-05-PLAN.md",".planning/phases/21-one-screen-family/21-05-SUMMARY.md",".planning/phases/21-one-screen-family/21-06-PLAN.md",".planning/phases/21-one-screen-family/21-06-SUMMARY.md",".planning/phases/21-one-screen-family/21-07-PLAN.md",".planning/phases/21-one-screen-family/21-07-SUMMARY.md",".planning/phases/21-one-screen-family/21-08-PLAN.md",".planning/phases/21-one-screen-family/21-08-SUMMARY.md",".planning/phases/21-one-screen-family/21-09-PLAN.md",".planning/phases/21-one-screen-family/21-09-SUMMARY.md",".planning/phases/21-one-screen-family/21-10-PLAN.md",".planning/phases/21-one-screen-family/21-10-SUMMARY.md",".planning/phases/21-one-screen-family/21-11-PLAN.md",".planning/phases/21-one-screen-family/21-11-SUMMARY.md",".planning/phases/21-one-screen-family/21-12-PLAN.md",".planning/phases/21-one-screen-family/21-12-SUMMARY.md",".planning/phases/21-one-screen-family/21-13-PLAN.md",".planning/phases/21-one-screen-family/21-13-SUMMARY.md",".planning/phases/21-one-screen-family/21-14-PLAN.md",".planning/phases/21-one-screen-family/21-14-SUMMARY.md",".planning/phases/21-one-screen-family/21-15-PLAN.md",".planning/phases/21-one-screen-family/21-15-SUMMARY.md",".planning/phases/21-one-screen-family/21-16-PLAN.md",".planning/phases/21-one-screen-family/21-16-SUMMARY.md",".planning/phases/21-one-screen-family/21-17-PLAN.md",".planning/phases/21-one-screen-family/21-17-SUMMARY.md",".planning/phases/21-one-screen-family/21-18-PLAN.md",".planning/phases/21-one-screen-family/21-18-SUMMARY.md",".planning/phases/21-one-screen-family/21-19-PLAN.md",".planning/phases/21-one-screen-family/21-19-SUMMARY.md",".planning/phases/21-one-screen-family/21-20-PLAN.md",".planning/phases/21-one-screen-family/21-20-SUMMARY.md",".planning/phases/21-one-screen-family/21-21-PLAN.md",".planning/phases/21-one-screen-family/21-21-SUMMARY.md","installer/guidance.py","installer/uninstall.py","installer/wizard_app.py","tests/test_layout_80x20.py","tests/test_screen_family.py"]
-covered_digest: "v4:sha256:d762589a256003467c9886f860a4fea05beec9e6ab1cf28bf49f230e0d0259fa"
+covered_digest: "v4:sha256:68f980e3141f5149fca3db4db6d42c9dc2f077428bcfdce58f91ebd206029705"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -27,6 +27,15 @@ re_verification:
     changed_files: "installer/wizard_app.py tests/test_layout_80x20.py"
     dropped_covered_files: "none"
     must_haves: "re-checked: unchanged. a8c37dc2 changes wizard_app and the layout test; it narrows the 80x20 gaps this report recorded and keeps the single screen family (UI-01..08). tests/test_layout_80x20.py and the 6 other files are green."
+  refresh_2026_11_15b:
+    date: 2026-11-15
+    head: 1cc6953e
+    suite: "make validate && make test at HEAD 1cc6953e: 7679 passed, 6 skipped in 57.04s, coverage 96.09%"
+    phase_tests: "own test files from this report's evidence run with uv run pytest -n 0 --no-cov: all passed"
+    verified_commit: ed04c454
+    changed_files: "installer/wizard_app.py tests/test_layout_80x20.py"
+    dropped_covered_files: "none"
+    must_haves: "re-checked: unchanged. 7e9f2edb and 42ed8cd4 (merge 1cc6953e) only cap the status line at four rows, end the Policies Effect column and the Schedules detail in an ellipsis, and move cut_rows/Rows into ui_common (installer/ui_common.py, tool_browser.py, wizard_app.py, tests/test_layout_80x20.py, tests/test_schedules_view.py); layout and status-line code only, no behavior contract changed; this phase's test files are green."
 
 ---
 
