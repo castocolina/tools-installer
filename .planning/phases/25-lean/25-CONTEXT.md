@@ -129,7 +129,7 @@ Phases 17 to 24.5 ran after this file was written, so the facts under several lo
   - Tests that cover moved code may move into a per-module test file. They change only their import path, never an assertion.
   - The pilot safety net (`tests/test_layout_80x20.py`, `tests/test_screen_family.py`, `tests/test_wizard_app.py`) stays green at every intermediate commit.
 - **D-08 (intent kept: `max_lines=5000`, one write helper, a dropped-lines label above the log, newest line last).** The `RichLog` is at `execute_screen.py:431` with no `max_lines`. The writes are scattered over about :869-953. The plan re-locates every `#execute-log` write.
-- **D-09.** Unchanged. The "before" SHA for the net-line report is the last commit before the first Phase 25 code commit, so this amendment and the plans are not counted.
+- **D-09 (intent kept: the net-line report):** Unchanged. The "before" SHA for the net-line report is the last commit before the first Phase 25 code commit, so this amendment and the plans are not counted.
 
 **D-10 (new, inherited from 24.5 D-17): retire the `host_setup` method kind.** pi moved to a bun method plus an executed pnpm `node` fallback, so `rg host_setup installer/registry.toml` finds nothing and the kind has no registry user.
 - Delete `installer/host_setup.py` (`HOST_SETUPS`, `HOST_SETUP_IDS`, `pnpm_add_command`) and every branch that exists only for it:
