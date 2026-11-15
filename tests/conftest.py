@@ -239,8 +239,9 @@ def no_shell_location_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear inherited agent, toolchain and shell-location variables, and re-strip PATH.
 
     The names (`env_names_to_clear`) cover the developer's shell files (`$ZDOTDIR`, `$ZSH`),
-    absolute toolchain overrides into the real HOME (`PNPM_HOME`, `VOLTA_HOME`, the XDG
-    variables), agent config and tokens, and the `UV_`, `HOMEBREW_` and `npm_config_` families.
+    absolute toolchain overrides into the real HOME (`PNPM_HOME`, `VOLTA_HOME`, `BUN_INSTALL*`,
+    the XDG variables), agent config and tokens, and the `UV_`, `HOMEBREW_` and `npm_config_`
+    families.
     The PATH loses the real home, `/run/user` and linuxbrew bins, judged by resolved path
     (`/home` may symlink to `/var/home`); `sh`, `bash` and `zsh` stay runnable by name through
     the interpreter link dir. With `VOLTA_HOME` cleared, a Volta shim can reinvoke itself

@@ -1246,3 +1246,17 @@ def test_a_refusal_names_the_program_the_test_invoked(outside: Path) -> None:
     env = {"PATH": str(outside)}
     with pytest.raises(AssertionError, match=f"host's true at {target}"):
         check_launch(["true"], env=env, cwd=None, policy=launch_policy())
+
+
+def test_the_bun_tree_variables_are_cleared() -> None:
+    names = ("BUN_INSTALL", "BUN_INSTALL_BIN", "BUN_INSTALL_GLOBAL_DIR")
+    assert env_names_to_clear(dict.fromkeys(names, "x")) == names
+
+
+def test_bun_dirs_stay_under_the_scratch_home() -> None:
+    # A developer shell exports BUN_INSTALL=$HOME/.bun; the autouse env fixture must drop it.
+    from installer.bun_globals import bun_dirs
+
+    bin_dir, global_dir = bun_dirs()
+    assert bin_dir.is_relative_to(Path.home())
+    assert global_dir.is_relative_to(Path.home())

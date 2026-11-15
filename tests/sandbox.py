@@ -755,6 +755,9 @@ CLEARED_ENV_NAMES: frozenset[str] = frozenset(
         "ZSH",
         "PNPM_HOME",
         "VOLTA_HOME",
+        "BUN_INSTALL",
+        "BUN_INSTALL_BIN",
+        "BUN_INSTALL_GLOBAL_DIR",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
     }
