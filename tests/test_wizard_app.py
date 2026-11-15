@@ -56,6 +56,7 @@ from installer.rcclean import PathWriterLine
 from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError, Runner
 from installer.schedules import ReconcileReport
+from installer.schedules_screen import SchedulesScreen
 from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingProbe, CompetingUnit
@@ -78,7 +79,6 @@ from installer.wizard_app import (
     VIEW_ORDER,
     DoctorScreen,
     RefreshPublished,
-    SchedulesScreen,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,

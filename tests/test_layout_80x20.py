@@ -33,6 +33,7 @@ from installer.policy import (
     desktop_shell_policy,
 )
 from installer.resolve import resolve_methods
+from installer.schedules_screen import SchedulesScreen
 from installer.ui_common import (
     GLOBAL_NAV,
     VIEWS,
@@ -48,7 +49,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import SchedulesScreen, UnifiedApp, UninstallInputs, UninstallScreen
+from installer.wizard_app import UnifiedApp, UninstallInputs, UninstallScreen
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     HeldRefreshService,

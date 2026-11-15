@@ -36,12 +36,13 @@ from installer.schedules import (
     ScheduleRecord,
     update_state,
 )
+from installer.schedules_screen import SchedulesScreen
 from installer.session import Disposition, PlanRow, RowOutcome
 from installer.systemd_daemon import CompetingUnit
 from installer.systemd_daemon import decided as systemd_decided
 from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult
-from installer.wizard_app import SchedulesScreen, UnifiedApp
+from installer.wizard_app import UnifiedApp
 from tests import test_setup
 from tests.compose_patch import patch_composition
 from tests.screen_family import settle, wait_until

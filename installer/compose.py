@@ -67,6 +67,7 @@ from installer.run import (
     run_git_isolated,
 )
 from installer.schedules import ScheduleDefaultWarnings
+from installer.schedules_screen import ScheduleInputs
 from installer.settings import SettingsStore
 from installer.shellrc import ShellrcRefusal, has_managed_block
 from installer.status import is_installed
@@ -84,7 +85,7 @@ from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, probe_version_output, resolve_github_tag
-from installer.wizard_app import ScheduleInputs, UnifiedApp, UninstallInputs
+from installer.wizard_app import UnifiedApp, UninstallInputs
 
 # The private names setup.py imports back keep their names (D-05); listing them here is what
 # tells pyright they are this module's surface and not unused private functions.

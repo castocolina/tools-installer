@@ -19,7 +19,7 @@ from rich.cells import cell_len
 from textual.containers import Vertical
 from textual.widgets import DataTable, Input, Label, OptionList, Select, Static
 
-from installer import runlock, schedules, wizard_app
+from installer import runlock, schedules, schedules_screen, wizard_app
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import DaemonState, Severity
@@ -27,10 +27,11 @@ from installer.modals import CursorModelScreen, ScheduleTimeScreen
 from installer.model import Method, Tool
 from installer.policies_screen import PolicyInputs
 from installer.schedules import SCHEDULES
+from installer.schedules_screen import ScheduleInputs, SchedulesScreen
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, TimerStateCache
 from installer.ui_common import GLOBAL_NAV, VIEWS, FooterBar, WayfindingTab
 from installer.uninstall import SweepResult
-from installer.wizard_app import ScheduleInputs, SchedulesScreen, UnifiedApp, UninstallInputs
+from installer.wizard_app import UnifiedApp, UninstallInputs
 from tests.screen_family import settle
 from tests.test_schedules_engine import CLAUDE_BASENAME, Env, Install, make_env
 
@@ -587,7 +588,7 @@ async def test_a_user_action_clears_the_damage(
 async def test_refresh_every_30_seconds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
     schedules.turn_on(env.ctx, "update-claude")
-    monkeypatch.setitem(vars(wizard_app), "_REFRESH_SECONDS", 0.05)
+    monkeypatch.setattr(schedules_screen, "_REFRESH_SECONDS", 0.05)
     app = make_app(env, monkeypatch)
     async with app.run_test(size=(80, 20)) as pilot:
         screen = await open_schedules(app, pilot)
@@ -664,7 +665,7 @@ async def test_encoding_and_width(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         assert "[red]boom[/red]" in full
         assert "\x1b" not in full
         table = table_of(app)
-        widths = {key: width for key, _label, width in vars(wizard_app)["_SCHEDULE_COLUMNS"]}
+        widths = {key: width for key, _label, width in vars(schedules_screen)["_SCHEDULE_COLUMNS"]}
         for schedule in SCHEDULES:
             for column, width in widths.items():
                 assert cell_len(table.get_cell(schedule.id, column).plain) <= width
