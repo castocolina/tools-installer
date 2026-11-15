@@ -5448,3 +5448,110 @@ async def test_writes_replayed_after_the_first_resize_update_the_notice() -> Non
         assert _notice_shown(screen)
         assert str(_notice(screen).content) == "1 earlier line dropped"
         assert _log_text(screen).splitlines()[-1] == "line 5000"
+
+
+async def test_a_multi_line_write_counts_every_stored_line() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _show_log(screen, pilot)
+        log = _run_log(screen)
+        screen.write_log(*_numbered("line", 4999))
+        screen.write_log("first\nsecond\nthird")
+        assert len(log.lines) == 5000
+        assert log.dropped == 2
+        assert str(_notice(screen).content) == "2 earlier lines dropped"
+        assert _log_text(screen).splitlines()[-1] == "third"
+
+
+async def test_an_empty_write_at_the_bound_still_trims() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _show_log(screen, pilot)
+        log = _run_log(screen)
+        screen.write_log(*_numbered("line", 5000))
+        screen.write_log("")
+        assert len(log.lines) == 5000
+        assert log.dropped == 1
+        assert _notice_shown(screen)
+        assert str(_notice(screen).content) == "1 earlier line dropped"
+
+
+async def test_a_near_full_run_finished_report_updates_the_notice() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        await _show_log(screen, pilot)
+        log = _run_log(screen)
+        screen.write_log(*_numbered("line", 5000))
+        outcomes = [RowOutcome(PlanRow("rg", Disposition.INSTALL, ""), "crashed")]
+        screen.on_install_run_finished(
+            InstallRunFinished(outcomes, "run crashed", "wired one\nwired two", "audited")
+        )
+        await pilot.pause()
+        assert len(log.lines) == 5000
+        assert log.dropped >= 6
+        assert str(_notice(screen).content) == installer.execute_screen.dropped_notice(log.dropped)
+        assert _log_text(screen).splitlines()[-1] == "run crashed"
+
+
+async def test_the_80x20_running_layout_shows_the_notice_above_a_visible_log() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    rg = _tool("rg")
+
+    def held_install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+        tools: Mapping[str, Tool] | None = None,
+        repair: bool = False,
+    ) -> InstallOutcome:
+        del platform, runner, resolve_tag, checksum_policy, tools, repair
+        started.set()
+        assert release.wait(timeout=5)
+        return InstallOutcome(tool.id, InstallStatus.INSTALLED)
+
+    inputs = _inputs(
+        tools=[rg], install=held_install, states=[plan_state(rg, health=Health.MISSING)]
+    )
+    app = _host(inputs, [rg])
+    async with app.run_test(size=(80, 20)) as pilot:
+        try:
+            app.push_screen(ExecuteScreen([rg.id], inputs))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecuteScreen)
+            await pilot.press("enter")
+            for _ in range(400):
+                if started.is_set():
+                    break
+                await pilot.pause()
+            assert started.is_set()
+            screen.write_log(*_numbered("line", 5001))
+            notice = _notice(screen)
+            log = _run_log(screen)
+            rows = screen.query_one("#plan-rows", OptionList)
+            await wait_until(pilot, lambda: notice.region.height == 1)
+            assert notice.region.y + 1 == log.region.y
+            assert log.region.height >= 5
+            assert rows.region.height <= 8
+        finally:
+            release.set()
+        await _settle_execute(screen, pilot)
