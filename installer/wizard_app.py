@@ -330,14 +330,6 @@ class ScheduleManagerProbed(Message):
         super().__init__()
 
 
-class _BodyStatic(Static):
-    """Static with a small public render seam for headless tests."""
-
-    @property
-    def renderable(self) -> Any:
-        return self.render()
-
-
 _DOCTOR_READ_ERROR = "Could not read the doctor state: "
 
 
@@ -500,7 +492,7 @@ class DoctorScreen(AppScreen):
 
     def compose_body(self) -> ComposeResult:
         with VerticalScroll(id="doctor-scroll"):
-            yield _BodyStatic(id="doctor-body")
+            yield Static(id="doctor-body")
 
     def enter_view(self) -> None:
         """Re-read the live state on every entry, and re-ask pnpm off the loop.
@@ -612,7 +604,7 @@ class DoctorScreen(AppScreen):
         # body may already be gone (the 765c0e5 shutdown race).
         if not self.app.is_running:
             return
-        body = self.query_one("#doctor-body", _BodyStatic)
+        body = self.query_one("#doctor-body", Static)
         text = Text()
         text.append("PATH Doctor\n", style="bold")
         text.append("Audit\n", style="bold")
