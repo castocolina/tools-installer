@@ -23,17 +23,16 @@ from installer import runlock, schedules, wizard_app
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
 from installer.enums import DaemonState, Severity
+from installer.modals import CursorModelScreen, ScheduleTimeScreen
 from installer.model import Method, Tool
 from installer.schedules import SCHEDULES
 from installer.systemd_daemon import SCOPE_SYSTEM, CompetingUnit, TimerStateCache
 from installer.ui_common import GLOBAL_NAV, VIEWS, FooterBar, WayfindingTab
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
-    CursorModelScreen,
     PolicyInputs,
     ScheduleInputs,
     SchedulesScreen,
-    ScheduleTimeScreen,
     UnifiedApp,
     UninstallInputs,
 )

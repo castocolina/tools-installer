@@ -2235,7 +2235,7 @@ async def test_invalid_settings_file_launches_to_the_first_screen_with_a_warning
     del case_id
     from textual.screen import Screen
 
-    from installer.wizard_app import LinkModeScreen
+    from installer.modals import LinkModeScreen
 
     _hermetic_route(monkeypatch, tmp_path)
     path = tmp_path / "settings.json"

@@ -14,6 +14,7 @@ from textual.widgets import DataTable
 from installer.catalog_tui import RefreshRequested
 from installer.doctor import DoctorReport
 from installer.enums import Severity
+from installer.modals import LinkModeScreen
 from installer.model import Method, Tool
 from installer.policy import (
     Policy,
@@ -25,7 +26,6 @@ from installer.tweaks import BUNDLES, TweakBundle, shell_init_bundle, tweak_pres
 from installer.ui_common import VIEW_BY_NAME, FooterBar, highlighted_key
 from installer.uninstall import SweepResult
 from installer.wizard_app import (
-    LinkModeScreen,
     PoliciesScreen,
     PolicyInputs,
     UnifiedApp,

@@ -23,6 +23,7 @@ from textual.widgets import DataTable, Rule, Static
 
 from installer.enums import Severity
 from installer.run import CommandError
+from installer.sanitize import sanitize_log_line
 from installer.shellrc import ShellrcRefusal
 
 T = TypeVar("T")
@@ -441,3 +442,12 @@ class AppScreen(Screen[None]):
         yield from self.compose_body()
         yield self.status
         yield FooterBar(self._view)
+
+
+TIMES_LISTED = 8  # more slots than this are shown as a compressed range
+
+
+def sentence(text: str) -> str:
+    """The first line of `text` as one sentence with a single closing period."""
+    lines = sanitize_log_line(text).strip().splitlines()
+    return f"{(lines[0] if lines else 'unknown error').rstrip('.')}."

@@ -21,6 +21,7 @@ from textual.widgets import DataTable, Rule, Static
 from installer.app import UninstallDecision
 from installer.doctor import DoctorReport
 from installer.enums import MutationHolder
+from installer.modals import ConfirmUninstall
 from installer.model import Method, Tool, load_categories, load_tools
 from installer.platform import Platform
 from installer.pnpm_globals import NodeGlobalsReport
@@ -47,7 +48,6 @@ from installer.version_status import (
     VersionStatus,
 )
 from installer.wizard_app import (
-    ConfirmUninstall,
     PoliciesScreen,
     PolicyInputs,
     SchedulesScreen,

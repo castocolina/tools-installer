@@ -35,6 +35,7 @@ from installer.guidance import (
 )
 from installer.legacy_guard import SHIM_SENTINEL
 from installer.manager_versions import OutdatedReport
+from installer.modals import ConfirmUninstall, LinkModeScreen, NavScreen
 from installer.model import Method, Tool
 from installer.mutation_lock import MutationLock
 from installer.ownership import (
@@ -75,11 +76,8 @@ from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
     CompetingProbe,
-    ConfirmUninstall,
     DiskPressureProbe,
     DoctorScreen,
-    LinkModeScreen,
-    NavScreen,
     PoliciesScreen,
     PolicyInputs,
     RefreshPublished,
@@ -485,7 +483,7 @@ async def _ready_doctor(app: App[None], pilot: Pilot[None]) -> DoctorScreen:
 
 
 def _guard_modal_text(screen: object) -> str:
-    from installer.wizard_app import ConfirmGuardFile
+    from installer.modals import ConfirmGuardFile
 
     assert isinstance(screen, ConfirmGuardFile)
     rendered = str(screen.query_one(Static).render())
