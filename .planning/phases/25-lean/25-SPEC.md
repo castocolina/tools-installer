@@ -73,6 +73,16 @@ Scouted 2026-10-13:
    - Target: The count is reported, with no minimum (decision).
    - Acceptance: CI is green on ubuntu and macOS. The summary carries the measured net count and the before/after commit SHAs.
 
+### Amendment 2026-11-15 (pre-plan re-measure, orchestrator)
+
+This amendment reconciles the requirements with `25-CONTEXT.md`'s amendment of the same date and with the Pre-phase check under Phase 25 in `.planning/ROADMAP.md`. The WHAT is unchanged. Only the target lists and the measured facts move.
+- **Background.** The 2026-10-13 figures are superseded by these HEAD 572d30fd figures: `setup.py` is 1,489 lines, `_build_app` is at :743, `wizard_app.py` is 4,438 lines with 28 classes, and the `RichLog` is at `execute_screen.py:431`.
+- **R1.** Several targets are already deleted and are reported in the summary as such: `audit.py`, the agent policy modules, the questionary chooser and the dead `Tool` fields. `agent_env.py` and `app._choose_tools` are live and are listed with their callers. R1 gains two inherited targets, with the same "zero production callers" rule:
+  - the `host_setup` method kind: `installer/host_setup.py`, `HOST_SETUPS`, its ownership probe and `update.py`'s branch (24.5 D-17, ROADMAP SC1 amendment);
+  - the empty sensitive-action machinery: `ConfirmSensitiveAction`, `SensitiveActionScreen` and the loader field `default_enabled_sensitive_actions` (23.2 D-13, 24.1 D-21).
+  - A registry row that declares the retired kind or field is then rejected at load like any unknown key. No shipped row declares either one, so shipped behaviour is unchanged.
+- **R3.** "One module per screen, one for modals, one for the app class" now needs sibling modules: the uninstall screen class alone is about 870 lines and the app class about 762 plus imports. The 800-line cap per file is unchanged. Siblings that hold a screen's inputs, pure helpers or the app's mutation lock count as part of the split, and each is under the same cap and the same review-ID grep. 25-CONTEXT D-07 (amended) names the set.
+
 ## Boundaries
 
 **In scope:**
