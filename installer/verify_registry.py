@@ -180,7 +180,6 @@ class _TargetIdentity:
     expected_sha256: str | None
     registry_pin: str | None
     repo: str | None
-    release_tag: str | None
 
 
 def _runner_never_called(cmd: list[str]) -> None:
@@ -373,7 +372,6 @@ def _collect_targets(
                         if method.kind == "app":
                             target = _resolve_app_target(method)
                             repo = None
-                            tag = None
                         else:
                             ctx = ExecContext(
                                 runner=_runner_never_called,
@@ -386,7 +384,6 @@ def _collect_targets(
                                 if method.kind == "github_release"
                                 else None
                             )
-                            tag = release(repo).tag if repo else None
                     except VersionError as exc:
                         if method.kind == "github_release":
                             repo = require_str(method, "repo")
@@ -445,7 +442,6 @@ def _collect_targets(
                             expected_sha256=target.sha256,
                             registry_pin=registry_pin,
                             repo=repo,
-                            release_tag=tag,
                         )
     return list(grouped.values())
 
