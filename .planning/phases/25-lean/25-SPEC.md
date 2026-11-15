@@ -82,6 +82,7 @@ This amendment reconciles the requirements with `25-CONTEXT.md`'s amendment of t
   - the empty sensitive-action machinery: `ConfirmSensitiveAction`, `SensitiveActionScreen` and the loader field `default_enabled_sensitive_actions` (23.2 D-13, 24.1 D-21).
   - A registry row that declares the retired kind or field is then rejected at load like any unknown key. No shipped row declares either one, so shipped behaviour is unchanged.
 - **R3.** "One module per screen, one for modals, one for the app class" now needs sibling modules: the uninstall screen class alone is about 870 lines and the app class about 762 plus imports. The 800-line cap per file is unchanged. Siblings that hold a screen's inputs, pure helpers or the app's mutation lock count as part of the split, and each is under the same cap and the same review-ID grep. 25-CONTEXT D-07 (amended) names the set.
+- **R3 acceptance "CLI `--all`/`--categories` test files are byte-identical".** `tests/test_cli.py` stays byte-identical. In `tests/test_setup.py`, the `--all`/`--categories` tests keep every assertion byte-identical, and only import and monkeypatch-target lines change (25-CONTEXT D-12).
 
 ## Boundaries
 

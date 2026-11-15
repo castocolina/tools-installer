@@ -155,6 +155,12 @@ Phases 17 to 24.5 ran after this file was written, so the facts under several lo
 - The `.claude/architecture.md:779` paragraph on the sensitive-action confirmation is updated in the same plan.
 - No registry row declares `default_enabled_sensitive_actions`.
 - Behaviour is unchanged, because no action ever asks.
+
+**D-12 (new, 2026-11-15 after 25-RESEARCH): what "the CLI `--all`/`--categories` test files are byte-identical" means.** Read literally, SPEC R3 cannot be met. LEAN-02 moves composition names out of `setup`, so `tests/test_setup.py` must retarget imports and monkeypatches. D-11 also changes `tests/test_app.py`. Best over easy: keep the intent, which is that no assertion about the CLI flags changes.
+- `tests/test_cli.py` (the flag parser) stays byte-identical.
+- In `tests/test_setup.py`, every test that exercises `--all` or `--categories` keeps every `assert` line and every expected value byte-identical. Only import lines, module-object references and monkeypatch targets may change.
+- A guard in the phase-gate plan diffs those tests against the pre-phase SHA and fails on any removed or changed `assert` line.
+- D-08 wording: the notice reads "1 earlier line dropped" for one dropped line and "N earlier lines dropped" otherwise.
 </decisions>
 
 <canonical_refs>
