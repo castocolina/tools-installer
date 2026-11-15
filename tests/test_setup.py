@@ -31,6 +31,7 @@ from installer import (
 from installer.app import UninstallDecision
 from installer.catalog_tui import ToolUpdated
 from installer.diskusage import DiskPressure
+from installer.doctor_screen import DoctorScreen
 from installer.engine import InstallOutcome
 from installer.enums import DaemonState, Severity
 from installer.execute_screen import ExecuteInputs
@@ -62,7 +63,6 @@ from installer.update import UpdateOutcome, UpdateService, UpdateTarget
 from installer.version_status import Health, VersionRefreshService
 from installer.wizard_app import (
     BASE_VIEW,
-    DoctorScreen,
     ExecuteScreen,
     UnifiedApp,
     UninstallInputs,

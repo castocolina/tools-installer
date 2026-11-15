@@ -18,6 +18,7 @@ from installer.app import UninstallDecision, perform_uninstall
 from installer.catalog_tui import CatalogScreen, RefreshRequested, health_cell
 from installer.diskusage import DiskPressure, DiskPressureProbe
 from installer.doctor import DoctorReport
+from installer.doctor_screen import DoctorScreen
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import DaemonState, MutationHolder, Severity
 from installer.execute_screen import (
@@ -77,7 +78,6 @@ from installer.version_status import (
 from installer.versions import TagResolver, VersionError
 from installer.wizard_app import (
     VIEW_ORDER,
-    DoctorScreen,
     RefreshPublished,
     UnifiedApp,
     UninstallInputs,

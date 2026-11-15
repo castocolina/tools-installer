@@ -17,6 +17,8 @@ from installer.app import UninstallDecision
 from installer.catalog_tui import CatalogScreen
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
+from installer.doctor_messages import DiskPressureProbed, GlobalsReinstalled
+from installer.doctor_screen import DoctorScreen
 from installer.engine import InstallOutcome
 from installer.enums import MutationHolder, Severity
 from installer.execute_screen import ExecuteInputs, ExecuteScreen
@@ -47,9 +49,6 @@ from installer.version_status import (
     VersionStatus,
 )
 from installer.wizard_app import (
-    DiskPressureProbed,
-    DoctorScreen,
-    GlobalsReinstalled,
     RefreshPublished,
     ScheduleDefaultsApplied,
     UnifiedApp,
