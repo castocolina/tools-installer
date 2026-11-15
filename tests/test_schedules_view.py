@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 from rich.cells import cell_len
-from rich.text import Text
 from textual.containers import Vertical
 from textual.widgets import DataTable, Input, Label, OptionList, Select, Static
 
@@ -666,11 +665,10 @@ async def test_encoding_and_width(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         screen = await open_schedules(app, pilot)
         await move_to(pilot, screen, "update-claude")
         detail = screen.query_one("#schedule-detail", Static)
-        content = detail.content
-        assert isinstance(content, Text)
-        assert str(odd / "runner.py") in content.plain
-        assert "[red]boom[/red]" in content.plain
-        assert "\x1b" not in content.plain
+        full = screen.detail_text  # the panel paints it cut to its rows, with `…`
+        assert str(odd / "runner.py") in full
+        assert "[red]boom[/red]" in full
+        assert "\x1b" not in full
         table = table_of(app)
         widths = {key: width for key, _label, width in vars(wizard_app)["_SCHEDULE_COLUMNS"]}
         for schedule in SCHEDULES:

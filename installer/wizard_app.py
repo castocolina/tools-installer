@@ -31,6 +31,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Input, Label, ListItem, ListView, OptionList, Select, Static
+from textual.widgets.data_table import ColumnKey
 from textual.widgets.option_list import Option
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
@@ -107,6 +108,7 @@ from installer.ui_common import (
     VIEW_ORDER,
     VIEWS,
     AppScreen,
+    Rows,
     WayfindingHeader,
     highlighted_key,
     mark,
@@ -2215,15 +2217,38 @@ class PoliciesScreen(AppScreen):
         table.add_column("Requires", key="requires")
         table.add_column("Effect", key="effect")
         for policy in self._policies:
-            effect_kind = policy.effect_kind or "shell config"
             table.add_row(
                 Text(""),
                 Text(policy.label, style="bold yellow"),
                 Text(""),
-                Text(f"{effect_kind}: {policy.description}", style="dim"),
+                Text(self._effect_text(policy), style="dim"),
                 key=policy.id,
             )
         table.focus()
+        self.call_after_refresh(self._fit_effect)  # the table has its width after first layout
+
+    @staticmethod
+    def _effect_text(policy: Policy) -> str:
+        return f"{policy.effect_kind or 'shell config'}: {policy.description}"
+
+    def _fit_effect(self) -> None:
+        """Give the Effect column the width the others leave (less the scrollbar), its cells
+        ending in `…` where cut, as the catalog tables do."""
+        table = self.query_one(DataTable[Any])
+        if not self.is_mounted or table.size.width == 0:
+            return
+        others = sum(
+            table.columns[ColumnKey(key)].get_render_width(table) for key in _POLICY_FIXED_COLUMNS
+        )
+        column = table.columns[ColumnKey("effect")]
+        column.auto_width = False
+        column.width = max(table.size.width - 2 - others - 2, _POLICY_EFFECT_FLOOR)
+        for policy in self._policies:
+            cell = Text(_fit(self._effect_text(policy), column.width), style="dim")
+            table.update_cell(policy.id, "effect", cell)
+
+    def on_resize(self) -> None:
+        self._fit_effect()
 
     def _refresh_link_mode_line(self) -> None:
         line = self.query_one("#link-mode-line", Static)
@@ -2580,6 +2605,8 @@ def _link_mode_status(
 
 _STILL_CHECKING = "Still checking for a user timer manager; try again in a moment."
 _REFRESH_SECONDS = 30
+_POLICY_FIXED_COLUMNS = ("state", "policy", "requires")
+_POLICY_EFFECT_FLOOR = 12
 _SCHEDULE_COLUMNS = (
     ("schedule", "Schedule", 13),
     ("target", "Target", 12),
@@ -2866,7 +2893,13 @@ class SchedulesScreen(AppScreen):
     def _set_detail(self) -> None:
         schedule = self._highlighted_schedule()
         self.detail_text = "" if schedule is None else self._detail(schedule)
-        self.query_one("#schedule-detail", Static).update(Text(self.detail_text))
+        detail = self.query_one("#schedule-detail", Static)
+        # The panel keeps the rows it has; the last one ends in `…` when text is cut.
+        detail.update(Rows(Text(self.detail_text), max(detail.size.height, 1)))
+
+    def on_resize(self) -> None:
+        if self.is_mounted:
+            self._set_detail()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         del event  # the highlighted row is read back from the table

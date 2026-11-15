@@ -50,6 +50,7 @@ from installer.wizard_app import (
     ConfirmUninstall,
     PoliciesScreen,
     PolicyInputs,
+    SchedulesScreen,
     UnifiedApp,
     UninstallInputs,
     UninstallScreen,
@@ -845,3 +846,29 @@ async def test_a_long_status_never_scrolls_the_policies_screen_at_80x20(tmp_path
             assert tab.region.right <= 80, (tab.id, tab.region)
         assert rows_of(screen, table)
         _assert_chrome(screen)
+
+
+async def test_the_policies_effect_column_ends_in_an_ellipsis_at_80_columns(
+    tmp_path: Path,
+) -> None:
+    """Visual-acceptance R3: the Effect cell is cut with `…`, not at the last column."""
+    app = _app(tmp_path, policies=_new_policy_rows(tmp_path))
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "policies")
+        table = screen.query_one(DataTable[Any])
+        await wait_until(pilot, lambda: _table_lines(table)[1].rstrip().endswith("…"))
+
+
+async def test_the_schedules_detail_ends_in_an_ellipsis_when_it_is_cut_at_80x20(
+    tmp_path: Path,
+) -> None:
+    """Visual-acceptance R3: the detail panel keeps its rows and the last one ends in `…`."""
+    app = _app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await _open(app, pilot, "schedules")
+        assert isinstance(screen, SchedulesScreen)
+        detail = screen.query_one("#schedule-detail", Static)
+        rows = detail.size.height
+        assert len(list(Text(screen.detail_text).wrap(Console(width=78), 78))) > rows
+        last = detail.render_lines(Region(0, rows - 1, detail.size.width, 1))[0].text
+        assert last.rstrip().endswith("…"), last
