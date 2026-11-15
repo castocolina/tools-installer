@@ -759,6 +759,8 @@ Plans:
 
 ### Phase 999.1: Install selection lifecycle: show every direct selection in the Install review with an explicit disposition (will install / already installed / unavailable / blocked), keep each dragged dependency tied to the dependent that pulled it in, and after an install keep only the selections that still need action (clear succeeded/already-satisfied, retain failed/skipped/cancelled/unavailable/blocked) (BACKLOG)
 
+**Status (2026-11-15):** resolved by Phases 20 and 21 — 20-VERIFICATION PLAN-01..05 (dispositions, `r` reinstall, retained selection, `esc` keeps it) and 21-VERIFICATION UI-08 (prune on reload) are satisfied; tests/test_session.py::test_remove_failed_is_retained_and_removed_is_not passes.
+
 **Goal:** [Captured for future planning]
 **Source:** abandoned branch `feat/catalog-reliability-scope-reduction` (tip d8a3123, Jul 2026); plan text preserved in `999.1-*/source/`. HEAD already has the SDKMAN-only JVM methods, the cached version status and Phase 14's explicit "outdated tool is not silently skipped" behavior; the dispositions model (`PlanDisposition` in the branch's `install_plan.py`) and retained-selection semantics have no equivalent in HEAD (`rg PlanDisposition` = 0 hits).
 **Also covers (2026-10-10 real-host audit, NOT fixed):** (a) a staged selection survives an Uninstall — `UnifiedApp._staged` is cleared only in `_install_closed` (`installer/wizard_app.py`), so a tool removed in Uninstall comes back to the catalog still selected for install; (b) an "already current" tool (wezterm) is selectable but there is no way to reinstall/repair it from the catalog — the run reports "already" and does nothing, and the terminal sync does not re-run (see 999.4).
@@ -775,6 +777,8 @@ Plans:
 
 ### Phase 999.2: Installer receipts as direct-artifact ownership proof: record what this installer wrote (artifact path + checksum/receipt) so ownership of a script/download-installed tool is proven by a receipt instead of inferred "by elimination" (BACKLOG)
 
+**Status (2026-11-15):** resolved by Phases 19 and 22 — `installer/receipts.py`; 19-VERIFICATION STATE-03 and 22-VERIFICATION LIFE-01/LIFE-03 are satisfied; tests/test_receipts.py passes.
+
 **Goal:** [Captured for future planning]
 **Source:** abandoned branch `feat/catalog-reliability-scope-reduction` (`installer/receipts.py` / `ReceiptStore`); plan text preserved in `999.2-*/source/`. Phase 16 resolves ownership from the filesystem and never considered receipts (no mention in 16-CONTEXT/RESEARCH); `rg ReceiptStore` = 0 hits in HEAD.
 **Before planning:** decide whether Phase 16's filesystem-only attribution already makes this unnecessary; high conflict risk with `installer/ownership.py`, so evaluate after Phase 16 ships and its human UAT passes.
@@ -789,6 +793,8 @@ Plans:
 
 ### Phase 999.3: Registry can express a different artifact per OS and per arch: a `.dmg`/cask on macOS vs a vendor script or tarball on Linux, distinct per-arch assets, without bending an unrelated method kind (BACKLOG)
 
+**Status (2026-11-15):** resolved by Phase 18 (narrowed, no new method kind) — the 2026-10-13 audit narrowed it to data fixes (18-VERIFICATION REG-09), `app` and `tarball` already take os/arch and `{ver}`, and Alacritty's Distrobox route shipped in Phase 24 (`installer/cargo_distrobox.py`); brew on Intel macOS is tracked in 999.15.
+
 **Goal:** [Captured for future planning]
 **Source:** 2026-10-10 real-host audit (kitty: cask on macOS, `installer.sh` on Linux; tools shipping distinct per-OS/arch artifacts not behind a script). `Method` carries `os`/`arch` params, but a per-platform artifact that is neither a `github_release` asset pattern nor a script has no method kind.
 **Before planning:** inventory which of the 90 entries already fake this with multiple methods, and research vendor artifact shapes per OS/arch before designing any schema change; `.claude/skills/tool-onboarding/SKILL.md` step 3 routes such tools here.
@@ -801,6 +807,8 @@ Plans:
 **Absorbed by:** Phase 18 (v0.50.0)
 
 ### Phase 999.4: Terminal shell sync follow-ups: export `SHELL` to the configured zsh inside kitty/WezTerm, and re-run the terminal sync when an install run reports the terminal as "already" present (BACKLOG)
+
+**Status (2026-11-15):** resolved by Phases 20 and 23 — 23-VERIFICATION CONF-05 (managed `~/.zshenv` exports `SHELL`) and RECONFIGURE steps run the terminal sync for already-present terminals (`installer/session.py` terminal_sync step); tests/test_terminal_shell.py zshenv tests pass.
 
 **Goal:** [Captured for future planning]
 **Source:** 2026-10-10 real-host audit. Inside kitty the prompt is zsh but `echo $SHELL` prints `/bin/bash`: there is no `chsh` (by design, Phase 15.6), and `installer/terminal_shell.py` sets kitty `shell`/WezTerm `default_prog` without `env SHELL=` / `set_environment_variables`. The sync runs only when `Summary.installed` is non-empty (`_install_state_changed`), so selecting an already-present wezterm never re-applies it.
@@ -815,6 +823,8 @@ Plans:
 
 ### Phase 999.5: Finish the tool-onboarding skill revision with skill-judge: score `.claude/skills/tool-onboarding/SKILL.md` and apply its findings so the skill is well defined (BACKLOG)
 
+**Status (2026-11-15):** resolved by Phase 24 — 24-VERIFICATION ONB-03 satisfied; `24-SKILL-JUDGE.md` records 84 to 86 of 125.
+
 **Goal:** [Captured for future planning]
 **Source:** user request 2026-10-10 after the skill was generalized in 41d642c (research-first, per-OS/arch artifacts, customization questions, "the skill cannot promise what the platform does not do"). The rewrite was never evaluated.
 **Before planning:** run the `skill-judge` skill as the LAST step of any change to this skill (now and in future revisions); act on low-scoring dimensions (knowledge delta, NEVER list, description triggers, freedom calibration) without adding promises the platform cannot keep — anything that needs a missing capability stays routed to 999.2/999.3/999.4.
@@ -827,6 +837,8 @@ Plans:
 **Absorbed by:** Phase 24 (v0.50.0)
 
 ### Phase 999.6: One row-state model instead of three disagreeing classifiers, plus the earlier-phase promises the 2026-10-10 audit found unmet (BACKLOG)
+
+**Status (2026-11-15):** resolved by Phases 19 and 21 — `ToolState` in `installer/version_status.py`; 19-VERIFICATION STATE-01..07 and 21-VERIFICATION UI-01..03 are satisfied.
 
 **Goal:** [Captured for future planning]
 **Source:** 2026-10-10 real-host report ("siguen los mismos vicios, es como que no se reusan los componentes") and the ponytail audit of it.
@@ -869,6 +881,8 @@ Plans:
 
 ### Phase 999.8: Per-method uninstall spec: each install method declares how it is removed on its OS/arch (manager remove, vendor uninstaller/script, or the exact paths it wrote), what config/data it leaves, and the removal policy (keep config by default, delete all, or ask), replacing today's generic Uninstall (BACKLOG)
 
+**Status (2026-11-15):** resolved by Phase 22 — `plan_removal` and `remove_proven` in `installer/uninstall.py`; 22-VERIFICATION LIFE-01/03/04 and UI-04, 17-VERIFICATION SAFE-03; tests/test_app.py::test_a_recipe_tool_is_removed_by_its_vendor_command_first passes. Per-entry removal footprints stay in 999.14.
+
 **Goal:** [Captured for future planning]
 **Source:** user direction 2026-10-11: onboarding must know how each tool is removed per OS/arch (e.g. kitty: cask on macOS, `installer.sh` on Linux with `~/.local/kitty.app` + `~/.local/bin` links + desktop files), with a verifying removal script or a keep-config / delete-all choice, or a silent documented default — never a generic uninstall. Today `Tool.uninstall` is one free-text hint (3 of 90 tools set it) and `installer/uninstall.py` `plan_uninstall` treats download/app kinds generically.
 **Evidence (2026-10-11 ponytail audit, `.planning/research/2026-10-11-ponytail-audit.md`):** F1 — Uninstall calls a tool removable when a file with the expected name exists: it would delete a `uv tool` ruff symlink; `drawio-desktop` and `drawio-cli` share one file so removing one removes the other; `make uninstall --yes` deletes them all without asking. F7 — install and uninstall compute paths with different formulas (Sublime on Linux reports "Removed" and leaves `~/.local/opt/subl`).
@@ -890,6 +904,8 @@ Plans:
 **Absorbed by:** Phase 22 (v0.50.0)
 
 ### Phase 999.9: Correctness and data-safety fixes from the 2026-10-11 ponytail audit not covered by another item (BACKLOG)
+
+**Status (2026-11-15):** resolved by Phases 17 and 21 — 17-VERIFICATION SAFE-04 (atomic rc writes) and SAFE-09 (every route executes); 21-VERIFICATION UI-05/06/07 (removal worker, live Policies, Doctor `a` removed).
 
 **Goal:** [Captured for future planning]
 **Source:** `.planning/research/2026-10-11-ponytail-audit.md` (ponytail-audit at ultra level, Opus). Findings marked probe-confirmed were reproduced headless by the auditor; the rest come from reading code and must be re-verified when planned.
@@ -928,6 +944,8 @@ Plans:
 **Absorbed by:** Phases 21 and 25 (v0.50.0)
 
 ### Phase 999.11: Onboard herdr and re-onboard Alacritty through the tool-onboarding skill (install AND removal per OS/arch, no-reboot path on Bazzite, user customizations) (BACKLOG)
+
+**Status (2026-11-15):** resolved by Phases 23 and 24 — 24-VERIFICATION ONB-01 (herdr plus integrations hook), ONB-02/06/07 (Alacritty via cargo in Distrobox, zsh sync, keybindings) satisfied, with real-host UAT tests 6-8 passing.
 
 **Goal:** [Captured for future planning]
 **Source:** user request 2026-10-13. Neither tool had a phase: herdr is absent from the registry; Alacritty entered outside any phase (commit 102c83e, 2026-10-09) before the skill gained steps 4b (removal) and 7 (customizations).
@@ -968,6 +986,8 @@ Plans:
 
 ### Phase 999.12: Register codegraph and graphify hooks for the copilot host (BACKLOG)
 
+**Status (2026-11-15):** resolved by Phase 24.3 (24.3-08) — `_CODEGRAPH_TARGETS` in `installer/postinstall.py` maps copilot to `copilot-cli`; graphify stays unregistered by decision.
+
 **Goal:** When copilot (added in 23.2) is present, the codegraph and graphify postinstall hooks register for it like the other agent hosts, are recorded in `receipt.hooks`, and unregister on removal.
 **Requirements:** TBD
 **Evidence (live, 2026-11-07, 23.2 analyzer):** codegraph 1.6.2's target id is `copilot-cli` (writes `~/.copilot/mcp-config.json`; `copilot` is rejected); graphify accepts `install --platform copilot`.
@@ -977,6 +997,8 @@ Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
 ### Phase 999.13: Move Pi off the host-setup handoff to a directly installed, updatable method (BACKLOG)
+
+**Status (2026-11-15):** resolved by Phase 24.5 (commit 80331678, 24.5-06) — Pi installs through a `bun` method with a pnpm `node` fallback; 24.5-VERIFICATION PRIO-03/PRIO-04 satisfied. The dead `HOST_SETUPS["pi"]` row goes with Phase 25 LEAN-01.
 
 **Goal:** The catalog installs, updates and removes Pi itself instead of printing a pnpm handoff: a method the installer runs with no privilege escalation (the `node` kind through pnpm with Pi's Node floor, or Pi's own installer only if it can run without `sudo`), with `pi update` or the manager's update as the update route, a receipt, and the scheduled update from Phase 24.2 following it.
 **Requirements:** TBD

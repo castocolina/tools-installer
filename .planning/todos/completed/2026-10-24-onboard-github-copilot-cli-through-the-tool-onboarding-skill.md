@@ -44,3 +44,5 @@ smoke check such as `copilot --version`. Authentication is interactive
 `copilot` harness to the new tool if the onboarding skill's dependency checks
 call for it. Real install/removal verification runs only in disposable
 containers.
+
+Resolved (2026-11-15): commit 164110e5 (23.2-04) added the copilot entry (brew cask on macOS, github_release on Linux, install tuning, recommends); tests/test_registry.py::test_copilot_entry_methods_and_tuning and test_copilot_entry_records_the_onboarding_findings pass.

@@ -59,3 +59,5 @@ both working correctly here) or to Phase 15.4 (ownership/owner-column
 visibility — this is a version-probe-failure class, not an ownership-unknown
 class). Filed as a new pending todo per the registry's own documented split
 that Doctor is "where an already-installed machine's state is audited."
+
+Resolved (2026-11-15): Phase 16 commits b6ece400 and 46ba5334 mark a dangling pnpm shim broken in the catalog; Phase 21-19 shows it in Doctor; tests/test_ownership.py::test_dangling_pnpm_shim_reads_broken and tests/test_screen_family.py::test_a_dangling_pnpm_shim_reads_broken_in_doctor_and_on_the_tier pass; 21-VERIFICATION UI-07 is satisfied.
