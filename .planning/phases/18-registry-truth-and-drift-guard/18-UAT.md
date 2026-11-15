@@ -113,6 +113,7 @@ evidence: main pushed ab23f33..daf0524; run 38839041957 on daf0524 — `validate
 expected: On a Mac without the draw.io cask, the pinned app method links `~/.local/bin/drawio` to Contents/MacOS/draw.io, the `--version` smoke leaves no GUI window open, and the java/git stubs alone show as not installed.
 result: skipped
 reason: needs a real macOS host; backstop: CI macos-latest unit tests (run 38839041957, test 3 and test 11 fixtures). Stays under human_verification in 18-VERIFICATION.md; `executors.smoke_binary` records the macOS app-CLI smoke as not verified.
+re-verified 2026-11-15 at HEAD 40233075: still owner-only / deferred (macOS, no CI path for the real app-CLI smoke). Backstop refreshed: ci.yml run 43734240980 green on macos-latest and ubuntu-latest. Test 7 follow-up: the weekly job has since run 5 times, produced exactly one registry-drift issue (#5) on its two drift runs, and the 2026-11-12 run is green.
 
 ## Summary
 
