@@ -17,9 +17,10 @@ state, not the churn.
 3. **One apply workflow.** Any live core mutation triggered from a screen goes
    through `ui_common.run_live`; screens supply the closure and the messages,
    never their own `try/except OSError`.
-4. **`setup.py` is wiring only.** It may parse args, prompt, print, read the
-   real environment, and construct. Any decision function belongs in
-   `installer/` where pyright, coverage, and tests apply.
+4. **`setup.py` is wiring only.** It may parse args, prompt, print, and call the
+   composition root in `installer/compose.py`, which reads the real environment
+   and constructs. Any decision function belongs in `installer/` where pyright,
+   coverage, and tests apply.
 5. **No orphan helpers.** A shared helper with zero production callers is
    deleted or adopted at its duplicate sites — never kept "for later". Only its
    own test keeping it covered is the tell.
@@ -410,7 +411,7 @@ restrictions leave it with no applicable method on the current machine is
 shown disabled in both places that already need to know this. On the
 CLI/install-time path, `installer/engine.py::install_tool` reports
 `NO_METHOD` — unchanged. On the catalog-browsing path,
-`setup.py::_build_app` computes `installer/resolve.py::platform_could_support`
+`installer/compose.py::_build_app` computes `installer/resolve.py::platform_could_support`
 per tool, threads that boolean through `UnifiedApp` into `CatalogScreen`, and
 `CatalogScreen` reuses `BrowserAdapter.selectable` — an already-existing,
 already-generic `ToolBrowser` field `UninstallScreen._tool_entry` already
@@ -428,7 +429,7 @@ Do not conflate the two.
 This reconciles, rather than contradicts, the "Tier is a browsing label"
 reasoning that "a screen with no `Platform` must not make a judgement it
 cannot make correctly." `CatalogScreen` no longer lacks `Platform`-derived
-data once `setup.py`'s composition root threads it through, the same way the
+data once the composition root in `installer/compose.py` threads it through, the same way the
 Uninstall view already receives one. The principle was never "never give a
 screen this data"; it was "never judge without it."
 

@@ -451,7 +451,7 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
     _store_link_mode(monkeypatch, tmp_path, "single")
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", fake_detect)
-    monkeypatch.setattr(setup, "_build_app", fake_build_app)
+    patch_composition(monkeypatch, "_build_app", fake_build_app)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
 
     console = Console(file=io.StringIO(), width=100, no_color=True)
@@ -526,7 +526,7 @@ def _capture_app(
         def end_mutation(self) -> None:
             """See `_render_published`."""
 
-    monkeypatch.setattr(setup, "UnifiedApp", _App)
+    patch_composition(monkeypatch, "UnifiedApp", _App)
     # The stand-in never runs the daemon-default worker that finishes the armed
     # collector, so main would otherwise sit out the full 5 s wait every test.
     monkeypatch.setattr(setup, "SCHEDULE_DEFAULT_WAIT_SECONDS", 0.01)
@@ -595,7 +595,7 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user"
     )
     monkeypatch.setattr(setup, "load_tools", _no_tools)
-    monkeypatch.setattr(setup, "load_categories", _no_categories)
+    patch_composition(monkeypatch, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
     settings_path = tmp_path / "settings.json"
@@ -669,7 +669,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
     monkeypatch.setattr(setup, "_stdin_on_tty", contextlib.nullcontext)
     installed: list[str] = []
     patch_composition(monkeypatch, "install_tool", _recording_install(installed))
-    real_inputs = setup._execute_inputs  # pyright: ignore[reportPrivateUsage]
+    real_inputs = compose._execute_inputs  # pyright: ignore[reportPrivateUsage]
 
     def recording_inputs(
         tools: list[Tool],
@@ -694,7 +694,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
 
         return replace(inputs, resolve_tag=_pinned_tag)
 
-    monkeypatch.setattr(setup, "_execute_inputs", recording_inputs)  # pyright: ignore[reportPrivateUsage]
+    patch_composition(monkeypatch, "_execute_inputs", recording_inputs)  # pyright: ignore[reportPrivateUsage]
     return installed
 
 
@@ -726,7 +726,7 @@ def test_the_uninstall_view_is_wired_to_a_total_teardown_of_the_real_zshrc(
         forwarded.append(kwargs)
         return SweepResult()
 
-    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+    patch_composition(monkeypatch, "perform_uninstall", fake_perform_uninstall)
 
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
@@ -1303,7 +1303,7 @@ def test_doctor_preview_carries_the_grouped_pinned_allowed_replay(
     patch_composition(monkeypatch, "_SHELLRC", tmp_path / ".shellrc")
     patch_composition(monkeypatch, "_ZSHRC", tmp_path / ".zshrc")
     patch_composition(monkeypatch, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
-    monkeypatch.setattr(setup, "load_categories", _no_categories)
+    patch_composition(monkeypatch, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
 
     def never_installed(_tool: Tool) -> bool:
@@ -1464,7 +1464,7 @@ def test_the_interactive_uninstall_view_forwards_the_schedule_adapters(
         forwarded.append(kwargs)
         return SweepResult()
 
-    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+    patch_composition(monkeypatch, "perform_uninstall", fake_perform_uninstall)
 
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
@@ -1560,10 +1560,10 @@ def _headless_main_fixture(
 
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", _platform)
-    monkeypatch.setattr(setup, "load_categories", fake_load_categories)
+    patch_composition(monkeypatch, "load_categories", fake_load_categories)
     patch_composition(monkeypatch, "_build_services", fake_build_services)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
-    monkeypatch.setattr(setup, "configure_path", configure)
+    patch_composition(monkeypatch, "configure_path", configure)
     monkeypatch.setattr(setup, "_verify_and_clean", verify)
     patch_composition(monkeypatch, "_sync_terminals_and_report", sync)
     monkeypatch.setattr(setup, "render_troubleshooting", render_help)
@@ -1967,7 +1967,7 @@ def _noninteractive_all_fixture(
 
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", _platform)
-    monkeypatch.setattr(setup, "load_categories", fake_load_categories)
+    patch_composition(monkeypatch, "load_categories", fake_load_categories)
     patch_composition(monkeypatch, "_build_services", fake_build_services)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
     monkeypatch.setattr(
@@ -1976,7 +1976,7 @@ def _noninteractive_all_fixture(
     monkeypatch.setattr(
         setup, "default_settings_path", lambda: Path("/no/such/settings.json"), raising=False
     )
-    monkeypatch.setattr(setup, "configure_path", noop)
+    patch_composition(monkeypatch, "configure_path", noop)
     monkeypatch.setattr(setup, "_verify_and_clean", noop)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
     patch_composition(
@@ -2498,7 +2498,7 @@ def test_headless_all_never_constructs_unified_app(monkeypatch: pytest.MonkeyPat
         raise AssertionError("headless --all must not construct UnifiedApp")
 
     rendered = _stub_install_run(monkeypatch, _headless_outcomes(fd="done"))
-    monkeypatch.setattr(setup, "_build_app", boom)
+    patch_composition(monkeypatch, "_build_app", boom)
     assert setup.main(["--all", "--yes"]) == 0
     assert rendered == []
 
@@ -2522,12 +2522,12 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
         captured.append({"tools": tools, "console": console, **kwargs})
         console.print("PATH configured")
 
-    monkeypatch.setattr(setup, "configure_path", fake_configure_path)
+    patch_composition(monkeypatch, "configure_path", fake_configure_path)
     patch_composition(monkeypatch, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     patch_composition(monkeypatch, "_MYSHELLRC", tmp_path / ".myshellrc")
     patch_composition(monkeypatch, "_SHELLRC", tmp_path / ".shellrc")
     patch_composition(monkeypatch, "_SHELL", "/bin/zsh")
-    inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+    inputs = compose._execute_inputs(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
         link_mode="single",
@@ -2559,9 +2559,9 @@ def test_execute_inputs_verify_calls_run_doctor_and_returns_captured_text(
         console.print("PATH audit")
         return object()
 
-    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    patch_composition(monkeypatch, "run_doctor", fake_run_doctor)
     patch_composition(monkeypatch, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
-    inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+    inputs = compose._execute_inputs(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
         link_mode="centralized",
@@ -2621,7 +2621,7 @@ def _wire_interactive_summary(
     monkeypatch.setattr(setup, "render_troubleshooting", fake_render_troubleshooting)
     monkeypatch.setattr(setup, "clean_rc_duplicates", fake_clean)
     monkeypatch.setattr(setup, "collect_bin_dirs", fake_collect)
-    monkeypatch.setattr(setup, "_build_app", fake_build)
+    patch_composition(monkeypatch, "_build_app", fake_build)
     return rendered
 
 
@@ -2670,9 +2670,9 @@ def test_interactive_path_cleans_rc_duplicates_without_re_running_doctor(
 
     _sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(setup, "clean_rc_duplicates", fake_clean)
-    monkeypatch.setattr(setup, "run_doctor", fake_doctor)
+    patch_composition(monkeypatch, "run_doctor", fake_doctor)
     monkeypatch.setattr(setup, "collect_bin_dirs", fake_collect)
-    monkeypatch.setattr(setup, "_build_app", fake_build)
+    patch_composition(monkeypatch, "_build_app", fake_build)
     assert setup.main([]) == 0
     assert cleaned == ["cleaned"]
     assert doctors == []
@@ -2772,7 +2772,7 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
     def fake_configure_path(_tools: object, _console: object, **kwargs: object) -> None:
         captured.append(kwargs)
 
-    monkeypatch.setattr(setup, "configure_path", fake_configure_path)
+    patch_composition(monkeypatch, "configure_path", fake_configure_path)
     fix = seen[0]["fix"]
     assert callable(fix)
     cast(Callable[[], None], fix)()
@@ -2851,7 +2851,7 @@ def test_non_interactive_fix_with_link_mode_flag_writes_split_and_stores_nothing
     def fake_configure_path(_tools: object, _console: object, **kwargs: object) -> None:
         written.append(str(kwargs["link_mode"]))
 
-    monkeypatch.setattr(setup, "configure_path", fake_configure_path)
+    patch_composition(monkeypatch, "configure_path", fake_configure_path)
     path = tmp_path / "settings.json"
     assert setup.main(["--fix", "--link-mode", "split"]) == 0
     assert written == ["split"]
@@ -2921,8 +2921,8 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
         handed.arm()
         return _Aborting()
 
-    monkeypatch.setattr(setup, "_build_app", fake_build)
-    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: collector)
+    patch_composition(monkeypatch, "_build_app", fake_build)
+    patch_composition(monkeypatch, "ScheduleDefaultWarnings", lambda: collector)
     assert setup.main([]) == 0
     text = buffer.getvalue()
     warning_at = text.index("another timer is still running")
@@ -2964,8 +2964,8 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
         collector.arm()
         return _Done()
 
-    monkeypatch.setattr(setup, "_build_app", fake_build)
-    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: collector)
+    patch_composition(monkeypatch, "_build_app", fake_build)
+    patch_composition(monkeypatch, "ScheduleDefaultWarnings", lambda: collector)
     assert setup.main([]) == 0
     assert "taken over" in buffer.getvalue()
     assert "Aborted." not in buffer.getvalue()
@@ -2985,8 +2985,8 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
     def quiet_build(*_args: object, **_kwargs: object) -> _Quiet:
         return _Quiet()
 
-    monkeypatch.setattr(setup, "_build_app", quiet_build)
-    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: empty)
+    patch_composition(monkeypatch, "_build_app", quiet_build)
+    patch_composition(monkeypatch, "ScheduleDefaultWarnings", lambda: empty)
     assert setup.main([]) == 0
     assert quiet.getvalue() == ""
 
@@ -3015,8 +3015,8 @@ def test_interactive_wizard_labels_a_timed_out_background_apply(
         collector.arm()
         return _Aborting()
 
-    monkeypatch.setattr(setup, "_build_app", fake_build)
-    monkeypatch.setattr(setup, "ScheduleDefaultWarnings", lambda: collector)
+    patch_composition(monkeypatch, "_build_app", fake_build)
+    patch_composition(monkeypatch, "ScheduleDefaultWarnings", lambda: collector)
     monkeypatch.setattr(setup, "SCHEDULE_DEFAULT_WAIT_SECONDS", 0.01)
     assert setup.main([]) == 0
     text = buffer.getvalue()
@@ -3044,7 +3044,7 @@ def test_both_uninstall_routes_pass_the_same_cache_redirect_set(
         return SweepResult()
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
-    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+    patch_composition(monkeypatch, "perform_uninstall", fake_perform_uninstall)
     assert setup.main(["--uninstall", "--yes"]) == 0
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[-1]["uninstall"]
@@ -3348,7 +3348,7 @@ def test_run_doctor_non_tty_forwards_the_probe_closure(
         return object()
 
     patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
-    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    patch_composition(monkeypatch, "run_doctor", fake_run_doctor)
     assert setup._run_doctor(Console(file=io.StringIO())) == 0  # pyright: ignore[reportPrivateUsage]
     assert seen and forwarded[0] is seen[0]
 
@@ -3369,7 +3369,7 @@ def test_verify_and_clean_forwards_the_probe_closure(
         return object()
 
     patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
-    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    patch_composition(monkeypatch, "run_doctor", fake_run_doctor)
 
     def no_duplicates(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
         return {}
@@ -3404,7 +3404,7 @@ def test_interactive_wizard_hands_one_probe_to_execute_and_policy_inputs(
         return object()
 
     patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
-    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    patch_composition(monkeypatch, "run_doctor", fake_run_doctor)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     policies = seen[0]["policies"]
@@ -3618,10 +3618,10 @@ def test_every_configure_path_call_site_passes_a_shellrc_path(
         captured.append(dict(kwargs))
         console.print("wired")
 
-    monkeypatch.setattr(setup, "configure_path", recorder)
+    patch_composition(monkeypatch, "configure_path", recorder)
 
     # Route 1: the Doctor apply closure, and Route 2: the execute-inputs wire step.
-    inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
+    inputs = compose._execute_inputs(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
         link_mode="single",
@@ -3652,7 +3652,7 @@ def test_doctor_apply_raises_on_a_consolidation_refusal(
     def refusing(_tools: object, _console: Console, **_kwargs: object) -> ShellrcConsolidation:
         return _refused("~/.shellrc line 3 is ambiguous")
 
-    monkeypatch.setattr(setup, "configure_path", refusing)
+    patch_composition(monkeypatch, "configure_path", refusing)
     app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
     doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(doctor, DoctorScreen)
@@ -3673,7 +3673,7 @@ def test_doctor_apply_does_not_raise_on_any_non_refusal_outcome(
     def succeeding(_tools: object, _console: Console, **_kwargs: object) -> ShellrcConsolidation:
         return ShellrcConsolidation(status=status)
 
-    monkeypatch.setattr(setup, "configure_path", succeeding)
+    patch_composition(monkeypatch, "configure_path", succeeding)
     app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
     doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(doctor, DoctorScreen)
@@ -3689,7 +3689,7 @@ def test_doctor_apply_does_not_raise_when_no_outcome_is_returned(
     def returning_none(_tools: object, _console: Console, **_kwargs: object) -> None:
         return None
 
-    monkeypatch.setattr(setup, "configure_path", returning_none)
+    patch_composition(monkeypatch, "configure_path", returning_none)
     app = setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
     doctor = app._views["doctor"]  # pyright: ignore[reportPrivateUsage]
     assert isinstance(doctor, DoctorScreen)
@@ -3842,7 +3842,7 @@ def test_non_tty_doctor_with_a_damaged_settings_json_warns_before_acting(
     def fake_run_doctor(*_args: object, **_kwargs: object) -> None:
         ran.append(1)
 
-    monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
+    patch_composition(monkeypatch, "run_doctor", fake_run_doctor)
     path = tmp_path / "settings.json"
     path.write_bytes(b'{"link_mode": ')
 
@@ -3918,7 +3918,7 @@ async def test_uninstall_screen_passes_the_selected_tools(
         captured.append(decision)
         return SweepResult()
 
-    monkeypatch.setattr(setup, "perform_uninstall", fake_perform_uninstall)
+    patch_composition(monkeypatch, "perform_uninstall", fake_perform_uninstall)
     apps: list[UnifiedApp] = []
 
     def recording_run(self: UnifiedApp) -> None:
@@ -4472,7 +4472,7 @@ def test_install_routes_never_include_a_retired_id(
         app_tools.append(list(tools))
         return build_app(tools, platform, **kwargs)
 
-    monkeypatch.setattr(setup, "_build_app", spy_build_app)
+    patch_composition(monkeypatch, "_build_app", spy_build_app)
     _capture_app(monkeypatch)
     assert setup.main([]) == 0
     assert app_tools
@@ -4592,8 +4592,8 @@ def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) 
     monkeypatch.setattr(setup, "_has_controlling_tty", lambda: False)
     monkeypatch.setattr(setup, "load_tools", _no_tools)
     monkeypatch.setattr(setup, "detect", _platform)
-    monkeypatch.setattr(setup, "run_doctor", noop)
-    monkeypatch.setattr(setup, "configure_path", noop)
+    patch_composition(monkeypatch, "run_doctor", noop)
+    patch_composition(monkeypatch, "configure_path", noop)
     monkeypatch.setattr(setup, "run_uninstall", uninstalled)
     patch_composition(monkeypatch, "sync_terminal_shells", no_terminal_sync)
     patch_composition(monkeypatch, "_timer_state_cache", noop)
@@ -4815,7 +4815,7 @@ def test_the_uninstall_sweep_carries_the_desktop_shell_policy(
         captured.append(kwargs)
         return SweepResult()
 
-    monkeypatch.setattr(setup, "perform_uninstall", fake_perform)
+    patch_composition(monkeypatch, "perform_uninstall", fake_perform)
     uninstall = seen["uninstall"]
     assert isinstance(uninstall, UninstallInputs)
     uninstall.remove(cast("UninstallDecision", object()))

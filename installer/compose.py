@@ -7,8 +7,10 @@ imports questionary or prompt_toolkit, so any prompt reaches it only as a parame
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -22,12 +24,22 @@ from installer import (
     diskusage,
     env_redirect,
     pnpm_globals,
+    post_install,
     schedules,
     systemd_daemon,
+)
+from installer.app import (
+    UninstallDecision,
+    configure_path,
+    consolidation_refusal_message,
+    doctor_data,
+    perform_uninstall,
+    run_doctor,
 )
 from installer.diskusage import DiskPressure
 from installer.engine import ChecksumPolicy, InstallOutcome, install_tool
 from installer.enums import DaemonState
+from installer.execute_screen import ExecuteInputs, wants_ascii_spinner
 from installer.install_ownership import run_probe
 from installer.legacy_guard import remove_ban_blocks, remove_guard_shims
 from installer.locations import (
@@ -35,34 +47,48 @@ from installer.locations import (
     rc_paths_for_mode,
     zshrc_path,
 )
-from installer.model import Tool
-from installer.ownership import read_inventory
+from installer.model import Tool, load_categories
+from installer.ownership import manager_listing, read_inventory
 from installer.platform import Platform
 from installer.policy import (
     Policy,
     cache_redirect_policy,
     desktop_shell_policy,
+    tweak_policy,
 )
 from installer.postinstall import which_with_brew
+from installer.receipts import scan_retired
+from installer.resolve import unavailable_reason
 from installer.run import (
     OutputRunner,
     Runner,
     run_captured,
+    run_git_isolated,
 )
+from installer.schedules import ScheduleDefaultWarnings
+from installer.settings import SettingsStore
+from installer.shellrc import ShellrcRefusal, has_managed_block
 from installer.status import is_installed
 from installer.terminal_shell import sync_message, sync_terminal_shells, terminal_sync_warning
 from installer.tweaks import (
+    BUNDLES,
+    SHELL_INIT_TOOLS,
     LegacyStrip,
+    applicable_bundles,
     strip_legacy_aliases,
 )
+from installer.ui_common import BASE_VIEW
+from installer.uninstall import SweepResult, active_tweak_ids
 from installer.update import UpdateService
 from installer.version_cache import default_cache_path
 from installer.version_status import VersionRefreshService
 from installer.versions import TagResolver, probe_version_output, resolve_github_tag
+from installer.wizard_app import PolicyInputs, ScheduleInputs, UnifiedApp, UninstallInputs
 
 # The private names setup.py imports back keep their names (D-05); listing them here is what
 # tells pyright they are this module's surface and not unused private functions.
 __all__ = [
+    "_build_app",
     "_build_services",
     "_cache_redirect_policies",
     "_competitor_probe",
@@ -531,3 +557,378 @@ def _reconcile_headless(
     ctx = _schedule_context(platform, refresh.installed_or(launch))
     for text, _severity in schedules.reconcile_lines(schedules.ensure_schedule_defaults(ctx)):
         console.print(text, markup=False, soft_wrap=True)
+
+
+def _build_app(
+    tools: list[Tool],
+    platform: Platform,
+    *,
+    initial_view: str = BASE_VIEW,
+    link_mode: str = "centralized",
+    apply_schedule_defaults: bool = False,
+    unattended: bool = False,
+    settings: SettingsStore | None = None,
+    prompt_link_mode: bool = False,
+    schedule_default_warnings: ScheduleDefaultWarnings | None = None,
+    disk_pressure: Callable[..., DiskPressure] | None = None,
+    timer_cache: systemd_daemon.TimerStateCache | None = None,
+    competing: Callable[..., tuple[systemd_daemon.CompetingUnit, ...]] | None = None,
+) -> UnifiedApp:
+    # A legacy alias block is stripped at every launch and its notice rides the startup
+    # warning: the alias is never migrated into an agent settings file (user decision 2026-11-06).
+    # First, so no read below (installed map, doctor data, services) sees a retired guard file.
+    legacy_strip, repairs = _launch_repairs()
+    # One resolution, not two independent fallbacks: the routes that supply
+    # neither argument (_run_doctor's TTY branch, _run_fix, _run_uninstall)
+    # must still share one cache between the daemon Policy and the probe.
+    if timer_cache is None and disk_pressure is None:
+        timer_cache = _timer_state_cache(
+            platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+        )
+    if disk_pressure is None:
+        disk_pressure = _disk_pressure_probe(platform, timer_cache=timer_cache)
+    if competing is None:
+        competing = _competitor_probe(
+            platform, which=shutil.which, read_output=systemd_daemon.query_systemctl
+        )
+    installed = {tool.id: is_installed(tool) for tool in tools}
+    unavailable = {tool.id: unavailable_reason(tool, platform) or False for tool in tools}
+    report = doctor_data(
+        tools,
+        platform=platform,
+        default_bin_dir=_DEFAULT_BIN_DIR,
+        path_value=os.environ.get("PATH", ""),
+        exists=Path.is_dir,
+    )
+
+    def _current_link_mode() -> str:
+        return settings.link_mode if settings is not None else link_mode
+
+    # The Policies view offers what applies HERE; the teardown sweeps every
+    # bundle. A bundle whose `platforms` tuple changed between installer
+    # versions, or an rc file carried between machines, would otherwise leave a
+    # block and a helper on disk with nothing reporting them.
+    # tweak_present/tweak_executables_present already answer False for anything
+    # not on disk, so the total sweep costs nothing.
+    bundles = applicable_bundles(platform)
+
+    # Hoisted above `uninstall_inputs` (Round-1 review HIGH's post-removal
+    # invalidation): the Uninstall screen's seam binds to this instance, so
+    # it must exist before that construction. A pure construction with no
+    # dependency on anything declared between here and its old position
+    # below -- this is a reordering and nothing else.
+    version_refresh, updates, policy, _install = _build_services(tools, platform)
+
+    # One context for the Schedules view, the reconciles and the uninstall sweep (24.2-11).
+    installed_now = version_refresh.installed_or(installed)
+    schedule_ctx = _invalidating(_schedule_context(platform, installed_now), timer_cache)
+
+    def _uninstall_extras() -> tuple[Policy, ...]:
+        # Read when a sweep starts, before any removal runs, so each adapter is built from what
+        # is on disk now (R1-19); the idempotent adapters tolerate a timer a removal took first.
+        return (*redirects, *desktop, *schedules.sweep_adapters(schedule_ctx))
+
+    def _do_uninstall(decision: UninstallDecision) -> SweepResult:
+        # Runs live inside the UninstallScreen.
+        # The sweep result is returned so the view reports what came off.
+        return perform_uninstall(
+            decision,
+            runner=run_captured,
+            bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            bundles=BUNDLES,
+            zshrc_path=_ZSHRC,
+            extra_policies=_uninstall_extras(),
+            catalog=tools,
+            schedule_removed=lambda tool_id: _schedule_removed_lines(schedule_ctx, tool_id),
+        )
+
+    def _tweak_ensure_sourced_from() -> tuple[Path, ...]:
+        return _split_sourced_from(_current_link_mode())
+
+    # An install-time shell-init yes is sourced the same way a tweak is (D-11).
+    post_install.use_shell_init_sourcing(_tweak_ensure_sourced_from)
+    post_install.use_git_runner(run_git_isolated)
+    redirects = _cache_redirect_policies(platform, ensure_sourced_from=_tweak_ensure_sourced_from)
+    desktop = _desktop_shell_policies(platform)
+
+    def _sync_omz_terminals() -> str | None:
+        """Apply the shared terminal writer after a committed OMZ plugin edit,
+        a successful direct catalog update, an interactive close, or a
+        successful interactive Uninstall removal (D-01/15.6-05/15.6-06) -- a
+        zero-arg wrapper closing over this call's own resolved `platform`
+        around the one composition-root closure every call site reuses
+        (`_sync_terminals` above), so a stale terminal shell configuration
+        from any of them is corrected the same way."""
+        return _sync_terminals(platform)
+
+    def _post_run_terminals() -> str | None:
+        # X-01: the interactive close after a run names every file the sync wrote.
+        return _sync_terminals(platform, report_changes=True)
+
+    def _uninstall_terminals() -> str | None:
+        # CR-09: after an uninstall only owned regions are stripped, and only once zsh is gone.
+        return _sync_terminals(platform, strip_only=True)
+
+    # The three environment fields are predicates, not their results: the
+    # Policies and Doctor views mutate them live in this same session, and the
+    # Uninstall view re-reads them on entry and on every publish (see
+    # UninstallInputs). The tool rows are not an input: the view builds them
+    # from the app's one published state, and the removal worker invalidates that
+    # state through the app's own service (D-05). `terminal_sync` is the SAME closure
+    # `UnifiedApp`'s own `terminal_sync` kwarg is bound with (D-01/15.6-06 Task 3) --
+    # defined just above this construction so the reference resolves at
+    # statement-execution time, not only at call time.
+    catalog_ids = frozenset(tool.id for tool in tools)
+    uninstall_inputs = UninstallInputs(
+        has_path_block=lambda: has_managed_block(_MYSHELLRC),
+        remove=_do_uninstall,
+        tweak_ids=lambda: active_tweak_ids(
+            BUNDLES,
+            rc_path=_MYSHELLRC,
+            bin_dir=_DEFAULT_BIN_DIR,
+            zshrc_path=_ZSHRC,
+            extra_policies=_uninstall_extras(),
+        ),
+        terminal_sync=_uninstall_terminals,
+        retired=lambda: scan_retired(catalog_ids).tools,
+        platform_os=platform.os,
+    )
+
+    startup_lines = [] if settings is None or settings.warning is None else [settings.warning]
+    startup_lines += [text for text, _severity in (*legacy_strip.launch_lines(), *repairs)]
+    # Launch-time warnings come from this one scan only; the `retired` predicate drops its own.
+    startup_lines += scan_retired(catalog_ids).warnings
+    policy_inputs = PolicyInputs(
+        policies=[
+            *(
+                tweak_policy(
+                    bundle,
+                    rc_path=_MYSHELLRC,
+                    bin_dir=_DEFAULT_BIN_DIR,
+                    installed_tools=version_refresh.installed_or(installed),
+                    ensure_sourced_from=_tweak_ensure_sourced_from,
+                )
+                for bundle in bundles
+                if bundle.id not in SHELL_INIT_TOOLS
+            ),
+            *redirects,
+            *desktop,
+        ],
+        link_mode=_current_link_mode if settings is not None else None,
+        set_link_mode=settings.set_link_mode if settings is not None else None,
+        disk_pressure=disk_pressure,
+        competing=competing,
+    )
+
+    schedule_inputs = ScheduleInputs(
+        context=schedule_ctx,
+        present=installed_now,
+        disk_pressure=disk_pressure,
+        competing=competing,
+    )
+
+    def _apply_fix() -> None:
+        # Runs live inside the DoctorScreen. A quiet console keeps configure_path's
+        # own prints from corrupting the running TUI; the screen renders its own
+        # result. Link mode is re-read here so a Policies-view change takes
+        # effect without rebuilding the app.
+        mode = _current_link_mode()
+        outcome = configure_path(
+            tools,
+            Console(file=io.StringIO()),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            shellrc_path=_SHELLRC,
+            rc_paths=rc_paths_for_mode(mode, _SHELL),
+            link_mode=mode,
+        )
+        # The raise happens AFTER configure_path returns, so the managed PATH
+        # block has already been written: the wiring succeeded, the consolidation
+        # did not, and the message says both. Do NOT "fix" this by raising
+        # earlier -- that would stop wiring PATH for every user whose ~/.shellrc
+        # cannot be consolidated. The quiet console above is why this route
+        # raises at all: a printed refusal never reaches this screen's user.
+        message = consolidation_refusal_message(outcome)
+        if message is not None:
+            raise ShellrcRefusal(message)
+
+    def preview() -> str:
+        mode = _current_link_mode()
+        paths = rc_paths_for_mode(mode, _SHELL)
+        return (
+            f"Will wire the managed bin dirs into "
+            f"{', '.join(str(p) for p in paths)} (mode: {mode}).\n"
+            'For a different layout, run `make fix ARGS="--link-mode=centralized|single|split"`.'
+        )
+
+    # The audit asks the real pnpm what it manages globally, so it spawns a
+    # process. DoctorScreen calls this only from a thread worker and holds the
+    # answer itself, which is why there is no cache here any more: the cache
+    # existed because every render re-read the report, and a cell written by the
+    # reinstall worker and read by the event loop was a race waiting to be lost.
+    # Preview and reinstall must receive the SAME policy object: the module's
+    # preview-equals-effect guarantee rests on both paths reaching one argv
+    # builder with one set of inputs. The policy is the one `_build_services`
+    # returned, so this preview and the replay closure there share one object.
+
+    def _node_globals_report() -> pnpm_globals.NodeGlobalsReport:
+        return pnpm_globals.audit_node_globals(
+            tools, policy=policy, bun_managed=lambda: manager_listing("bun")
+        )
+
+    def _globals_preview(report: pnpm_globals.NodeGlobalsReport) -> str:
+        # Takes the audited report rather than fetching one: fetching would put
+        # `pnpm list -g --json` back on whatever thread renders. `known` travels
+        # with the set, so an unreadable global set has no preview and must not
+        # borrow the empty set's "nothing to reinstall".
+        return pnpm_globals.reinstall_preview(report.managed, known=report.known, policy=policy)
+
+    def _reinstall_globals(packages: Sequence[str]) -> tuple[str, ...]:
+        # The set to replay is the one the user saw and consented to, passed in
+        # by the screen — not one re-derived here behind their back.
+        return pnpm_globals.reinstall_node_globals(packages, policy=policy)
+
+    # An ALLOWLIST, not the initial_view != "uninstall" blocklist that would
+    # wrongly reconcile for "doctor"/"policies" too (11-REVIEWS.md cycle 2
+    # finding #14) -- make doctor is documented read-only (Makefile:19), and
+    # no other entry point may silently register a background timer either. Only
+    # _run_interactive_wizard's own call site
+    # (the genuine, normal interactive make setup wizard flow) passes
+    # apply_schedule_defaults=True; the Schedules view itself is visible from
+    # every entry point.
+    schedule_defaults: Callable[[], schedules.ReconcileReport] | None = None
+    if apply_schedule_defaults:
+        if schedule_default_warnings is not None:
+            schedule_default_warnings.arm()
+        # A live probe, never the launch snapshot: the reconcile after an install run must see
+        # the tool that run just put on PATH.
+        by_id = {tool.id: tool for tool in tools}
+        reconcile_ctx = _invalidating(
+            _schedule_context(
+                platform, lambda tool_id: tool_id in by_id and is_installed(by_id[tool_id])
+            ),
+            timer_cache,
+        )
+        told: set[str] = set()
+
+        def _schedule_defaults() -> schedules.ReconcileReport:
+            # finish() is unconditional for the same reason the worker's own
+            # finally always posts: an exception must still signal, or the
+            # console waits the full timeout for a signal that never comes.
+            try:
+                report = schedules.ensure_schedule_defaults(reconcile_ctx)
+                for warning in report.warnings:
+                    if schedule_default_warnings is not None and warning not in told:
+                        told.add(warning)
+                        schedule_default_warnings.append(warning)
+                return report
+            finally:
+                if schedule_default_warnings is not None:
+                    schedule_default_warnings.finish()
+
+        schedule_defaults = _schedule_defaults
+
+    # D-12: _build_app builds ExecuteInputs itself, so no route (current or
+    # future) can build an app that cannot execute an accepted selection.
+    # link_mode is read LIVE through _current_link_mode, exactly like every
+    # other closure above.
+    execute = _execute_inputs(
+        tools,
+        platform,
+        link_mode=_current_link_mode,
+        unattended=unattended,
+        disk_pressure=disk_pressure,
+        version_refresh=version_refresh,
+    )
+
+    execute = replace(
+        execute,
+        install=_install,
+        updates=updates,
+        terminal_sync=_sync_omz_terminals,
+    )
+
+    return UnifiedApp(
+        tools,
+        load_categories(_REGISTRY),
+        report=report,
+        fix_preview=preview,
+        fix=_apply_fix,
+        uninstall=uninstall_inputs,
+        policies=policy_inputs,
+        schedules=schedule_inputs,
+        node_globals=_node_globals_report,
+        globals_preview=_globals_preview,
+        reinstall_globals=_reinstall_globals,
+        unavailable=unavailable,
+        initial_view=initial_view,
+        schedule_defaults=schedule_defaults,
+        version_refresh=version_refresh,
+        updates=updates,
+        execute=execute,
+        prompt_link_mode=prompt_link_mode,
+        # D-11: a damaged settings.json surfaces as the startup warning on the
+        # first screen the route opens, carried through the store's flag.
+        startup_warning="\n".join(startup_lines) or None,
+        # D-01/15.6-06 Task 1: the SAME closure `omz_plugins_policy` and
+        # `updates` above are wired with -- every interactive close
+        # re-synchronizes terminal configuration exactly like Policies' own
+        # apply and the direct `u` update already do; a write is named (X-01).
+        terminal_sync=_post_run_terminals,
+    )
+
+
+def _execute_inputs(
+    tools: list[Tool],
+    platform: Platform,
+    *,
+    link_mode: str | Callable[[], str],
+    unattended: bool,
+    disk_pressure: Callable[[], DiskPressure],
+    version_refresh: VersionRefreshService,
+) -> ExecuteInputs:
+    def current_mode() -> str:
+        return link_mode() if callable(link_mode) else link_mode
+
+    def wire_path() -> str:
+        mode = current_mode()
+        buffer = io.StringIO()
+        configure_path(
+            tools,
+            Console(file=buffer),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            myshellrc_path=_MYSHELLRC,
+            shellrc_path=_SHELLRC,
+            rc_paths=rc_paths_for_mode(mode, _SHELL),
+            link_mode=mode,
+        )
+        return buffer.getvalue()
+
+    def verify() -> str:
+        buffer = io.StringIO()
+        run_doctor(
+            tools,
+            Console(file=buffer),
+            platform=platform,
+            default_bin_dir=_DEFAULT_BIN_DIR,
+            path_value=os.environ.get("PATH", ""),
+            exists=Path.is_dir,
+            disk_pressure=disk_pressure,
+        )
+        return buffer.getvalue()
+
+    # Textual draws to sys.__stderr__ (linux_driver.py): its encoding picks the spinner.
+    return ExecuteInputs(
+        catalog=tools,
+        platform=platform,
+        wire_path=wire_path,
+        verify=verify,
+        version_refresh=version_refresh,
+        unattended=unattended,
+        ascii_spinner=wants_ascii_spinner(
+            sys.__stderr__.encoding if sys.__stderr__ is not None else None
+        ),
+    )

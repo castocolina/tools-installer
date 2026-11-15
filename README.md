@@ -347,7 +347,7 @@ A scheduled GitHub Actions workflow (`verify-registry.yml`) runs weekly (Monday 
 
 ```
 install.sh                 # curl|sh bootstrap: detect OS/arch, ensure uv, clone, run wizard
-setup.py                   # wizard entrypoint / composition root (rich, questionary)
+setup.py                   # wizard entrypoint: argument parsing, questionary prompts (rich)
 installer/
   registry.toml            # the tool catalog — single source of truth
   model.py                 # Tool/Method model + tomllib loader
@@ -358,7 +358,8 @@ installer/
   download.py              # github_release / tarball binary executors
   versions.py, assets.py   # GitHub release version + asset-name resolution
   app.py, cli.py           # wizard flow + non-interactive flag parsing
-  selection.py, audit.py   # catalog → choices; installed/missing status
+  compose.py               # composition root: builds the app and its services
+  selection.py             # catalog → choices; installed/missing status
   prompt.py, render.py     # injected TUI callbacks + rich output
   session.py               # orchestrate installs, bucket the outcomes
   shellrc.py, doctor.py    # ~/.myshellrc management + PATH audit/fix

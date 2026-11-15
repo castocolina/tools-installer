@@ -32,8 +32,9 @@ audit-catalog:  ## Audit the catalog for the catalog-audit skill (read-only fact
 	uv run --isolated --no-dev python -m installer.catalog_audit $(ARGS)
 
 validate:  ## Lint, format-check, type-check, security, dead-code
-	# setup.py (composition root) is lint/format-gated but stays out of pyright/coverage:
-	# it imports the untyped, TTY-only questionary, which is isolated there by design.
+	# The composition root lives in installer/compose.py, under pyright, coverage, bandit and
+	# vulture. setup.py is lint/format-gated but stays out of pyright/coverage: it imports the
+	# untyped, TTY-only questionary and holds only argument parsing, prompts and the calls.
 	uv run ruff check installer tests setup.py
 	uv run ruff format --check installer tests setup.py
 	uv run pyright

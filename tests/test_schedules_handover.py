@@ -114,7 +114,7 @@ def _headless(
     patch_composition(monkeypatch, "_build_services", services)
     patch_composition(monkeypatch, "_schedule_context", schedule_context)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
-    monkeypatch.setattr(setup, "configure_path", nothing)
+    patch_composition(monkeypatch, "configure_path", nothing)
     monkeypatch.setattr(setup, "_verify_and_clean", nothing)
     patch_composition(monkeypatch, "_sync_terminals_and_report", nothing)
     monkeypatch.setattr(setup, "render_troubleshooting", nothing)

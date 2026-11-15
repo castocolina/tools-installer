@@ -47,6 +47,41 @@ _DISPATCH_TABLES: tuple[tuple[str, str], ...] = (
     ("installer.postinstall", "POSTINSTALL_HOOKS"),
 )
 
+# What composition lives in installer/compose.py (plan 25-05): setup.py may import these back
+# but must not define them.
+_COMPOSITION_NAMES: tuple[str, ...] = (
+    "_REGISTRY",
+    "_DEFAULT_BIN_DIR",
+    "_MYSHELLRC",
+    "_SHELLRC",
+    "_ZSHRC",
+    "_RC_PATHS",
+    "_SHELL",
+    "Install",
+    "_WARN_CONSOLE",
+    "_DAEMON_PLIST_PATH",
+    "_LINUX_DAEMON_UNIT_DIR",
+    "_ENVIRONMENT_D_DIR",
+    "_build_app",
+    "_execute_inputs",
+    "_timer_state_cache",
+    "_CompetitorProbe",
+    "_competitor_probe",
+    "_DiskProbe",
+    "_disk_pressure_probe",
+    "_cache_redirect_policies",
+    "_sync_terminals",
+    "_sync_terminals_and_report",
+    "_build_services",
+    "_split_sourced_from",
+    "_desktop_shell_policies",
+    "_launch_repairs",
+    "_schedule_context",
+    "_invalidating",
+    "_schedule_removed_lines",
+    "_reconcile_headless",
+)
+
 
 def _installer_files(root: Path) -> dict[str, Path]:
     return {_dotted(root, path): path for path in sorted((root / "installer").rglob("*.py"))}
@@ -387,3 +422,48 @@ def test_the_exemptions_are_live() -> None:
     reachable_paths = [_ROOT / "setup.py", *(modules[name] for name in _reachable_modules(_ROOT))]
     for path in reachable_paths:
         assert _runtime_imports(path, exempt, _ROOT) == set(), f"{path} imports an exempt module"
+
+
+def _defined_top_level(tree: ast.Module) -> set[str]:
+    names = _top_level_assigned(tree)
+    names.update(
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    )
+    return names
+
+
+def _imported_modules(tree: ast.Module) -> set[str]:
+    """Every module an import node names, at any depth; `from . import x` names `x`'s package."""
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                modules.add(node.module)
+            if node.module in (None, "installer"):
+                modules.update(alias.name for alias in node.names)
+    return modules
+
+
+def _imports_any(tree: ast.Module, libraries: tuple[str, ...]) -> bool:
+    return any(module.split(".")[0] in libraries for module in _imported_modules(tree))
+
+
+def test_composition_lives_in_compose_not_setup() -> None:
+    setup_tree = _parse(_ROOT / "setup.py")
+    compose_tree = _parse(_ROOT / "installer" / "compose.py")
+    assert sorted(set(_COMPOSITION_NAMES) & _defined_top_level(setup_tree)) == []
+    assert {"_build_app", "_execute_inputs"} <= _defined_top_level(compose_tree)
+    # Structural, so the module docstring may still name questionary.
+    assert not _imports_any(compose_tree, ("questionary", "prompt_toolkit"))
+    assert _imports_any(ast.parse("import questionary.prompts"), ("questionary",))
+    assert _imports_any(ast.parse("from prompt_toolkit.input import Input"), ("prompt_toolkit",))
+    importers = [
+        name
+        for name, path in _installer_files(_ROOT).items()
+        if _imports_any(_parse(path), ("setup",))
+    ]
+    assert importers == []
