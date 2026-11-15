@@ -678,7 +678,7 @@ Research must verify these points before the design is locked:
 - What "brew first" means on Linux hosts without brew.
 **Requirements**: PRIO-01, PRIO-02, PRIO-03, PRIO-04, PRIO-05, PRIO-06, PRIO-07 *(amended 2026-11-14, 24.5 SPEC and D-23)*
 **Depends on:** Phase 24.4
-**Plans:** 8/9 plans executed
+**Plans:** 9/9 plans executed
 
 Plans:
 **Wave 1**
@@ -702,7 +702,7 @@ Plans:
 - [x] 24.5-08-PLAN.md — README, architecture rule doc and onboarding skill describe the new order and verified bun facts (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 24.5-09-PLAN.md — `bun-lifecycle` container verb and one disposable-container run (phase-gate container check) (wave 7)
+- [x] 24.5-09-PLAN.md — `bun-lifecycle` container verb and one disposable-container run (phase-gate container check) (wave 7)
 
 ### Phase 25: Lean
 
