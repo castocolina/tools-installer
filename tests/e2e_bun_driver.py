@@ -342,6 +342,8 @@ def trust_verdict(
         detail = f"the ladder ended at method kind {method_kind}, not bun"
     elif last_error is None or command not in last_error:
         detail = f"the last error does not name `{command}`"
+    elif not any(_head(argv) == "bun" and tuple(argv[1:3]) == ("add", "-g") for argv in argvs):
+        detail = "no `bun add -g` argv was recorded, so the failure did not come from bun"
     elif any(_head(argv) == "pnpm" for argv in argvs):
         detail = "a pnpm command ran after the bun method"
     elif trusted_after != _USER_TRUST:

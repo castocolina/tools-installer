@@ -223,6 +223,19 @@ def test_landing_teardown_leaves_a_shared_base_image_it_did_not_pull(tmp_path: P
     assert "TRACER_LANDING_TEARDOWN_OK" in result.stdout
 
 
+def test_landing_teardown_is_unverified_when_the_follow_up_listing_fails(tmp_path: Path) -> None:
+    script = _script(
+        "landing_teardown",
+        variables={"FAIL_CT": "ps -a"},
+        stubs=_CT_STUB + "landing_teardown",
+    )
+    result = _run(script, tmp_path / "unverified")
+    assert result.returncode != 0
+    assert "TRACER_LANDING_TEARDOWN_LEFT container=tools-installer-e2e-landing" in result.stdout
+    assert "unverified" in result.stdout
+    assert "TRACER_LANDING_TEARDOWN_OK" not in result.stdout
+
+
 @pytest.mark.parametrize(("present", "pulled"), [(True, "0"), (False, "1")])
 def test_audit_landing_records_whether_it_pulled_the_image(
     tmp_path: Path, present: bool, pulled: str

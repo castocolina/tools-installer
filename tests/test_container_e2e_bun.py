@@ -238,7 +238,7 @@ def test_landing_teardown_appends_its_verdict_to_the_transcript(tmp_path: Path) 
         ),
         left,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode != 0  # a container left behind fails the run
     expected = f"TRACER_LANDING_TEARDOWN_LEFT container={_constant('LANDING_CONTAINER_NAME')}"
     assert result.stdout.strip() == expected
     assert left_log.read_text(encoding="utf-8").splitlines() == [expected]
@@ -618,9 +618,10 @@ _PNPM_AS_FALLBACK = ("/h/pnpm", "add", "-g", "x")
         (InstallStatus.INSTALLED, "bun", None, [], ["esbuild"], "FAILED"),
         (_FAILED, "node", _TRUST_ERROR, [], ["esbuild"], "kind"),
         (_FAILED, "bun", "some other error", [], ["esbuild"], "trust"),
-        (_FAILED, "bun", _TRUST_ERROR, [_PNPM_AS_FALLBACK], ["esbuild"], "pnpm"),
-        (_FAILED, "bun", _TRUST_ERROR, [], ["esbuild", "puppeteer"], "trustedDependencies"),
-        (_FAILED, "bun", _TRUST_ERROR, [], None, "trustedDependencies"),
+        (_FAILED, "bun", _TRUST_ERROR, [], ["esbuild"], "bun add -g"),
+        (_FAILED, "bun", _TRUST_ERROR, [_BUN_ADD, _PNPM_AS_FALLBACK], ["esbuild"], "pnpm"),
+        (_FAILED, "bun", _TRUST_ERROR, [_BUN_ADD], ["esbuild", "puppeteer"], "trustedDependencies"),
+        (_FAILED, "bun", _TRUST_ERROR, [_BUN_ADD], None, "trustedDependencies"),
     ],
 )
 def test_trust_verdict(

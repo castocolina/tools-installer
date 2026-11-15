@@ -2735,18 +2735,22 @@ landing_note_image() {
 # with --keep-image. Both removals tolerate absence (a base image another container uses stays).
 # The verdict is printed and also appended to the run's transcript, which the phase gate reads.
 landing_teardown() {
-  local verdict=TRACER_LANDING_TEARDOWN_OK
+  local entry_rc=$? verdict=TRACER_LANDING_TEARDOWN_OK listing
   ct rm -f "$LANDING_CONTAINER_NAME" >/dev/null 2>&1 || true
   if [[ "$LANDING_KEEP_IMAGE" -ne 1 && "$LANDING_PULLED" -eq 1 ]]; then
     ct rmi "$LANDING_IMAGE" >/dev/null 2>&1 || true
   fi
-  if ct ps -a --filter "name=^${LANDING_CONTAINER_NAME}$" --format '{{.Names}}' 2>/dev/null \
-    | grep -qx "$LANDING_CONTAINER_NAME"; then
+  # The listing is the proof the container is gone: a listing that fails proves nothing.
+  if ! listing="$(ct ps -a --filter "name=^${LANDING_CONTAINER_NAME}$" --format '{{.Names}}' 2>/dev/null)"; then
+    verdict="TRACER_LANDING_TEARDOWN_LEFT container=$LANDING_CONTAINER_NAME unverified"
+  elif grep -qx "$LANDING_CONTAINER_NAME" <<<"$listing"; then
     verdict="TRACER_LANDING_TEARDOWN_LEFT container=$LANDING_CONTAINER_NAME"
   fi
   printf '%s\n' "$verdict"
   # The braces catch the shell's own "No such file" for a directory a failed run never made.
   [[ -z "${LANDING_TRANSCRIPT:-}" ]] || { printf '%s\n' "$verdict" >>"$LANDING_TRANSCRIPT"; } 2>/dev/null || true
+  # A container left behind or unverified fails the run, keeping an earlier failure's own code.
+  [[ "$verdict" == TRACER_LANDING_TEARDOWN_OK ]] || exit "$((entry_rc == 0 ? 1 : entry_rc))"
   return 0
 }
 
