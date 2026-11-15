@@ -20,6 +20,7 @@ from textual.pilot import Pilot
 import setup
 from installer import (
     compose,
+    diskusage,
     pnpm_globals,
     post_install,
     postinstall,
@@ -67,6 +68,7 @@ from installer.wizard_app import (
     UninstallInputs,
     UninstallScreen,
 )
+from tests.compose_patch import patch_composition
 from tests.screen_family import wait_until
 from tests.state_doubles import (
     FrozenStateService,
@@ -453,7 +455,7 @@ def test_main_fix_interactive_without_link_mode_opens_doctor(
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
 
     console = Console(file=io.StringIO(), width=100, no_color=True)
-    monkeypatch.setattr(setup, "Console", lambda: console)
+    patch_composition(monkeypatch, "Console", lambda: console)
 
     assert setup.main(["--fix"]) == 0
     assert len(build_calls) == 1
@@ -547,7 +549,7 @@ def _bind_refresh(
         built.append(service)
         return service
 
-    monkeypatch.setattr(setup, "VersionRefreshService", build)
+    patch_composition(monkeypatch, "VersionRefreshService", build)
     return built
 
 
@@ -575,13 +577,13 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point every import-time home constant at tmp_path, so the real
     _build_app can run without touching the developer's shell files."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
-    monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
-    monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")
-    monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
-    monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
-    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "LaunchAgents" / "daemon.plist")
-    monkeypatch.setattr(setup, "_ENVIRONMENT_D_DIR", tmp_path / ".config" / "environment.d")
+    patch_composition(monkeypatch, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    patch_composition(monkeypatch, "_MYSHELLRC", tmp_path / ".myshellrc")
+    patch_composition(monkeypatch, "_SHELLRC", tmp_path / ".shellrc")
+    patch_composition(monkeypatch, "_ZSHRC", tmp_path / ".zshrc")
+    patch_composition(monkeypatch, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
+    patch_composition(monkeypatch, "_DAEMON_PLIST_PATH", tmp_path / "LaunchAgents" / "daemon.plist")
+    patch_composition(monkeypatch, "_ENVIRONMENT_D_DIR", tmp_path / ".config" / "environment.d")
     # Linux mirror of the macOS daemon paths above: without this, the
     # module-level _LINUX_DAEMON_UNIT_DIR constant (computed once, at import
     # time, from the real machine's HOME) would have every Linux-platform
@@ -589,7 +591,9 @@ def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # dev host's ~/.config/systemd/user -- not merely the wrong isolation
     # boundary, but also what keeps timer_state()'s own presence short-circuit
     # (D-01c) from ever reaching the real systemctl in these tests.
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user")
+    patch_composition(
+        monkeypatch, "_LINUX_DAEMON_UNIT_DIR", tmp_path / "config" / "systemd" / "user"
+    )
     monkeypatch.setattr(setup, "load_tools", _no_tools)
     monkeypatch.setattr(setup, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
@@ -664,7 +668,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
     monkeypatch.setattr(setup, "_has_controlling_tty", lambda: True)
     monkeypatch.setattr(setup, "_stdin_on_tty", contextlib.nullcontext)
     installed: list[str] = []
-    monkeypatch.setattr(setup, "install_tool", _recording_install(installed))
+    patch_composition(monkeypatch, "install_tool", _recording_install(installed))
     real_inputs = setup._execute_inputs  # pyright: ignore[reportPrivateUsage]
 
     def recording_inputs(
@@ -871,7 +875,7 @@ def test_the_policy_requirements_read_the_shared_state(
         methods=(Method(kind="brew", params={"formula": "watch"}),),
         tier="system",
     )
-    monkeypatch.setattr(setup, "is_installed", _never_installed)
+    patch_composition(monkeypatch, "is_installed", _never_installed)
     built = _bind_refresh(monkeypatch, FrozenStateService)
     seen = _capture_app(monkeypatch)
     setup._build_app([watch], _platform())  # pyright: ignore[reportPrivateUsage]
@@ -902,7 +906,7 @@ def test_build_app_wires_one_terminal_sync_closure(
         calls.append(kwargs)
         return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
 
     setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
 
@@ -1036,7 +1040,7 @@ def test_a_timer_change_invalidates_the_doctors_shared_cache_on_success_and_on_f
     def shared_cache(*_args: object, **_kwargs: object) -> TimerStateCache:
         return cache
 
-    monkeypatch.setattr(setup, "_timer_state_cache", shared_cache)
+    patch_composition(monkeypatch, "_timer_state_cache", shared_cache)
     ran: list[list[str]] = []
 
     def run(cmd: list[str]) -> None:
@@ -1051,7 +1055,7 @@ def test_a_timer_change_invalidates_the_doctors_shared_cache_on_success_and_on_f
     ) -> schedules.ScheduleContext:
         return replace(real_context(platform, present), run=run)
 
-    monkeypatch.setattr(setup, "_schedule_context", recording_context)
+    patch_composition(monkeypatch, "_schedule_context", recording_context)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
     schedule_inputs = seen[0]["schedules"]
@@ -1205,7 +1209,7 @@ def test_the_disk_probe_ignores_a_relative_tmpdir(
             tmp_threshold=False,
         )
 
-    monkeypatch.setattr(setup.diskusage, "probe_disk_pressure", fake_probe)
+    monkeypatch.setattr(diskusage, "probe_disk_pressure", fake_probe)
     probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
         Platform("fedora", "amd64", False, False), timer_cache=None
     )
@@ -1227,7 +1231,11 @@ def test_the_environment_d_dir_honours_xdg_config_home(tmp_path: Path) -> None:
     xdg = tmp_path / "xdg"
     env = {**os.environ, "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(xdg)}
     completed = subprocess.run(
-        [sys.executable, "-c", "import setup; print(setup._ENVIRONMENT_D_DIR)"],
+        [
+            sys.executable,
+            "-c",
+            "import installer.compose as compose; print(compose._ENVIRONMENT_D_DIR)",
+        ],
         cwd=Path(setup.__file__).parent,
         env=env,
         capture_output=True,
@@ -1290,18 +1298,18 @@ def test_doctor_preview_carries_the_grouped_pinned_allowed_replay(
     whose managed set is the brownfield pair.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
-    monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
-    monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")
-    monkeypatch.setattr(setup, "_ZSHRC", tmp_path / ".zshrc")
-    monkeypatch.setattr(setup, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
+    patch_composition(monkeypatch, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    patch_composition(monkeypatch, "_MYSHELLRC", tmp_path / ".myshellrc")
+    patch_composition(monkeypatch, "_SHELLRC", tmp_path / ".shellrc")
+    patch_composition(monkeypatch, "_ZSHRC", tmp_path / ".zshrc")
+    patch_composition(monkeypatch, "_RC_PATHS", [tmp_path / ".zshrc", tmp_path / ".bashrc"])
     monkeypatch.setattr(setup, "load_categories", _no_categories)
     monkeypatch.setattr(setup, "detect", _platform)
 
     def never_installed(_tool: Tool) -> bool:
         return False
 
-    monkeypatch.setattr(setup, "is_installed", never_installed)
+    patch_composition(monkeypatch, "is_installed", never_installed)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
     seen = _capture_app(monkeypatch)
 
@@ -1366,7 +1374,7 @@ def test_the_cli_teardown_is_wired_to_a_total_sweep_of_the_zdotdir_aware_zshrc(
         monkeypatch.setattr(setup, "detect", _platform)
         monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
         console = Console(file=io.StringIO(), width=100, no_color=True)
-        monkeypatch.setattr(setup, "Console", lambda: console)
+        patch_composition(monkeypatch, "Console", lambda: console)
 
         assert setup.main(["--uninstall", "--yes"]) == 0
         assert forwarded[0]["bundles"] is BUNDLES
@@ -1488,7 +1496,7 @@ def test_build_app_wires_a_strip_only_terminal_closure_into_uninstall_inputs(
         calls.append(kwargs)
         return TerminalShellResult()
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
     assert setup.main(["--uninstall"]) == 0
     inputs = seen[0]["uninstall"]
     assert isinstance(inputs, UninstallInputs)
@@ -1553,18 +1561,20 @@ def _headless_main_fixture(
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup, "load_categories", fake_load_categories)
-    monkeypatch.setattr(setup, "_build_services", fake_build_services)
+    patch_composition(monkeypatch, "_build_services", fake_build_services)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
     monkeypatch.setattr(setup, "configure_path", configure)
     monkeypatch.setattr(setup, "_verify_and_clean", verify)
-    monkeypatch.setattr(setup, "_sync_terminals_and_report", sync)
+    patch_composition(monkeypatch, "_sync_terminals_and_report", sync)
     monkeypatch.setattr(setup, "render_troubleshooting", render_help)
     monkeypatch.setattr(
         "installer.settings.default_settings_path", lambda: Path("/no/such/settings.json")
     )
     monkeypatch.setattr(setup, "default_settings_path", lambda: Path("/no/such/settings.json"))
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
     return run_calls, built_services, side_effects
 
 
@@ -1620,7 +1630,7 @@ def test_headless_post_run_failure_exits_1_with_the_reason(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise OSError(expected.rsplit(": ", 1)[-1])
 
-    monkeypatch.setattr(setup, failing_step, fail)
+    patch_composition(monkeypatch, failing_step, fail)
     assert setup.main(["--all", "--yes"]) == 1
     assert expected in buffer.getvalue()
     assert "Troubleshooting help" in buffer.getvalue()
@@ -1803,7 +1813,7 @@ def test_build_app_wires_the_shared_terminal_closure_into_update_service(
         calls.append(kwargs)
         return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
     app = setup._build_app([], platform)  # pyright: ignore[reportPrivateUsage]
     updates = app.catalog._updates  # pyright: ignore[reportPrivateUsage]
     assert updates is not None
@@ -1849,7 +1859,7 @@ def test_build_app_takes_its_services_from_build_services(
         recorded.append((seen_tools, seen_platform, services))
         return services
 
-    monkeypatch.setattr(setup, "_build_services", recording_build_services)
+    patch_composition(monkeypatch, "_build_services", recording_build_services)
     app = setup._build_app(tools, platform)  # pyright: ignore[reportPrivateUsage]
     assert len(recorded) == 1
     seen_tools, seen_platform, services = recorded[0]
@@ -1884,7 +1894,7 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
         terminal_calls.append(seen)
         return None
 
-    monkeypatch.setattr(setup, "_sync_terminals", fake_sync_terminals)
+    patch_composition(monkeypatch, "_sync_terminals", fake_sync_terminals)
     follow_up = updates._terminal_follow_up  # pyright: ignore[reportPrivateUsage]
     assert follow_up is not None
     assert follow_up() is None
@@ -1918,7 +1928,7 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
         methods=(),
         tier="user",
     )
-    outcome = install(tool, platform, setup.run_captured, setup.resolve_github_tag)
+    outcome = install(tool, platform, setup.run_captured, compose.resolve_github_tag)
     assert outcome.status.value == "no-method"
 
 
@@ -1946,7 +1956,7 @@ def _noninteractive_all_fixture(
             presence_service(tools, platform=platform),
             ScriptedUpdates({}),
             pnpm_globals.node_install_policy(tools),
-            setup.install_tool,
+            compose.install_tool,
         )
 
     def fake_run_wizard(*_args: object, **_kwargs: object) -> list[RowOutcome]:
@@ -1958,7 +1968,7 @@ def _noninteractive_all_fixture(
     monkeypatch.setattr(setup, "load_tools", fake_load_tools)
     monkeypatch.setattr(setup, "detect", _platform)
     monkeypatch.setattr(setup, "load_categories", fake_load_categories)
-    monkeypatch.setattr(setup, "_build_services", fake_build_services)
+    patch_composition(monkeypatch, "_build_services", fake_build_services)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
     monkeypatch.setattr(
         "installer.settings.default_settings_path", lambda: Path("/no/such/settings.json")
@@ -1969,7 +1979,9 @@ def _noninteractive_all_fixture(
     monkeypatch.setattr(setup, "configure_path", noop)
     monkeypatch.setattr(setup, "_verify_and_clean", noop)
     monkeypatch.setattr(setup.sys, "stdin", _FakeStdin())
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
 
 
 def test_the_noninteractive_all_route_calls_the_terminal_synchronizer_after_run_wizard(
@@ -1987,7 +1999,7 @@ def test_the_noninteractive_all_route_calls_the_terminal_synchronizer_after_run_
         calls.append(kwargs)
         return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
 
     assert setup.main(["--all", "--yes"]) == 0
     assert len(calls) == 1
@@ -2013,14 +2025,16 @@ def test_the_cli_uninstall_route_calls_the_terminal_synchronizer_after_run_unins
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
     calls: list[dict[str, object]] = []
 
     def sync(**kwargs: object) -> TerminalShellResult:
         calls.append(kwargs)
         return TerminalShellResult(warnings=("wezterm configuration is user-owned",))
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
 
     assert setup.main(["--uninstall", "--yes"]) == 0
     assert len(calls) == 1
@@ -2042,7 +2056,7 @@ def test_the_noninteractive_all_route_survives_a_raising_terminal_synchronizer(
     def boom(**_kwargs: object) -> TerminalShellResult:
         raise OSError("EACCES: ~/.config/kitty/kitty.conf")
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", boom)
+    patch_composition(monkeypatch, "sync_terminal_shells", boom)
 
     assert setup.main(["--all", "--yes"]) == 0
     text = buffer.getvalue()
@@ -2067,10 +2081,12 @@ def test_the_cli_uninstall_never_writes_a_shell_block_while_zsh_stays(
     def only_zsh(name: str) -> str | None:
         return "/usr/bin/zsh" if name == "zsh" else None
 
-    monkeypatch.setattr(setup, "which_with_brew", only_zsh)
+    patch_composition(monkeypatch, "which_with_brew", only_zsh)
     monkeypatch.setattr(setup, "detect", _linux)
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=200, no_color=True)
+    )
 
     assert setup.main(["--uninstall", "--yes"]) == 0
     assert not (tmp_path / ".zshenv").exists()
@@ -2093,7 +2109,7 @@ def test_the_noninteractive_all_route_names_a_shell_write(
             paths=(("zshenv", zshenv),),
         )
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", wrote)
+    patch_composition(monkeypatch, "sync_terminal_shells", wrote)
 
     assert setup.main(["--all", "--yes"]) == 0
     assert "Shell: ~/.zshenv now exports SHELL=/usr/bin/zsh" in buffer.getvalue()
@@ -2113,12 +2129,14 @@ def test_the_cli_uninstall_route_survives_a_raising_terminal_synchronizer(
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
 
     def boom(**_kwargs: object) -> TerminalShellResult:
         raise OSError("EACCES: ~/.config/kitty/kitty.conf")
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", boom)
+    patch_composition(monkeypatch, "sync_terminal_shells", boom)
 
     assert setup.main(["--uninstall", "--yes"]) == 0
     text = buffer.getvalue()
@@ -2137,7 +2155,7 @@ def test_sync_terminals_surfaces_a_silent_revert_as_a_message(
     def sync(**_kwargs: object) -> TerminalShellResult:
         return TerminalShellResult(reverted=("kitty", "konsole"))
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
 
     warning = setup._sync_terminals(platform)  # pyright: ignore[reportPrivateUsage]
 
@@ -2505,10 +2523,10 @@ def test_execute_inputs_wire_path_calls_configure_path_and_returns_captured_text
         console.print("PATH configured")
 
     monkeypatch.setattr(setup, "configure_path", fake_configure_path)
-    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
-    monkeypatch.setattr(setup, "_MYSHELLRC", tmp_path / ".myshellrc")
-    monkeypatch.setattr(setup, "_SHELLRC", tmp_path / ".shellrc")
-    monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
+    patch_composition(monkeypatch, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    patch_composition(monkeypatch, "_MYSHELLRC", tmp_path / ".myshellrc")
+    patch_composition(monkeypatch, "_SHELLRC", tmp_path / ".shellrc")
+    patch_composition(monkeypatch, "_SHELL", "/bin/zsh")
     inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
@@ -2542,7 +2560,7 @@ def test_execute_inputs_verify_calls_run_doctor_and_returns_captured_text(
         return object()
 
     monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
-    monkeypatch.setattr(setup, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
+    patch_composition(monkeypatch, "_DEFAULT_BIN_DIR", tmp_path / ".local" / "bin")
     inputs = setup._execute_inputs(  # pyright: ignore[reportPrivateUsage]
         [],
         _platform(),
@@ -2563,7 +2581,9 @@ def test_interactive_none_summary_prints_aborted_and_returns_zero(
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
     _capture_app(monkeypatch)
     assert setup.main([]) == 0
     assert "Aborted." in buffer.getvalue()
@@ -2735,7 +2755,7 @@ def test_live_set_link_mode_rereads_fix_preview_apply_execute_and_policies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "_SHELL", "/bin/zsh")
+    patch_composition(monkeypatch, "_SHELL", "/bin/zsh")
     seen = _capture_app(monkeypatch)
     store = SettingsStore(tmp_path / "settings.json", link_mode="centralized")
     setup._build_app([], _platform(), settings=store)  # pyright: ignore[reportPrivateUsage]
@@ -2880,7 +2900,9 @@ def test_interactive_wizard_prints_warnings_before_the_abort_return(
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=120, no_color=True)
+    )
     collector = ScheduleDefaultWarnings()
 
     class _Aborting:
@@ -2915,7 +2937,9 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=120, no_color=True)
+    )
 
     def no_duplicates(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
         return {}
@@ -2948,7 +2972,7 @@ def test_interactive_wizard_prints_warnings_on_the_normal_path_and_stays_quiet_w
 
     quiet = io.StringIO()
     empty = ScheduleDefaultWarnings()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=quiet, width=120, no_color=True))
+    patch_composition(monkeypatch, "Console", lambda: Console(file=quiet, width=120, no_color=True))
 
     class _Quiet:
         run_in_flight = False
@@ -2974,7 +2998,9 @@ def test_interactive_wizard_labels_a_timed_out_background_apply(
 
     buffer = io.StringIO()
     _sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=120, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=120, no_color=True)
+    )
     collector = ScheduleDefaultWarnings()
 
     class _Aborting:
@@ -3070,7 +3096,7 @@ def test_disk_pressure_probe_is_a_zero_arg_callable_returning_disk_pressure(
 ) -> None:
     from installer.diskusage import DiskPressure
 
-    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
+    patch_composition(monkeypatch, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     probe = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
         _platform(), timer_cache=None
@@ -3128,7 +3154,7 @@ def test_disk_pressure_probe_none_cache_is_unavailable_on_linux_and_plist_on_mac
 ) -> None:
     from installer.enums import DaemonState
 
-    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
+    patch_composition(monkeypatch, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     linux = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
         _linux_platform(), timer_cache=None
@@ -3137,7 +3163,7 @@ def test_disk_pressure_probe_none_cache_is_unavailable_on_linux_and_plist_on_mac
 
     plist = tmp_path / "agent.plist"
     plist.write_text("plist")
-    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", plist)
+    patch_composition(monkeypatch, "_DAEMON_PLIST_PATH", plist)
     macos = setup._disk_pressure_probe(  # pyright: ignore[reportPrivateUsage]
         _platform(), timer_cache=None
     )()
@@ -3321,7 +3347,7 @@ def test_run_doctor_non_tty_forwards_the_probe_closure(
         forwarded.append(kwargs.get("disk_pressure"))
         return object()
 
-    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
     monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
     assert setup._run_doctor(Console(file=io.StringIO())) == 0  # pyright: ignore[reportPrivateUsage]
     assert seen and forwarded[0] is seen[0]
@@ -3342,7 +3368,7 @@ def test_verify_and_clean_forwards_the_probe_closure(
         forwarded.append(kwargs.get("disk_pressure"))
         return object()
 
-    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
     monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
 
     def no_duplicates(*_args: object, **_kwargs: object) -> dict[Path, list[str]]:
@@ -3377,7 +3403,7 @@ def test_interactive_wizard_hands_one_probe_to_execute_and_policy_inputs(
         received.append(kwargs.get("disk_pressure"))
         return object()
 
-    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
     monkeypatch.setattr(setup, "run_doctor", fake_run_doctor)
     seen = _capture_app(monkeypatch)
     assert setup.main([]) == 0
@@ -3411,7 +3437,7 @@ def test_interactive_wizard_builds_one_timer_cache(
         calls.append(cache)
         return cache
 
-    monkeypatch.setattr(setup, "_timer_state_cache", fake_cache)
+    patch_composition(monkeypatch, "_timer_state_cache", fake_cache)
     _capture_app(monkeypatch)
     assert setup.main([]) == 0
     assert calls == [cache]
@@ -3426,7 +3452,7 @@ def test_build_app_without_disk_pressure_still_binds_the_probe(
     def fake_probe(*_args: object, **_kwargs: object) -> object:
         return marker
 
-    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
     seen = _capture_app(monkeypatch)
     setup._build_app([], _platform())  # pyright: ignore[reportPrivateUsage]
     policies = seen[0]["policies"]
@@ -3444,7 +3470,7 @@ def test_build_app_binds_the_callers_probe_without_building_another(
         built.append(object())
         return built[-1]
 
-    monkeypatch.setattr(setup, "_disk_pressure_probe", fake_probe)
+    patch_composition(monkeypatch, "_disk_pressure_probe", fake_probe)
     seen = _capture_app(monkeypatch)
     setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [], _platform(), disk_pressure=_unused_probe
@@ -3466,7 +3492,7 @@ def test_build_app_omitted_arguments_still_share_one_cache(
     unit_dir.mkdir()
     (unit_dir / "tools-installer-prune-tmp.timer").write_text("timer")
     (unit_dir / "tools-installer-prune-tmp.service").write_text("service")
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
+    patch_composition(monkeypatch, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
 
@@ -3498,7 +3524,7 @@ def test_build_app_calls_timer_state_cache_at_most_once(
         calls["n"] += 1
         return original(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(setup, "_timer_state_cache", counting)
+    patch_composition(monkeypatch, "_timer_state_cache", counting)
     setup._build_app([], _linux_platform())  # pyright: ignore[reportPrivateUsage]
     assert calls["n"] == 1
 
@@ -3508,7 +3534,7 @@ def test_probe_reports_unavailable_when_there_is_no_timer_cache(
 ) -> None:
     from installer.enums import DaemonState
 
-    monkeypatch.setattr(setup, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
+    patch_composition(monkeypatch, "_DAEMON_PLIST_PATH", tmp_path / "missing.plist")
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     cache = setup._timer_state_cache(  # pyright: ignore[reportPrivateUsage]
         _linux_platform(), which=lambda _name: None, read_output=lambda _argv: "active"
@@ -3530,7 +3556,7 @@ def test_linux_probe_memoizes_is_active_inside_the_ttl(
     unit_dir.mkdir()
     (unit_dir / "tools-installer-prune-tmp.timer").write_text("timer")
     (unit_dir / "tools-installer-prune-tmp.service").write_text("service")
-    monkeypatch.setattr(setup, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
+    patch_composition(monkeypatch, "_LINUX_DAEMON_UNIT_DIR", unit_dir)
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     cache = setup._timer_state_cache(  # pyright: ignore[reportPrivateUsage]
         _linux_platform(),
@@ -3547,7 +3573,7 @@ def test_linux_probe_memoizes_is_active_inside_the_ttl(
 
 
 def test_native_probe_is_wired_once_and_the_mutation_site_reuses_the_service() -> None:
-    source = Path(setup.__file__).read_text()
+    source = Path(compose.__file__).read_text()
     assert source.count("native_probe=") == 1, source.count("native_probe=")
     assert "reresolve_ownership=version_refresh.resolve_owner" in source
     assert "run_probe" in source
@@ -3858,8 +3884,8 @@ async def test_uninstall_screen_passes_the_selected_tools(
     an env-only selection passes `tools=()`, a mixed one only its tool."""
     del selection
     _hermetic_route(monkeypatch, tmp_path)
-    monkeypatch.setattr(setup, "resolve_github_tag", _offline_tag)
-    monkeypatch.setattr(setup, "_sync_terminals", _no_terminal_sync)
+    patch_composition(monkeypatch, "resolve_github_tag", _offline_tag)
+    patch_composition(monkeypatch, "_sync_terminals", _no_terminal_sync)
     bin_dir = tmp_path / ".local" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     rg = Tool(
@@ -3946,12 +3972,14 @@ def test_terminal_drift_pass_writes_nothing(
     kitty_conf = home / ".config" / "kitty" / "kitty.conf"
     kitty_conf.parent.mkdir(parents=True)
     kitty_conf.write_text("shell /bin/bash\n", encoding="utf-8")
-    monkeypatch.setattr(setup, "default_cache_path", lambda: tmp_path / "state" / "versions.json")
+    patch_composition(
+        monkeypatch, "default_cache_path", lambda: tmp_path / "state" / "versions.json"
+    )
 
     def no_native(argv: list[str]) -> str:
         raise OSError(f"no native probe in this test: {argv[0]}")
 
-    monkeypatch.setattr(setup, "run_probe", no_native)
+    patch_composition(monkeypatch, "run_probe", no_native)
     built: list[VersionRefreshService] = []
 
     def capture(**kwargs: Any) -> VersionRefreshService:
@@ -3959,7 +3987,7 @@ def test_terminal_drift_pass_writes_nothing(
         built.append(service)
         return service
 
-    monkeypatch.setattr(setup, "VersionRefreshService", capture)
+    patch_composition(monkeypatch, "VersionRefreshService", capture)
     tools = [
         Tool(
             id=tool_id,
@@ -4026,7 +4054,7 @@ def test_execute_inputs_presence_is_the_state(
 ) -> None:
     _sandbox(monkeypatch, tmp_path)
     tool = _brew_rg()
-    monkeypatch.setattr(setup, "is_installed", _always_installed)
+    patch_composition(monkeypatch, "is_installed", _always_installed)
     built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
     execute = _wired(monkeypatch, [tool])["execute"]
     assert isinstance(execute, ExecuteInputs)
@@ -4051,7 +4079,7 @@ def test_install_binding_passes_present(monkeypatch: pytest.MonkeyPatch, tmp_pat
         recorded.append(kwargs)
         return InstallOutcome(tool.id, "installed")
 
-    monkeypatch.setattr(setup, "install_tool", fake_install)
+    patch_composition(monkeypatch, "install_tool", fake_install)
     built = _bind_refresh(monkeypatch, FrozenStateService, present=_always_installed)
     execute = _wired(monkeypatch, [tool])["execute"]
     assert isinstance(execute, ExecuteInputs)
@@ -4278,9 +4306,11 @@ def test_the_cli_uninstall_strips_legacy_alias_blocks(
     def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
         return TerminalShellResult()
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", no_terminal_sync)
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
 
     assert setup.main(["--uninstall", "--yes"]) == 0
     assert "Removed the codex-skip alias block(s) from ~/.myshellrc." in buffer.getvalue()
@@ -4301,12 +4331,14 @@ def _plant_retired_rtk(home: Path) -> Path:
 def _headless_teardown(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
     """Run the real headless teardown; stub only the host collaborators it would touch."""
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=100, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=100, no_color=True)
+    )
 
     def no_terminal_sync(**_kwargs: object) -> TerminalShellResult:
         return TerminalShellResult()
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", no_terminal_sync)
     return buffer
 
 
@@ -4469,9 +4501,11 @@ def test_every_route_survives_a_non_utf8_myshellrc(
         return TerminalShellResult()
 
     monkeypatch.setattr(setup, "run_uninstall", fake_run_uninstall)
-    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", no_terminal_sync)
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=200, no_color=True)
+    )
     assert setup.main(["--uninstall", "--yes"]) == 0
     assert notice in buffer.getvalue()
     assert rc.read_bytes() == latin1
@@ -4561,11 +4595,13 @@ def _headless_route_stubs(monkeypatch: pytest.MonkeyPatch, buffer: io.StringIO) 
     monkeypatch.setattr(setup, "run_doctor", noop)
     monkeypatch.setattr(setup, "configure_path", noop)
     monkeypatch.setattr(setup, "run_uninstall", uninstalled)
-    monkeypatch.setattr(setup, "sync_terminal_shells", no_terminal_sync)
-    monkeypatch.setattr(setup, "_timer_state_cache", noop)
-    monkeypatch.setattr(setup, "_disk_pressure_probe", noop)
-    monkeypatch.setattr(setup, "_competitor_probe", noop)
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=300, no_color=True))
+    patch_composition(monkeypatch, "sync_terminal_shells", no_terminal_sync)
+    patch_composition(monkeypatch, "_timer_state_cache", noop)
+    patch_composition(monkeypatch, "_disk_pressure_probe", noop)
+    patch_composition(monkeypatch, "_competitor_probe", noop)
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=300, no_color=True)
+    )
 
 
 def test_a_doctor_launch_removes_the_retired_guard(
@@ -4752,7 +4788,7 @@ def test_the_cli_teardown_removes_the_guard_before_any_read(
         shim_at_read.append((tmp_path / ".local" / "bin" / "npx").exists())
         return False
 
-    monkeypatch.setattr(setup, "is_installed", recording_is_installed)
+    patch_composition(monkeypatch, "is_installed", recording_is_installed)
     _seed_retired_guard(tmp_path)
 
     assert setup.main(["--uninstall", "--yes"]) == 0
@@ -5006,7 +5042,7 @@ def test_sync_terminals_passes_a_runner_and_drift_does_not(
         calls.append(kwargs)
         return TerminalShellResult()
 
-    monkeypatch.setattr(setup, "sync_terminal_shells", sync)
+    patch_composition(monkeypatch, "sync_terminal_shells", sync)
     setup._sync_terminals(platform)  # pyright: ignore[reportPrivateUsage]
     refresh = setup._build_services([], platform)[0]  # pyright: ignore[reportPrivateUsage]
     drift = refresh._terminal_drift  # pyright: ignore[reportPrivateUsage]
@@ -5029,8 +5065,8 @@ def _alacritty_update_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
 
     _sandbox(monkeypatch, tmp_path)
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
-    monkeypatch.setattr(
-        setup, "which_with_brew", {"zsh": _ZSH_PATH, "alacritty": _ALACRITTY_PATH}.get
+    patch_composition(
+        monkeypatch, "which_with_brew", {"zsh": _ZSH_PATH, "alacritty": _ALACRITTY_PATH}.get
     )
     config = tmp_path / ".config" / "alacritty" / "alacritty.toml"
     config.parent.mkdir(parents=True)
@@ -5149,7 +5185,7 @@ def test_build_app_removes_the_guard_before_any_read(
         shim_at_read.append((tmp_path / ".local" / "bin" / "npx").exists())
         return False
 
-    monkeypatch.setattr(setup, "is_installed", recording_is_installed)
+    patch_composition(monkeypatch, "is_installed", recording_is_installed)
     _seed_retired_guard(tmp_path)
 
     warning = _wired(monkeypatch, [loop_tool("rg")])["startup_warning"]

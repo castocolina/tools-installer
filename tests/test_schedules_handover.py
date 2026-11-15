@@ -43,6 +43,7 @@ from installer.ui_common import BASE_VIEW
 from installer.uninstall import SweepResult
 from installer.wizard_app import SchedulesScreen, UnifiedApp
 from tests import test_setup
+from tests.compose_patch import patch_composition
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import FrozenStateService
 from tests.test_schedules_engine import (
@@ -110,16 +111,18 @@ def _headless(
     settings = tmp_path / "settings.json"
     monkeypatch.setattr(setup, "load_tools", _no_tools)
     monkeypatch.setattr(setup, "detect", lambda: FEDORA)
-    monkeypatch.setattr(setup, "_build_services", services)
-    monkeypatch.setattr(setup, "_schedule_context", schedule_context)
+    patch_composition(monkeypatch, "_build_services", services)
+    patch_composition(monkeypatch, "_schedule_context", schedule_context)
     monkeypatch.setattr(setup, "run_wizard", fake_run_wizard)
     monkeypatch.setattr(setup, "configure_path", nothing)
     monkeypatch.setattr(setup, "_verify_and_clean", nothing)
-    monkeypatch.setattr(setup, "_sync_terminals_and_report", nothing)
+    patch_composition(monkeypatch, "_sync_terminals_and_report", nothing)
     monkeypatch.setattr(setup, "render_troubleshooting", nothing)
     monkeypatch.setattr("installer.settings.default_settings_path", lambda: settings)
     monkeypatch.setattr(setup, "default_settings_path", lambda: settings)
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=200, no_color=True)
+    )
     return ran
 
 
@@ -150,7 +153,7 @@ def test_headless_route_turns_schedules_on_and_says_so(
     assert runlock.holder(runlock.run_lock_path()) is None
 
     again = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=again, width=200, no_color=True))
+    patch_composition(monkeypatch, "Console", lambda: Console(file=again, width=200, no_color=True))
     assert setup.main(["--all", "--yes"]) == 0
     assert "Turned on schedules" not in again.getvalue()
 
@@ -213,7 +216,7 @@ def _tui_app(
     def schedule_context(_platform: Platform, _present: Callable[[str], bool]) -> ScheduleContext:
         return replace(env.ctx, present=present.__contains__)
 
-    monkeypatch.setattr(setup, "_schedule_context", schedule_context)
+    patch_composition(monkeypatch, "_schedule_context", schedule_context)
     return setup._build_app(  # pyright: ignore[reportPrivateUsage]
         [],
         FEDORA,
@@ -565,7 +568,9 @@ def test_cli_uninstall_refuses_during_a_scheduled_run(
     state = schedules.default_state_path()
     schedules.save_state(state, schedules.ScheduleState())
     buffer = io.StringIO()
-    monkeypatch.setattr(setup, "Console", lambda: Console(file=buffer, width=200, no_color=True))
+    patch_composition(
+        monkeypatch, "Console", lambda: Console(file=buffer, width=200, no_color=True)
+    )
 
     def boom(*_args: object, **_kwargs: object) -> tuple[list[Path], tuple[str, ...]]:
         raise AssertionError("the teardown must not start while a scheduled run holds the lock")

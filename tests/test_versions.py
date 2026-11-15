@@ -147,15 +147,15 @@ def test_production_paths_select_the_real_release_resolver() -> None:
             default = inspect.signature(getattr(module, name)).parameters["resolve_tag"].default
         assert default is resolve_github_tag
 
-    setup_source = Path("setup.py").read_text(encoding="utf-8")
-    tree = ast.parse(setup_source)
     resolve_tag_keywords: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        for keyword in node.keywords:
-            if keyword.arg == "resolve_tag" and isinstance(keyword.value, ast.Name):
-                resolve_tag_keywords.append(keyword.value.id)
+    for source_path in (Path("setup.py"), Path("installer/compose.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "resolve_tag" and isinstance(keyword.value, ast.Name):
+                    resolve_tag_keywords.append(keyword.value.id)
     assert resolve_tag_keywords
     assert all(name == "resolve_github_tag" for name in resolve_tag_keywords)
 

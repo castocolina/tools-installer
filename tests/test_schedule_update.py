@@ -28,6 +28,7 @@ from installer.update import (
     perform_update,
     resolve_update_argv,
 )
+from tests.compose_patch import patch_composition
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 _FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
@@ -219,7 +220,7 @@ def test_setup_routes_run_schedule_first(
         "_run_interactive_wizard",
         "run_wizard",
     ):
-        monkeypatch.setattr(setup, name, refuse)
+        patch_composition(monkeypatch, name, refuse)
     code = setup.main(["--run-schedule", "update-claude", "--parent-holds-run-lock"])
     assert code == 0
     assert capsys.readouterr().out == "ok: updated 1.0 → 1.1\n"
@@ -246,7 +247,7 @@ def test_run_schedule_uses_the_in_group_runner(monkeypatch: pytest.MonkeyPatch) 
         )
         return _Refresh(), updates, None, None
 
-    monkeypatch.setattr(setup, "_build_services", fake_build_services)
+    patch_composition(monkeypatch, "_build_services", fake_build_services)
     deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
     assert isinstance(deps, RunDeps)
     assert seen == {"runner": run_captured_in_group}
