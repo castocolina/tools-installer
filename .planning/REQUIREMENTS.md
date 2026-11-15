@@ -26,16 +26,16 @@
 
 ### Registry truth
 
-- [ ] **REG-01**: Loading the registry rejects unknown method keys per kind [TA §4.2, A T-07-14, D C10]
-- [ ] **REG-02**: Every `[[tool]]` carries a `verified = YYYY-MM-DD` key, validated by the loader [A Ph6]
-- [ ] **REG-03**: `make verify-registry` reports renamed assets, missing archive members and checksum drift against the latest release; it runs weekly as a non-blocking scheduled job, never in the PR gate [D C5, O12]
-- [ ] **REG-04**: GitHub release downloads without a pinned checksum are verified against the GitHub API sha256 digest [F X5, C5]
-- [ ] **REG-05**: A freshly installed binary that fails a smoke run (`--version`, loader errors) falls through to the next method [D C6]
-- [ ] **REG-06**: The installer launches without the dev venv on PATH, so tools resolve their real owner [D C1]
-- [ ] **REG-07**: macOS stubs (`/usr/bin/java`) never count as an installed tool [C G1]
-- [ ] **REG-08**: The version parser never fabricates a version (`-1`, quoted, `version=` forms) [B 15 WR-02]
-- [ ] **REG-09**: All data fixes from audits C, D, E and F are applied, and the `managed-download` owner probe is removed [C/D/E/F, B 15 WR-07]
-- [ ] **REG-10**: The `drawio-cli` row is removed; `drawio-desktop` serves both audiences [O6]
+- [x] **REG-01**: Loading the registry rejects unknown method keys per kind [TA §4.2, A T-07-14, D C10]
+- [x] **REG-02**: Every `[[tool]]` carries a `verified = YYYY-MM-DD` key, validated by the loader [A Ph6]
+- [x] **REG-03**: `make verify-registry` reports renamed assets, missing archive members and checksum drift against the latest release; it runs weekly as a non-blocking scheduled job, never in the PR gate [D C5, O12]
+- [x] **REG-04**: GitHub release downloads without a pinned checksum are verified against the GitHub API sha256 digest [F X5, C5]
+- [x] **REG-05**: A freshly installed binary that fails a smoke run (`--version`, loader errors) falls through to the next method [D C6]
+- [x] **REG-06**: The installer launches without the dev venv on PATH, so tools resolve their real owner [D C1]
+- [x] **REG-07**: macOS stubs (`/usr/bin/java`) never count as an installed tool [C G1]
+- [x] **REG-08**: The version parser never fabricates a version (`-1`, quoted, `version=` forms) [B 15 WR-02]
+- [x] **REG-09**: All data fixes from audits C, D, E and F are applied, and the `managed-download` owner probe is removed [C/D/E/F, B 15 WR-07]
+- [x] **REG-10**: The `drawio-cli` row is removed; `drawio-desktop` serves both audiences [O6]
 
 ### Tool state and health
 
@@ -209,16 +209,16 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | CI-01 | Phase 17 | Pending |
 | CI-02 | Phase 17 | Pending |
 | CI-03 | Phase 17 | Pending |
-| REG-01 | Phase 18 | Pending |
-| REG-02 | Phase 18 | Pending |
-| REG-03 | Phase 18 | Pending |
-| REG-04 | Phase 18 | Pending |
-| REG-05 | Phase 18 | Pending |
-| REG-06 | Phase 18 | Pending |
-| REG-07 | Phase 18 | Pending |
-| REG-08 | Phase 18 | Pending |
-| REG-09 | Phase 18 | Pending |
-| REG-10 | Phase 18 | Pending |
+| REG-01 | Phase 18 | Complete |
+| REG-02 | Phase 18 | Complete |
+| REG-03 | Phase 18 | Complete |
+| REG-04 | Phase 18 | Complete |
+| REG-05 | Phase 18 | Complete |
+| REG-06 | Phase 18 | Complete |
+| REG-07 | Phase 18 | Complete |
+| REG-08 | Phase 18 | Complete |
+| REG-09 | Phase 18 | Complete |
+| REG-10 | Phase 18 | Complete |
 | STATE-01 | Phase 19 | Pending |
 | STATE-02 | Phase 19 | Pending |
 | STATE-03 | Phase 19 | Pending |

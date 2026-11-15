@@ -26,7 +26,7 @@
 - Decimal phases (e.g. 17.1): Urgent insertions (marked with INSERTED)
 
 - [ ] **Phase 17: Stop the bleeding** - Fix host hazards H1–H7 and the false-success, crash and dead-route bugs; CI green on both OSes with the PR check required
-- [ ] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke
+- [x] **Phase 18: Registry truth and drift guard** - Apply every audit data fix, reject unknown keys, require a `verified` date key, add `make verify-registry`, digest checksums and install-time smoke (completed 2026-11-15)
 - [ ] **Phase 19: One tool state with health plus receipts** - One `ToolState` per tool with a closed `Health` set, published in one swap, plus an atomic receipt for every install
 - [x] **Phase 20: Install plan with dispositions** - The review states each selection's disposition; TUI and headless run one plan and one engine with outcome-based exit codes (completed 2026-11-07)
 - [ ] **Phase 21: One screen family** - Every view reflects every mutation; Uninstall, Policies and Doctor become projections of the shared state
@@ -106,7 +106,7 @@ Plans:
   4. Launched without the dev venv on PATH, ruff resolves its real owner under `make setup` (container); `/usr/bin/java` alone never counts as installed; `parse_version('-1') is None`, and quoted or `version=` output never yields a fabricated version.
   5. Every C/D/E/F audit data fix is applied, the `managed-download` owner probe is gone, and `drawio-cli` is removed with `drawio-desktop` serving both audiences.
 
-**Plans:** 28/28 plans executed
+**Plans:** 28/28 plans complete
 
 Plans (numbered in creation order; W = execution wave):
 - [x] 18-01-PLAN.md — Closed METHOD_PARAMS keys, required `verified` date (seeded), pinned app/tarball rule (W1)
@@ -740,7 +740,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 17. Stop the bleeding | 21/21 | In Progress | - |
-| 18. Registry truth and drift guard | 28/28 | In Progress | - |
+| 18. Registry truth and drift guard | 28/28 | Complete    | 2026-11-15 |
 | 19. One tool state with health plus receipts | 46/46 | In Progress | - |
 | 20. Install plan with dispositions | 31/31 | Complete    | 2026-11-07 |
 | 21. One screen family | 21/21 | In Progress | - |
