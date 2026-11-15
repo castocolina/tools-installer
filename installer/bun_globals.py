@@ -1,9 +1,8 @@
 """bun's global directories, computed from the environment, and the bun resolver.
 
 This never calls bun's CLI: `bun pm bin -g` errors on a fresh host, before the first global
-install, which is exactly when the answer is needed. Importers: engine, executors, status,
-shellrc, ownership and version_status; this module imports only the standard library,
-`installer.model` and `installer.versions` so none can cycle.
+install, which is exactly when the answer is needed. This module imports only the standard
+library, `installer.model` and `installer.versions`, so none of its importers can cycle.
 """
 
 import json
