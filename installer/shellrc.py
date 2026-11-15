@@ -700,11 +700,6 @@ def _inspect_source_line(
     return _SourceInspection("none", has_source, False, has_unresolvable)
 
 
-def classify_source_line(line: str, target: Path) -> _SourceInspection:
-    """Expose the pure line classifier for focused tests and diagnostics."""
-    return _inspect_source_line(line, target)
-
-
 def _classify_source_lines(text: str, target: Path) -> list[_SourceInspection]:
     """Classify every physical line without attempting to parse shell syntax.
 
