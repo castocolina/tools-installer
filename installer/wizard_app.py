@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, ClassVar
 from textual import work
 from textual.app import App
 from textual.binding import Binding, BindingType
-from textual.message import Message
 from textual.screen import Screen
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
@@ -23,6 +22,7 @@ from installer import schedules
 from installer.app import (
     path_writer_lines_for,
 )
+from installer.app_messages import RefreshFinished, RefreshPublished, ScheduleDefaultsApplied
 from installer.catalog_tui import CatalogScreen, RefreshRequested, ToolUpdated
 from installer.doctor import DoctorReport
 from installer.doctor_screen import DoctorScreen
@@ -76,39 +76,6 @@ from installer.version_status import (
 
 _REMOVAL_QUIT_WAIT = "Waiting for the removal to finish…"
 _REMOVAL_QUIT_CUT = "Quit before the removal finished; some files may remain."
-
-
-class ScheduleDefaultsApplied(Message):
-    """The threaded schedule-defaults reconcile finished; `report` is what it did (an empty
-    report when it did nothing or raised).
-
-    Posted unconditionally from UnifiedApp's own worker, in a finally block,
-    regardless of outcome -- mirroring GlobalsAudited/GlobalsReinstalled's same
-    thread -> post_message hand-off shape, for the identical reason: widgets
-    may only be touched from the app's own thread.
-    """
-
-    def __init__(self, report: schedules.ReconcileReport) -> None:
-        self.report = report
-        super().__init__()
-
-
-class RefreshPublished(Message):
-    """The refresh worker published a pass. `error` is the pass's first error;
-    a clean publication means the pass succeeded."""
-
-    def __init__(self, error: str | None, warning: str | None) -> None:
-        super().__init__()
-        self.error = error
-        self.warning = warning
-
-
-class RefreshFinished(Message):
-    """The refresh worker ended; `error` is the pass's first failure, if any."""
-
-    def __init__(self, error: str | None) -> None:
-        super().__init__()
-        self.error = error
 
 
 class UnifiedApp(MutationLock, App[list[str] | None]):
@@ -442,30 +409,19 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         screen.status.set(line, "warn")
         self._state_line = (screen, line, "")
 
-    # exit_on_error=False (Textual's own worker.py defaults this True, which
-    # calls App._handle_exception -- crashing the whole app -- on any
-    # exception a threaded worker raises): an exception from the reconcile must
-    # still leave a usable, running app (the finally block below already
-    # guarantees the lock releases); Worker.state/.error still record
-    # it for diagnosis, this only suppresses the exit-the-app side effect.
+    # exit_on_error=False: Textual defaults it True, which crashes the whole app on any
+    # exception a threaded worker raises; an exception from the reconcile must still
+    # leave a usable, running app. Worker.state/.error still record it.
     @work(thread=True, exclusive=True, group="schedule-defaults", exit_on_error=False)
     def _apply_schedule_defaults_worker(self) -> None:
         """Turn on the schedules nobody has decided about, off the event loop.
 
-        Mirrors DoctorScreen._audit_globals_worker/_reinstall_globals_worker's
-        own thread-worker + post_message shape, for the identical reason: a
-        real systemctl or launchctl call (run_captured's underlying
-        subprocess.run has no timeout) must never freeze frame rendering or
-        keypress handling. The body is wrapped in try/finally so the
-        completion message is ALWAYS posted -- regardless of whether
-        self._schedule_defaults() returns normally or raises ANYTHING -- so the
-        app mutation lock the constructor (or the install run's end) took can
-        never stay held. An exception
-        raised inside the try still propagates normally after the finally runs
-        and is recorded on the Worker itself (state=ERROR, .error);
-        exit_on_error=False is what keeps that from also crashing the app, so
-        this only ever ADDS the guaranteed message post, it never swallows or
-        hides a genuine bug.
+        The same thread-worker + post_message shape as DoctorScreen's globals
+        workers: a real systemctl or launchctl call (run_captured's subprocess.run
+        has no timeout) must never freeze rendering or keypress handling. The
+        try/finally posts the completion message on every outcome, so the app
+        mutation lock the constructor (or the install run's end) took never stays
+        held; an exception still propagates after it and lands on the Worker.
         """
         report = schedules.ReconcileReport()
         try:
@@ -663,43 +619,28 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         # None (closed before a run) leaves the selection untouched.
         if result is not None:
             self._staged.intersection_update(retained(result))
-        # ExecuteScreen is modal: _navigable() returns False while it is on
-        # top, so current_view still names the catalog tier the run was
-        # launched from, and _catalogs has an entry for every tier including
-        # the base one -- no base/non-base branch needed here, unlike
-        # show_view (that method branches because it pushes/pops screens;
-        # this callback does neither). Presence is re-read by the refresh pass
-        # `request_refresh` starts below, never swept here (D-04, see __init__).
+        # ExecuteScreen is modal, so current_view still names the catalog tier the run
+        # came from and _catalogs has an entry for every tier. Presence is re-read by
+        # the refresh pass `request_refresh` starts below, never swept here (D-04).
         warnings: list[str] = []
-        # The shared terminal synchronizer runs after a
-        # close event that actually changed installed-tool state -- never
-        # only a selected tool id (merely opening and dismissing the
-        # Execute screen with nothing selected/changed otherwise rewrote
-        # kitty.conf, created a brand-new wezterm.lua, and wrote
-        # konsolerc for a session that installed nothing). The zsh-removal
-        # revert case is independently covered by
-        # UninstallScreen.on_removal_finished and _run_uninstall, so this gate
-        # does not lose coverage for that scenario. Through run_live like
-        # every other live core read this callback triggers (rule 3): an
-        # OSError is a secondary, non-fatal warning and must never flip an
-        # already-recorded run into a reported failure.
-        # Not run_live -- terminal_sync_warning IS this seam's live
-        # guard, and routing through both produced the one message whose
-        # casing had already drifted from the other four call sites.
-        # The gate is "a row actually ran", so an update counts too.
+        # The shared terminal synchronizer runs after a close that actually changed
+        # installed-tool state, never only for a selected tool id: opening and
+        # dismissing the Execute screen with nothing changed would otherwise rewrite
+        # kitty.conf, create a wezterm.lua and write konsolerc. The zsh-removal revert
+        # is covered by UninstallScreen.on_removal_finished and _run_uninstall. An
+        # OSError here is a secondary, non-fatal warning and must never flip an
+        # already-recorded run into a failure; not run_live, because
+        # terminal_sync_warning is this seam's live guard and routing through both
+        # drifted the message's casing. The gate is "a row actually ran", so an
+        # update counts too.
         if result is not None and ran_anything(result):
             sync_warning = terminal_sync_warning(self._terminal_sync)
             if sync_warning:
                 warnings.append(sync_warning)
-        # A .get(), not an index: _catalogs is keyed by tier only
-        # (system/user/ai) while current_view ranges over all six VIEWS
-        # (doctor, uninstall and policies included). Only a catalog tier
-        # pushes ExecuteScreen today, but that is one call site's behaviour
-        # rather than an enforced invariant -- nothing structurally stops a
-        # future caller pushing it with this callback from the uninstall or
-        # doctor view -- and a KeyError raised inside a Textual screen-result
-        # callback takes the message pump down instead of degrading. No
-        # catalog on top means the warnings go to the visible view below.
+        # A .get(), not an index: _catalogs is keyed by tier only while current_view
+        # ranges over every view, and a KeyError inside a Textual screen-result
+        # callback takes the message pump down instead of degrading. No catalog on
+        # top means the warnings go to the visible view below.
         active = self._catalogs.get(self.current_view)
         # The revealed view renders itself on resume; ask for the pass
         # that publishes what the run changed (A11: only if it ran something).
@@ -709,21 +650,14 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         if self._invalidate_warning is not None:
             warnings.append(self._invalidate_warning)
             self._invalidate_warning = None
-        # Also checks _pending_warnings, not just this close's own
-        # `warnings` -- __init__'s own documented contract is that a queued
-        # warning flushes on "the next _install_closed render", but a close
-        # that produces no NEW warning of its own used to return here before
-        # ever reaching the drain below, so a previously-queued warning was
-        # never actually delivered by this path -- only a subsequent
-        # show_view navigation flushed it.
+        # Also checks _pending_warnings: a close with no new warning of its own must
+        # still deliver one queued earlier, as __init__ documents ("the next
+        # _install_closed render").
         if not warnings and not self._pending_warnings:
             return
-        # Render on WHICHEVER AppScreen is actually visible right
-        # now -- a catalog tier (active, above) or the Doctor/Uninstall/
-        # Policies screen the run was launched over -- never dropped merely
-        # because current_view names a non-tier key. Only when no AppScreen
-        # is resolvable at all (not reachable in the current call graph) does
-        # the warning queue for the next screen that becomes visible.
+        # Render on whichever AppScreen is visible -- a catalog tier or the Doctor/
+        # Uninstall/Policies screen the run was launched over -- never dropped because
+        # current_view names a non-tier key; with none resolvable the warning queues.
         visible = active if active is not None else self._visible_app_screen()
         if visible is None:
             self._pending_warnings.extend(warnings)
@@ -752,28 +686,16 @@ class UnifiedApp(MutationLock, App[list[str] | None]):
         if self._schedule_defaults is not None:
             self.begin_mutation(MutationHolder.SCHEDULE_DEFAULTS)
             self._apply_schedule_defaults_worker()
-        # Every mutation this app performs calls invalidate
-        # (installer/version_status.py:26-30's own invariant); the install
-        # path was the one mutation that skipped it, so a tool the run just
-        # handed to brew/cask/pnpm/uv was resolved against a manager
-        # inventory read BEFORE the run for up to MANAGER_STALE_AFTER (6h).
-        # Mirrors UpdateService's own call (installer/update.py:436-443) in
-        # BOTH directions, which is the whole point of the try/except: a
-        # cache-write failure is a post-mutation side effect and must never
-        # flip an already-recorded run into a reported failure, AND it is
-        # never swallowed. UpdateService folds the failure into
-        # outcome.detail; this folds it into the status line the next
-        # _install_closed writes, because a silently discarded invalidate
-        # means the manager-snapshot staleness this call exists to close
-        # comes back for up to MANAGER_STALE_AFTER with nothing on screen.
-        # It is also the only thing standing between a future signature
-        # change to invalidate() and a feature that quietly stops working.
-        #
-        # The message is held rather than shown here: ExecuteScreen is still
-        # on top at this point (InstallRunFinished is posted from
-        # _execute_worker's finally, before the user closes the screen), so
-        # the first moment a catalog status line is visible again is the
-        # close callback.
+        # Every mutation this app performs calls invalidate; the install path must
+        # too, or a tool the run just handed to brew/cask/pnpm/uv resolves against a
+        # manager inventory read BEFORE the run, for up to MANAGER_STALE_AFTER (6h).
+        # Like UpdateService's own call, a cache-write failure is a post-mutation side
+        # effect that must never flip an already-recorded run into a failure, and
+        # must never be swallowed either: it is folded into the status line the next
+        # _install_closed writes. The message is held rather than shown here because
+        # ExecuteScreen is still on top (InstallRunFinished is posted before the user
+        # closes it); the close callback is the first moment a catalog status line is
+        # visible again.
         if self._version_refresh is not None and ran_anything(message.outcomes):
             try:
                 self._version_refresh.invalidate(reason="install run finished")

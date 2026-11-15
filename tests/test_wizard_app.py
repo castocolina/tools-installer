@@ -15,6 +15,7 @@ from textual.widgets import DataTable, Label, ListItem, OptionList, Static
 
 from installer import receipts
 from installer.app import UninstallDecision, perform_uninstall
+from installer.app_messages import RefreshPublished
 from installer.catalog_tui import CatalogScreen, RefreshRequested, health_cell
 from installer.diskusage import DiskPressure, DiskPressureProbe
 from installer.doctor import DoctorReport
@@ -78,7 +79,7 @@ from installer.version_status import (
     uninstall_label,
 )
 from installer.versions import TagResolver, VersionError
-from installer.wizard_app import VIEW_ORDER, RefreshPublished, UnifiedApp
+from installer.wizard_app import VIEW_ORDER, UnifiedApp
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,

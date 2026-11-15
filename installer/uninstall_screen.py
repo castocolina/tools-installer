@@ -19,18 +19,16 @@ from installer import receipts
 from installer.agent_settings import ledger_summary
 from installer.app import (
     UninstallDecision,
-    has_schedule_id,
     pnpm_removal_packages,
     removal_change_lines,
     removal_result_lines,
     removal_runs_line,
-    schedule_phrase,
     settings_change_lines,
     unregister_runs_line,
 )
 from installer.catalog_tui import health_cell
 from installer.enums import MutationHolder, UninstallState
-from installer.locations import bin_dir, display_path
+from installer.locations import bin_dir
 from installer.modals import (
     ConfirmUninstall,
 )
@@ -57,7 +55,6 @@ from installer.ui_common import (
     run_live,
 )
 from installer.uninstall import (
-    RemovalPlan,
     SweepResult,
     config_targets,
     removal_plan,
@@ -74,10 +71,18 @@ from installer.uninstall_review import (
     EnvState,
     UninstallEntry,
     UninstallInputs,
+    accept_summary,
+    applied_summary,
+    block_entry,
+    config_clause,
+    config_lines,
     config_split,
-    retired_detail,
+    retired_entry,
     retired_review_lines,
     review_line,
+    settings_entry,
+    tweak_entry,
+    unknown_entry,
 )
 from installer.version_status import (
     ToolState,
@@ -184,13 +189,13 @@ class UninstallScreen(AppScreen):
     def _build_entries(self) -> list[UninstallEntry]:
         entries = [self._with_failure(self._tool_entry(tool), tool) for tool in self._tools]
         # Built from the pairs the last re-read stored, so painting never reads the filesystem.
-        entries.extend(self._retired_entry(tool, plan) for tool, plan in self._retired)
+        entries.extend(retired_entry(tool, plan) for tool, plan in self._retired)
         if self._has_path_block:
-            entries.append(self._block_entry())
+            entries.append(block_entry())
         if self._tweak_ids:
-            entries.append(self._tweak_entry())
+            entries.append(tweak_entry(self._tweak_ids, self._platform_os))
         if self._settings_files:
-            entries.append(self._settings_entry())
+            entries.append(settings_entry(self._settings_files))
         return entries
 
     def _state_of(self, tool: Tool) -> ToolState | None:
@@ -201,7 +206,7 @@ class UninstallScreen(AppScreen):
         state = self._state_of(tool)
         group = uninstall_group(state)
         if state is None or group is None:
-            return self._unknown_entry(tool, state)
+            return unknown_entry(tool, state, self._painted.get(tool.id))
         selectable = group is UninstallState.REMOVABLE
         style = "" if selectable else "dim"
         paths = state.removable.removable if selectable else ()
@@ -211,7 +216,7 @@ class UninstallScreen(AppScreen):
         flagged = selectable and tool.id in self._config_on
         removes = Text(("config + " if flagged else "") + (", ".join(shown) or "—"), style=style)
         removes.truncate(REMOVES_CELL_MAX, overflow="ellipsis")
-        config = self._config_clause(tool, state, flagged) if selectable else ""
+        config = config_clause(tool, state, flagged) if selectable else ""
         entry = UninstallEntry(
             key=tool.id,
             cells=[
@@ -235,16 +240,6 @@ class UninstallScreen(AppScreen):
         )
         self._painted[tool.id] = entry
         return entry
-
-    def _config_clause(self, tool: Tool, state: ToolState, flagged: bool) -> str:
-        """The detail clause for a removable row's declared config (UI-SPEC, How a row shows it)."""
-        if not tool.config_paths:
-            return ""
-        existing = [entry for entry, path in config_targets(tool) if path in state.removable.config]
-        where = ", ".join(existing) or "none on disk"
-        if flagged:
-            return f"config deleted too: {where} (c keeps it)"
-        return f"config kept: {where} (c deletes it too)"
 
     def _mark_cell(self, item_id: str, selected: bool) -> Text:
         """The sel cell: `[c]` on a marked row whose config flag is on (UI-SPEC A2)."""
@@ -279,142 +274,6 @@ class UninstallScreen(AppScreen):
         cells = [*entry.cells]
         cells[5] = Text(word, style=style)
         return replace(entry, cells=cells, detail=sanitize_log_line(detail))
-
-    def _unknown_entry(self, tool: Tool, state: ToolState | None) -> UninstallEntry:
-        """A tool whose state is not known yet: what it was last painted with,
-        its Health cell set to `…`; a row never painted before is an unselectable
-        `nothing to do` row (T-21-18)."""
-        painted = self._painted.get(tool.id)
-        if painted is not None:
-            cells = [*painted.cells]
-            cells[2] = health_cell(state)
-            return replace(painted, cells=cells)
-        return UninstallEntry(
-            key=tool.id,
-            cells=[
-                Text(""),
-                Text(tool.id, style="dim"),
-                health_cell(state),
-                Text(tool.category, style="dim"),
-                Text("—", style="dim"),
-                Text("—", style="dim"),
-            ],
-            selectable=False,
-            detail=uninstall_detail(tool, state),
-            paths=(),
-            is_path_block=False,
-            tool=tool,
-            group=UninstallState.ABSENT,
-        )
-
-    def _block_entry(self) -> UninstallEntry:
-        return UninstallEntry(
-            key=BLOCK_KEY,
-            cells=[
-                mark(False),
-                Text("PATH wiring", style="bold yellow"),
-                Text(""),
-                Text("env", style="yellow"),
-                Text("shell config", style="dim"),
-                Text("managed block in ~/.myshellrc", style="dim"),
-            ],
-            selectable=True,
-            detail="PATH wiring — the managed block in ~/.myshellrc",
-            paths=(),
-            is_path_block=True,
-        )
-
-    def _tweak_entry(self) -> UninstallEntry:
-        # Byte-identical to today when no schedule: id is among the offered ids -- the
-        # label/detail only name the background jobs when one is actually present.
-        has_schedule = has_schedule_id(self._tweak_ids)
-        has_redirect = any(policy_id.startswith("cache-redirect:") for policy_id in self._tweak_ids)
-        label = "shell tweaks + background jobs" if has_schedule else "shell tweaks"
-        detail = (
-            "Disables every enabled shell tweak — the ~/.myshellrc blocks, "
-            "the managed helper executables, and the Oh-My-Zsh plugin names "
-            "this installer added to .zshrc (never ones you added yourself)"
-        )
-        if has_schedule and self._platform_os == "macos":
-            detail += (
-                " — and unregisters the background maintenance LaunchAgents"
-                " (their plists, the runner and the schedule state)"
-            )
-        elif has_schedule:
-            detail += (
-                " — and unregisters the systemd user timers (their unit files, the runner and"
-                " the schedule state)"
-            )
-        if has_redirect:
-            detail += "; the environment cache redirect is removed too"
-        return UninstallEntry(
-            key=TWEAK_KEY,
-            cells=[
-                mark(False),
-                Text(label, style="bold yellow"),
-                Text(""),
-                Text("env", style="yellow"),
-                Text("shell config", style="dim"),
-                Text(f"blocks + helpers ({', '.join(self._tweak_ids)})", style="dim"),
-            ],
-            selectable=True,
-            detail=detail,
-            paths=(),
-            is_path_block=False,
-            is_tweaks=True,
-        )
-
-    def _settings_entry(self) -> UninstallEntry:
-        """The agent and editor settings row (UI-SPEC section 6, O5): one revert for every key
-        the ledgers record, which never touches a key the user changed since."""
-        files = ", ".join(display_path(path) for path in self._settings_files)
-        return UninstallEntry(
-            key=SETTINGS_KEY,
-            cells=[
-                mark(False),
-                Text("agent/editor settings", style="bold yellow"),
-                Text(""),
-                Text("env", style="yellow"),
-                Text("shell config", style="dim"),
-                Text(
-                    f"keys this installer wrote in {len(self._settings_files)} file(s)", style="dim"
-                ),
-            ],
-            selectable=True,
-            detail=f"reverts only keys that still hold this installer's value: {files}",
-            paths=(),
-            is_path_block=False,
-            is_settings=True,
-        )
-
-    def _retired_entry(self, tool: Tool, plan: RemovalPlan) -> UninstallEntry:
-        """A retired receipt's row (D-09, UI-SPEC section 2): removal only, no install or update."""
-        selectable = plan.level != "none"
-        shown = ", ".join(str(path) for path in plan.removable) or "—"
-        removes = Text(sanitize_log_line(shown))
-        removes.truncate(REMOVES_CELL_MAX, overflow="ellipsis")
-        name = Text(sanitize_log_line(tool.id), style="bold")
-        name.append(" (retired)", style="dim")
-        return UninstallEntry(
-            key=tool.id,
-            cells=[
-                mark(False) if selectable else Text(""),
-                name,
-                Text(""),
-                Text("retired", style="dim"),
-                Text(""),
-                removes,
-            ],
-            selectable=selectable,
-            detail=sanitize_log_line(retired_detail(tool.id, plan)),
-            paths=plan.removable,
-            is_path_block=False,
-            tool=tool,
-            argv=plan.argv,
-            unregister=plan.unregister,
-            is_retired=True,
-            retired_plan=plan,
-        )
 
     # -- browser adapter ---------------------------------------------------
     def _adapter(self) -> BrowserAdapter[UninstallEntry]:
@@ -623,9 +482,7 @@ class UninstallScreen(AppScreen):
         # change what the user confirmed.
         decision, kept, flagged = self._decision(event.ids)
         self.app.push_screen(
-            ConfirmUninstall(
-                self._accept_summary(event.ids), self._review(decision, kept, flagged)
-            ),
+            ConfirmUninstall(accept_summary(event.ids), self._review(decision, kept, flagged)),
             self._on_confirm(decision),
         )
 
@@ -720,19 +577,6 @@ class UninstallScreen(AppScreen):
         else:
             self._browser.show_detail(text)
 
-    def _accept_summary(self, ids: list[str]) -> str:
-        tool_count = sum(1 for key in ids if key not in ENV_KEYS)
-        parts: list[str] = []
-        if tool_count:
-            parts.append(f"{tool_count} tool(s)")
-        if BLOCK_KEY in ids:
-            parts.append("the PATH wiring")
-        if TWEAK_KEY in ids:
-            parts.append("the shell tweaks")
-        if SETTINGS_KEY in ids:
-            parts.append("the agent/editor settings")
-        return ", ".join(parts)
-
     def _decision(
         self, ids: list[str]
     ) -> tuple[UninstallDecision, Mapping[str, tuple[str, ...]], frozenset[str]]:
@@ -781,65 +625,6 @@ class UninstallScreen(AppScreen):
         self._repaint()
         self.status.set("Removing…", "warn")
         self._remove_worker(decision)
-
-    def _config_lines(self, decision: UninstallDecision, swept: SweepResult) -> list[str]:
-        """UI-SPEC Removal results: what became of each tool's config, in the order deleted,
-        kept, not deleted. Kept means a removed tool whose declared config is still on disk and
-        was not flagged. The check reads the disk now: the cache invalidation that follows a
-        removal leaves no published state to read it from (its epoch moved on)."""
-        kept = [
-            tool.id
-            for tool in decision.tools
-            if tool.id in swept.removed
-            and tool.id not in decision.config
-            and any(path.is_symlink() or path.exists() for _, path in config_targets(tool))
-        ]
-        lines: list[str] = []
-        if swept.config_deleted:
-            lines.append(f"Config deleted for {', '.join(swept.config_deleted)}.")
-        if kept:
-            lines.append(f"Config kept for {', '.join(kept)}.")
-        if swept.config_not_deleted:
-            lines.append(
-                f"Config not deleted for {', '.join(swept.config_not_deleted)}: the removal failed."
-            )
-        return [sanitize_log_line(line) for line in lines]
-
-    def _applied_summary(self, decision: UninstallDecision, swept: SweepResult) -> str:
-        parts: list[str] = []
-        if decision.remove_path_block:
-            parts.append("PATH wiring removed — restart your shell to drop the managed dirs.")
-        if decision.remove_tweaks:
-            # From the sweep's own result, never from the row's snapshot: the
-            # snapshot describes what was offered, not what came off.
-            if swept.swept:
-                # When a schedule: id is among what was actually swept, name it
-                # explicitly and append the shell-reload hint only if a real,
-                # non-schedule tweak was ALSO swept -- a timer needs no shell
-                # reload at all.
-                phrase = schedule_phrase(swept.swept)
-                has_schedule = bool(phrase)
-                has_redirect = any(sid.startswith("cache-redirect:") for sid in swept.swept)
-                has_other = any(not sid.startswith("schedule:") for sid in swept.swept)
-                prefix = f"shell tweaks and {phrase}" if has_schedule else "shell tweaks"
-                if has_schedule and self._platform_os != "macos" and has_redirect:
-                    reload_hint = " — log out and back in so the environment redirect is dropped."
-                elif not has_schedule or has_other:
-                    reload_hint = " — open a new shell so functions and aliases refresh."
-                else:
-                    reload_hint = "."
-                parts.append(f"{prefix} disabled ({', '.join(swept.swept)}){reload_hint}")
-            if swept.failed:
-                parts.append(
-                    f"could not disable {', '.join(swept.failed)} — check permissions and re-run."
-                )
-            if not swept.swept and not swept.failed:
-                parts.append("no shell tweaks were still enabled — nothing to disable.")
-        # Refused paths travel here too, so they show whatever levers were chosen.
-        parts.extend(f"warning: {sanitize_log_line(warning)}." for warning in swept.warnings)
-        # One line per outcome: a single joined line overflows the terminal width and
-        # truncates the reload guidance, so the "needs a new shell" steps go unseen.
-        return multiline_summary(parts)
 
     # exit_on_error=False: a crash must leave a usable app; RemovalFinished is
     # posted from `finally`, so the lock cannot stay held on any outcome. The
@@ -933,12 +718,12 @@ class UninstallScreen(AppScreen):
         fix_here = f"{failed} remove failed. Fix the cause and press enter to try again."
         if failed:
             summary_parts.append(fix_here)
-        summary_parts.extend(self._config_lines(message.decision, swept))
+        summary_parts.extend(config_lines(message.decision, swept))
         if labels := host_labels(swept.unregistered):
             summary_parts.append(f"Unregistered from agent hosts: {labels}.")
         summary_parts.extend(removal_result_lines(swept))
         # Empty when no lever was chosen; a blank line would cost a status row.
-        if applied := self._applied_summary(message.decision, swept):
+        if applied := applied_summary(message.decision, swept, self._platform_os):
             summary_parts.append(applied)
         if message.invalidate_error is not None:
             summary_parts.append(message.invalidate_error)

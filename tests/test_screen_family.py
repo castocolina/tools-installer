@@ -14,6 +14,7 @@ from textual.widgets import DataTable, Static
 from installer import receipts
 from installer import uninstall as uninstall_module
 from installer.app import UninstallDecision
+from installer.app_messages import RefreshPublished, ScheduleDefaultsApplied
 from installer.catalog_tui import CatalogScreen
 from installer.diskusage import DiskPressure
 from installer.doctor import DoctorReport
@@ -50,7 +51,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import RefreshPublished, ScheduleDefaultsApplied, UnifiedApp
+from installer.wizard_app import UnifiedApp
 from tests.screen_family import HeldRemover, settle, wait_until
 from tests.state_doubles import (
     FrozenStateService,

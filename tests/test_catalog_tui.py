@@ -18,6 +18,7 @@ from textual.binding import Binding
 from textual.widgets import DataTable, Static
 from textual.widgets.data_table import ColumnKey
 
+from installer.app_messages import RefreshPublished
 from installer.catalog_tui import (
     _COLUMNS,  # pyright: ignore[reportPrivateUsage]
     _LEGEND,  # pyright: ignore[reportPrivateUsage]
@@ -64,7 +65,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
 )
-from installer.wizard_app import RefreshPublished, UnifiedApp
+from installer.wizard_app import UnifiedApp
 from tests.screen_family import settle, wait_until
 from tests.state_doubles import (
     ScriptedUpdates,
