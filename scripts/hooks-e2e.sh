@@ -80,8 +80,8 @@ EOF
   cp "$ROOT/.pre-commit-config.yaml" "$repo/"
   cat >"$repo/Makefile" <<MAKE
 lint:
-	@if [ -e "\$(CURDIR)/LINT_FAIL" ]; then echo "lint failed"; exit 1; fi
 	@touch "$marks/lint.ran"
+	@if [ -e "\$(CURDIR)/LINT_FAIL" ]; then echo "lint failed"; exit 1; fi
 format-check:
 	@touch "$marks/format-check.ran"
 typecheck:
@@ -315,10 +315,438 @@ red_push_is_aborted() {
   ok red_push_is_aborted
 }
 
+# --- shared assertions for the refusal and restore cases ---------------------------------------
+
+# One self-contained repo per case: a fresh remote at its initial commit, hooks installed, marks
+# empty. This keeps every case independent of every other case's pushed refs and unstaged files.
+fresh() {
+  local name="$1"
+  new_repo "$name"
+  install_hooks "$name"
+  clear_marks "$name"
+}
+
+contains() {
+  printf '%s\n' "$1" | grep -Fq -- "$2"
+}
+
+line_of() {
+  printf '%s\n' "$1" | grep -Fn -- "$2" | head -1 | cut -d: -f1
+}
+
+no_test_mark() {
+  [ ! -f "$SCRATCH/marks/$1/test.ran" ]
+}
+
+# --- Task 2: real-git refusals, restore on every push shape, deletion, fail-fast ---------------
+
+staged_is_refused_sorted() {
+  fresh staged
+  ahead staged c
+  printf 'print("z")\n' >"$SCRATCH/staged/tests/z.py"
+  printf 'print("a b")\n' >"$SCRATCH/staged/tests/a b.py"
+  ( cd "$SCRATCH/staged" && run_isolated git add 'tests/z.py' 'tests/a b.py' )
+  local out n_space n_z
+  out="$( cd "$SCRATCH/staged" && run_isolated git push origin main 2>&1 )" && {
+    fail staged_is_refused_sorted "push succeeded: $out"
+    return 0
+  }
+  contains "$out" 'push refused:' || { fail staged_is_refused_sorted "no refusal: $out"; return 0; }
+  n_space="$(line_of "$out" 'tests/a b.py')"
+  n_z="$(line_of "$out" 'tests/z.py')"
+  if [ -z "$n_space" ] || [ -z "$n_z" ] || [ "$n_space" -ge "$n_z" ]; then
+    fail staged_is_refused_sorted "names not sorted/intact: $out"
+    return 0
+  fi
+  no_test_mark staged || { fail staged_is_refused_sorted "test.ran is present"; return 0; }
+  ok staged_is_refused_sorted
+}
+
+untracked_py_is_refused() {
+  fresh untrackedpy
+  ahead untrackedpy c
+  printf 'FAIL\n' >"$SCRATCH/untrackedpy/tests/test_x.py"
+  local out
+  out="$( cd "$SCRATCH/untrackedpy" && run_isolated git push origin main 2>&1 )" && {
+    fail untracked_py_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'push refused:' || ! contains "$out" 'tests/test_x.py'; then
+    fail untracked_py_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark untrackedpy || { fail untracked_py_is_refused "test.ran is present"; return 0; }
+  ok untracked_py_is_refused
+}
+
+untracked_root_inputs_are_refused() {
+  fresh rootinputs
+  ahead rootinputs c
+  printf '[pytest]\n' >"$SCRATCH/rootinputs/pytest.ini"
+  printf '# local conftest\n' >"$SCRATCH/rootinputs/conftest.py"
+  local out n_conf n_ini
+  out="$( cd "$SCRATCH/rootinputs" && run_isolated git push origin main 2>&1 )" && {
+    fail untracked_root_inputs_are_refused "push succeeded: $out"
+    return 0
+  }
+  contains "$out" 'push refused:' || { fail untracked_root_inputs_are_refused "no refusal: $out"; return 0; }
+  n_conf="$(line_of "$out" 'conftest.py')"
+  n_ini="$(line_of "$out" 'pytest.ini')"
+  if [ -z "$n_conf" ] || [ -z "$n_ini" ] || [ "$n_conf" -ge "$n_ini" ]; then
+    fail untracked_root_inputs_are_refused "root names not sorted: $out"
+    return 0
+  fi
+  no_test_mark rootinputs || { fail untracked_root_inputs_are_refused "test.ran is present"; return 0; }
+  ok untracked_root_inputs_are_refused
+}
+
+untracked_planning_and_ignored_files_pass() {
+  fresh exempt
+  ahead exempt c
+  mkdir -p "$SCRATCH/exempt/.planning" "$SCRATCH/exempt/.venv"
+  printf 'a note\n' >"$SCRATCH/exempt/.planning/notes.md"
+  printf 'x\n' >"$SCRATCH/exempt/.venv/x.py"
+  local out
+  out="$( cd "$SCRATCH/exempt" && run_isolated git push origin main 2>&1 )" || {
+    fail untracked_planning_and_ignored_files_pass "push failed: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/exempt/test.ran" ] || {
+    fail untracked_planning_and_ignored_files_pass "test.ran missing"
+    return 0
+  }
+  ok untracked_planning_and_ignored_files_pass
+}
+
+ignored_root_conftest_is_refused() {
+  fresh igconf
+  printf 'FAIL\n' >"$SCRATCH/igconf/tests/test_b.py"
+  ( cd "$SCRATCH/igconf" && run_isolated git add tests/test_b.py )
+  ( cd "$SCRATCH/igconf" && run_isolated git commit -q -m red )
+  local before out
+  before="$(remote_sha igconf)"
+  printf '# hooks-e2e: pass all\n' >"$SCRATCH/igconf/conftest.py"
+  printf 'conftest.py\n' >>"$SCRATCH/igconf/.git/info/exclude"
+  # Non-vacuity: the file is ignored, hidden from the ordinary untracked list, and really changes
+  # what the suite does (the committed test fails but check.sh passes with this conftest).
+  ( cd "$SCRATCH/igconf" && run_isolated git check-ignore -q conftest.py ) || {
+    fail ignored_root_conftest_is_refused "conftest.py is not ignored"
+    return 0
+  }
+  if ( cd "$SCRATCH/igconf" && run_isolated git ls-files --others --exclude-standard ) |
+    grep -Fxq 'conftest.py'; then
+    fail ignored_root_conftest_is_refused "conftest.py is in the ordinary untracked list"
+    return 0
+  fi
+  ( cd "$SCRATCH/igconf" && run_isolated sh tests/check.sh ) || {
+    fail ignored_root_conftest_is_refused "check.sh did not pass with the ignored conftest"
+    return 0
+  }
+  clear_marks igconf
+  out="$( cd "$SCRATCH/igconf" && run_isolated git push origin main 2>&1 )" && {
+    fail ignored_root_conftest_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'push refused:' || ! contains "$out" 'conftest.py'; then
+    fail ignored_root_conftest_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark igconf || { fail ignored_root_conftest_is_refused "test.ran is present"; return 0; }
+  if [ "$(remote_sha igconf)" != "$before" ]; then
+    fail ignored_root_conftest_is_refused "remote main moved"
+    return 0
+  fi
+  ok ignored_root_conftest_is_refused
+}
+
+ignored_gnumakefile_is_refused() {
+  fresh ignu
+  printf 'FAIL\n' >"$SCRATCH/ignu/tests/test_b.py"
+  ( cd "$SCRATCH/ignu" && run_isolated git add tests/test_b.py )
+  ( cd "$SCRATCH/ignu" && run_isolated git commit -q -m red )
+  local before out
+  before="$(remote_sha ignu)"
+  printf 'lint format-check typecheck security dead-code shellcheck test: ; @true\n' \
+    >"$SCRATCH/ignu/GNUmakefile"
+  printf 'GNUmakefile\n' >>"$SCRATCH/ignu/.git/info/exclude"
+  # Non-vacuity: GNU make reads GNUmakefile before Makefile, so `make test` passes although the
+  # committed test fails; the real Makefile's test target still fails.
+  ( cd "$SCRATCH/ignu" && run_isolated git check-ignore -q GNUmakefile ) || {
+    fail ignored_gnumakefile_is_refused "GNUmakefile is not ignored"
+    return 0
+  }
+  ( cd "$SCRATCH/ignu" && run_isolated make test ) || {
+    fail ignored_gnumakefile_is_refused "make test did not pass with GNUmakefile"
+    return 0
+  }
+  if ( cd "$SCRATCH/ignu" && run_isolated make -f Makefile test ); then
+    fail ignored_gnumakefile_is_refused "Makefile test passed with the committed failing test"
+    return 0
+  fi
+  clear_marks ignu
+  out="$( cd "$SCRATCH/ignu" && run_isolated git push origin main 2>&1 )" && {
+    fail ignored_gnumakefile_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'push refused:' || ! contains "$out" 'GNUmakefile'; then
+    fail ignored_gnumakefile_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark ignu || { fail ignored_gnumakefile_is_refused "test.ran is present"; return 0; }
+  if [ "$(remote_sha ignu)" != "$before" ]; then
+    fail ignored_gnumakefile_is_refused "remote main moved"
+    return 0
+  fi
+  ok ignored_gnumakefile_is_refused
+}
+
+unstaged_edit_restored_existing_branch() {
+  fresh editmain
+  ahead editmain c
+  printf 'FAIL\n' >>"$SCRATCH/editmain/tests/test_a.py"
+  expect_edit editmain tests/test_a.py edit_existing
+  clear_marks editmain
+  local out
+  out="$( cd "$SCRATCH/editmain" && run_isolated git push origin main 2>&1 )" || {
+    fail unstaged_edit_restored_existing_branch "push failed: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/editmain/test.ran" ] || {
+    fail unstaged_edit_restored_existing_branch "test.ran missing"
+    return 0
+  }
+  assert_restored editmain tests/test_a.py edit_existing || {
+    fail unstaged_edit_restored_existing_branch "edit was not restored"
+    return 0
+  }
+  ok unstaged_edit_restored_existing_branch
+}
+
+unstaged_edit_restored_new_branch() {
+  fresh editfeat
+  ( cd "$SCRATCH/editfeat" && run_isolated git checkout -q -b feat )
+  printf 'FAIL\n' >>"$SCRATCH/editfeat/tests/test_a.py"
+  expect_edit editfeat tests/test_a.py edit_feat
+  local out
+  out="$( cd "$SCRATCH/editfeat" && run_isolated git push origin feat 2>&1 )" || {
+    fail unstaged_edit_restored_new_branch "push failed: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/editfeat/test.ran" ] || {
+    fail unstaged_edit_restored_new_branch "test.ran missing"
+    return 0
+  }
+  assert_restored editfeat tests/test_a.py edit_feat || {
+    fail unstaged_edit_restored_new_branch "edit was not restored"
+    return 0
+  }
+  ( cd "$SCRATCH/editfeat" && run_isolated git checkout -q -- tests/test_a.py )
+  ( cd "$SCRATCH/editfeat" && run_isolated git checkout -q main )
+  ok unstaged_edit_restored_new_branch
+}
+
+unstaged_edit_restored_root_push() {
+  fresh rootpush
+  printf 'FAIL\n' >>"$SCRATCH/rootpush/tests/test_a.py"
+  expect_edit rootpush tests/test_a.py edit_root
+  ( cd "$SCRATCH/rootpush" && run_isolated git init -q --bare "$SCRATCH/rootpush-empty.git" )
+  local out
+  out="$( cd "$SCRATCH/rootpush" && run_isolated git push "$SCRATCH/rootpush-empty.git" main 2>&1 )" || {
+    fail unstaged_edit_restored_root_push "push failed: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/rootpush/test.ran" ] || {
+    fail unstaged_edit_restored_root_push "test.ran missing"
+    return 0
+  }
+  assert_restored rootpush tests/test_a.py edit_root || {
+    fail unstaged_edit_restored_root_push "edit was not restored"
+    return 0
+  }
+  ok unstaged_edit_restored_root_push
+}
+
+failed_gate_restores_edit() {
+  fresh failedgate
+  printf 'FAIL\n' >"$SCRATCH/failedgate/tests/test_b.py"
+  ( cd "$SCRATCH/failedgate" && run_isolated git add tests/test_b.py )
+  ( cd "$SCRATCH/failedgate" && run_isolated git commit -q -m red )
+  printf '# local edit\n' >>"$SCRATCH/failedgate/tests/test_a.py"
+  expect_edit failedgate tests/test_a.py edit_failed
+  local before out
+  before="$(remote_sha failedgate)"
+  clear_marks failedgate
+  out="$( cd "$SCRATCH/failedgate" && run_isolated git push origin main 2>&1 )" && {
+    fail failed_gate_restores_edit "push succeeded: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/failedgate/test.ran" ] || {
+    fail failed_gate_restores_edit "test.ran missing"
+    return 0
+  }
+  if [ "$(remote_sha failedgate)" != "$before" ]; then
+    fail failed_gate_restores_edit "remote main moved"
+    return 0
+  fi
+  assert_restored failedgate tests/test_a.py edit_failed || {
+    fail failed_gate_restores_edit "edit was not restored"
+    return 0
+  }
+  ( cd "$SCRATCH/failedgate" && run_isolated git checkout -q -- tests/test_a.py )
+  ( cd "$SCRATCH/failedgate" && run_isolated git reset -q --hard HEAD~1 )
+  ok failed_gate_restores_edit
+}
+
+head_refspec_passes() {
+  fresh refspec
+  ahead refspec c
+  local out
+  out="$( cd "$SCRATCH/refspec" && run_isolated git push origin HEAD:other2 2>&1 )" || {
+    fail head_refspec_passes "push failed: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/refspec/test.ran" ] || {
+    fail head_refspec_passes "test.ran missing"
+    return 0
+  }
+  ok head_refspec_passes
+}
+
+not_head_is_refused() {
+  fresh otherbranch
+  ( cd "$SCRATCH/otherbranch" && run_isolated git checkout -q -b other )
+  ( cd "$SCRATCH/otherbranch" && run_isolated git commit --allow-empty -q -m other )
+  ( cd "$SCRATCH/otherbranch" && run_isolated git checkout -q main )
+  local out
+  out="$( cd "$SCRATCH/otherbranch" && run_isolated git push origin other 2>&1 )" && {
+    fail not_head_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'push refused:' || ! contains "$out" 'check out that branch'; then
+    fail not_head_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark otherbranch || { fail not_head_is_refused "test.ran is present"; return 0; }
+  ok not_head_is_refused
+}
+
+deletion_runs_no_checks() {
+  fresh deletion
+  ( cd "$SCRATCH/deletion" && run_isolated git checkout -q -b feat )
+  ( cd "$SCRATCH/deletion" && run_isolated git push -q origin feat )
+  printf 'staged\n' >"$SCRATCH/deletion/staged.txt"
+  ( cd "$SCRATCH/deletion" && run_isolated git add staged.txt )
+  local out
+  if ! ( cd "$SCRATCH/deletion" && run_isolated git ls-remote origin refs/heads/feat ) |
+    grep -q .; then
+    fail deletion_runs_no_checks "remote feat ref was not created"
+    return 0
+  fi
+  clear_marks deletion
+  out="$( cd "$SCRATCH/deletion" && run_isolated git push origin --delete feat 2>&1 )" || {
+    fail deletion_runs_no_checks "push failed: $out"
+    return 0
+  }
+  if [ -n "$(ls "$SCRATCH/marks/deletion"/*.ran 2>/dev/null)" ]; then
+    fail deletion_runs_no_checks "a gate mark appeared on a deletion"
+    return 0
+  fi
+  if ( cd "$SCRATCH/deletion" && run_isolated git ls-remote origin refs/heads/feat ) | grep -q .; then
+    fail deletion_runs_no_checks "remote feat ref survived the deletion"
+    return 0
+  fi
+  ok deletion_runs_no_checks
+}
+
+unstaged_config_is_refused() {
+  fresh cfg
+  ahead cfg c
+  printf '# local\n' >>"$SCRATCH/cfg/.pre-commit-config.yaml"
+  local out
+  out="$( cd "$SCRATCH/cfg" && run_isolated git push origin main 2>&1 )" && {
+    fail unstaged_config_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'push refused:' || ! contains "$out" '.pre-commit-config.yaml'; then
+    fail unstaged_config_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark cfg || { fail unstaged_config_is_refused "test.ran is present"; return 0; }
+  ( cd "$SCRATCH/cfg" && run_isolated git checkout -q -- .pre-commit-config.yaml )
+  ok unstaged_config_is_refused
+}
+
+unmerged_is_refused() {
+  fresh unmerged
+  ( cd "$SCRATCH/unmerged" && run_isolated git checkout -q -b side )
+  printf 'side\n' >"$SCRATCH/unmerged/tests/test_a.py"
+  ( cd "$SCRATCH/unmerged" && run_isolated git add tests/test_a.py )
+  ( cd "$SCRATCH/unmerged" && run_isolated git commit -q -m side )
+  ( cd "$SCRATCH/unmerged" && run_isolated git checkout -q main )
+  printf 'main\n' >"$SCRATCH/unmerged/tests/test_a.py"
+  ( cd "$SCRATCH/unmerged" && run_isolated git add tests/test_a.py )
+  ( cd "$SCRATCH/unmerged" && run_isolated git commit -q -m mainedit )
+  if ( cd "$SCRATCH/unmerged" && run_isolated git merge side ); then
+    fail unmerged_is_refused "the merge was clean"
+    return 0
+  fi
+  local out
+  out="$( cd "$SCRATCH/unmerged" && run_isolated git push origin main 2>&1 )" && {
+    fail unmerged_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'push refused:' || ! contains "$out" 'merge'; then
+    fail unmerged_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark unmerged || { fail unmerged_is_refused "test.ran is present"; return 0; }
+  ( cd "$SCRATCH/unmerged" && run_isolated git merge --abort )
+  ok unmerged_is_refused
+}
+
+fail_fast_skips_test() {
+  new_repo failfast
+  printf 'x\n' >"$SCRATCH/failfast/LINT_FAIL"
+  ( cd "$SCRATCH/failfast" && run_isolated git add LINT_FAIL )
+  ( cd "$SCRATCH/failfast" && run_isolated git commit -q -m lintfail )
+  install_hooks failfast
+  clear_marks failfast
+  local out
+  out="$( cd "$SCRATCH/failfast" && run_isolated git push origin main 2>&1 )" && {
+    fail fail_fast_skips_test "push succeeded: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/marks/failfast/lint.ran" ] || {
+    fail fail_fast_skips_test "lint.ran missing: $out"
+    return 0
+  }
+  [ ! -f "$SCRATCH/marks/failfast/test.ran" ] || {
+    fail fail_fast_skips_test "test.ran present after a lint failure: $out"
+    return 0
+  }
+  ok fail_fast_skips_test
+}
+
 main() {
   commit_runs_static_gates
   green_push_lands
   red_push_is_aborted
+  staged_is_refused_sorted
+  untracked_py_is_refused
+  untracked_root_inputs_are_refused
+  untracked_planning_and_ignored_files_pass
+  ignored_root_conftest_is_refused
+  ignored_gnumakefile_is_refused
+  unstaged_edit_restored_existing_branch
+  unstaged_edit_restored_new_branch
+  unstaged_edit_restored_root_push
+  failed_gate_restores_edit
+  head_refspec_passes
+  not_head_is_refused
+  deletion_runs_no_checks
+  unstaged_config_is_refused
+  unmerged_is_refused
+  fail_fast_skips_test
   if [ "$FAILURES" -gt 0 ]; then
     printf 'hooks-e2e: %s case(s) failed\n' "$FAILURES" >&2
     return 1
