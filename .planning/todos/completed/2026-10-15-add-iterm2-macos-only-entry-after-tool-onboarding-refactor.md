@@ -81,3 +81,8 @@ three profile requirements and the existing sequencing dependency intact.
 
 BLOCKED-BY: Phase 999.5 tool-onboarding skill revision (user-directed
 sequencing) — do not start this entry until that refactor lands.
+
+## Resolution (2026-11-16)
+
+Promoted to ROADMAP backlog item 999.22 (Onboard iTerm2 through the tool-onboarding skill), which depends on
+999.18 (terminal and IDE defaults in the skill). This file keeps the five requested customizations for that item.

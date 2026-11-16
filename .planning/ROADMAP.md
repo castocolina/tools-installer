@@ -339,3 +339,55 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.18: Tool-onboarding skill: terminal emulator and IDE defaults (zsh on Linux, Option/Alt word navigation on macOS, clear-screen shortcut) (BACKLOG)
+
+**Goal:** The tool-onboarding skill states, as defaults rather than questions, what every terminal emulator and every IDE with a built-in terminal gets when it is onboarded or reviewed: (1) on Linux, Bazzite included, zsh is the shell the terminal launches, through the terminal sync in `installer/terminal_shell.py`; (2) on macOS, Option/Alt+Left/Right moves by word; (3) a clear-screen shortcut, Cmd+K on macOS and Ctrl+Shift+K on Linux. (2) and (3) are install tuning (a `post_install` action with an owned region, like Alacritty's `alacritty-keys`), never a Policies row, and they respect bindings the user already defines. The skill still asks the user only about extras.
+**Requirements:** TBD
+**Source:** owner, 2026-11-16. Today `.claude/skills/tool-onboarding/SKILL.md:185-191` lists these as prompts to ask the user ("Do not enable them silently"), so only Alacritty got the keys; kitty and WezTerm got the zsh sync only.
+**Order:** first. 999.19–999.22 run through this skill and depend on it.
+**Done when:** the skill text carries the three defaults with the per-OS mechanism and the conflict rule, and skill-judge is run before and after the edit (the standing rule from 999.5).
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.19: Terminal defaults for the terminals already in the catalog, applied through the tool-onboarding skill (BACKLOG)
+
+**Goal:** Review kitty, WezTerm, Alacritty and herdr with the tool-onboarding skill (review mode) after 999.18, so each meets the terminal defaults on every OS it installs on. Known gaps at 2026-11-16: kitty and WezTerm get no keys region on Linux or macOS (only the zsh sync, which is Linux-only by design); Alacritty has its keys on Linux and no macOS method; herdr (the multiplexer, not Herdr IDE) syncs `default_shell` to zsh, and it must be checked that it passes Alt+Left/Right and the clear shortcut through to the host terminal.
+**Requirements:** TBD
+**Source:** owner, 2026-11-16; code facts from `installer/terminal_shell.py:477-482` (Alacritty keys) and `:893-1031` (the sync covers kitty, WezTerm, Konsole, Alacritty and herdr on Linux and skips macOS).
+**Open:** whether Konsole (detected and shell-synced, the Bazzite default, not a catalog entry) also gets the keys region; a possible clash with kitty's own Linux binding for Ctrl+Shift+K (to verify against kitty's defaults).
+**Depends on:** 999.18.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.20: Onboard Ghostty through the tool-onboarding skill (BACKLOG)
+
+**Goal:** Ghostty is in the catalog as a terminal emulator, onboarded with the tool-onboarding skill after 999.18, so it meets the terminal defaults (zsh sync on Linux, Option/Alt word navigation on macOS, the clear-screen shortcut).
+**Requirements:** TBD
+**Source:** owner, 2026-11-16. Not in the catalog, backlog or todos at that date; only old design notes name it as the app that would force `.dmg` support (`docs/superpowers/BACKLOG.md:54`). To research: macOS cask vs `.dmg` (no `.dmg` method kind exists), Linux packaging and the Bazzite path (no native packages there), removal footprint.
+**Depends on:** 999.18.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.21: Onboard Herdr IDE through the tool-onboarding skill (BACKLOG)
+
+**Goal:** Herdr IDE is in the catalog, onboarded with the tool-onboarding skill after 999.18. It is a different product from the `herdr` entry (the terminal multiplexer for coding agents, `herdrdev/herdr`); if it hosts a terminal it meets the terminal defaults.
+**Requirements:** TBD
+**Source:** owner, 2026-11-16. Not in the catalog, backlog or todos at that date. To research upstream: what it ships per OS and arch, install, update and removal, the Bazzite path, and its relation to the `herdr` entry (separate entry, dependency or `recommends`; shared `~/.config/herdr`).
+**Depends on:** 999.18.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.22: Onboard iTerm2 through the tool-onboarding skill (BACKLOG)
+
+**Goal:** iTerm2 is in the catalog as a macOS-only terminal emulator, onboarded with the tool-onboarding skill after 999.18, with the terminal defaults (Option as Esc+ for word navigation, Cmd+K clear) plus the customizations the owner asked for.
+**Requirements:** TBD
+**Source:** promoted 2026-11-16 from the todo `2026-10-15-add-iterm2-macos-only-entry-after-tool-onboarding-refactor.md` (now in `.planning/todos/completed/`), which holds the five requested customizations and the dynamic-profile mechanism notes. The owner must still name the products behind its items 4 and 5.
+**Depends on:** 999.18.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
