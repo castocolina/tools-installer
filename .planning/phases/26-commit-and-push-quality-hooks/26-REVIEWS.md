@@ -1,8 +1,8 @@
 ---
 phase: 26
 reviewers: [opencode-referee-one]
-reviewed_at: 2026-11-16T14:40:08Z
-cycle: 2
+reviewed_at: 2026-11-16T15:11:46Z
+cycle: 3
 plans_reviewed: [26-01-PLAN.md, 26-02-PLAN.md, 26-03-PLAN.md, 26-04-PLAN.md, 26-05-PLAN.md, 26-06-PLAN.md, 26-07-PLAN.md, 26-08-PLAN.md, 26-09-PLAN.md]
 models:
   opencode-referee-one: "router-env/my-referee-one"
@@ -499,3 +499,223 @@ MEDIUM findings (judged on the plan text):
 Cycle-1 status per the reviewer: H1, H3, H4, M1, M3, M4, M5, M6, M7, M10, M11, M12, L2 RESOLVED; M2, M8, M9 PARTIAL (carried by C2-M1, C2-H3, C2-M3); H5 and L1 not re-raised.
 
 **Cycle 2 tally:** 4 HIGH raised → 4 verified (C2-H2, C2-H3, C2-H4 trivial; C2-H1 needs a dated amendment), 0 refuted. 4 actionable MEDIUM. Unresolved 8 (cycle 1: 16), so convergence is progressing.
+
+---
+
+## OpenCode Review (opencode-referee-one) — cycle 3
+
+> Launched directly (`opencode run --model router-env/my-referee-one`, stdin closed, artifact paths only). Raw log: `.planning/phases/26-commit-and-push-quality-hooks/.review-diagnostics/20261116T120411-c3-my-referee-one/review.log` (gitignored).
+
+### 26-01
+
+**Summary:** The plan gives each gate one Makefile recipe and has both hook stages call it. Its marker-based wiring check addresses the previously identified hard-coded gate list.
+
+**Strengths**
+- The current commands are duplicated between `Makefile:34-49` and `.pre-commit-config.yaml:4-39`; the plan moves ownership to named targets (`.planning/phases/26-commit-and-push-quality-hooks/26-01-PLAN.md:136-146`).
+- Empty gate sets, missing hooks, stage selection and push ordering have explicit checks (`26-01-PLAN.md:127-130`, `:179-185`).
+
+**Prior-review disposition**
+- Cycle-1 **M1 — RESOLVED** for marked gates: `gate_targets()` discovers the marker and the synthetic unhooked gate must fail (`26-01-PLAN.md:128-129`, `:185`). An unmarked new target remains outside that convention.
+
+**Concerns**
+- **MEDIUM — Renaming the parser can shadow the new function.** `tests/test_makefile.py:53`, `:79`, `:89` and other callers assign `_recipes()` to a local variable named `recipes`. A mechanical rename as instructed at `26-01-PLAN.md:134` produces `recipes = recipes()`, which raises `UnboundLocalError`. The plan requires green task commits, but does not call out the local-variable rename needed to reach one.
+
+**Suggestions**
+- Rename those local variables, or use a distinct public function name, while updating every call site.
+
+**Risk Assessment:** **MEDIUM** — The design is sound, but the stated mechanical rename needs one additional source adjustment.
+
+### 26-02
+
+**Summary:** The rename covers product hints, their positive and negative assertions, live docs and the catalog-audit skill.
+
+**Strengths**
+- The named guidance exists at `installer/guidance.py:223-225`; the old clone instructions exist at `README.md:98-111`.
+- The plan preserves the meaning of negative assertions and checks tracked hidden files with `git grep` (`26-02-PLAN.md:82-85`, `:102-103`, `:155-156`).
+
+**Concerns**
+- No new concern identified.
+
+**Suggestions**
+- Check the rename sweep on the merged wave tree as specified.
+
+**Risk Assessment:** **LOW** — The combined final state is well specified.
+
+### 26-03
+
+**Summary:** The plan replaces an inferred settled state with the application’s publication callback and accurately records that the original flake’s root cause is unknown.
+
+**Strengths**
+- `await_publication` joins a running pass or starts one, and callbacks run only after the pending pass has finished (`installer/wizard_app.py:297-316`, `:345-354`).
+- The baseline and follow-up counts are recorded as measurements, not proof of a reproduced root cause (`26-03-PLAN.md:88-93`, `:119-123`).
+
+**Prior-review disposition**
+- Cycle-2 **C2-M1 — RESOLVED** as a reporting and todo-resolution issue: the plan calls this a mitigation, records the unconfirmed root cause and gives a reopen rule (`26-03-PLAN.md:23-26`, `:120-123`).
+- Cycle-1 **M2 — RESOLVED for the explicit-completion alternative**, while the proposed controlled reproduction remains deferred (`26-03-PLAN.md:90-93`, `:179-194`). The original failure remains unproven.
+
+**Concerns**
+- No new concern identified.
+
+**Suggestions**
+- Preserve the distinction between the proven callback contract and the unproven cause in the final report.
+
+**Risk Assessment:** **MEDIUM** — The wait is better grounded, but the reported flake may have another cause.
+
+### 26-04
+
+**Summary:** The gate has ordered refusals, parses all ref updates and delegates preservation of unstaged edits to pre-commit. The revised ignored-input check closes the specific root-input cases identified in cycle 2, with an explicitly accepted residual.
+
+**Strengths**
+- The gate uses NUL-separated Git output and argument lists, and checks all pushed commits (`26-04-PLAN.md:97-104`, `:183-190`).
+- The signal test injects a signal before the child handle exists (`26-04-PLAN.md:219-224`).
+
+**Prior-review disposition**
+- Cycle-2 **C2-H1 — RESOLVED for the specified ignored inputs and refusal advice**: query B includes ignored matches and the message separates gate-read files from other files (`26-04-PLAN.md:168-177`, `:186-190`). This is not a general proof that the checked tree equals HEAD: D-28 explicitly accepts ignored inputs outside the fixed list (`.planning/phases/26-commit-and-push-quality-hooks/26-CONTEXT.md:323-349`).
+
+**Concerns**
+- **MEDIUM — The zero-exit signal test is not executable as described.** The fake child “exits 0 when argv[1] is `zero`” before the subsequent started-marker and wait description (`26-04-PLAN.md:220`), but the test must send it SIGTERM and prove the gate converts its successful exit to 130 (`:223`). If implemented in that order, the child can exit before the test can signal it, so the test cannot reliably cover the claimed branch.
+
+**Suggestions**
+- Specify that zero mode stays alive until it receives the signal, then exits 0 from its signal handler. Keep the started-marker handshake and timeout.
+
+**Risk Assessment:** **MEDIUM** — The named C2 cases are addressed, but the signal-status test needs a deterministic child lifecycle.
+
+### 26-05
+
+**Summary:** The installer now preflights both hook names and the legacy destination. It still permits a regular hook file that is hard-linked to another file, which can make an in-place rewrite affect that other file.
+
+**Strengths**
+- The new `lstat` checks reject symlinks and other non-regular hook entries before pre-commit runs (`26-05-PLAN.md:188-195`).
+- The existing pre-commit implementation does move foreign hooks to `.legacy` and opens recognized hooks for writing (`.venv/lib/python3.12/site-packages/pre_commit/commands/install_uninstall.py:56-61`, `:71-77`, `:92-108`), supporting the preflight.
+
+**Prior-review disposition**
+- Cycle-2 **C2-H2 — RESOLVED for the reported symlink and foreign-hook/legacy collision**: the planned preflight and tests cover both (`26-05-PLAN.md:175-179`, `:188-195`). The header-versus-pre-commit-ID limitation is explicitly recorded as accepted (`:106`, `:272`).
+
+**Concerns**
+- **HIGH — A hard-linked hook can still overwrite another user file.** A hard link is a regular file, so the planned `S_ISREG` check accepts it (`26-05-PLAN.md:192-193`). If a recognized `pre-commit` hook shares an inode with another file, pre-commit’s `open(hook_path, 'w')` truncates both names; similarly, `Path.write_text` on a marked `pre-push` hard link rewrites its other link (`26-05-PLAN.md:139-142`; pre-commit source above). The symlink tests do not cover this data-loss case.
+
+**Suggestions**
+- Refuse existing hook files with more than one hard link before any write, or use another approach that preserves the other link. Add a scratch-file test asserting both names remain unchanged.
+
+**Risk Assessment:** **HIGH** — Installing hooks can alter a user file outside the hooks directory through a regular hard link.
+
+### 26-06
+
+**Summary:** The harness has substantially stronger non-vacuity and restore checks. Two process-management details still leave its stated host-isolation and cleanup guarantees incomplete.
+
+**Strengths**
+- Expected bytes are captured after the edit and checked together with a Git dirty-tree assertion (`26-06-PLAN.md:108-111`, `:189-192`).
+- The ignored `conftest.py` and `GNUmakefile` cases first demonstrate that the ignored input changes the scratch test result (`26-06-PLAN.md:187-188`).
+
+**Prior-review disposition**
+- Cycle-2 **C2-M2 — PARTIAL**: descendant-group discovery and a nested abort test address a live, still-parented push (`26-06-PLAN.md:114-121`, `:240`). They do not cover a child already reparented before the snapshot. Research records that a lone SIGTERM to Git can leave the gate and pre-commit orphaned (`26-RESEARCH.md:223-225`).
+- Cycle-2 **C2-H1 companion coverage — RESOLVED for the two specified ignored root inputs** (`26-06-PLAN.md:187-188`).
+- Cycle-2 **C2-H2 companion coverage — RESOLVED for the specified symlink and existing-legacy cases** (`26-06-PLAN.md:233-235`).
+
+**Concerns**
+- **HIGH — The prescribed background push can inherit the real Git environment.** The design requires every Git command to go through `run_isolated` with `env -i` (`26-06-PLAN.md:98-99`), but gives the background launch as a direct `"$PY" -c '… os.execvp(…)’ git push …` (`:113`, used again at `:238`). If followed literally, that child inherits `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE`; the project’s research identifies these inherited values as capable of steering Git at the real checkout (`26-RESEARCH.md:303-306`). This conflicts with the scratch-only boundary.
+- **MEDIUM — Cleanup can miss a group orphaned before its snapshot.** The trap discovers groups only by walking the current descendants of each recorded Git PID (`26-06-PLAN.md:114-120`). If Git has already exited and its gate or pre-commit child has been reparented, that walk cannot discover the child group. The nested self-test aborts while both groups are still descendants (`:121`, `:240`), so it does not exercise this case.
+
+**Suggestions**
+- Launch the Python process-group wrapper itself through the isolated environment, with an explicit scratch working directory.
+- Record the gate child group while it is known, or use another ownership mechanism that survives reparenting; add an abort case where the Git parent exits before cleanup begins.
+
+**Risk Assessment:** **HIGH** — A literal implementation of the background launch can escape the scratch Git environment; abnormal cleanup can also leave processes behind.
+
+### 26-07
+
+**Summary:** The classifier keeps the required matrix job names and makes failed or empty Git queries run the full jobs. Its drift tests cover the known literal readers and the existing runtime link reader.
+
+**Strengths**
+- The current matrix and job name are at `.github/workflows/ci.yml:13-21`; the plan preserves them and gates steps rather than the job (`26-07-PLAN.md:97-107`).
+- NUL-separated paths and `--no-renames` cover the named path and rename cases (`26-07-PLAN.md:184-189`).
+
+**Concerns**
+- No new concern identified.
+
+**Suggestions**
+- Keep the documented dynamic-reader limitation visible (`26-07-PLAN.md:236-238`) when tests add new file-reading mechanisms.
+
+**Risk Assessment:** **MEDIUM** — The local tests parse workflow configuration; the first real branch push remains the proof of GitHub behavior.
+
+### 26-08
+
+**Summary:** The plan improves both recovery procedures and pins the commands that matter. The patch recovery still selects a potentially unrelated patch automatically, even when the operator cannot inspect it.
+
+**Strengths**
+- The store lookup matches pre-commit’s implementation (`.venv/lib/python3.12/site-packages/pre_commit/store.py:25-36`).
+- The final apply is guarded by the dry run (`26-08-PLAN.md:115`, `:134`).
+
+**Prior-review disposition**
+- Cycle-2 **C2-H3 — RESOLVED for the reported failed-check path**: check and apply are joined with `&&`, and the pin forbids the old separate lines (`26-08-PLAN.md:115`, `:134`, `:148-149`).
+- Cycle-2 **C2-M3 — RESOLVED for a failed POST under `set -e`**: DELETE, push and POST each have a guard, followed by read-back and escalation (`26-08-PLAN.md:179-185`).
+- Cycle-1 **M8 and M9 — RESOLVED for their stated command and failure-handling concerns**, subject to the remaining recovery concern below (`26-08-PLAN.md:130-134`, `:179-185`).
+
+**Concerns**
+- **MEDIUM — A failed inspection does not stop recovery from applying the newest patch.** The block selects the newest `patch*`, runs `less "$patch"` on a separate line, then applies it if Git’s dry run succeeds (`26-08-PLAN.md:130-134`). Pre-commit retains patch files (`staged_files_only.py:68-75`, `:83-98`), so the newest one can belong to a different run; if `less` is unavailable or fails, pasting the block continues to a potentially unrelated but applicable patch. A successful `git apply --check` verifies applicability, not that it is the intended lost edit.
+
+**Suggestions**
+- Require an explicit successful inspection and selection of the exact patch named in the interrupted push’s output before applying it. Do not automatically apply a guessed newest patch when inspection fails.
+
+**Risk Assessment:** **MEDIUM** — The original failed-check bug is fixed, but recovery can still apply the wrong saved change.
+
+### 26-09
+
+**Summary:** The final plan separates executor work from orchestrator checkpoints, records protection read-back, and no longer counts a bypassed landing as a protected-flow success. Its fallback record assumes the guarded push succeeded even though the guard explicitly permits failure.
+
+**Strengths**
+- The protection checkpoint requires the merged implementation and green CI before changing enforcement (`26-09-PLAN.md:99-105`).
+- A fallback outcome is not claimed by the already-landed “landing in progress” evidence commit (`26-09-PLAN.md:197-203`).
+
+**Prior-review disposition**
+- Cycle-2 **C2-H4 — RESOLVED for ordinary command failures**: the guarded block attempts re-enable and read-back after a failed push, and unconfirmed restoration stops further pushes (`26-09-PLAN.md:192-198`).
+- Cycle-2 **C2-M4 — PARTIAL**: a concrete branch-only follow-up commit now exists (`26-09-PLAN.md:199-203`), but its required text assumes the fallback push landed even when the guarded push failed, as described below.
+- Cycle-1 **M11 — RESOLVED as an acceptance classification**: fallback is never recorded as a passed protected landing (`26-09-PLAN.md:197-204`).
+
+**Concerns**
+- **HIGH — The fallback can report a landing that did not happen.** The push is `git push … || echo …`, so the block continues even when that push fails (`26-09-PLAN.md:195-197`). The next instructions nevertheless require the follow-up to say “landed through the escape hatch” and the owner report to say `main` holds the evidence commit (`:199-203`). If the fallback push is rejected or the network fails, neither statement is established; the recorded result can mislead the owner about what is on `main`.
+
+**Suggestions**
+- Capture the push outcome and read back `main`’s SHA after protection is restored. Record separate outcomes for “fallback landed,” “fallback failed,” and “remote state unknown”; claim a landing only when the remote SHA proves it.
+
+**Risk Assessment:** **HIGH** — A failure during the exceptional landing path can produce a false audit record.
+
+### Overall
+
+**Cross-plan risk: HIGH.** The revisions resolve the specific cycle-2 patch-guard and protection-guard defects, and substantially improve the ignored-input and hook-migration cases. Before execution, the remaining blockers are the hard-link overwrite risk, the potentially non-isolated background Git launch, and the fallback’s unverified landing claim.
+
+**Flat list of HIGH concerns**
+- **26-05:** Regular hard-linked hooks can cause installation to overwrite another user file.
+- **26-06:** The prescribed background push can inherit Git variables instead of the scratch-only environment.
+- **26-09:** A failed fallback push can be recorded as a successful escape-hatch landing.
+
+**Verdict: Fix the HIGH concerns and re-review before execution.**
+
+**Not checked:** Per the read-only instruction, no tests, GitHub calls, hook installations, or live signal experiments were run. Signal and GitHub behavior were assessed from the plans, repository source, and recorded research.
+
+---
+
+## Orchestrator Verification (cycle 3, final)
+
+Every cycle-3 HIGH was checked against the cited plan lines and source. Cycle 3 is the cap; with 3
+verified HIGHs (fewer than 4) and each fix trivial, the owner's cap rule applies: the orchestrator fixed
+them in the plans by hand, together with the trivial MEDIUMs, and recorded each in a "Round 3" ledger block.
+
+| # | Plan | Finding | Verdict | Fix applied by hand |
+|---|------|---------|---------|---------------------|
+| C3-H1 | 26-05 | A hard-linked hook passes `S_ISREG`, so `Path.write_text` (pre-push) or pre-commit's `open(hook_path, 'w')` (`install_uninstall.py:93`) rewrites the other name too | **VERIFIED — HIGH (trivial)** | Task 2 steps 4 and 5 refuse a regular hook with `st_nlink > 1` before any write; new test `test_a_hard_linked_hook_is_refused_untouched` (pre-push and pre-commit) |
+| C3-H2 | 26-06 | The background push launch `"$PY" -c '… os.execvp …' git push` (old line 113) bypasses `run_isolated`, so git inherits the caller's `GIT_*` | **VERIFIED — HIGH (trivial)** | The launch runs through `run_isolated` from the scratch work tree; new pin `test_hooks_e2e_background_push_is_isolated` and an acceptance grep (`os.setpgid` lines all hold `run_isolated`) |
+| C3-H3 | 26-09 | The guarded fallback push continues on failure, yet the follow-up record said "landed through the escape hatch" (old line 200) | **VERIFIED — HIGH (trivial)** | After protection is confirmed, `git fetch -q origin main` plus a `FETCH_HEAD` vs `HEAD` comparison record exactly one outcome (`fallback landed`, `fallback push failed`, `remote state unknown`); a landing is claimed only when the sha proves it |
+
+MEDIUM findings:
+
+| # | Plan | Finding | Disposition |
+|---|------|---------|-------------|
+| C3-M1 | 26-01 | `recipes = recipes()` after the rename raises `UnboundLocalError` | fixed by hand: callers' locals become `recipe_map` |
+| C3-M2 | 26-04 | The `zero`-mode fake child could exit before it is signalled | fixed by hand: the fake exits only inside its handler, after `started`; tests signal only after `started` |
+| C3-M3 | 26-08 | The newest `patch*` may belong to another run; a failed `less` did not stop the apply | fixed by hand: the block prints the patch name for comparison with the push output, and the apply line is `less "$patch" && git apply --check "$patch" && git apply "$patch"` (new pin) |
+| C3-M4 | 26-06 | Cleanup can miss a group orphaned before the snapshot (C2-M2 PARTIAL) | deferred with reason in the 26-06 ledger: only a signal to `git` alone orphans the gate (D-17 residual), and the harness only signals whole push groups; Task 1's `pgrep` acceptance catches any survivor |
+
+Cycle-2 status per the reviewer: C2-H1, C2-H2, C2-H3, C2-H4, C2-M1, C2-M3 RESOLVED; C2-M2 and C2-M4 PARTIAL (carried by C3-M4 and C3-H3, both handled above).
+
+**Cycle 3 tally:** 3 HIGH raised → 3 verified, 0 refuted, all fixed by hand under the cap rule. 4 MEDIUM → 3 fixed by hand, 1 explicitly deferred in PLAN.md. After the fixes: 0 unresolved HIGH, 0 actionable MEDIUM/LOW outside PLAN.md. All 9 plans pass `verify.plan-structure`; the verify-command path and failing-direction probes report 34 commands, all `severity: none`.
