@@ -672,3 +672,59 @@ def test_dev_environment_documents_the_push_gate_and_recovery() -> None:
         )
         if "git apply" in line:
             assert "<" not in line, f"placeholder on an apply line: {line!r}"
+
+
+def _section(text: str, heading: str) -> str:
+    """One Markdown section: its heading through the next heading of the same or higher level."""
+    lines = text.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.startswith("#") and heading in line),
+        None,
+    )
+    assert start is not None, f"no section headed {heading!r}"
+    level = len(lines[start]) - len(lines[start].lstrip("#"))
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line.startswith("#") and len(line) - len(line.lstrip("#")) <= level:
+            end = i
+            break
+    return "\n".join(lines[start:end])
+
+
+def test_git_workflow_documents_the_path_to_main() -> None:
+    """HOOK-05/06 (D-09, D-16, D-21): branch push, green CI, then a fast-forward of main."""
+    text = GIT_WORKFLOW.read_text(encoding="utf-8")
+    for phrase in ("git push origin <branch>:main", "strict", "fast-forward", "docs-only"):
+        assert phrase in text, f"git-workflow.md lacks {phrase!r}"
+
+
+def test_escape_hatch_turns_enforce_admins_back_on() -> None:
+    """P6 (D-10, review M9/C2-M3): every mutation is guarded so the read-back always runs."""
+    section = _section(GIT_WORKFLOW.read_text(encoding="utf-8"), "Escape hatch")
+    anchors = (
+        "branch=$(git branch --show-current)",
+        (
+            "gh api -X DELETE repos/castocolina/tools-installer/branches/main/"
+            "protection/enforce_admins ||"
+        ),
+        'git push origin "$branch:main" ||',
+        (
+            "gh api -X POST repos/castocolina/tools-installer/branches/main/"
+            "protection/enforce_admins ||"
+        ),
+        "gh api repos/castocolina/tools-installer/branches/main/protection --jq",
+    )
+    offsets = [section.index(anchor) for anchor in anchors]
+    assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets), (
+        f"escape-hatch steps are not strictly ordered: {offsets}"
+    )
+    blocks = re.findall(r"```sh\n(.*?)```", section, re.DOTALL)
+    assert blocks, "the escape hatch has no shell block"
+    for block in blocks:
+        for line in block.splitlines():
+            if line.startswith("gh api -X") or line.startswith("git push"):
+                assert "||" in line, f"unguarded mutating line: {line!r}"
+            assert "<" not in line, f"placeholder in the escape block: {line!r}"
+    assert "always" in section, "no always-follows statement"
+    assert "cannot be restored" in section, "no escalation statement"
