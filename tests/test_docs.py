@@ -610,3 +610,65 @@ def test_docs_make_no_overclaim_about_bun() -> None:
         assert "run under node" in text, f"{rel}: never says bun-installed CLIs run under node"
         for claim in _BUN_OVERCLAIMS:
             assert claim not in text, f"{rel}: overclaims bun with {claim!r}"
+
+
+DEV_ENVIRONMENT = REPO_ROOT / ".claude" / "dev-environment.md"
+GIT_WORKFLOW = REPO_ROOT / ".claude" / "git-workflow.md"
+AGENTS = REPO_ROOT / "AGENTS.md"
+
+_GATE_TARGETS = (
+    "make lint",
+    "make format-check",
+    "make typecheck",
+    "make security",
+    "make dead-code",
+    "make shellcheck",
+    "make test",
+)
+
+
+def test_dev_environment_carries_the_gate_table() -> None:
+    """HOOK-06 (D-06): every gate, its target, the validate aggregate and the re-run rule."""
+    text = DEV_ENVIRONMENT.read_text(encoding="utf-8")
+    phrases = (
+        *_GATE_TARGETS,
+        "make validate",
+        "make hooks-e2e",
+        "make dev-setup",
+        "pre-commit run --all-files",
+        "re-run its own target",
+    )
+    for phrase in phrases:
+        assert phrase in text, f"dev-environment.md lacks {phrase!r}"
+
+
+def test_dev_environment_has_the_stage_table_with_timings() -> None:
+    """HOOK-06 (SPEC R6): a Stage table carries measured timings and their measurement date."""
+    text = DEV_ENVIRONMENT.read_text(encoding="utf-8")
+    assert re.search(r"\|\s*Stage\s*\|", text), "no Stage table header"
+    timings = re.findall(r"\d+(?:\.\d+)? ?(?:s|min)\b", text)
+    assert len(timings) >= 3, f"fewer than three measured timings: {timings}"
+    assert re.search(r"measured[^\n]*2026-", text), "no 2026 measurement date"
+
+
+def test_dev_environment_documents_the_push_gate_and_recovery() -> None:
+    """D-17/D-18/D-25/D-28: refusals and a placeholder-free, guarded edit recovery."""
+    text = DEV_ENVIRONMENT.read_text(encoding="utf-8")
+    phrases = (
+        "--fail-fast",
+        "main checkout",
+        ".git/info/exclude",
+        "GATE_READ_PATHSPECS",
+        "even when git ignores",
+        "${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}",
+        'git apply --check "$patch" && git apply "$patch"',
+    )
+    for phrase in phrases:
+        assert phrase in text, f"dev-environment.md lacks {phrase!r}"
+    for line in text.splitlines():
+        stripped = line.strip()
+        assert stripped not in ('git apply "$patch"', 'git apply --check "$patch"'), (
+            f"unguarded apply line: {line!r}"
+        )
+        if "git apply" in line:
+            assert "<" not in line, f"placeholder on an apply line: {line!r}"
