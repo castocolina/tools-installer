@@ -23,8 +23,8 @@ from installer.policy import Policy, PolicyResult
 from installer.render import display_order
 from installer.run import CommandError, Runner
 from installer.session import (
+    InstallFn,
     MismatchChoice,
-    SensitiveInstall,
     build_plan,
     exit_code,
 )
@@ -82,7 +82,7 @@ class FakePrompter:
         return self._confirm
 
 
-def _recording_install() -> tuple[list[str], SensitiveInstall]:
+def _recording_install() -> tuple[list[str], InstallFn]:
     installed: list[str] = []
 
     def install(
@@ -1794,7 +1794,7 @@ def test_run_uninstall_nothing_to_remove_skips_confirm(
     assert removed == []
 
 
-def _mismatching_install() -> tuple[list[str], SensitiveInstall]:
+def _mismatching_install() -> tuple[list[str], InstallFn]:
     attempts: list[str] = []
     exc = ChecksumMismatch("a.tar.gz", "0" * 64, "f" * 64)
 

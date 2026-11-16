@@ -252,13 +252,11 @@ class _DiskProbe:
         platform: Platform,
         timer_cache: systemd_daemon.TimerStateCache | None,
         plist_path: Path,
-        unit_dir: Path,
         usage: diskusage.UsageProbe = shutil.disk_usage,
     ) -> None:
         self._platform = platform
         self._timer_cache = timer_cache
         self._plist_path = plist_path
-        self._unit_dir = unit_dir
         self._usage = usage
 
     def _daemon(self, *, blocking: bool) -> DaemonState:
@@ -312,7 +310,6 @@ def _disk_pressure_probe(
         platform=platform,
         timer_cache=timer_cache,
         plist_path=_DAEMON_PLIST_PATH,
-        unit_dir=_LINUX_DAEMON_UNIT_DIR,
         usage=usage,
     )
 

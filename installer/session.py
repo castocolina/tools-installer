@@ -68,7 +68,7 @@ _UNRESOLVED: frozenset[InstallStatus] = frozenset(
 )
 
 
-class SensitiveInstall(Protocol):
+class InstallFn(Protocol):
     """The install seam `execute_plan` calls, with the checksum policy keyword."""
 
     def __call__(
@@ -200,7 +200,7 @@ class RunContext:
     platform: Platform
     runner: Runner
     resolve_tag: TagResolver
-    install: SensitiveInstall
+    install: InstallFn
     updates: UpdateService | None = None
     terminal_sync: Callable[[], str | None] | None = None
     on_mismatch: OnMismatch | None = None
@@ -274,9 +274,7 @@ def summary_counts(outcomes: Sequence[RowOutcome]) -> str:
     return _count_line((word for word in words if word is not None), order)
 
 
-def _with_force(
-    install: Callable[..., InstallOutcome], force_ids: frozenset[str]
-) -> SensitiveInstall:
+def _with_force(install: Callable[..., InstallOutcome], force_ids: frozenset[str]) -> InstallFn:
     """Pass repair=True only for repair and reinstall plan rows.
 
     Every other row calls `install` without the keyword at all, so an install

@@ -50,11 +50,11 @@ from installer.sanitize import sanitize_log_line
 from installer.session import (
     RUNNABLE,
     Disposition,
+    InstallFn,
     MismatchChoice,
     PlanRow,
     RowOutcome,
     RunContext,
-    SensitiveInstall,
     build_plan,
     execute_plan,
     exit_code,
@@ -293,7 +293,7 @@ class ExecuteInputs:
     verify: Callable[[], str]
     version_refresh: VersionRefreshService
     resolve_tag: TagResolver = resolve_github_tag
-    install: SensitiveInstall = install_tool
+    install: InstallFn = install_tool
     unattended: bool = False
     updates: UpdateService | None = None
     now: Callable[[], float] = time.monotonic

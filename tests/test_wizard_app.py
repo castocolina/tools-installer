@@ -59,7 +59,7 @@ from installer.receipts import Receipt, ReceiptMethod
 from installer.run import CommandError, Runner
 from installer.schedules import ReconcileReport
 from installer.schedules_screen import SchedulesScreen
-from installer.session import Disposition, PlanRow, Result, RowOutcome, SensitiveInstall
+from installer.session import Disposition, InstallFn, PlanRow, Result, RowOutcome
 from installer.shellrc import PathGuardOutcome, ShellrcRefusal
 from installer.systemd_daemon import CompetingProbe, CompetingUnit
 from installer.ui_common import BASE_VIEW, VIEW_BY_NAME
@@ -4460,7 +4460,7 @@ async def test_a_clean_publish_clears_only_the_state_line_it_wrote(tmp_path: Pat
 def _tracking_install(
     on_install: Callable[[Tool], None],
 ) -> Callable[..., InstallOutcome]:
-    """A SensitiveInstall-shaped callable that records which tool it "installed"
+    """A InstallFn-shaped callable that records which tool it "installed"
     (via `on_install`) and always reports success -- the seam every
     `install_closed` test uses to flip a test's own presence/probe holders."""
 
@@ -6139,7 +6139,7 @@ def _execute_inputs(
     catalog: list[Tool] | None = None,
     *,
     present: Presence = (),
-    install: SensitiveInstall | None = None,
+    install: InstallFn | None = None,
     platform: Platform | None = None,
     version_refresh: VersionRefreshService | None = None,
 ) -> ExecuteInputs:

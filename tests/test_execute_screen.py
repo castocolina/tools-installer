@@ -51,11 +51,11 @@ from installer.resolve import resolve_methods
 from installer.run import CommandError, Runner, StreamingRunner
 from installer.session import (
     Disposition,
+    InstallFn,
     PlanRow,
     Result,
     RowOutcome,
     RunContext,
-    SensitiveInstall,
     ran_anything,
 )
 from installer.uninstall import SweepResult
@@ -213,7 +213,7 @@ def _emit_through_runner(runner: object, tool_id: str, lines: tuple[str, ...]) -
         emit(tool_id, line)
 
 
-def _install_with_output(captured: list[str]) -> SensitiveInstall:
+def _install_with_output(captured: list[str]) -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -234,7 +234,7 @@ def _install_with_output(captured: list[str]) -> SensitiveInstall:
 def _inputs(
     *,
     tools: list[Tool] | None = None,
-    install: SensitiveInstall | None = None,
+    install: InstallFn | None = None,
     wire_path: Callable[[], str] | None = None,
     verify: Callable[[], str] | None = None,
     present: Collection[str] = (),
@@ -614,7 +614,7 @@ async def test_unattended_renders_the_head_before_the_worker_starts() -> None:
         assert captured == ["rg"]
 
 
-def _mismatch_then_ok() -> tuple[list[tuple[str, str]], SensitiveInstall]:
+def _mismatch_then_ok() -> tuple[list[tuple[str, str]], InstallFn]:
     seen: list[tuple[str, str]] = []
 
     def install(
@@ -821,7 +821,7 @@ def _keys_text(screen: ExecuteScreen) -> str:
     return str(screen.query_one("#execute-keys", Static).render())
 
 
-def _install_second_fails(captured: list[str]) -> SensitiveInstall:
+def _install_second_fails(captured: list[str]) -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -1031,7 +1031,7 @@ async def test_execute_keys_name_the_idle_actions_before_a_run() -> None:
         assert _keys_text(screen) == "enter start · up/down move · esc cancel"
 
 
-def _mixed_report_install() -> SensitiveInstall:
+def _mixed_report_install() -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -1142,7 +1142,7 @@ async def test_post_run_log_carries_every_renderer_in_wizard_order() -> None:
         assert "enter" in screen.status.text.lower() or "esc" in screen.status.text.lower()
 
 
-def _ansi_bomb_install() -> SensitiveInstall:
+def _ansi_bomb_install() -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -1592,8 +1592,8 @@ async def test_streaming_runner_in_execute_worker_opts_in_to_unbuffer(
 
 def _blocking_install_emitting_one_line(
     started: threading.Event, release: threading.Event
-) -> SensitiveInstall:
-    """A SensitiveInstall that emits one line, then blocks until released."""
+) -> InstallFn:
+    """A InstallFn that emits one line, then blocks until released."""
 
     def install(
         tool: Tool,
@@ -2288,7 +2288,7 @@ def _two_stage_blocking_install(
     release1: threading.Event,
     started2: threading.Event,
     release2: threading.Event,
-) -> SensitiveInstall:
+) -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -2412,7 +2412,7 @@ async def test_transient_line_does_not_reset_last_output_at_or_in_flight() -> No
 
 def _install_first_immediate_second_blocks(
     started: threading.Event, release: threading.Event
-) -> SensitiveInstall:
+) -> InstallFn:
     """rg finishes at once; fd emits one line then blocks until released."""
 
     def install(
@@ -3000,7 +3000,7 @@ def _mark_broken(refresh: FrozenStateService, tool: Tool) -> None:
     _publish(refresh, tool, version=state.version if state else None, broken=True)
 
 
-def _repair_install(calls: list[tuple[str, bool]]) -> SensitiveInstall:
+def _repair_install(calls: list[tuple[str, bool]]) -> InstallFn:
     def strict(
         tool: Tool,
         platform: Platform,
@@ -3090,7 +3090,7 @@ async def test_non_broken_install_omits_the_repair_kwarg(tmp_path: Path) -> None
     assert ("fd", False) in calls
 
 
-def _install_raises_after_first(exception: Exception) -> SensitiveInstall:
+def _install_raises_after_first(exception: Exception) -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -3236,7 +3236,7 @@ def _recording(calls: list[str], text: str) -> Callable[[], str]:
     return run
 
 
-def _failing_install(captured: list[str]) -> SensitiveInstall:
+def _failing_install(captured: list[str]) -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,
@@ -3253,7 +3253,7 @@ def _failing_install(captured: list[str]) -> SensitiveInstall:
     return install
 
 
-def _raising_first_install(captured: list[str]) -> SensitiveInstall:
+def _raising_first_install(captured: list[str]) -> InstallFn:
     def install(
         tool: Tool,
         platform: Platform,

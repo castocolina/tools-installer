@@ -1536,7 +1536,7 @@ def test_update_refuses_volta_cleanly() -> None:
     assert calls == []
 
 
-def test_update_refuses_host_setup_pnpm_cleanly() -> None:
+def test_update_refuses_a_pnpm_owner_without_a_method_cleanly() -> None:
     # No methods on the tool: the `_target` helper would otherwise fill one in.
     tool = _tool("pi")
     target = _target(tool, "pnpm", package="@earendil-works/pi-coding-agent")

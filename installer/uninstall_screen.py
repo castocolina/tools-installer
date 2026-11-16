@@ -125,8 +125,8 @@ class UninstallScreen(AppScreen):
 
     # Narrow .app from App[Unknown] (MessagePump default) to the concrete host
     # app so push_screen() is typed without an Unknown generic param.
-    # UnifiedApp is defined later in this module; the string forward reference is
-    # resolved by pyright (which analyses all module-level names together).
+    # UnifiedApp is imported under TYPE_CHECKING from installer.wizard_app; the string
+    # annotation is resolved by pyright.
     if TYPE_CHECKING:
 
         @property

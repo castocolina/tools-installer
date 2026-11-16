@@ -61,10 +61,10 @@ from installer.sanitize import sanitize_log_line
 from installer.session import (
     RUNNABLE,
     Disposition,
+    InstallFn,
     OnMismatch,
     RowOutcome,
     RunContext,
-    SensitiveInstall,
     build_plan,
     execute_plan,
     first_line,
@@ -125,7 +125,7 @@ def run_wizard(
     terminal_sync: Callable[[], str | None] | None = None,
     runner: Runner = run_command,
     resolve_tag: TagResolver = resolve_github_tag,
-    install: SensitiveInstall = install_tool,
+    install: InstallFn = install_tool,
     on_mismatch: OnMismatch | None = None,
 ) -> list[RowOutcome] | None:
     """Print and execute a fresh plan, or return None when confirmation is declined.

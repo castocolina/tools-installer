@@ -1291,7 +1291,7 @@ def _tuned_claude() -> Tool:
         name="Claude Code",
         category="ai",
         cmd="claude",
-        methods=(Method(kind="host", params={}),),
+        methods=(Method(kind="brew", params={"formula": "claude"}),),
         post_install=("apply_agent_tuning",),
     )
 
@@ -1318,7 +1318,7 @@ def test_each_config_step_kind_dispatches(
     assert frozenset(_ALL_KIND_STEPS) == declared
 
     tool_id = "superpowers"
-    tool = _node_tool(Method(kind="host", params={"host_setup": True}), _group_method())
+    tool = _node_tool(Method(kind="brew", params={"formula": "other"}), _group_method())
     if kind == "hook_register":
         tool_id, tool = "codegraph", _codegraph_tool()
         monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
@@ -1355,7 +1355,7 @@ def test_pnpm_group_install_runs_the_tools_first_node_method(
 
     monkeypatch.setattr(session_module.executors, "execute", _execute)
     recorder = RunRecorder()
-    tool = _node_tool(Method(kind="host", params={"host_setup": True}), _group_method())
+    tool = _node_tool(Method(kind="brew", params={"formula": "other"}), _group_method())
     step = _ALL_KIND_STEPS["pnpm_group_install"]
 
     outcome = execute_plan(
@@ -1367,7 +1367,7 @@ def test_pnpm_group_install_runs_the_tools_first_node_method(
     assert executed == [_group_method()]
     assert recorder.argv == []
 
-    no_node = _node_tool(Method(kind="host", params={"host_setup": True}))
+    no_node = _node_tool(Method(kind="brew", params={"formula": "other"}))
     failed = execute_plan(
         [_reconfigure_row("superpowers", step)],
         _run_context(recorder, catalog={"superpowers": no_node}),
