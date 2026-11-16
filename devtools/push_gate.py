@@ -31,6 +31,9 @@ PRE_PUSH_ARGS: tuple[str, ...] = (
 )
 
 
+# Files that define the gate and its environment: an unstaged edit changes what the gates run.
+ENV_FILES: tuple[str, ...] = (".pre-commit-config.yaml", "pyproject.toml", "uv.lock")
+
 # Config and plugin files the gates load, plus the gated sources; each entry is an exact root name
 # or starts with a literal directory, so git never walks .venv/.
 GATE_READ_PATHSPECS: tuple[str, ...] = (
@@ -211,12 +214,12 @@ def refusal(git: GitRunner, updates: Sequence[RefUpdate]) -> str | None:
     message = _untracked_message(git)
     if message is not None:
         return "push refused: " + message
-    edited = _names(_query(git, ["diff", "--name-only", "-z", "--", ".pre-commit-config.yaml"]))
+    edited = _names(_query(git, ["diff", "--name-only", "-z", "--", *ENV_FILES]))
     if edited:
         return "push refused: " + _part(
-            "the gate config has an unstaged edit:",
+            "the gate config or the environment lock has an unstaged edit:",
             edited,
-            "commit or discard the edit (git restore .pre-commit-config.yaml), then push again.",
+            "commit or discard the edit (git restore <file>), then push again.",
         )
     head = _rev(git, "HEAD")
     elsewhere: list[str] = []

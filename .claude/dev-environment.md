@@ -68,7 +68,7 @@ shared hooks directory. It refuses, before running any gate:
    tests read) even when git ignores it — commit a gate-read file
    or move it out of the repository; `.git/info/exclude` is only for a local-only file that no
    gate reads;
-4. an unstaged edit to `.pre-commit-config.yaml`;
+4. an unstaged edit to `.pre-commit-config.yaml`, `pyproject.toml` or `uv.lock`;
 5. a pushed commit that is not HEAD.
 
 It then runs `pre-commit run --hook-stage pre-push --fail-fast --from-ref HEAD --to-ref HEAD`.

@@ -78,7 +78,7 @@ INTENT = ("diff", "--name-only", "--diff-filter=A", "-z")
 HIDDEN = ("ls-files", "-v", "-z")
 UNTRACKED = ("ls-files", "--others", "--exclude-standard", "-z")
 GATE_READ = ("--glob-pathspecs", "ls-files", "--others", "-z", "--", *GATE_READ_PATHSPECS)
-CONFIG = ("diff", "--name-only", "-z", "--", ".pre-commit-config.yaml")
+CONFIG = ("diff", "--name-only", "-z", "--", ".pre-commit-config.yaml", "pyproject.toml", "uv.lock")
 GATE_HEADER = "the gates read these untracked files, even when git ignores them:"
 OTHER_HEADER = "these untracked files can change what the gates see:"
 QUERIES = {
@@ -321,7 +321,13 @@ def test_refusal_3_untracked_files_in_two_parts(capsys: pytest.CaptureFixture[st
 
 def test_refusal_4_unstaged_config_edit(capsys: pytest.CaptureFixture[str]) -> None:
     err = _refused(_git(config=_z(".pre-commit-config.yaml")), capsys)
-    assert "commit or discard the edit (git restore .pre-commit-config.yaml)" in err
+    assert "commit or discard the edit (git restore <file>)" in err
+
+
+@pytest.mark.parametrize("name", ("pyproject.toml", "uv.lock"))
+def test_refusal_4_unstaged_environment_edit(name: str, capsys: pytest.CaptureFixture[str]) -> None:
+    err = _refused(_git(config=_z(name)), capsys)
+    assert f"environment lock has an unstaged edit:\n  {name}\n" in err
 
 
 def test_refusal_5_pushed_commit_is_not_head(capsys: pytest.CaptureFixture[str]) -> None:
@@ -348,7 +354,7 @@ def test_order_untracked_beats_not_head(capsys: pytest.CaptureFixture[str]) -> N
 def test_order_config_beats_not_head(capsys: pytest.CaptureFixture[str]) -> None:
     git = _git(pushed=OTHER, config=_z(".pre-commit-config.yaml"))
     err = _refused(git, capsys, _line(OTHER))
-    assert "git restore .pre-commit-config.yaml" in err
+    assert "git restore <file>" in err
 
 
 @pytest.mark.parametrize("name", ("conftest.py", "tox.ini"))
