@@ -80,3 +80,78 @@ def test_main_writes_full_true_for_a_code_change(
     assert output.read_text().endswith("full=true\n")
     assert "installer/a.py" in capsys.readouterr().out
     assert calls == [[GIT, "diff", "--name-only", "-z", "--no-renames", "origin/main...HEAD"]]
+
+
+def test_a_python_file_renamed_into_planning_runs_everything(tmp_path: Path) -> None:
+    """SPEC R5 encoding backstop: --no-renames lists both paths of a rename (D-16)."""
+    from devtools.docs_only import main
+
+    output = tmp_path / "github_output"
+    run, _ = _fake_runner(b"installer/a.py\0.planning/a.py\0")
+    assert main(["--github-output", str(output)], run=run, which=_which) == 0
+    assert output.read_text().endswith("full=true\n")
+
+
+def test_a_path_with_a_space_or_newline_is_one_path(tmp_path: Path) -> None:
+    """SPEC R5 encoding backstop: -z keeps a space and a newline inside one path (D-16)."""
+    from devtools.docs_only import is_docs_only, main
+
+    output = tmp_path / "github_output"
+    run, _ = _fake_runner(b".planning/a b.md\0.planning/c\nd.md\0")
+    assert main(["--github-output", str(output)], run=run, which=_which) == 0
+    assert output.read_text().endswith("full=false\n")
+    assert is_docs_only([".planning/a b.md", ".planning/c\nd.md"]) is True
+
+    output = tmp_path / "github_output_code"
+    run, _ = _fake_runner(b"installer/a b.py\0")
+    assert main(["--github-output", str(output)], run=run, which=_which) == 0
+    assert output.read_text().endswith("full=true\n")
+
+
+def test_uppercase_md_is_not_markdown() -> None:
+    """SPEC R5 encoding backstop: the .md suffix match is exact and lowercase (D-16)."""
+    from devtools.docs_only import is_docs_only
+
+    assert is_docs_only(["NOTES.MD"]) is False
+
+
+def test_git_failure_runs_everything(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """D-16: a git failure, such as no merge base, fails closed to a full run."""
+    from devtools.docs_only import main
+
+    output = tmp_path / "github_output"
+    run, _ = _fake_runner(b"", returncode=128)
+    assert main(["--github-output", str(output)], run=run, which=_which) == 0
+    assert output.read_text().endswith("full=true\n")
+    assert "no change list" in capsys.readouterr().out
+
+
+def test_missing_git_runs_everything(tmp_path: Path) -> None:
+    """D-16: a missing git fails closed to a full run and never runs a command."""
+    from devtools.docs_only import main
+
+    output = tmp_path / "github_output"
+    run, calls = _fake_runner(b"")
+    assert main(["--github-output", str(output)], run=run, which=lambda name: None) == 0
+    assert output.read_text().endswith("full=true\n")
+    assert calls == []
+
+
+def test_empty_change_runs_everything(tmp_path: Path) -> None:
+    """D-16: an empty change list fails closed to a full run, never a fast pass."""
+    from devtools.docs_only import main
+
+    output = tmp_path / "github_output"
+    run, _ = _fake_runner(b"")
+    assert main(["--github-output", str(output)], run=run, which=_which) == 0
+    assert output.read_text().endswith("full=true\n")
+
+
+def test_output_file_gets_exactly_one_line(tmp_path: Path) -> None:
+    """D-16: one classification appends exactly one full=... line to the output file."""
+    from devtools.docs_only import main
+
+    output = tmp_path / "github_output"
+    run, _ = _fake_runner(b".planning/x.md\0")
+    assert main(["--github-output", str(output)], run=run, which=_which) == 0
+    assert output.read_text().splitlines() == ["full=false"]
