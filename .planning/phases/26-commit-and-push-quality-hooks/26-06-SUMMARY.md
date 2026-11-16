@@ -147,7 +147,12 @@ status: complete
 
 ## Deviations from Plan
 
-None - plan executed as written.
+Four post-review fixes applied to `scripts/hooks-e2e.sh`:
+
+- Prune a reaped pid from `BG_PIDS` in `interrupt_restores_edit` so `cleanup` cannot signal or SIGKILL a recycled pid's process group.
+- Add `GIT_CEILING_DIRECTORIES="$SCRATCH"` to the `run_isolated` allowlist and assert no git dir is reachable above scratch in `install_outside_a_checkout_skips`; a deliberate deviation from the plan's exact allowlist for P5 (never touch a real repo).
+- Assert the six push-stage gate marks in `green_push_lands`, matching `commit_runs_static_gates`.
+- Make `trap '' INT TERM HUP` the first line of `cleanup` so a second Ctrl-C cannot abort it midway.
 
 ### Mutation check (required by Task 2, reverted before commit)
 
@@ -155,8 +160,8 @@ None - plan executed as written.
 - `make hooks-e2e` then printed `FAIL unstaged_edit_restored_existing_branch` (plus the other three restore cases), exit 1 — the check is not vacuous.
 - Reverted the mutation; the final run prints all 32 `ok` lines.
 
-**Total deviations:** 0 auto-fixed.
-**Impact on plan:** None.
+**Total deviations:** 4 post-review fixes (1 deliberate allowlist addition for P5).
+**Impact on plan:** None beyond the `GIT_CEILING_DIRECTORIES` allowlist addition.
 
 ## Issues Encountered
 

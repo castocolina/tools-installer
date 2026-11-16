@@ -32,6 +32,7 @@ FAILURES=0
 # reaches it: no inherited GIT_DIR, GIT_INDEX_FILE or user git config (RESEARCH Pitfall 2).
 # `exec` keeps the pid of a backgrounded call equal to the pid its python wrapper
 # makes a process group leader, so `kill -- -$pid` reaches the whole push group.
+# GIT_CEILING_DIRECTORIES stops git climbing above scratch into a real repo (P5).
 run_isolated() {
   exec env -i \
     PATH="$PRE_COMMIT_DIR:$UV_DIR:/usr/bin:/bin" \
@@ -43,6 +44,7 @@ run_isolated() {
     UV_OFFLINE=1 \
     GIT_CONFIG_NOSYSTEM=1 \
     GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CEILING_DIRECTORIES="$SCRATCH" \
     GIT_TERMINAL_PROMPT=0 \
     GIT_AUTHOR_NAME=hooks-e2e \
     GIT_AUTHOR_EMAIL=hooks-e2e@example.invalid \
@@ -170,6 +172,15 @@ push_bg() {
   BG_PIDS+=("$PUSH_PID")
 }
 
+# A reaped pid must leave BG_PIDS or cleanup may signal a recycled pid's group.
+untrack_bg_pid() {
+  local target="$1" pid kept=()
+  for pid in ${BG_PIDS[@]+"${BG_PIDS[@]}"}; do
+    [ "$pid" = "$target" ] || kept+=("$pid")
+  done
+  BG_PIDS=(${kept[@]+"${kept[@]}"})
+}
+
 live_groups() {
   local groups="$1" pgid out=""
   for pgid in $groups; do
@@ -213,6 +224,7 @@ collect_groups() {
 # the gate starts pre-commit in a group of its own (review C2-M2). The scratch dir is
 # removed only after no member of any collected group remains.
 cleanup() {
+  trap '' INT TERM HUP
   touch "$SCRATCH/stop" 2>/dev/null || true
   local snapshot pids groups pid pgid i live
   snapshot="$SCRATCH/ps.snapshot"
@@ -277,11 +289,17 @@ commit_runs_static_gates() {
 
 green_push_lands() {
   clear_marks gates
-  local out
+  local out target
   out="$( cd "$SCRATCH/gates" && run_isolated git push origin main 2>&1 )" || {
     fail green_push_lands "push failed: $out"
     return 0
   }
+  for target in lint format-check typecheck security dead-code shellcheck; do
+    if [ ! -f "$SCRATCH/marks/gates/$target.ran" ]; then
+      fail green_push_lands "missing $target.ran"
+      return 0
+    fi
+  done
   if [ ! -f "$SCRATCH/marks/gates/test.ran" ]; then
     fail green_push_lands "test.ran missing"
     return 0
@@ -759,6 +777,10 @@ install_outside_a_checkout_skips() {
   cp -R "$ROOT/devtools" "$SCRATCH/plain/"
   cp "$ROOT/.pre-commit-config.yaml" "$ROOT/Makefile" "$SCRATCH/plain/"
   local out
+  if out="$( run_isolated git -C "$SCRATCH/plain" rev-parse --git-dir 2>&1 )"; then
+    fail install_outside_a_checkout_skips "repo discovered above scratch: $out"
+    return 0
+  fi
   out="$( cd "$SCRATCH/plain" && run_isolated "$PY_BIN" -m devtools.hooks install 2>&1 )" || {
     fail install_outside_a_checkout_skips "hook step failed: $out"
     return 0
@@ -936,7 +958,7 @@ interrupt_restores_edit() {
   ( cd "$SCRATCH/$name" && run_isolated git commit -q -m slow )
   printf 'FAIL\n' >>"$SCRATCH/$name/tests/test_a.py"
   expect_edit "$name" tests/test_a.py "$name"
-  local before pid i=0
+  local before pid i=0 wait_status=0
   before="$(remote_sha "$name")"
   clear_marks "$name"
   push_bg "$name" origin main
@@ -950,7 +972,9 @@ interrupt_restores_edit() {
     return 0
   fi
   kill -"$sig" -- "-$pid" 2>/dev/null || true
-  if wait "$pid" 2>/dev/null; then
+  wait "$pid" 2>/dev/null || wait_status=$?
+  untrack_bg_pid "$pid"
+  if [ "$wait_status" -eq 0 ]; then
     fail "$case_name" "the push exited 0 after the signal"
     return 0
   fi
