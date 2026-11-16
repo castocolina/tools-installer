@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build setup run doctor fix uninstall lint format-check typecheck security dead-code shellcheck validate test e2e verify-registry audit-catalog
+.PHONY: help install build run doctor fix uninstall lint format-check typecheck security dead-code shellcheck validate test e2e verify-registry audit-catalog
 
 help:  ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 
 install:  ## Create .venv and install runtime + dev deps (uv)
@@ -11,10 +11,8 @@ install:  ## Create .venv and install runtime + dev deps (uv)
 build:  ## Build the wheel + sdist
 	uv build
 
-setup:  ## Launch the setup wizard (pass flags via ARGS, e.g. ARGS="--all --yes")
+run:  ## Launch the setup wizard (pass flags via ARGS, e.g. ARGS="--all --yes")
 	uv run --isolated --no-dev setup.py $(ARGS)
-
-run: setup  ## Alias for `setup`
 
 doctor:  ## Audit PATH (report; launch repairs aside, `make fix` applies changes)
 	uv run --isolated --no-dev setup.py --doctor
