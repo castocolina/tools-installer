@@ -173,12 +173,12 @@
 
 *(added 2026-11-16, 26 SPEC + CONTEXT)*
 
-- [ ] **HOOK-01**: Every commit runs each static gate as its own hook entry calling its `make` target (lint, format-check, typecheck, security, dead-code, shellcheck); `make validate` runs them all through `pre-commit run --all-files`; no commit-stage hook runs tests [26 R1, D-03, D-04]
-- [ ] **HOOK-02**: Every push runs each static gate and then `make test` (90% coverage gate), each as its own entry; any failure aborts the push [26 R2, D-05]
-- [ ] **HOOK-03**: The push gate tests a tree equal to the pushed commit: unstaged edits are set aside and restored, and the push is refused for staged-uncommitted changes, untracked `.py` under `installer/` or `tests/`, or a pushed commit that is not HEAD [26 R3, D-01]
-- [ ] **HOOK-04**: `make dev-setup` (renamed from `make install`) installs the commit hook and the push gate, idempotently, skips outside a git checkout and fails when `core.hooksPath` is set; `make setup` is removed and `make run` launches the wizard [26 R4, D-07, D-08]
-- [ ] **HOOK-05**: GitHub accepts a commit on `main`, an admin's included, only after both CI checks passed on that exact SHA; changes land by branch push, green CI, fast-forward; docs-only changes get a fast pass under the same check names [26 R5, D-09, D-10, D-11]
-- [ ] **HOOK-06**: The docs state each gate, its target and stage with measured timings, the branch → CI → `main` flow and the manual `enforce_admins` escape hatch; no doc claims `make validate` runs pre-commit unless it does [26 R6, D-06]
+- [x] **HOOK-01**: Every commit runs each static gate as its own hook entry calling its `make` target (lint, format-check, typecheck, security, dead-code, shellcheck); `make validate` runs them all through `pre-commit run --all-files`; no commit-stage hook runs tests [26 R1, D-03, D-04]
+- [x] **HOOK-02**: Every push runs each static gate and then `make test` (90% coverage gate), each as its own entry; any failure aborts the push [26 R2, D-05]
+- [x] **HOOK-03**: The push gate tests a tree equal to the pushed commit: unstaged edits are set aside and restored, and the push is refused for staged-uncommitted changes, untracked `.py` under `installer/` or `tests/`, or a pushed commit that is not HEAD [26 R3, D-01]
+- [x] **HOOK-04**: `make dev-setup` (renamed from `make install`) installs the commit hook and the push gate, idempotently, skips outside a git checkout and fails when `core.hooksPath` is set; `make setup` is removed and `make run` launches the wizard [26 R4, D-07, D-08]
+- [x] **HOOK-05**: GitHub accepts a commit on `main`, an admin's included, only after both CI checks passed on that exact SHA; changes land by branch push, green CI, fast-forward; docs-only changes get a fast pass under the same check names [26 R5, D-09, D-10, D-11]
+- [x] **HOOK-06**: The docs state each gate, its target and stage with measured timings, the branch → CI → `main` flow and the manual `enforce_admins` escape hatch; no doc claims `make validate` runs pre-commit unless it does [26 R6, D-06]
 
 ## Future Requirements
 
@@ -323,12 +323,12 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | LEAN-02 | Phase 25 | Complete |
 | LEAN-03 | Phase 25 | Complete |
 | LEAN-04 | Phase 25 | Complete |
-| HOOK-01 | Phase 26 | Pending |
-| HOOK-02 | Phase 26 | Pending |
-| HOOK-03 | Phase 26 | Pending |
-| HOOK-04 | Phase 26 | Pending |
-| HOOK-05 | Phase 26 | Pending |
-| HOOK-06 | Phase 26 | Pending |
+| HOOK-01 | Phase 26 | Complete |
+| HOOK-02 | Phase 26 | Complete |
+| HOOK-03 | Phase 26 | Complete |
+| HOOK-04 | Phase 26 | Complete |
+| HOOK-05 | Phase 26 | Complete |
+| HOOK-06 | Phase 26 | Complete |
 
 **Coverage:**
 

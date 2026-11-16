@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v0.50.0 — Truthful lifecycle",
+  "milestone": "v0.50.0 \u2014 Truthful lifecycle",
   "phases": [
     {
       "number": "17",
@@ -76,13 +76,13 @@
     {
       "number": "26",
       "name": "Commit and push quality hooks",
-      "status": "pending"
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd-progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd-new-milestone",
+    "label": "Start a new milestone",
+    "reason": "All phases complete \u2014 start a new milestone"
   },
-  "updated_at": "2026-11-16T15:12:02.227Z"
+  "updated_at": "2026-11-16T19:09:52.404Z"
 }
