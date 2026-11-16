@@ -419,9 +419,11 @@ def test_the_gate_read_pathspecs_are_pinned_and_bounded() -> None:
         "devtools/**/.bandit",
         "scripts/**/.shellcheckrc",
         "typings/**",
+        ".claude/*.md",
+        ".claude/skills/**",
     )
-    assert len(GATE_READ_PATHSPECS) == 27
-    literal_roots = ("installer/", "tests/", "devtools/", "scripts/", "typings/")
+    assert len(GATE_READ_PATHSPECS) == 29
+    literal_roots = ("installer/", "tests/", "devtools/", "scripts/", "typings/", ".claude/")
     assert all("/" not in p or p.startswith(literal_roots) for p in GATE_READ_PATHSPECS)
 
 

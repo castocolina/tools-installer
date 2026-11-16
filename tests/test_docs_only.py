@@ -246,6 +246,7 @@ LEDGER: dict[tuple[str, str], str | None] = {
     ("tests/test_push_gate.py", ".planning"): None,  # asserted absent from a refusal
     ("tests/test_push_gate.py", ".planning/debug/x.log"): None,  # fake git output
     ("tests/test_push_gate.py", ".planning/notes.md"): None,  # fake git output
+    ("tests/test_push_gate.py", ".claude/*.md"): None,  # pinned pathspec, not a repo file
     ("tests/test_registry.py", "CLAUDE.md"): None,  # asserted block text
     (
         "tests/test_render.py",

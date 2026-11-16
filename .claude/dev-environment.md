@@ -64,7 +64,8 @@ shared hooks directory. It refuses, before running any gate:
    `--no-assume-unchanged` clears them);
 3. untracked, non-ignored files outside `.planning/`, plus every gate-read file of
    `GATE_READ_PATHSPECS` (the config and plugin files the gates load, and Python sources under
-   `installer/`, `tests/` and `devtools/`) even when git ignores it — commit a gate-read file
+   `installer/`, `tests/` and `devtools/`, and the `.claude/*.md` and `.claude/skills/` files that
+   tests read) even when git ignores it — commit a gate-read file
    or move it out of the repository; `.git/info/exclude` is only for a local-only file that no
    gate reads;
 4. an unstaged edit to `.pre-commit-config.yaml`;

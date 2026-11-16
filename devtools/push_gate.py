@@ -61,6 +61,8 @@ GATE_READ_PATHSPECS: tuple[str, ...] = (
     "devtools/**/.bandit",
     "scripts/**/.shellcheckrc",
     "typings/**",
+    ".claude/*.md",
+    ".claude/skills/**",
 )
 
 
