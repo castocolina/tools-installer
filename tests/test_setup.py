@@ -1071,7 +1071,7 @@ def test_schedule_defaults_are_wired_only_for_the_genuine_setup_wizard_entry_poi
 ) -> None:
     """apply_schedule_defaults' ALLOWLIST gate (11-REVIEWS.md cycle 2 finding
     #14): only the default/no-flag path (_run_interactive_wizard's own call
-    site -- the genuine, normal interactive `make setup` wizard flow) ever
+    site -- the genuine, normal interactive `make run` wizard flow) ever
     wires a real schedule_defaults callback into UnifiedApp. `--doctor`
     (read-only, Makefile:19) and `--uninstall` must never auto-apply -- proven against
     _capture_app's own CAPTURED kwargs, not merely that an injected callback was never

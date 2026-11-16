@@ -101,14 +101,14 @@ or `TI_UV_INSTALL_URL`, or set `TI_NO_RUN=1` to install without launching.
 git clone https://github.com/castocolina/tools-installer.git
 cd tools-installer
 make install                 # uv creates .venv + installs deps
-make setup                   # launch the wizard (make run is an alias)
+make run                     # launch the wizard
 ```
 
 ### Non-interactive (CI / scripting)
 
 ```sh
-make setup ARGS="--all"                      # install everything
-make setup ARGS="--categories search,data"   # only some categories
+make run ARGS="--all"                        # install everything
+make run ARGS="--categories search,data"     # only some categories
 make doctor                                  # audit PATH (a report; runs the launch repairs first)
 make fix                                     # wire PATH into your shell
 ```
@@ -322,7 +322,7 @@ workflow has a `make` target so local runs and CI are identical:
 | Command          | Does                                                            |
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` — create `.venv`, install runtime + dev deps          |
-| `make setup`     | launch the wizard (`uv run --isolated --no-dev setup.py`, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); flags via `ARGS`; `make run` is an alias) |
+| `make run`       | launch the wizard (`uv run --isolated --no-dev setup.py`, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); flags via `ARGS`) |
 | `make doctor`    | audit `PATH` (a report; runs the launch repairs first)          |
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
 | `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode |
@@ -366,7 +366,7 @@ installer/
   locations.py, status.py, run.py, links.py   # seams: paths, is-installed, runner, URLs
 tests/                     # pytest suite (offline, deterministic)
 .github/workflows/ci.yml   # CI: make validate + make test on Ubuntu + macOS
-Makefile                   # task interface: install, setup, doctor, build, validate, test
+Makefile                   # task interface: install, run, doctor, build, validate, test
 pyproject.toml             # deps + tool config (ruff, pyright, pytest, coverage, …)
 AGENTS.md, .claude/        # contributor rules (tooling, testing, git, dev env)
 docs/prds/                 # product requirements

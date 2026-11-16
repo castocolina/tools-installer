@@ -9,11 +9,10 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
   Never use `pip`, `poetry`, `conda`, or a hand-rolled venv.
 - `make install`   — create `.venv` (uv), install runtime + dev dependencies
 - `make build`     — build the distributable
-- `make setup`     — launch the wizard (`uv run --isolated --no-dev setup.py`; pass flags via `ARGS="…"`)
+- `make run`       — launch the wizard (`uv run --isolated --no-dev setup.py`; pass flags via `ARGS="…"`)
 - `make doctor`    — audit PATH (a report; like every launch it first repairs installer-owned
   leftovers: it removes legacy alias blocks and the retired pip/npm guard shims and alias block)
 - `make fix`       — wire `~/.myshellrc` + shell rc files into your PATH
-- `make run`       — alias for `make setup`
 - `make uninstall` — remove installed artifacts
 - `make verify-registry` — check registry pins against upstream (read-only; pass `ARGS="--write"` to bump)
 - `make audit-catalog` — the catalog-audit skill's fact gatherer and report writer (read-only facts; writes only `.planning/audits/catalog/<date>/`; pass the subcommand via `ARGS="…"`)
@@ -30,7 +29,7 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
   so each commit is one self-contained, valid change. See [Git Workflow](.claude/git-workflow.md).
 - **Validate before you commit.** `make validate && make test` must pass on the exact
   tree you are about to commit.
-- **Never mutate the developer's host.** Do not run `make setup`, `make fix`,
+- **Never mutate the developer's host.** Do not run `make run`, `make fix`,
   `make uninstall`, `make doctor`, or mutating `systemctl --user` commands, on the
   real machine (every launch route, doctor included, may rewrite the real
   `~/.myshellrc` and delete leftover guard shims in `~/.local/bin`), and

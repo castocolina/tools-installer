@@ -3738,7 +3738,7 @@ async def test_doctor_discloses_a_system_scope_competitor_from_a_worker_read() -
 
 
 async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -> None:
-    # The generic `Run `make setup`` branch must not capture this item: a
+    # The generic `Run `make run`` branch must not capture this item: a
     # full disk answered with "press r to reinstall pnpm globals" is exactly
     # the mis-routing the branch ordering exists to prevent.
     app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")

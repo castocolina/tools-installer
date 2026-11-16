@@ -137,7 +137,7 @@ def test_skill_host_safety_text() -> None:
             "opencode upgrade",
             "pi update",
             "pi mcp add",
-            "make setup",
+            "make run",
             "make doctor",
             "vendor installer script",
             "scripts/detect-container-runtime.sh",
