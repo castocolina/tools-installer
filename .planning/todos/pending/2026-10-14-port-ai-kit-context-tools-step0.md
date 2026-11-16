@@ -7,6 +7,9 @@ source: ai-kit hand-off (2026-10-14; tag archive/context-tools-plan1 = 27d355f i
 files:
   - installer/registry.toml
   - installer/catalog_tui.py
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

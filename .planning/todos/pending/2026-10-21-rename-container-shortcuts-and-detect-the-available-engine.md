@@ -11,6 +11,9 @@ files:
   - tests/test_policy_tweaks.py:14-18
   - tests/test_wizard_app.py:2217-2219
   - README.md:271-276
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

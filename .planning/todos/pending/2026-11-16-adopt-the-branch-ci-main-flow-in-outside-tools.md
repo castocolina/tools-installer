@@ -4,6 +4,9 @@ title: Adopt the branch → green CI → main flow in the outside tools that pus
 area: tooling
 severity: major
 files: []
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

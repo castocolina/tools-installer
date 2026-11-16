@@ -6,6 +6,9 @@ severity: minor
 source: ai-kit hand-off (2026-10-13 audit, report 16)
 files:
   - .planning/research/2026-10-13-from-ai-kit/16-playwright-chrome-bazzite.md
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

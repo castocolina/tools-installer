@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v0.50.0
 milestone_name: Truthful lifecycle
-current_phase: 26
-status: completed
+status: Awaiting next milestone
 stopped_at: "Phase 26 complete (landed via branch -> green CI -> ff under enforce_admins); v0.50.0 all 17 phases complete — next: /gsd-audit-milestone"
-last_updated: "2026-11-16T19:10:37.305Z"
+last_updated: "2026-11-16T20:38:06.387Z"
 last_activity: 2026-11-16
-last_activity_desc: Phase 26 complete
-state_head: 920bd05465ce55650245c2198e2b807551692b46
+last_activity_desc: Milestone v0.50.0 completed and archived
+state_head: 0d04c5fc76bca5193b0bc3c12fec21ade28dddd5
 progress:
   total_phases: 17
   completed_phases: 17
   total_plans: 276
   completed_plans: 276
   percent: 100
+current_phase: 26
 ---
 
 # Project State
@@ -28,12 +28,10 @@ See: .planning/PROJECT.md (updated 2026-10-13)
 
 ## Current Position
 
-Phase: 26
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-11-16 — Phase 26 complete
-
-Progress: [██████████] 100%
+Phase: Milestone v0.50.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-16 — Milestone v0.50.0 completed and archived
 
 ## Performance Metrics
 
@@ -110,6 +108,26 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 | Category | Item | Status | Deferred At | Milestone |
 |----------|------|--------|-------------|-----------|
+| todos | 2026-10-13-playwright-mcp-flatpak-chrome.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-13-repair-pi-install-and-sync-models.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-14-add-xcode-clt-catalog-entry-as-macos-prerequisite.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-14-port-ai-kit-context-tools-step0.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-15-add-iterm2-macos-only-entry-after-tool-onboarding-refactor.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-15-adopt-apple-containers-runtime-colima-stays-compose-path.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-15-onboard-bruno-api-client-via-the-tool-onboarding-skill.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-21-onboard-aws-cli-through-the-tool-onboarding-skill.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-21-rename-container-shortcuts-and-detect-the-available-engine.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-10-21-research-memory-efficient-compose-on-apple-silicon.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-03-add-the-gh-stack-extension-through-the-tool-onboarding-skill.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-04-hand-off-casks-whose-uninstall-needs-root.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-07-strip-fnm-vendor-shell-blocks-left-on-existing-hosts.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-08-retry-transient-tls-errors-in-network-installs.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-08-small-23-2-follow-ups.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-13-phase-24-review-deferrals.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-14-replace-codegraph-with-codebase-memory-mcp.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-16-adopt-the-branch-ci-main-flow-in-outside-tools.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-16-keep-the-run-log-tail-visible-after-a-shrink.md | (presence-only) | 2026-11-16 | v0.50.0 |
+| todos | 2026-11-16-transient-test-errors-under-xdist-in-the-push-gate.md | (presence-only) | 2026-11-16 | v0.50.0 |
 | verification | 15 stale phase verifications (override closeout) | acknowledged | 2026-10-13 | v0.49.0 |
 | uat | 15.1-UAT.md open items | acknowledged | 2026-10-13 | v0.49.0 |
 | todo | detect dangling pnpm global bin shims in doctor | carried to v0.50.0 (Phase 21) | 2026-10-13 | v0.49.0 |
@@ -135,4 +153,5 @@ Resume file: .planning/phases/26-commit-and-push-quality-hooks/26-VERIFICATION.m
 
 ## Operator Next Steps
 
-- Discuss the first phase with /gsd-discuss-phase 17
+
+- Start the next milestone with /gsd-new-milestone

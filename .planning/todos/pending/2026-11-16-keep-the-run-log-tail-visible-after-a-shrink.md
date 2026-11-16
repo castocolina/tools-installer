@@ -6,6 +6,9 @@ severity: cosmetic
 files:
   - installer/execute_screen.py
   - tests/test_execute_screen.py
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

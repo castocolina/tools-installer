@@ -1,5 +1,46 @@
 # Milestones
 
+## v0.50.0 Truthful lifecycle (Shipped: 2026-11-16)
+
+**Delivered:** every screen tells the truth about each tool on this host (present, healthy, whose, which version,
+removable with proof), and install, update, removal and configuration follow one per-method contract with install
+receipts as removal proof.
+
+**Phases completed:** 17 phases (17–26 incl. 23.1–23.2 and 24.1–24.5), 276 plans, 438 tasks. 121/121 requirements.
+2044 commits since v0.49.0, 1221 files changed, 2026-10-13 → 2026-11-16 (34 days). Full phase details:
+[milestones/v0.50.0-ROADMAP.md](milestones/v0.50.0-ROADMAP.md); phase directories: `milestones/v0.50.0-phases/`.
+
+**Key accomplishments:**
+
+- Host hazards H1–H7 closed: atomic links that never write through a directory, detached non-interactive children,
+  removal only with proof, honest exit codes on every route, and CI green on both OSes behind a required check.
+- Registry truth: closed method keys, required `verified` dates, digest-verified downloads with staged smoke tests,
+  and `make verify-registry` with a weekly drift guard.
+- One `ToolState` with a closed `Health` set per tool, published in one swap, with atomic install receipts as the
+  removal proof; one install plan with dispositions and one screen family for Catalog, Uninstall and Doctor.
+- One method lifecycle contract (install, update, remove, configure), configuration applied at install time, the
+  guard aliases and redirects retired, and the JavaScript install priority brew → bun → volta.
+- Host safety and onboarding: a sandboxed test suite and container-only e2e, the tool-onboarding and catalog-audit
+  skills, Neovim onboarded, and a Schedules view.
+- Phase 25 split the composition out of `setup.py`; Phase 26 added the commit hook, the push gate and per-gate make
+  targets, and changes now reach `main` only by branch push, green CI and fast-forward under `enforce_admins`.
+
+### Closeout record
+
+- **Closeout type:** override_closeout, by the workflow rule for acknowledged items. All 17 phases read
+  `phase_complete` and verification `passed` at close. The 14 phases that read `stale` after Phase 26 were each
+  re-verified at HEAD on 2026-11-16 (a `## Re-verification` section in each VERIFICATION.md, no gaps); the gates and
+  CI were green on the landed tree (0d04c5fc). The pnpm group-removal debug session was resolved with a container
+  check, and the 23.1/23.2 UAT files were set to `complete`.
+- **Known verification overrides:** 20 newly acknowledged (pending todos carried to the next milestone, triaged
+  against the code in `.planning/todos/TRIAGE-2026-11-16.md`: 5 partial, 15 pending), 1 carried forward from a prior
+  close (see STATE.md Deferred Items).
+- **Known gaps:** none in requirements. Tech debt (non-blocking) is in `milestones/v0.50.0-MILESTONE-AUDIT.md`:
+  integration warnings W1–W5, Nyquist VALIDATION.md still draft on 14 of 17 phases, macOS never run locally, and
+  backlog 999.7 (partial) and 999.14–999.17 (pending).
+
+---
+
 ## v0.49.0 Tiered Catalog (Shipped: 2026-10-13)
 
 **Phases completed:** 28 phases, 110 plans, 244 tasks

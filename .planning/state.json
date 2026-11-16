@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v0.50.0 \u2014 Truthful lifecycle",
+  "milestone": "v0.50.0 — Truthful lifecycle",
   "phases": [
     {
       "number": "17",
@@ -80,9 +80,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start a new milestone",
-    "reason": "All phases complete \u2014 start a new milestone"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-16T19:09:52.404Z"
+  "updated_at": "2026-11-16T20:38:06.393Z"
 }

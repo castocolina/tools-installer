@@ -9,6 +9,9 @@ files:
   - docs/research/2026-10-09-alacritty.md
   - .claude/skills/tool-onboarding/SKILL.md
   - .planning/ROADMAP.md:323
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

@@ -2,6 +2,9 @@
 created: 2026-11-08
 source: Phase 23.2 (plan 05 deferred issue, UAT O-7/O-8, security residuals R1-R4)
 priority: low
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 # Small Phase 23.2 follow-ups

@@ -7,6 +7,9 @@ files:
   - installer/registry.toml
   - .planning/todos/pending/2026-10-15-adopt-apple-containers-runtime-colima-stays-compose-path.md
   - .planning/todos/pending/2026-10-21-rename-container-shortcuts-and-detect-the-available-engine.md
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

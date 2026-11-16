@@ -1,6 +1,9 @@
 ---
 created: 2026-11-13
 source: .planning/phases/24-onboarding-through-the-skill-and-e2e/24-REVIEW.md (Deferred)
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 # Phase 24 review deferrals

@@ -2,6 +2,9 @@
 created: 2026-11-16
 title: Transient test ERRORs under xdist in the push gate
 area: testing
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

@@ -12,6 +12,9 @@ files:
   - scripts/container-e2e-verify.sh
   - scripts/e2e-residue-allowlist.txt
   - .claude/skills/catalog-audit/SKILL.md
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

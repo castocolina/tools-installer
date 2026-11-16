@@ -10,6 +10,9 @@ files:
   - installer/postinstall.py (_AGENT_HOST_IDS lacks pi)
   - .planning/research/2026-10-13-from-ai-kit/11-pi-model-asset-sync.md
   - .planning/research/2026-10-13-from-ai-kit/pi-sync/pi_sync.py
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

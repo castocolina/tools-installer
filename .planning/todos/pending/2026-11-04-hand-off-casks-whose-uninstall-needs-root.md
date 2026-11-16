@@ -7,6 +7,9 @@ files:
   - installer/uninstall.py
   - installer/app.py
   - installer/manager_versions.py
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

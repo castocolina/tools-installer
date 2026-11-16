@@ -5,6 +5,9 @@ area: catalog
 severity: minor
 files:
   - installer/registry.toml
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 ## Problem

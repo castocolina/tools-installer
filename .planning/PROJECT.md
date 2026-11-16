@@ -6,32 +6,36 @@ tools-installer is an interactive, cross-platform (macOS/Linux, including immuta
 Bazzite) Textual TUI and CLI that installs and manages a developer's AI-assisted dev
 environment from a single declarative `registry.toml` catalog. It handles install
 ordering, dependency drag-in, PATH repair, uninstall, and shell/environment tweaks so
-a developer never has to sequence machine-bootstrap steps by hand. Python 3, managed
-end-to-end by `uv` (interpreter version, venv, dependencies).
+a developer never has to sequence machine-bootstrap steps by hand. Every screen shows
+one truthful state per tool on this host (present, health, owner, version, removable with
+proof), and install, update, removal and configuration follow one per-method lifecycle
+contract with install receipts. Python 3, managed end-to-end by `uv` (interpreter
+version, venv, dependencies).
 
 ## Core Value
 
 A developer can go from a bare machine to a working, correctly-ordered install
 (system prerequisites -> user tools -> AI-agent tooling) entirely through the
 catalog, with dependency drag-in resolving automatically and no manual ordering
-knowledge required.
+knowledge required, and every screen tells the truth about what is on the host.
 
-## Current Milestone: v0.50.0 Truthful lifecycle
+## Last Shipped Milestone: v0.50.0 Truthful lifecycle
 
-**Goal:** Every screen tells the truth about each tool on this host (present, healthy, whose, which version, removable with proof), and install, update, removal and configuration follow one per-method contract with install receipts as removal proof.
+Shipped 2026-11-16 (started 2026-10-13): 17 phases (17-26 with inserted 23.1, 23.2, 24.1-24.5), 276 plan summaries, 121/121 requirements. Every screen tells the truth about each tool on this host, and install, update, removal and configuration follow one per-method contract with install receipts as removal proof.
 
-**Target features:**
-- Stop the bleeding: the seven host hazards (H1–H7), CI green on both OSes, PR check required
-- Registry truth and drift guard (`make verify-registry`, unknown-key rejection, checksums, smoke test)
-- One `ToolState` with a closed `Health` set and install receipts
-- Install plan with dispositions (install / update / repair / reconfigure / reinstall `r` / skip / blocked), one engine for TUI and headless
-- One screen family; Uninstall, Policies and Doctor as projections of the same state
-- Per-method lifecycle contract (script `paths`/`remove`/`update`, native installs handed off, `config_paths`)
-- Configuration as a lifecycle step (reversible agent-host hooks, shell init, terminal `SHELL`)
-- herdr and Alacritty onboarded through the tool-onboarding skill; container e2e with leftover checks
-- Lean-up (~2,000 lines deleted)
+**Shipped:**
+- Host hazards H1-H7 closed, CI green on Ubuntu and macOS, PR check required (17)
+- Registry truth: unknown-key rejection, `verified` dates, digest checks, smoke runs, `make verify-registry` (18)
+- One `ToolState` with a closed `Health` set and install receipts; install plan with dispositions and one engine for the TUI and headless (19, 20)
+- One screen family; Uninstall, Policies and Doctor as projections of the shared state (21)
+- Per-method lifecycle contract and configuration as a lifecycle step (22, 23)
+- Host safety, install-time tuning, Schedules view, catalog-audit skill, guard retirement, brew -> bun -> volta priority (23.1, 23.2, 24.2-24.5)
+- herdr, Alacritty and Neovim onboarded through the tool-onboarding skill, with a three-distro container e2e (24, 24.1)
+- Lean-up and commit/push quality hooks with a protected branch -> CI -> fast-forward `main` flow (25, 26)
 
-**Design source:** `.planning/research/2026-10-13-target-architecture.md` (decisions D-A..D-J, open decisions O1–O14) and `.planning/research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md`.
+**Design source:** `.planning/research/2026-10-13-target-architecture.md` and `.planning/research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md`. Audit: `.planning/v0.50.0-MILESTONE-AUDIT.md`.
+
+**Next milestone:** not started. Candidates are under Active; owner decisions are in `.planning/todos/TRIAGE-2026-11-16.md`.
 
 ## Requirements
 
@@ -44,22 +48,40 @@ knowledge required.
 - ✓ Hard-dependency resolution via `Tool.requires`: transitive drag-in, deps-first topological order, cycle detection, unavailable-dependency skipping (`installer/deps.py`) — shipped pre-GSD
 - ✓ PATH doctor: read-only audit plus an explicit apply-fix flow — shipped pre-GSD
 - ✓ Registry-driven uninstall for userspace (download/app) artifacts, with "managed by Homebrew" vs. "removable here" classification — shipped pre-GSD
-- ✓ Policies tab: pip/npm ban (shims + aliases) and curated cross-shell tweak bundles (docker shortcuts, countdown helper, claude skip-permissions, apt selective upgrade) written into `~/.myshellrc` — shipped pre-GSD
+- ✓ Policies tab: curated cross-shell tweak bundles written into `~/.myshellrc` — shipped pre-GSD (the pip/npm ban shims and aliases were retired in v0.50.0, GUARD-01..06; claude/codex skip-permissions and agent attribution moved to install-time tuning, TUNE-01)
 - ✓ One view registry / one navigation path / one apply workflow UI architecture (`installer/ui_common.py`, `.claude/architecture.md`) — shipped pre-GSD
 - ✓ Catalog tiers (system/user/ai) with tier-scoped views, `recommends`, failure propagation, tweak-executable uninstall sweep, Oh-My-Zsh bundled plugins — v0.49.0
-- ✓ Package-manager redirect policy, catalog expansion (system/user/AI tiers), `uv-tool` executor, postinstall hooks, agent CLI ergonomics, background maintenance daemon (macOS launchd, Linux systemd user timer) — v0.49.0
-- ✓ Version-aware status and owner-routed updates, live in-TUI install execution, persistent wizard settings, Owner column and Uninstall manager attribution, terminal default shell on immutable hosts, self-deduping PATH, filesystem-based detection — v0.49.0 (partially: see the 2026-10-13 audit; 14 partial and 53 deferred promises carried forward)
+- ✓ Package-manager redirect policy (retired in v0.50.0, GUARD-01..06), catalog expansion (system/user/AI tiers), `uv-tool` executor, postinstall hooks, agent CLI ergonomics, background maintenance daemon (macOS launchd, Linux systemd user timer) — v0.49.0
+- ✓ Version-aware status and owner-routed updates, live in-TUI install execution, persistent wizard settings, Owner column and Uninstall manager attribution, terminal default shell on immutable hosts, self-deduping PATH, filesystem-based detection — v0.49.0 (partially: see the 2026-10-13 audit; 14 partial and 53 deferred promises carried forward; closed by v0.50.0)
+
+- ✓ Host safety and CI: the seven hazards closed (no deletion of unproven artifacts, no link to a directory, no write into the CWD, atomic rc and shim writes, red status and non-zero exit on any failure), CI green on both OSes, PR check required — v0.50.0 (SAFE-01..09, CI-01..03, Phase 17)
+- ✓ Registry truth: unknown-key rejection, `verified` dates, GitHub digest checks, smoke runs that fall through, macOS stub detection, `make verify-registry`, audit data fixes — v0.50.0 (REG-01..10, Phase 18)
+- ✓ One `ToolState` per tool with a closed `Health` set and one health mark, published in one swap, with an atomic install receipt per tool — v0.50.0 (STATE-01..07, Phase 19; STATE-07 skill-pack status superseded by HOST-01)
+- ✓ Install plan with dispositions (install / update / repair / reconfigure / reinstall `r` / skip / blocked); TUI and headless run one plan and one engine, exit code from outcomes — v0.50.0 (PLAN-01..08, Phase 20)
+- ✓ One screen family: every view reflects every mutation; Uninstall, Policies and Doctor are projections of the shared state; removal on a worker — v0.50.0 (UI-01..08, Phase 21)
+- ✓ Per-method lifecycle contract: script `paths`/`remove`/`update`, tool-level `config_paths`, receipts as the only removal proof, native installs handed off, leftover-checking container e2e — v0.50.0 (LIFE-01..10, Phase 22)
+- ✓ Configuration as a lifecycle step: agent-host hooks that follow hosts in and out, shell init offered and removed with the tool, `SHELL` kept on zsh — v0.50.0 (CONF-01..12, Phase 23; the asked CONF-08/09/11/12 variants superseded by TUNE)
+- ✓ Host safety: skill-pack, rtk, GSD, openspec and spec-kit entries dropped, retired receipts removable, sandboxed tests with a real-HOME fingerprint, installs and removals only in containers — v0.50.0 (HOST-01..05, Phase 23.1)
+- ✓ Install-time tuning with no question (agent co-authoring off and auto-approve, zsh plugins and theme, VS Code lean), Policies trimmed, live run indicator, Copilot CLI in the catalog, present dependencies runnable in-session — v0.50.0 (TUNE-01..07, Phase 23.2)
+- ✓ Onboarding through the skill: herdr, Alacritty (Distrobox cargo build on Bazzite) and Neovim; skill-judge scored skill; three-distro container e2e; real-host UAT — v0.50.0 (ONB-01..10, Phases 24, 24.1)
+- ✓ Schedules view with user-level timers (cache cleanup, 6-hourly agent-CLI updates, cursor-agent model shim) — v0.50.0 (SCHED-01..05, Phase 24.2)
+- ✓ Catalog-audit skill (`make audit-catalog`), first run covering opencode v2 and Pi MCP — v0.50.0 (AUDIT-01..04, Phase 24.3)
+- ✓ npx/npm/pip guard shims, aliases and redirects retired; a launch removes the installer's own leftovers byte-exact — v0.50.0 (GUARD-01..06, Phase 24.4)
+- ✓ Install priority brew -> bun -> volta/pnpm with a `bun` method kind and bun owner, receipts and updates — v0.50.0 (PRIO-01..07, Phase 24.5)
+- ✓ Lean-up: dead code out, `installer/compose.py` under pyright and coverage, `wizard_app.py` split, run log bounded at 5,000 lines — v0.50.0 (LEAN-01..04, Phase 25)
+- ✓ Commit hook and push gate, per-gate `make` targets, branch -> green CI -> fast-forward `main` with `enforce_admins` — v0.50.0 (HOOK-01..06, Phase 26)
 
 ### Active
 
-<!-- v0.50.0 scope; full list with REQ-IDs in .planning/REQUIREMENTS.md. -->
+<!-- Next-milestone candidates, not yet scoped. Evidence, verdicts and owner decisions: .planning/todos/TRIAGE-2026-11-16.md (20 pending todos, backlog 999.7 partial, 999.14-17 pending). -->
 
-- [ ] One truthful tool state per host (installed / health / owner / version / removability) shared by every screen
-- [ ] Install review that states each selection's disposition (install / update / repair / reconfigure / reinstall / skip)
-- [ ] Per-method lifecycle contract (install, detect, version, owner, update, remove, configure, service, privileges) with install receipts as removal proof
-- [ ] Configuration as a lifecycle step (shell init, agent-host hooks re-synced and reversible, terminal drift), with user-chosen customizations
-- [ ] Registry kept true: drift detection, checksums, smoke tests; CI green on both OSes
-- [ ] No host hazard left: no unproven deletion, no link to a directory, no writes into the CWD, no false success
+- [ ] Declare the removal footprint (`config_paths`, script `paths`) for about 26 catalog entries and bring install-method and update-route currency up to date (Backlog 999.14, 999.15)
+- [ ] Replace codegraph with codebase-memory-mcp in the catalog and its postinstall hooks (todo 2026-11-14; owner decision on the AGENTS-TOOLING writer)
+- [ ] Onboard pending tools through the skill: Xcode CLT, iTerm2, Bruno, AWS CLI, gh-stack, Playwright MCP (owner decisions on Xcode CLT and iTerm2)
+- [ ] Small lifecycle fixes: zip version probe (999.16), TLS retry for release and app downloads, cask uninstall that needs root, fnm vendor block cleanup, run-log tail after a shrink
+- [ ] Duplicate-code gate with its own `make` target and hook entry (999.17)
+- [ ] Adopt the branch -> CI -> fast-forward `main` flow in the outside tools (GSD merge helpers, ai-kit-commit-fold, GSD phase-complete); direct pushes to `main` are now rejected
+- [ ] Close the Phase 16 UAT debt or accept later-phase coverage (999.7); run the installer on macOS and Apple Silicon (deferred since v0.49.0)
 
 ### Out of Scope
 
@@ -67,13 +89,23 @@ knowledge required.
 - External/custom (non-bundled) Oh-My-Zsh plugins requiring their own `git clone` step — deferred per the source PRD's Open Questions
 - `rpm-ostree` layering on immutable hosts — needs a reboot; Bazzite recommends Flatpak, Homebrew, Distrobox first
 - Any sudo/pkexec/doas performed by this project itself — zero-sudo invariant; native dnf/apt/pacman installs are handed off as the exact command (O1, 2026-10-13)
-- New method kinds for dmg / `app {ver}`, a `service` start/stop step, a keep/delete/ask config enum, git-config/completion writers — v0.50.0 ultra cut (target architecture §9.1)
+- New method kinds for dmg / `app {ver}`, a `service` start/stop step, a keep/delete/ask config enum, git-config/completion writers — v0.50.0 ultra cut (target architecture §9.1); the two kinds that shipped anyway are `cargo_distrobox` (O5) and `bun` (PRIO-02), each with a proven case
 - REQ-manager-drift-alerting — dropped 2026-10-13: the off-policy owner note already says another manager owns the tool
+- Skill packs, rtk, GSD, openspec and spec-kit as catalog entries — owner decision in Phase 23.1 (HOST-01): they are not installer scope, and nothing in the installer or its tests may install them
+- npx/npm/pip guard shims, ban aliases and PATH redirects — retired in Phase 24.4 (GUARD-01..06); the launch only removes the installer's own leftovers
+- Agent-tuning and zsh-theme knobs as Policies rows — install-time tuning applies them with no question (TUNE-04); a new requirement becomes a Policies knob only if it lies outside any install
 
 ## Context
 
-**Current state (2026-10-13):** v0.49.0 "Tiered Catalog" shipped (28 phases, 110 plans) and was closed with an override closeout after a seven-part audit (`.planning/research/audit-2026-10-13/`) found the catalog installs binaries well but lacks one shared tool state, a health model, an install-disposition plan, a per-method removal/configuration contract and registry drift detection; 6 registry blockers (java, ruff, difftastic, sublime, jetbrains-toolbox, graphify) and red CI carry into v0.50.0.
+**Current state (2026-11-16):** v0.50.0 "Truthful lifecycle" shipped (17 phases, 276 plan summaries, 121/121 requirements). Codebase: about 44,000 lines of Python in `installer/`, `devtools/` and `setup.py`, about 133,600 lines in `tests/`, 86 catalog entries, 90% coverage gate. Phase 25 split `wizard_app.py` (793 lines) and moved composition to `installer/compose.py`. `main` is protected (`enforce_admins`, both CI checks required on the exact SHA); changes land by branch push, green CI, fast-forward. The milestone audit (`.planning/v0.50.0-MILESTONE-AUDIT.md`) found no unsatisfied requirement and no blocker; its one gap, 14 stale phase verifications after Phase 26, was closed by re-verification (0d04c5fc).
 
+**Known issues and technical debt (none blocking, about 245 items):**
+- Nyquist `VALIDATION.md` is still draft for 14 of 17 phases; 18 requirements lack `requirements-completed` in SUMMARY frontmatter (metadata only).
+- Integration warnings W1-W5: `--run-schedule` skips launch repairs by design; a retired `host_setup` receipt still parses; `flow='guard'` naming collision; a stale `make setup` in a dated handoff; two close `postinstall` module names in the onboarding skill.
+- Phase 26 left 7 open review Info items, owner decision IN-06 (gate-read pathspecs would refuse a local-only `.claude/CLAUDE.md`), and a flaky-test mitigation under xdist that is not a root-cause fix.
+- macOS and Apple Silicon were never run locally; Phase 16 UAT tests 2-4 stay open (999.7).
+
+**Earlier context (v0.49.0 ingestion, 2026-09-04):** the notes below record how the catalog-tiers PRD was ingested; the other six PRDs of that batch shipped in v0.49.0.
 
 This is the first of seven PRDs from a 2026-09-04 planning batch being ingested one
 at a time, in a deliberate dependency order — catalog-tiers-and-dependency-chain
@@ -102,19 +134,22 @@ missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
 
 ## Constraints
 
-- **Tech stack**: Python 3, `uv`-managed (venv + deps + interpreter), Textual TUI, cross-platform macOS/Linux including immutable Bazzite — per `CLAUDE.md`, non-negotiable
+- **Tech stack**: Python 3, `uv`-managed (venv + deps + interpreter), Textual TUI, cross-platform macOS/Linux including immutable Bazzite — per `AGENTS.md`, non-negotiable
 - **Architecture**: one view registry (`installer/ui_common.py` `VIEWS`), one navigation path (`UnifiedApp.show_view`), one apply workflow (`ui_common.run_live`), `setup.py` is wiring-only — per `.claude/architecture.md`, "the bias is less total code"
 - **No new resolver logic**: `requires` stays the single mechanism for install order, transitive drag-in, cycle detection, and unavailable-dependency skipping; `tier` must never be required to make a `requires` chain resolve — per PRD Design Decisions
-- **Quality gates**: new/changed behavior covered by failing tests before implementation; `make validate` and `make test` (at the project's current coverage gate) must pass — per PRD Quality Standards and `CLAUDE.md`'s "never bypass a quality gate"
+- **Quality gates**: new/changed behavior covered by failing tests before implementation; `make validate` and `make test` (90% coverage gate) must pass on the exact tree committed; every gate is its own `make` target and hook entry (commit hook for static checks, push gate for the full suite) — per PRD Quality Standards and `AGENTS.md`'s "never bypass a quality gate"
+- **Host safety**: tests run in a scratch `HOME`; real installs and removals run only in disposable containers; agents never run `make run`, `make fix`, `make uninstall`, `make doctor` or `make dev-setup` on the real host — per `AGENTS.md` (Phase 23.1, 26)
+- **Zero sudo**: no code path runs `sudo`, `pkexec` or `doas`; root work is handed off as the exact command (O1)
+- **Merge flow**: changes reach `main` by branch push, green CI on both OSes and fast-forward; direct pushes to `main` are rejected, admins included (Phase 26)
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| v0.50.0 is built from a ponytail-ultra target architecture, not from per-phase fixes | v0.49.0 audit: seven to ten places answered "installed / owner / removable" differently | — Pending |
-| Native package installs are handed off as a command, never run with sudo (O1) | Zero-sudo invariant; the TUI child has no usable tty | — Pending |
-| Receipts are the only removal proof; nothing unproven is deleted, in CLI or TUI | Uninstall deleted files it could not prove it wrote (F1, AR-01) | — Pending |
-| Alacritty on Bazzite: cargo build in a throwaway Distrobox, native binary on the host, container and image deleted (O5) | Measured 2026-10-13: 35 s build, 12 MB permanent vs 2.4 GB for a persistent Distrobox; runs natively, no shell-inside-container issue | — Pending |
+| v0.50.0 is built from a ponytail-ultra target architecture, not from per-phase fixes | v0.49.0 audit: seven to ten places answered "installed / owner / removable" differently | ✓ Good — 121/121 requirements, integration clean, 7/7 flows trace (v0.50.0 audit) |
+| Native package installs are handed off as a command, never run with sudo (O1) | Zero-sudo invariant; the TUI child has no usable tty | ✓ Good — LIFE-02, Phase 22 |
+| Receipts are the only removal proof; nothing unproven is deleted, in CLI or TUI | Uninstall deleted files it could not prove it wrote (F1, AR-01) | ✓ Good — Phases 17, 19, 22 |
+| Alacritty on Bazzite: cargo build in a throwaway Distrobox, native binary on the host, container and image deleted (O5) | Measured 2026-10-13: 35 s build, 12 MB permanent vs 2.4 GB for a persistent Distrobox; runs natively, no shell-inside-container issue | ✓ Good — shipped in Phase 24, UAT tests 6-8 pass |
 | Ponytail joins GSD `agent_skills` as `global:ponytail:ponytail` (Claude only) | Plugin skills load only in Claude; no vendored copy to keep in sync | — Pending |
 | `tier` gets three top-level catalog views, not an in-screen filter | Matches the user's actual bootstrap mental model (system -> user -> ai); resolved 2026-09-04 | — Pending |
 | `tier` is strictly orthogonal to `Category`; `requires` remains the sole install-order mechanism | Avoids a second ordering mechanism drifting out of sync with the registry's actual `requires` data | — Pending |
@@ -148,6 +183,23 @@ missing `installer/tweaks.py`'s `ManagedExecutable` artifacts (e.g.
 | D-01/D-01a: a permanent tier/dependency/postinstall onboarding checklist lives in `.claude/architecture.md`'s Registry-authoring guidelines, and `.claude/skills/tool-onboarding/SKILL.md` (this project's first self-authored skill) walks it interactively, referencing rather than duplicating the checklist so there is exactly one canonical decision tree. States D-01a's "detect and configure, never blind-overwrite" principle as a standing rule, citing the GSD-statusline precedent. | This is the checklist that would have caught rtk/graphify's postinstall gap before it sat unnoticed across three phases (8, 9, 12.4) — a documented, repeatable process rather than ad-hoc judgment, so the same gap shape does not recur silently for the next catalog addition. See 12.4-03-SUMMARY.md. | Phase 12.4 (12.4-03) |
 | D-04: full-catalog audit against the new checklist covered all 89 `registry.toml` entries (89/89, confirmed by direct count) — zero new postinstall-mechanism gaps found, one pre-existing dead-code finding (`Tool.post_install` plural) logged as a pending todo rather than fixed in-phase, one pre-existing open research question (graphify output-location) closed by direct investigation with no code change warranted. | 12.4-RESEARCH.md's own grep-scan for a third gap was a cheap keyword search, not the structured per-entry audit D-04 actually required; this plan ran the real audit so any gap gets a name and an owner instead of staying invisible the way rtk/graphify's did. See 12.4-AUDIT.md, 12.4-04-SUMMARY.md. | Phase 12.4 (12.4-04) |
 | D-01..D-04: every managed PATH line this installer writes uses the case-guarded self-deduping idiom (`path_export_guard`) instead of a plain unconditional `export PATH=...`, applied to every writer in the repo (shell rc files and `scripts/container-e2e-verify.sh`); a generic `~/.shellrc` is consolidated into one canonical `~/.myshellrc` plus a marked stub, foreign content copied forward byte-exact. | A plain export re-prepends the same directory every time a nested/child shell re-sources the rc file, accumulating duplicates with every nesting level — confirmed live (5 copies of `~/.local/bin` in one real session) before this phase. Re-verified end to end in a disposable container after the dev host's own verification stalled on `human_needed` (no real hand-authored `~/.shellrc`, no pure-POSIX shell available here): `make fix` against a real hand-written `~/.shellrc`, `dash`, and the real wired `~/.bashrc`→`~/.myshellrc` route all confirmed the managed directory never exceeds 1 after 5 sources, while the user's own pre-existing plain exports (carried forward, out of scope) duplicate as documented. See 15.8-VERIFICATION.md, 15.8-SECURITY.md, 15.8-VALIDATION.md. | Phase 15.8 |
+| One `ToolState` per tool, published in one swap; Uninstall, Policies and Doctor are projections of it (19 D-01/D-02, 21) | Seven to ten classifiers disagreed on installed, owner and removable | ✓ Good — Backlog 999.6 closed, 7/7 flows trace |
+| One install plan with dispositions and one engine for the TUI and headless; exit code from outcomes (20 D-01, D-07..D-09) | A run could exit 0 after a failed or skipped install, and the review did not say what would happen | ✓ Good — Phase 20 |
+| Receipts are written at one point (`engine.install_tool`) with a stat fingerprint and one `artifact_paths` formula (19 D-06..D-08) | One writer and one formula keep "what this method created" from drifting between install, status and removal | ✓ Good — Phases 19, 22 |
+| Lifecycle contract: script `paths`/`remove`/`update` per method, tool-level `config_paths` with one denylist, removal order fixed (22 D-01..D-08) | Removal needed one proof and one order for every owner; shared harness dirs must never be listed | ✓ Good — contract shipped; only 4 of about 30 flagged entries declare `config_paths` yet (999.14) |
+| Registry rejects unknown keys through `METHOD_PARAMS`, requires a `verified` date and checks digests; `make verify-registry` runs weekly and never in the PR gate (18 D-01, D-02, D-08) | Typos and drift were silent; a network check in the PR gate would make CI flaky | ✓ Good — Phase 18 |
+| Agent-host hooks are recorded per host in `receipt.hooks`, with one new-host sweep at the end of a run and one `agent_settings.py` writer (23 D-02, D-03, D-06) | Hooks must follow hosts in and out and be reversible without parsing MCP configs | ✓ Good — Phase 23 |
+| Skill packs, rtk, GSD, openspec and spec-kit leave the catalog; retired receipts are removed by a placement-shape proof, and manager kinds are handed off (23.1 D-06..D-08) | Owner decision: not installer scope; an unproven delete is never acceptable | ✓ Good — Phase 23.1 |
+| Tests and shims can never install on the host: a subprocess allowlist guard, a real-HOME fingerprint, installs and removals only in containers (HOST-03..05) | An `npx` flag mismatch ran GSD's global installer 10 times on the developer's host (2026-11-07) | ✓ Good — Phase 23.1 |
+| Install-time tuning in the tool's postinstall, never a Policies knob by default; applied with no question (23.2 D-01, TUNE-04) | Asking about co-authoring, auto-approve and zsh plugins at every install was friction the owner did not want | ✓ Good — Phase 23.2 |
+| Schedules are a closed Python table with user-level timers, one JSON state file and fingerprinted files (24.2 D-01, D-06, D-07) | Zero sudo, atomic writes, and removal that proves what it wrote | ✓ Good — Phase 24.2 |
+| The npx/npm/pip guard aliases and redirects are retired; the launch removes the installer's own leftovers and keeps every other byte (24.4, GUARD-01..06) | Owner: the aliases proved a disaster; a flag mismatch had run the wrong package | ✓ Good — Phase 24.4; ⚠️ naming collision `flow='guard'` (W3) |
+| Install priority is brew, then bun, then volta/pnpm, with a `bun` method kind that passes no `--trust` (24.5 D-01, PRIO-06) | Owner preference; bun's default-deny postinstall gate stays on | ✓ Good — Phase 24.5 |
+| A permanent AST reachability test, composition moved to `installer/compose.py` under pyright and coverage, run log bounded at 5,000 lines (25 D-01, D-05, D-08) | vulture at confidence 80 is silent where an import-graph check finds dead modules | ✓ Good — Phase 25 |
+| The push gate is our own Python module outside `installer/`; it tests a tree equal to the pushed commit; each gate is its own `make` target and hook entry; `make validate` aggregates through pre-commit (26 D-01..D-05) | A red suite must not reach the remote; re-running only the failing gate keeps the loop short | ✓ Good — Phase 26 verified 6/6 with real-git evidence |
+| Branch push, green CI, fast-forward `main` with `enforce_admins` applied last; `make install` becomes `make dev-setup`, `make setup` is removed, `make run` launches the wizard (26 D-07..D-10) | Owner decision 2026-11-16: no commit reaches `main` without both checks on that SHA | ⚠️ Revisit — outside tools (GSD merge helpers, ai-kit-commit-fold, phase-complete) still push directly; todo 2026-11-16 |
+| The flaky `invalidate` test under xdist is mitigated with a reopen rule, not root-caused (26-03) | The push gate needs a stable suite now | ⚠️ Revisit — reopen on the next transient failure |
+| Phase 26 owner decision IN-06: gate-read pathspecs would refuse a local-only `.claude/CLAUDE.md` | Found in code review; the owner has not chosen whether to allow it | — Pending |
 
 ## Evolution
 
@@ -167,4 +219,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-13 after starting milestone v0.50.0 Truthful lifecycle*
+*Last updated: 2026-11-16 after v0.50.0 milestone*

@@ -2,6 +2,9 @@
 created: 2026-11-08
 source: Phase 23.2 container e2e #2 (EXIT=2) and UAT O-5
 priority: medium
+audit_acknowledged:
+  milestone: v0.50.0
+  at: 2026-11-16
 ---
 
 # Retry transient TLS errors in network installs
