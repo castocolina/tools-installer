@@ -4,7 +4,7 @@ verified: 2026-11-14T12:00:00Z
 status: passed
 score: 7/7 must-haves verified
 covered_files: [".claude/architecture.md",".claude/skills/tool-onboarding/SKILL.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-SUMMARY.md",".pre-commit-config.yaml","Makefile","docs/catalog-unsupported-tools.md","installer/agent_env.py","installer/agent_settings.py","installer/app.py","installer/cargo_distrobox.py","installer/desktop_entry.py","installer/download.py","installer/engine.py","installer/executors.py","installer/model.py","installer/ownership.py","installer/platform.py","installer/post_install.py","installer/postinstall.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/resolve.py","installer/run.py","installer/session.py","installer/terminal_shell.py","installer/uninstall.py","installer/update.py","installer/version_status.py","installer/versions.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","setup.py"]
-covered_digest: "v4:sha256:7345ede519617456fe00fb8eacb4b5459733d177515ba568b470207192e1909d"
+covered_digest: "v4:sha256:1b64a86ae45ebc00edc4eb743abdfb228040a3471008b3b5e5683fe69eac8e6b"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -33,6 +33,15 @@ re_verification:
     changed_files: "installer/wizard_app.py"
     dropped_covered_files: "none"
     must_haves: "re-checked: unchanged. 7e9f2edb and 42ed8cd4 (merge 1cc6953e) only cap the status line at four rows, end the Policies Effect column and the Schedules detail in an ellipsis, and move cut_rows/Rows into ui_common (installer/ui_common.py, tool_browser.py, wizard_app.py, tests/test_layout_80x20.py, tests/test_schedules_view.py); layout and status-line code only, no behavior contract changed; this phase's test files are green."
+  refresh_2026_11_16:
+    date: 2026-11-16
+    head: a2e68cf3
+    suite: "make validate && make test at HEAD a2e68cf3: 7662 passed, 6 skipped in 60.05s, coverage 96.20%"
+    phase_tests: "own test files from this report's evidence run with uv run pytest -n 0 --no-cov at HEAD: all passed; deleted test files dropped: none"
+    verified_commit: b4d0cde9
+    changed_files: ".claude/architecture.md .claude/skills/tool-onboarding/SKILL.md Makefile installer/agent_env.py installer/app.py installer/engine.py installer/executors.py installer/model.py installer/ownership.py installer/post_install.py installer/receipts.py installer/resolve.py installer/run.py installer/session.py installer/terminal_shell.py installer/update.py installer/version_status.py installer/wizard_app.py setup.py"
+    dropped_covered_files: "none"
+    must_haves: "re-checked: unchanged. Phase 25 (Lean) moved or deleted code (host_setup and sensitive-action retirements, compose.py, wizard_app.py split into ten modules); 25-VERIFICATION, 25-SECURITY and 25-UAT prove behaviour preserved (AST-identical moves, byte-identical 80x20 screens, real install and uninstall); this phase's surviving test files are green."
 prohibitions:
   - statement: "MUST NOT leave a Distrobox container or image after any build outcome"
     verification: test

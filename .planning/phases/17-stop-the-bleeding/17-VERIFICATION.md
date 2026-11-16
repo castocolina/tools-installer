@@ -4,7 +4,7 @@ verified: 2026-10-15T08:55:22Z
 status: passed
 score: 26/26 must-haves verified
 covered_files: [".planning/phases/17-stop-the-bleeding/17-01-PLAN.md",".planning/phases/17-stop-the-bleeding/17-01-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-02-PLAN.md",".planning/phases/17-stop-the-bleeding/17-02-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-03-PLAN.md",".planning/phases/17-stop-the-bleeding/17-03-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-04-PLAN.md",".planning/phases/17-stop-the-bleeding/17-04-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-05-PLAN.md",".planning/phases/17-stop-the-bleeding/17-05-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-06-PLAN.md",".planning/phases/17-stop-the-bleeding/17-06-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-07-PLAN.md",".planning/phases/17-stop-the-bleeding/17-07-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-08-PLAN.md",".planning/phases/17-stop-the-bleeding/17-08-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-09-PLAN.md",".planning/phases/17-stop-the-bleeding/17-09-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-10-PLAN.md",".planning/phases/17-stop-the-bleeding/17-10-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-11-PLAN.md",".planning/phases/17-stop-the-bleeding/17-11-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-12-PLAN.md",".planning/phases/17-stop-the-bleeding/17-12-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-13-PLAN.md",".planning/phases/17-stop-the-bleeding/17-13-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-14-PLAN.md",".planning/phases/17-stop-the-bleeding/17-14-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-15-PLAN.md",".planning/phases/17-stop-the-bleeding/17-15-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-16-PLAN.md",".planning/phases/17-stop-the-bleeding/17-16-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-17-PLAN.md",".planning/phases/17-stop-the-bleeding/17-17-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-18-PLAN.md",".planning/phases/17-stop-the-bleeding/17-18-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-19-PLAN.md",".planning/phases/17-stop-the-bleeding/17-19-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-20-PLAN.md",".planning/phases/17-stop-the-bleeding/17-20-SUMMARY.md",".planning/phases/17-stop-the-bleeding/17-21-PLAN.md",".planning/phases/17-stop-the-bleeding/17-21-SUMMARY.md","installer/executors.py","installer/policy.py","setup.py"]
-covered_digest: "v4:sha256:664b4ac2a153d9bc7fe299501ebb4096efb316de91e8582d4e6ba9ab8f5c7d67"
+covered_digest: "v4:sha256:0fca0f6e503c1d574577755cb6c13c5a43c1ed5f8403959887bb42814ce2daa1"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification_2026_11_15:
@@ -20,6 +20,15 @@ re_verification:
     - "17-18 prohibition: MUST NOT add a new type: ignore / pyright: ignore / noqa (closed by 17-21: e63f983 types `_uninstall_kwargs` as TypedDict `_UninstallKwargs`, all six `# type: ignore[arg-type]` on it removed; a34fa30 corrects the 17-18 SUMMARY claim)"
   gaps_remaining: []
   regressions: []
+  refresh_2026_11_16:
+    date: 2026-11-16
+    head: a2e68cf3
+    suite: "make validate && make test at HEAD a2e68cf3: 7662 passed, 6 skipped in 60.05s, coverage 96.20%"
+    phase_tests: "own test files from this report's evidence run with uv run pytest -n 0 --no-cov at HEAD: all passed; deleted test files dropped: none"
+    verified_commit: 572d30fd
+    changed_files: "installer/executors.py setup.py"
+    dropped_covered_files: "none"
+    must_haves: "re-checked: unchanged. Phase 25 (Lean) moved or deleted code (host_setup and sensitive-action retirements, compose.py, wizard_app.py split into ten modules); 25-VERIFICATION, 25-SECURITY and 25-UAT prove behaviour preserved (AST-identical moves, byte-identical 80x20 screens, real install and uninstall); this phase's surviving test files are green."
 advisory: []
 human_verification:
   - test: "CI-02: apply branch protection on main once the post-verification main push is green: printf '%s' '<body from 17-13-SUMMARY.md>' | gh api -X PUT repos/castocolina/tools-installer/branches/main/protection --input -"
