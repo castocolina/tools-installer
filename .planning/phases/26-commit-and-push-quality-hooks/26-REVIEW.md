@@ -42,10 +42,10 @@ files_reviewed_list:
   - .graphifyignore
   - .claude/skills/catalog-audit/SKILL.md
 findings:
-  critical: 1
-  warning: 3
-  info: 5
-  total: 9
+  critical: 0
+  warning: 0
+  info: 7
+  total: 7
   necessity: 0
 status: issues_found
 ---
@@ -55,7 +55,7 @@ status: issues_found
 **Reviewed:** 2026-11-16T18:45:30Z
 **Depth:** deep
 **Files Reviewed:** 37
-**Status:** issues_found
+**Status:** issues_found (Critical/Warning all resolved; Info IN-01..IN-07 open)
 
 ## Summary
 
@@ -236,3 +236,57 @@ Every Critical and Warning finding was re-checked against the cited source befor
 - WR-02: verified. The refusal only checks `.pre-commit-config.yaml` for unstaged edits, and the shim's `uv run` syncs from the working tree. The fix extends the unstaged-edit refusal to `pyproject.toml` and `uv.lock`. The shim stays the same: changing it would make every developer reinstall the hook.
 - WR-03: verified. `devtools/hooks.py:109,115` trusts the `rev-parse --path-format=absolute` stdout without checking it.
 - IN-01..IN-05: out of the default fix scope (Critical + Warning).
+
+## Re-review (iteration 2)
+
+**Reviewed:** 2026-11-16T20:10:00Z, deep, fix range `ca57e670..HEAD` (5010fc36, eaa2af05, a038be2b, 5718fe26).
+**Checks run:** `uv run pytest tests/test_push_gate.py tests/test_hooks_install.py tests/test_docs_only.py -q` passed. `refusal()` was called with the real `git_runner` (git 2.56) in throwaway repos under the session scratchpad, which were deleted afterwards. Results: a clean repo returns `None`, and so does a clean repo with the cwd in a subdirectory. It refuses: `git add -N`, skip-worktree on a path with a space (no edit), an edited assume-unchanged file, both flags at once (git prints tag `h`), an ignored `.claude/skills/s/ref.md`, and an unstaged `uv.lock` edit. It passes: a cone sparse checkout (out-of-cone file absent), a sparse index (`ls-files -v` expands it to per-file `S` entries), and an out-of-cone file re-created on disk (git clears the skip-worktree bit on index read, and the bytes match HEAD). This checkout has no flagged entries and no untracked `.claude/*.md` or `.claude/skills/**` files, so these fixes cause no false refusal here.
+
+- CR-01: **mostly resolved, one gap left (see WR-04).** `devtools/push_gate.py:192-199` refuses intent-to-add entries. `devtools/push_gate.py:166-176,205-213` refuses entries tagged `S` or lowercase that exist on disk. Both checks run before the untracked check. `-z` parsing (`entry[2:]`) keeps spaces, the empty trailing entry is skipped (`"".islower()` is False), and a sparse-checkout entry that is absent from disk passes (`os.path.lexists`). But an intent-to-add file that git's rename detection pairs with an unstaged deletion is still not refused.
+- WR-01: **resolved.** `devtools/push_gate.py:67-68` adds `.claude/*.md` and `.claude/skills/**`. Verified against real git: an ignored `.claude/skills/s/ref.md` is refused and `.claude/handoffs/h.md` is not, because `*` does not cross `/` under `--glob-pathspecs`. The pinned test is at `tests/test_push_gate.py:428-433`. The pathspec is broader than what the tests read (IN-06).
+- WR-02: **resolved.** `devtools/push_gate.py:35,217-223` refuses unstaged edits to `.pre-commit-config.yaml`, `pyproject.toml` and `uv.lock`. The tests are at `tests/test_push_gate.py:322-330`. As the orchestrator decided, the shim's `uv run --locked --exact` half was not done. The refusal covers the concrete case (`uv add` left unstaged).
+- WR-03: **resolved.** `devtools/hooks.py:99-104,126-129` accepts only a single-line absolute path from both `rev-parse --path-format=absolute` calls. It fails before `core.hooksPath`, `pre-commit install` or `mkdir` run. `tests/test_hooks_install.py:158-174` covers each query with the two-line output from old git and asserts that nothing was created.
+- IN-01..IN-05: still open (outside the fix scope).
+- Note: `26-REVIEW-FIX.md` cites commits 46f48578, 3c621b50, f2cbb74c, ecd19d9e and 8ee7b0fe. None of them is in `ca57e670..HEAD`; the fixes landed as 5010fc36, eaa2af05, a038be2b and 5718fe26. This is a planning artifact, so it is not counted as a finding.
+
+### WR-04: An intent-to-add file that rename detection pairs with a deletion slips past the CR-01 refusal, and pre-commit then crashes and leaves the work tree changed
+
+**File:** `devtools/push_gate.py:195`
+**Issue:** The intent-to-add query is `git diff --name-only --diff-filter=A -z`. Rename detection is on by default for `git diff`. When the same content shows up as an unstaged deletion and an intent-to-add file, git reports one `R` entry instead of `D` + `A`, so `--diff-filter=A` prints nothing. I reproduced this in a scratch repo:
+
+```
+mv installer/a.py installer/b.py && git add -N installer/b.py
+git diff --name-status                          ->  R100 installer/a.py installer/b.py
+git diff --name-only --diff-filter=A            ->  (empty)
+refusal(...)                                    ->  None
+```
+
+`pre-commit`'s own `intent_to_add_files()` (`.venv/.../pre_commit/git.py:146-151`) runs the same query, so it does not un-add `b.py` either. I ran `pre-commit run --hook-stage pre-push --from-ref HEAD --to-ref HEAD` with a local hook that lists the tree. The hook saw `a.py`, `b.py` and `user.py`, so the gates read `b.py`, which is not in HEAD. Then the stash restore failed (`git apply ... error: installer/b.py: already exists in working directory`, "An unexpected error has occurred") and pre-commit exited non-zero. The push is refused, but the user sees "a gate failed", while their unstaged rename is half undone: `a.py` is back on disk and the patch sits in the pre-commit cache. `mv` followed by `git add -N` is a common way to rename a module.
+**Fix:** Turn off rename pairing for this one query, so every intent-to-add entry shows as `A`:
+
+```python
+            ["diff", "--name-only", "--no-renames", "--diff-filter=A", "-z"],
+```
+
+I verified this: `git diff --name-only --no-renames --diff-filter=A` prints `installer/b.py` in the repro. Update `INTENT` in `tests/test_push_gate.py:77` to match. Optionally add a `hooks-e2e` case for `mv` + `git add -N`.
+
+### IN-06: `.claude/*.md` and `.claude/skills/**` also refuse local-only Claude files that no gate reads
+
+**File:** `devtools/push_gate.py:67-68`
+**Issue:** The tests read five fixed `.claude/*.md` names (`tests/test_docs.py:20-27`) and two skill directories (`tests/test_catalog_audit_skill.py:15,82`). The pathspecs match any file there. `.claude/` is gitignored, and gate-read matches skip ignore rules on purpose, so `.git/info/exclude` cannot exempt anything. I verified with real git that an untracked `.claude/CLAUDE.md` (a location Claude Code reads for project memory) is refused with "commit them, or move them out of the repository". The same happens to a personal project skill under `.claude/skills/<name>/`. No tool in this repo creates such files today, so this is a judgment call between strict fail-closed behavior and false refusals.
+**Fix:** If false refusals matter more, narrow the list to the trees the tests read: `.claude/skills/catalog-audit/**`, `.claude/skills/tool-onboarding/**`, plus `.claude/*.md`, or name the five docs. Otherwise, mention the trade-off in `.claude/dev-environment.md` refusal 3.
+
+### IN-07: The "no message suggests skipping a hook" test does not cover the new skip-worktree refusal
+
+**File:** `tests/test_push_gate.py:475-482`
+**Issue:** The cases list gained `{"intent": ...}` but no `{"hidden": ...}` case, so a future `--no-verify` hint in the skip-worktree or assume-unchanged message would go untested. Adding that case needs a file on disk (`os.path.lexists`), which is likely why it was skipped.
+**Fix:** Add a hidden case that uses `tmp_path`/`monkeypatch.chdir` and an existing file, as `test_refusal_2c_hidden_edits` does.
+
+_Re-reviewed: 2026-11-16T20:10:00Z, Claude (gsd-code-reviewer), deep_
+
+## Resolution (orchestrator)
+
+- WR-04: verified in a scratch repository (`mv a.py b.py && git add -N b.py` made `refusal()` return `None`), then fixed in 91986f98: the intent-to-add query adds `--no-renames`. A new `hooks-e2e` case, `renamed_intent_to_add_is_refused`, failed without the fix and passes with it.
+- The fix commit hashes in 26-REVIEW-FIX.md were rewritten after a follow-up ledger commit was folded into CR-01 and WR-01. The commits are 5010fc36 (CR-01), eaa2af05 (WR-01), a038be2b (WR-02), 5718fe26 (WR-03) and 91986f98 (WR-04).
+- No third re-review ran: WR-04 is one flag, and the real-git e2e case went red then green.
+- IN-01..IN-07 stay open (Info is outside the default fix scope).
