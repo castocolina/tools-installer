@@ -762,14 +762,15 @@ Plans:
 
 ### Phase 26: Commit and push quality hooks
 
-**Goal**: The local git hooks enforce the AGENTS.md gate: fast static checks on every commit and the full test suite on every push, installed by `make install`, so a red suite never reaches the remote.
+**Goal**: The local git hooks enforce the AGENTS.md gate: fast static checks on every commit and the full test suite on every push, installed by `make install`, so a red suite never reaches the remote. *(amended 2026-11-16, 26 SPEC + D-07/D-09: each gate is a named `make` target and hook entry; `make dev-setup` (renamed from `make install`) installs the hooks; the push gate tests a tree equal to the pushed commit; GitHub accepts a commit on `main`, admins included, only after both CI checks pass on that SHA.)*
 **Depends on**: Phase 25 (added 2026-10-15 at the user's request, runs at the end of the v0.50.0 autonomous run)
-**Requirements**: TBD (spec at run time)
+**Requirements**: HOOK-01, HOOK-02, HOOK-03, HOOK-04, HOOK-05, HOOK-06 *(amended 2026-11-16, 26 SPEC)*
 **Success Criteria** (what must be TRUE):
 
   1. A commit runs the fast checks (ruff check, ruff format --check, pyright, bandit, vulture, shellcheck) and a push runs `make test` (pytest -n auto with the 90% coverage gate); which check runs at which stage is decided and documented.
   2. `make install` installs both hook types (`default_install_hook_types: [pre-commit, pre-push]`), and a test pins the hook configuration.
   3. `.claude/dev-environment.md` documents the split; CI (`ci.yml`, ubuntu + macOS) stays the remote backstop and is green.
+  *(amended 2026-11-16, 26 SPEC: SC2 reads `make dev-setup`, which installs the commit hook through pre-commit and the push gate itself (26 D-01, D-07); SC3 adds that `main` is gated behind CI with `enforce_admins` on and changes land by branch push, green CI, fast-forward (26 R5, D-09). See 26-SPEC.md for the 6 locked requirements.)*
 
 **Context (2026-10-15):** today pre-commit runs only at commit and runs no tests; `.git/hooks` has only `pre-commit`; CI runs `make validate && make test` on push to main and on PRs. pylint is not added: ruff covers its rules.
 **Plans**: TBD
@@ -1073,6 +1074,15 @@ Plans:
 **Goal:** `extract_observed_version` stops reading `1990-2008` from `zip --version`'s first line and reads `Zip 3.0` from the second.
 **Requirements:** TBD
 **Evidence (live, 2026-11-13, first catalog audit):** script finding at `installer/versions.py:211` in `.planning/audits/catalog/2026-11-13/findings.toml`.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.17: Duplicate-code gate: pick a duplicate-code detector and add it as a quality gate with its own `make` target and pre-commit hook (BACKLOG)
+
+**Goal:** A commit fails when a new block duplicates existing code beyond an agreed threshold, reported by a `make duplicated-check` target that also runs as its own hook entry and through `make validate`.
+**Requirements:** TBD
+**Source:** owner, 2026-11-16, during the Phase 26 discussion (26 D-13). No duplicate-code gate exists: ruff does not detect duplication and pylint (which has `duplicate-code`) was ruled out on 2026-10-15.
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)

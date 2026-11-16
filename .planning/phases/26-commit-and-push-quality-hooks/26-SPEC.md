@@ -33,6 +33,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 - **pre-commit behaviour** (`pre_commit/commands/run.py:344-421`, version 4.6.0). On a run with refs, the pre-push
   stage included, unstaged tracked edits are stashed, so hooks see the index. The exception is a new branch's first
   push, which runs with `all_files` and stashes nothing (`hook_impl.py:157`). Untracked files are never stashed.
+  *(amended 2026-11-16, 26 D-01: `all_files` applies only to a root push, when the remote has none of the history.
+  A new branch on an existing remote is stashed. pre-commit's pre-push entry also reads only the first pushed ref
+  with something to push (`hook_impl.py:119-174`), so the gate reads the refs itself.)*
 
 ## Requirements
 
@@ -44,6 +47,11 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      same arguments, same file sets.
    - Acceptance: a test fails when a commit-stage hook or a `make validate` command is added, removed or given
      different arguments or files without the matching change on the other side. No commit-stage hook runs pytest.
+   - *Amended 2026-11-16 (26 D-03, D-04):* Each gate is a `make` target (`lint`, `format-check`, `typecheck`, `security`,
+     `dead-code`, `shellcheck`, `test`), and each hook entry calls its target, so the command exists once. `make validate`
+     runs `pre-commit run --all-files` without listing the gates. The drift test becomes a wiring test. It checks that
+     each commit-stage hook calls an existing target, that each gate target except `test` has a commit-stage hook, and
+     that `make validate` is exactly `pre-commit run --all-files`.
 
 2. **Push stage**: A push runs `make validate` and then `make test` (the full suite with the 90% coverage gate). Any
    failure aborts the push.
@@ -53,6 +61,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
    - Acceptance: a test pins the pre-push hook entries, their order, and that they run regardless of the changed files.
      In a scratch git repo, a push whose suite fails exits non-zero and the remote ref does not move; a green push
      moves it.
+   - *Amended 2026-11-16 (26 D-05):* The push stage runs each static gate hook, which also carries the `pre-push`
+     stage, and then the `make test` hook, each as its own entry. This is equivalent to `make validate` then
+     `make test`, and a failure names the gate that failed.
 
 3. **Tested tree equals the pushed commit**: The push gate tests the staged tree with unstaged edits set aside, a new
    branch's first push included. It refuses the push before running any check when the tree differs from HEAD:
@@ -79,6 +90,10 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      leaves `.git/hooks/pre-commit` and `.git/hooks/pre-push`; a second run leaves both files byte-identical. In a
      scratch directory that is not a git checkout, `make install` exits 0 and prints the skip message. In a scratch
      repo with `core.hooksPath` set, `make install` exits non-zero and names `core.hooksPath`.
+   - *Amended 2026-11-16 (26 D-07):* The target is renamed `make dev-setup`, with no `make install` alias; CI, README
+     and AGENTS.md switch to it. pre-commit installs only the commit hook (`default_install_hook_types: [pre-commit]`).
+     `make dev-setup` installs the push gate of 26 D-01 as `pre-push` in the shared hooks directory. Every
+     `make install` in this SPEC reads as `make dev-setup`.
 
 5. **`main` is gated behind CI on GitHub**: Branch protection on `main` has `enforce_admins` enabled and requires both
    CI contexts, so GitHub rejects any update to `main`, an admin's included, unless both checks passed on that commit.
@@ -118,6 +133,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 - Any `ci.yml` trigger change the branch → CI → `main` flow needs.
 - Docs: AGENTS.md, `.claude/dev-environment.md`, `.claude/git-workflow.md`.
 - A pending todo for the tools outside this repo that push straight to `main`.
+- *(added 2026-11-16, 26 D-03, D-07, D-08, D-12)* Per-gate `make` targets. `make install` is renamed `make dev-setup`.
+  `make setup` is removed and `make run` launches the wizard, with every product message, test and doc updated.
+  The flaky screen-family test is fixed (50 runs under `-n auto`).
 
 **Out of scope:**
 - Updating the GSD merge helpers, the ai-kit-commit-fold unit flow and the GSD phase-complete flow. They live outside
@@ -127,6 +145,7 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 - pylint. ruff covers its rules (roadmap context, 2026-10-15).
 - Remote pre-commit repos and `pre-commit autoupdate`. All hooks stay `repo: local` on the uv toolchain.
 - An automatic bypass of the `main` gate. The escape hatch is a documented manual toggle only.
+- *(added 2026-11-16, 26 D-13)* A duplicate-code gate. Backlog 999.17 covers it.
 
 ## Constraints
 
@@ -171,7 +190,7 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 
 ## Edge Coverage
 
-**Coverage:** 28/28 applicable edges resolved · 0 unresolved
+**Coverage:** 32/32 applicable edges resolved · 0 unresolved
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
@@ -180,6 +199,10 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 | ordering | R1 | ✅ covered | Parity compares the two sides as sets; hook order does not matter (AC: zero-checks line) |
 | concurrency | R1 | ⛔ dismissed | Commit-stage checks only read files; parallel commits in separate worktrees each use their own index |
 | concurrency | R2 | ✅ covered | An interrupted or failing gate exits non-zero, so git aborts the push and the remote ref stays (AC: failing push); set-aside edits are restored (AC: restore line) |
+| adjacency | R2 | ✅ covered | (added 2026-11-16, D-05) A static gate carries both the commit and the push stage and runs at both. The push re-runs it on purpose, to cover commits made without hooks (AC: pre-push stage line) |
+| empty | R2 | ✅ covered | (added 2026-11-16, D-05) A push with no changed files still runs every gate (`always_run`) (AC: "whatever files the push touches") |
+| encoding | R2 | ⛔ dismissed | (added 2026-11-16, D-05) The gates take no file names (`pass_filenames: false`), so file-name encoding never reaches them |
+| ordering | R2 | ✅ covered | (added 2026-11-16, D-05) The static gates run before the `make test` gate, which is last in the config. The pin covers the order (AC: pre-push stage line) |
 | adjacency | R3 | ✅ covered | Untracked `.py` files count recursively under `installer/` and `tests/`; ignored files and paths outside the two trees do not; a pushed ref that is not HEAD is refused (AC: untracked, ref lines) |
 | empty | R3 | ✅ covered | A push that only deletes a remote ref runs no checks and goes through (AC: ref line) |
 | encoding | R3 | 🧪 backstop | File names come from git verbatim; held-out test with a space in a file name (AC: sorted-names line) |

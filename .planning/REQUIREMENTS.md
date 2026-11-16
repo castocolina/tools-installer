@@ -169,6 +169,17 @@
 - [x] **LEAN-03**: `wizard_app.py` is split and review-history comments are dropped [F13]
 - [x] **LEAN-04**: The run log is bounded [B 13 IN-08]
 
+### Commit and push hooks
+
+*(added 2026-11-16, 26 SPEC + CONTEXT)*
+
+- [ ] **HOOK-01**: Every commit runs each static gate as its own hook entry calling its `make` target (lint, format-check, typecheck, security, dead-code, shellcheck); `make validate` runs them all through `pre-commit run --all-files`; no commit-stage hook runs tests [26 R1, D-03, D-04]
+- [ ] **HOOK-02**: Every push runs each static gate and then `make test` (90% coverage gate), each as its own entry; any failure aborts the push [26 R2, D-05]
+- [ ] **HOOK-03**: The push gate tests a tree equal to the pushed commit: unstaged edits are set aside and restored, and the push is refused for staged-uncommitted changes, untracked `.py` under `installer/` or `tests/`, or a pushed commit that is not HEAD [26 R3, D-01]
+- [ ] **HOOK-04**: `make dev-setup` (renamed from `make install`) installs the commit hook and the push gate, idempotently, skips outside a git checkout and fails when `core.hooksPath` is set; `make setup` is removed and `make run` launches the wizard [26 R4, D-07, D-08]
+- [ ] **HOOK-05**: GitHub accepts a commit on `main`, an admin's included, only after both CI checks passed on that exact SHA; changes land by branch push, green CI, fast-forward; docs-only changes get a fast pass under the same check names [26 R5, D-09, D-10, D-11]
+- [ ] **HOOK-06**: The docs state each gate, its target and stage with measured timings, the branch → CI → `main` flow and the manual `enforce_admins` escape hatch; no doc claims `make validate` runs pre-commit unless it does [26 R6, D-06]
+
 ## Future Requirements
 
 - Latest-version lookup for script and SDKMAN tools (vendors self-update today) [C G7]
@@ -312,11 +323,17 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | LEAN-02 | Phase 25 | Complete |
 | LEAN-03 | Phase 25 | Complete |
 | LEAN-04 | Phase 25 | Complete |
+| HOOK-01 | Phase 26 | Pending |
+| HOOK-02 | Phase 26 | Pending |
+| HOOK-03 | Phase 26 | Pending |
+| HOOK-04 | Phase 26 | Pending |
+| HOOK-05 | Phase 26 | Pending |
+| HOOK-06 | Phase 26 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 115 total *(recounted 2026-11-07 in 23.2: HOST, TUNE, SCHED and AUDIT rows were not counted)* *(amended 2026-11-14, 24.4 SPEC: GUARD-01..06 added)* *(amended 2026-11-14, 24.5 SPEC: PRIO-01..07 added)*
-- Mapped to phases: 115 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 23.1: 5, Phase 23.2: 7, Phase 24: 7, Phase 24.1: 3, Phase 24.2: 5, Phase 24.3: 4, Phase 24.4: 6, Phase 24.5: 7, Phase 25: 4)
+- v1 requirements: 115 total *(recounted 2026-11-07 in 23.2: HOST, TUNE, SCHED and AUDIT rows were not counted)* *(amended 2026-11-14, 24.4 SPEC: GUARD-01..06 added)* *(amended 2026-11-14, 24.5 SPEC: PRIO-01..07 added)* *(amended 2026-11-16, 26 SPEC: HOOK-01..06 added; 121 total)*
+- Mapped to phases: 121 (Phase 17: 12, Phase 18: 10, Phase 19: 7, Phase 20: 8, Phase 21: 7, Phase 22: 11, Phase 23: 12, Phase 23.1: 5, Phase 23.2: 7, Phase 24: 7, Phase 24.1: 3, Phase 24.2: 5, Phase 24.3: 4, Phase 24.4: 6, Phase 24.5: 7, Phase 25: 4, Phase 26: 6)
 - Unmapped: 0
 - Mapping note: UI-04 sits in Phase 22, not Phase 21 (TA §8 P5), because it needs `config_paths` (LIFE-04)
 
