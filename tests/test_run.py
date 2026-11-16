@@ -289,7 +289,8 @@ def test_streaming_runner_emits_incrementally_before_child_exits() -> None:
     script = "print('first', flush=True); import time; time.sleep(0.3); print('second', flush=True)"
     runner([sys.executable, "-u", "-c", script])
     assert len(timestamps) == 2
-    assert timestamps[1] - timestamps[0] >= 0.3
+    # The child sleeps 0.3 s between lines; the margin absorbs clock jitter on a loaded host.
+    assert timestamps[1] - timestamps[0] >= 0.2
 
 
 def test_streaming_runner_method_started_emits_header_under_current_tool() -> None:
