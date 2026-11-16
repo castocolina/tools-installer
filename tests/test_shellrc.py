@@ -2223,7 +2223,7 @@ def _consolidated_span(myshellrc: Path) -> list[str]:
     return lines[start + 1 + _PROVENANCE_LINES : stop]
 
 
-def test_a_simple_line_sourcing_myshellrc_is_disabled_not_deleted(tmp_path: Path) -> None:
+def test_a_simple_line_sourcing_myshellrc_survives_verbatim_on_a_comment(tmp_path: Path) -> None:
     shellrc, myshellrc, _managed_bin = _seed_consolidable_home(tmp_path)
     original_line = '. "$HOME/.myshellrc"'
     shellrc.write_text(f"export KEEP=1\n{original_line}\nexport TAIL=2\n")

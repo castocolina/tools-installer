@@ -69,7 +69,7 @@ def test_multi_line_array_is_refused_not_parsed() -> None:
         enable_plugins(src)
 
 
-def test_a_zshrc_with_no_plugins_line_raises_on_enable_and_no_ops_on_disable() -> None:
+def test_a_zshrc_with_no_plugins_line_raises_on_enable() -> None:
     src = 'ZSH_THEME="robbyrussell"\nsource $ZSH/oh-my-zsh.sh\n'
     with pytest.raises(OmzPluginsError, match=r"plugins=\("):
         enable_plugins(src)

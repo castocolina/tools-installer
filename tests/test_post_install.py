@@ -220,7 +220,7 @@ def _shell_init_tool(tool_id: str) -> Tool:
     return replace(tools[tool_id], post_install=("source_shell_init",))
 
 
-def test_starship_yes_turns_shell_init_on_and_empties_the_theme() -> None:
+def test_starship_turns_shell_init_on_and_empties_the_theme() -> None:
     home = Path.home()
     zshrc = home / ".zshrc"
     zshrc.write_text(_OMZ_ZSHRC)
