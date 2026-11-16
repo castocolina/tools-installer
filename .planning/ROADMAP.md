@@ -357,6 +357,7 @@ Plans:
 **Requirements:** TBD
 **Source:** owner, 2026-11-16; code facts from `installer/terminal_shell.py:477-482` (Alacritty keys) and `:893-1031` (the sync covers kitty, WezTerm, Konsole, Alacritty and herdr on Linux and skips macOS).
 **Open:** whether Konsole (detected and shell-synced, the Bazzite default, not a catalog entry) also gets the keys region; a possible clash with kitty's own Linux binding for Ctrl+Shift+K (to verify against kitty's defaults).
+**Pending work (one todo each, 2026-11-16):** `.planning/todos/pending/2026-11-16-terminal-defaults-for-kitty.md`, `…-for-wezterm.md`, `…-for-konsole.md` (owner decision first) and `…-for-herdr.md` (pass-through check). Alacritty has nothing pending: its Linux keys are written and it has no macOS method.
 **Depends on:** 999.18.
 
 Plans:
