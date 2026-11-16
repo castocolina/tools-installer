@@ -70,6 +70,10 @@ def _fake_runner(
         (["README.md"], False),
         (["docs/TROUBLESHOOTING.md"], False),
         ([".claude/skills/catalog-audit/SKILL.md"], False),
+        ([".github/PULL_REQUEST_TEMPLATE.md"], False),
+        ([".github/workflows/notes.md"], False),
+        (["scripts/README.md"], False),
+        (["tests/fixtures/x.md"], False),
         ([".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-1.md"], False),
         ([".planning/x.md", "installer/a.py"], False),
         ([], False),
@@ -317,11 +321,7 @@ def test_every_runtime_resolved_link_target_is_test_read() -> None:
             dest = (doc.parent / path_part).resolve()
             assert dest.exists(), f"{doc.name}: {target} does not exist"
             assert dest.is_relative_to(ROOT), f"{doc.name}: {target} leaves the repo"
-            rel = dest.relative_to(ROOT).as_posix()
-            assert not is_docs_path(rel), (
-                f"{doc.name}: link {target} resolves to docs-only {rel}; add the target to"
-                " TEST_READ in devtools/docs_only.py"
-            )
+        assert docs_only_link_targets(doc, ROOT) == [], f"{doc.name} has docs-only link targets"
 
 
 def test_the_link_drift_test_catches_a_planning_target(tmp_path: Path) -> None:

@@ -31,6 +31,8 @@ jobs:
           enable-cache: true
       - name: Classify the change
         id: scope
+        # A classifier crash leaves the output empty, so every gated step runs (fail closed).
+        continue-on-error: true
         run: uv run --no-sync python -m devtools.docs_only --base origin/main --github-output "$GITHUB_OUTPUT"
       - name: Install dependencies
         if: steps.scope.outputs.full != 'false'

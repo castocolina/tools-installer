@@ -229,7 +229,9 @@ Semantic check: the target tests failed on the missing `devtools.docs_only` modu
 
 ## Deviations from Plan
 
-None - plan executed as written.
+- Plan gap (P4): the plan fixed `TEST_READ` verbatim, so `.github/...`, `scripts/...` and `tests/...` Markdown was test-read yet took the docs-only fast pass; added those three globs and matrix rows proving four such paths classify as full.
+- `Classify the change` now sets `continue-on-error: true` so a classifier crash leaves the output empty and every gated step runs (fail closed), with a pin in `test_ci_workflow.py`.
+- `test_every_runtime_resolved_link_target_is_test_read` now calls the shared `docs_only_link_targets(doc, ROOT)` helper instead of re-implementing its loop, keeping the exists/inside-the-repo assertions.
 
 ## Issues Encountered
 

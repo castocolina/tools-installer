@@ -64,6 +64,11 @@ def test_classify_runs_after_uv_and_before_install() -> None:
     assert "devtools.docs_only" in scope["run"]
 
 
+def test_a_classifier_crash_fails_closed() -> None:
+    scope = next(step for step in _steps() if step.get("id") == "scope")
+    assert scope.get("continue-on-error") is True
+
+
 def test_every_full_step_is_gated_fail_closed() -> None:
     for name in ("Install dependencies", "Validate", "Test", "Hook e2e"):
         assert _step(name)["if"] == "steps.scope.outputs.full != 'false'"

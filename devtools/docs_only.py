@@ -21,7 +21,10 @@ TEST_READ: tuple[str, ...] = (
     "AGENTS.md",
     "README.md",
     ".claude/*",
+    ".github/*",
     "docs/*",
+    "scripts/*",
+    "tests/*",
     ".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*",
 )
 
