@@ -325,7 +325,7 @@ def _run_interactive_wizard(
         console.print("The background cleanup apply had not finished.")
     if app.outcomes is None:
         console.print("Aborted.")
-        # WR-06: a hard abort while a run was in flight interrupted a real
+        # A hard abort while a run was in flight interrupted a real
         # run; that is a failure, not a clean abort.
         return 1 if app.run_in_flight else 0
     # run_doctor is deliberately NOT re-run here: the app already rendered
@@ -347,7 +347,7 @@ def _settings_store(
 ) -> tuple[SettingsStore, bool]:
     path = default_settings_path()
     loaded = load_settings(path)
-    # WR-05: the TUI shows the warning via startup_warning; every headless
+    # The TUI shows the warning via startup_warning; every headless
     # route announces it here instead, before it acts on the default mode.
     if announce_warning and loaded.warning:
         _WARN_CONSOLE.print(loaded.warning, style="yellow", markup=False, soft_wrap=True)
@@ -359,7 +359,7 @@ def _settings_store(
 
 def _session_exit_code(app: UnifiedApp) -> int:
     """The one exit rule for every TUI route (SAFE-05): a failed row, a PATH or
-    verify error, or a run interrupted by a hard abort mid-flight (WR-06) exits
+    verify error, or a run interrupted by a hard abort mid-flight exits
     1; everything else exits 0. A route that never ran a plan has no outcomes."""
     if app.run_in_flight or app.run_errors:
         return 1
@@ -499,7 +499,7 @@ def _teardown_cli(console: Console, platform: Platform, *, assume_yes: bool) -> 
     # that just removed zsh corrects the terminals the same way any other
     # completion route does.
     _sync_terminals_and_report(console, platform, strip_only=True)
-    # A removal that failed is a failed teardown, whatever else the sweep did (review R1-24).
+    # A removal that failed is a failed teardown, whatever else the sweep did.
     return 1 if failed else 0
 
 
@@ -527,7 +527,7 @@ def _verify_and_clean(
 
 
 def _schedule_run_deps(tools: list[Tool], platform: Platform) -> RunDeps:
-    # R2-04: the in-group runner keeps the vendor update in the group the schedule runner kills.
+    # The in-group runner keeps the vendor update in the group the schedule runner kills.
     version_refresh, updates, _policy, _install = _build_services(
         tools, platform, runner=run_captured_in_group
     )

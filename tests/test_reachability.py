@@ -501,6 +501,8 @@ _SPLIT_MODULES: tuple[str, ...] = (
     "installer/wizard_app.py",
 )
 _SPLIT_MAX_LINES = 800
+# The composition root is big on purpose (no size cap) but still carries no review history.
+_REVIEW_ID_FREE: tuple[str, ...] = (*_SPLIT_MODULES, "installer/compose.py", "setup.py")
 # Code the split moved into modules that already existed; only these nodes are scanned there.
 _MOVED_INTO_SHARED: tuple[tuple[str, str], ...] = (
     ("installer/systemd_daemon.py", "CompetingProbe"),
@@ -553,8 +555,8 @@ def test_split_modules_stay_under_800_lines() -> None:
         )
 
 
-def test_split_modules_carry_no_review_ids() -> None:
-    for relative in _SPLIT_MODULES:
+def test_split_modules_and_the_composition_root_carry_no_review_ids() -> None:
+    for relative in _REVIEW_ID_FREE:
         ids = _review_ids((_ROOT / relative).read_text(encoding="utf-8"))
         assert ids == [], f"{relative} carries review ids: {ids}"
 

@@ -121,7 +121,7 @@ _ZSHRC = zshrc_path(Path.home(), os.environ)
 _RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")
 Install = Callable[..., InstallOutcome]
-# WR-05: a dedicated stderr console, separate from the monkeypatch-able
+# A dedicated stderr console, separate from the monkeypatch-able
 # `Console` the routes build, so headless routes can announce the settings
 # warning without a test double rerouting it.
 _WARN_CONSOLE = Console(stderr=True)
@@ -131,7 +131,7 @@ _WARN_CONSOLE = Console(stderr=True)
 _DAEMON_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{daemon.LABEL}.plist"
 _LINUX_DAEMON_UNIT_DIR = systemd_daemon.user_unit_dir(Path.home(), os.environ)
 # systemd's user environment generator reads $XDG_CONFIG_HOME/environment.d,
-# so this honours XDG_CONFIG_HOME exactly like _LINUX_DAEMON_UNIT_DIR (WR-04).
+# so this honours XDG_CONFIG_HOME exactly like _LINUX_DAEMON_UNIT_DIR.
 _ENVIRONMENT_D_DIR = env_redirect.environment_d_dir(Path.home(), os.environ)
 
 
@@ -165,7 +165,7 @@ def _timer_state_cache(
 
 class _CompetitorProbe:
     """Zero-argument competing-mechanism probe with the same blocking switch
-    as _DiskProbe (WR-10).
+    as _DiskProbe.
 
     blocking=True issues the bounded, READ-ONLY `systemctl list-unit-files`
     queries through the shared memo; blocking=False peeks and never spawns,
@@ -194,7 +194,7 @@ def _competitor_probe(
     which: Callable[[str], str | None],
     read_output: OutputRunner,
 ) -> _CompetitorProbe:
-    """THE construction point for a competing-mechanism probe (WR-10).
+    """THE construction point for a competing-mechanism probe.
 
     Gated on exactly the D-01b condition `_timer_state_cache` uses, so one
     place in this file decides "this host has no systemd"; on macOS or a
@@ -273,7 +273,7 @@ class _DiskProbe:
         return cache.read()
 
     def __call__(self, *, blocking: bool = True) -> DiskPressure:
-        # IN-03: a RELATIVE TMPDIR is ignored rather than measured against
+        # A RELATIVE TMPDIR is ignored rather than measured against
         # whatever cwd this process happens to have, matching
         # systemd_daemon.user_unit_dir's own XDG rule.
         raw_tmp = os.environ.get("TMPDIR", "")
@@ -328,8 +328,8 @@ def _cache_redirect_policies(
     uninstall sweep must act on the same objects. The per-platform branch
     lives inside ``cache_redirect_policy``.
 
-    ``ensure_sourced_from`` is ``_build_app``'s link-mode-aware closure
-    (WR-07): in split mode no rc file sources ``~/.myshellrc``, so a macOS
+    ``ensure_sourced_from`` is ``_build_app``'s link-mode-aware closure:
+    in split mode no rc file sources ``~/.myshellrc``, so a macOS
     redirect written only there would never reach Bun. The CLI uninstall
     route keeps the ``()`` default, because removal needs no sourcing.
     """
@@ -360,9 +360,9 @@ def _sync_terminals(
     the two CLI-only lifecycle routes in `main`/`_run_uninstall` call this
     directly since neither builds a `UnifiedApp`.
 
-    CR-04: `lookup` is `which_with_brew`, not a bare `shutil.which`, so a
+    `lookup` is `which_with_brew`, not a bare `shutil.which`, so a
     zsh that a brew install just placed on disk in this same process is
-    still found. IN-01/CR-04: a revert is also surfaced now -- previously
+    still found. A revert is also surfaced now -- previously
     only `result.warnings` was ever read, so a full revert (zsh no longer
     discoverable) produced no message at all.
     """
@@ -385,7 +385,7 @@ def _sync_terminals_and_report(
     routes (`main`'s unattended install, `_run_uninstall`'s command-line
     teardown) call this after their own primary completion, so a raised
     exception is reported truthfully without ever flipping an already-determined
-    exit code. WR-03: the catch and the message live in the one shared
+    exit code. The catch and the message live in the one shared
     `terminal_sync_warning` contract, never in a try/except copied to this
     site."""
     warning = terminal_sync_warning(
@@ -396,7 +396,7 @@ def _sync_terminals_and_report(
 
 
 class _InstallOptions(TypedDict, total=False):
-    """The keyword options `install_tool` keeps; an omitted key stays omitted (R3-03)."""
+    """The keyword options `install_tool` keeps; an omitted key stays omitted."""
 
     checksum_policy: ChecksumPolicy
     repair: bool
@@ -628,7 +628,7 @@ def _build_app(
 
     def _uninstall_extras() -> tuple[Policy, ...]:
         # Read when a sweep starts, before any removal runs, so each adapter is built from what
-        # is on disk now (R1-19); the idempotent adapters tolerate a timer a removal took first.
+        # is on disk now; the idempotent adapters tolerate a timer a removal took first.
         return (*redirects, *desktop, *schedules.sweep_adapters(schedule_ctx))
 
     def _do_uninstall(decision: UninstallDecision) -> SweepResult:
@@ -670,7 +670,7 @@ def _build_app(
         return _sync_terminals(platform, report_changes=True)
 
     def _uninstall_terminals() -> str | None:
-        # CR-09: after an uninstall only owned regions are stripped, and only once zsh is gone.
+        # After an uninstall only owned regions are stripped, and only once zsh is gone.
         return _sync_terminals(platform, strip_only=True)
 
     # The three environment fields are predicates, not their results: the
