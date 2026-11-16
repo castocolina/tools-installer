@@ -191,3 +191,32 @@ All are minor layout items, pre-existing before Phase 21 and tracked in the todo
 ### Needs owner confirmation
 
 - Run the wizard on the real machine: remove an installer-owned and a managed-elsewhere tool from Uninstall, toggle a Policies row, open Doctor, quit with `q`; every screen shows the current truth.
+
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+HEAD 4c1d243e. Each finding was made as a fresh check at HEAD, then classified on the jev ladder (Laya, then TypeSafe
+under the 2026-10-14 consent) before the next group. Fresh evidence: `uv run pytest tests/test_screen_family.py
+tests/test_layout_80x20.py tests/test_policies_e2e.py tests/test_ownership.py tests/test_tool_browser.py -n 4 --no-cov -q`
+exits 0; code lines read at HEAD; 80x20 captures in scratchpad `uat/80x20-after2/` and `uat/25/t80/` (byte-identical to each other).
+
+| Item | Fresh evidence | Laya (conf) | TypeSafe (conf) | Verdict | Override reason |
+|------|----------------|-------------|-----------------|---------|-----------------|
+| UI-01 | 42-case matrix (`MATRIX_SOURCES` 7, `MATRIX_TARGETS` 6) + repaint case pass | open-real 0.41 (fallback) | resolved 0.94 | resolved | none |
+| UI-02 | three status-lifecycle tests exist and pass | open-real 0.58 (fallback) | resolved 0.98 | resolved | none |
+| UI-03 | `version_status.py:729` BROKEN_REPAIR_NOTE; unknown-owner tests pass; Uninstall capture shows the groups | open-real 0.53 (fallback) | open-real 0.42 (fallback) | resolved | both rungs `needs_fallback`; decided by own reasoning from the evidence |
+| UI-05 | `uninstall_screen.py:633` exclusive worker, REMOVAL holder guards :464/:575, held-removal test passes | open-real 0.61 (fallback) | resolved 0.96 | resolved | none |
+| UI-06 | `test_installing_watch_unblocks_the_docker_tweak` passes; Policies capture shows live glyphs | open-real 0.49 (fallback) | resolved 0.98 | resolved | none |
+| UI-07 | `doctor_screen.py:119-122` bindings are `enter` and `r` only; `a`-inert and pnpm-shim tests pass | open-real 0.53 (fallback) | resolved 0.97 | resolved | none |
+| UI-08 | tier-selection and reload prune tests pass | open-real 0.55 (fallback) | resolved 0.99 | resolved | none |
+| Fork guard + architecture doc | 26-case fork guard passes; `.claude/architecture.md:1199`; REQUIREMENTS UI-01..08 Complete | open-real 0.47 (fallback) | resolved 0.94 | resolved | none |
+| Real-host check | container and test evidence green; the owner's real managers, rc and systemd session are not reachable by an agent | open-real 0.53 (fallback) | owner-only 0.94 | owner-only | none |
+| UAT 1 (80x20) | captures: seven tabs fit, Policies shows 5 rows, toggle status keeps the table and `[on]`, Uninstall badge and footer fit; Doctor still one scrolling card; todo is in `todos/completed/` | open-real 0.41 (fallback) | open-trivial 0.73 | open-trivial | Laya answer was a fallback; own reasoning agrees with TypeSafe (cosmetic, not a phase requirement) |
+| UAT 2 (removal) | pinned by removal/prune tests passing at HEAD (UAT run itself at 68d498d) | open-real 0.56 (fallback) | resolved 0.91 | resolved | none |
+| UAT 3 (quit during removal) | `wizard_app.py:78,764` quit-cut branch; forced-quit message asserted in `tests/test_screen_family.py` | open-real 0.43 (fallback) | resolved 0.97 | resolved | none |
+
+Time order (UTC, 2026-11-16): requirement and must-have findings (UI-01..08, fork guard) made 02:44:26-02:44:33,
+classified by ladder call 02:45:06; human-item findings (real-host, UAT 1-3) made 02:44:33-02:45:00, classified by ladder
+call 02:45:19. Receipts: scratchpad `fresh21-a.out`, `fresh21-b.out`.
+
+Result: 11 resolved, 1 open-trivial, 1 owner-only, 0 open-real. Status stays `passed`; the owner confirmation list is unchanged.

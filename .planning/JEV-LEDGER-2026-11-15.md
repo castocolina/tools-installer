@@ -45,4 +45,12 @@ each phase's VERIFICATION.md under "Fresh re-verification with inline jev (2026-
 - 18: 7 items resolved, 1 deferred (macOS), and 1 open-trivial (issue #5 waits for the next scheduled run of the
   new close step). TypeSafe agreed on 7 of 9.
 - 19: 11 items resolved. TypeSafe decided 10, all resolved at 0.83 to 0.98; 1 was decided on evidence.
+- 21: 11 items resolved, 1 open-trivial (the 80x20 status cut), 1 owner-only (the real-host walk). TypeSafe was
+  confident on 11 and agreed on all of them.
+- 22: 8 resolved, 4 owner-only. Of 5 confident TypeSafe answers, 4 agreed. The one override is SC2: its named
+  tests pass and `opencode uninstall` is never run.
+- 23: 8 resolved, 5 owner-only. TypeSafe was confident on 8 and agreed on all of them.
+
+Phases 21, 22 and 23 were also verified again from scratch at HEAD 4c1d243e with inline jev, which makes the
+inline pass cover every re-verified phase, 17 through 23.
 

@@ -275,3 +275,32 @@ CONF-01 satisfied (codegraph-mcp-register, herdr-integration, tests); CONF-02 sa
 
 - F-5 stays: removing the managed blocks leaves blank separator lines in `~/.myshellrc` (four blank lines after removing all blocks, 16-after-all-removed.txt); a byte-exact test pins the separator. Cosmetic, open-trivial.
 - After removing codex, the PATH block in `~/.myshellrc` still listed codex's bin dirs until the PATH wiring row was removed (observation only; the next wiring pass rewrites it).
+
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+HEAD 4c1d243e. Every finding was made as a fresh check at HEAD and classified by the jev ladder right after its group,
+before the next group. Laya answers are all `fallback: true` (low confidence), so they never decided an item. Test runs:
+`uv run pytest <files> -n 0 --no-cov -q` on test_postinstall, test_session (hook/resync/host/tealdeer selection),
+test_terminal_shell, test_agent_settings, test_omz, test_tweaks, test_shellrc and test_layout_80x20: all passed.
+
+| Item | Fresh evidence | Laya | TypeSafe | Verdict | Override reason |
+|------|----------------|------|----------|---------|-----------------|
+| CONF-01..03 | hook/resync/host/tealdeer tests pass; register_hooks, unregister_argvs, present_hosts in postinstall.py; codegraph and herdr postinstall users in registry | open-real 0.43 (fallback) | resolved 0.88 | resolved | |
+| CONF-04..07 | seven phase test files pass; zshenv_block, sync_terminal_shells, omz_root, _tealdeer_cache present | open-real 0.58 (fallback) | resolved 0.98 | resolved | |
+| CONF-08..12 | same files pass; strip_legacy_aliases present; REQUIREMENTS rows complete | open-real 0.51 (fallback) | resolved 0.72 (fallback) | resolved | no confident jev answer; own reasoning decides |
+| H1 round trip at HEAD | container captures 02-17 present, tests green; no installer run now | open-real 0.46 (fallback) | resolved 0.73 (fallback) | resolved | own reasoning |
+| H2 real terminals run zsh | capture 04: `env -i SHELL=/bin/bash zsh -c` prints /usr/bin/zsh | open-real 0.49 (fallback) | owner-only 0.94 | owner-only | |
+| H3 VS Code terminal zsh | JSONC tests pass; real app not runnable here | open-real 0.40 (fallback) | owner-only 0.80 | owner-only | |
+| H4 settings revert, live CLIs | capture 15: CLAUDE_BYTE_IDENTICAL, CODEX_BYTE_IDENTICAL | open-real 0.46 (fallback) | resolved 0.96 | resolved | |
+| H5 80x20 legibility | test_layout_80x20 passes; alias notice in capture 19 | open-real 0.45 (fallback) | resolved 0.96 | resolved | |
+| H6 Shell notice colour | line text in captures; colour is visual | open-real 0.54 (fallback) | owner-only 0.77 (fallback) | owner-only | own reasoning |
+| H7 macOS bash 3.2 | capture 20: BASH32_N_OK (3.2.57); darwin detection needs a Mac | open-real 0.43 (fallback) | owner-only 0.90 | owner-only (deferred macOS) | |
+| H8 CONF-08 pi clause | render.py:357 static note, no extension detection | open-real 0.52 (fallback) | resolved 0.50 (fallback) | owner-only | own reasoning: a requirement-wording decision, behaviour not broken |
+| H9 rtk parenthetical | `rg 'id = "rtk"' installer/registry.toml` exit 1 (0 hits) | open-real 0.42 (fallback) | resolved 0.92 | resolved | |
+| Deferred herdr hook | registry.toml:3219 herdr, postinstall herdr-integration | open-real 0.54 (fallback) | resolved 0.70 (fallback) | resolved | own reasoning |
+
+Time order (UTC, 2026-11-16): group 1 (CONF) findings 02:44:02 to 02:44:29, jev call 02:44:40; group 2 (H1-H9, herdr)
+findings 02:44:47, jev call 02:45:01. Inputs and outputs: scratchpad `fresh23-g1.json/.out`, `fresh23-g2.json/.out`.
+
+Result: 8 resolved, 5 owner-only (H2, H3, H6, H7, H8), 0 open-trivial, 0 open-real. Status stays `passed`.

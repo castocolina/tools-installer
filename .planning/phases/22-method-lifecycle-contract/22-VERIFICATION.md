@@ -225,3 +225,38 @@ No blocking gaps. All five roadmap success criteria and all eleven requirements 
 
 _Verified: 2026-11-04 (re-verified at 6164583)_
 _Verifier: Claude (gsd-verifier)_
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+Fresh checks at HEAD 4c1d243e. Each group was classified by the jev ladder (Laya first, TypeSafe jev-1.14.0 under the 2026-10-14 consent) right after its findings, before the next group. `fb` = the column returned `fallback: true` and did not decide.
+
+| Item | Fresh evidence | Laya | TypeSafe | Verdict | Override reason |
+|------|----------------|------|----------|---------|-----------------|
+| SC1, LIFE-09 (both-direction receipts, listing compare) | `uv run pytest` test_uninstall_e2e, test_uninstall, test_receipts, test_container_e2e_receipts, test_ownership: all pass | open-real 0.46 (fb) | resolved 0.89 | resolved | none |
+| SC2, LIFE-01/03/08 (receipt gate, group warning, opencode override) | test_app, test_pnpm_globals pass; opencode stanza declares `remove = ["opencode2","service","stop"]` (a service stop, not `opencode uninstall`), so the accepted override still holds | open-real 0.53 (fb) | open-real 0.81 | resolved | Overrode a confident TypeSafe open-real: every named test passes and the override's subject (vendor `opencode uninstall`) is still not run. Info: the override's reason text says opencode declares no `remove`; that is now stale (a service-stop remove exists). Documentation drift only, open-trivial |
+| LIFE-02 (no sudo argv) | `sudo` in executors.py only in a comment and the manual-handoff display strings (lines 701-720); model.py `ELEVATION_COMMANDS`; no other argv with sudo | open-trivial 0.34 (fb) | resolved 0.87 | resolved | none |
+| SC3, LIFE-05/06 (OMZ upgrade.sh, sdk selfupdate, pinned refusal) | test_update, test_version_status, test_version_cache pass; registry.toml:624 and :2004 | open-real 0.47 (fb) | resolved 0.51 (fb) | resolved | needs_fallback: decided by me on the passing tests and the registry lines |
+| SC4, LIFE-02/07 (prefix handoff) | test_plan, test_engine, test_executors, test_run pass; `writable_prefix` at registry.toml:184/194/204 | open-real 0.45 (fb) | resolved 0.51 (fb) | resolved | needs_fallback: decided by me |
+| LIFE-10 (greedy casks) | test_manager_versions passes; `brew_greedy_outdated` uses `--greedy-auto-updates`; no macOS host | open-real 0.48 (fb) | owner-only 0.83 | owner-only (deferred, macOS, no CI) | none |
+| SC5, LIFE-04, UI-04 (config_paths, c toggle, CLI never deletes) | test_model, test_registry, test_wizard_app, test_catalog_tui, test_cli pass; `HARNESS_MARKER_DIRS` at model.py:153 | open-real 0.44 (fb) | resolved 0.65 (fb) | resolved | needs_fallback: decided by me |
+| Human 1 (80x20 `c` toggle and modal) | captures uat/22-reverify/03,05,07,08: `[c]` + 'config +', 'rg declares no config to delete.', modal with the runs line and 'Config deleted too: ~/.config/gh (gh)' unclipped, '2 removed / Config deleted for gh.'; last table column cut without an ellipsis at 80 columns | open-real 0.43 (fb) | open-trivial 0.71 (fb) | resolved, with open-trivial cosmetic (column cut) | needs_fallback: decided by me |
+| Human 2 (copy run-log command by mouse) | no real terminal emulator for agents; command text covered by tests | open-real 0.45 (fb) | owner-only 0.69 (fb) | owner-only | needs_fallback: decided by me |
+| Human 3/4 (macOS casks and bash 3.2) | no macOS host or bash 3.2 here; fake-runner and grep tests pass | open-real 0.40 (fb) | open-real 0.54 (fb) | owner-only (deferred, macOS, no CI) | needs_fallback: decided by me. Not open-real: a missing host is not a defect and no code evidence is against it |
+| Human 5 (real-host removal) | container capture 08/09 shows receipts gone; the real host is off limits to agents | open-real 0.57 (fb) | owner-only 0.73 (fb) | owner-only (container part resolved) | needs_fallback: decided by me |
+| Human 6 (real pnpm group removal) | uat/22-reverify/11-real-pnpm-group.txt: pnpm 12.21.0 comma-joined group removed whole; group-warning tests pass | open-real 0.51 (fb) | resolved 0.98 | resolved | none |
+
+Counts: 12 rows: resolved 8 (plus 1 cosmetic open-trivial note under Human 1 and 1 doc-drift note under SC2), owner-only 4 (LIFE-10, Human 2, Human 3/4, Human 5), open-real 0. jev agreement: of 5 confident (non-fallback) TypeSafe answers, 4 agreed with the verdict (SC1, LIFE-02, LIFE-10, Human 6) and 1 was overridden (SC2); 7 rows had only needs_fallback answers and were decided by me (SC3, SC4, SC5, Human 1, 2, 3/4, 5), where TypeSafe's fallback guess matched my verdict on 5.
+
+Time order (UTC, 2026-11-16; finding made, then jev call; the finding window includes the pytest runs):
+- Group 1 (SC1, SC2, LIFE-02): findings 02:44:07 to 02:44:34; jev call 02:44:48 to 02:44:49 (first call 02:44:34 was rejected for empty context, re-sent with context).
+- Group 2 (SC3, SC4, LIFE-10): findings 02:44:55 to 02:45:11; jev call 02:45:11.
+- Group 3 (SC5, Human 1, 2, 3/4, 5, 6): findings 02:45:16 to 02:47:44; jev call 02:47:44 to 02:47:45.
+
+Status stays `passed`; no open-real finding. Covered files unchanged, so the digest is untouched.
+
+**Orchestrator note (2026-11-16):** two lines in the fresh section rest on old evidence. First, the Uninstall
+80-column ellipsis is already fixed: commit 81ef77e4 makes the header and cut cells end in `…`, and the 80x20
+captures in `uat/80x20-after2/` and `uat/25/` show `What gets …`. Second, the opencode override reason text is
+outdated: opencode now removes through `remove = ["opencode2","service","stop"]`, a service stop. The override's
+substance, that `opencode uninstall` is never run, still holds.
+\n
