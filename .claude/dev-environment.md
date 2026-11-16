@@ -59,7 +59,9 @@ The push gate is `devtools/push_gate.py`, installed by `make dev-setup` as `pre-
 shared hooks directory. It refuses, before running any gate:
 
 1. unmerged paths — finish or abort the merge;
-2. staged changes that are not committed;
+2. staged changes that are not committed, intent-to-add files (`git add -N`), and files on disk
+   flagged skip-worktree or assume-unchanged (`git update-index --no-skip-worktree` or
+   `--no-assume-unchanged` clears them);
 3. untracked, non-ignored files outside `.planning/`, plus every gate-read file of
    `GATE_READ_PATHSPECS` (the config and plugin files the gates load, and Python sources under
    `installer/`, `tests/` and `devtools/`) even when git ignores it — commit a gate-read file

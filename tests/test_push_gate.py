@@ -74,6 +74,8 @@ def _stdin(text: str) -> io.BytesIO:
 
 UNMERGED = ("diff", "--name-only", "--diff-filter=U", "-z")
 STAGED = ("diff", "--cached", "--name-only", "-z")
+INTENT = ("diff", "--name-only", "--diff-filter=A", "-z")
+HIDDEN = ("ls-files", "-v", "-z")
 UNTRACKED = ("ls-files", "--others", "--exclude-standard", "-z")
 GATE_READ = ("--glob-pathspecs", "ls-files", "--others", "-z", "--", *GATE_READ_PATHSPECS)
 CONFIG = ("diff", "--name-only", "-z", "--", ".pre-commit-config.yaml")
@@ -82,6 +84,8 @@ OTHER_HEADER = "these untracked files can change what the gates see:"
 QUERIES = {
     "unmerged": UNMERGED,
     "staged": STAGED,
+    "intent": INTENT,
+    "hidden": HIDDEN,
     "untracked": UNTRACKED,
     "gate_read": GATE_READ,
     "config": CONFIG,
@@ -234,6 +238,50 @@ def test_refusal_2_staged_changes(capsys: pytest.CaptureFixture[str]) -> None:
     err = _refused(_git(staged=_z("tests/z.py", "installer/a b.py")), capsys)
     assert "\n  installer/a b.py\n  tests/z.py\n" in err
     assert "commit them, or unstage them (git restore --staged" in err
+
+
+def test_refusal_2b_intent_to_add_files(capsys: pytest.CaptureFixture[str]) -> None:
+    err = _refused(_git(intent=_z("installer/helper.py")), capsys)
+    assert "intent-to-add files are not committed:\n  installer/helper.py\n" in err
+    assert "git add <file>" in err and "git rm --cached <file>" in err
+
+
+def _ls_v(*entries: str) -> _Reply:
+    return (0, b"".join(f"{entry}\0".encode() for entry in entries), b"")
+
+
+@pytest.mark.parametrize("tag", ("S", "h", "s"))
+def test_refusal_2c_hidden_edits(
+    tag: str,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "a b.py").write_text("x")
+    monkeypatch.chdir(tmp_path)
+    err = _refused(_git(hidden=_ls_v("H ok.py", f"{tag} a b.py")), capsys)
+    assert "skip-worktree or assume-unchanged" in err and "\n  a b.py\n" in err
+    assert "ok.py" not in err
+    assert "git update-index --no-skip-worktree <file>" in err and "--no-assume-unchanged" in err
+
+
+def test_a_sparse_checkout_skip_worktree_entry_absent_on_disk_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    run = Recorder()
+    git = _git(hidden=_ls_v("H ok.py", "S docs/absent.txt"))
+    assert main(stdin=_stdin(_line()), git=git, run=run, which=_which) == 0
+    assert len(run.calls) == 1
+
+
+def test_order_hidden_beats_untracked(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "h.py").write_text("x")
+    monkeypatch.chdir(tmp_path)
+    err = _refused(_git(hidden=_ls_v("S h.py"), untracked=_z("u.py")), capsys)
+    assert "h.py" in err and "u.py" not in err
 
 
 def test_refusal_3_untracked_files_in_two_parts(capsys: pytest.CaptureFixture[str]) -> None:
@@ -419,6 +467,7 @@ def test_no_message_suggests_skipping_a_hook(capsys: pytest.CaptureFixture[str])
     cases: tuple[dict[str, _Reply], ...] = (
         {"unmerged": _z("a")},
         {"staged": _z("a")},
+        {"intent": _z("a")},
         {"untracked": _z("a"), "gate_read": _z("b")},
         {"config": _z(".pre-commit-config.yaml")},
         {"unmerged": (128, b"", b"fatal\n")},

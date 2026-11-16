@@ -158,6 +158,19 @@ def _untracked_message(git: GitRunner) -> str | None:
     return "\n".join(parts) if parts else None
 
 
+def _hidden_edits(git: GitRunner) -> list[str]:
+    """Index entries flagged skip-worktree (`S`) or assume-unchanged (lowercase) that exist on disk.
+
+    A sparse checkout flags absent files skip-worktree on purpose; only present ones can hide edits.
+    """
+    entries = os.fsdecode(_query(git, ["ls-files", "-v", "-z"])).split("\0")
+    return [
+        entry[2:]
+        for entry in entries
+        if (entry[:1] == "S" or entry[:1].islower()) and os.path.lexists(entry[2:])
+    ]
+
+
 def refusal(git: GitRunner, updates: Sequence[RefUpdate]) -> str | None:
     """The first refusal message, or None when the tested tree is the pushed commit."""
     checks: tuple[tuple[Sequence[str], str, str], ...] = (
@@ -171,11 +184,28 @@ def refusal(git: GitRunner, updates: Sequence[RefUpdate]) -> str | None:
             "staged changes are not committed:",
             "commit them, or unstage them (git restore --staged <file>), then push again.",
         ),
+        (
+            # Only intent-to-add entries differ as "added" between index and worktree; pre-commit
+            # un-adds them for the run, so the gates would read files that are not in HEAD.
+            ["diff", "--name-only", "--diff-filter=A", "-z"],
+            "intent-to-add files are not committed:",
+            "commit them (git add <file>), or drop the intent (git rm --cached <file>),"
+            " then push again.",
+        ),
     )
     for args, header, fix in checks:
         names = _names(_query(git, args))
         if names:
             return "push refused: " + _part(header, names, fix)
+    hidden = _hidden_edits(git)
+    if hidden:
+        return "push refused: " + _part(
+            "these files are marked skip-worktree or assume-unchanged, so the gates may test"
+            " edits git hides:",
+            hidden,
+            "clear the flag (git update-index --no-skip-worktree <file> or --no-assume-unchanged"
+            " <file>), then push again.",
+        )
     message = _untracked_message(git)
     if message is not None:
         return "push refused: " + message
