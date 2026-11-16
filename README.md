@@ -332,7 +332,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make typecheck` | pyright (strict)                                                |
 | `make security`  | bandit                                                          |
 | `make dead-code` | vulture                                                         |
-| `make shellcheck`| shellcheck the install script and scripts/                      |
+| `make shellcheck`| shellcheck `install.sh` plus exactly `scripts/lib/prune-tmp-common.sh`, `scripts/prune-tmp-linux.sh`, `scripts/prune-user-tmpdir.sh`, `scripts/container-e2e-verify.sh`, `scripts/hooks-e2e.sh` (not all of `scripts/`) |
 | `make validate`  | every commit-stage gate through `pre-commit run --all-files`    |
 | `make test`      | `pytest` with coverage                                          |
 | `make hooks-e2e` | prove the commit hook and the push gate with real git in scratch repos |

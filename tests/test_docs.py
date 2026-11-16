@@ -662,14 +662,17 @@ def test_dev_environment_documents_the_push_gate_and_recovery() -> None:
         "even when git ignores",
         "${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}",
         'git apply --check "$patch" && git apply "$patch"',
+        'less "$patch" && git apply --check "$patch" && git apply "$patch"',
     )
     for phrase in phrases:
         assert phrase in text, f"dev-environment.md lacks {phrase!r}"
     for line in text.splitlines():
         stripped = line.strip()
-        assert stripped not in ('git apply "$patch"', 'git apply --check "$patch"'), (
-            f"unguarded apply line: {line!r}"
-        )
+        assert stripped not in (
+            'git apply "$patch"',
+            'git apply --check "$patch"',
+            'less "$patch"',
+        ), f"unguarded recovery line: {line!r}"
         if "git apply" in line:
             assert "<" not in line, f"placeholder on an apply line: {line!r}"
 
@@ -703,12 +706,11 @@ def test_escape_hatch_turns_enforce_admins_back_on() -> None:
     """P6 (D-10, review M9/C2-M3): every mutation is guarded so the read-back always runs."""
     section = _section(GIT_WORKFLOW.read_text(encoding="utf-8"), "Escape hatch")
     anchors = (
-        "branch=$(git branch --show-current)",
         (
             "gh api -X DELETE repos/castocolina/tools-installer/branches/main/"
             "protection/enforce_admins ||"
         ),
-        'git push origin "$branch:main" ||',
+        "git push origin HEAD:main ||",
         (
             "gh api -X POST repos/castocolina/tools-installer/branches/main/"
             "protection/enforce_admins ||"
@@ -718,6 +720,9 @@ def test_escape_hatch_turns_enforce_admins_back_on() -> None:
     offsets = [section.index(anchor) for anchor in anchors]
     assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets), (
         f"escape-hatch steps are not strictly ordered: {offsets}"
+    )
+    assert '"$branch:main"' not in section, (
+        "stale $branch:main refspec can delete remote main on a detached HEAD"
     )
     blocks = re.findall(r"```sh\n(.*?)```", section, re.DOTALL)
     assert blocks, "the escape hatch has no shell block"

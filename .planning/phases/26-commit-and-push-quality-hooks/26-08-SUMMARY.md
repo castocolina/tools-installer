@@ -42,7 +42,7 @@ key-files:
     - tests/test_docs.py
 
 key-decisions:
-  - "Timings come from direct measurement on this tree (validate 13.0 s, test 78.1 s, push about 91 s) and from `gh run view` on the latest green full CI run (ubuntu 190 s, macOS 427 s); no figure was derived from the ci.yml comment."
+  - "Timings come from direct measurement on this tree (validate 13.0 s, test 78.1 s, push about 91 s) and from `gh run view` on the current-workflow full CI run 43922254257 (ubuntu 252 s, macOS 524 s); no figure was derived from the ci.yml comment."
   - "The recovery block prints the chosen patch name for comparison with the push output's `Stashing unstaged files to ...` line, then inspects and applies on one guarded line, so a failed inspection or dry run stops the apply even in a shell that does not exit on error."
   - "The escape hatch guards the DELETE, the push and the POST individually; the on command and the read-back always run, and an escalation paragraph requires re-running them until `enforce_admins: true` is shown. The docs do not claim line order alone enforces P6."
   - "Each task was committed as one green tree with RED evidence recorded here, per this plan's explicit 'one commit per task' rule (see TDD Gate Compliance)."
@@ -135,10 +135,10 @@ status: complete
 | `make validate` | 13.0 s | `time make validate` on this tree, 24-thread host |
 | `make test` | 78.1 s | `time make test` on this tree (7813 passed, 6 skipped) |
 | push (validate + test) | about 91 s | sum of the two wall times |
-| CI ubuntu-latest | 190 s | `gh run view 43917832565 --json jobs`, started 17:23:21Z, completed 17:26:31Z |
-| CI macos-latest | 427 s | same run, started 17:23:20Z, completed 17:30:27Z |
+| CI ubuntu-latest | 252 s | `gh run view 43922254257 --json jobs` (current workflow) |
+| CI macos-latest | 524 s | same run |
 
-The run was confirmed full (install, validate, test and hook e2e steps all ran), not a docs-only fast pass. No figure was taken from the `ci.yml` comment.
+Run 43922254257 was confirmed full: Classify and Hook e2e ran alongside install, validate and test, so it is not a docs-only fast pass. The earlier run 43917832565 predates the current workflow (no Classify, no Hook e2e step) and is not the source of these figures. No figure was taken from the `ci.yml` comment.
 
 ## RED Evidence
 
@@ -177,7 +177,11 @@ Each task was committed atomically:
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+- Review fix 1: the escape hatch pushes `HEAD:main` and no longer computes `$branch`, so a detached HEAD cannot delete remote `main`; the pin now forbids `"$branch:main"`.
+- Review fix 2: CI timings now cite the current-workflow full run 43922254257 (ubuntu 252 s, macOS 524 s, Classify and Hook e2e included); the false hook-e2e claim about run 43917832565 is corrected.
+- Review fix 3: the recovery pin requires the whole `less "$patch" && git apply --check "$patch" && git apply "$patch"` chain and forbids a bare `less "$patch"` line.
+- Review fix 4: wording tightened for the escape-hatch ending, the docs-only timing and skipped steps, the three-line recovery sequence, and the exact shellcheck file scope in README and dev-environment.
+- Review fix 5: these five review fixes are recorded here, one line each.
 
 ## TDD Gate Compliance
 

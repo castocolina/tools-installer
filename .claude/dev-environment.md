@@ -37,7 +37,7 @@ Every workflow has a target so humans and CI run the same thing:
 | `make typecheck`    | pyright (strict)                                                |
 | `make security`     | bandit                                                          |
 | `make dead-code`    | vulture                                                         |
-| `make shellcheck`   | shellcheck the install script and the scripts/ wrappers          |
+| `make shellcheck`   | shellcheck `install.sh` plus exactly `scripts/lib/prune-tmp-common.sh`, `scripts/prune-tmp-linux.sh`, `scripts/prune-user-tmpdir.sh`, `scripts/container-e2e-verify.sh`, `scripts/hooks-e2e.sh` (not all of `scripts/`) |
 | `make validate`     | run every commit-stage gate through `pre-commit run --all-files` |
 | `make test`         | `uv run pytest -n auto` (parallel, xdist) with coverage (`--cov`, `--cov-fail-under`) |
 | `make hooks-e2e`    | prove the commit hook and the push gate with real git in scratch repos |
@@ -74,9 +74,10 @@ closed terminal or a group SIGTERM.
 
 #### Recover unstaged edits
 
-The push output's `Stashing unstaged files to …` line names the exact patch file. Compare it
-with the file the block below picks; if they differ, set `patch` to the named file first. For
-the residual cases (SIGKILL, or a SIGTERM sent only to `git`), restore the edits with:
+For the residual cases (SIGKILL, or a SIGTERM sent only to `git`), run the first two lines of
+the block below, compare the printed name with the push output's `Stashing unstaged files to …`
+line, then run the third line. If the names differ, set `patch` to the file the push output
+named before running the third:
 
 ```sh
 patch=$(ls -t "${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}"/patch* | head -n 1)
@@ -108,11 +109,11 @@ When a gate fails, fix it and re-run its own target (`make typecheck`, and so on
 | ----- | ------------------------------------------------------- | ---------------------------- |
 | commit | the six static gates                                   | about 13.0 s                 |
 | push  | the six gates with `--fail-fast`, then `make test`      | about 91 s (13.0 s + 78.1 s) |
-| CI    | full job on ubuntu-latest                               | 190 s                        |
-| CI    | full job on macos-latest                                | 427 s                        |
-| CI    | docs-only fast pass: both check names, gated steps skip | seconds; no wall time measured |
+| CI    | full job on ubuntu-latest, including Classify and Hook e2e | 252 s                        |
+| CI    | full job on macos-latest, including Classify and Hook e2e  | 524 s                        |
+| CI    | docs-only fast pass: both check names; install, validate, test and hook e2e skip | unavailable (not yet measured) |
 
 All wall times measured 2026-11-16 on this 24-thread host; `make test` uses the project's
-~40% thread cap. The CI figures are the job wall times of the latest green run read with
-`gh` on 2026-11-16. A figure `gh` cannot read is written `unavailable`, never derived from a
-workflow comment.
+~40% thread cap. The CI figures are the job wall times of the current-workflow full run
+43922254257, read with `gh` on 2026-11-16. A figure `gh` cannot read is written `unavailable`,
+never derived from a workflow comment.

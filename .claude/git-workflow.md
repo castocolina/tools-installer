@@ -57,16 +57,15 @@ If CI cannot produce its checks, a maintainer may land an already-tested commit 
 want to land:
 
 ```sh
-branch=$(git branch --show-current)
 gh api -X DELETE repos/castocolina/tools-installer/branches/main/protection/enforce_admins || echo "off command failed; the push will be rejected and protection is re-checked below"
-git push origin "$branch:main" || echo "push failed; protection goes back on anyway"
+git push origin HEAD:main || echo "push failed; protection goes back on anyway"
 gh api -X POST repos/castocolina/tools-installer/branches/main/protection/enforce_admins || echo "on command failed; read the state below, then re-run it"
 gh api repos/castocolina/tools-installer/branches/main/protection --jq '{enforce_admins: .enforce_admins.enabled, strict: .required_status_checks.strict, checks: [.required_status_checks.checks[].context]}'
 ```
 
 Expect `enforce_admins: true`, `strict: true` and both `validate & test on …` contexts. The
 on command and the read-back always run after the push, even when the off command, the push
-or the on command failed; protection is never left off by this block.
+or the on command failed; the block always ends by re-enabling and reading back protection.
 
 If the block was interrupted, or the read-back fails or does not show `enforce_admins: true`,
 protection may still be off: re-run the on command and the read-back until it does. If
