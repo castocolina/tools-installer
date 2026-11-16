@@ -2706,6 +2706,16 @@ async def _wait_for_passes(pilot: Any, service: FrozenStateService, expected: in
     assert service.passes == expected
 
 
+async def _published_passes(app: UnifiedApp, pilot: Any, service: FrozenStateService) -> int:
+    # `settle` cannot see a pass that is pending behind a finished worker; the app's own
+    # completion signal fires only once a pass has finished with none queued.
+    done: list[str | None] = []
+    app.await_publication(done.append)
+    await wait_until(pilot, lambda: bool(done))
+    await pilot.pause()
+    return service.passes
+
+
 async def test_reinstall_invalidates_and_requests_one_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -2713,8 +2723,7 @@ async def test_reinstall_invalidates_and_requests_one_pass(
     reasons = _record_invalidations(monkeypatch, service)
     async with app.run_test(size=(120, 30)) as pilot:
         await _open_view(app, pilot, "doctor")
-        await settle(app, pilot)
-        before = service.passes
+        before = await _published_passes(app, pilot, service)
         await pilot.press("r")
         await settle(app, pilot)
         await _wait_for_passes(pilot, service, before + 1)
@@ -2758,8 +2767,7 @@ async def test_doctor_fix_requests_one_pass(tmp_path: Path, fix_raises: bool):
     app, service = _reinstall_app(tmp_path, HeldRemover(), lambda _packages: (), fix=fix)
     async with app.run_test(size=(120, 30)) as pilot:
         await _open_view(app, pilot, "doctor")
-        await settle(app, pilot)
-        before = service.passes
+        before = await _published_passes(app, pilot, service)
         await pilot.press("enter")
         await settle(app, pilot)
         await _wait_for_passes(pilot, service, before + 1)
@@ -2780,11 +2788,16 @@ async def test_a_failed_invalidate_after_a_reinstall_is_reported(
     service.invalidate_error = error
     async with app.run_test(size=(120, 30)) as pilot:
         await _open_view(app, pilot, "doctor")
-        await settle(app, pilot)
-        before = service.passes
+        before = await _published_passes(app, pilot, service)
         await pilot.press("r")
         await settle(app, pilot)
         await _wait_for_passes(pilot, service, before + 1)
+        await wait_until(
+            pilot,
+            lambda: (
+                "pnpm globals reinstalled." in str(_doctor_text(app)) and not app.mutation_in_flight
+            ),
+        )
         body = str(_doctor_text(app))
         assert "pnpm globals reinstalled." in body
         assert _INVALIDATE_FAILED.format(error=shown) in body
@@ -2806,11 +2819,17 @@ async def test_a_crashed_reinstall_still_invalidates(
     reasons = _record_invalidations(monkeypatch, service)
     async with app.run_test(size=(120, 30)) as pilot:
         await _open_view(app, pilot, "doctor")
-        await settle(app, pilot)
-        before = service.passes
+        before = await _published_passes(app, pilot, service)
         await pilot.press("r")
         await settle(app, pilot)
         await _wait_for_passes(pilot, service, before + 1)
+        await wait_until(
+            pilot,
+            lambda: (
+                "the reinstall did not complete" in str(_doctor_text(app))
+                and not app.mutation_in_flight
+            ),
+        )
         body = str(_doctor_text(app))
         assert reasons == ["pnpm globals reinstalled"]
         assert "the reinstall did not complete" in body
