@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v0.50.0
-milestone_name: Truthful lifecycle
 status: Awaiting next milestone
-stopped_at: "Phase 26 complete (landed via branch -> green CI -> ff under enforce_admins); v0.50.0 all 17 phases complete — next: /gsd-audit-milestone"
-last_updated: "2026-11-16T20:38:06.387Z"
+stopped_at: "v0.50.0 milestone archived (all 17 phases verified; 20 todos carried) — next: /gsd-new-milestone"
+last_updated: "2026-11-16T20:41:44.160Z"
 last_activity: 2026-11-16
 last_activity_desc: Milestone v0.50.0 completed and archived
-state_head: 0d04c5fc76bca5193b0bc3c12fec21ade28dddd5
+state_head: 8b66ae1362d4b0ee118475c425b8321e25172be2
 progress:
   total_phases: 17
   completed_phases: 17
   total_plans: 276
   completed_plans: 276
   percent: 100
+milestone_name: Truthful lifecycle
 current_phase: 26
 ---
 
@@ -21,10 +21,10 @@ current_phase: 26
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-13)
+See: .planning/PROJECT.md (updated 2026-11-16)
 
-**Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required.
-**Current focus:** Phase 26
+**Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required, and every screen tells the truth about what is on the host.
+**Current focus:** Planning the next milestone (`/gsd-new-milestone`); inputs in `.planning/todos/TRIAGE-2026-11-16.md`
 
 ## Current Position
 
@@ -139,9 +139,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-16T19:10:35.851Z
-Stopped at: Phase 26 complete (landed via branch -> green CI -> ff under enforce_admins); v0.50.0 all 17 phases complete — next: /gsd-audit-milestone
-Resume file: .planning/phases/26-commit-and-push-quality-hooks/26-VERIFICATION.md
+Last session: 2026-11-16T20:41:44.146Z
+Stopped at: v0.50.0 milestone archived (all 17 phases verified; 20 todos carried) — next: /gsd-new-milestone
+Resume file: .planning/MILESTONES.md
 
 ## Deferred Verification
 
