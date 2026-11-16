@@ -727,7 +727,7 @@ Plans:
 - **LEAN-03 (open).** `installer/wizard_app.py` is 4,438 lines (3,011 when scouted; Phase 22-24.x added `SchedulesScreen`, `CursorModelScreen` and more), with 28 classes and 512 comment lines. 23 lines carry `WR-`/`CR-`/`IN-` review ids and 88 match a wider id pattern. No split modules exist (`modals.py`, `doctor_screen.py`, ...). The 800-line cap now needs more modules than the five in 25-CONTEXT D-07 (`UninstallScreen` is ~980 lines, `PoliciesScreen` ~510, `SchedulesScreen` ~530, `UnifiedApp` ~760, `DoctorScreen` ~680). Review-id comments also sit in `setup.py` (16), `terminal_shell.py` (13), `schedules.py` (13), `ownership.py` (9), `uninstall.py` (8), `systemd_daemon.py` (8), `policy.py` (8); the requirement names only the split modules.
 - **LEAN-04 (open).** `execute_screen.py:431` builds `RichLog(id="execute-log", markup=False, highlight=False, auto_scroll=True)` with no `max_lines`; writes are scattered at `execute_screen.py:869-953`. No dropped-lines notice and no test exist.
 
-**Plans:** 10/11 plans executed
+**Plans:** 11/11 plans executed
 
 Plans:
 **Wave 1**
@@ -755,7 +755,7 @@ Plans:
 - [x] 25-10-PLAN.md — Review-id comment cleanup in a code-free commit, helper extraction to the 800-line cap, permanent size/review-id/cycle guards (wave 7)
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 25-11-PLAN.md — Phase gate: guards against the pre-phase SHA, full gates, net production lines with both SHAs, kept targets with callers (wave 8)
+- [x] 25-11-PLAN.md — Phase gate: guards against the pre-phase SHA, full gates, net production lines with both SHAs, kept targets with callers (wave 8)
 
 **Cross-cutting constraints:** <!-- gsd:generated -->
 - The moves are verbatim: p25-moved-same.py finds no AST difference (docstrings ignored, renames applied) and no lost name (SPEC R3 ordering edge)
@@ -794,7 +794,7 @@ Plans:
 | 24.1 Onboard Neovim through the tool-onboarding skill | 5/5 | Complete    | 2026-11-14 |
 | 24.2 Schedules view | 13/13 | Complete    | 2026-11-14 |
 | 24.3 Catalog audit skill | 11/11 | Complete    | 2026-11-14 |
-| 25. Lean | 10/11 | In Progress | - |
+| 25. Lean | 11/11 | In Progress | - |
 | 26. Commit and push quality hooks | 0/TBD | Not started | - |
 
 ## Backlog
