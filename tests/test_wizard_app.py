@@ -3562,12 +3562,10 @@ async def test_doctor_tui_guidance_rewrites_make_setup_prefix() -> None:
         await _settle(app, pilot)
         assert isinstance(app.screen, DoctorScreen)
         # The console wording never reaches the TUI: pnpm findings are state reasons now.
-        assert not any(
-            item.next_step.startswith("Run `make setup`") for item in app.screen.guidance
-        )
+        assert not any(item.next_step.startswith("Run `make run`") for item in app.screen.guidance)
         body = str(app.screen.query_one("#doctor-body", Static).render())
         assert "Press r" in body
-        assert "Run `make setup`" not in body
+        assert "Run `make run`" not in body
 
 
 def test_unified_app_constructs_without_node_globals_closures() -> None:
@@ -3669,10 +3667,10 @@ async def test_doctor_tui_rewrites_the_disk_pressure_next_step_to_the_schedules_
         )
         assert "Schedules view" in tui_item.next_step
         assert "tmp cleanup row" in tui_item.next_step
-        assert "make setup" not in tui_item.next_step
+        assert "make run" not in tui_item.next_step
         assert tui_item == replace(console_item, next_step=tui_item.next_step)
         body = _doctor_body(app)
-        assert "make setup`'s Schedules view" not in body
+        assert "make run`'s Schedules view" not in body
 
 
 async def test_doctor_tui_step_keeps_the_platforms_own_prune_command() -> None:
@@ -3740,7 +3738,7 @@ async def test_doctor_discloses_a_system_scope_competitor_from_a_worker_read() -
 
 
 async def test_doctor_disk_pressure_step_is_never_rewritten_into_pnpm_advice() -> None:
-    # The generic `Run `make setup`` branch must not capture this item: a
+    # The generic `Run `make run`` branch must not capture this item: a
     # full disk answered with "press r to reinstall pnpm globals" is exactly
     # the mis-routing the branch ordering exists to prevent.
     app = _app(policies=_policy_inputs(disk_pressure=_probe(_AT_RISK)), initial_view="doctor")

@@ -1908,7 +1908,7 @@ def test_run_doctor_reports_missing_pnpm_globals(
     )
     out = buf.getvalue()
     assert "mmdc" in out
-    assert "make setup" in out
+    assert "make run" in out
 
 
 def test_run_doctor_silent_when_the_catalog_tool_was_never_installed(

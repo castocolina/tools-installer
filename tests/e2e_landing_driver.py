@@ -416,7 +416,7 @@ def install_one(
     *,
     platform: host_platform.Platform | None = None,
 ) -> engine.InstallOutcome:
-    """The one-tool install path `make setup` runs for a selected row, hooks and tuning included.
+    """The one-tool install path `make run` runs for a selected row, hooks and tuning included.
 
     It passes the production inventory reader, as `setup.py`'s install closure does: with none the
     engine counts every brew, node and bun package as already there and writes no receipt, which

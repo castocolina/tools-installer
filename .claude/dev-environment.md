@@ -29,7 +29,7 @@ Every workflow has a target so humans and CI run the same thing:
 | ---------------- | -------------------------------------------------------------- |
 | `make install`   | `uv sync` (creates `.venv`, installs runtime + dev deps)        |
 | `make build`     | build the distributable                                         |
-| `make setup`     | `uv run --isolated --no-dev setup.py` (launch the wizard, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); `make run` is an alias)   |
+| `make run`       | `uv run --isolated --no-dev setup.py` (launch the wizard, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours))   |
 | `make doctor`    | audit & fix `PATH` (`uv run --isolated --no-dev setup.py --doctor`)                 |
 | `make uninstall` | remove installed artifacts / symlinks                          |
 | `make validate`  | run pre-commit hooks: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |

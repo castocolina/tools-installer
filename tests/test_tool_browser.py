@@ -366,7 +366,7 @@ async def test_refresh_marks_tolerates_a_cleared_table() -> None:
     """Regression: refresh_marks is scheduled via call_after_refresh; under the
     real Textual driver a second _rebuild (the single-tab activation / a resize)
     clears the table before the pending callback fires. It must not raise
-    CellDoesNotExist — this crashed the real Uninstall view on `make setup`."""
+    CellDoesNotExist — this crashed the real Uninstall view on `make run`."""
     app = _Host(_adapter())
     async with app.run_test():
         browser = app.query_one(ToolBrowser[_Item])
@@ -382,7 +382,7 @@ async def test_refresh_marks_tolerates_a_removed_table() -> None:
     call_after_refresh fires, the DataTable child is removed outright (not just
     cleared) while the browser still reports is_mounted. The stale callback must
     no-op, not raise NoMatches into the message loop — that unhandled exception
-    wedged all input on `make setup` (the '1-5 stop responding' bug). The host
+    wedged all input on `make run` (the '1-5 stop responding' bug). The host
     app now installs its view screens so they survive pops, but the guard stays:
     any embedder with uninstalled screens hits exactly this state."""
     app = _Host(_adapter())

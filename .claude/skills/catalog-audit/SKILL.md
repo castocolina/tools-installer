@@ -186,7 +186,7 @@ version probe sets both.
   `opencode debug paths` (lists directories), `brew info --json=v2 <name>` (reads the formula
   index), and HTTP reads of public vendor and distribution APIs and pages.
 - Forbidden on the host, because each changes the machine: `opencode upgrade` and `pi update`
-  replace the installed tool, `pi mcp add` writes pi's agent config, `make setup`, `make doctor`,
+  replace the installed tool, `pi mcp add` writes pi's agent config, `make run`, `make doctor`,
   `make fix` and `make uninstall` rewrite the real shell rc, any vendor installer script, any
   package-manager install, any write to an agent's config, and `systemctl` or `launchctl` that
   changes state.

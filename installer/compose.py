@@ -795,7 +795,7 @@ def _build_app(
     # finding #14) -- make doctor is documented read-only (Makefile:19), and
     # no other entry point may silently register a background timer either. Only
     # _run_interactive_wizard's own call site
-    # (the genuine, normal interactive make setup wizard flow) passes
+    # (the genuine, normal interactive make run wizard flow) passes
     # apply_schedule_defaults=True; the Schedules view itself is visible from
     # every entry point.
     schedule_defaults: Callable[[], schedules.ReconcileReport] | None = None
