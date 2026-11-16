@@ -1,8 +1,9 @@
 """Import-reachability guard for ``installer/`` (phase 25, D-01).
 
-Module-level reachability from the production entry points: ``setup.py``, every
-``installer`` module with a top-level ``if __name__ == "__main__"`` guard, and
-``installer/__main__.py`` when it exists. The walk follows function-level imports
+Module-level reachability from the production entry points: ``setup.py``,
+``installer/__main__.py`` when it exists, and the ``python -m installer.<x>`` modules the
+Makefile, ``install.sh`` and the GitHub workflows invoke. A ``__main__`` guard alone does not
+make a module an entry point. The walk follows function-level imports
 and skips ``if TYPE_CHECKING:`` bodies, so only runtime imports make a module
 reachable. String-keyed dispatch tables are listed in ``_DISPATCH_TABLES``; their
 targets are plain callables imported by the table's own module, so the module
@@ -130,17 +131,9 @@ def _has_main_guard(path: Path) -> bool:
     return any(isinstance(node, ast.If) and _is_main_guard(node.test) for node in _parse(path).body)
 
 
-def _entry_points(root: Path) -> list[Path]:
-    found = {path for path in _installer_modules(root).values() if _has_main_guard(path)}
-    main = root / "installer" / "__main__.py"
-    if main.is_file():
-        found.add(main)
-    return [root / "setup.py", *sorted(found)]
-
-
 def _entry_modules(root: Path) -> set[str]:
-    entry = set(_entry_points(root))
-    return {name for name, path in _installer_modules(root).items() if path in entry}
+    declared = _python_m_modules(root) | {"installer.__main__"}
+    return {name for name in _installer_modules(root) if name in declared}
 
 
 def _with_parents(dotted: str, modules: Mapping[str, Path]) -> set[str]:
@@ -227,9 +220,15 @@ def _unreachable_modules(root: Path) -> list[str]:
 
 
 def _python_m_modules(root: Path) -> set[str]:
+    launchers = [
+        root / "Makefile",
+        root / "install.sh",
+        *(root / ".github/workflows").glob("*.yml"),
+    ]
     found: set[str] = set()
-    for name in ("Makefile", "install.sh"):
-        found.update(_PYTHON_M.findall((root / name).read_text(encoding="utf-8")))
+    for launcher in launchers:
+        if launcher.is_file():
+            found.update(_PYTHON_M.findall(launcher.read_text(encoding="utf-8")))
     return found
 
 
@@ -302,10 +301,27 @@ def test_a_seeded_orphan_module_is_reported(tmp_path: Path) -> None:
     assert _unreachable_modules(tree) == ["installer.orphan"]
 
 
-def test_makefile_and_install_sh_name_only_discovered_entry_points() -> None:
+def test_a_dead_module_with_a_main_guard_is_still_reported(tmp_path: Path) -> None:
+    tree = _scratch_tree(
+        tmp_path,
+        {
+            "setup.py": "import installer.a\n",
+            "installer/__init__.py": "",
+            "installer/a.py": "",
+            "installer/dead.py": 'if __name__ == "__main__":\n    pass\n',
+        },
+    )
+    assert _unreachable_modules(tree) == ["installer.dead"]
+
+
+def test_every_main_guard_module_is_invoked_by_a_launcher() -> None:
+    guarded = {n for n, p in _installer_modules(_ROOT).items() if _has_main_guard(p)}
+    assert guarded == _python_m_modules(_ROOT)
+
+
+def test_launchers_name_only_existing_entry_modules() -> None:
     named = _python_m_modules(_ROOT)
     assert named, "the Makefile names no installer entry module"
-    assert named <= _entry_modules(_ROOT)
     for name in named:
         assert (_ROOT / Path(*name.split("."))).with_suffix(".py").is_file()
     for launcher in ("Makefile", "install.sh"):
