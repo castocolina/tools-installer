@@ -7,10 +7,13 @@ both Linux and macOS. It catches a malformed or gutted workflow before it is
 pushed (where the only other feedback is a failed Actions run after the fact).
 """
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
+
+from tests.test_makefile import recipes
 
 ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -48,3 +51,14 @@ def test_ci_matrix_covers_linux_and_macos() -> None:
     matrix = _load_ci()["jobs"]["validate-and-test"]["strategy"]["matrix"]["os"]
     assert "ubuntu-latest" in matrix
     assert "macos-latest" in matrix
+
+
+def test_ci_installs_with_dev_setup() -> None:
+    assert "make dev-setup" in [step.get("run", "") for step in _steps()]
+
+
+def test_ci_names_only_existing_make_targets() -> None:
+    targets = recipes()
+    for step in _steps():
+        for name in re.findall(r"\bmake ([a-zA-Z0-9_-]+)", step.get("run", "")):
+            assert name in targets, f"ci.yml runs `make {name}`, which the Makefile does not define"
