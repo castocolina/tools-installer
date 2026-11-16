@@ -4,7 +4,7 @@ verified: 2026-11-03T21:30:00Z
 status: passed
 score: 5/5 must-haves verified
 covered_files: [".claude/architecture.md",".planning/phases/21-one-screen-family/21-01-PLAN.md",".planning/phases/21-one-screen-family/21-01-SUMMARY.md",".planning/phases/21-one-screen-family/21-02-PLAN.md",".planning/phases/21-one-screen-family/21-02-SUMMARY.md",".planning/phases/21-one-screen-family/21-03-PLAN.md",".planning/phases/21-one-screen-family/21-03-SUMMARY.md",".planning/phases/21-one-screen-family/21-04-PLAN.md",".planning/phases/21-one-screen-family/21-04-SUMMARY.md",".planning/phases/21-one-screen-family/21-05-PLAN.md",".planning/phases/21-one-screen-family/21-05-SUMMARY.md",".planning/phases/21-one-screen-family/21-06-PLAN.md",".planning/phases/21-one-screen-family/21-06-SUMMARY.md",".planning/phases/21-one-screen-family/21-07-PLAN.md",".planning/phases/21-one-screen-family/21-07-SUMMARY.md",".planning/phases/21-one-screen-family/21-08-PLAN.md",".planning/phases/21-one-screen-family/21-08-SUMMARY.md",".planning/phases/21-one-screen-family/21-09-PLAN.md",".planning/phases/21-one-screen-family/21-09-SUMMARY.md",".planning/phases/21-one-screen-family/21-10-PLAN.md",".planning/phases/21-one-screen-family/21-10-SUMMARY.md",".planning/phases/21-one-screen-family/21-11-PLAN.md",".planning/phases/21-one-screen-family/21-11-SUMMARY.md",".planning/phases/21-one-screen-family/21-12-PLAN.md",".planning/phases/21-one-screen-family/21-12-SUMMARY.md",".planning/phases/21-one-screen-family/21-13-PLAN.md",".planning/phases/21-one-screen-family/21-13-SUMMARY.md",".planning/phases/21-one-screen-family/21-14-PLAN.md",".planning/phases/21-one-screen-family/21-14-SUMMARY.md",".planning/phases/21-one-screen-family/21-15-PLAN.md",".planning/phases/21-one-screen-family/21-15-SUMMARY.md",".planning/phases/21-one-screen-family/21-16-PLAN.md",".planning/phases/21-one-screen-family/21-16-SUMMARY.md",".planning/phases/21-one-screen-family/21-17-PLAN.md",".planning/phases/21-one-screen-family/21-17-SUMMARY.md",".planning/phases/21-one-screen-family/21-18-PLAN.md",".planning/phases/21-one-screen-family/21-18-SUMMARY.md",".planning/phases/21-one-screen-family/21-19-PLAN.md",".planning/phases/21-one-screen-family/21-19-SUMMARY.md",".planning/phases/21-one-screen-family/21-20-PLAN.md",".planning/phases/21-one-screen-family/21-20-SUMMARY.md",".planning/phases/21-one-screen-family/21-21-PLAN.md",".planning/phases/21-one-screen-family/21-21-SUMMARY.md","installer/guidance.py","installer/uninstall.py","installer/wizard_app.py","tests/test_layout_80x20.py","tests/test_screen_family.py"]
-covered_digest: "v4:sha256:064a6e983660ec2617e3394ebc75d580a267f6d0fc67c19ce09f9e0b42674666"
+covered_digest: "v4:sha256:474fea40a008cbc44b399a7c2cecbc1f3c0793f793b5b14b5ea47beda2b7da5b"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -220,3 +220,13 @@ classified by ladder call 02:45:06; human-item findings (real-host, UAT 1-3) mad
 call 02:45:19. Receipts: scratchpad `fresh21-a.out`, `fresh21-b.out`.
 
 Result: 11 resolved, 1 open-trivial, 1 owner-only, 0 open-real. Status stays `passed`; the owner confirmation list is unchanged.
+
+## Re-verification 2026-11-16 (after Phase 26)
+
+Changed covered files: `installer/guidance.py`, `tests/test_screen_family.py` (verification.status reported both as moved).
+
+- `installer/guidance.py` (457d728f): text only. Doctor and disk-pressure hints now say `make run` instead of `make setup` (lines ~142, ~224, ~425). No route or state logic changed; must-haves UI-01..08 do not cite those strings.
+- `tests/test_screen_family.py` (1c320802): the reinstall and Doctor-fix tests read the pass baseline through `_published_passes` (the app's `await_publication` signal) and wait for the result text. This makes the tests deterministic; assertions are unchanged.
+- Re-check: `uv run pytest tests/test_screen_family.py tests/test_layout_80x20.py -n 0 --no-cov -q` at HEAD b1ce5f61: all passed. Grep of this report for `make setup` / `make install`: no stale citations.
+
+Verdict: all 5 must-haves still hold; `status: passed` unchanged.

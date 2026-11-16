@@ -4,7 +4,7 @@ verified: 2026-11-07T12:00:00Z
 status: passed
 score: 6/6 must-haves verified
 covered_files: [".planning/phases/23-configuration-as-a-lifecycle-step/23-01-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-01-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-02-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-02-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-03-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-03-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-04-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-04-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-05-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-05-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-06-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-06-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-07-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-07-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-08-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-08-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-09-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-09-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-10-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-10-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-11-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-11-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-12-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-12-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-13-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-13-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-14-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-14-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-15-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-15-SUMMARY.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-16-PLAN.md",".planning/phases/23-configuration-as-a-lifecycle-step/23-16-SUMMARY.md","installer/agent_env.py","installer/agent_settings.py","installer/app.py","installer/atomic.py","installer/engine.py","installer/env_redirect.py","installer/execute_screen.py","installer/locations.py","installer/model.py","installer/omz.py","installer/policy.py","installer/post_install.py","installer/postinstall.py","installer/prompt.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/run.py","installer/session.py","installer/shellrc.py","installer/terminal_shell.py","installer/tweaks.py","installer/uninstall.py","installer/update.py","installer/version_status.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","setup.py"]
-covered_digest: "v4:sha256:dd29b879c937692aedf011045db2733693981200290e3ed7d6b8f49fa62cbeff"
+covered_digest: "v4:sha256:c386788d454df97d6193c8df44797ef45b769bd57ad6afb125308755f22db34a"
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
@@ -304,3 +304,13 @@ Time order (UTC, 2026-11-16): group 1 (CONF) findings 02:44:02 to 02:44:29, jev 
 findings 02:44:47, jev call 02:45:01. Inputs and outputs: scratchpad `fresh23-g1.json/.out`, `fresh23-g2.json/.out`.
 
 Result: 8 resolved, 5 owner-only (H2, H3, H6, H7, H8), 0 open-trivial, 0 open-real. Status stays `passed`.
+
+## Re-verification 2026-11-16 (after Phase 26)
+
+- Changed covered file: `setup.py` only (`verification.status` moved_files). Diff `a2e68cf3..HEAD`: one line, the module
+  docstring hint `make setup` -> `make run` (commit d444804b). No code changed.
+- Affected claims: none. Must-haves 1-6 and CONF-01..12 cite no `make setup` text, and no test name or hint string of
+  this phase changed. The `setup.py:930/1336/1464` citation for the launch `strip_legacy_aliases` call predates Phase 25;
+  the call now lives at `installer/compose.py:510` (Phase 25 move, behaviour unchanged).
+- Re-check: `uv run pytest tests/test_shellrc.py tests/test_layout_80x20.py -n 0 --no-cov -q` passed.
+- Verdict: unchanged, `status: passed`. The orchestrator runs the full gates on HEAD.

@@ -4,7 +4,7 @@ verified: 2026-11-15T00:00:00Z
 status: passed
 score: 5/5 must-haves verified (1 via override)
 covered_files: [".planning/phases/22-method-lifecycle-contract/22-01-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-01-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-02-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-02-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-03-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-03-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-04-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-04-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-05-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-05-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-06-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-06-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-07-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-07-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-08-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-08-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-09-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-09-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-10-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-10-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-11-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-11-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-12-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-12-SUMMARY.md",".planning/phases/22-method-lifecycle-contract/22-13-PLAN.md",".planning/phases/22-method-lifecycle-contract/22-13-SUMMARY.md","installer/app.py","installer/apps.py","installer/atomic.py","installer/catalog_tui.py","installer/deps.py","installer/doctor.py","installer/download.py","installer/engine.py","installer/enums.py","installer/execute_screen.py","installer/executors.py","installer/guidance.py","installer/install_ownership.py","installer/locations.py","installer/manager_versions.py","installer/model.py","installer/ownership.py","installer/pnpm_globals.py","installer/policy.py","installer/post_install.py","installer/postinstall.py","installer/prompt.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/resolve.py","installer/run.py","installer/selection.py","installer/session.py","installer/settings.py","installer/status.py","installer/terminal_shell.py","installer/tool_browser.py","installer/tweaks.py","installer/ui_common.py","installer/uninstall.py","installer/update.py","installer/verify_registry.py","installer/version_cache.py","installer/version_status.py","installer/versions.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","scripts/detect-container-runtime.sh","scripts/e2e-residue-allowlist.txt","scripts/lib/prune-tmp-common.sh","scripts/prune-tmp-linux.sh","setup.py"]
-covered_digest: "v4:sha256:c22d8028833548e5add8976f069f35ae2b5da9d33d066e1c1541ee450fc2bdc9"
+covered_digest: "v4:sha256:4a4841b476eee63a8909b242d77cdec02ecaf66f7dc8f8a75821c97d2912cd24"
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
@@ -260,3 +260,18 @@ captures in `uat/80x20-after2/` and `uat/25/` show `What gets …`. Second, the 
 outdated: opencode now removes through `remove = ["opencode2","service","stop"]`, a service stop. The override's
 substance, that `opencode uninstall` is never run, still holds.
 
+
+## Re-verification 2026-11-16 (after Phase 26)
+
+Changed covered files since the last verifier head (d8c469f7): `installer/guidance.py`, `setup.py`.
+
+- `installer/guidance.py`: Phase 26 commits 457d728f and d444804b replaced `make setup` with `make run` in four
+  strings and one comment (reinstall hint, pnpm-globals hint, tmp-cleanup hint). No route or logic change.
+  Re-checked: `uv run pytest tests -n 0 --no-cov -q -k "guidance or applies_the_child_env or pnpm_globals"` passes.
+- `setup.py`: the docstring now says `make run`; the composition code moved to `installer/compose.py` in Phase 25
+  (behavior preserved per 25-VERIFICATION). The cited wiring still holds: `apply_child_env(os.environ)` is called at
+  `setup.py:656` and imported at `setup.py:75`; `uv run pytest tests/test_run.py -n 0 --no-cov -q` passes (includes
+  `test_setup_applies_the_child_env_before_main_runs`).
+- No test, doc or Makefile citation in this VERIFICATION named `make setup` or `make install`; no stale citation to fix.
+
+Verdict: all 5 must-haves (1 via override) still hold; status stays `passed`.

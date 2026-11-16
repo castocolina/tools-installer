@@ -31,7 +31,7 @@ covered_files:
   - installer/wizard_app.py
   - setup.py
   - tests/test_reachability.py
-covered_digest: "v4:sha256:4c7e5bc21081a342ee963498bef049cbb1540ebc2d5f8a13c9de9bd51f061865"
+covered_digest: "v4:sha256:4f0027b9e1db44cabe73b40ba1e080706dad15891dbfdf167491e0a26130d2a4"
 behavior_unverified: 0
 ---
 
@@ -106,3 +106,16 @@ agrees with the evidence (TypeSafe 0.82).
 Rendered run-log evidence for LEAN-04: see 25-UAT.md "Run-log capture 2026-11-16" (notice, newest line and footer captured at 80x20,
 120x40 and the default size; resize keeps the notice). The "Execute screen with a long run" row above, "accepted on test evidence",
 now also has a real-screen capture.
+
+## Re-verification 2026-11-16 (after Phase 26)
+
+Changed covered files since the last verified head (8b0d1bf1): `installer/compose.py` and `setup.py`, both only in commit d444804b
+(docs(26-02)). The diff is one comment line in compose.py (`make setup` to `make run`, line ~798) and one docstring line in setup.py
+(line 3). No code changed; `installer/execute_screen.py`, `installer/wizard_app.py` and `tests/test_reachability.py` are unchanged.
+
+Affected claims: none of LEAN-01..04 depends on those lines. Spot checks at HEAD: `uv run pytest tests/test_reachability.py -n 0
+--no-cov -q` passes (LEAN-01); compose.py is 934 lines, setup.py 663, wizard_app.py 793 (LEAN-02, LEAN-03 unchanged);
+`RUN_LOG_MAX_LINES = 5000` at installer/execute_screen.py:94 (LEAN-04). Stale citation note: the "make setup" wording above is
+historical; the wizard target is now `make run`.
+
+Verdict: passed, 4/4 must-haves still hold. Fingerprint regenerated with `query verification.fingerprint`.

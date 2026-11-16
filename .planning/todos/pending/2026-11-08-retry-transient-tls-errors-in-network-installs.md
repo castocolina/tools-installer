@@ -21,3 +21,10 @@ transient connection exit codes (e.g. 6, 7, 28, 35, 52, 56), never for HTTP erro
 mismatches. Prefer `curl --retry N --retry-connrefused --retry-all-errors` where the command is built by the
 installer; for vendor `curl | bash` scripts, fetch the script with retry to a temp file first, then run it.
 Backstop: a test with a fake curl that fails once with 35 and then succeeds.
+
+## Status (2026-11-16)
+
+Triage at b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`), verdict partial.
+
+- Done: vendor script fetches go to a temp file with `curl -fsSL --retry 3 --retry-all-errors` (`installer/executors.py:488`, 31243588). The fake-curl tests are at `tests/test_engine.py:2542-2560`.
+- Left: retry for github_release/tarball downloads (`installer/download.py:473`, `:478`) and app downloads (`installer/apps.py:132`), which still run plain `curl -fsSL`. Example: the jetbrains-toolbox download. The curl >= 7.71 probe is tracked in the Phase 24 review deferrals todo.

@@ -824,7 +824,7 @@ Plans:
 
 ### Phase 999.1: Install selection lifecycle: show every direct selection in the Install review with an explicit disposition (will install / already installed / unavailable / blocked), keep each dragged dependency tied to the dependent that pulled it in, and after an install keep only the selections that still need action (clear succeeded/already-satisfied, retain failed/skipped/cancelled/unavailable/blocked) (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phases 20 and 21 — 20-VERIFICATION PLAN-01..05 (dispositions, `r` reinstall, retained selection, `esc` keeps it) and 21-VERIFICATION UI-08 (prune on reload) are satisfied; tests/test_session.py::test_remove_failed_is_retained_and_removed_is_not passes.
+**Status (2026-11-16):** completed by Phases 20 and 21 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). 20-VERIFICATION PLAN-01..05 and 21-VERIFICATION UI-08; tests/test_session.py::test_remove_failed_is_retained_and_removed_is_not passes at HEAD.
 
 **Goal:** [Captured for future planning]
 **Source:** abandoned branch `feat/catalog-reliability-scope-reduction` (tip d8a3123, Jul 2026); plan text preserved in `999.1-*/source/`. HEAD already has the SDKMAN-only JVM methods, the cached version status and Phase 14's explicit "outdated tool is not silently skipped" behavior; the dispositions model (`PlanDisposition` in the branch's `install_plan.py`) and retained-selection semantics have no equivalent in HEAD (`rg PlanDisposition` = 0 hits).
@@ -842,7 +842,7 @@ Plans:
 
 ### Phase 999.2: Installer receipts as direct-artifact ownership proof: record what this installer wrote (artifact path + checksum/receipt) so ownership of a script/download-installed tool is proven by a receipt instead of inferred "by elimination" (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phases 19 and 22 — `installer/receipts.py`; 19-VERIFICATION STATE-03 and 22-VERIFICATION LIFE-01/LIFE-03 are satisfied; tests/test_receipts.py passes.
+**Status (2026-11-16):** completed by Phases 19 and 22 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). `installer/receipts.py`; 19-VERIFICATION STATE-03, 22-VERIFICATION LIFE-01/03; tests/test_receipts.py passes at HEAD.
 
 **Goal:** [Captured for future planning]
 **Source:** abandoned branch `feat/catalog-reliability-scope-reduction` (`installer/receipts.py` / `ReceiptStore`); plan text preserved in `999.2-*/source/`. Phase 16 resolves ownership from the filesystem and never considered receipts (no mention in 16-CONTEXT/RESEARCH); `rg ReceiptStore` = 0 hits in HEAD.
@@ -858,7 +858,7 @@ Plans:
 
 ### Phase 999.3: Registry can express a different artifact per OS and per arch: a `.dmg`/cask on macOS vs a vendor script or tarball on Linux, distinct per-arch assets, without bending an unrelated method kind (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phase 18 (narrowed, no new method kind) — the 2026-10-13 audit narrowed it to data fixes (18-VERIFICATION REG-09), `app` and `tarball` already take os/arch and `{ver}`, and Alacritty's Distrobox route shipped in Phase 24 (`installer/cargo_distrobox.py`); brew on Intel macOS is tracked in 999.15.
+**Status (2026-11-16):** completed by Phase 18, narrowed with no new method kind (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). 18-VERIFICATION REG-09; `app`/`tarball` take os/arch and `{ver}`; `installer/cargo_distrobox.py` shipped in Phase 24. The brew Intel macOS method is tracked in 999.15.
 
 **Goal:** [Captured for future planning]
 **Source:** 2026-10-10 real-host audit (kitty: cask on macOS, `installer.sh` on Linux; tools shipping distinct per-OS/arch artifacts not behind a script). `Method` carries `os`/`arch` params, but a per-platform artifact that is neither a `github_release` asset pattern nor a script has no method kind.
@@ -873,7 +873,7 @@ Plans:
 
 ### Phase 999.4: Terminal shell sync follow-ups: export `SHELL` to the configured zsh inside kitty/WezTerm, and re-run the terminal sync when an install run reports the terminal as "already" present (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phases 20 and 23 — 23-VERIFICATION CONF-05 (managed `~/.zshenv` exports `SHELL`) and RECONFIGURE steps run the terminal sync for already-present terminals (`installer/session.py` terminal_sync step); tests/test_terminal_shell.py zshenv tests pass.
+**Status (2026-11-16):** completed by Phases 20 and 23 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). 23-VERIFICATION CONF-05; `installer/session.py:374` runs the `terminal_sync`/`zshenv_shell` steps; the zshenv tests pass. A real-terminal look stays a human item in 23-VERIFICATION.
 
 **Goal:** [Captured for future planning]
 **Source:** 2026-10-10 real-host audit. Inside kitty the prompt is zsh but `echo $SHELL` prints `/bin/bash`: there is no `chsh` (by design, Phase 15.6), and `installer/terminal_shell.py` sets kitty `shell`/WezTerm `default_prog` without `env SHELL=` / `set_environment_variables`. The sync runs only when `Summary.installed` is non-empty (`_install_state_changed`), so selecting an already-present wezterm never re-applies it.
@@ -888,7 +888,7 @@ Plans:
 
 ### Phase 999.5: Finish the tool-onboarding skill revision with skill-judge: score `.claude/skills/tool-onboarding/SKILL.md` and apply its findings so the skill is well defined (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phase 24 — 24-VERIFICATION ONB-03 satisfied; `24-SKILL-JUDGE.md` records 84 to 86 of 125.
+**Status (2026-11-16):** completed by Phase 24 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). 24-VERIFICATION ONB-03, `24-SKILL-JUDGE.md`, 0fcea8d3 (judge before and after). The rule to re-run skill-judge on every skill edit stays.
 
 **Goal:** [Captured for future planning]
 **Source:** user request 2026-10-10 after the skill was generalized in 41d642c (research-first, per-OS/arch artifacts, customization questions, "the skill cannot promise what the platform does not do"). The rewrite was never evaluated.
@@ -903,7 +903,7 @@ Plans:
 
 ### Phase 999.6: One row-state model instead of three disagreeing classifiers, plus the earlier-phase promises the 2026-10-10 audit found unmet (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phases 19 and 21 — `ToolState` in `installer/version_status.py`; 19-VERIFICATION STATE-01..07 and 21-VERIFICATION UI-01..03 are satisfied.
+**Status (2026-11-16):** completed by Phases 19 and 21 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). `ToolState` at `installer/version_status.py:1019`; 19-VERIFICATION STATE-01..07, 21-VERIFICATION UI-01..03.
 
 **Goal:** [Captured for future planning]
 **Source:** 2026-10-10 real-host report ("siguen los mismos vicios, es como que no se reusan los componentes") and the ponytail audit of it.
@@ -928,6 +928,8 @@ Plans:
 
 ### Phase 999.7: Phase 16 verification debt left open at close (BACKLOG)
 
+**Status (2026-11-16):** partial (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). Done: CI green (17-VERIFICATION CI-01/03); CI-02 branch protection, via 26-VERIFICATION HOOK-05 and a live read-back (enforce_admins true, strict, both contexts); the owner-on-every-tier and ✓-cleared re-check (24-UAT tests 2-4). Left: 16-UAT tests 2-4 (live Execute enter on an already-current tool, a day-to-day dangling-shim session, the owner's review of the 11 prohibitions), a formal review of 9050446, and a local macOS run. Owner decision: run them, or close them on later-phase coverage.
+
 **Goal:** [Captured for future planning]
 **Source:** Phase 16 closed on 2026-10-10 by user decision with these unproven:
 - 16-UAT tests 2-4 recorded as deferred follow-ups, not passes: Execute-screen enter on the real host with an already-current tool; a day-to-day catalog/Doctor session with the dangling pnpm shim (puppeteer); review of the 11 judgment-tier prohibitions.
@@ -946,7 +948,7 @@ Plans:
 
 ### Phase 999.8: Per-method uninstall spec: each install method declares how it is removed on its OS/arch (manager remove, vendor uninstaller/script, or the exact paths it wrote), what config/data it leaves, and the removal policy (keep config by default, delete all, or ask), replacing today's generic Uninstall (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phase 22 — `plan_removal` and `remove_proven` in `installer/uninstall.py`; 22-VERIFICATION LIFE-01/03/04 and UI-04, 17-VERIFICATION SAFE-03; tests/test_app.py::test_a_recipe_tool_is_removed_by_its_vendor_command_first passes. Per-entry removal footprints stay in 999.14.
+**Status (2026-11-16):** completed by Phase 22 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). `plan_removal`/`remove_proven` in `installer/uninstall.py:255,589`; 22-VERIFICATION LIFE-01/03/04, UI-04; test_a_recipe_tool_is_removed_by_its_vendor_command_first passes. Per-entry footprints are tracked in 999.14.
 
 **Goal:** [Captured for future planning]
 **Source:** user direction 2026-10-11: onboarding must know how each tool is removed per OS/arch (e.g. kitty: cask on macOS, `installer.sh` on Linux with `~/.local/kitty.app` + `~/.local/bin` links + desktop files), with a verifying removal script or a keep-config / delete-all choice, or a silent documented default — never a generic uninstall. Today `Tool.uninstall` is one free-text hint (3 of 90 tools set it) and `installer/uninstall.py` `plan_uninstall` treats download/app kinds generically.
@@ -970,7 +972,7 @@ Plans:
 
 ### Phase 999.9: Correctness and data-safety fixes from the 2026-10-11 ponytail audit not covered by another item (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phases 17 and 21 — 17-VERIFICATION SAFE-04 (atomic rc writes) and SAFE-09 (every route executes); 21-VERIFICATION UI-05/06/07 (removal worker, live Policies, Doctor `a` removed).
+**Status (2026-11-16):** completed by Phases 17 and 21 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). Shell rc and tweak writes go through `atomic_write_text` (`installer/shellrc.py:304,317`); 17-VERIFICATION SAFE-04/09; 21-VERIFICATION UI-05/06/07.
 
 **Goal:** [Captured for future planning]
 **Source:** `.planning/research/2026-10-11-ponytail-audit.md` (ponytail-audit at ultra level, Opus). Findings marked probe-confirmed were reproduced headless by the auditor; the rest come from reading code and must be re-verified when planned.
@@ -993,6 +995,8 @@ Plans:
 
 ### Phase 999.10: Screen component architecture and lean-up: one RowsScreen family for Catalog/Uninstall/Policies, dead code out, wiring under the type checker (BACKLOG)
 
+**Status (2026-11-16):** completed by Phases 21 and 25 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). 25-VERIFICATION passed 4/4: LEAN-01 dead policy/audit/host_setup code out; LEAN-02 `installer/compose.py` under pyright and coverage; LEAN-03 `wizard_app.py` split to 793 lines with no review ids. F15: 25-RESEARCH §1.3 kept the remaining Message classes by decision (the epochs stay, AR-04).
+
 **Goal:** [Captured for future planning]
 **Source:** `.planning/research/2026-10-11-ponytail-audit.md` section "Screen component architecture" + F10–F15; user direction 2026-10-11: the System/User/AI install screens must be one component, Uninstall the same family (removable-here first, then managed elsewhere, then nothing to do), Policies/Doctor built from the same blocks.
 **Target (auditor's proposal, ~60 new lines in `ui_common.py`):** `AppScreen` → `RowsScreen[T]` with hooks `rows()` (read from 999.6's shared `ToolState` via `run_live`), `adapter(rows)`, `on_accept(ids)`; shared `enter_view()` after push, one app-level state-refreshed signal, selection pruned when a row stops being selectable, status cleared on leave. `CatalogScreen` (all tiers, Enter → Execute always wired), `UninstallScreen` (rows ordered: proven-ours removable → managed elsewhere with owner + removal text → not installed/unavailable; removal on a worker), `PoliciesScreen` (live `is_active`/prerequisites; ToolBrowser with activate-on-space). Doctor stays a text report but uses the same entry/refresh path. Modals: one `ChoiceModal` + one `ConfirmModal` (F14). Execute reads `ToolState` instead of re-classifying.
@@ -1010,7 +1014,7 @@ Plans:
 
 ### Phase 999.11: Onboard herdr and re-onboard Alacritty through the tool-onboarding skill (install AND removal per OS/arch, no-reboot path on Bazzite, user customizations) (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phases 23 and 24 — 24-VERIFICATION ONB-01 (herdr plus integrations hook), ONB-02/06/07 (Alacritty via cargo in Distrobox, zsh sync, keybindings) satisfied, with real-host UAT tests 6-8 passing.
+**Status (2026-11-16):** completed by Phases 23 and 24 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). registry.toml alacritty and herdr entries; 24-VERIFICATION ONB-01/02/06/07; 24-UAT tests 6-8 pass.
 
 **Goal:** [Captured for future planning]
 **Source:** user request 2026-10-13. Neither tool had a phase: herdr is absent from the registry; Alacritty entered outside any phase (commit 102c83e, 2026-10-09) before the skill gained steps 4b (removal) and 7 (customizations).
@@ -1051,7 +1055,7 @@ Plans:
 
 ### Phase 999.12: Register codegraph and graphify hooks for the copilot host (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phase 24.3 (24.3-08) — `_CODEGRAPH_TARGETS` in `installer/postinstall.py` maps copilot to `copilot-cli`; graphify stays unregistered by decision.
+**Status (2026-11-16):** completed by Phase 24.3 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). `_CODEGRAPH_TARGETS` maps copilot to `copilot-cli` (`installer/postinstall.py:219-226`); test_copilot_codegraph_round_trip passes; graphify stays unregistered by decision. codegraph itself is being retired (todo 2026-11-14).
 
 **Goal:** When copilot (added in 23.2) is present, the codegraph and graphify postinstall hooks register for it like the other agent hosts, are recorded in `receipt.hooks`, and unregister on removal.
 **Requirements:** TBD
@@ -1063,7 +1067,7 @@ Plans:
 
 ### Phase 999.13: Move Pi off the host-setup handoff to a directly installed, updatable method (BACKLOG)
 
-**Status (2026-11-15):** resolved by Phase 24.5 (commit 80331678, 24.5-06) — Pi installs through a `bun` method with a pnpm `node` fallback; 24.5-VERIFICATION PRIO-03/PRIO-04 satisfied. The dead `HOST_SETUPS["pi"]` row goes with Phase 25 LEAN-01.
+**Status (2026-11-16):** completed by Phases 24.5 and 25 (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). Bun method with a pnpm fallback (80331678); host_setup kind retired (04ad08b8); the Pi registry tests pass. Nit: the pi comment at registry.toml:3285 still says the vendor-script change "waits in Backlog 999.13".
 
 **Goal:** The catalog installs, updates and removes Pi itself instead of printing a pnpm handoff: a method the installer runs with no privilege escalation (the `node` kind through pnpm with Pi's Node floor, or Pi's own installer only if it can run without `sudo`), with `pi update` or the manager's update as the update route, a receipt, and the scheduled update from Phase 24.2 following it.
 **Requirements:** TBD
@@ -1075,6 +1079,8 @@ Plans:
 
 ### Phase 999.14: Declare the removal footprint of catalog entries that lack it: config_paths and script paths per the first catalog audit (BACKLOG)
 
+**Status (2026-11-16):** pending (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). Only 4 of the 30 flagged ids (gh, glow, tealdeer, kitty) carry `config_paths`, all pre-dating the audit; no footprint was declared since 2026-11-13.
+
 **Goal:** Every catalog entry the 2026-11-13 audit marked "removal recipe and paths" gets its user config, state or data directories declared (`config_paths` with the keep default, `paths` on script methods), so Uninstall lists them and a delete choice reaches them; includes the schema gaps the audit found (an absolute system path such as `/Applications/kitty.app`, a legacy `~/.wezterm.lua` one level under `~`, a per-OS `config_paths` for glow, a bun owner for a global Pi, codegraph's `~/.codegraph` after a vendor self-upgrade).
 **Requirements:** TBD
 **Evidence (live, 2026-11-13, first catalog audit):** `.planning/audits/catalog/2026-11-13/SUMMARY.md` Drift rows with check `removal recipe and paths` (bat, eza, zoxide, lazygit, gh, starship, oh-my-zsh, direnv, glow, xh, gitui, lazydocker, docker, colima, dive, miller, tealdeer, fx, dasel, sdkman, bun, vale, broot, vscode, kitty, wezterm, glab, graphify, pi, codegraph), each with its upstream citation and risk in `dispositions.toml`.
@@ -1083,6 +1089,8 @@ Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
 ### Phase 999.15: Catalog install-method and update-route currency from the first catalog audit (BACKLOG)
+
+**Status (2026-11-16):** pending (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). At HEAD: gron still lists github_release before brew; vale is still `errata-ai/vale`; codex has no `update`; mmdc `min_node` is still 22.12.0; the brew macOS amd64 method is still present.
 
 **Goal:** Entries whose install method, update argv or runtime expectation drifted from the vendor's current guidance are brought current or the reason is recorded in `# Verified`: distro packages where current (eza, gum, glow, xh, difftastic, gitui, duf), a checksummed method first (gron), the vendor's apt repo or macOS pkg (docker, podman), glab's supported Linux route, the macOS Homebrew amd64 script method (brew), the `codex update` route, the vale slug, mmdc's Node floor, puppeteer's linux arm64 gate, Volta versus mise, and the daemon or machine expectation of lazydocker, docker and podman.
 **Requirements:** TBD
@@ -1093,6 +1101,8 @@ Plans:
 
 ### Phase 999.16: Version probe for zip reads the copyright years instead of the version (BACKLOG)
 
+**Status (2026-11-16):** pending (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). A scratch probe at HEAD still returns `1990-2008` for zip's version output.
+
 **Goal:** `extract_observed_version` stops reading `1990-2008` from `zip --version`'s first line and reads `Zip 3.0` from the second.
 **Requirements:** TBD
 **Evidence (live, 2026-11-13, first catalog audit):** script finding at `installer/versions.py:211` in `.planning/audits/catalog/2026-11-13/findings.toml`.
@@ -1101,6 +1111,8 @@ Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
 ### Phase 999.17: Duplicate-code gate: pick a duplicate-code detector and add it as a quality gate with its own `make` target and pre-commit hook (BACKLOG)
+
+**Status (2026-11-16):** pending (triage b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`)). No duplicate-code target or hook exists in the Makefile or `.pre-commit-config.yaml`.
 
 **Goal:** A commit fails when a new block duplicates existing code beyond an agreed threshold, reported by a `make duplicated-check` target that also runs as its own hook entry and through `make validate`.
 **Requirements:** TBD

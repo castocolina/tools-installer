@@ -45,3 +45,10 @@ archive/context-tools-plan1:tools/context_tools.py`,
 `registry.toml` entry, re-verify every command against the currently installed tool versions,
 and add only what is missing. Do not copy the ai-kit wizard code; it was written against
 ai-kit's `setup.py`/`wizard_app.py` seams.
+
+## Status (2026-11-16)
+
+Triage at b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`), verdict partial.
+
+- Done: codegraph wiring. `_CODEGRAPH_TARGETS` at `installer/postinstall.py:219-226` and its register/unregister hooks cover the non-interactive target list.
+- Left: gitnexus is still absent (`rg gitnexus installer scripts tests` = 0 hits), and the owner decides whether it is still wanted. The codegraph half is superseded by the codebase-memory-mcp replacement todo (2026-11-14). The 4-state toggle idea is superseded by Phases 20-21 and should be dropped.

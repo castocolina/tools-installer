@@ -33,3 +33,13 @@ a brew method already exists) or otherwise surface the docker-CLI prerequisite;
 one-line desc updates on both entries stating the intended split (Apple
 container = plain runtime on Apple Silicon; colima = compose path). Verify on
 real hardware before changing default install flows.
+
+## Status (2026-11-16)
+
+Triage at b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`), verdict partial.
+
+- Done: the colima entry surfaces the docker CLI prerequisite with `recommends = ["docker"]` (`installer/registry.toml:1124`, fe8af6c9).
+- Left:
+  - The one-line desc updates on colima (`:1123`) and container (`:1160`) stating the runtime split.
+  - Owner decision: is `recommends` enough, or is `requires` wanted?
+  - A real Apple Silicon check (macOS is deferred).

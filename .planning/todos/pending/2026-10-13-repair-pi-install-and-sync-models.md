@@ -36,3 +36,10 @@ Volta install, and pi cannot see the providers and MCP servers the other hosts a
    post-setup handoff: opencode Zen/Go models via an `apiKey` reference, opencode MCP servers
    converted to pi's `mcp.json`. router-env stays with llm-env.
 4. Add pi to `_AGENT_HOST_IDS`.
+
+## Status (2026-11-16)
+
+Triage at b1ce5f61 (`.planning/todos/TRIAGE-2026-11-16.md`), verdict partial.
+
+- Done: steps 1 and 2 were one-off host fixes on 2026-10-14 and need no code. Step 4 is done: pi is in the agent host maps at `installer/postinstall.py:45`, `:73`, `:225` and `:346`. `_AGENT_HOST_IDS` no longer exists.
+- Left: step 3. The pi model/MCP sync (opencode Zen/Go models, MCP servers into `~/.pi/agent/mcp.json`) is not in the repo (`rg 'pi_sync|pi-sync'` = 0 hits). The owner decides whether it belongs in the installer at all.

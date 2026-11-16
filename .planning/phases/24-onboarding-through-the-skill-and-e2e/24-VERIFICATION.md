@@ -4,7 +4,7 @@ verified: 2026-11-14T12:00:00Z
 status: passed
 score: 7/7 must-haves verified
 covered_files: [".claude/architecture.md",".claude/skills/tool-onboarding/SKILL.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-01-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-02-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-03-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-04-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-05-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-06-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-07-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-08-SUMMARY.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-PLAN.md",".planning/phases/24-onboarding-through-the-skill-and-e2e/24-09-SUMMARY.md",".pre-commit-config.yaml","Makefile","docs/catalog-unsupported-tools.md","installer/agent_env.py","installer/agent_settings.py","installer/app.py","installer/cargo_distrobox.py","installer/desktop_entry.py","installer/download.py","installer/engine.py","installer/executors.py","installer/model.py","installer/ownership.py","installer/platform.py","installer/post_install.py","installer/postinstall.py","installer/receipts.py","installer/registry.toml","installer/render.py","installer/resolve.py","installer/run.py","installer/session.py","installer/terminal_shell.py","installer/uninstall.py","installer/update.py","installer/version_status.py","installer/versions.py","installer/wizard_app.py","scripts/container-e2e-verify.sh","setup.py"]
-covered_digest: "v4:sha256:1b64a86ae45ebc00edc4eb743abdfb228040a3471008b3b5e5683fe69eac8e6b"
+covered_digest: "v4:sha256:fb9568bf4fc39fdd6b061f8368a10e04a000ff4ba39cd6c51cdaf4a169e6d0ed"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -155,3 +155,14 @@ There are no gaps. Every roadmap criterion is backed by code, wiring and a green
 
 _Verified: 2026-11-14_
 _Verifier: Claude (gsd-verifier)_
+
+## Re-verification 2026-11-16 (after Phase 26)
+
+**Changed covered files:** `.pre-commit-config.yaml`, `Makefile`, `setup.py` (fingerprint stale).
+
+- `setup.py`: docstring only (`make setup` -> `make run`); no code change.
+- `Makefile` / `.pre-commit-config.yaml`: per-gate targets, `validate` = `pre-commit run --all-files`, `make install` -> `make dev-setup`. The spot-check rows above (`make validate`, `make test`) still name existing targets. This phase cites no `make setup` or `make install` (grep: none in this file or the tool-onboarding SKILL.md).
+- `installer/*` and `scripts/container-e2e-verify.sh`: unchanged since a2e68cf3 apart from text hints in `installer/guidance.py` and `installer/compose.py` (no route logic).
+- Re-checks at HEAD: `uv run pytest tests/test_cargo_distrobox.py tests/test_update.py tests/test_terminal_shell.py tests/test_ownership.py -n 0 --no-cov -q` all passed (covers the prohibition tests and truths 2-4, 7); `shellcheck scripts/container-e2e-verify.sh` clean.
+
+**Verdict:** all 7 truths and ONB-01..07 unaffected; status stays `passed`.
