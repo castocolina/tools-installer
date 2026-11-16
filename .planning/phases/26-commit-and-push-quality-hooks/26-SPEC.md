@@ -85,6 +85,10 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      staged changes, untracked `.py` under `installer/`, `tests/` or `devtools/`, an unstaged `.pre-commit-config.yaml`,
      then a pushed commit that is not HEAD. A tag or refspec whose commit is HEAD passes. D-15: `make hooks-e2e` runs
      the scratch-repo cases above.)*
+   - *(amended 2026-11-16, 26 plan-phase D-25 (review H1): refusal 3 covers every untracked, non-ignored file
+     outside `.planning/`, at any depth and the repo root included, whatever its extension. A root `conftest.py` or
+     `pytest.ini` changes what pytest runs. Untracked `.py` under `installer/` or `tests/` is a subset. The target
+     above is the authority for the widening.)*
 
 4. **`make install` installs both hooks**: `make install` installs the pre-commit and pre-push hooks after `uv sync`.
    Running it again changes nothing. Outside a git checkout it skips the hook step with a one-line message and still
@@ -105,6 +109,8 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      `python -m devtools.hooks install` in scratch repos, and a text test pins the `dev-setup` recipe. Run from a linked
      worktree, the step warns to re-run it from the main checkout. It refuses a foreign `pre-push` file without
      touching it.)*
+   - *(amended 2026-11-16, 26 plan-phase D-26 (review M12): the AGENTS.md rule that agents never run
+     `make dev-setup` names its one exception, the final owner-assigned checkpoint that lists the real install.)*
 
 5. **`main` is gated behind CI on GitHub**: Branch protection on `main` has `enforce_admins` enabled and requires both
    CI contexts, so GitHub rejects any update to `main`, an admin's included, unless both checks passed on that commit.
@@ -114,6 +120,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
    file that no test reads. *(amended 2026-11-16, 26 plan-phase D-16: a path under `.planning/` counts only when no
    test reads it (three `24.3-SKILLJUDGE-*` files are read). Paths come from `git diff --name-only -z --no-renames
    origin/main...HEAD`. An empty list, a git failure or a missing classifier output means the full jobs run.)*
+   *(amended 2026-11-16, 26 plan-phase D-27 (review M7): a file a test reaches through a link resolved at runtime,
+   such as a relative link target of README.md or docs/TROUBLESHOOTING.md, counts as "a file a test reads"; a drift
+   test pins it.)*
    - Current: `enforce_admins` is false; direct pushes to `main` bypass the required checks. CI runs only on pushes to
      `main` and on pull requests.
    - Target: `enforce_admins` is true with both contexts required, and the documented flow puts every change through
@@ -181,7 +190,7 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 - [ ] `.pre-commit-config.yaml` has a `pre-push` stage that runs `make validate` and then `make test`, whatever files the push touches; a test pins it.
 - [ ] In a scratch repo, a push whose suite fails exits non-zero and leaves the remote ref unchanged; a green push updates it. *(amended 2026-11-16, 26 plan-phase D-15: every "in a scratch repo" line here is met by `make hooks-e2e`, with the gate logic also pinned by pytest fake-runner tests.)*
 - [ ] In a scratch repo, a staged uncommitted change refuses the push, naming the file.
-- [ ] In a scratch repo, an untracked `.py` file under `installer/` or `tests/` refuses the push, naming the file.
+- [ ] In a scratch repo, an untracked `.py` file under `installer/` or `tests/` refuses the push, naming the file. *(amended 2026-11-16, 26 plan-phase D-25: so does any untracked, non-ignored file outside `.planning/`, such as a root `conftest.py` or `pytest.ini`, listed sorted.)*
 - [ ] In a scratch repo, an unstaged edit that breaks a test does not fail a push of a green HEAD, on an existing branch and on a new branch's first push.
 - [ ] In a scratch repo, pushing a branch that is not HEAD is refused with the check-out-first message; a branch deletion goes through with no checks.
 - [ ] After a passing, failing or interrupted push gate, the unstaged edits it set aside are restored byte-identical. *(amended 2026-11-16, 26 plan-phase D-17: "interrupted" means SIGINT, SIGTERM or SIGHUP to the gate's process group; SIGKILL and a SIGTERM sent only to `git` are documented residual cases with a recovery command.)*
@@ -219,7 +228,7 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 | empty | R2 | ✅ covered | (added 2026-11-16, D-05) A push with no changed files still runs every gate (`always_run`) (AC: "whatever files the push touches") |
 | encoding | R2 | ⛔ dismissed | (added 2026-11-16, D-05) The gates take no file names (`pass_filenames: false`), so file-name encoding never reaches them |
 | ordering | R2 | ✅ covered | (added 2026-11-16, D-05) The static gates run before the `make test` gate, which is last in the config. The pin covers the order (AC: pre-push stage line) |
-| adjacency | R3 | ✅ covered | Untracked `.py` files count recursively under `installer/` and `tests/`; ignored files and paths outside the two trees do not; a pushed ref that is not HEAD is refused (AC: untracked, ref lines) |
+| adjacency | R3 | ✅ covered | Untracked `.py` files count recursively under `installer/` and `tests/`; ignored files and paths outside the two trees do not; a pushed ref that is not HEAD is refused (AC: untracked, ref lines) *(amended 2026-11-16, 26 plan-phase D-25: every untracked, non-ignored file outside `.planning/` counts, at any depth, the repo root included (a root `conftest.py`, a root `pytest.ini`); ignored files and paths under `.planning/` do not)* |
 | empty | R3 | ✅ covered | A push that only deletes a remote ref runs no checks and goes through (AC: ref line) |
 | encoding | R3 | 🧪 backstop | File names come from git verbatim; held-out test with a space in a file name (AC: sorted-names line) |
 | ordering | R3 | ✅ covered | Refusal messages list the offending files sorted (AC: sorted-names line) |

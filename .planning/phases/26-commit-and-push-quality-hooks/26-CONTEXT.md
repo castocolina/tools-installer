@@ -194,6 +194,7 @@ it amends; SPEC.md carries a matching inline note.
   - A change is docs-only only when it is non-empty and every path is docs-only.
   - A drift test classifies every `.md` string literal in `tests/**/*.py`, and every test module that names
     `.planning`, in a reviewed ledger. Every real file the ledger resolves to must be test-read.
+    *(extended 2026-11-16 by D-27: link targets that tests resolve at runtime must be test-read too.)*
   - CI lists paths with `git diff --name-only -z --no-renames origin/main...HEAD`, so a rename counts both paths. An
     empty list or any git failure means a full run, and so does a classify step that writes no output
     (`if: steps.scope.outputs.full != 'false'`).
@@ -216,6 +217,7 @@ it amends; SPEC.md carries a matching inline note.
   2. staged changes that are not committed;
   3. untracked, non-ignored `.py` files under `installer/`, `tests/` or `devtools/`. D-02 puts `devtools/` under
      every gate, so an untracked module there changes what lint, typecheck and the suite see.
+     *(amended 2026-11-16 by D-25: every untracked, non-ignored file outside `.planning/`, the repo root included.)*
   4. an unstaged edit to `.pre-commit-config.yaml`: commit or discard it. pre-commit would refuse it anyway, but with
      advice to stage it, which then trips refusal 2.
   5. a pushed commit that is not HEAD. The pushed sha is peeled to its commit first, so a tag or a `HEAD:other`
@@ -252,6 +254,7 @@ it amends; SPEC.md carries a matching inline note.
     prints a warning to re-run it from the main checkout before that worktree is removed.
   - AGENTS.md gains one sentence: agents never run `make dev-setup`, because it rewrites the hooks every worktree
     shares. The sentence sits outside the host-safety list, since it changes repo hooks and not the host.
+    *(amended 2026-11-16 by D-26: the sentence names its one exception, the final owner-assigned checkpoint.)*
 - **D-23: R6's grep target is read after D-04** (amends SPEC R6 acceptance and the matching acceptance line). Since
   D-04, `make validate` does run `pre-commit run --all-files`, so the docs say exactly that. The R6 check becomes:
   `rg 'runs? pre-commit hooks'` over AGENTS.md and `.claude/` finds nothing, and no doc says the hooks "mirror"
@@ -264,6 +267,47 @@ it amends; SPEC.md carries a matching inline note.
   - The shim fails closed: without `uv` on PATH it prints the cause and exits 1.
   - The commit hook keeps pre-commit's own migration: a foreign `pre-commit` hook becomes `pre-commit.legacy` and
     still runs.
+
+## Review amendments (2026-11-16, plan-phase `--reviews`, cycle 1, review commit `d933e9c8`)
+
+Added when the plans were revised against `26-REVIEWS.md` (orchestrator-verified findings). Each entry cites the
+finding and the SPEC item it amends. SPEC.md carries a matching inline note.
+
+- **D-25: Refusal 3 covers every untracked, non-ignored file outside `.planning/`** (review H1, verified; amends
+  D-18 item 3, D-01's refusal list, SPEC R3, its adjacency edge row and the untracked-file acceptance line).
+  - The gate lists `git ls-files --others --exclude-standard -z` over the whole tree, the repo root included, drops
+    names under `.planning/`, and refuses with the sorted list. The fix line reads: commit, stash, remove or ignore
+    them, with `.git/info/exclude` for a local-only file.
+  - Why the whole tree: pytest's rootdir is the repo root, so it loads an untracked root `conftest.py`, and an
+    untracked root `pytest.ini`, `.pytest.ini`, `tox.ini` or `setup.cfg` overrides `[tool.pytest.ini_options]`
+    (`pyproject.toml:49`). The gates also read `.coveragerc`, `pyrightconfig.json`, a `ruff.toml` or `.ruff.toml`
+    in any parent directory, `typings/*.pyi`, `.shellcheckrc`, a `.bandit` file under the bandit targets, and a
+    `GNUmakefile` or `makefile` that shadows `Makefile`. Tests read installer data files, docs and link targets.
+    Any of these, untracked, can make a HEAD that fails in CI pass locally, which is the false green SPEC R3's
+    target ("every push either tests a tree equal to HEAD or is refused") forbids.
+  - Why not a fixed list of names: it would need the same upkeep review M1 rejects for the gate set, and each
+    omission is a false green. The broad rule's cost is a false refusal for a scratch file outside `.planning/`.
+    Its fix is one permanent line in `.git/info/exclude`, and agents already keep scratch files outside the repo.
+  - Why `.planning/` stays exempt: SPEC R5 already treats it as docs, `.planning/debug/` and the phase `.gitkeep`
+    files stay untracked by the owner's rule, and no gate reads `.planning/` except the SKILLJUDGE glob of
+    `tests/test_catalog_audit_skill.py:401`. That test checks each file it finds, so an extra untracked file can
+    only add failures and never hides one.
+  - This checkout: the owner's untracked root `.graphifyignore` would be refused. 26-09 adds it to
+    `.git/info/exclude` (local, reversible, never tracked) before the first real push.
+  - **Reversibility:** reversible. The rule lives in one function of `devtools/push_gate.py`.
+- **D-26: The AGENTS.md rule "agents never run `make dev-setup`" names its one exception** (review M12, reclassified
+  from H6; amends D-22's AGENTS.md sentence). The exception is the final owner-assigned checkpoint of a phase plan
+  that lists the real install explicitly. In this phase that is 26-09, because the owner's run brief (2026-11-16)
+  assigns "installing the hooks for real in this checkout" to the orchestrator as the final step. The sentence
+  stays generic in AGENTS.md (no phase number), so the rule and 26-09 agree.
+- **D-27: Files a test reaches through a link resolved at runtime count as test-read** (review M7; extends D-16's
+  drift test, no change to the SPEC R5 definition). `tests/test_docs.py:445-472` resolves every relative link and
+  anchor in README.md and docs/TROUBLESHOOTING.md. tests/test_docs.py exposes those docs as `LINK_CHECKED_DOCS`
+  and its parser as `link_targets`. A drift test in tests/test_docs_only.py requires every existing target inside
+  the repo to be test-read (`is_docs_path` false). A drift test was chosen over a link parser inside the CI
+  classifier: a new link always edits README or TROUBLESHOOTING, which are test-read, so that change runs the full
+  suite, where the drift test fails until the target joins `TEST_READ`. The classifier stays small and stdlib-only
+  for its first push.
 
 </decisions>
 
