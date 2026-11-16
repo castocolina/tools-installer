@@ -1,9 +1,9 @@
 # Owner confirmation list (2026-11-15)
 
-On 2026-11-15 every phase from 17 through 24.5 was re-verified, with real screens captured in disposable
+On 2026-11-15/16 every phase from 17 through 25 was verified, with real screens captured in disposable
 containers through herdr. Each finding was classified with jev-fast-decision; trivial findings were decided or
-fixed. Phases 17 to 24.5 now read complete, and 111 of 115 requirements are marked complete. The 4 left
-(LEAN-01..04) belong to Phase 25, which has not started; see its "Pre-phase check 2026-11-15" note in ROADMAP.md.
+fixed. Phases 17 to 25 now read complete, and all 115 requirements are marked complete. Phase 25 (LEAN-01..04)
+was run at the owner's request and left no owner-only item.
 
 This list holds only what automation cannot prove. Each item names its source.
 
