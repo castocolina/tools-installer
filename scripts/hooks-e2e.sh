@@ -398,6 +398,24 @@ untracked_py_is_refused() {
   ok untracked_py_is_refused
 }
 
+# A moved file marked intent-to-add pairs with the deletion as a rename; it must still be refused.
+renamed_intent_to_add_is_refused() {
+  fresh renamedita
+  ahead renamedita c
+  ( cd "$SCRATCH/renamedita" && mv tests/test_a.py tests/test_b.py && run_isolated git add -N tests/test_b.py )
+  local out
+  out="$( cd "$SCRATCH/renamedita" && run_isolated git push origin main 2>&1 )" && {
+    fail renamed_intent_to_add_is_refused "push succeeded: $out"
+    return 0
+  }
+  if ! contains "$out" 'intent-to-add files are not committed:' || ! contains "$out" 'tests/test_b.py'; then
+    fail renamed_intent_to_add_is_refused "wrong refusal: $out"
+    return 0
+  fi
+  no_test_mark renamedita || { fail renamed_intent_to_add_is_refused "test.ran is present"; return 0; }
+  ok renamed_intent_to_add_is_refused
+}
+
 untracked_root_inputs_are_refused() {
   fresh rootinputs
   ahead rootinputs c
@@ -1083,6 +1101,7 @@ main() {
   red_push_is_aborted
   staged_is_refused_sorted
   untracked_py_is_refused
+  renamed_intent_to_add_is_refused
   untracked_root_inputs_are_refused
   untracked_planning_and_ignored_files_pass
   ignored_root_conftest_is_refused

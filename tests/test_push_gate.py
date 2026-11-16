@@ -74,7 +74,7 @@ def _stdin(text: str) -> io.BytesIO:
 
 UNMERGED = ("diff", "--name-only", "--diff-filter=U", "-z")
 STAGED = ("diff", "--cached", "--name-only", "-z")
-INTENT = ("diff", "--name-only", "--diff-filter=A", "-z")
+INTENT = ("diff", "--name-only", "--no-renames", "--diff-filter=A", "-z")
 HIDDEN = ("ls-files", "-v", "-z")
 UNTRACKED = ("ls-files", "--others", "--exclude-standard", "-z")
 GATE_READ = ("--glob-pathspecs", "ls-files", "--others", "-z", "--", *GATE_READ_PATHSPECS)

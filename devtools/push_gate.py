@@ -192,7 +192,8 @@ def refusal(git: GitRunner, updates: Sequence[RefUpdate]) -> str | None:
         (
             # Only intent-to-add entries differ as "added" between index and worktree; pre-commit
             # un-adds them for the run, so the gates would read files that are not in HEAD.
-            ["diff", "--name-only", "--diff-filter=A", "-z"],
+            # --no-renames: a deleted file would otherwise pair with an intent-to-add one.
+            ["diff", "--name-only", "--no-renames", "--diff-filter=A", "-z"],
             "intent-to-add files are not committed:",
             "commit them (git add <file>), or drop the intent (git rm --cached <file>),"
             " then push again.",
