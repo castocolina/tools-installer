@@ -210,7 +210,7 @@ def test_omz_repair_completes_before_kitty_region_is_written(
 def test_omz_repair_uses_the_real_root_when_zsh_names_a_relocated_install(
     tmp_path: Path,
 ) -> None:
-    """CR-01: `omz_present` treats a configured $ZSH as present too, so the
+    """CR-01: `omz_root` finds a configured $ZSH too, so the
     repair must write that real root -- not assume the conventional
     ~/.oh-my-zsh -- or it overwrites a working $ZSH with a path that does not
     exist."""
@@ -232,7 +232,7 @@ def test_omz_repair_uses_the_real_root_when_zsh_names_a_relocated_install(
 def test_omz_repair_falls_back_to_the_default_root_when_no_zsh_env_is_set(
     tmp_path: Path,
 ) -> None:
-    """The conventional ~/.oh-my-zsh remains the default when omz_present is
+    """The conventional ~/.oh-my-zsh remains the default when omz_root is
     satisfied through that location rather than a configured $ZSH."""
     (tmp_path / ".oh-my-zsh").mkdir()
 

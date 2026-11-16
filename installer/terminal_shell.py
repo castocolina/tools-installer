@@ -942,9 +942,8 @@ def sync_terminal_shells(
 
     root = omz_root(home, environ)
     if write and root is not None:
-        # CR-01: pass the real install directory, mirroring omz_present's own
-        # $ZSH-aware check -- omz_present being true guarantees root is not
-        # None, so the repair never hardcodes $HOME/.oh-my-zsh for an install
+        # CR-01: pass the real install directory from omz_root's $ZSH-aware
+        # lookup, so the repair never hardcodes $HOME/.oh-my-zsh for an install
         # that actually lives elsewhere (a dotfiles-managed or XDG-relocated
         # oh-my-zsh checkout).
         # G-01: resolve the repair target through the same $ZDOTDIR-aware

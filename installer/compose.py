@@ -116,7 +116,7 @@ _MYSHELLRC = Path.home() / ".myshellrc"
 # during D-04 consolidation, and only when that is provably safe.
 _SHELLRC = Path.home() / ".shellrc"
 # $ZDOTDIR-aware, so the file the installer edits is the one zsh actually reads
-# and agrees with omz_present's own environment-aware detection.
+# and agrees with omz_root's own environment-aware detection.
 _ZSHRC = zshrc_path(Path.home(), os.environ)
 _RC_PATHS = [_ZSHRC, Path.home() / ".bashrc"]
 _SHELL = os.environ.get("SHELL", "")

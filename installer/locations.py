@@ -21,7 +21,7 @@ def zshrc_path(home: Path, environ: Mapping[str, str]) -> Path:
     """The .zshrc zsh actually reads: $ZDOTDIR/.zshrc when ZDOTDIR names an
     existing directory, else ~/.zshrc.
 
-    Mirrors omz.omz_present's $ZSH-awareness. The two must agree: a ZDOTDIR
+    Mirrors omz.omz_root's $ZSH-awareness. The two must agree: a ZDOTDIR
     setup where the detection predicate reads the environment but the write
     target does not is one that enables the Oh-My-Zsh policy and then edits a
     file zsh never sources. The is_dir() guard keeps a stale or typo'd ZDOTDIR

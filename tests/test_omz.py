@@ -9,7 +9,6 @@ from installer.omz import (
     OmzPluginsError,
     enable_plugins,
     ensure_zshrc_template,
-    omz_present,
     omz_root,
     owned_plugins,
     plugins_in,
@@ -289,42 +288,20 @@ def test_write_does_not_touch_the_file_when_nothing_changes(
     assert owned_plugins(state) == ("git", "docker")
 
 
-def test_omz_present_detects_the_home_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert omz_present(tmp_path, {}) is False
-    (tmp_path / ".oh-my-zsh").mkdir()
-    assert omz_present(tmp_path, {}) is True
-
-
-def test_omz_present_accepts_a_valid_zsh_env_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    custom = tmp_path / "custom-omz"
-    custom.mkdir()
-    assert omz_present(tmp_path, {"ZSH": str(custom)}) is True
-    assert omz_present(tmp_path, {"ZSH": str(tmp_path / "missing")}) is False
-    assert omz_present(tmp_path, {"ZSH": ""}) is False
-
-
-def test_omz_root_agrees_with_omz_present_on_every_case(tmp_path: Path) -> None:
-    """CR-01: omz_present is now defined directly in terms of omz_root, so the
-    two answers can never disagree -- this pins that relationship rather than
-    re-testing each branch independently."""
+def test_omz_root_resolves_the_real_install_directory(tmp_path: Path) -> None:
     custom = tmp_path / "custom-omz"
     missing = tmp_path / "missing"
-    for environ in ({}, {"ZSH": str(custom)}, {"ZSH": str(missing)}, {"ZSH": ""}):
-        assert (omz_root(tmp_path, environ) is not None) == omz_present(tmp_path, environ)
-
     assert omz_root(tmp_path, {}) is None
-    (tmp_path / ".oh-my-zsh").mkdir()
-    assert omz_root(tmp_path, {}) == tmp_path / ".oh-my-zsh"
+    assert omz_root(tmp_path, {"ZSH": str(custom)}) is None
+    assert omz_root(tmp_path, {"ZSH": str(missing)}) is None
+    assert omz_root(tmp_path, {"ZSH": ""}) is None
 
     custom.mkdir()
-    # The conventional default takes priority when both exist, matching
-    # omz_present's own preference order.
+    assert omz_root(tmp_path, {"ZSH": str(custom)}) == custom
+
+    (tmp_path / ".oh-my-zsh").mkdir()
+    assert omz_root(tmp_path, {}) == tmp_path / ".oh-my-zsh"
+    # The conventional default takes priority when both exist.
     assert omz_root(tmp_path, {"ZSH": str(custom)}) == tmp_path / ".oh-my-zsh"
 
 

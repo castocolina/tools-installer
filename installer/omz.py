@@ -90,8 +90,8 @@ _ANY_PLUGINS_OPEN = re.compile(r"^[ \t]*plugins=\(")
 # WR-06 (15.6-REVIEW.md): anchored to the start of the (trimmed) line only,
 # the previous pattern classified the common guarded idiom
 # `[ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"` as "not sourced"
-# -- ensure_zshrc_template is called unconditionally whenever omz_present()
-# is true, bypassing write_plugins's own smarter already-has-an-array gate
+# -- ensure_zshrc_template is called unconditionally whenever omz_root()
+# finds an install, bypassing write_plugins's own smarter already-has-an-array gate
 # entirely, so a fully correct .zshrc using this idiom got a second,
 # unconditional export ZSH=/source pair appended on every install-close,
 # update, and uninstall event. `(?:^|[;&|]\s*|\s)` requires the token to be
@@ -384,8 +384,8 @@ def _template_update(zshrc_path: Path, root: Path | None) -> str | None:
     all left unchanged.
 
     CR-01: `root` is the real oh-my-zsh install directory -- `omz_root`'s
-    answer, not an assumption. `omz_present`, the predicate every caller
-    gates this repair on, deliberately treats oh-my-zsh as present either at
+    answer, not an assumption. `omz_root`, which every caller
+    gates this repair on, deliberately finds oh-my-zsh either at
     the conventional `~/.oh-my-zsh` or at whatever directory a configured
     `$ZSH` names (a dotfiles-managed or XDG-relocated install). Before this
     fix, this function ignored that and always emitted a literal
@@ -681,18 +681,12 @@ def omz_root(home: Path, environ: Mapping[str, str]) -> Path | None:
     """The real oh-my-zsh install directory, or None when neither location exists.
 
     CR-01: this is the one place that decides "where is oh-my-zsh actually
-    installed", so `omz_present` and `ensure_zshrc_template`'s root can never
-    disagree again -- `omz_present` is now defined directly in terms of this
-    function's answer, and callers that need to write a root (terminal_shell's
-    synchronizer) resolve it here rather than assuming the default.
+    installed", so presence and `ensure_zshrc_template`'s root can never
+    disagree; callers that need to write a root (terminal_shell's synchronizer)
+    resolve it here rather than assuming the default.
     """
     default = home / ".oh-my-zsh"
     if default.is_dir():
         return default
     configured = environ.get("ZSH")
     return Path(configured) if configured and Path(configured).is_dir() else None
-
-
-def omz_present(home: Path, environ: Mapping[str, str]) -> bool:
-    """True when ~/.oh-my-zsh or a $ZSH that names an existing directory is present."""
-    return omz_root(home, environ) is not None
