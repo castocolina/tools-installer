@@ -1,39 +1,56 @@
+# Each gate's command lives once, in its Makefile target. The commit stage runs the six static
+# gates; the push stage runs them again, then `make test`. `make validate` runs the commit stage
+# through pre-commit. `pre-commit install` writes only the commit hook.
+default_install_hook_types: [pre-commit]
 repos:
   - repo: local
     hooks:
-      # Same file set as `make validate` (installer, tests, setup.py); planning research is not product code.
       - id: ruff-check
-        name: ruff check
-        entry: uv run ruff check
+        name: make lint
+        entry: make lint
         language: system
-        types: [python]
-        files: ^(installer/|tests/|setup\.py$)
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
       - id: ruff-format
-        name: ruff format --check
-        entry: uv run ruff format --check
+        name: make format-check
+        entry: make format-check
         language: system
-        types: [python]
-        files: ^(installer/|tests/|setup\.py$)
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
       - id: pyright
-        name: pyright
-        entry: uv run pyright
+        name: make typecheck
+        entry: make typecheck
         language: system
-        types: [python]
         pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
       - id: bandit
-        name: bandit
-        entry: uv run bandit -q -r installer --skip B404,B603,B310
+        name: make security
+        entry: make security
         language: system
         pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
       - id: vulture
-        name: vulture
-        entry: uv run vulture
+        name: make dead-code
+        entry: make dead-code
         language: system
         pass_filenames: false
-      # Same file set as `make validate`, so a commit cannot pass what the gate rejects.
+        always_run: true
+        stages: [pre-commit, pre-push]
       - id: shellcheck
-        name: shellcheck
-        entry: uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh scripts/container-e2e-verify.sh
+        name: make shellcheck
+        entry: make shellcheck
         language: system
         pass_filenames: false
-        types: [shell]
+        always_run: true
+        stages: [pre-commit, pre-push]
+      - id: tests
+        name: make test
+        entry: make test
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

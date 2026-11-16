@@ -40,7 +40,7 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pyright]
-include = ["installer", "tests"]
+include = ["installer", "tests", "devtools"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
 
@@ -52,7 +52,7 @@ asyncio_mode = "auto"
 faulthandler_timeout = 120
 
 [tool.coverage.run]
-source = ["installer"]
+source = ["installer", "devtools"]
 branch = true
 
 [tool.coverage.report]
@@ -60,5 +60,5 @@ show_missing = true
 fail_under = 90
 
 [tool.vulture]
-paths = ["installer"]
+paths = ["installer", "devtools"]
 min_confidence = 80

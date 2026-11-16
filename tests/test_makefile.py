@@ -16,7 +16,7 @@ _FORBIDDEN_RUNS = {"setup.py", "install.sh", "container-e2e-verify.sh"}
 _SHELLS = {"bash", "sh", "python", "python3"}
 
 
-def _recipes() -> dict[str, tuple[list[str], list[str]]]:
+def recipes() -> dict[str, tuple[list[str], list[str]]]:
     """Return target -> (prerequisites, recipe lines) for every make target."""
     lines = MAKEFILE.read_text().splitlines()
     result: dict[str, tuple[list[str], list[str]]] = {}
@@ -49,36 +49,50 @@ def _recipes() -> dict[str, tuple[list[str], list[str]]]:
     return result
 
 
+def gate_targets() -> list[str]:
+    """Return the `[gate]`-marked targets in file order: the ones the commit and push hooks run."""
+    targets: list[str] = []
+    for line in MAKEFILE.read_text().splitlines():
+        match = re.match(r"^([a-zA-Z0-9_-]+)\s*:(.*)$", line)
+        if match and "## [gate] " in match.group(2):
+            targets.append(match.group(1))
+    return targets
+
+
 def test_launch_targets_run_without_the_dev_venv() -> None:
-    recipes = _recipes()
-    for name in ("setup", "doctor", "fix", "uninstall"):
-        _, lines = recipes[name]
+    recipe_map = recipes()
+    for name in ("run", "doctor", "fix", "uninstall"):
+        _, lines = recipe_map[name]
         joined = "\n".join(lines)
         assert "uv run --isolated --no-dev setup.py" in joined, name
 
 
-def test_run_is_an_alias_of_setup() -> None:
-    prereqs, recipe = _recipes()["run"]
-    assert prereqs == ["setup"]
-    assert recipe == []
+def test_run_launches_the_wizard_and_setup_is_gone() -> None:
+    recipe_map = recipes()
+    prereqs, lines = recipe_map["run"]
+    assert prereqs == []
+    assert "uv run --isolated --no-dev setup.py $(ARGS)" in "\n".join(lines)
+    assert "setup" not in recipe_map
+    phony = MAKEFILE.read_text().split(".PHONY:")[1].split("\n")[0].split()
+    assert "setup" not in phony
 
 
 def test_every_setup_py_recipe_uses_the_launch_form() -> None:
     launcher_targets: list[str] = []
-    for name, (_, lines) in _recipes().items():
+    for name, (_, lines) in recipes().items():
         launcher_lines = [line for line in lines if _LAUNCHER_LINE.match(line)]
         if launcher_lines:
             launcher_targets.append(name)
         for line in launcher_lines:
             assert "uv run --isolated --no-dev setup.py" in line
-    assert launcher_targets == ["setup", "doctor", "fix", "uninstall"]
+    assert launcher_targets == ["run", "doctor", "fix", "uninstall"]
 
 
 def test_retired_guard_targets_are_gone() -> None:
     makefile = MAKEFILE.read_text()
-    recipes = _recipes()
-    assert "guard" not in recipes
-    assert "unguard" not in recipes
+    recipe_map = recipes()
+    assert "guard" not in recipe_map
+    assert "unguard" not in recipe_map
     phony = makefile.split(".PHONY:")[1].split("\n")[0].split()
     assert "guard" not in phony
     assert "unguard" not in phony
@@ -86,17 +100,17 @@ def test_retired_guard_targets_are_gone() -> None:
 
 
 def test_gate_targets_keep_dev_dependencies() -> None:
-    recipes = _recipes()
-    for name in ("validate", "test"):
-        joined = "\n".join(recipes[name][1])
+    recipe_map = recipes()
+    for name in [*gate_targets(), "validate"]:
+        joined = "\n".join(recipe_map[name][1])
         assert "--no-dev" not in joined
         assert "--isolated" not in joined
 
 
 def test_verify_registry_target_is_read_only_by_default() -> None:
-    recipes = _recipes()
-    assert "verify-registry" in recipes
-    _, lines = recipes["verify-registry"]
+    recipe_map = recipes()
+    assert "verify-registry" in recipe_map
+    _, lines = recipe_map["verify-registry"]
     joined = "\n".join(lines)
     assert "uv run --isolated --no-dev python -m installer.verify_registry" in joined
     assert "$(ARGS)" in joined
@@ -121,9 +135,9 @@ def _invoked_names(line: str) -> list[str]:
 
 
 def test_gate_recipes_never_run_a_real_install() -> None:
-    recipes = _recipes()
-    for name in ("validate", "test"):
-        _, lines = recipes[name]
+    recipe_map = recipes()
+    for name in [*gate_targets(), "validate"]:
+        _, lines = recipe_map[name]
         for line in lines:
             code = line.strip()
             if not code or code.startswith("#"):
@@ -164,9 +178,9 @@ _E2E_SCRIPT = "scripts/container-e2e-verify.sh"
 
 def test_e2e_script_appears_in_gates_only_as_a_shellcheck_argument() -> None:
     """R1-04: a lint argument is not a run; nothing else of the e2e reaches the gates."""
-    recipes = _recipes()
-    for name in ("validate", "test"):
-        prereqs, lines = recipes[name]
+    recipe_map = recipes()
+    for name in [*gate_targets(), "validate"]:
+        prereqs, lines = recipe_map[name]
         kept: list[str] = []
         for line in lines:
             if _E2E_SCRIPT in line:
@@ -179,9 +193,9 @@ def test_e2e_script_appears_in_gates_only_as_a_shellcheck_argument() -> None:
 
 
 def test_audit_catalog_target() -> None:
-    recipes = _recipes()
-    assert "audit-catalog" in recipes
-    _, lines = recipes["audit-catalog"]
+    recipe_map = recipes()
+    assert "audit-catalog" in recipe_map
+    _, lines = recipe_map["audit-catalog"]
     joined = "\n".join(lines)
     assert "uv run --isolated --no-dev python -m installer.catalog_audit" in joined
     assert "$(ARGS)" in joined
@@ -190,3 +204,16 @@ def test_audit_catalog_target() -> None:
     assert re.search(r"^audit-catalog:.*?## .+$", makefile, re.MULTILINE), (
         "audit-catalog needs a ## help comment"
     )
+
+
+def test_gate_targets_are_phony_and_documented() -> None:
+    targets = gate_targets()
+    assert len(targets) >= 7
+    phony = MAKEFILE.read_text().split(".PHONY:")[1].split("\n")[0].split()
+    for name in targets:
+        assert name in phony, name
+
+
+def test_help_lists_names_with_digits() -> None:
+    _, lines = recipes()["help"]
+    assert "^[a-zA-Z0-9_-]+:.*?## .*$$" in "\n".join(lines)
