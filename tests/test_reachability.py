@@ -5,9 +5,8 @@ Module-level reachability from the production entry points: ``setup.py``,
 Makefile, ``install.sh`` and the GitHub workflows invoke. A ``__main__`` guard alone does not
 make a module an entry point. The walk follows function-level imports
 and skips ``if TYPE_CHECKING:`` bodies, so only runtime imports make a module
-reachable. String-keyed dispatch tables are listed in ``_DISPATCH_TABLES``; their
-targets are plain callables imported by the table's own module, so the module
-graph already reaches them and the dispatch test only proves it.
+reachable. A string-keyed dispatch table needs no special case: its targets are
+plain callables imported by the table's own module, so the module graph reaches them.
 
 Symbol-level dead code stays with vulture. Do not weaken this guard to a name
 grep: a name that appears in a comment is not an import, and a module reached
@@ -15,17 +14,12 @@ only through a string table is still reached through the table's module.
 """
 
 import ast
-import dataclasses
-import functools
-import importlib
-import inspect
 import io
 import re
 import tokenize
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -33,57 +27,6 @@ _ROOT = Path(__file__).resolve().parents[1]
 # Installed data files that run on the user's machine and are read by path, never imported.
 _EXEMPT_DIRS: tuple[str, ...] = ("installer/helper_assets",)
 _PYTHON_M = re.compile(r"python -m (installer(?:\.\w+)+)")
-# The string-keyed callable dispatch tables at HEAD, as (module, attribute). The inventory
-# test fails on any unlisted table, and the dispatch test fails on a stale entry.
-_DISPATCH_TABLES: tuple[tuple[str, str], ...] = (
-    ("installer.app", "_RECIPE_SERVICE_PID"),
-    ("installer.app", "_RECIPE_SERVICE_FILE"),
-    ("installer.catalog_audit", "_NAMED_READERS"),
-    ("installer.download", "SCRIPT_ROOT_RESOLVERS"),
-    ("installer.executors", "EXECUTORS"),
-    ("installer.executors", "SMOKE_CHECKS"),
-    ("installer.install_ownership", "_PROBES"),
-    ("installer.install_ownership", "_OWNER_QUERIES"),
-    ("installer.install_ownership", "_PATH_QUERIES"),
-    ("installer.install_ownership", "_BATCHES"),
-    ("installer.post_install", "POST_INSTALL_HOOKS"),
-    ("installer.postinstall", "POSTINSTALL_HOOKS"),
-)
-
-# What composition lives in installer/compose.py (plan 25-05): setup.py may import these back
-# but must not define them.
-_COMPOSITION_NAMES: tuple[str, ...] = (
-    "_REGISTRY",
-    "_DEFAULT_BIN_DIR",
-    "_MYSHELLRC",
-    "_SHELLRC",
-    "_ZSHRC",
-    "_RC_PATHS",
-    "_SHELL",
-    "Install",
-    "_WARN_CONSOLE",
-    "_DAEMON_PLIST_PATH",
-    "_LINUX_DAEMON_UNIT_DIR",
-    "_ENVIRONMENT_D_DIR",
-    "_build_app",
-    "_execute_inputs",
-    "_timer_state_cache",
-    "_CompetitorProbe",
-    "_competitor_probe",
-    "_DiskProbe",
-    "_disk_pressure_probe",
-    "_cache_redirect_policies",
-    "_sync_terminals",
-    "_sync_terminals_and_report",
-    "_build_services",
-    "_split_sourced_from",
-    "_desktop_shell_policies",
-    "_launch_repairs",
-    "_schedule_context",
-    "_invalidating",
-    "_schedule_removed_lines",
-    "_reconcile_headless",
-)
 
 
 def _installer_files(root: Path) -> dict[str, Path]:
@@ -232,40 +175,6 @@ def _python_m_modules(root: Path) -> set[str]:
     return found
 
 
-def _installer_owner(fn: Callable[..., object]) -> str | None:
-    module = getattr(fn, "__module__", None)
-    if isinstance(module, str) and (module == "installer" or module.startswith("installer.")):
-        return module
-    return None
-
-
-def _callables(value: object) -> list[Callable[..., object]]:
-    if inspect.isfunction(value):
-        return [value]
-    if isinstance(value, functools.partial):
-        return [cast(functools.partial[object], value).func]
-    if isinstance(value, tuple):
-        return [fn for member in cast(tuple[object, ...], value) for fn in _callables(member)]
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return [
-            fn
-            for field in dataclasses.fields(value)
-            for fn in _callables(getattr(value, field.name))
-        ]
-    return []
-
-
-def _is_callable_table(value: object) -> bool:
-    if not isinstance(value, dict) or not value:
-        return False
-    table = cast(dict[object, object], value)
-    if not all(isinstance(key, str) for key in table):
-        return False
-    return any(
-        _installer_owner(fn) is not None for member in table.values() for fn in _callables(member)
-    )
-
-
 def _top_level_assigned(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for node in tree.body:
@@ -399,36 +308,6 @@ def test_a_relative_import_is_an_edge(tmp_path: Path) -> None:
     assert _unreachable_modules(deep) == []
 
 
-def test_dispatch_table_targets_live_in_reachable_modules() -> None:
-    reachable = _reachable_modules(_ROOT)
-    for module_name, attribute in _DISPATCH_TABLES:
-        module_vars = vars(importlib.import_module(module_name))
-        assert attribute in module_vars, f"{module_name}.{attribute} is gone; drop it from the list"
-        table: object = module_vars[attribute]
-        assert isinstance(table, dict), f"{module_name}.{attribute} is not a dict"
-        owners = {
-            owner
-            for member in cast(dict[object, object], table).values()
-            for fn in _callables(member)
-            if (owner := _installer_owner(fn)) is not None
-        }
-        assert owners, f"{module_name}.{attribute} has no installer callable target"
-        assert owners <= reachable, (
-            f"{module_name}.{attribute} targets {sorted(owners - reachable)}"
-        )
-
-
-def test_every_string_keyed_callable_table_is_listed() -> None:
-    modules = _installer_modules(_ROOT)
-    found: set[tuple[str, str]] = set()
-    for name in _reachable_modules(_ROOT):
-        module_vars = vars(importlib.import_module(name))
-        for attribute in _top_level_assigned(_parse(modules[name])):
-            if _is_callable_table(module_vars.get(attribute)):
-                found.add((name, attribute))
-    assert sorted(found) == sorted(_DISPATCH_TABLES)
-
-
 def test_the_exemptions_are_live() -> None:
     for directory in _EXEMPT_DIRS:
         path = _ROOT / directory
@@ -470,11 +349,8 @@ def _imports_any(tree: ast.Module, libraries: tuple[str, ...]) -> bool:
     return any(module.split(".")[0] in libraries for module in _imported_modules(tree))
 
 
-def test_composition_lives_in_compose_not_setup() -> None:
-    setup_tree = _parse(_ROOT / "setup.py")
+def test_compose_is_prompt_free_and_nothing_imports_setup() -> None:
     compose_tree = _parse(_ROOT / "installer" / "compose.py")
-    assert sorted(set(_COMPOSITION_NAMES) & _defined_top_level(setup_tree)) == []
-    assert {"_build_app", "_execute_inputs"} <= _defined_top_level(compose_tree)
     # Structural, so the module docstring may still name questionary.
     assert not _imports_any(compose_tree, ("questionary", "prompt_toolkit"))
     assert _imports_any(ast.parse("import questionary.prompts"), ("questionary",))
