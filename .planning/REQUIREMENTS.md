@@ -164,10 +164,10 @@
 
 ### Lean
 
-- [ ] **LEAN-01**: Dead code is removed (agent policy modules, questionary chooser, `audit.py`, dead fields and messages) while race epochs stay [F11, F14, F15, G #9]
-- [ ] **LEAN-02**: App composition lives in an `installer/` module under pyright and the coverage gate [F12]
-- [ ] **LEAN-03**: `wizard_app.py` is split and review-history comments are dropped [F13]
-- [ ] **LEAN-04**: The run log is bounded [B 13 IN-08]
+- [x] **LEAN-01**: Dead code is removed (agent policy modules, questionary chooser, `audit.py`, dead fields and messages) while race epochs stay [F11, F14, F15, G #9]
+- [x] **LEAN-02**: App composition lives in an `installer/` module under pyright and the coverage gate [F12]
+- [x] **LEAN-03**: `wizard_app.py` is split and review-history comments are dropped [F13]
+- [x] **LEAN-04**: The run log is bounded [B 13 IN-08]
 
 ## Future Requirements
 
@@ -308,10 +308,10 @@ Filled by the roadmap (2026-10-13). Phases 17–25 = milestone v0.50.0.
 | PRIO-05 | Phase 24.5 | Complete |
 | PRIO-06 | Phase 24.5 | Complete |
 | PRIO-07 | Phase 24.5 | Complete |
-| LEAN-01 | Phase 25 | Pending |
-| LEAN-02 | Phase 25 | Pending |
-| LEAN-03 | Phase 25 | Pending |
-| LEAN-04 | Phase 25 | Pending |
+| LEAN-01 | Phase 25 | Complete |
+| LEAN-02 | Phase 25 | Complete |
+| LEAN-03 | Phase 25 | Complete |
+| LEAN-04 | Phase 25 | Complete |
 
 **Coverage:**
 
