@@ -19,6 +19,7 @@ from installer.shellrc import (
     apply_block,
     collect_bin_dirs,
     consolidate_shellrc,
+    consolidated_body,
     consolidation_refusal,
     drop_managed_path_dirs,
     ensure_source,
@@ -1576,6 +1577,108 @@ def _backup_path(shellrc: Path) -> Path:
 
 def _no_backup_anywhere(root: Path) -> bool:
     return not list(root.glob(f"*{OLD_SUFFIX}"))
+
+
+def _verdict(line: str, tmp_path: Path) -> str:
+    """What consolidation does with one line: ``rewritable``, ``refused`` or ``none``."""
+    target = tmp_path / ".myshellrc"
+    text = f"{line}\n"
+    refusal = consolidation_refusal(
+        text, "", shellrc_path=tmp_path / ".shellrc", myshellrc_path=target
+    )
+    if refusal is not None:
+        return "refused"
+    return "rewritable" if consolidated_body(text, target) != text else "none"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        ". {target}",
+        "source {target}",
+        ". $HOME/.myshellrc",
+        ". ${HOME}/.myshellrc",
+        ". ~/.myshellrc",
+        '. "$HOME/.myshellrc"',
+        "  source {target}   ",
+    ],
+)
+def test_consolidation_disables_only_simple_target_lines(tmp_path: Path, line: str) -> None:
+    target = tmp_path / ".myshellrc"
+    assert _verdict(line.replace("{target}", str(target)), tmp_path) == "rewritable"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'export A=1; . "$HOME/.myshellrc"; export B=1',
+        '[ -f "$HOME/.myshellrc" ] && . "$HOME/.myshellrc"',
+        'if . "$HOME/.myshellrc"; then',
+        '! source "$HOME/.myshellrc"',
+        '. "$HOME/.myshellrc" \\',
+        '. "$target"',
+        '. "$HOME"/.myshellrc',
+        'FOO=bar . "$HOME/.myshellrc"',
+        '*) . "$HOME/.myshellrc" ;;',
+        'root=$HOME; . "$root/.myshellrc"',
+        'command source "$HOME/.myshellrc"',
+        'builtin source "$HOME/.myshellrc"',
+        'command . "$HOME/.myshellrc"',
+        r'sour\ce "$HOME/.myshellrc"',
+        "'source' \"$HOME/.myshellrc\"",
+        'command -p source "$HOME/.myshellrc"',
+        'cmd=source; $cmd "$HOME/.myshellrc"',
+    ],
+)
+def test_consolidation_refuses_every_ambiguous_target_line(tmp_path: Path, line: str) -> None:
+    assert _verdict(line, tmp_path) == "refused", line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# source $HOME/.myshellrc",
+        'export MYSHELLRC="$HOME/.myshellrc"',
+        'echo "$HOME/.myshellrc"',
+        '. "$HOME/.other.myshellrc"',
+        '. "$HOME/.shellrc"',
+        '. "$HOME/.cargo/env"',
+        '$EDITOR "$HOME/.bashrc"',
+        'command ls "$HOME"',
+        "time make build",
+        "time ls -la",
+        "noglob echo *",
+        "echo hi > /tmp/x",
+        "cat < /etc/hosts",
+        "make 2>&1 | tee log",
+        "ls >out 2>&1",
+    ],
+)
+def test_consolidation_ignores_unrelated_lines(tmp_path: Path, line: str) -> None:
+    assert _verdict(line, tmp_path) == "none", line
+
+
+def test_a_single_quoted_argument_is_not_expanded(tmp_path: Path) -> None:
+    """Single quotes suppress every expansion, so this sources a DIFFERENT file.
+
+    Treating `. '$HOME/.myshellrc'` as the target would comment out a working
+    command that sources some other file.
+    """
+    target = tmp_path / ".myshellrc"
+    assert _verdict(". '$HOME/.myshellrc'", tmp_path) == "none"
+    assert _verdict(". '~/.myshellrc'", tmp_path) == "none"
+    # An absolute single-quoted path needs no expansion, so it still matches.
+    assert _verdict(f". '{target}'", tmp_path) == "rewritable"
+
+
+def test_a_target_reached_through_an_aliased_home_still_counts(tmp_path: Path) -> None:
+    real_home = tmp_path / "var" / "home" / "u"
+    real_home.mkdir(parents=True)
+    aliased_home = tmp_path / "home" / "u"
+    aliased_home.parent.mkdir()
+    aliased_home.symlink_to(real_home)
+    target = aliased_home / ".myshellrc"
+    assert sources_file(f'. "{real_home}/.myshellrc"\n', target) == "yes"
 
 
 def _assert_content_refusal(
