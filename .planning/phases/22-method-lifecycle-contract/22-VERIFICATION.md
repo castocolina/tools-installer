@@ -259,4 +259,4 @@ Status stays `passed`; no open-real finding. Covered files unchanged, so the dig
 captures in `uat/80x20-after2/` and `uat/25/` show `What gets …`. Second, the opencode override reason text is
 outdated: opencode now removes through `remove = ["opencode2","service","stop"]`, a service stop. The override's
 substance, that `opencode uninstall` is never run, still holds.
-\n
+
