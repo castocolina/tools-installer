@@ -610,3 +610,149 @@ def test_docs_make_no_overclaim_about_bun() -> None:
         assert "run under node" in text, f"{rel}: never says bun-installed CLIs run under node"
         for claim in _BUN_OVERCLAIMS:
             assert claim not in text, f"{rel}: overclaims bun with {claim!r}"
+
+
+DEV_ENVIRONMENT = REPO_ROOT / ".claude" / "dev-environment.md"
+GIT_WORKFLOW = REPO_ROOT / ".claude" / "git-workflow.md"
+AGENTS = REPO_ROOT / "AGENTS.md"
+
+_GATE_TARGETS = (
+    "make lint",
+    "make format-check",
+    "make typecheck",
+    "make security",
+    "make dead-code",
+    "make shellcheck",
+    "make test",
+)
+
+
+def test_dev_environment_carries_the_gate_table() -> None:
+    """HOOK-06 (D-06): every gate, its target, the validate aggregate and the re-run rule."""
+    text = DEV_ENVIRONMENT.read_text(encoding="utf-8")
+    phrases = (
+        *_GATE_TARGETS,
+        "make validate",
+        "make hooks-e2e",
+        "make dev-setup",
+        "pre-commit run --all-files",
+        "re-run its own target",
+    )
+    for phrase in phrases:
+        assert phrase in text, f"dev-environment.md lacks {phrase!r}"
+
+
+def test_dev_environment_has_the_stage_table_with_timings() -> None:
+    """HOOK-06 (SPEC R6): a Stage table carries measured timings and their measurement date."""
+    text = DEV_ENVIRONMENT.read_text(encoding="utf-8")
+    assert re.search(r"\|\s*Stage\s*\|", text), "no Stage table header"
+    timings = re.findall(r"\d+(?:\.\d+)? ?(?:s|min)\b", text)
+    assert len(timings) >= 3, f"fewer than three measured timings: {timings}"
+    assert re.search(r"measured[^\n]*2026-", text), "no 2026 measurement date"
+
+
+def test_dev_environment_documents_the_push_gate_and_recovery() -> None:
+    """D-17/D-18/D-25/D-28: refusals and a placeholder-free, guarded edit recovery."""
+    text = DEV_ENVIRONMENT.read_text(encoding="utf-8")
+    phrases = (
+        "--fail-fast",
+        "main checkout",
+        ".git/info/exclude",
+        "GATE_READ_PATHSPECS",
+        "even when git ignores",
+        "${PRE_COMMIT_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit}",
+        'git apply --check "$patch" && git apply "$patch"',
+        'less "$patch" && git apply --check "$patch" && git apply "$patch"',
+    )
+    for phrase in phrases:
+        assert phrase in text, f"dev-environment.md lacks {phrase!r}"
+    for line in text.splitlines():
+        stripped = line.strip()
+        assert stripped not in (
+            'git apply "$patch"',
+            'git apply --check "$patch"',
+            'less "$patch"',
+        ), f"unguarded recovery line: {line!r}"
+        if "git apply" in line:
+            assert "<" not in line, f"placeholder on an apply line: {line!r}"
+
+
+def _section(text: str, heading: str) -> str:
+    """One Markdown section: its heading through the next heading of the same or higher level."""
+    lines = text.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.startswith("#") and heading in line),
+        None,
+    )
+    assert start is not None, f"no section headed {heading!r}"
+    level = len(lines[start]) - len(lines[start].lstrip("#"))
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line.startswith("#") and len(line) - len(line.lstrip("#")) <= level:
+            end = i
+            break
+    return "\n".join(lines[start:end])
+
+
+def test_git_workflow_documents_the_path_to_main() -> None:
+    """HOOK-05/06 (D-09, D-16, D-21): branch push, green CI, then a fast-forward of main."""
+    text = GIT_WORKFLOW.read_text(encoding="utf-8")
+    for phrase in ("git push origin <branch>:main", "strict", "fast-forward", "docs-only"):
+        assert phrase in text, f"git-workflow.md lacks {phrase!r}"
+
+
+def test_escape_hatch_turns_enforce_admins_back_on() -> None:
+    """P6 (D-10, review M9/C2-M3): every mutation is guarded so the read-back always runs."""
+    section = _section(GIT_WORKFLOW.read_text(encoding="utf-8"), "Escape hatch")
+    anchors = (
+        (
+            "gh api -X DELETE repos/castocolina/tools-installer/branches/main/"
+            "protection/enforce_admins ||"
+        ),
+        "git push origin HEAD:main ||",
+        (
+            "gh api -X POST repos/castocolina/tools-installer/branches/main/"
+            "protection/enforce_admins ||"
+        ),
+        "gh api repos/castocolina/tools-installer/branches/main/protection --jq",
+    )
+    offsets = [section.index(anchor) for anchor in anchors]
+    assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets), (
+        f"escape-hatch steps are not strictly ordered: {offsets}"
+    )
+    assert '"$branch:main"' not in section, (
+        "stale $branch:main refspec can delete remote main on a detached HEAD"
+    )
+    blocks = re.findall(r"```sh\n(.*?)```", section, re.DOTALL)
+    assert blocks, "the escape hatch has no shell block"
+    for block in blocks:
+        for line in block.splitlines():
+            if line.startswith("gh api -X") or line.startswith("git push"):
+                assert "||" in line, f"unguarded mutating line: {line!r}"
+            assert "<" not in line, f"placeholder in the escape block: {line!r}"
+    assert "always" in section, "no always-follows statement"
+    assert "cannot be restored" in section, "no escalation statement"
+
+
+def test_no_rule_doc_keeps_the_stale_validate_wording() -> None:
+    """D-23: no rule doc claims make validate runs pre-commit hooks or mirrors the hooks."""
+    stale = re.compile(r"runs? pre-commit hooks", re.IGNORECASE)
+    for path in _rule_document_paths():
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(REPO_ROOT)
+        assert not stale.search(text), f"{rel}: stale validate wording"
+        assert "mirror `make validate`" not in text, f"{rel}: stale mirror claim"
+
+
+def test_agents_carries_the_gate_table() -> None:
+    """D-06/D-23: AGENTS.md names every gate target and points to the path to main."""
+    text = AGENTS.read_text(encoding="utf-8")
+    phrases = (
+        *_GATE_TARGETS,
+        "pre-commit run --all-files",
+        "re-run its own target",
+        "git-workflow.md",
+    )
+    for phrase in phrases:
+        assert phrase in text, f"AGENTS.md lacks {phrase!r}"

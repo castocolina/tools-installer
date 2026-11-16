@@ -27,8 +27,9 @@ curl -fsSL https://raw.githubusercontent.com/castocolina/tools-installer/main/in
 
 `install.sh` clones `main`, so every `git push` to `main` is "published"
 immediately — the raw URL always serves the latest script, and the script always
-clones the latest `main`. CI (`.github/workflows/ci.yml`) runs `make validate`
-and `make test` on every push and pull request.
+clones the latest `main`. CI (`.github/workflows/ci.yml`) runs `make validate`,
+`make test` and `make hooks-e2e` on every push to a branch other than `main`, and
+`main` moves only by fast-forward to a commit whose CI passed.
 
 To pin to a specific branch, tag, or commit, callers set `TI_REF`:
 
