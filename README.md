@@ -327,8 +327,15 @@ workflow has a `make` target so local runs and CI are identical:
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
 | `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode |
 | `make audit-catalog` | maintainer tooling for the catalog-audit skill: prints read-only facts about one registry entry and validates and stores its audit report under `.planning/audits/catalog/<date>/`; subcommand via `ARGS="…"` (`status`, `facts`, `write`); never installs anything |
-| `make validate`  | pre-commit gates: `ruff check`, `ruff format --check`, `pyright`, `bandit`, `vulture`, `shellcheck` |
+| `make lint`      | ruff check                                                      |
+| `make format-check` | ruff format --check (no rewrite)                             |
+| `make typecheck` | pyright (strict)                                                |
+| `make security`  | bandit                                                          |
+| `make dead-code` | vulture                                                         |
+| `make shellcheck`| shellcheck the install script and scripts/                      |
+| `make validate`  | every commit-stage gate through `pre-commit run --all-files`    |
 | `make test`      | `pytest` with coverage                                          |
+| `make hooks-e2e` | prove the commit hook and the push gate with real git in scratch repos |
 | `make build`     | build the distributable                                         |
 | `make uninstall` | remove userspace artifacts. Interactively (a TTY) this opens the app on the **uninstall view**: toggle which tools to remove, plus an independent toggle for the managed `~/.myshellrc` PATH wiring, applied live with reload guidance. Non-interactively / `--yes` it runs the unchanged console flow (previews `~/.local/opt/*` dirs, `~/.local/bin` symlinks, and the PATH block, then confirms) |
 
@@ -365,7 +372,7 @@ installer/
   shellrc.py, doctor.py    # ~/.myshellrc management + PATH audit/fix
   locations.py, status.py, run.py, links.py   # seams: paths, is-installed, runner, URLs
 tests/                     # pytest suite (offline, deterministic)
-.github/workflows/ci.yml   # CI: make validate + make test on Ubuntu + macOS
+.github/workflows/ci.yml   # CI: on every branch push except main — validate, test, hook e2e on Ubuntu + macOS
 Makefile                   # task interface: dev-setup, run, doctor, build, validate, test
 pyproject.toml             # deps + tool config (ruff, pyright, pytest, coverage, …)
 AGENTS.md, .claude/        # contributor rules (tooling, testing, git, dev env)

@@ -728,3 +728,26 @@ def test_escape_hatch_turns_enforce_admins_back_on() -> None:
             assert "<" not in line, f"placeholder in the escape block: {line!r}"
     assert "always" in section, "no always-follows statement"
     assert "cannot be restored" in section, "no escalation statement"
+
+
+def test_no_rule_doc_keeps_the_stale_validate_wording() -> None:
+    """D-23: no rule doc claims make validate runs pre-commit hooks or mirrors the hooks."""
+    stale = re.compile(r"runs? pre-commit hooks", re.IGNORECASE)
+    for path in _rule_document_paths():
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(REPO_ROOT)
+        assert not stale.search(text), f"{rel}: stale validate wording"
+        assert "mirror `make validate`" not in text, f"{rel}: stale mirror claim"
+
+
+def test_agents_carries_the_gate_table() -> None:
+    """D-06/D-23: AGENTS.md names every gate target and points to the path to main."""
+    text = AGENTS.read_text(encoding="utf-8")
+    phrases = (
+        *_GATE_TARGETS,
+        "pre-commit run --all-files",
+        "re-run its own target",
+        "git-workflow.md",
+    )
+    for phrase in phrases:
+        assert phrase in text, f"AGENTS.md lacks {phrase!r}"

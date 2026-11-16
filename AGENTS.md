@@ -16,17 +16,33 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 - `make uninstall` — remove installed artifacts
 - `make verify-registry` — check registry pins against upstream (read-only; pass `ARGS="--write"` to bump)
 - `make audit-catalog` — the catalog-audit skill's fact gatherer and report writer (read-only facts; writes only `.planning/audits/catalog/<date>/`; pass the subcommand via `ARGS="…"`)
-- `make validate`  — run pre-commit hooks (lint, format check, types, security, dead code)
+- `make validate`  — run every commit-stage gate through `pre-commit run --all-files` (verify a whole plan or phase)
 - `make test`      — `pytest -n auto` with coverage, capped at ~40% of the host's threads (see [Testing](.claude/testing.md))
+- `make hooks-e2e` — prove the commit hook and the push gate with real git in scratch repos
+
+### Gates
+
+| Gate                | Target              | Stage        |
+| ------------------- | ------------------- | ------------ |
+| ruff check          | `make lint`         | commit, push |
+| ruff format --check | `make format-check` | commit, push |
+| pyright             | `make typecheck`    | commit, push |
+| bandit              | `make security`     | commit, push |
+| vulture             | `make dead-code`    | commit, push |
+| shellcheck          | `make shellcheck`   | commit, push |
+| pytest + coverage   | `make test`         | push         |
+
+When a gate fails, fix it and re-run its own target.
 
 ## Non-negotiable rules
 
 - **English only.** Every response, identifier, comment, docstring, log line, and
   commit message is in English — no matter what language the request is written in.
 - **Never bypass a quality gate.** Fix the root cause; never silence a check to make
-  it pass. Details: [Python Tooling](.claude/python-tooling.md), [Testing](.claude/testing.md).
+  it pass, and never skip a git hook. Details: [Python Tooling](.claude/python-tooling.md), [Testing](.claude/testing.md).
 - **Coherent commits.** Do not pile up "fix review comment" commits. Amend or squash
   so each commit is one self-contained, valid change. See [Git Workflow](.claude/git-workflow.md).
+- **Changes reach `main` by branch push, green CI, fast-forward** ([Git Workflow](.claude/git-workflow.md)).
 - **Validate before you commit.** `make validate && make test` must pass on the exact
   tree you are about to commit.
 - **Never mutate the developer's host.** Do not run `make run`, `make fix`,

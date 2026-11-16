@@ -3,16 +3,17 @@
 ## Overview
 
 The project enforces quality with a fixed set of tools, all configured in
-`pyproject.toml` and run through `make validate` (and pre-commit). These apply to
-every change to Python code.
+`pyproject.toml` and run through `make validate`; each has its own make target, and
+`make validate` runs them all through pre-commit. These apply to every change to
+Python code.
 
 | Tool          | Purpose                          | Run via            |
 | ------------- | -------------------------------- | ------------------ |
-| `ruff check`  | Linting (pyflakes, pycodestyle, isort, bugbear, …) | `make validate` |
-| `ruff format` | Code formatting (Black-compatible) | `make validate`  |
-| `pyright`     | Static type checking (strict)    | `make validate`   |
-| `bandit`      | Security static analysis         | `make validate`   |
-| `vulture`     | Dead-code detection              | `make validate`   |
+| `ruff check`  | Linting (pyflakes, pycodestyle, isort, bugbear, …) | `make lint`     |
+| `ruff format` | Code formatting (Black-compatible) | `make format-check` |
+| `pyright`     | Static type checking (strict)    | `make typecheck`  |
+| `bandit`      | Security static analysis         | `make security`   |
+| `vulture`     | Dead-code detection              | `make dead-code`  |
 
 > `ruff format` is the only formatter. Do not add `black` — it duplicates `ruff format`.
 
