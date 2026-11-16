@@ -417,6 +417,7 @@ def test_architecture_records_the_install_tuning_rule() -> None:
 
 README = REPO_ROOT / "README.md"
 TROUBLESHOOTING = REPO_ROOT / "docs" / "TROUBLESHOOTING.md"
+LINK_CHECKED_DOCS: tuple[Path, ...] = (README, TROUBLESHOOTING)
 
 
 def _outside_fences(text: str) -> str:
@@ -442,6 +443,21 @@ def _headings(text: str) -> set[str]:
     return {_slug(match.group(1)) for match in found}
 
 
+def link_targets(doc: Path) -> list[str]:
+    """Every non-external link target in doc's prose, exactly as written.
+
+    This is the parser the link test uses; the docs-only drift test reuses it so a new
+    link and its runtime-resolved target are checked by the same code.
+    """
+    text = _outside_fences(doc.read_text(encoding="utf-8"))
+    targets: list[str] = []
+    for target in re.findall(r"\]\(([^)\s]+)\)", text):
+        if re.match(r"[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
+            continue  # an external scheme such as https: or mailto:
+        targets.append(target)
+    return targets
+
+
 def _broken_links(doc: Path) -> list[str]:
     """Each relative link or anchor in doc that does not resolve, as written.
 
@@ -451,9 +467,7 @@ def _broken_links(doc: Path) -> list[str]:
     """
     text = _outside_fences(doc.read_text(encoding="utf-8"))
     broken: list[str] = []
-    for target in re.findall(r"\]\(([^)\s]+)\)", text):
-        if re.match(r"[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
-            continue  # an external scheme such as https: or mailto:
+    for target in link_targets(doc):
         path_part, _, fragment = target.partition("#")
         if not path_part:
             if fragment not in _headings(text):
@@ -474,7 +488,7 @@ def _missing_fragment(dest: Path, fragment: str) -> bool:
 
 def test_readme_and_troubleshooting_links_resolve() -> None:
     """Every anchor and relative link in the two user documents resolves (T-24.4-21)."""
-    for doc in (README, TROUBLESHOOTING):
+    for doc in LINK_CHECKED_DOCS:
         assert _broken_links(doc) == [], f"{doc.relative_to(REPO_ROOT)}: broken links"
 
 
