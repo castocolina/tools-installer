@@ -27,7 +27,7 @@ Every workflow has a target so humans and CI run the same thing:
 
 | Target           | Does                                                            |
 | ---------------- | -------------------------------------------------------------- |
-| `make install`   | `uv sync` (creates `.venv`, installs runtime + dev deps)        |
+| `make dev-setup` | `uv sync`, then the commit hook and the push gate (`python -m devtools.hooks install`); run it from the main checkout |
 | `make build`     | build the distributable                                         |
 | `make run`       | `uv run --isolated --no-dev setup.py` (launch the wizard, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours))   |
 | `make doctor`    | audit & fix `PATH` (`uv run --isolated --no-dev setup.py --doctor`)                 |
