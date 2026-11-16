@@ -55,6 +55,8 @@ Downstream agents MUST read `26-SPEC.md` before planning or implementing. Requir
   - It applies the R3 refusals before any check, in this order:
     1. staged changes that are not committed;
     2. untracked `.py` files under `installer/` or `tests/` (recursive, ignored files excluded);
+       *(amended 2026-11-16 by D-25 and D-28: every untracked file outside `.planning/`; the gate-read files of
+       D-28 count even when git ignores them.)*
     3. any pushed commit that is not HEAD.
   - A deletion-only push goes through with no checks.
   - Each refusal lists the offending files or refs, sorted.
@@ -267,6 +269,8 @@ it amends; SPEC.md carries a matching inline note.
   - The shim fails closed: without `uv` on PATH it prints the cause and exits 1.
   - The commit hook keeps pre-commit's own migration: a foreign `pre-commit` hook becomes `pre-commit.legacy` and
     still runs.
+    *(amended 2026-11-16 by D-29: the hook step refuses, untouched, a `pre-commit` entry that is not a regular file,
+    and a foreign `pre-commit` while `pre-commit.legacy` already exists.)*
 
 ## Review amendments (2026-11-16, plan-phase `--reviews`, cycle 1, review commit `d933e9c8`)
 
@@ -288,6 +292,8 @@ finding and the SPEC item it amends. SPEC.md carries a matching inline note.
   - Why not a fixed list of names: it would need the same upkeep review M1 rejects for the gate set, and each
     omission is a false green. The broad rule's cost is a false refusal for a scratch file outside `.planning/`.
     Its fix is one permanent line in `.git/info/exclude`, and agents already keep scratch files outside the repo.
+    *(amended 2026-11-16 by D-28: ignored files take a fixed list of gate-read pathspecs, and the
+    `.git/info/exclude` advice applies only to a file no gate reads.)*
   - Why `.planning/` stays exempt: SPEC R5 already treats it as docs, `.planning/debug/` and the phase `.gitkeep`
     files stay untracked by the owner's rule, and no gate reads `.planning/` except the SKILLJUDGE glob of
     `tests/test_catalog_audit_skill.py:401`. That test checks each file it finds, so an extra untracked file can
@@ -308,6 +314,57 @@ finding and the SPEC item it amends. SPEC.md carries a matching inline note.
   classifier: a new link always edits README or TROUBLESHOOTING, which are test-read, so that change runs the full
   suite, where the drift test fails until the target joins `TEST_READ`. The classifier stays small and stdlib-only
   for its first push.
+
+## Review amendments (2026-11-16, plan-phase `--reviews`, cycle 2, review commit `52b2b19f`)
+
+Added when the plans were revised against the cycle-2 section of `26-REVIEWS.md` (orchestrator-verified findings).
+SPEC.md carries a matching inline note for each.
+
+- **D-28: Gate-read files are refused even when git ignores them** (review C2-H1, verified; narrows "ignored files
+  excluded" in D-01 item 2 and D-25, and in SPEC R3 and its adjacency edge row).
+  - Refusal 3 runs a second, bounded query: `git --glob-pathspecs ls-files --others -z -- <GATE_READ_PATHSPECS>`.
+    With no exclude option it lists every untracked file the pathspecs match, ignored or not. `GATE_READ_PATHSPECS`
+    is a fixed tuple in `devtools/push_gate.py`: the root files `conftest.py`, `pytest.ini`, `.pytest.ini`,
+    `tox.ini`, `setup.cfg`, `.coveragerc`, `pyrightconfig.json`, `ruff.toml`, `.ruff.toml`, `GNUmakefile`,
+    `makefile`, `.shellcheckrc`, `.python-version` and `uv.toml`; Python sources at any depth under `installer/`,
+    `tests/` and `devtools/` (every `conftest.py` there included); `ruff.toml` and `.ruff.toml` under those three
+    trees; `.bandit` under the bandit targets `installer/` and `devtools/`; `.shellcheckrc` under `scripts/`; and
+    `typings/`.
+  - Why: pre-commit stashes only tracked edits (`staged_files_only.py:50-82`), so an ignored root `conftest.py`,
+    `pytest.ini` or `GNUmakefile` still changes what pytest or make runs. pytest and pyright do not read
+    `.gitignore`, so an ignored module under the source trees is still collected, type-checked and importable. D-25's
+    advice to ignore a file through `.git/info/exclude` would otherwise turn refusal 3 into a bypass.
+  - Why a fixed list here, when D-25 rejected one: the broad D-25 rule still covers every non-ignored file.
+    Ignored files cannot take a broad rule, because `.venv/` and the tool caches are always present. The list names
+    the two classes that change what runs: config and plugin files the gates load, and the gated sources. Every
+    pathspec is an exact root name or starts with a literal directory, so git never walks `.venv/` (a scratch-repo
+    trace with git 2.56.0 visited 5 directories, against 608 for the unbounded listing). `--glob-pathspecs` makes
+    `**` behave the same whatever the caller's environment; a conflicting `GIT_LITERAL_PATHSPECS` or
+    `GIT_NOGLOB_PATHSPECS` makes git exit 128, so the gate fails closed.
+  - Advice: the refusal lists the gate-read files in their own sorted part, with the fix "commit them, or move them
+    out of the repository", and never advises ignoring one. The `.git/info/exclude` advice stays only in the part
+    listing the other untracked files, worded for a file no gate reads.
+  - Residual (accepted): an ignored file outside the list, such as an unlisted config or a data file the code reads,
+    can still let a local push pass while CI fails. CI on the pushed commit, required for everyone by
+    `enforce_admins`, stays the binding gate.
+  - This checkout: the query lists nothing (read-only check, 2026-11-16). `.graphifyignore` is read by no gate, so
+    26-09's `.git/info/exclude` step for it stays valid.
+  - **Reversibility:** reversible. One tuple and one query in `devtools/push_gate.py`.
+- **D-29: `make dev-setup` preflights the commit hook before pre-commit's migration** (review C2-H2, verified;
+  narrows D-24's last bullet and the SPEC R4 adjacency backstop row).
+  - pre-commit moves a hook it does not recognize to `pre-commit.legacy` with `shutil.move`, which on Unix renames
+    over an existing `pre-commit.legacy`. It also follows a symlink when it reads and writes the hook
+    (`pre_commit/commands/install_uninstall.py:56-61`, `:75-77`, `:93`).
+  - So, before `pre-commit install` and before any write, the hook step runs `os.lstat` on
+    `<common>/hooks/pre-commit`. A non-regular entry (symlink, directory, FIFO) is refused untouched. A regular file
+    without pre-commit's header line `# File generated by pre-commit` (a foreign hook) is refused untouched when
+    `pre-commit.legacy` already exists as any entry, a dangling symlink included. The message names the file, or
+    both files, and the fix: move one of them out of the hooks directory, merging them first if both are needed.
+  - A foreign hook with no legacy file still goes through pre-commit's migration (D-24), and pre-commit's own hook
+    next to a legacy file is rewritten in place, so a rerun after a migration stays byte-identical.
+  - Residual (accepted): a hand-edited hook that keeps pre-commit's header but drops its `# ID:` hash counts as
+    pre-commit's own here, while pre-commit treats it as foreign.
+  - **Reversibility:** reversible. One preflight in `devtools/hooks.py`.
 
 </decisions>
 

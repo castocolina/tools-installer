@@ -89,6 +89,10 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      outside `.planning/`, at any depth and the repo root included, whatever its extension. A root `conftest.py` or
      `pytest.ini` changes what pytest runs. Untracked `.py` under `installer/` or `tests/` is a subset. The target
      above is the authority for the widening.)*
+   - *(amended 2026-11-16, 26 plan-phase D-28 (review C2-H1): a fixed list of gate-read files, the config and
+     plugin files the gates load plus the Python sources under `installer/`, `tests/` and `devtools/`, counts even
+     when git ignores it, such as an ignored root `conftest.py` or `GNUmakefile`. The refusal never advises
+     ignoring a gate-read file. Other ignored files stay excluded.)*
 
 4. **`make install` installs both hooks**: `make install` installs the pre-commit and pre-push hooks after `uv sync`.
    Running it again changes nothing. Outside a git checkout it skips the hook step with a one-line message and still
@@ -111,6 +115,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      touching it.)*
    - *(amended 2026-11-16, 26 plan-phase D-26 (review M12): the AGENTS.md rule that agents never run
      `make dev-setup` names its one exception, the final owner-assigned checkpoint that lists the real install.)*
+   - *(amended 2026-11-16, 26 plan-phase D-29 (review C2-H2): before pre-commit runs, the hook step refuses,
+     untouched, a `pre-commit` entry that is not a regular file, and a foreign `pre-commit` while
+     `pre-commit.legacy` already exists, because pre-commit's migration would rename over the legacy file.)*
 
 5. **`main` is gated behind CI on GitHub**: Branch protection on `main` has `enforce_admins` enabled and requires both
    CI contexts, so GitHub rejects any update to `main`, an admin's included, unless both checks passed on that commit.
@@ -228,13 +235,13 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 | empty | R2 | ✅ covered | (added 2026-11-16, D-05) A push with no changed files still runs every gate (`always_run`) (AC: "whatever files the push touches") |
 | encoding | R2 | ⛔ dismissed | (added 2026-11-16, D-05) The gates take no file names (`pass_filenames: false`), so file-name encoding never reaches them |
 | ordering | R2 | ✅ covered | (added 2026-11-16, D-05) The static gates run before the `make test` gate, which is last in the config. The pin covers the order (AC: pre-push stage line) |
-| adjacency | R3 | ✅ covered | Untracked `.py` files count recursively under `installer/` and `tests/`; ignored files and paths outside the two trees do not; a pushed ref that is not HEAD is refused (AC: untracked, ref lines) *(amended 2026-11-16, 26 plan-phase D-25: every untracked, non-ignored file outside `.planning/` counts, at any depth, the repo root included (a root `conftest.py`, a root `pytest.ini`); ignored files and paths under `.planning/` do not)* |
+| adjacency | R3 | ✅ covered | Untracked `.py` files count recursively under `installer/` and `tests/`; ignored files and paths outside the two trees do not; a pushed ref that is not HEAD is refused (AC: untracked, ref lines) *(amended 2026-11-16, 26 plan-phase D-25: every untracked, non-ignored file outside `.planning/` counts, at any depth, the repo root included (a root `conftest.py`, a root `pytest.ini`); ignored files and paths under `.planning/` do not)* *(amended 2026-11-16, 26 plan-phase D-28: the gate-read files of `GATE_READ_PATHSPECS` in `devtools/push_gate.py` count even when ignored, such as an ignored root `conftest.py` or `GNUmakefile`; other ignored files still do not)* |
 | empty | R3 | ✅ covered | A push that only deletes a remote ref runs no checks and goes through (AC: ref line) |
 | encoding | R3 | 🧪 backstop | File names come from git verbatim; held-out test with a space in a file name (AC: sorted-names line) |
 | ordering | R3 | ✅ covered | Refusal messages list the offending files sorted (AC: sorted-names line) |
 | idempotency | R3 | ✅ covered | Running the gate leaves the tree as it was: set-aside edits come back byte-identical, so a second run sees the same tree (AC: restore line) |
 | concurrency | R3 | ✅ covered | Ctrl-C during the gate restores the set-aside unstaged edits (AC: restore line; must-NOT P2) *(amended 2026-11-16, 26 plan-phase D-17: SIGINT, SIGTERM or SIGHUP to the gate's process group, forwarded once as SIGINT)* |
-| adjacency | R4 | 🧪 backstop | An existing foreign hook file is kept by pre-commit as `<hook>.legacy` and still runs; held-out test that it is not lost |
+| adjacency | R4 | 🧪 backstop | An existing foreign hook file is kept by pre-commit as `<hook>.legacy` and still runs; held-out test that it is not lost *(amended 2026-11-16, 26 plan-phase D-29: when `pre-commit.legacy` already exists, or `pre-commit` is a symlink or other non-regular entry, the hook step refuses and leaves both untouched instead)* |
 | empty | R4 | ✅ covered | Outside a git checkout: skip with a message, exit 0. With `core.hooksPath` set: fail and name it (AC: skip, hooksPath lines) |
 | encoding | R4 | ⛔ dismissed | The hook files are pre-commit's generated ASCII scripts; the byte-identical rerun check already covers their content |
 | ordering | R4 | ⛔ dismissed | The two hook files are independent; the order they are written in has no effect |
