@@ -367,7 +367,7 @@ def test_render_node_globals_prints_finding() -> None:
     )
     out = buf.getvalue()
     assert "mmdc" in out
-    assert "make setup" in out
+    assert "make run" in out
 
 
 def test_guidance_text_styles_by_severity_and_suppresses_empty_next_step() -> None:

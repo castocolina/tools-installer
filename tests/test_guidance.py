@@ -223,7 +223,7 @@ def test_node_globals_guidance_warns_and_points_at_make_setup() -> None:
     assert item.severity == "warn"
     assert "mmdc" in item.meaning
     assert "pnpm" in item.meaning.lower()
-    assert item.next_step.startswith("Run `make setup`")
+    assert item.next_step.startswith("Run `make run`")
 
 
 def test_node_globals_guidance_warns_on_a_split_install_group() -> None:
@@ -240,7 +240,7 @@ def test_node_globals_guidance_warns_on_a_split_install_group() -> None:
     assert item.severity == "warn"
     assert "puppeteer" in item.meaning
     assert "mermaid" in item.meaning
-    assert item.next_step.startswith("Run `make setup`")
+    assert item.next_step.startswith("Run `make run`")
 
 
 def test_node_globals_guidance_reports_missing_and_split_together() -> None:
@@ -253,8 +253,8 @@ def test_node_globals_guidance_reports_missing_and_split_together() -> None:
         )
     )
     assert len(items) == 2
-    assert items[0].next_step.startswith("Run `make setup`")
-    assert items[1].next_step.startswith("Run `make setup`")
+    assert items[0].next_step.startswith("Run `make run`")
+    assert items[1].next_step.startswith("Run `make run`")
     assert "puppeteer" in items[1].meaning
 
 
@@ -303,7 +303,7 @@ def test_node_globals_guidance_warns_on_an_incomplete_install_group() -> None:
     assert item.severity == "warn"
     assert "@mermaid-js/mermaid-cli" in item.meaning
     assert "puppeteer" in item.meaning
-    assert item.next_step.startswith("Run `make setup`")
+    assert item.next_step.startswith("Run `make run`")
 
 
 def test_group_members_are_joined_as_a_sentence_not_repeated_ands() -> None:
@@ -348,7 +348,7 @@ def test_node_globals_guidance_warns_when_an_installed_tool_fails_its_smoke_chec
     assert "puppeteer" in item.meaning
     assert "could not be started" in item.meaning
     # `r` replays pnpm's global set; a missing shared library is not in it.
-    assert not item.next_step.startswith("Run `make setup`")
+    assert not item.next_step.startswith("Run `make run`")
     assert item.next_step
 
 
@@ -634,7 +634,7 @@ def test_broken_link_guidance_never_escalates(tmp_path: Path):
             text = f"{item.title} {item.meaning} {item.next_step}"
             assert "sudo" not in text and "pkexec" not in text and "doas" not in text
             assert not item.next_step.startswith("Run `make fix`")
-            assert not item.next_step.startswith("Run `make setup`")
+            assert not item.next_step.startswith("Run `make run`")
 
 
 def test_only_broken_links_is_a_problem(tmp_path: Path):

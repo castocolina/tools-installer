@@ -353,7 +353,7 @@ def test_disk_pressure_points_at_schedules() -> None:
         tmp_threshold=True,
     )
     [item] = disk_pressure_guidance(pressure)
-    assert item.next_step.startswith("Turn on tmp cleanup in `make setup`'s Schedules view; a ")
+    assert item.next_step.startswith("Turn on tmp cleanup in `make run`'s Schedules view; a ")
     assert "Policies" not in item.next_step
 
 

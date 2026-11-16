@@ -139,7 +139,7 @@ def doctor_guidance(
             next_step = (
                 f"If tools-installer installed it, remove {link.path} and "
                 f"{link.opt_dir} (rm -rf {shlex.quote(str(link.opt_dir))}), "
-                "then reinstall the tool from the catalog (make setup)."
+                "then reinstall the tool from the catalog (make run)."
             )
         else:
             next_step = (
@@ -221,7 +221,7 @@ def doctor_guidance(
 
 
 _REINSTALL_NEXT_STEP = (
-    "Run `make setup` and open the Doctor view to reinstall the globals pnpm still tracks."
+    "Run `make run` and open the Doctor view to reinstall the globals pnpm still tracks."
 )
 
 
@@ -418,11 +418,11 @@ def _disk_pressure_next_step(pressure: DiskPressure) -> str:
         # prune script as the immediate one-off (D-03's action text). This
         # sentence is deliberately NOT runnable_prune_sentence verbatim, and
         # plan 15.7-06 rewrites it (by its own new prefix match, distinct
-        # from the existing "Run `make fix`"/"Run `make setup`" prefixes
+        # from the existing "Run `make fix`"/"Run `make run`" prefixes
         # DoctorScreen._tui_guidance already recognises) into a "go to the
         # Schedules view" TUI instruction (24.2: the tmp cleanup is a Schedules row).
         return (
-            "Turn on tmp cleanup in `make setup`'s Schedules view; a "
+            "Turn on tmp cleanup in `make run`'s Schedules view; a "
             f"one-off `{command}` run clears space immediately in the meantime."
         )
     if pressure.daemon is DaemonState.UNAVAILABLE:
