@@ -130,3 +130,65 @@ Expected: both CLI routes run to completion with their normal output. A retired
 ## Issues
 
 None.
+
+## Run-log capture 2026-11-16
+
+Closes the gap the verification left open: the dropped-lines notice had only test evidence, never a real screen.
+
+Setup: disposable container `ti-uat-25b-fedora` (Fedora 44 from the already-present image, `--init`, user `tester`, repo from
+`git archive HEAD` = 8b0d1bf1, uv sync --no-dev). Driver `scratchpad/rv25b-driver.py` hosts the real `ExecuteScreen` in the real
+`UnifiedApp` (as `tests/test_execute_screen.py::_host` does), shows the log with the `-running` class and feeds 6,000 numbered
+lines plus a final `DONE` through `ExecuteScreen.write_log`. Two orders: `after` (written once the log has a width and has replayed)
+and `burst` (written before the first layout, replayed on the first resize). Run in tmux inside the container (NO_COLOR=1) at 80x20 and
+120x40, then resized with `tmux resize-window`; one more capture through `herdr pane read --source visible` in a default-size
+(252x69) herdr tab. Nothing ran on the host. Captures: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/uat/25-runlog/`.
+
+| Capture file | Size | Notice | Last line | Footer |
+|---|---|---|---|---|
+| after-80x20.txt | 80x20 | 1001 earlier lines dropped | DONE | whole |
+| burst-80x20.txt | 80x20 | 1001 earlier lines dropped | DONE | whole |
+| after-120x40.txt | 120x40 | 1001 earlier lines dropped | DONE | whole |
+| burst-120x40.txt | 120x40 | 1001 earlier lines dropped | DONE | whole |
+| after-80x20-resized-100x30.txt, burst-80x20-resized-100x30.txt | 80x20 to 100x30 | present | DONE | whole |
+| after-120x40-resized-90x25.txt, burst-120x40-resized-90x25.txt | 120x40 to 90x25 | present | not visible (see below) | whole |
+| herdr-after-default.txt | 252x69 | 1001 earlier lines dropped | DONE | whole |
+| state-*.txt | all | widget state: `dropped=1001 stored=5000` in all four runs | | |
+
+Observed against Expected:
+
+- The notice `1001 earlier lines dropped` (the count the code computes: 6,001 written minus the 5,000 bound) sits directly above the log
+  at both sizes, in both write orders and in the herdr pane. The newest line `DONE` is the last log row; the header
+  (`Install plan`, row box) and the footer key bar (`enter continue · up/down move · esc cancel`) are whole.
+- No screen-level scrollbar: the only block glyphs are the plan-row box border, and after a shrink the log's own thin scrollbar
+  thumb at its right edge (inner widget, not the screen).
+- Resize: growing 80x20 to 100x30 keeps the notice and keeps DONE visible. Shrinking 120x40 to 90x25 keeps the notice, but the log
+  stays at its old scroll offset, so the tail (to about line 5985) is cut off and DONE is not visible until the next write or a
+  scroll. This is how Textual's RichLog keeps its offset on a shrink; I did not compare it with a pre-phase build, so it is recorded as
+  an observation, not a phase 25 regression (low severity, cosmetic, only after a manual terminal shrink).
+- Scope limits, said plainly: the Execute screen here is a modal over the app, so the tab bar is hidden behind it exactly as in a
+  real run (the "tab chrome" check is not applicable to this screen; the footer is the screen's own key bar). The run was driven,
+  not a real install: the plan row shows `checking…` because the test double publishes no version state, and no tool was installed.
+- Verdict: pass for the notice, the newest line, the chrome and the resize-keeps-notice clause. LEAN-04's rendered check is now
+  proven on a real screen at two sizes plus the default size, not only by tests.
+- Harness note: my first run lost the UI because I redirected stderr (Textual draws on stderr) and a driver task outside the app's
+  context raised `LookupError: active_app`. Both were my driver's faults and are fixed in `rv25b-driver.py`; product code untouched.
+
+## jev ladder 2026-11-16
+
+Entry point `jev_review.py ladder` (Laya first, then TypeSafe under the consent recorded 2026-10-14; `consent_used: typesafe`). One
+`choice` item per finding, evidence in each item's `context` (summaries only), `reviewed_head` 8b0d1bf1e5b0408f2f40ecdd50b253a367ca1355.
+Receipt: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/rv25b-jev-out.json`. jev is advisory; the final verdict is my own reasoning against the evidence.
+
+| Item | Laya | TypeSafe | decided_by | Final verdict |
+|---|---|---|---|---|
+| UAT test 1 (every view unchanged) | open-real, top 0.31 (needs_fallback) | open-real, 0.95 | typesafe | **resolved** (override, below) |
+| UAT test 2 (install and removal) | open-real, 0.43 (needs_fallback) | resolved, 0.58 (needs_fallback) | own reasoning | **resolved** |
+| UAT test 3 (CLI routes) | open-real, 0.44 (needs_fallback) | resolved, 0.66 (needs_fallback) | own reasoning | **resolved** |
+| Run-log capture | resolved, 0.42 (needs_fallback) | resolved, 0.66 (needs_fallback) | own reasoning | **resolved** (shrink observation recorded above) |
+
+Override, UAT test 1: TypeSafe said open-real at 0.95. The item's context named the gap it keyed on: macOS and a real systemd user
+manager were not covered. The evidence for the claim itself is complete (20 of 20 captures byte-identical to the pre-phase set, default
+size checked). macOS has no container path, so the owner rule defers it, and CI run 43783376230 already passed on macos; the systemd
+Schedules view reads `n/a` in the container exactly as in the baseline. Those are the deferred host-only gaps listed under Results,
+not a defect in the view. The other six answers were low confidence and mostly Laya noise (Laya said open-real on every item,
+consistent with its 50% confident-answer calibration), so none decided anything.

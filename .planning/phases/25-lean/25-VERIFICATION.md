@@ -84,3 +84,25 @@ No TBD/FIXME markers in installer/compose.py. compose.py at 934 lines exceeds 80
 None. Every previously open item is resolved.
 
 _Verifier: Claude (gsd-verifier)_
+
+## jev ladder 2026-11-16
+
+Entry point `jev_review.py ladder` (Laya, then TypeSafe under the consent recorded 2026-10-14), one `choice` item per finding with the
+evidence in its `context`, `reviewed_head` 8b0d1bf1e5b0408f2f40ecdd50b253a367ca1355. The earlier note "no jev classification was
+needed" is superseded: the findings were classified. Receipt: `/tmp/claude-1000/-var-home-bazzite-git-personal-tools-installer/954c3fb8-ff60-4af7-85b4-b39cda9abded/scratchpad/rv25b-jev-out.json`. Advisory only.
+
+| Finding | Laya | TypeSafe | decided_by | Final verdict |
+|---|---|---|---|---|
+| F1 compose `__all__` lists private names (locked by D-05) | open-real, 0.32 (needs_fallback) | resolved, 0.65 (needs_fallback) | own reasoning | **resolved** (accepted by design, D-05) |
+| F2 25-11 SUMMARY net -76 lines | open-real, 0.41 (needs_fallback) | open-trivial, 0.57 (needs_fallback) | own reasoning | **resolved** |
+| F4 deferred-items.md closed | resolved, 0.30 (needs_fallback) | resolved, 0.82 | typesafe | **resolved** |
+
+Overrides and reasons: no jev answer was confident and against the evidence, but two disagree and are overridden on the evidence. F1:
+Laya open-real (0.32, noise) and TypeSafe resolved (0.65); my verdict is resolved because CONTEXT D-05 locks the re-export, and it is
+a named design decision, not a defect. F2: Laya open-real and TypeSafe open-trivial, both under the confidence threshold; my verdict
+is resolved because the corrected figure (net -32 at HEAD) is already recorded in this file and the SPEC accepts any line count. F4
+agrees with the evidence (TypeSafe 0.82).
+
+Rendered run-log evidence for LEAN-04: see 25-UAT.md "Run-log capture 2026-11-16" (notice, newest line and footer captured at 80x20,
+120x40 and the default size; resize keeps the notice). The "Execute screen with a long run" row above, "accepted on test evidence",
+now also has a real-screen capture.
