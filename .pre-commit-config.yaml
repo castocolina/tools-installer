@@ -1,5 +1,7 @@
 # Each gate's command lives once, in its Makefile target. The commit stage runs the six static
-# gates; the push stage runs them again. `make validate` runs the commit stage through pre-commit.
+# gates; the push stage runs them again, then `make test`. `make validate` runs the commit stage
+# through pre-commit. `pre-commit install` writes only the commit hook.
+default_install_hook_types: [pre-commit]
 repos:
   - repo: local
     hooks:
@@ -45,3 +47,10 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit, pre-push]
+      - id: tests
+        name: make test
+        entry: make test
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
