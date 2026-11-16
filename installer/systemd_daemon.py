@@ -528,7 +528,7 @@ class TimerStateCache(_ProbeCache[DaemonState]):
     with an injected monotonic clock for deterministic TTL tests.
 
     D-01e: this is the ONE shared instance every consumer in this phase
-    reads -- constructed once by setup.py::_timer_state_cache and injected
+    reads -- constructed once by compose.py::_timer_state_cache and injected
     into both the Linux daemon Policy and plan 15.7-06's disk-pressure
     probe. D-01c: the split between read()/peek() is load-bearing --
     read() may spawn one bounded probe (Policy.active/is_active, Doctor

@@ -378,7 +378,7 @@ class DoctorScreen(AppScreen):
         if self.applied:
             text.append("PATH wired.", style="green")
             text.append("\nRestart your shell or run `source ~/.myshellrc` to apply.")
-            # The audit above is a process-lifetime snapshot (setup.py::_build_app
+            # The audit above is a process-lifetime snapshot (compose.py::_build_app
             # reads os.environ["PATH"] once) -- it genuinely cannot reflect this
             # fix yet. Say so explicitly, framed as expected rather than as a
             # second warning, only once there is something frozen to explain.

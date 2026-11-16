@@ -144,7 +144,7 @@ class SettingsStore:
             raise ValueError(f"rejected link_mode {value!r}")
         # Save FIRST, then update the live mode (17-08): a failed save must
         # leave self._link_mode on the old value, because the tweak
-        # closures read it live (setup.py::_current_link_mode) and
+        # closures read it live (compose.py::_current_link_mode) and
         # policy.move_link_mode's rollbacks re-apply blocks into the files the
         # LIVE mode selects. Assigning first would point the closures at the
         # new mode while the disk still records the old one.

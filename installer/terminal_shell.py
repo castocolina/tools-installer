@@ -947,7 +947,7 @@ def sync_terminal_shells(
         # that actually lives elsewhere (a dotfiles-managed or XDG-relocated
         # oh-my-zsh checkout).
         # G-01: resolve the repair target through the same $ZDOTDIR-aware
-        # resolver the Policies route already uses (setup.py::_ZSHRC), so the
+        # resolver the Policies route already uses (compose.py::_ZSHRC), so the
         # repair never edits a file zsh does not source.
         ensure_zshrc_template(zshrc_path(home, environ), root)
 
