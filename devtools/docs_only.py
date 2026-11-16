@@ -25,7 +25,7 @@ TEST_READ: tuple[str, ...] = (
     "docs/*",
     "scripts/*",
     "tests/*",
-    ".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*",
+    ".planning/milestones/v0.50.0-phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*",
 )
 
 

@@ -248,7 +248,7 @@ def test_trigger_queries_shape() -> None:
     assert len([q for q in negatives if _NEAR_MISS_RE.search(q["query"])]) >= 3
 
 
-PHASE_DIR = REPO_ROOT / ".planning" / "phases" / "24.3-catalog-audit-skill"
+PHASE_DIR = REPO_ROOT / ".planning" / "milestones" / "v0.50.0-phases" / "24.3-catalog-audit-skill"
 _VERDICT_KEYS = frozenset(
     {
         "skill",
@@ -398,7 +398,9 @@ def test_resume_eval_fixture_is_a_partial_run() -> None:
 
 
 def test_skill_judge_verdicts_are_well_formed() -> None:
-    for path in sorted(PHASE_DIR.glob("24.3-SKILLJUDGE-*.md")):
+    verdicts = sorted(PHASE_DIR.glob("24.3-SKILLJUDGE-*.md"))
+    assert len(verdicts) == 3, PHASE_DIR  # a moved phase dir must fail, never pass on zero files
+    for path in verdicts:
         verdict = _parse_verdict(_text(path), final=path.stem.endswith("-FINAL"))
         assert "catalog-audit" in str(verdict["skill"]), path.name
 

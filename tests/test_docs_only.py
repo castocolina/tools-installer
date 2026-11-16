@@ -74,7 +74,10 @@ def _fake_runner(
         ([".github/workflows/notes.md"], False),
         (["scripts/README.md"], False),
         (["tests/fixtures/x.md"], False),
-        ([".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-1.md"], False),
+        (
+            [".planning/milestones/v0.50.0-phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-1.md"],
+            False,
+        ),
         ([".planning/x.md", "installer/a.py"], False),
         ([], False),
     ],
@@ -203,11 +206,11 @@ LEDGER: dict[tuple[str, str], str | None] = {
     (
         "tests/test_catalog_audit_skill.py",
         ".planning",
-    ): ".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*.md",
+    ): ".planning/milestones/v0.50.0-phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*.md",
     (
         "tests/test_catalog_audit_skill.py",
         "24.3-SKILLJUDGE-*.md",
-    ): ".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*.md",
+    ): ".planning/milestones/v0.50.0-phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*.md",
     ("tests/test_catalog_audit_skill.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
     (
         "tests/test_catalog_audit_skill.py",
@@ -280,7 +283,7 @@ def test_every_ledger_glob_reads_test_read_files_only() -> None:
 
 def test_the_ledger_covers_the_known_readers() -> None:
     assert LEDGER[("tests/test_catalog_audit_skill.py", "24.3-SKILLJUDGE-*.md")] == (
-        ".planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*.md"
+        ".planning/milestones/v0.50.0-phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*.md"
     )
     assert LEDGER[("tests/test_postinstall.py", "skills/*/SKILL.md")] == (
         ".claude/skills/*/SKILL.md"
