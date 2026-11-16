@@ -96,6 +96,14 @@ def _hook_problem(hooks: Path) -> str | None:
     return None
 
 
+def _absolute_path(stdout: str) -> Path | None:
+    """The one absolute path git printed, else None: git older than 2.31 echoes the unknown flag."""
+    lines = stdout.strip().splitlines()
+    if len(lines) == 1 and Path(lines[0]).is_absolute():
+        return Path(lines[0])
+    return None
+
+
 def install(
     *,
     run: Runner | None = None,
@@ -115,7 +123,10 @@ def install(
     git_dir = run([git, "rev-parse", "--path-format=absolute", "--git-dir"])
     if git_dir.returncode != 0:
         return _fail(f"git rev-parse failed:\n{git_dir.stderr.strip()}")
-    common_dir = Path(common.stdout.strip())
+    common_dir = _absolute_path(common.stdout)
+    git_dir_path = _absolute_path(git_dir.stdout)
+    if common_dir is None or git_dir_path is None:
+        return _fail("git 2.31 or newer is required (git rev-parse --path-format=absolute)")
     hooks = common_dir / "hooks"
 
     hooks_path = run([git, "config", "--get", "core.hooksPath"])
@@ -142,7 +153,7 @@ def install(
     if not shim.exists() or shim.read_text() != SHIM:
         shim.write_text(SHIM)
     shim.chmod(0o744)
-    if Path(git_dir.stdout.strip()) != common_dir:
+    if git_dir_path != common_dir:
         print(
             "dev-setup: warning: this is a linked worktree; the hooks went to the shared "
             f"{hooks}. Commits there use this worktree's .venv, so re-run make dev-setup "

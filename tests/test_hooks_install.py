@@ -155,6 +155,25 @@ def test_the_default_runner_forces_the_c_locale(monkeypatch: pytest.MonkeyPatch)
     assert env["LC_ALL"] == "C"
 
 
+@pytest.mark.parametrize("which_query", ("--git-common-dir", "--git-dir"))
+def test_old_git_rev_parse_output_fails_closed(
+    which_query: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class OldGit(FakeRunner):
+        def __call__(self, argv: Sequence[str]) -> "subprocess.CompletedProcess[str]":
+            if which_query in argv:  # git < 2.31 echoes the unknown flag, then the relative path
+                self.calls.append(list(argv))
+                out = f"--path-format=absolute\n{self.common}\n"
+                return subprocess.CompletedProcess(list(argv), 0, out, "")
+            return super().__call__(argv)
+
+    common = tmp_path / "repo" / ".git"
+    runner = OldGit(common)
+    assert install(run=runner, which=fake_which) == 1
+    assert_refused(capsys, runner, common, "git 2.31 or newer")
+    assert not common.exists()
+
+
 def test_missing_pre_commit_names_uv_sync(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
