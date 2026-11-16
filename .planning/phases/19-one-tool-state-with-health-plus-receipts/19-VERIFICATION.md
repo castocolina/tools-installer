@@ -154,3 +154,25 @@ _Verifier: Claude (gsd-verifier)_
 ## Re-verification (2026-11-15, HEAD 75b732d4)
 
 All three human items are resolved with fresh evidence (see the re_verification block). STATE-07 is superseded by Phase 23.1 (skill packs removed by the owner's order). Nothing is left for the owner. Container, image set and herdr tab were removed after the run.
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+HEAD 970e80fe. Each group was checked at HEAD, then sent to the jev ladder (Laya, then TypeSafe) right after, as one `choice` item per finding with options resolved / open-trivial / open-real / owner-only. Laya answered open-real at 0.37-0.56 on every item, always `needs_fallback`, so TypeSafe decided. Jev is advisory; the evidence decides.
+
+| Item | Fresh evidence | Laya | TypeSafe | Verdict | Override reason |
+|------|----------------|------|----------|---------|-----------------|
+| A1 STATE-01 overtaken pass, precedence | 23 selected tests in test_tool_health/test_version_status pass; `state_of` epoch check; `_pass` merges only `current.seq < seq` | open-real 0.40 (fallback) | resolved 0.98 | resolved | none |
+| A2 checking before first pass | `health_cell(None)` = CHECKING glyph; stale-cached-present test passes | open-real 0.48 (fallback) | resolved 0.90 | resolved | none |
+| A3 receipt reads fail closed | 27 selected tests in test_receipts pass | open-real 0.56 (fallback) | resolved 0.97 | resolved | none |
+| B1 STATE-02/06 marks, legend, reasons | 14 tests (marks per tier, legend 78 cells, 80x20 rows) pass; no new capture taken | open-real 0.44 (fallback) | resolved 0.92 | resolved | none |
+| B2 misconfiguration marks | 11 tests (kitty drift, pnpm group, terminal seam) pass | open-real 0.52 (fallback) | resolved 0.85 | resolved | none |
+| C1 STATE-03 receipts, changed link, dir proof | receipts/uninstall/engine/update selected tests (about 250) pass; test_container_e2e_receipts and test_uninstall_e2e pass | open-real 0.43 (fallback) | resolved 0.97 | resolved | none |
+| C2 one remover, deletion-time re-proof | app.py:853 calls `remove_proven`; unlink/rmtree only in uninstall.py removal path; tampered-path and rehash tests pass | open-real 0.40 (fallback) | resolved 0.94 | resolved | none |
+| D1 STATE-04/05 ownership, brew mid-session | 57 selected tests pass | open-real 0.40 (fallback) | resolved 0.94 | resolved | none |
+| D2 adoption and live-host convergence | adoption tests (no network, digest binding) pass; live host cache not readable without the real HOME | open-real 0.38 (fallback) | resolved 0.54 (fallback) | resolved (own reasoning: needs_fallback) | none |
+| D3 STATE-07 superseded | `installer/skill_lifecycle.py` absent; model.py rejects the retired table; REQUIREMENTS row Superseded (23.1) | open-real 0.44 (fallback) | resolved 0.83 | resolved (superseded) | none |
+| D4 CI | success on 8b0d1bf1, a61cb6b3, a2e68cf3; HEAD run in progress; two runs cancelled by newer pushes | open-real 0.37 (fallback) | resolved 0.97 | resolved | none |
+
+Time order (UTC, all 2026-11-16): A made 02:33:28, jev 02:33:45. B made 02:33:49-02:33:51, jev 02:33:59. C made 02:33:59-02:34:12 (code read to 02:34:20), jev 02:34:28. D made 02:34:28-02:34:30, jev 02:34:44.
+
+Not re-run: the container `make e2e` (no containers allowed in this pass); its earlier 2026-11-15 evidence stands and the receipt e2e unit tests pass. No finding is open-real; status stays `passed`.

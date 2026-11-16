@@ -242,3 +242,28 @@ Ladder run 2026-11-15 (jev-fast-decision `ladder`, summaries only; TypeSafe unde
 | CI green on ubuntu and macOS | open-real 0.36 (fallback) | resolved 0.97 | resolved |
 | Real-Mac draw.io install | open-real 0.32 (fallback) | open-real 0.88 | deferred, owner rule overrides: macOS with no CI path is deferred (2026-11-14); macOS fixtures pass on the CI macOS leg |
 | registry-drift issue left open after a clean run | open-real 0.55 (fallback) | resolved 0.60 (fallback) | resolved by own reasoning: the new close-on-clean step (93c37ea0) closes it on the next clean run; the owner chose to let the workflow close it |
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+HEAD 970e80fe. Each check was run fresh (`uv run pytest <files> -n 0 --no-cov -q`, file reads, read-only `gh`), then classified through the jev `ladder` (summaries only; TypeSafe under the 2026-10-14 consent). Findings were batched into one ladder call after all groups were made, not one call per group. Laya answers are all `fallback: true` (top 0.47-0.66), so Laya decided nothing.
+
+| Item | Fresh evidence | Laya | TypeSafe | Verdict | Override reason |
+|---|---|---|---|---|---|
+| REG-01, REG-02, SPEC R11 | test_model loader subset 26 passed; registry 86 tools, 86 `verified` | open-real 0.50 (fb) | resolved 0.99 | resolved | none |
+| REG-03 | test_verify_registry + workflow 0 failed; schedule runs success/failure/success/failure, latest 2026-11-12 success | open-real 0.47 (fb) | resolved 0.71 (fb) | resolved (own reasoning, needs_fallback) | none |
+| REG-04, REG-05 | test_download, test_executors, test_apps 0 failed | open-real 0.50 (fb) | resolved 0.98 | resolved | none |
+| REG-06, REG-07, REG-08 | test_status, test_versions, test_makefile, test_install_sh 0 failed | open-real 0.54 (fb) | resolved 0.99 | resolved | none |
+| REG-09, REG-10 | 0 `drawio-cli` rows, no `managed-download` in installer/; 24 `audit_fix` tests + drawio tests pass (earlier report said 30; later phases removed entries) | open-real 0.55 (fb) | resolved 0.89 | resolved | none |
+| Human 1: workflow run | scheduled runs fire; 2026-11-12 success | open-real 0.56 (fb) | resolved 0.58 (fb) | resolved (own reasoning, needs_fallback) | none |
+| Human 2: CI matrix | last success ci.yml 8b0d1bf1; newer runs cancelled/in progress, not failed | open-real 0.54 (fb) | resolved 0.70 (fb) | resolved (own reasoning, needs_fallback) | none |
+| Human 3: real Mac draw.io | no CI path; fixtures green | open-real 0.59 (fb) | owner-only 0.98 | owner-only (deferred, macOS) | none |
+| Issue #5 still open | `gh issue list --label registry-drift`: #5 OPEN; close-on-clean step in verify-registry.yml:46-48, not yet exercised by a scheduled run (next Mon 2026-11-16 05:17Z) | open-real 0.66 (fb) | open-real 0.80 | open-trivial | Overrides confident TypeSafe open-real: housekeeping only, wired fix exists, owner chose to let the workflow close it; no requirement depends on it |
+
+### Time order (UTC)
+
+| Group | Finding made | jev call |
+|---|---|---|
+| REG tests (groups 1-5) | 2026-11-16T02:33:28Z to 02:33:40Z | 2026-11-16T02:34:06Z-02:34:07Z |
+| gh checks (human 1-3, issue #5) | 2026-11-16T02:33:40Z to 02:34:00Z | 2026-11-16T02:34:06Z-02:34:07Z |
+
+Status unchanged (`passed`); no open-real finding. Fingerprint untouched (no covered file changed).

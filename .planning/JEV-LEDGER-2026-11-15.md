@@ -34,3 +34,15 @@ The owner was asked on 2026-11-15 and chose to apply the protection. It was appl
 protection back through the GitHub API: both required contexts, `validate & test on ubuntu-latest` and
 `validate & test on macos-latest`, are present, and `enforce_admins` is false. The read-back was repeated on
 2026-11-16 with the same result.
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+Phases 17, 18 and 19, the three whose jev records had been added late, were verified again from scratch at HEAD
+970e80fe. Each group of findings went to the jev ladder right after it was made. The timestamps are recorded in
+each phase's VERIFICATION.md under "Fresh re-verification with inline jev (2026-11-16)".
+
+- 17: 5 groups resolved. TypeSafe was confident on 3 (0.95 to 1.00); 2 were decided on evidence (needs_fallback).
+- 18: 7 items resolved, 1 deferred (macOS), and 1 open-trivial (issue #5 waits for the next scheduled run of the
+  new close step). TypeSafe agreed on 7 of 9.
+- 19: 11 items resolved. TypeSafe decided 10, all resolved at 0.83 to 0.98; 1 was decided on evidence.
+

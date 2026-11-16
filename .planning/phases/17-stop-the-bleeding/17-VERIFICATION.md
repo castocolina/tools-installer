@@ -227,3 +227,17 @@ Ladder run 2026-11-15 (jev-fast-decision `ladder`, summaries only; TypeSafe unde
 |---|---|---|---|
 | CI-02 branch protection | open-real 0.45 (fallback) | resolved 0.97 | resolved (protection read back with both contexts) |
 | Post-verification main push green | resolved 0.36 (fallback) | resolved 0.97 | resolved |
+
+## Fresh re-verification with inline jev (2026-11-16)
+
+HEAD 970e80fe. Each group was checked fresh at HEAD (`uv run pytest tests -n 0 --no-cov -k <names>`, code reads, read-only `gh`), then sent to the jev ladder (summaries only; TypeSafe under the 2026-10-14 consent). The ladder call was `reviewed_head` 970e80fe, one `choice` item per group, options resolved / open-trivial / open-real / owner-only. Receipt: scratchpad `fresh17-out.json`.
+
+| Item | Fresh evidence | Laya | TypeSafe | Verdict | Override reason |
+|---|---|---|---|---|---|
+| G1 SAFE-01/02 | 4 named tests pass (directory member ladder, app CLI directory links nothing, graphify install and update register nothing) plus 3 more (reinstall never writes through a directory link; atomic oserror; doctor link scan); no graphify hook in postinstall.py or model.py | open-real 0.49 (fallback) | resolved 0.95 | resolved | none (Laya was low confidence; TypeSafe agrees with the evidence) |
+| G2 SAFE-03/04 | 5 of 6 previously named tests pass at HEAD. `test_ban_aliases_write_failure_leaves_the_rc_byte_identical` no longer exists: deleted with the retired guard module (8b727786, Phase 24.4); `legacy_guard.py` and `tweaks.py` still write through `atomic_write_text`, and the atomic-write failure test passes | open-real 0.44 (fallback) | resolved 0.48 (fallback) | resolved | decided by me (both rungs needs_fallback); the deleted test is a retirement, not a gap |
+| G3 SAFE-05/07/08/09 | 17 tests pass (failed run exits 1, tty fails fast, new session, invalid UTF-8 settings, every TUI route executes) | open-real 0.40 (fallback) | resolved 1.00 | resolved | none |
+| G4 SAFE-06 | 18 tests pass (move ban and tweak to split, foreign rc bytes identical, non-aware ignored, rollback set) | open-real 0.50 (fallback) | resolved 0.99 | resolved | none |
+| G5 CI-01/02/03 | completed main runs 8b0d1bf1, a61cb6b3, a2e68cf3 success; run for HEAD 970e80fe in progress, two earlier runs cancelled by newer pushes (concurrency); protection read-back: both contexts, enforce_admins false | open-real 0.43 (fallback) | open-real 0.69 (fallback) | resolved | decided by me (both fallback): the open-real answers came from the in-progress run; the latest completed runs are green, protection holds. Re-check the HEAD run when it ends |
+
+Time order (UTC, 2026-11-16): G1 made 02:33:27, G2 02:33:29, G1b/G3/G4 re-run for counts 02:34:18-02:34:40, G5 (gh calls) 02:33:46-02:34:11; the single ladder call classifying all five ran 02:34:58-02:34:59. Findings preceded the jev call by under two minutes and nothing was classified earlier or afterwards. Status stays `passed`; no finding is open-real.
