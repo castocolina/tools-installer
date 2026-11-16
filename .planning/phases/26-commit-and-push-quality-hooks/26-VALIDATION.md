@@ -44,11 +44,35 @@ behaviour is proven only by the e2e script. The sandbox is never widened.
 
 ## Per-Task Verification Map
 
-Filled by the planner from the final plans; one row per task.
+Filled by the planner from the final plans (2026-11-16); one row per task.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 26-XX-XX | XX | X | HOOK-0X | T-26-XX / — | see plan | unit | see plan `<automated>` | ❌ W0 | ⬜ pending |
+| 26-01-01 | 01 | 1 | HOOK-01 | T-26-03 | each static hook calls its make target; `make validate` is `pre-commit run --all-files`; devtools under every gate | unit (text parse) | `uv run pytest tests/test_hook_wiring.py tests/test_makefile.py tests/test_reachability.py -n auto -q --no-cov` and `make validate` | ❌ W0 | ⬜ pending |
+| 26-01-02 | 01 | 1 | HOOK-02 | T-26-01, T-26-02 | `make test` push-only and last; no bypass literal (P1); no auto-fix (P3); drift guard non-vacuous | unit | `uv run pytest tests/test_hook_wiring.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-01-03 | 01 | 1 | HOOK-04 | — | `make run` is the wizard target; `setup` gone; `make help` lists names with digits | unit | `uv run pytest tests/test_makefile.py tests/test_reachability.py tests/test_hook_wiring.py -n auto -q --no-cov` | ✅ extend | ⬜ pending |
+| 26-02-01 | 02 | 1 | HOOK-04 | T-26-04 | every user-visible hint names `make run` | unit | `uv run pytest tests/test_guidance.py tests/test_wizard_app.py tests/test_app.py tests/test_render.py tests/test_schedules_handover.py -n auto -q --no-cov` | ✅ edit | ⬜ pending |
+| 26-02-02 | 02 | 1 | HOOK-04 | T-26-04 | docs, skill and comments name `make run`; zero old-target hits in tracked source | unit + git grep | `uv run pytest tests/test_catalog_audit_skill.py tests/test_docs.py tests/test_setup.py tests/test_tool_browser.py tests/test_wizard_app.py -n auto -q --no-cov` | ✅ edit | ⬜ pending |
+| 26-03-01 | 03 | 1 | HOOK-02 | T-26-05 | settled pass count and body waits, no fixed pause | unit (pilot) | `uv run pytest tests/test_screen_family.py -n auto -q --no-cov` | ✅ edit | ⬜ pending |
+| 26-03-02 | 03 | 1 | HOOK-02 | T-26-05 | 50/50 runs after the fix; full suite green | loop + suite | `make test` (plus the 50-run loop script) | ✅ | ⬜ pending |
+| 26-04-01 | 04 | 2 | HOOK-02, HOOK-03 | T-26-06, T-26-10 | every ref parsed; push stage through pre-commit with the stash on; fails closed | unit (fake runner) | `uv run pytest tests/test_push_gate.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-04-02 | 04 | 2 | HOOK-03 | T-26-08 | five refusals, first match wins, sorted names, space intact | unit (fake runner) | `uv run pytest tests/test_push_gate.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-04-03 | 04 | 2 | HOOK-03 | T-26-07 | SIGINT/SIGTERM/SIGHUP forwarded once as SIGINT; signalled gate never exits 0 (P2) | Python child (real signals) | `uv run pytest tests/test_push_gate.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-05-01 | 05 | 2 | HOOK-04 | T-26-11 | `make dev-setup` writes both hooks into the common hooks dir; CI calls it | unit (fake runner) + text | `uv run pytest tests/test_hooks_install.py tests/test_makefile.py tests/test_ci_workflow.py tests/test_hook_wiring.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-05-02 | 05 | 2 | HOOK-04 | T-26-11, T-26-12, T-26-13, T-26-14, T-26-15 | skip outside git; fail on core.hooksPath; foreign pre-push refused untouched; rerun byte-identical; worktree warning; shim fails closed | unit + `sh` child | `uv run pytest tests/test_hooks_install.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-05-03 | 05 | 2 | HOOK-04 | T-26-14 | docs name `make dev-setup`; agents never run it | docs test + git grep | `uv run pytest tests/test_docs.py -n auto -q --no-cov` | ✅ | ⬜ pending |
+| 26-06-01 | 06 | 3 | HOOK-01, HOOK-02 | T-26-16 | real commit runs the static gates; red push aborted, remote unmoved | e2e (real git) | `make hooks-e2e` | ❌ W0 | ⬜ pending |
+| 26-06-02 | 06 | 3 | HOOK-03 | T-26-16 | real refusals; byte-identical restore on existing, new and root pushes; deletion runs nothing; fail-fast | e2e (real git) | `make hooks-e2e` | ❌ W0 | ⬜ pending |
+| 26-06-03 | 06 | 3 | HOOK-03, HOOK-04 | T-26-18 | real install branches; SIGINT/SIGTERM/SIGHUP restore byte-identical | e2e (real git) | `make hooks-e2e` | ❌ W0 | ⬜ pending |
+| 26-07-01 | 07 | 4 | HOOK-05 | T-26-19, T-26-21, T-26-22 | branch-push CI; fast pass gated `!= 'false'` under unchanged job names | unit | `uv run pytest tests/test_docs_only.py tests/test_ci_workflow.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-07-02 | 07 | 4 | HOOK-05 | T-26-20 | renames, odd names, git failures and empty changes run everything (P4) | unit | `uv run pytest tests/test_docs_only.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-07-03 | 07 | 4 | HOOK-05 | T-26-19 | every test `.md`/`.planning` literal classified; ledger files are test-read | unit (AST) | `uv run pytest tests/test_docs_only.py -n auto -q --no-cov` | ❌ W0 | ⬜ pending |
+| 26-08-01 | 08 | 5 | HOOK-06 | — | gate/target/stage table, measured timings, push-gate recovery | unit (doc pins) | `uv run pytest tests/test_docs.py tests/test_hook_wiring.py tests/test_docs_only.py -n auto -q --no-cov` | ✅ extend | ⬜ pending |
+| 26-08-02 | 08 | 5 | HOOK-05, HOOK-06 | T-26-23 | path to main; escape hatch off → on → read-back (P6) | unit (doc pins) | `uv run pytest tests/test_docs.py tests/test_hook_wiring.py -n auto -q --no-cov` | ✅ extend | ⬜ pending |
+| 26-08-03 | 08 | 5 | HOOK-06 | T-26-24, T-26-25 | no stale validate wording; AGENTS gate table; D-14 todo | unit + rg | `uv run pytest tests/test_docs.py tests/test_hook_wiring.py tests/test_docs_only.py -n auto -q --no-cov` | ✅ extend | ⬜ pending |
+| 26-09-01 | 09 | 6 | HOOK-05 | T-26-26, T-26-27 | strict + `enforce_admins` read back twice; untested probe rejected | manual (orchestrator) | `gh api repos/castocolina/tools-installer/branches/main/protection --jq …` | n/a | ⬜ pending |
+| 26-09-02 | 09 | 6 | HOOK-04 | — | real hook install from the main checkout, idempotent | manual (orchestrator) | `test -x .git/hooks/pre-commit && test -x .git/hooks/pre-push && grep -c 'tools-installer: pre-push gate' .git/hooks/pre-push` | n/a | ⬜ pending |
+| 26-09-03 | 09 | 6 | HOOK-05 | T-26-28, T-26-29 | last change lands by branch push → green CI → fast-forward; `main` is the tested commit | manual (orchestrator) | `git fetch -q origin main && test "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)"` | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

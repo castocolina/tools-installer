@@ -64,6 +64,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
    - *Amended 2026-11-16 (26 D-05):* The push stage runs each static gate hook, which also carries the `pre-push`
      stage, and then the `make test` hook, each as its own entry. This is equivalent to `make validate` then
      `make test`, and a failure names the gate that failed.
+   - *(amended 2026-11-16, 26 plan-phase D-15, D-19: `make hooks-e2e` proves the scratch-repo push cases with real
+     git and pre-commit; CI runs it on ubuntu and macOS. pytest pins the hook entries and the gate logic with fake
+     runners. The gate runs `pre-commit run --hook-stage pre-push --fail-fast --from-ref HEAD --to-ref HEAD`.)*
 
 3. **Tested tree equals the pushed commit**: The push gate tests the staged tree with unstaged edits set aside, a new
    branch's first push included. It refuses the push before running any check when the tree differs from HEAD:
@@ -78,6 +81,10 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      untracked `tests/test_x.py` refuses it; an unstaged edit that breaks a test does not make a clean HEAD fail; the
      same holds on a new branch's first push; a clean tree passes; pushing a branch that is not checked out is
      refused; a branch deletion goes through with no checks. Each refusal lists the offending files, sorted.
+   - *(amended 2026-11-16, 26 plan-phase D-18: the gate checks five refusals, first match wins: unmerged paths,
+     staged changes, untracked `.py` under `installer/`, `tests/` or `devtools/`, an unstaged `.pre-commit-config.yaml`,
+     then a pushed commit that is not HEAD. A tag or refspec whose commit is HEAD passes. D-15: `make hooks-e2e` runs
+     the scratch-repo cases above.)*
 
 4. **`make install` installs both hooks**: `make install` installs the pre-commit and pre-push hooks after `uv sync`.
    Running it again changes nothing. Outside a git checkout it skips the hook step with a one-line message and still
@@ -94,13 +101,19 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      and AGENTS.md switch to it. pre-commit installs only the commit hook (`default_install_hook_types: [pre-commit]`).
      `make dev-setup` installs the push gate of 26 D-01 as `pre-push` in the shared hooks directory. Every
      `make install` in this SPEC reads as `make dev-setup`.
+   - *(amended 2026-11-16, 26 plan-phase D-15, D-22, D-24: `make hooks-e2e` runs the hook step
+     `python -m devtools.hooks install` in scratch repos, and a text test pins the `dev-setup` recipe. Run from a linked
+     worktree, the step warns to re-run it from the main checkout. It refuses a foreign `pre-push` file without
+     touching it.)*
 
 5. **`main` is gated behind CI on GitHub**: Branch protection on `main` has `enforce_admins` enabled and requires both
    CI contexts, so GitHub rejects any update to `main`, an admin's included, unless both checks passed on that commit.
    CI runs on the commits before they reach `main`. The commit that lands on `main` is the exact commit CI tested.
    A docs-only change gets a fast pass: CI reports both required check names quickly without running the full
    jobs. A change is docs-only when every path it changes against `main` is under `.planning/` or is a Markdown
-   file that no test reads.
+   file that no test reads. *(amended 2026-11-16, 26 plan-phase D-16: a path under `.planning/` counts only when no
+   test reads it (three `24.3-SKILLJUDGE-*` files are read). Paths come from `git diff --name-only -z --no-renames
+   origin/main...HEAD`. An empty list, a git failure or a missing classifier output means the full jobs run.)*
    - Current: `enforce_admins` is false; direct pushes to `main` bypass the required checks. CI runs only on pushes to
      `main` and on pull requests.
    - Target: `enforce_admins` is true with both contexts required, and the documented flow puts every change through
@@ -121,6 +134,9 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
      AGENTS.md and dev-environment.md.
    - Acceptance: each statement above is present. `rg 'runs? pre-commit hooks'` over AGENTS.md and `.claude/` finds
      no claim that `make validate` runs pre-commit. The escape-hatch section holds both the off and the on command.
+     *(amended 2026-11-16, 26 plan-phase D-23: since D-04, `make validate` does run `pre-commit run --all-files`,
+     and the docs say so. The grep finds no `runs? pre-commit hooks` phrase, and no doc says the hooks "mirror"
+     `make validate`.)*
 
 ## Boundaries
 
@@ -163,15 +179,15 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 - [ ] A test pins the commit-stage hooks to the `make validate` commands (tools, arguments, file sets) and fails on drift in either direction.
 - [ ] No commit-stage hook runs pytest.
 - [ ] `.pre-commit-config.yaml` has a `pre-push` stage that runs `make validate` and then `make test`, whatever files the push touches; a test pins it.
-- [ ] In a scratch repo, a push whose suite fails exits non-zero and leaves the remote ref unchanged; a green push updates it.
+- [ ] In a scratch repo, a push whose suite fails exits non-zero and leaves the remote ref unchanged; a green push updates it. *(amended 2026-11-16, 26 plan-phase D-15: every "in a scratch repo" line here is met by `make hooks-e2e`, with the gate logic also pinned by pytest fake-runner tests.)*
 - [ ] In a scratch repo, a staged uncommitted change refuses the push, naming the file.
 - [ ] In a scratch repo, an untracked `.py` file under `installer/` or `tests/` refuses the push, naming the file.
 - [ ] In a scratch repo, an unstaged edit that breaks a test does not fail a push of a green HEAD, on an existing branch and on a new branch's first push.
 - [ ] In a scratch repo, pushing a branch that is not HEAD is refused with the check-out-first message; a branch deletion goes through with no checks.
-- [ ] After a passing, failing or interrupted push gate, the unstaged edits it set aside are restored byte-identical.
+- [ ] After a passing, failing or interrupted push gate, the unstaged edits it set aside are restored byte-identical. *(amended 2026-11-16, 26 plan-phase D-17: "interrupted" means SIGINT, SIGTERM or SIGHUP to the gate's process group; SIGKILL and a SIGTERM sent only to `git` are documented residual cases with a recovery command.)*
 - [ ] Refusal messages list the offending files sorted, and a file name with a space is printed intact.
 - [ ] The commit-stage parity test fails when either side has zero checks; it compares the two sides as sets, not by order.
-- [ ] `.pre-commit-config.yaml` sets `default_install_hook_types: [pre-commit, pre-push]`.
+- [ ] `.pre-commit-config.yaml` sets `default_install_hook_types: [pre-commit, pre-push]`. *(amended 2026-11-16, 26 D-07: `[pre-commit]`; the push gate is installed by `make dev-setup`, not by pre-commit.)*
 - [ ] `make install` in a scratch git repo leaves both hook files; a second run leaves them byte-identical.
 - [ ] `make install` outside a git checkout exits 0 and prints the skip message.
 - [ ] `make install` with `core.hooksPath` set exits non-zero and names `core.hooksPath`.
@@ -184,7 +200,7 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 - [ ] No hook auto-fixes files: no `--fix`, and no `ruff format` without `--check` (must-NOT, P3).
 - [ ] `.claude/dev-environment.md` has the commit / push / CI table with timings.
 - [ ] `.claude/git-workflow.md` documents the flow and both escape-hatch `gh` commands.
-- [ ] No doc claims `make validate` runs pre-commit hooks.
+- [ ] No doc claims `make validate` runs pre-commit hooks. *(amended 2026-11-16, 26 plan-phase D-23: docs state that `make validate` runs `pre-commit run --all-files`; no `runs? pre-commit hooks` phrase and no "mirror `make validate`" claim remain.)*
 - [ ] A pending todo lists the outside-repo tools that push straight to `main`.
 - [ ] `make validate` and `make test` pass, and CI is green on ubuntu and macOS.
 
@@ -208,7 +224,7 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 | encoding | R3 | 🧪 backstop | File names come from git verbatim; held-out test with a space in a file name (AC: sorted-names line) |
 | ordering | R3 | ✅ covered | Refusal messages list the offending files sorted (AC: sorted-names line) |
 | idempotency | R3 | ✅ covered | Running the gate leaves the tree as it was: set-aside edits come back byte-identical, so a second run sees the same tree (AC: restore line) |
-| concurrency | R3 | ✅ covered | Ctrl-C during the gate restores the set-aside unstaged edits (AC: restore line; must-NOT P2) |
+| concurrency | R3 | ✅ covered | Ctrl-C during the gate restores the set-aside unstaged edits (AC: restore line; must-NOT P2) *(amended 2026-11-16, 26 plan-phase D-17: SIGINT, SIGTERM or SIGHUP to the gate's process group, forwarded once as SIGINT)* |
 | adjacency | R4 | 🧪 backstop | An existing foreign hook file is kept by pre-commit as `<hook>.legacy` and still runs; held-out test that it is not lost |
 | empty | R4 | ✅ covered | Outside a git checkout: skip with a message, exit 0. With `core.hooksPath` set: fail and name it (AC: skip, hooksPath lines) |
 | encoding | R4 | ⛔ dismissed | The hook files are pre-commit's generated ASCII scripts; the byte-identical rerun check already covers their content |
@@ -234,10 +250,10 @@ Measured at HEAD `ae9b99b0` on 2026-11-16:
 | Prohibition (must-NOT statement) | Requirement | Status | Verification / Reason |
 |----------------------------------|-------------|--------|------------------------|
 | P1: MUST NOT let any Makefile target, script, hook, CI file, AGENTS.md or `.claude/` doc use `--no-verify` or `SKIP=` to get past the gate | R2, R6 | resolved | verification: test (a grep test over the named files) |
-| P2: MUST NOT discard or rewrite uncommitted work. Unstaged edits set aside by the push gate come back byte-identical after a pass, a failure or an interrupt | R3 | resolved | verification: test (a scratch-repo test that compares bytes after each outcome) |
+| P2: MUST NOT discard or rewrite uncommitted work. Unstaged edits set aside by the push gate come back byte-identical after a pass, a failure or an interrupt *(amended 2026-11-16, 26 plan-phase D-17: an interrupt is SIGINT, SIGTERM or SIGHUP to the gate's process group)* | R3 | resolved | verification: test (a scratch-repo test that compares bytes after each outcome) *(D-15: `make hooks-e2e`, plus a pytest child that proves the forwarding)* |
 | P3: MUST NOT auto-fix files in any hook (no `--fix`, no `ruff format` without `--check`) | R1, R2 | resolved | verification: test (a test over the hook entries) |
 | P4: MUST NOT let the docs-only fast pass skip the full jobs for a change that touches code, CI config or a file a test reads | R5 | resolved | verification: test (a test of the docs-only rule) |
-| P5: MUST NOT let a test write this repo's `.git/hooks` or call GitHub | R2, R3, R4, R5 | resolved | verification: judgment (scratch repos and scratch `HOME` by design; checked in review) |
+| P5: MUST NOT let a test write this repo's `.git/hooks` or call GitHub | R2, R3, R4, R5 | resolved | verification: judgment (scratch repos and scratch `HOME` by design; checked in review) *(amended 2026-11-16, 26 plan-phase D-15: also binds `scripts/hooks-e2e.sh`, whose scratch-only markers a text test pins)* |
 | P6: MUST NOT leave `enforce_admins` off after an escape. The documented off command is always followed by the on command and a read-back | R6 | resolved | verification: judgment (doc review) |
 
 ## Ambiguity Report

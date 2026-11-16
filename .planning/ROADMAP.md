@@ -773,7 +773,29 @@ Plans:
   *(amended 2026-11-16, 26 SPEC: SC2 reads `make dev-setup`, which installs the commit hook through pre-commit and the push gate itself (26 D-01, D-07); SC3 adds that `main` is gated behind CI with `enforce_admins` on and changes land by branch push, green CI, fast-forward (26 R5, D-09). See 26-SPEC.md for the 6 locked requirements.)*
 
 **Context (2026-10-15):** today pre-commit runs only at commit and runs no tests; `.git/hooks` has only `pre-commit`; CI runs `make validate && make test` on push to main and on PRs. pylint is not added: ruff covers its rules.
-**Plans**: TBD
+**Plans:** 9 plans
+
+Plans:
+**Wave 1**
+- [ ] 26-01-PLAN.md — Six gate make targets; each pre-commit hook entry calls its target at commit and push; `make test` hook last, push only; `make validate` runs `pre-commit run --all-files`; `make run` replaces `setup`; wiring, P1 and P3 tests (wave 1)
+- [ ] 26-02-PLAN.md — Rename `make setup` to `make run` in every product hint, test pin and doc (wave 1)
+- [ ] 26-03-PLAN.md — Fix the flaky failed-invalidate-after-reinstall screen-family test, proved with 50 runs under `-n auto` (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 26-04-PLAN.md — `devtools/push_gate.py`: every pushed ref, the D-18 refusals, pre-commit push stage with the stash on, signal forwarding (wave 2)
+- [ ] 26-05-PLAN.md — `make dev-setup` (no `install` alias) with `devtools/hooks.py`: commit hook through pre-commit, push-gate shim in the common hooks dir (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 26-06-PLAN.md — `scripts/hooks-e2e.sh` and `make hooks-e2e`: real git and pre-commit in scratch repos for every SPEC scratch-repo case (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 26-07-PLAN.md — CI on branch push except `main`, docs-only fast pass in the same job with byte-identical check names, `devtools/docs_only.py` (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 26-08-PLAN.md — Docs: gate/target/stage table with timings, push-gate recovery, path to `main`, escape hatch; D-14 todo (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 26-09-PLAN.md — Orchestrator checkpoints: strict checks and `enforce_admins` on `main`, real hook install, final change landed by branch push, green CI, fast-forward (wave 6)
 
 ## Progress
 

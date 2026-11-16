@@ -1,0 +1,1 @@
+No external API integration: phase 26 adds local git hooks, make targets, a CI workflow change and docs; its only GitHub REST use is the orchestrator-run `gh api` branch-protection commands in the final checkpoint and in docs, not product code that integrates an API.

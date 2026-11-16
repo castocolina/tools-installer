@@ -162,6 +162,109 @@ Downstream agents MUST read `26-SPEC.md` before planning or implementing. Requir
   GSD merge helpers, the ai-kit-commit-fold unit flow and the GSD phase-complete flow, and they must adopt the D-09
   flow.
 
+## Planning amendments (2026-11-16, plan-phase)
+
+Added by `/gsd-plan-phase 26` (unattended `--converge` run). Each entry cites the RESEARCH evidence and the SPEC item
+it amends; SPEC.md carries a matching inline note.
+
+- **D-15: Real-git proof is an e2e script; pytest uses fake runners** (RESEARCH Contradiction 1, Pitfall 1; amends
+  SPEC R2, R3 and R4 acceptance, P2 and P5 verification, and this file's `code_context` line about scratch-repo tests).
+  `tests/sandbox.py` refuses real `git`, `make`, `uv` and `pre-commit` inside pytest (`FORBIDDEN_PROGRAM_NAMES`,
+  `check_launch` step 5), and widening it would reopen the 23.1 host-safety hole. So:
+  - `make test` holds unit tests of `devtools/` with injected fake runners, plus a `sys.executable` child that proves
+    the gate's signal forwarding with real signals.
+  - `scripts/hooks-e2e.sh`, run by `make hooks-e2e`, drives real git, real pre-commit, the real gate and the real hook
+    installer in scratch repos under `mktemp -d`. It starts every command from an `env -i` allowlist (scratch `HOME`,
+    `PRE_COMMIT_HOME`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`) and never
+    touches this checkout's `.git`.
+  - The scratch repos copy the real `.pre-commit-config.yaml` and `devtools/`, with a scratch Makefile whose gate
+    targets are cheap stand-ins. The real Makefile recipes (`dev-setup`, the gate targets, `validate`) are pinned
+    by text tests.
+  - CI runs `make hooks-e2e` on ubuntu and macOS after `make test`. Neither `make test` nor the push gate runs it.
+  - Every SPEC line that says "in a scratch git repo" is met by `make hooks-e2e`, and the matching gate logic is
+    pinned by pytest.
+- **D-16: The docs-only rule excludes test-read files, `.planning/` included** (RESEARCH Contradiction 2, Pitfall 6,
+  Pattern 5; amends SPEC R5's docs-only definition and D-11).
+  - A changed path counts as docs-only when it is under `.planning/` or ends in a lowercase `.md`, and it matches no
+    pattern of `TEST_READ` in `devtools/docs_only.py`.
+  - The `TEST_READ` patterns are `AGENTS.md`, `README.md`, `.claude/*`, `docs/*` and
+    `.planning/phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-*`. They use fnmatch, where `*` also matches `/`.
+    `tests/test_catalog_audit_skill.py:251,401` reads the three SKILLJUDGE files, and `tests/test_docs.py:17-29` and
+    `tests/test_postinstall.py:608` read the rest.
+  - A change is docs-only only when it is non-empty and every path is docs-only.
+  - A drift test classifies every `.md` string literal in `tests/**/*.py`, and every test module that names
+    `.planning`, in a reviewed ledger. Every real file the ledger resolves to must be test-read.
+  - CI lists paths with `git diff --name-only -z --no-renames origin/main...HEAD`, so a rename counts both paths. An
+    empty list or any git failure means a full run, and so does a classify step that writes no output
+    (`if: steps.scope.outputs.full != 'false'`).
+  - The classifier runs through `uv run --no-sync python -m devtools.docs_only`, not the runner's system `python3`, so
+    its Python is the project's `>=3.11`.
+  - Today the fast pass covers `.planning/` minus the three SKILLJUDGE files. The `.claude/*` pattern also sends the
+    catalog-audit eval fixtures to a full run, which errs toward the full run.
+- **D-17: "Interrupted" means SIGINT, SIGTERM or SIGHUP to the gate's process group** (RESEARCH Contradiction 3,
+  Pattern 3, experiments 3 and 3b; amends SPEC P2 and the R3 concurrency edge).
+  - pre-commit restores its stash on SIGINT only, so the gate runs pre-commit in its own process group.
+  - The gate forwards the first such signal to that group as SIGINT, ignores later ones so a second Ctrl-C cannot
+    cut the restore short, waits, and exits non-zero.
+  - Residual cases, documented with the recovery command in `.claude/dev-environment.md`: a SIGKILL, and a SIGTERM
+    sent only to the `git` process. pre-commit then leaves the edits in `$PRE_COMMIT_HOME/patch<timestamp>-<pid>`
+    (default `~/.cache/pre-commit/`), and `git apply` on that file restores them.
+- **D-18: The gate refuses five cases, first match wins** (RESEARCH Contradiction 4, Pattern 1, `run.py:347-358`,
+  experiments 1E/1F; amends SPEC R3 and D-01's order). It checks, before any gate runs:
+  1. unmerged paths: finish or abort the merge. This comes first because unmerged entries also show as staged, and
+     "commit them" is the wrong advice in the middle of a merge.
+  2. staged changes that are not committed;
+  3. untracked, non-ignored `.py` files under `installer/`, `tests/` or `devtools/`. D-02 puts `devtools/` under
+     every gate, so an untracked module there changes what lint, typecheck and the suite see.
+  4. an unstaged edit to `.pre-commit-config.yaml`: commit or discard it. pre-commit would refuse it anyway, but with
+     advice to stage it, which then trips refusal 2.
+  5. a pushed commit that is not HEAD. The pushed sha is peeled to its commit first, so a tag or a `HEAD:other`
+     refspec whose commit is HEAD passes.
+  Each refusal lists the files or refs, sorted, and the fix.
+- **D-19: The push stage always runs `pre-commit run --hook-stage pre-push --fail-fast --from-ref HEAD --to-ref
+  HEAD`** (resolves the D-01 root-push question and D-05's `fail_fast` discretion; RESEARCH Pattern 1, experiments
+  1A, 1B, 1D and 8).
+  - The refs are given and `--all-files` is not, so pre-commit keeps its stash on (`run.py:344`) for a root push, a
+    new branch and an update alike.
+  - Refusal 5 makes every pushed commit equal HEAD, and every gate is `always_run` with `pass_filenames: false`, so
+    the refs feed nothing else.
+  - `--fail-fast` is passed only at push, so a lint failure skips the 60 s suite. The commit stage still reports
+    every failing gate, and the config sets no top-level `fail_fast`.
+  - `pre-commit` and `git` are resolved on PATH with `shutil.which`, never a partial path (bandit B607).
+  - Each hook's `name:` is its make target (`make lint`, and so on), so pre-commit's pass or fail line names the
+    target to re-run (D-06).
+- **D-20: The D-08 rename list is completed** (RESEARCH Contradiction 5). It adds:
+  - `tests/test_render.py`, the `make setup` rows of `.claude/dev-environment.md`, and
+    `.claude/skills/catalog-audit/SKILL.md` with its pin in `tests/test_catalog_audit_skill.py`;
+  - the README "Makefile task interface" line, the CI descriptions in `docs/PUBLISHING.md` and the README, and the
+    "`make validate` (and pre-commit)" wording of `.claude/python-tooling.md`;
+  - the `setup.py` docstring, and the comments in `installer/compose.py` and `tests/test_setup.py`.
+  The `make install` → `make dev-setup` sweep covers `README.md`, `AGENTS.md`, `.claude/dev-environment.md` and
+  `.github/workflows/ci.yml`.
+- **D-21: The CI trigger test is rewritten with the trigger change, and `pull_request` is dropped** (RESEARCH
+  Contradiction 6 and Open Question 3; settles D-09's discretion). `tests/test_ci_workflow.py` pins a `push`
+  trigger with `branches-ignore: [main]`, with no `main` push trigger and no `pull_request`. An outside contributor's
+  branch gets CI once the maintainer pushes it to this repository. `.claude/git-workflow.md` says so.
+- **D-22: `make dev-setup` runs from the main checkout, and agents never run it** (RESEARCH Contradiction 7, Pitfall 3;
+  amends D-07's worktree sentence and settles the open AGENTS.md point).
+  - `pre-commit install` bakes the installing interpreter (`INSTALL_PYTHON`) into the shared commit hook.
+  - Run from a linked worktree, `make dev-setup` still installs into the shared hooks directory (SPEC edge), and
+    prints a warning to re-run it from the main checkout before that worktree is removed.
+  - AGENTS.md gains one sentence: agents never run `make dev-setup`, because it rewrites the hooks every worktree
+    shares. The sentence sits outside the host-safety list, since it changes repo hooks and not the host.
+- **D-23: R6's grep target is read after D-04** (amends SPEC R6 acceptance and the matching acceptance line). Since
+  D-04, `make validate` does run `pre-commit run --all-files`, so the docs say exactly that. The R6 check becomes:
+  `rg 'runs? pre-commit hooks'` over AGENTS.md and `.claude/` finds nothing, and no doc says the hooks "mirror"
+  `make validate`. HOOK-06 already reads "unless it does".
+- **D-24: `make dev-setup` never replaces or chains a foreign pre-push hook** (RESEARCH Pattern 4, Assumption A6).
+  - When `<hooks>/pre-push` exists without the gate's marker line, the hook step exits 1, names the file and says
+    to move or delete it. It checks this before it writes anything.
+  - A file with the marker line is rewritten only when its bytes differ, so a second run leaves both hooks
+    byte-identical.
+  - The shim fails closed: without `uv` on PATH it prints the cause and exits 1.
+  - The commit hook keeps pre-commit's own migration: a foreign `pre-commit` hook becomes `pre-commit.legacy` and
+    still runs.
+
 </decisions>
 
 <canonical_refs>
@@ -202,7 +305,8 @@ Downstream agents MUST read `26-SPEC.md` before planning or implementing. Requir
 
 ### Reusable Assets
 - `tests/sandbox.py` and `tests/conftest.py`: the scratch-`HOME` sandbox every test runs under. The scratch-repo hook
-  tests build their git repos inside it.
+  tests build their git repos inside it. *(amended 2026-11-16, 26 plan-phase D-15: the sandbox refuses real git,
+  make, uv and pre-commit, so pytest uses fake runners and `make hooks-e2e` builds the real scratch repos.)*
 - `tests/test_makefile.py`: the existing Makefile recipe pins. Extend it for the per-gate targets, `dev-setup`, `run`,
   and the absence of `install` and `setup`.
 - `wait_until` and the `settle` helpers in the pilot tests: the pattern for the D-12 flaky fix.
