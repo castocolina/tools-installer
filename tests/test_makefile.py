@@ -192,23 +192,99 @@ def test_e2e_script_refuses_without_a_container_runtime(tmp_path: Path) -> None:
     assert not (repo / ".e2e-artifacts").exists()
 
 
-_E2E_SCRIPT = "scripts/container-e2e-verify.sh"
+_E2E_SCRIPTS = ("scripts/container-e2e-verify.sh", "scripts/hooks-e2e.sh")
 
 
 def test_e2e_script_appears_in_gates_only_as_a_shellcheck_argument() -> None:
-    """R1-04: a lint argument is not a run; nothing else of the e2e reaches the gates."""
+    """R1-04: a lint argument is not a run; nothing else of an e2e script reaches the gates."""
     recipe_map = recipes()
     for name in [*gate_targets(), "validate"]:
         prereqs, lines = recipe_map[name]
         kept: list[str] = []
         for line in lines:
-            if _E2E_SCRIPT in line:
-                assert _invoked_names(line) == ["shellcheck"], f"{name}: {line}"
-                line = line.replace(_E2E_SCRIPT, "")
+            for script in _E2E_SCRIPTS:
+                if script in line:
+                    assert _invoked_names(line) == ["shellcheck"], f"{name}: {line}"
+                    line = line.replace(script, "")
             kept.append(line)
         text = "\n".join([*prereqs, *kept])
         assert "container-e2e-verify.sh" not in text, name
+        assert "hooks-e2e.sh" not in text, name
         assert not re.search(r"\be2e\b", text), name
+
+
+_HOOKS_E2E = ROOT / "scripts" / "hooks-e2e.sh"
+
+
+def test_hooks_e2e_target_runs_the_script() -> None:
+    prereqs, lines = recipes()["hooks-e2e"]
+    assert prereqs == []
+    assert [line.strip() for line in lines] == ["uv run scripts/hooks-e2e.sh"]
+    makefile = MAKEFILE.read_text()
+    assert "hooks-e2e" in makefile.split(".PHONY:")[1].split("\n")[0].split()
+    assert re.search(r"^hooks-e2e:.*?## .+$", makefile, re.MULTILINE), (
+        "hooks-e2e needs a ## help comment"
+    )
+
+
+def test_shellcheck_covers_the_hooks_e2e_script() -> None:
+    _, lines = recipes()["shellcheck"]
+    assert any("scripts/hooks-e2e.sh" in line for line in lines)
+
+
+def test_hooks_e2e_script_runs_only_in_scratch_dirs() -> None:
+    text = _HOOKS_E2E.read_text()
+    assert text.startswith("#!/usr/bin/env bash\n")
+    for marker in (
+        "set -euo pipefail",
+        "env -i",
+        "mktemp -d",
+        "trap ",
+        "GIT_CONFIG_NOSYSTEM=1",
+        "GIT_CONFIG_GLOBAL=/dev/null",
+        "GIT_TERMINAL_PROMPT=0",
+        "PRE_COMMIT_HOME=",
+        "UV_OFFLINE=1",
+        "HOME=",
+    ):
+        assert marker in text, marker
+    assert '"$ROOT"/.git' not in text
+    assert "$ROOT/.git" not in text
+
+
+def test_hooks_e2e_cleanup_reaps_descendant_groups() -> None:
+    text = _HOOKS_E2E.read_text()
+    for marker in (
+        "trap cleanup EXIT",
+        "trap 'exit 130' INT",
+        "trap 'exit 143' TERM",
+        "trap 'exit 129' HUP",
+        "-o pgid=",
+        "FAIL cleanup:",
+    ):
+        assert marker in text, marker
+    assert text.index('rm -rf "$SCRATCH"') > text.index("FAIL cleanup:")
+
+
+def test_hooks_e2e_background_push_is_isolated() -> None:
+    lines = _HOOKS_E2E.read_text().splitlines()
+    setpgid_lines = [line for line in lines if "os.setpgid" in line]
+    assert setpgid_lines, "the background push launch is missing"
+    for line in setpgid_lines:
+        assert "run_isolated" in line, line
+    in_function = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("run_isolated()"):
+            in_function = True
+            continue
+        if in_function and stripped == "}":
+            in_function = False
+            continue
+        if in_function or stripped.startswith("#"):
+            continue
+        if re.search(r"\bgit\s", line):
+            assert "run_isolated" in line, line
 
 
 def test_audit_catalog_target() -> None:

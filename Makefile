@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help dev-setup build run doctor fix uninstall lint format-check typecheck security dead-code shellcheck validate test e2e verify-registry audit-catalog
+.PHONY: help dev-setup build run doctor fix uninstall lint format-check typecheck security dead-code shellcheck validate test hooks-e2e e2e verify-registry audit-catalog
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -55,13 +55,16 @@ shellcheck:  ## [gate] Lint the shell scripts with shellcheck
 	# scripts/lib/prune-tmp-common.sh is a sourced-only library (15.7-07);
 	# -x follows the wrappers' `source` into it so shellcheck sees the real
 	# call graph instead of reporting an unfollowable SC1091.
-	uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh scripts/container-e2e-verify.sh
+	uv run shellcheck -x install.sh scripts/lib/prune-tmp-common.sh scripts/prune-tmp-linux.sh scripts/prune-user-tmpdir.sh scripts/container-e2e-verify.sh scripts/hooks-e2e.sh
 
 validate:  ## Run every commit-stage gate through pre-commit
 	uv run pre-commit run --all-files
 
 test:  ## [gate] Run tests with coverage, in parallel (pytest-xdist)
 	uv run pytest -n auto --cov
+
+hooks-e2e:  ## Prove the commit hook and the push gate with real git in scratch repos (never this checkout)
+	uv run scripts/hooks-e2e.sh
 
 e2e:  ## Real install/uninstall in a disposable container (ARGS="--distro debian"; podman/docker, never the host)
 	scripts/container-e2e-verify.sh all $(ARGS)
