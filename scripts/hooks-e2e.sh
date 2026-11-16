@@ -9,6 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 PRE_COMMIT_BIN="$(command -v pre-commit || true)"
 UV_BIN="$(command -v uv || true)"
@@ -727,7 +728,332 @@ fail_fast_skips_test() {
   ok fail_fast_skips_test
 }
 
+# --- Task 3: the real hook step's install branches ---------------------------------------------
+
+install_leaves_both_hooks_and_is_idempotent() {
+  fresh hooksbasic
+  local h="$SCRATCH/hooksbasic/.git/hooks" out
+  [ -x "$h/pre-commit" ] && [ -x "$h/pre-push" ] || {
+    fail install_leaves_both_hooks_and_is_idempotent "a hook file is missing or not executable"
+    return 0
+  }
+  cp "$h/pre-commit" "$SCRATCH/pc-idempotent"
+  cp "$h/pre-push" "$SCRATCH/pp-idempotent"
+  out="$( cd "$SCRATCH/hooksbasic" && run_isolated uv run python -m devtools.hooks install 2>&1 )" || {
+    fail install_leaves_both_hooks_and_is_idempotent "second install failed: $out"
+    return 0
+  }
+  cmp -s "$h/pre-commit" "$SCRATCH/pc-idempotent" || {
+    fail install_leaves_both_hooks_and_is_idempotent "pre-commit changed on rerun"
+    return 0
+  }
+  cmp -s "$h/pre-push" "$SCRATCH/pp-idempotent" || {
+    fail install_leaves_both_hooks_and_is_idempotent "pre-push changed on rerun"
+    return 0
+  }
+  ok install_leaves_both_hooks_and_is_idempotent
+}
+
+install_outside_a_checkout_skips() {
+  mkdir -p "$SCRATCH/plain"
+  cp -R "$ROOT/devtools" "$SCRATCH/plain/"
+  cp "$ROOT/.pre-commit-config.yaml" "$ROOT/Makefile" "$SCRATCH/plain/"
+  local out
+  out="$( cd "$SCRATCH/plain" && run_isolated "$PY_BIN" -m devtools.hooks install 2>&1 )" || {
+    fail install_outside_a_checkout_skips "hook step failed: $out"
+    return 0
+  }
+  if ! contains "$out" 'not a git' || ! contains "$out" 'checkout; skipping'; then
+    fail install_outside_a_checkout_skips "no skip message: $out"
+    return 0
+  fi
+  ok install_outside_a_checkout_skips
+}
+
+install_with_hooks_path_fails() {
+  fresh hookspath
+  ( cd "$SCRATCH/hookspath" && run_isolated git config core.hooksPath .githooks )
+  local out
+  out="$( cd "$SCRATCH/hookspath" && run_isolated uv run python -m devtools.hooks install 2>&1 )" && {
+    fail install_with_hooks_path_fails "hook step succeeded: $out"
+    return 0
+  }
+  contains "$out" 'core.hooksPath' || {
+    fail install_with_hooks_path_fails "core.hooksPath not named: $out"
+    return 0
+  }
+  ok install_with_hooks_path_fails
+}
+
+install_from_a_worktree_uses_the_common_dir() {
+  fresh wt
+  ( cd "$SCRATCH/wt" && run_isolated git worktree add -q "$SCRATCH/wt-wt" -b wt )
+  local out
+  out="$( cd "$SCRATCH/wt-wt" && run_isolated uv run python -m devtools.hooks install 2>&1 )" || {
+    fail install_from_a_worktree_uses_the_common_dir "hook step failed: $out"
+    return 0
+  }
+  [ -f "$SCRATCH/wt/.git/hooks/pre-push" ] || {
+    fail install_from_a_worktree_uses_the_common_dir "shared pre-push missing"
+    return 0
+  }
+  if [ -n "$(find "$SCRATCH/wt/.git/worktrees" -type f -name pre-push 2>/dev/null)" ]; then
+    fail install_from_a_worktree_uses_the_common_dir "a worktree-local pre-push was written"
+    return 0
+  fi
+  contains "$out" 'linked worktree' || {
+    fail install_from_a_worktree_uses_the_common_dir "no main-checkout warning: $out"
+    return 0
+  }
+  ( cd "$SCRATCH/wt" && run_isolated git worktree remove --force "$SCRATCH/wt-wt" )
+  ok install_from_a_worktree_uses_the_common_dir
+}
+
+foreign_pre_commit_becomes_legacy() {
+  new_repo legacy
+  cat >"$SCRATCH/legacy/.git/hooks/pre-commit" <<EOF
+#!/bin/sh
+touch "$SCRATCH/marks/legacy/foreign.ran"
+EOF
+  chmod +x "$SCRATCH/legacy/.git/hooks/pre-commit"
+  install_hooks legacy
+  [ -f "$SCRATCH/legacy/.git/hooks/pre-commit.legacy" ] || {
+    fail foreign_pre_commit_becomes_legacy "pre-commit.legacy missing"
+    return 0
+  }
+  clear_marks legacy
+  ( cd "$SCRATCH/legacy" && run_isolated git commit --allow-empty -q -m after_install )
+  [ -f "$SCRATCH/marks/legacy/foreign.ran" ] || {
+    fail foreign_pre_commit_becomes_legacy "the legacy hook did not run on a commit"
+    return 0
+  }
+  ok foreign_pre_commit_becomes_legacy
+}
+
+foreign_pre_push_is_refused_untouched() {
+  new_repo foreignpp
+  printf '#!/bin/sh\necho mine\n' >"$SCRATCH/foreignpp/.git/hooks/pre-push"
+  chmod +x "$SCRATCH/foreignpp/.git/hooks/pre-push"
+  cp "$SCRATCH/foreignpp/.git/hooks/pre-push" "$SCRATCH/foreignpp-copy"
+  local out
+  out="$( cd "$SCRATCH/foreignpp" && run_isolated uv run python -m devtools.hooks install 2>&1 )" && {
+    fail foreign_pre_push_is_refused_untouched "hook step succeeded: $out"
+    return 0
+  }
+  cmp -s "$SCRATCH/foreignpp/.git/hooks/pre-push" "$SCRATCH/foreignpp-copy" || {
+    fail foreign_pre_push_is_refused_untouched "the foreign hook was modified"
+    return 0
+  }
+  ok foreign_pre_push_is_refused_untouched
+}
+
+pre_push_symlink_is_refused_untouched() {
+  new_repo ppsymlink
+  printf '#!/bin/sh\n# tools-installer: pre-push gate (installed by make dev-setup; do not edit)\necho mine\n' \
+    >"$SCRATCH/link-target"
+  cp "$SCRATCH/link-target" "$SCRATCH/link-target-copy"
+  ln -s "$SCRATCH/link-target" "$SCRATCH/ppsymlink/.git/hooks/pre-push"
+  local out
+  out="$( cd "$SCRATCH/ppsymlink" && run_isolated uv run python -m devtools.hooks install 2>&1 )" && {
+    fail pre_push_symlink_is_refused_untouched "hook step succeeded: $out"
+    return 0
+  }
+  [ -L "$SCRATCH/ppsymlink/.git/hooks/pre-push" ] || {
+    fail pre_push_symlink_is_refused_untouched "pre-push is no longer a symlink"
+    return 0
+  }
+  cmp -s "$SCRATCH/link-target" "$SCRATCH/link-target-copy" || {
+    fail pre_push_symlink_is_refused_untouched "the symlink target was modified"
+    return 0
+  }
+  ok pre_push_symlink_is_refused_untouched
+}
+
+pre_commit_symlink_is_refused_untouched() {
+  new_repo pcsymlink
+  printf '#!/usr/bin/env bash\n# File generated by pre-commit: https://pre-commit.com\necho mine\n' \
+    >"$SCRATCH/pc-target"
+  cp "$SCRATCH/pc-target" "$SCRATCH/pc-target-copy"
+  ln -s "$SCRATCH/pc-target" "$SCRATCH/pcsymlink/.git/hooks/pre-commit"
+  local out
+  out="$( cd "$SCRATCH/pcsymlink" && run_isolated uv run python -m devtools.hooks install 2>&1 )" && {
+    fail pre_commit_symlink_is_refused_untouched "hook step succeeded: $out"
+    return 0
+  }
+  [ -L "$SCRATCH/pcsymlink/.git/hooks/pre-commit" ] || {
+    fail pre_commit_symlink_is_refused_untouched "pre-commit is no longer a symlink"
+    return 0
+  }
+  cmp -s "$SCRATCH/pc-target" "$SCRATCH/pc-target-copy" || {
+    fail pre_commit_symlink_is_refused_untouched "the symlink target was modified"
+    return 0
+  }
+  [ ! -e "$SCRATCH/pcsymlink/.git/hooks/pre-push" ] || {
+    fail pre_commit_symlink_is_refused_untouched "pre-push was written despite the refusal"
+    return 0
+  }
+  ok pre_commit_symlink_is_refused_untouched
+}
+
+foreign_pre_commit_with_legacy_is_refused_untouched() {
+  new_repo pclegacy
+  printf '#!/bin/sh\necho mine\n' >"$SCRATCH/pclegacy/.git/hooks/pre-commit"
+  printf '#!/bin/sh\necho older\n' >"$SCRATCH/pclegacy/.git/hooks/pre-commit.legacy"
+  chmod +x "$SCRATCH/pclegacy/.git/hooks/pre-commit" "$SCRATCH/pclegacy/.git/hooks/pre-commit.legacy"
+  cp "$SCRATCH/pclegacy/.git/hooks/pre-commit" "$SCRATCH/pc-foreign-copy"
+  cp "$SCRATCH/pclegacy/.git/hooks/pre-commit.legacy" "$SCRATCH/pc-legacy-copy"
+  local out
+  out="$( cd "$SCRATCH/pclegacy" && run_isolated uv run python -m devtools.hooks install 2>&1 )" && {
+    fail foreign_pre_commit_with_legacy_is_refused_untouched "hook step succeeded: $out"
+    return 0
+  }
+  contains "$out" 'pre-commit.legacy' || {
+    fail foreign_pre_commit_with_legacy_is_refused_untouched "legacy file not named: $out"
+    return 0
+  }
+  cmp -s "$SCRATCH/pclegacy/.git/hooks/pre-commit" "$SCRATCH/pc-foreign-copy" || {
+    fail foreign_pre_commit_with_legacy_is_refused_untouched "the foreign hook was modified"
+    return 0
+  }
+  cmp -s "$SCRATCH/pclegacy/.git/hooks/pre-commit.legacy" "$SCRATCH/pc-legacy-copy" || {
+    fail foreign_pre_commit_with_legacy_is_refused_untouched "the legacy hook was modified"
+    return 0
+  }
+  [ ! -e "$SCRATCH/pclegacy/.git/hooks/pre-push" ] || {
+    fail foreign_pre_commit_with_legacy_is_refused_untouched "pre-push was written despite the refusal"
+    return 0
+  }
+  ok foreign_pre_commit_with_legacy_is_refused_untouched
+}
+
+# --- Task 3: interrupt restore and the harness's own abort cleanup -----------------------------
+
+interrupt_restores_edit() {
+  local sig="$1" name="intr$1" case_name="interrupt_$1_restores_edit"
+  fresh "$name"
+  touch "$SCRATCH/$name/tests/slow"
+  ( cd "$SCRATCH/$name" && run_isolated git add tests/slow )
+  ( cd "$SCRATCH/$name" && run_isolated git commit -q -m slow )
+  printf 'FAIL\n' >>"$SCRATCH/$name/tests/test_a.py"
+  expect_edit "$name" tests/test_a.py "$name"
+  local before pid i=0
+  before="$(remote_sha "$name")"
+  clear_marks "$name"
+  push_bg "$name" origin main
+  pid="$PUSH_PID"
+  while [ ! -f "$SCRATCH/marks/$name/started" ] && [ "$i" -lt 300 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ ! -f "$SCRATCH/marks/$name/started" ]; then
+    fail "$case_name" "the suite never started"
+    return 0
+  fi
+  kill -"$sig" -- "-$pid" 2>/dev/null || true
+  if wait "$pid" 2>/dev/null; then
+    fail "$case_name" "the push exited 0 after the signal"
+    return 0
+  fi
+  if [ "$(remote_sha "$name")" != "$before" ]; then
+    fail "$case_name" "remote main moved"
+    return 0
+  fi
+  i=0
+  while ! assert_restored "$name" tests/test_a.py "$name" && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  assert_restored "$name" tests/test_a.py "$name" || {
+    fail "$case_name" "the unstaged edit was not restored"
+    return 0
+  }
+  ok "$case_name"
+}
+
+# Write one `<pid> <pgid>` line per collected process, plus the nested scratch dir, so the parent
+# can prove that every group the abort left alive was reaped by the nested cleanup trap.
+write_abort_pids() {
+  local out="$1" snapshot="$SCRATCH/abort.ps" pids="" pid pgid
+  ps -A -o pid= -o ppid= -o pgid= >"$snapshot" 2>/dev/null || : >"$snapshot"
+  for pid in ${BG_PIDS[@]+"${BG_PIDS[@]}"}; do
+    pids="$pids $pid"
+  done
+  pids="$(collect_descendants "$snapshot" "$pids")"
+  : >"$out"
+  for pid in $pids; do
+    pgid="$(awk -v p="$pid" '$1 == p { print $3; exit }' "$snapshot")"
+    [ -n "$pgid" ] && printf '%s %s\n' "$pid" "$pgid" >>"$out"
+  done
+  printf 'scratch %s\n' "$SCRATCH" >>"$out"
+}
+
+live_pgids() {
+  local groups="$1" pgid all
+  all="$(ps -A -o pgid= 2>/dev/null | awk '{print $1}' | sort -u)"
+  for pgid in $groups; do
+    if printf '%s\n' "$all" | grep -Fxq "$pgid"; then
+      printf '%s ' "$pgid"
+    fi
+  done
+  printf '\n'
+}
+
+abort_scenario() {
+  local outfile="$HOOKS_E2E_ABORT_PIDS" i=0
+  new_repo abort
+  install_hooks abort
+  touch "$SCRATCH/abort/tests/slow"
+  ( cd "$SCRATCH/abort" && run_isolated git add tests/slow )
+  ( cd "$SCRATCH/abort" && run_isolated git commit -q -m slow )
+  clear_marks abort
+  push_bg abort origin main
+  while [ ! -f "$SCRATCH/marks/abort/started" ] && [ "$i" -lt 300 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  write_abort_pids "$outfile"
+  exit 3
+}
+
+harness_abort_reaps_every_group() {
+  local pidsfile="$SCRATCH/abort.pids" out rc groups count i=0 scratch_dir
+  if out="$( HOOKS_E2E_ABORT_PIDS="$pidsfile" "$BASH" "$SELF" 2>&1 )"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 3 ] || {
+    fail harness_abort_reaps_every_group "nested exit $rc: $out"
+    return 0
+  }
+  groups="$(awk 'NF == 2 { print $2 }' "$pidsfile" | sort -u | tr '\n' ' ')"
+  count="$(printf '%s' "$groups" | wc -w)"
+  [ "$count" -ge 2 ] || {
+    fail harness_abort_reaps_every_group "only $count live group(s): $(cat "$pidsfile")"
+    return 0
+  }
+  while [ -n "$(live_pgids "$groups")" ] && [ "$i" -lt 50 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ -n "$(live_pgids "$groups")" ]; then
+    fail harness_abort_reaps_every_group "group(s) survived: $(live_pgids "$groups")"
+    return 0
+  fi
+  scratch_dir="$(awk '$1 == "scratch" { print $2; exit }' "$pidsfile")"
+  if [ -z "$scratch_dir" ] || [ -d "$scratch_dir" ]; then
+    fail harness_abort_reaps_every_group "nested scratch dir survived: $scratch_dir"
+    return 0
+  fi
+  ok harness_abort_reaps_every_group
+}
+
 main() {
+  local t0
+  t0=$(date +%s)
+  if [ -n "${HOOKS_E2E_ABORT_PIDS:-}" ]; then
+    abort_scenario
+  fi
   commit_runs_static_gates
   green_push_lands
   red_push_is_aborted
@@ -747,6 +1073,20 @@ main() {
   unstaged_config_is_refused
   unmerged_is_refused
   fail_fast_skips_test
+  install_leaves_both_hooks_and_is_idempotent
+  install_outside_a_checkout_skips
+  install_with_hooks_path_fails
+  install_from_a_worktree_uses_the_common_dir
+  foreign_pre_commit_becomes_legacy
+  foreign_pre_push_is_refused_untouched
+  pre_push_symlink_is_refused_untouched
+  pre_commit_symlink_is_refused_untouched
+  foreign_pre_commit_with_legacy_is_refused_untouched
+  interrupt_restores_edit INT
+  interrupt_restores_edit TERM
+  interrupt_restores_edit HUP
+  harness_abort_reaps_every_group
+  printf 'hooks-e2e: elapsed %ss\n' "$(( $(date +%s) - t0 ))"
   if [ "$FAILURES" -gt 0 ]; then
     printf 'hooks-e2e: %s case(s) failed\n' "$FAILURES" >&2
     return 1
