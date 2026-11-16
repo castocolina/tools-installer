@@ -690,7 +690,7 @@ def _hermetic_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str
 
         return replace(inputs, resolve_tag=_pinned_tag)
 
-    patch_composition(monkeypatch, "_execute_inputs", recording_inputs)  # pyright: ignore[reportPrivateUsage]
+    patch_composition(monkeypatch, "_execute_inputs", recording_inputs)
     return installed
 
 
