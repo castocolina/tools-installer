@@ -1,9 +1,10 @@
 name: CI
 
+# Every branch except main runs CI; main moves only by fast-forward to a commit CI already
+# passed (D-09). An outside contribution gets CI once the maintainer pushes their branch here.
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches-ignore: [main]
 
 # Cancel superseded runs on the same ref to save free-tier minutes.
 concurrency:
@@ -22,18 +23,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - name: Classify the change
+        id: scope
+        run: uv run --no-sync python -m devtools.docs_only --base origin/main --github-output "$GITHUB_OUTPUT"
       - name: Install dependencies
+        if: steps.scope.outputs.full != 'false'
         run: make dev-setup
       - name: Validate
+        if: steps.scope.outputs.full != 'false'
         run: make validate
       - name: Test
+        if: steps.scope.outputs.full != 'false'
         # Below the job's 25: a stalled run fails this step and keeps its log.
         # The macOS runner needed ~12 min for ~6000 tests and timed out at 96% three times.
         timeout-minutes: 20
         # A dedicated runner needs no host headroom: use every CPU, not the 40% local cap
         # (macos-latest has 3, which the cap turned into a single worker).
         run: PYTEST_XDIST_AUTO_NUM_WORKERS="$(python3 -c 'import os; print(os.cpu_count() or 1)')" make test
+      - name: Hook e2e
+        if: steps.scope.outputs.full != 'false'
+        timeout-minutes: 10
+        run: make hooks-e2e
