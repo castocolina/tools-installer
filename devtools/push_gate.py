@@ -28,6 +28,39 @@ PRE_PUSH_ARGS: tuple[str, ...] = (
 )
 
 
+# Config and plugin files the gates load, plus the gated sources; each entry is an exact root name
+# or starts with a literal directory, so git never walks .venv/.
+GATE_READ_PATHSPECS: tuple[str, ...] = (
+    "conftest.py",
+    "pytest.ini",
+    ".pytest.ini",
+    "tox.ini",
+    "setup.cfg",
+    ".coveragerc",
+    "pyrightconfig.json",
+    "ruff.toml",
+    ".ruff.toml",
+    "GNUmakefile",
+    "makefile",
+    ".shellcheckrc",
+    ".python-version",
+    "uv.toml",
+    "installer/**/*.py",
+    "tests/**/*.py",
+    "devtools/**/*.py",
+    "installer/**/ruff.toml",
+    "installer/**/.ruff.toml",
+    "tests/**/ruff.toml",
+    "tests/**/.ruff.toml",
+    "devtools/**/ruff.toml",
+    "devtools/**/.ruff.toml",
+    "installer/**/.bandit",
+    "devtools/**/.bandit",
+    "scripts/**/.shellcheckrc",
+    "typings/**",
+)
+
+
 class GitQueryError(Exception):
     """A git query exited non-zero; the gate fails closed."""
 
@@ -76,27 +109,93 @@ def _rev(git: GitRunner, rev: str) -> str:
     return os.fsdecode(_query(git, ["rev-parse", "--verify", rev])).strip()
 
 
+def _names(out: bytes) -> list[str]:
+    """Split `-z` output on NUL; names stay exactly as git reported them."""
+    return [os.fsdecode(part) for part in out.split(b"\0") if part]
+
+
+def _part(header: str, items: Sequence[str], fix: str) -> str:
+    return header + "\n" + "".join(f"  {item}\n" for item in sorted(items)) + fix
+
+
+def _untracked_message(git: GitRunner) -> str | None:
+    # Root configs, conftest and data files change what the gates see; only .planning/ is exempt.
+    untracked = {
+        name
+        for name in _names(_query(git, ["ls-files", "--others", "--exclude-standard", "-z"]))
+        if not name.startswith(".planning/")
+    }
+    # An ignored gate-read file still changes what the gates see; no exclude option, so ignored
+    # and non-ignored matches both come back (D-28).
+    gate_read = set(
+        _names(
+            _query(
+                git, ["--glob-pathspecs", "ls-files", "--others", "-z", "--", *GATE_READ_PATHSPECS]
+            )
+        )
+    )
+    parts: list[str] = []
+    if gate_read:
+        parts.append(
+            _part(
+                "the gates read these untracked files, even when git ignores them:",
+                list(gate_read),
+                "commit them, or move them out of the repository.",
+            )
+        )
+    if untracked - gate_read:
+        parts.append(
+            _part(
+                "these untracked files can change what the gates see:",
+                list(untracked - gate_read),
+                "commit, stash, remove or ignore them (.git/info/exclude keeps a local-only file"
+                " that no gate reads out of the gate).",
+            )
+        )
+    return "\n".join(parts) if parts else None
+
+
 def refusal(git: GitRunner, updates: Sequence[RefUpdate]) -> str | None:
     """The first refusal message, or None when the tested tree is the pushed commit."""
+    checks: tuple[tuple[Sequence[str], str, str], ...] = (
+        (
+            ["diff", "--name-only", "--diff-filter=U", "-z"],
+            "unmerged paths exist:",
+            "finish the merge, or abort it (git merge --abort), then push again.",
+        ),
+        (
+            ["diff", "--cached", "--name-only", "-z"],
+            "staged changes are not committed:",
+            "commit them, or unstage them (git restore --staged <file>), then push again.",
+        ),
+    )
+    for args, header, fix in checks:
+        names = _names(_query(git, args))
+        if names:
+            return "push refused: " + _part(header, names, fix)
+    message = _untracked_message(git)
+    if message is not None:
+        return "push refused: " + message
+    edited = _names(_query(git, ["diff", "--name-only", "-z", "--", ".pre-commit-config.yaml"]))
+    if edited:
+        return "push refused: " + _part(
+            "the gate config has an unstaged edit:",
+            edited,
+            "commit or discard the edit (git restore .pre-commit-config.yaml), then push again.",
+        )
     head = _rev(git, "HEAD")
     elsewhere: list[str] = []
     for update in updates:
-        pushed = _rev(git, f"{update.local_sha}^{{commit}}")  # peel a tag to its commit
+        pushed = _rev(git, update.local_sha + "^{commit}")  # peel a tag to its commit
         if pushed != head:
             elsewhere.append(f"{update.remote_ref} ({pushed[:12]})")
-    elsewhere.sort()
     if elsewhere:
-        return _message(
+        return "push refused: " + _part(
             "a pushed commit is not HEAD, so the gates would test a different tree:",
             elsewhere,
             "check out that branch and push from it.",
         )
     return None
-
-
-def _message(header: str, items: Sequence[str], fix: str) -> str:
-    lines = "".join(f"  {item}\n" for item in items)
-    return f"push refused: {header}\n{lines}{fix}"
 
 
 def run_forwarding_signals(argv: Sequence[str]) -> int:
