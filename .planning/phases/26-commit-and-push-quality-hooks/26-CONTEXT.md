@@ -298,6 +298,7 @@ finding and the SPEC item it amends. SPEC.md carries a matching inline note.
     files stay untracked by the owner's rule, and no gate reads `.planning/` except the SKILLJUDGE glob of
     `tests/test_catalog_audit_skill.py:401`. That test checks each file it finds, so an extra untracked file can
     only add failures and never hides one.
+  - *Amended 2026-11-16 (owner):* D-25 and D-28 are confirmed as widened. `.graphifyignore` is committed, not excluded.
   - This checkout: the owner's untracked root `.graphifyignore` would be refused. 26-09 adds it to
     `.git/info/exclude` (local, reversible, never tracked) before the first real push.
   - **Reversibility:** reversible. The rule lives in one function of `devtools/push_gate.py`.
