@@ -5379,6 +5379,7 @@ async def _show_log(screen: ExecuteScreen, pilot: Any) -> None:
     screen.add_class("-running")
     log = _run_log(screen)
     await wait_until(pilot, lambda: log.size.width > 0)
+    await pilot.pause()  # the log replays its first writes once its resize has been handled
 
 
 def test_dropped_notice_wording() -> None:

@@ -354,10 +354,10 @@ class RunLog(RichLog):
         return self._dropped
 
     def on_resize(self, event: Resize) -> None:
-        # Runs before RichLog.on_resize; the replay waits a refresh so that handler has run.
+        # Runs before RichLog.on_resize; replaying after this message lets that handler run first.
         if event.size.width and not self._replay_scheduled:
             self._replay_scheduled = True
-            self.call_after_refresh(self._replay)
+            self.call_next(self._replay)
 
     def _replay(self) -> None:
         while self._pending:
