@@ -4,9 +4,13 @@ Every git query goes through an in-process fake; the only processes started are
 `sys.executable` children (tests/sandbox.py forbids real git, make, uv and pre-commit).
 """
 
+import contextlib
 import io
+import os
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -19,6 +23,7 @@ from devtools.push_gate import (
     RefUpdate,
     main,
     parse_updates,
+    run_forwarding_signals,
 )
 
 HEAD = "a" * 40
@@ -430,3 +435,154 @@ def test_no_message_suggests_skipping_a_hook(capsys: pytest.CaptureFixture[str])
 def test_a_file_name_with_a_space_is_printed_intact(capsys: pytest.CaptureFixture[str]) -> None:
     err = _refused(_git(staged=(0, b"installer/a b.py\0", b"")), capsys)
     assert "\n  installer/a b.py\n" in err
+
+
+# --- signal forwarding (D-17) -------------------------------------------------------------------
+
+SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+FAKE_PRE_COMMIT = """
+import os, signal, sys, time
+log, started, mode = sys.argv[1:4]
+
+
+def on_sigint(signum, frame):
+    with open(log, "a") as handle:
+        handle.write("SIGINT\\n")
+    time.sleep(0.5)  # a second forwarded signal would land here and log again
+    sys.exit(0 if mode == "zero" else 130)
+
+
+signal.signal(signal.SIGINT, on_sigint)
+with open(started + ".tmp", "w") as handle:
+    handle.write(str(os.getpid()))
+os.replace(started + ".tmp", started)
+for _ in range(600):
+    time.sleep(0.05)
+sys.exit(99)
+"""
+GATE_CODE = (
+    "import sys; from devtools.push_gate import run_forwarding_signals; "
+    "sys.exit(run_forwarding_signals([sys.executable, *sys.argv[1:]]))"
+)
+
+
+def _wait_for(path: Path) -> None:
+    deadline = time.monotonic() + 30
+    while not path.exists():
+        assert time.monotonic() < deadline, f"{path.name} never appeared"
+        time.sleep(0.05)
+
+
+def _signal_the_gate(
+    tmp_path: Path, mode: str, signals: Sequence[signal.Signals]
+) -> tuple[int, str, list[str]]:
+    """Run the gate in its own group around a fake pre-commit, signal it, return its result."""
+    fake, log, started = tmp_path / "fake_pre_commit.py", tmp_path / "log", tmp_path / "started"
+    fake.write_text(FAKE_PRE_COMMIT)
+    gate = subprocess.Popen(
+        [sys.executable, "-c", GATE_CODE, str(fake), str(log), str(started), mode],
+        process_group=0,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(started)
+        for index, sig in enumerate(signals):
+            if index:
+                time.sleep(0.2)
+            os.killpg(gate.pid, sig)
+        _, err = gate.communicate(timeout=30)
+        lines = log.read_text().splitlines() if log.exists() else []
+        return gate.returncode, err, lines
+    finally:
+        gate.kill()
+        gate.wait()
+        if started.exists():  # the fake's own group: close what the test opened
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(int(started.read_text()), signal.SIGKILL)
+
+
+@pytest.mark.parametrize("sig", SIGNALS)
+def test_a_group_signal_is_forwarded_once_as_sigint(tmp_path: Path, sig: signal.Signals) -> None:
+    status, err, lines = _signal_the_gate(tmp_path, "one", [sig])
+    assert status == 130
+    assert lines == ["SIGINT"]
+    assert "push interrupted: no ref was pushed." in err
+
+
+def test_a_second_signal_is_ignored(tmp_path: Path) -> None:
+    status, _, lines = _signal_the_gate(tmp_path, "one", [signal.SIGTERM, signal.SIGTERM])
+    assert status != 0
+    assert lines == ["SIGINT"]
+
+
+def test_a_signalled_gate_never_exits_zero(tmp_path: Path) -> None:
+    status, _, lines = _signal_the_gate(tmp_path, "zero", [signal.SIGTERM])
+    assert lines == ["SIGINT"]
+    assert status == 130
+
+
+class _Child:
+    def __init__(self, status: int = 0) -> None:
+        self.pid = 4242
+        self.status = status
+
+    def wait(self) -> int:
+        return self.status
+
+
+@pytest.mark.parametrize("sig", SIGNALS)
+@pytest.mark.parametrize("times", (1, 2))
+def test_a_signal_in_the_spawn_window_is_forwarded_once_after_the_handle_exists(
+    sig: signal.Signals, times: int
+) -> None:
+    forwards: list[tuple[int, int]] = []
+    seen_inside_spawn: list[int] = []
+
+    def spawn(argv: Sequence[str]) -> _Child:
+        handler = signal.getsignal(sig)
+        assert callable(handler)
+        for _ in range(times):
+            handler(sig, None)
+        seen_inside_spawn.append(len(forwards))
+        return _Child()
+
+    status = run_forwarding_signals(
+        ["x"], spawn=spawn, killpg=lambda pid, signum: forwards.append((pid, signum))
+    )
+    assert seen_inside_spawn == [0]
+    assert forwards == [(4242, signal.SIGINT)]
+    assert status == 130
+
+
+def test_a_normal_child_status_passes_through() -> None:
+    before = [signal.getsignal(sig) for sig in SIGNALS]
+    assert run_forwarding_signals([sys.executable, "-c", "raise SystemExit(3)"]) == 3
+    assert [signal.getsignal(sig) for sig in SIGNALS] == before
+
+
+def test_a_child_killed_by_a_signal_maps_to_128_plus_the_number() -> None:
+    assert run_forwarding_signals(["x"], spawn=lambda argv: _Child(-9)) == 137
+
+
+def test_a_vanished_child_group_is_ignored_and_a_closed_terminal_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClosedTerminal:
+        def write(self, text: str) -> int:
+            raise OSError("terminal gone")
+
+        def flush(self) -> None:
+            raise OSError("terminal gone")
+
+    def gone(pid: int, signum: int) -> None:
+        raise ProcessLookupError
+
+    def spawn(argv: Sequence[str]) -> _Child:
+        handler = signal.getsignal(signal.SIGHUP)
+        assert callable(handler)
+        handler(signal.SIGHUP, None)
+        return _Child()
+
+    monkeypatch.setattr(sys, "stderr", ClosedTerminal())
+    assert run_forwarding_signals(["x"], spawn=spawn, killpg=gone) == 130

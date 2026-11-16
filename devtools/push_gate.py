@@ -5,13 +5,16 @@ git runs this as the `pre-push` hook (`python -m devtools.push_gate`) and writes
 only, no `installer` import: the hook must work before the project's dependencies are importable.
 """
 
+import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import BinaryIO
+from types import FrameType
+from typing import BinaryIO, Protocol
 
 GitRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[bytes]]
 
@@ -198,8 +201,58 @@ def refusal(git: GitRunner, updates: Sequence[RefUpdate]) -> str | None:
     return None
 
 
-def run_forwarding_signals(argv: Sequence[str]) -> int:
-    return subprocess.run(list(argv), check=False, stdin=subprocess.DEVNULL).returncode
+class Child(Protocol):
+    pid: int
+
+    def wait(self) -> int: ...
+
+
+def _spawn(argv: Sequence[str]) -> Child:
+    # Own group: pre-commit restores its stash on SIGINT only, so the gate forwards SIGINT to it.
+    return subprocess.Popen(list(argv), process_group=0, stdin=subprocess.DEVNULL)
+
+
+def run_forwarding_signals(
+    argv: Sequence[str],
+    *,
+    spawn: Callable[[Sequence[str]], Child] = _spawn,
+    killpg: Callable[[int, int], None] = os.killpg,
+) -> int:
+    """Run argv; forward the first SIGINT, SIGTERM or SIGHUP once as SIGINT, never exit 0 then."""
+    child: Child | None = None
+    interrupted = forwarded = False
+
+    def forward() -> None:
+        nonlocal forwarded
+        if child is not None and not forwarded:
+            forwarded = True
+            with contextlib.suppress(ProcessLookupError):
+                killpg(child.pid, signal.SIGINT)
+
+    def on_signal(signum: int, frame: FrameType | None) -> None:
+        nonlocal interrupted
+        interrupted = True
+        forward()
+
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    saved = {sig: signal.getsignal(sig) for sig in signals}
+    for sig in signals:
+        signal.signal(sig, on_signal)
+    try:
+        # No signal mask around the spawn: the child would inherit it and could not be interrupted.
+        child = spawn(argv)
+        if interrupted:  # the signal landed before the handle existed
+            forward()
+        status = child.wait()
+    finally:
+        for sig, old in saved.items():
+            signal.signal(sig, signal.SIG_DFL if old is None else old)
+    if interrupted:
+        with contextlib.suppress(OSError):  # the terminal may be gone after SIGHUP
+            print("push interrupted: no ref was pushed.", file=sys.stderr)
+    if status < 0:
+        status = 128 - status
+    return 130 if interrupted and status == 0 else status
 
 
 def main(
