@@ -773,7 +773,7 @@ Plans:
   *(amended 2026-11-16, 26 SPEC: SC2 reads `make dev-setup`, which installs the commit hook through pre-commit and the push gate itself (26 D-01, D-07); SC3 adds that `main` is gated behind CI with `enforce_admins` on and changes land by branch push, green CI, fast-forward (26 R5, D-09). See 26-SPEC.md for the 6 locked requirements.)*
 
 **Context (2026-10-15):** today pre-commit runs only at commit and runs no tests; `.git/hooks` has only `pre-commit`; CI runs `make validate && make test` on push to main and on PRs. pylint is not added: ruff covers its rules.
-**Plans:** 6/9 plans executed
+**Plans:** 7/9 plans executed
 
 Plans:
 **Wave 1**
@@ -789,7 +789,7 @@ Plans:
 - [x] 26-06-PLAN.md — `scripts/hooks-e2e.sh` and `make hooks-e2e`: real git and pre-commit in scratch repos for every SPEC scratch-repo case (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 26-07-PLAN.md — CI on branch push except `main`, docs-only fast pass in the same job with byte-identical check names, `devtools/docs_only.py` (wave 4)
+- [x] 26-07-PLAN.md — CI on branch push except `main`, docs-only fast pass in the same job with byte-identical check names, `devtools/docs_only.py` (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 26-08-PLAN.md — Docs: gate/target/stage table with timings, push-gate recovery, path to `main`, escape hatch; D-14 todo (wave 5)
@@ -818,7 +818,7 @@ Plans:
 | 24.2 Schedules view | 13/13 | Complete    | 2026-11-14 |
 | 24.3 Catalog audit skill | 11/11 | Complete    | 2026-11-14 |
 | 25. Lean | 11/11 | Complete    | 2026-11-15 |
-| 26. Commit and push quality hooks | 6/9 | In Progress | - |
+| 26. Commit and push quality hooks | 7/9 | In Progress | - |
 
 ## Backlog
 
