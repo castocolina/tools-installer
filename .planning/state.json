@@ -71,7 +71,7 @@
     {
       "number": "25",
       "name": "Lean",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "26",
@@ -80,9 +80,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 17 of 17 · 88% · executing"
   },
-  "updated_at": "2026-11-15T22:05:36.711Z"
+  "updated_at": "2026-11-16T01:45:55.746Z"
 }
