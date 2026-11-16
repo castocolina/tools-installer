@@ -1,88 +1,12 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v0.50.0 — Truthful lifecycle",
-  "phases": [
-    {
-      "number": "17",
-      "name": "Stop the bleeding",
-      "status": "complete"
-    },
-    {
-      "number": "18",
-      "name": "Registry truth and drift guard",
-      "status": "complete"
-    },
-    {
-      "number": "19",
-      "name": "One tool state with health plus receipts",
-      "status": "complete"
-    },
-    {
-      "number": "20",
-      "name": "Install plan with dispositions",
-      "status": "complete"
-    },
-    {
-      "number": "21",
-      "name": "One screen family",
-      "status": "complete"
-    },
-    {
-      "number": "22",
-      "name": "Method lifecycle contract",
-      "status": "complete"
-    },
-    {
-      "number": "23",
-      "name": "Configuration as a lifecycle step",
-      "status": "complete"
-    },
-    {
-      "number": "23.1",
-      "name": "Host safety",
-      "status": "complete"
-    },
-    {
-      "number": "23.2",
-      "name": "Install-time tuning",
-      "status": "complete"
-    },
-    {
-      "number": "24",
-      "name": "Onboarding through the skill and e2e",
-      "status": "complete"
-    },
-    {
-      "number": "24.1",
-      "name": "Onboard Neovim through the tool-onboarding skill",
-      "status": "complete"
-    },
-    {
-      "number": "24.2",
-      "name": "Schedules view",
-      "status": "complete"
-    },
-    {
-      "number": "24.3",
-      "name": "Catalog audit skill",
-      "status": "complete"
-    },
-    {
-      "number": "25",
-      "name": "Lean",
-      "status": "complete"
-    },
-    {
-      "number": "26",
-      "name": "Commit and push quality hooks",
-      "status": "complete"
-    }
-  ],
+  "milestone": "v0.51.0",
+  "phases": [],
   "next": {
-    "command": "/gsd-progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd-discuss-phase",
+    "label": "Discuss the first phase",
+    "reason": "Project initialized — plan your first phase"
   },
-  "updated_at": "2026-11-16T20:38:06.393Z"
+  "updated_at": "2026-11-16T23:33:57.488Z"
 }

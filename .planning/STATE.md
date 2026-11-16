@@ -1,20 +1,16 @@
 ---
 gsd_state_version: "1.0"
-milestone: v0.50.0
-status: Awaiting next milestone
-stopped_at: "v0.50.0 milestone archived (all 17 phases verified; 20 todos carried) — next: /gsd-new-milestone"
-last_updated: "2026-11-16T20:41:44.160Z"
+milestone: v0.51.0
+milestone_name: Onboard terminal tools
+status: planning
+last_updated: "2026-11-16T23:33:57.485Z"
 last_activity: 2026-11-16
-last_activity_desc: Milestone v0.50.0 completed and archived
-state_head: 8b66ae1362d4b0ee118475c425b8321e25172be2
 progress:
-  total_phases: 17
-  completed_phases: 17
-  total_plans: 276
-  completed_plans: 276
-  percent: 100
-milestone_name: Truthful lifecycle
-current_phase: 26
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +24,11 @@ See: .planning/PROJECT.md (updated 2026-11-16)
 
 ## Current Position
 
-Phase: Milestone v0.50.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-11-16 — Milestone v0.50.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-11-16 — Milestone v0.51.0 started
+
 
 ## Performance Metrics
 

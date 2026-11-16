@@ -19,6 +19,16 @@ A developer can go from a bare machine to a working, correctly-ordered install
 catalog, with dependency drag-in resolving automatically and no manual ordering
 knowledge required, and every screen tells the truth about what is on the host.
 
+## Current Milestone: v0.51.0 Onboard terminal tools
+
+**Goal:** Every terminal emulator and IDE in the catalog, and every one added later, ships with the same defaults: zsh as the launched shell on Linux (Bazzite included), Option/Alt+Left/Right word navigation on macOS, and a clear-screen shortcut (Cmd+K on macOS, Ctrl+Shift+K on Linux), all applied through a tool-onboarding skill that carries them as rules; the pending tool onboardings run through the same skill.
+
+**Target features:**
+- Tool-onboarding skill refactor: terminal and IDE defaults become rules, not questions (backlog 999.18) — first phase
+- Terminal defaults applied to the terminals already in the catalog: kitty, WezTerm, Konsole (owner decision), herdr pass-through (backlog 999.19)
+- Ghostty, Herdr IDE and iTerm2 onboarded through the skill (backlog 999.20-999.22)
+- Xcode CLT, Bruno, AWS CLI, gh-stack and Playwright MCP onboarded through the skill
+
 ## Last Shipped Milestone: v0.50.0 Truthful lifecycle
 
 Shipped 2026-11-16 (started 2026-10-13): 17 phases (17-26 with inserted 23.1, 23.2, 24.1-24.5), 276 plan summaries, 121/121 requirements. Every screen tells the truth about each tool on this host, and install, update, removal and configuration follow one per-method contract with install receipts as removal proof.
@@ -35,7 +45,7 @@ Shipped 2026-11-16 (started 2026-10-13): 17 phases (17-26 with inserted 23.1, 23
 
 **Design source:** `.planning/research/2026-10-13-target-architecture.md` and `.planning/research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md`. Audit: `.planning/v0.50.0-MILESTONE-AUDIT.md`.
 
-**Next milestone:** not started. Candidates are under Active; owner decisions are in `.planning/todos/TRIAGE-2026-11-16.md`.
+**Next milestone:** v0.51.0 Onboard terminal tools (started 2026-11-16).
 
 ## Requirements
 
@@ -73,12 +83,17 @@ Shipped 2026-11-16 (started 2026-10-13): 17 phases (17-26 with inserted 23.1, 23
 
 ### Active
 
-<!-- Next-milestone candidates, not yet scoped. Evidence, verdicts and owner decisions: .planning/todos/TRIAGE-2026-11-16.md (20 pending todos, backlog 999.7 partial, 999.14-17 pending). -->
+<!-- v0.51.0 scope. Evidence and owner decisions for the carried items: .planning/todos/TRIAGE-2026-11-16.md. -->
 
+- [ ] Tool-onboarding skill: terminal and IDE defaults as rules (zsh on Linux, Option/Alt word navigation on macOS, Cmd+K / Ctrl+Shift+K clear) — v0.51.0 (999.18)
+- [ ] Terminal defaults for kitty, WezTerm, Konsole (owner decision) and herdr pass-through — v0.51.0 (999.19)
+- [ ] Onboard Ghostty, Herdr IDE and iTerm2 through the skill — v0.51.0 (999.20-999.22)
+- [ ] Onboard Xcode CLT (owner decision: brew install.sh or softwareupdate), Bruno, AWS CLI, gh-stack and Playwright MCP through the skill — v0.51.0
+
+Carried, not in v0.51.0:
 - [ ] Declare the removal footprint (`config_paths`, script `paths`) for about 26 catalog entries and bring install-method and update-route currency up to date (Backlog 999.14, 999.15)
 - [ ] Replace codegraph with codebase-memory-mcp in the catalog and its postinstall hooks (todo 2026-11-14; owner decision on the AGENTS-TOOLING writer)
-- [ ] Onboard pending tools through the skill: Xcode CLT, iTerm2, Bruno, AWS CLI, gh-stack, Playwright MCP (owner decisions on Xcode CLT and iTerm2)
-- [ ] Small lifecycle fixes: zip version probe (999.16), TLS retry for release and app downloads, cask uninstall that needs root, fnm vendor block cleanup, run-log tail after a shrink
+- [ ] Small lifecycle fixes: zip version probe (999.16), TLS retry for release and app downloads, cask uninstall that needs root, fnm vendor block cleanup, run-log tail after a shrink, transient xdist test errors
 - [ ] Duplicate-code gate with its own `make` target and hook entry (999.17)
 - [ ] Adopt the branch -> CI -> fast-forward `main` flow in the outside tools (GSD merge helpers, ai-kit-commit-fold, GSD phase-complete); direct pushes to `main` are now rejected
 - [ ] Close the Phase 16 UAT debt or accept later-phase coverage (999.7); run the installer on macOS and Apple Silicon (deferred since v0.49.0)
@@ -219,4 +234,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-16 after v0.50.0 milestone*
+*Last updated: 2026-11-16 at the start of milestone v0.51.0*
