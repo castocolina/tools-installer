@@ -18,7 +18,9 @@ import dataclasses
 import functools
 import importlib
 import inspect
+import io
 import re
+import tokenize
 from collections import deque
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -467,3 +469,93 @@ def test_composition_lives_in_compose_not_setup() -> None:
         if _imports_any(_parse(path), ("setup",))
     ]
     assert importers == []
+
+
+# The modules the phase 25 split created: each stays small and carries no review history.
+_SPLIT_MODULES: tuple[str, ...] = (
+    "installer/app_messages.py",
+    "installer/doctor_messages.py",
+    "installer/doctor_screen.py",
+    "installer/modals.py",
+    "installer/mutation_lock.py",
+    "installer/policies_screen.py",
+    "installer/schedules_screen.py",
+    "installer/uninstall_review.py",
+    "installer/uninstall_screen.py",
+    "installer/wizard_app.py",
+)
+_SPLIT_MAX_LINES = 800
+# Code the split moved into modules that already existed; only these nodes are scanned there.
+_MOVED_INTO_SHARED: tuple[tuple[str, str], ...] = (
+    ("installer/systemd_daemon.py", "CompetingProbe"),
+    ("installer/diskusage.py", "DiskPressureProbe"),
+    ("installer/ui_common.py", "fit"),
+    ("installer/ui_common.py", "sentence"),
+    ("installer/ui_common.py", "TIMES_LISTED"),
+)
+_REVIEW_ID = re.compile(r"\b(?:CR|WR|IN|RR)-\d+\b|\bR\d+-\d+\b")
+
+
+def _review_ids(source: str) -> list[str]:
+    """Review ids in the comments and in the docstrings of the module, classes and functions."""
+    found: list[str] = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT:
+            found.extend(_REVIEW_ID.findall(token.string))
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.extend(_REVIEW_ID.findall(ast.get_docstring(node) or ""))
+    return found
+
+
+def _moved_source(path: Path, name: str) -> str:
+    """The source of the top-level node binding `name` plus the `#` block directly above it."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    node = next(
+        (n for n in _parse(path).body if name in _defined_top_level(ast.Module([n], []))), None
+    )
+    assert node is not None, f"{path.name}: no top-level definition of {name}"
+    start = node.lineno
+    while start > 1 and lines[start - 2].lstrip().startswith("#"):
+        start -= 1
+    return "\n".join(lines[start - 1 : node.end_lineno]) + "\n"
+
+
+def test_the_review_id_scan_finds_a_seeded_id() -> None:
+    assert _review_ids("x = 1  # WR-03: keep\n") == ["WR-03"]
+    assert _review_ids('def f():\n    """Fixed in R1-07."""\n') == ["R1-07"]
+    assert _review_ids('x = 1  # a plain why\n"""A plain docstring."""\n') == []
+
+
+def test_split_modules_stay_under_800_lines() -> None:
+    for relative in _SPLIT_MODULES:
+        path = _ROOT / relative
+        assert path.is_file(), f"{relative} is listed in _SPLIT_MODULES but does not exist"
+        count = len(path.read_text(encoding="utf-8").splitlines())
+        assert count <= _SPLIT_MAX_LINES, (
+            f"{relative} has {count} lines, the cap is {_SPLIT_MAX_LINES}"
+        )
+
+
+def test_split_modules_carry_no_review_ids() -> None:
+    for relative in _SPLIT_MODULES:
+        ids = _review_ids((_ROOT / relative).read_text(encoding="utf-8"))
+        assert ids == [], f"{relative} carries review ids: {ids}"
+
+
+def test_split_modules_import_the_app_only_for_typing() -> None:
+    modules = _installer_modules(_ROOT)
+    for relative in _SPLIT_MODULES:
+        if relative == "installer/wizard_app.py":
+            continue
+        imported = _runtime_imports(_ROOT / relative, modules, _ROOT)
+        assert "installer.wizard_app" not in imported, f"{relative} imports the app at runtime"
+
+
+def test_code_moved_into_shared_modules_carries_no_review_ids(tmp_path: Path) -> None:
+    seeded = tmp_path / "seeded.py"
+    seeded.write_text("Other = 1  # IN-09\n# WR-10: why\nProbe = int\nAfter = 2  # CR-11\n")
+    assert _review_ids(_moved_source(seeded, "Probe")) == ["WR-10"]
+    for relative, name in _MOVED_INTO_SHARED:
+        ids = _review_ids(_moved_source(_ROOT / relative, name))
+        assert ids == [], f"{relative}:{name} carries review ids: {ids}"
