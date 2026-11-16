@@ -1,12 +1,13 @@
 .DEFAULT_GOAL := help
-.PHONY: help install build run doctor fix uninstall lint format-check typecheck security dead-code shellcheck validate test e2e verify-registry audit-catalog
+.PHONY: help dev-setup build run doctor fix uninstall lint format-check typecheck security dead-code shellcheck validate test e2e verify-registry audit-catalog
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
 
-install:  ## Create .venv and install runtime + dev deps (uv)
+dev-setup:  ## Create .venv and install deps (uv), then the commit hook and the push gate
 	uv sync
+	uv run python -m devtools.hooks install
 
 build:  ## Build the wheel + sdist
 	uv build

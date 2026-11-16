@@ -27,7 +27,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: make install
+        run: make dev-setup
       - name: Validate
         run: make validate
       - name: Test

@@ -7,7 +7,7 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
 
 - **uv** owns the environment: Python version, `.venv`, and all dependencies.
   Never use `pip`, `poetry`, `conda`, or a hand-rolled venv.
-- `make install`   — create `.venv` (uv), install runtime + dev dependencies
+- `make dev-setup` — create `.venv` (uv), install runtime + dev dependencies, then the commit hook and the push gate
 - `make build`     — build the distributable
 - `make run`       — launch the wizard (`uv run --isolated --no-dev setup.py`; pass flags via `ARGS="…"`)
 - `make doctor`    — audit PATH (a report; like every launch it first repairs installer-owned
@@ -36,6 +36,9 @@ Python, managed with **uv**. See [PRD](docs/prds/ai-dev-tools-installer-v1.0-prd
   never edit the real shell rc or agent settings. Tests use a scratch `HOME`; real
   installs and removals run only in disposable containers
   (`scripts/detect-container-runtime.sh`), which are removed afterwards.
+- **Agents never run `make dev-setup`.** It rewrites the git hooks every worktree shares; the
+  developer runs it once from the main checkout. The one exception is the
+  final owner-assigned checkpoint of a phase plan that lists the real install explicitly.
 - **Zero sudo.** No code path runs `sudo`, `pkexec` or `doas`; anything that needs
   root is handed off as the exact command for the user to run.
 

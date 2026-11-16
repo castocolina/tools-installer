@@ -101,10 +101,29 @@ def test_retired_guard_targets_are_gone() -> None:
 
 def test_gate_targets_keep_dev_dependencies() -> None:
     recipe_map = recipes()
-    for name in [*gate_targets(), "validate"]:
+    for name in [*gate_targets(), "validate", "dev-setup"]:
         joined = "\n".join(recipe_map[name][1])
         assert "--no-dev" not in joined
         assert "--isolated" not in joined
+
+
+def test_dev_setup_installs_deps_then_the_hooks() -> None:
+    prereqs, lines = recipes()["dev-setup"]
+    assert prereqs == []
+    assert [line.strip() for line in lines] == [
+        "uv sync",
+        "uv run python -m devtools.hooks install",
+    ]
+    makefile = MAKEFILE.read_text()
+    assert "dev-setup" in makefile.split(".PHONY:")[1].split("\n")[0].split()
+    assert re.search(r"^dev-setup:.*?## .+$", makefile, re.MULTILINE), (
+        "dev-setup needs a ## help comment"
+    )
+
+
+def test_old_bootstrap_target_is_gone() -> None:
+    assert "install" not in recipes()
+    assert "install" not in MAKEFILE.read_text().split(".PHONY:")[1].split("\n")[0].split()
 
 
 def test_verify_registry_target_is_read_only_by_default() -> None:
