@@ -5452,6 +5452,26 @@ async def test_writes_replayed_after_the_first_resize_update_the_notice() -> Non
         assert _log_text(screen).splitlines()[-1] == "line 5000"
 
 
+async def test_a_burst_before_the_first_layout_is_bounded_and_counted() -> None:
+    inputs = _inputs()
+    app = _host(inputs)
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(ExecuteScreen(["rg"], inputs))
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ExecuteScreen)
+        log = _run_log(screen)
+        assert log.size.width == 0
+        screen.write_log(*_numbered("line", 6000))
+        assert log.dropped == 1000
+        screen.add_class("-running")
+        await wait_until(pilot, lambda: len(log.lines) == 5000)
+        assert log.dropped == 1000
+        assert str(_notice(screen).content) == "1000 earlier lines dropped"
+        text = _log_text(screen).splitlines()
+        assert (text[0], text[-1]) == ("line 1000", "line 5999")
+
+
 async def test_a_multi_line_write_counts_every_stored_line() -> None:
     inputs = _inputs()
     app = _host(inputs)

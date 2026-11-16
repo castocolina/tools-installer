@@ -13,6 +13,7 @@ import codecs
 import io
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Self
@@ -308,12 +309,19 @@ def dropped_notice(count: int) -> str:
     return f"{count} earlier lines dropped"
 
 
+def _stored_lines(content: object) -> int:
+    """How many log lines a write stores: one per newline-separated line, 1 for non-text."""
+    return content.count("\n") + 1 if isinstance(content, str) else 1
+
+
 class RunLog(RichLog):
     """The Execute run log, bounded at RUN_LOG_MAX_LINES stored lines.
 
-    Textual trims silently, so this log reports its trimmed count through
-    `on_dropped` whenever the count moves. The count is refreshed inside
-    `write`, so writes Textual defers and replays also update the notice.
+    Textual trims silently, so this log counts the lines it drops itself and reports
+    the count through `on_dropped` whenever it moves. Until the widget has a width,
+    writes wait in a queue of this log's own that holds only the newest
+    RUN_LOG_MAX_LINES lines (Textual's own deferral applies no bound); the queue
+    replays in order on the first layout, and the notice appears once it has.
     """
 
     def __init__(
@@ -333,12 +341,43 @@ class RunLog(RichLog):
             id=id,
         )
         self._on_dropped = on_dropped
+        self._dropped = 0
         self._reported_dropped = 0
+        self._live = False
+        self._replay_scheduled = False
+        self._pending: deque[tuple[object, tuple[Any, ...]]] = deque()
+        self._pending_lines = 0
 
     @property
     def dropped(self) -> int:
-        """Cumulative count of stored (rendered) lines Textual has trimmed."""
-        return self._start_line
+        """Cumulative count of lines trimmed or evicted before they could be shown."""
+        return self._dropped
+
+    def on_resize(self, event: Resize) -> None:
+        # Runs before RichLog.on_resize; the replay waits a refresh so that handler has run.
+        if event.size.width and not self._replay_scheduled:
+            self._replay_scheduled = True
+            self.call_after_refresh(self._replay)
+
+    def _replay(self) -> None:
+        while self._pending:
+            content, args = self._pending.popleft()
+            self._apply(content, args)
+        self._pending_lines = 0
+        self._live = True
+        self._report()
+
+    def _report(self) -> None:
+        if self._dropped != self._reported_dropped:
+            self._reported_dropped = self._dropped
+            self._on_dropped(self._dropped)
+
+    def _apply(self, content: object, args: tuple[Any, ...]) -> None:
+        before = len(self.lines)
+        super().write(content, *args)
+        after = len(self.lines)
+        if after >= RUN_LOG_MAX_LINES:
+            self._dropped += max(0, before + _stored_lines(content) - RUN_LOG_MAX_LINES)
 
     def write(
         self,
@@ -349,15 +388,25 @@ class RunLog(RichLog):
         scroll_end: bool | None = None,
         animate: bool = False,
     ) -> Self:
-        """Write like RichLog, then report the trimmed count if it moved.
+        """Write like RichLog, keeping the bound and the dropped count exact.
 
         The bound holds after every write, the empty string included: Textual
         stores "" as one line, so it is trimmed like any other.
         """
-        super().write(content, width, expand, shrink, scroll_end, animate)
-        if self.dropped != self._reported_dropped:
-            self._reported_dropped = self.dropped
-            self._on_dropped(self.dropped)
+        args = (width, expand, shrink, scroll_end, animate)
+        if self._live:
+            self._apply(content, args)
+            self._report()
+            return self
+        self._pending.append((content, args))
+        self._pending_lines += _stored_lines(content)
+        while self._pending_lines > RUN_LOG_MAX_LINES:
+            oldest = _stored_lines(self._pending[0][0])
+            if self._pending_lines - oldest < RUN_LOG_MAX_LINES:
+                break
+            self._pending.popleft()
+            self._pending_lines -= oldest
+            self._dropped += oldest
         return self
 
 
