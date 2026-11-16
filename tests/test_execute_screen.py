@@ -5379,7 +5379,8 @@ async def _show_log(screen: ExecuteScreen, pilot: Any) -> None:
     screen.add_class("-running")
     log = _run_log(screen)
     await wait_until(pilot, lambda: log.size.width > 0)
-    await pilot.pause()  # the log replays its first writes once its resize has been handled
+    # The log replays its pre-layout writes after its first resize: wait for that, not a pause.
+    await wait_until(pilot, lambda: vars(log)["_live"])
 
 
 def test_dropped_notice_wording() -> None:
