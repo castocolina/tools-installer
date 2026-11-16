@@ -7,7 +7,7 @@ block_on: high
 threats_total: 30
 threats_closed: 29
 threats_open: 0
-threats_open_nonblocking: 1
+threats_open_nonblocking: 0
 audited_at: 2026-11-15
 audited_head: efbb30db
 ---
@@ -143,3 +143,11 @@ None. All eleven SUMMARY `## Threat Flags` sections report none; the post-review
 `unit_dir` dead-field drop, the `InstallFn` rename, the run-log queue fixes covered by T-25-15/16).
 
 **threats_open:** 0
+
+## T-25-02 disposition (orchestrator, 2026-11-16)
+
+Accepted risk for the dispatch-table half. The two removed tests froze the names of string-keyed tables; a table
+whose target module or callable is deleted already fails at import or registry load (`load_tools` rejects an
+unknown method kind or owner probe, and every dispatch site is exercised by its route tests), and the module-graph
+reachability test now seeds only from the launchers (WR-01 fix, 1d2a9faf). The exemption and relative-import
+guards stay. Re-add a table inventory if a future table is keyed by user data rather than registry values.
