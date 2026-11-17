@@ -2,6 +2,7 @@
 created: 2026-11-16
 title: Terminal defaults for herdr (multiplexer): check the word-navigation and clear keys pass through
 area: catalog
+resolves_phase: 29
 severity: minor
 files:
   - installer/terminal_shell.py

@@ -2,6 +2,7 @@
 created: 2026-10-22T00:21:30.030Z
 title: Onboard AWS CLI through the tool-onboarding skill
 area: catalog
+resolves_phase: 32
 severity: minor
 files:
   - .claude/skills/tool-onboarding/SKILL.md

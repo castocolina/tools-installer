@@ -2,6 +2,7 @@
 created: 2026-11-03T14:30:00.000Z
 title: Add the gh-stack extension through the tool-onboarding skill
 area: catalog
+resolves_phase: 32
 severity: minor
 files:
   - .claude/skills/tool-onboarding/SKILL.md

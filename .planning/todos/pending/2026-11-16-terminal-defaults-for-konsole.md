@@ -2,6 +2,7 @@
 created: 2026-11-16
 title: Terminal defaults for Konsole: Ctrl+Shift+K clear-screen shortcut (owner decision)
 area: catalog
+resolves_phase: 29
 severity: minor
 files:
   - installer/terminal_shell.py

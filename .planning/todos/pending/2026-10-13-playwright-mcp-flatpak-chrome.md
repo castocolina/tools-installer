@@ -2,6 +2,7 @@
 created: 2026-10-13T23:30:00.000Z
 title: Point Playwright MCP at the Flatpak Chrome (shell tweak + Cursor MCP env)
 area: tweaks
+resolves_phase: 32
 severity: minor
 source: ai-kit hand-off (2026-10-13 audit, report 16)
 files:

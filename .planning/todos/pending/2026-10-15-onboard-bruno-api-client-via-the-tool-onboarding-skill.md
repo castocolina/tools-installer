@@ -2,6 +2,7 @@
 created: 2026-10-15T21:00:21.537Z
 title: Onboard Bruno API client via the tool-onboarding skill (nice to have)
 area: catalog
+resolves_phase: 32
 severity: minor
 files:
   - installer/registry.toml

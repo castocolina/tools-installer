@@ -2,6 +2,7 @@
 created: 2026-10-14T22:15:07.851Z
 title: Add xcode-clt catalog entry as macOS prerequisite
 area: catalog
+resolves_phase: 32
 severity: minor
 files:
   - installer/registry.toml
