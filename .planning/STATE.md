@@ -80,20 +80,32 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- [2026-09-16] [doctor] Detect dangling pnpm global bin shims in Doctor — [todo file](.planning/todos/pending/2026-09-16-detect-dangling-pnpm-global-bin-shims-in-doctor.md)
 - [2026-10-13] [tweaks] Point Playwright MCP at the Flatpak Chrome (shell tweak + Cursor MCP env) — [todo file](.planning/todos/pending/2026-10-13-playwright-mcp-flatpak-chrome.md)
 - [2026-10-13] [pi] Repair pi's install leftovers and ship the pi model/MCP sync — [todo file](.planning/todos/pending/2026-10-13-repair-pi-install-and-sync-models.md)
 - [2026-10-14] [catalog] Add xcode-clt catalog entry as macOS prerequisite — [todo file](.planning/todos/pending/2026-10-14-add-xcode-clt-catalog-entry-as-macos-prerequisite.md)
 - [2026-10-14] [catalog] Port what is useful from ai-kit's shelved "context tools" wizard Step 0 — [todo file](.planning/todos/pending/2026-10-14-port-ai-kit-context-tools-step0.md) — Needs Read the tag from the ai-kit checkout (`git show.
-- [2026-10-15] [catalog] Add iTerm2 macOS-only entry after tool-onboarding refactor — [todo file](.planning/todos/pending/2026-10-15-add-iterm2-macos-only-entry-after-tool-onboarding-refactor.md)
 - [2026-10-15] [catalog] Adopt Apple Containers runtime; colima stays compose path — [todo file](.planning/todos/pending/2026-10-15-adopt-apple-containers-runtime-colima-stays-compose-path.md)
 - [2026-10-15] [catalog] Onboard Bruno API client via the tool-onboarding skill (nice to have) — [todo file](.planning/todos/pending/2026-10-15-onboard-bruno-api-client-via-the-tool-onboarding-skill.md)
 - [2026-10-22] [catalog] Onboard AWS CLI through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-10-21-onboard-aws-cli-through-the-tool-onboarding-skill.md)
 - [2026-10-21] [tweaks] Rename container shortcuts and detect the available engine — [todo file](.planning/todos/pending/2026-10-21-rename-container-shortcuts-and-detect-the-available-engine.md)
 - [2026-10-21] [catalog] Research memory-efficient Compose on Apple Silicon — [todo file](.planning/todos/pending/2026-10-21-research-memory-efficient-compose-on-apple-silicon.md)
-- [2026-10-25] [catalog] Onboard GitHub Copilot CLI through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-10-24-onboard-github-copilot-cli-through-the-tool-onboarding-skill.md)
 - [2026-11-03] [catalog] Add the gh-stack extension through the tool-onboarding skill — [todo file](.planning/todos/pending/2026-11-03-add-the-gh-stack-extension-through-the-tool-onboarding-skill.md)
-- [2026-11-03] [tui] Fix 80x20 layout gaps found by the Phase 21 TUI check — [todo file](.planning/todos/pending/2026-11-03-fix-80x20-layout-gaps-found-by-the-phase-21-tui-check.md)
+- [2026-11-04] [lifecycle] Hand off casks whose uninstall needs root instead of running brew uninstall --cask — [todo file](.planning/todos/pending/2026-11-04-hand-off-casks-whose-uninstall-needs-root.md)
+- [2026-11-07] [general] Untitled — [todo file](.planning/todos/pending/2026-11-07-strip-fnm-vendor-shell-blocks-left-on-existing-hosts.md)
+- [2026-11-08] [general] Untitled — [todo file](.planning/todos/pending/2026-11-08-retry-transient-tls-errors-in-network-installs.md) — Needs Retry a download or script fetch a small bounded number of times with backoff, only for curl's.
+- [2026-11-08] [general] Untitled — [todo file](.planning/todos/pending/2026-11-08-small-23-2-follow-ups.md) — Needs Fix the skill text with a skill-judge re-score; look at the summary block layout at 80x20; check claude's.
+- [2026-11-13] [general] Untitled — [todo file](.planning/todos/pending/2026-11-13-phase-24-review-deferrals.md)
+- [2026-11-14] [catalog] Replace codegraph with codebase-memory-mcp as the code-and-doc exploration tool — [todo file](.planning/todos/pending/2026-11-14-replace-codegraph-with-codebase-memory-mcp.md)
+- [2026-11-16] [tooling] Adopt the branch → green CI → main flow in the outside tools that push to main — [todo file](.planning/todos/pending/2026-11-16-adopt-the-branch-ci-main-flow-in-outside-tools.md)
+- [2026-11-16] [tui] Keep the Execute run log's newest line visible after the window shrinks — [todo file](.planning/todos/pending/2026-11-16-keep-the-run-log-tail-visible-after-a-shrink.md)
+- [2026-11-16] [catalog] Terminal defaults for herdr (multiplexer): check the word-navigation and clear keys pass through — [todo file](.planning/todos/pending/2026-11-16-terminal-defaults-for-herdr.md)
+- [2026-11-16] [catalog] Terminal defaults for kitty: clear-screen shortcut and macOS Option word navigation — [todo file](.planning/todos/pending/2026-11-16-terminal-defaults-for-kitty.md)
+- [2026-11-16] [catalog] Terminal defaults for Konsole: Ctrl+Shift+K clear-screen shortcut (owner decision) — [todo file](.planning/todos/pending/2026-11-16-terminal-defaults-for-konsole.md)
+- [2026-11-16] [catalog] Terminal defaults for WezTerm: clear-screen shortcut and macOS Option word navigation — [todo file](.planning/todos/pending/2026-11-16-terminal-defaults-for-wezterm.md)
+- [2026-11-16] [testing] Transient test ERRORs under xdist in the push gate — [todo file](.planning/todos/pending/2026-11-16-transient-test-errors-under-xdist-in-the-push-gate.md)
+- [2026-11-17] [schedules] Daily update check with a desktop notification (Bazzite and macOS) — [todo file](.planning/todos/pending/2026-11-17-daily-update-check-with-desktop-notification.md)
+- [2026-11-17] [schedules] Opt-in auto-update schedule: package managers first, then dependents — [todo file](.planning/todos/pending/2026-11-17-opt-in-auto-update-policy-managers-first.md)
+- [2026-11-17] [ci] Registry update bot in GitHub Actions (catalog pins, Dependabot-like) — [todo file](.planning/todos/pending/2026-11-17-registry-update-bot-in-github-actions.md)
 
 ### Roadmap Evolution
 
