@@ -82,11 +82,35 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| SKILL-01 | Phase 27 | Pending |
+| SKILL-02 | Phase 27 | Pending |
+| SKILL-03 | Phase 27 | Pending |
+| SKILL-04 | Phase 27 | Pending |
+| SKILL-05 | Phase 27 | Pending |
+| SKILL-06 | Phase 27 | Pending |
+| KEYS-01 | Phase 28 | Pending |
+| KEYS-02 | Phase 28 | Pending |
+| KEYS-03 | Phase 28 | Pending |
+| KEYS-04 | Phase 28 | Pending |
+| TERM-01 | Phase 29 | Pending |
+| TERM-02 | Phase 29 | Pending |
+| TERM-03 | Phase 29 | Pending |
+| TERM-04 | Phase 29 | Pending |
+| TERM-05 | Phase 29 | Pending |
+| NTERM-01 | Phase 30 | Pending |
+| NTERM-02 | Phase 31 | Pending |
+| NTERM-03 | Phase 31 | Pending |
+| ONB-11 | Phase 32 | Pending |
+| ONB-12 | Phase 32 | Pending |
+| ONB-13 | Phase 32 | Pending |
+| ONB-14 | Phase 32 | Pending |
+| ONB-15 | Phase 32 | Pending |
 
 **Coverage:**
 - v0.51.0 requirements: 23 total
-- Mapped to phases: 0 (filled by the roadmapper)
+- Mapped to phases: 23
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-11-16*
-*Last updated: 2026-11-16 after initial definition*
+*Last updated: 2026-11-16 after roadmap creation (traceability filled)*

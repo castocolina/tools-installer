@@ -2,11 +2,11 @@
 gsd_state_version: "1.0"
 milestone: v0.51.0
 milestone_name: Onboard terminal tools
-status: planning
-last_updated: "2026-11-16T23:33:57.485Z"
+status: ready_to_plan
+last_updated: "2026-11-16T23:59:00.000Z"
 last_activity: 2026-11-16
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-16)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required, and every screen tells the truth about what is on the host.
-**Current focus:** Planning the next milestone (`/gsd-new-milestone`); inputs in `.planning/todos/TRIAGE-2026-11-16.md`
+**Current focus:** v0.51.0 Onboard terminal tools — Phase 27: Tool-onboarding skill: terminal defaults as rules
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-11-16 — Milestone v0.51.0 started
+Phase: 27 of 32 (Tool-onboarding skill: terminal defaults as rules) — first of 6 phases in v0.51.0 (27–32)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-16 — v0.51.0 roadmap created (Phases 27–32, 23/23 requirements mapped)
+
+Progress: [░░░░░░░░░░] 0%
 
 
 ## Performance Metrics
@@ -73,6 +75,8 @@ Recent decisions affecting current work:
 - [O1, 2026-10-13]: Native package installs are handed off as the exact command; no executor runs sudo
 - [O5, 2026-10-13]: Alacritty on Bazzite is a cargo build in a throwaway Distrobox (overrides the TA's "stay unavailable" recommendation and its no-new-kind cut); lands in Phase 24 on Phase 22's contract
 - [Roadmap, 2026-10-13]: Receipts are the only removal proof (Phase 19 format and writer, Phase 22 removal); UI-04 "delete config too" moved from TA P5 to Phase 22, where `config_paths` exists
+- [v0.51.0 Roadmap, 2026-11-16]: Owner order: skill refactor first (27), shared keys mechanism (28), existing terminals (29), new terminals (30 Ghostty; 31 iTerm2 + Herdr desktop app, split because both need a JSON file mode), other onboardings (32) in parallel with 28–31 once 27 lands
+- [v0.51.0 owner decisions, 2026-11-16]: clear = screen and scrollback, Modifier+K sends Ctrl+L; no global Option-as-Alt; Konsole verify-only; iTerm2 profile becomes the default; Ghostty Linux = labelled community AppImage; AWS CLI official script first; Xcode CLT handoff only (full list in REQUIREMENTS.md)
 
 ### Pending Todos
 
@@ -132,13 +136,14 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ### Roadmap Evolution
 
+- 2026-11-16: v0.51.0 roadmap created — Phases 27–32; backlog 999.18 → 27, 999.19 → 29, 999.20 → 30, 999.21 and 999.22 → 31
 - 2026-10-13: v0.50.0 roadmap created — Phases 17–25; backlog 999.1–999.11 kept, each marked with the phase(s) that absorb it
 
 ## Session Continuity
 
-Last session: 2026-11-16T20:41:44.146Z
-Stopped at: v0.50.0 milestone archived (all 17 phases verified; 20 todos carried) — next: /gsd-new-milestone
-Resume file: .planning/MILESTONES.md
+Last session: 2026-11-16T23:59:00.000Z
+Stopped at: v0.51.0 roadmap created (Phases 27–32) — next: /gsd-plan-phase 27
+Resume file: .planning/ROADMAP.md
 
 ## Deferred Verification
 
@@ -151,4 +156,4 @@ Resume file: .planning/MILESTONES.md
 ## Operator Next Steps
 
 
-- Start the next milestone with /gsd-new-milestone
+- Plan Phase 27 with /gsd-plan-phase 27 (Phase 32 may be planned in parallel once 27 lands)

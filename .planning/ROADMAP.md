@@ -4,6 +4,7 @@
 
 - ✅ **v0.49.0 Tiered Catalog** — Phases 1–16 incl. 12.1–12.4 and 15.1–15.8 (shipped 2026-10-13, override closeout; see [archive](milestones/v0.49.0-ROADMAP.md) and [audit](research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md))
 - ✅ **v0.50.0 Truthful lifecycle** — Phases 17–26 incl. 23.1–23.2 and 24.1–24.5 (shipped 2026-11-16; see [archive](milestones/v0.50.0-ROADMAP.md) and [audit](milestones/v0.50.0-MILESTONE-AUDIT.md))
+- 🚧 **v0.51.0 Onboard terminal tools** — Phases 27–32 (in progress)
 
 ## Phases
 
@@ -38,6 +39,132 @@
 - [x] Phase 26: Commit and push quality hooks (9 plans) — completed 2026-11-16
 
 </details>
+
+## 🚧 v0.51.0 Onboard terminal tools
+
+**Milestone Goal:** Every terminal emulator and IDE in the catalog, and every one added later, ships with the same defaults: zsh as the launched shell on Linux (Bazzite included), Option/Alt+Left/Right word navigation on macOS, a clear-screen shortcut (Cmd+K on macOS, Ctrl+Shift+K on Linux) and new tabs, windows and panes in the current directory, all applied through a tool-onboarding skill that carries them as rules; the pending tool onboardings run through the same skill.
+
+**Design source:** `.planning/research/SUMMARY.md` "Implications for Roadmap" (research Phases 1–5 = Phases 27–31 and 32 here) and the owner decisions of 2026-11-16 in `.planning/REQUIREMENTS.md`. Every phase after 27 runs its tool work through `.claude/skills/tool-onboarding/SKILL.md`. Every macOS behavior is a pure generator with a golden-file test on both OSes and a UAT line deferred to the owner's Mac.
+
+**Phase Numbering:**
+
+- Integer phases (27–32): Planned milestone work
+- Decimal phases (e.g. 27.1): Urgent insertions (marked with INSERTED)
+
+- [ ] **Phase 27: Tool-onboarding skill: terminal defaults as rules** - The skill applies the four terminal and IDE defaults without asking, carries a closed per-terminal table with a coverage test, the conflict rule and the macOS app and testing rules; skill-judge before and after
+- [ ] **Phase 28: Shared terminal-keys mechanism** - One table-driven keys mechanism keyed by tool id, with Alacritty moved in unchanged; drift, reconfigure and strip for every row; the shared Ctrl+L clear and the same-directory rule
+- [ ] **Phase 29: Terminal defaults for the terminals in the catalog** - kitty and WezTerm meet the defaults on both OSes, Alacritty's clear moves to screen and scrollback, Konsole is checked, and herdr passes the keys through
+- [ ] **Phase 30: Onboard Ghostty** - Ghostty in the catalog (cask, labelled community AppImage, pacman) with the zsh sync on Linux and its keys region
+- [ ] **Phase 31: Onboard iTerm2 and the Herdr desktop app** - iTerm2 as a macOS-only cask with a default Dynamic Profile, and the Herdr desktop app as its own entry with its keys files
+- [ ] **Phase 32: Onboard Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP** - Five non-terminal onboardings through the skill; runs in parallel with Phases 28–31
+
+## Phase Details
+
+### Phase 27: Tool-onboarding skill: terminal defaults as rules
+
+**Goal**: Anyone onboarding or reviewing a terminal or IDE through the tool-onboarding skill gets the same defaults applied without a question, from one closed table that a test keeps in step with the registry.
+**Depends on**: Nothing (first phase of v0.51.0; builds on shipped v0.50.0)
+**Requirements**: SKILL-01, SKILL-02, SKILL-03, SKILL-04, SKILL-05, SKILL-06
+**Note**: Absorbs backlog 999.18. The meaning of "clear" (screen and scrollback, Modifier+K sends Ctrl+L) is owner-decided; the old "ask the user, do not enable silently" bullets (`SKILL.md` ~185-191) are replaced, not extended.
+**Success Criteria** (what must be TRUE):
+
+  1. The skill states as rules applied without asking: zsh is the launched shell on Linux (Bazzite included); Option/Alt+Left/Right moves by word on macOS by binding only those two chords, never the global Option-as-Alt switch; Cmd+K (macOS) and Ctrl+Shift+K (Linux) clear the screen and the scrollback; a new tab, window or pane opens in the current directory. Only extras remain questions.
+  2. The skill carries a closed per-terminal table (config file, how each default is met or already met by the vendor, reload behavior), and the test suite fails when a terminal or IDE entry in `installer/registry.toml` has no row (proved with a fixture entry missing its row).
+  3. The skill states the conflict rule (a user binding is never overridden and is reported as `partial: kept yours`; a conflicting vendor default is overridden only with an install note naming the displaced default) and the macOS app rule: per app it records install, uninstall and configuration, places the bundle in `~/Applications` where the method allows it, links a shipped CLI into `~/.local/bin`, and says why when no user location is possible.
+  4. The skill states the macOS testing rule: each macOS behavior is a pure config generator with a golden-file test that runs on both OSes, macOS CI covers the file paths, and the real-Mac check is a UAT line marked deferred to the owner's Mac.
+  5. skill-judge scores for the skill before and after the rewrite are recorded in the phase directory, and the after score is not lower.
+
+**Plans**: TBD
+
+### Phase 28: Shared terminal-keys mechanism
+
+**Goal**: A terminal's keys become one row in one shared mechanism, so applying, checking, re-applying and removing its keys works the same for every terminal, starting with Alacritty exactly as it behaves today.
+**Depends on**: Phase 27
+**Requirements**: KEYS-01, KEYS-02, KEYS-03, KEYS-04
+**Note**: Research Phase 2. Behavior-preserving move of the Alacritty keys code out of `installer/terminal_shell.py` into `installer/terminal_keys.py`; the dispatch sites in `post_install.py`, `version_status.py` and `app.py` become table-driven. Konsole stays outside the table. Alacritty's own clear change is TERM-03 (Phase 29).
+**Success Criteria** (what must be TRUE):
+
+  1. Alacritty's keys region is applied, checked and stripped through the shared mechanism keyed by its registry tool id; the region it writes is byte-identical to before the move and its existing tests pass with no assertion edits; no dispatch site branches on the Alacritty id any more.
+  2. In a scratch HOME, deleting or editing a terminal's keys region makes its row read `≈ apply install tuning`, a reconfigure restores the region, and an uninstall strips it with the tool; a test fails when a registry tool with `apply_terminal_tuning` has no mechanism row.
+  3. In the installer's managed zsh configuration, Ctrl+L at the prompt clears the visible screen and the scrollback (byte-level test of the emitted sequences), and the mechanism maps the clear chord to Ctrl+L for every row: Cmd+K on macOS, Ctrl+Shift+K on Linux.
+  4. Every mechanism row declares whether the vendor already opens a new tab, window or pane in the current directory; the setting is written only for rows where it does not, and a test fails when a row leaves it undeclared.
+
+**Plans**: TBD
+
+### Phase 29: Terminal defaults for the terminals in the catalog
+
+**Goal**: kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults on every OS they install on, without overriding a binding the user set.
+**Depends on**: Phase 28
+**Requirements**: TERM-01, TERM-02, TERM-03, TERM-04, TERM-05
+**Note**: Absorbs backlog 999.19 and its four pending todos (`.planning/todos/pending/2026-11-16-terminal-defaults-for-{kitty,wezterm,konsole,herdr}.md`). Research flags: whether kitty's `map opt+left` fires with `macos_option_as_alt no`; Konsole's stock key on the current version in a container; herdr key handling. One phase rather than two: kitty and WezTerm prove the mechanism, and Alacritty, Konsole and herdr are small checks on the same rule.
+**Success Criteria** (what must be TRUE):
+
+  1. kitty's generated config (golden files on both OSes) binds Option+Left/Right to word navigation on macOS with no global `macos_option_as_alt` switch (a regression test asserts the switch is absent), clears screen and scrollback on Cmd+K and on Linux Ctrl+Shift+K with the displaced `scroll_line_up` named in the install note, opens new tabs and windows in the current directory, and kitty's macOS install writes nothing into `/Applications`.
+  2. WezTerm's Lua owned region meets the defaults on both OSes and extends the user's existing `config.keys` (a fixture with user keys keeps all of them); a config that holds both the shell region and the keys region is read correctly, because the shell-region check matches exact marker lines.
+  3. Alacritty's Cmd+K and Ctrl+Shift+K now clear the screen and the scrollback, and its Linux Alt+Left/Right rows are unchanged; on a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear, writes the binding only when the user removed it, and the Konsole zsh sync is unchanged.
+  4. Inside a herdr pane, Option/Alt+Left/Right and the clear chord reach the shell as the expected bytes (an observable byte-level test); a herdr pass-through setting is written only if herdr intercepts them.
+
+**Plans**: TBD
+
+### Phase 30: Onboard Ghostty
+
+**Goal**: A user can install, use and remove Ghostty from the catalog on macOS, Linux, Bazzite and Arch, and it opens zsh with the terminal defaults.
+**Depends on**: Phase 29
+**Requirements**: NTERM-01
+**Note**: Absorbs backlog 999.20. Its own phase because it is a full new entry with three install routes (cask, community AppImage, pacman), a new shell-sync branch, macOS effective-config resolution and a keys row; it is the only new terminal that fits the existing owned-region mode, so it lands before the two that need a JSON file mode (Phase 31). Research flags: AppImage under FUSE 2 on Bazzite (container test), the `{ver}` handling of the `v1.4.0` tag, XDG vs `~/Library/Application Support/com.mitchellh.ghostty/config` precedence.
+**Success Criteria** (what must be TRUE):
+
+  1. On macOS Ghostty installs from the official cask into a user-writable app location with its CLI linked into `~/.local/bin`; on Linux and Bazzite a digest-verified community AppImage installs without a reboot and its row and install note say "community build"; on Arch it installs with pacman.
+  2. On Linux, Ghostty launches zsh through the terminal sync and Ctrl+Shift+K clears the screen and the scrollback; the macOS golden file writes nothing where the vendor default already meets a rule, never writes `macos-option-as-alt`, and goes to the config file Ghostty actually reads.
+  3. New tabs, windows and splits open in the current directory; a drifted Ghostty keys region shows `≈ apply install tuning` and a reconfigure re-applies it.
+  4. In a container, uninstalling Ghostty removes the AppImage, its keys and shell regions and every receipt-recorded path, leaving only documented config.
+
+**Plans**: TBD
+
+### Phase 31: Onboard iTerm2 and the Herdr desktop app
+
+**Goal**: A macOS user gets iTerm2 with a ready default profile that meets the terminal defaults, and the Herdr desktop app installs on Linux and Apple Silicon macOS as its own entry with the same defaults.
+**Depends on**: Phase 30 (both extend the shared keys table; kept sequential to avoid conflicting edits)
+**Requirements**: NTERM-02, NTERM-03
+**Note**: Absorbs backlog 999.21 (Herdr IDE = the Herdr desktop app `herdrdev/herdr-app`, owner decision) and 999.22. Grouped because both need a JSON file mode the mechanism does not have yet: a whole-file iTerm2 Dynamic Profile and the herdr app's `keys.json`/`keys.macos.json`. Owner decision: the iTerm2 profile becomes the default profile (overrides the research recommendation). Research flags: iTerm2 Keyboard Map encoding and default-profile behavior (capture on a Mac or defer to UAT); the herdr app keys path and `install.sh` footprint.
+**Success Criteria** (what must be TRUE):
+
+  1. iTerm2 installs from the cask on macOS only (its Linux row reads unavailable), and the installer writes one owned Dynamic Profile with Option as Esc+, the Cmd+K clear, new tabs, windows and panes in the current directory, and the requested color scheme (golden file on both OSes).
+  2. After an iTerm2 install the installer's profile is the default profile, and an uninstall deletes the profile and restores the previous default (golden test of the before and after state; the real-Mac check is a UAT line deferred to the owner's Mac).
+  3. The Herdr desktop app is a catalog entry distinct from `herdr`: a user-scope `install.sh` with no sudo on Linux and the cask on Apple Silicon macOS (unavailable on Intel macOS); installing or removing one entry leaves the other's binaries and `~/.config/herdr` intact.
+  4. The Herdr desktop app's keys files meet the defaults on both OSes; on Linux Ctrl+Shift+K clears and the displaced picker binding is named in the install note, and a binding the user defined is kept and reported as `partial: kept yours`.
+
+**Plans**: TBD
+
+### Phase 32: Onboard Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP
+
+**Goal**: Five pending tools are onboarded through the skill, each with its install, detection, update and removal route, without sudo, interactive login or damage to user data.
+**Depends on**: Phase 27 (independent of the terminal mechanism; may run in parallel with Phases 28–31)
+**Requirements**: ONB-11, ONB-12, ONB-13, ONB-14, ONB-15
+**Note**: Absorbs the pending todos for Xcode CLT, Bruno, AWS CLI, gh-stack and the Playwright Flatpak Chrome path. One phase: every entry fits an existing method kind (`script`, `brew`, `cask`, `github_release` raw, `bun`) and is small. Research flags: AWS CLI gpg prerequisite; gh-stack's extension directory under a scratch `GH_CONFIG_DIR`; Playwright MCP headless launch smoke in a Fedora/Bazzite container.
+**Success Criteria** (what must be TRUE):
+
+  1. On macOS without the Command Line Tools, the Xcode CLT row shows them missing with the exact `xcode-select --install` command to run; no executor runs it (grep test) and Uninstall offers no removal.
+  2. In a container, AWS CLI v2 installs through the official user-scope `install.sh` with gpg verification and no `--system`, falls back to brew `awscli` when that route is unavailable, updates with `aws update`, and an uninstall leaves `~/.aws` untouched.
+  3. Bruno installs through the cask on macOS and a digest-verified AppImage for the host's architecture on Linux; no `bru` CLI is installed.
+  4. gh-stack installs with `gh extension install https://github.com/github/gh-stack`, reads present from `gh extension list`, updates with `gh extension upgrade stack` and is removed with `gh extension remove stack`; with an unauthenticated `gh` nothing blocks or prompts.
+  5. Playwright MCP is registered as the pinned `bunx @playwright/mcp@0.0.85` in each agent host present, an existing `playwright` server entry is left as it was, the Flatpak Chrome path is exported on Bazzite only when the wrapper exists, and a write into `~/.claude/settings.json` asks for consent first.
+
+**Plans**: TBD
+
+## Progress
+
+**Execution Order:**
+27 → 28 → 29 → 30 → 31, with 32 after 27 in parallel with 28–31. Phase 27 fixes the rules every later phase applies; 28 turns three hard-coded dispatch sites into one table before any terminal is added; 29 proves the mechanism on existing files before the new terminals; 31 adds the JSON file mode only when a row needs it.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 27. Tool-onboarding skill: terminal defaults as rules | 0/TBD | Not started | - |
+| 28. Shared terminal-keys mechanism | 0/TBD | Not started | - |
+| 29. Terminal defaults for the terminals in the catalog | 0/TBD | Not started | - |
+| 30. Onboard Ghostty | 0/TBD | Not started | - |
+| 31. Onboard iTerm2 and the Herdr desktop app | 0/TBD | Not started | - |
+| 32. Onboard Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP | 0/TBD | Not started | - |
 
 ## Backlog
 
@@ -351,6 +478,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phase 27 (v0.51.0)
+
 ### Phase 999.19: Terminal defaults for the terminals already in the catalog, applied through the tool-onboarding skill (BACKLOG)
 
 **Goal:** Review kitty, WezTerm, Alacritty and herdr with the tool-onboarding skill (review mode) after 999.18, so each meets the terminal defaults on every OS it installs on. Known gaps at 2026-11-16: kitty and WezTerm get no keys region on Linux or macOS (only the zsh sync, which is Linux-only by design); Alacritty has its keys on Linux and no macOS method; herdr (the multiplexer, not Herdr IDE) syncs `default_shell` to zsh, and it must be checked that it passes Alt+Left/Right and the clear shortcut through to the host terminal.
@@ -363,6 +492,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phase 29 (v0.51.0)
+
 ### Phase 999.20: Onboard Ghostty through the tool-onboarding skill (BACKLOG)
 
 **Goal:** Ghostty is in the catalog as a terminal emulator, onboarded with the tool-onboarding skill after 999.18, so it meets the terminal defaults (zsh sync on Linux, Option/Alt word navigation on macOS, the clear-screen shortcut).
@@ -372,6 +503,8 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phase 30 (v0.51.0)
 
 ### Phase 999.21: Onboard Herdr IDE through the tool-onboarding skill (BACKLOG)
 
@@ -383,6 +516,8 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+**Absorbed by:** Phase 31 (v0.51.0)
+
 ### Phase 999.22: Onboard iTerm2 through the tool-onboarding skill (BACKLOG)
 
 **Goal:** iTerm2 is in the catalog as a macOS-only terminal emulator, onboarded with the tool-onboarding skill after 999.18, with the terminal defaults (Option as Esc+ for word navigation, Cmd+K clear) plus the customizations the owner asked for.
@@ -392,3 +527,5 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+**Absorbed by:** Phase 31 (v0.51.0)
