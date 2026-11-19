@@ -1,0 +1,13 @@
+{
+  "source_path": "/var/home/bazzite/git/personal/tools-installer/.planning/todos/pending/2026-11-17-daily-update-check-with-desktop-notification.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Daily update check with a desktop notification (Bazzite and macOS)",
+  "summary": "Owner-requested daily scheduled update check with desktop notifications on Bazzite and macOS, covering catalog tools and tools-installer itself.",
+  "scope": ["Schedules engine", "check-updates schedule row", "VersionRefreshService", "version cache", "desktop notifications (notify-send, osascript)", "tools-installer self-update check"],
+  "cross_refs": [".planning/research/2026-11-17-update-automation.md", "24.2-SPEC.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Type DOC is manifest-declared (authoritative). Content is an owner feature todo with a solution sketch and open owner decisions, not supporting documentation; it carries no ADR status or locked decision. Treat as context only per manifest. Source hash in filename could not be computed (no shell tool available to this classifier)."
+}

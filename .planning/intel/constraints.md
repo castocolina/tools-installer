@@ -1,15 +1,7 @@
-# Constraints
+# Constraints (batch 5)
 
-No SPECs were present in the batch-1 classification (`catalog-tiers-and-dependency-chain`,
-1 classification, type `PRD`). No constraint entries to extract.
+No SPECs in this batch (4 classifications, all type DOC). No constraint entries extracted.
 
-No SPECs were present in the batch-2 classification (`package-manager-policy`,
-1 classification, type `PRD`). No constraint entries to extract.
-
-No SPECs were present in the batch-3 classification (`catalog-expansion`,
-`postinstall-hooks`, 2 classifications, both type `PRD`). No constraint entries
-to extract.
-
-No SPECs were present in the batch-4 classification (`agent-cli-ergonomics`,
-`background-maintenance-daemon`, `live-package-management`, 3 classifications,
-all type `PRD`). No constraint entries to extract.
+Existing locked constraints these features must honor (from PROJECT.md and 24.2-SPEC.md, not new): zero sudo,
+no new Policies knobs, never mutate the developer host, branch push + green CI + fast-forward to protected
+`main`. See `.planning/INGEST-CONFLICTS.md` for how each feature fares against them.

@@ -3,6 +3,7 @@ created: 2026-11-17T11:13:42.532Z
 title: Opt-in auto-update schedule: package managers first, then dependents
 area: schedules
 severity: minor
+resolves_phase: 35
 files:
   - installer/update.py
   - installer/resolve.py

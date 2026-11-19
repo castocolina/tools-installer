@@ -3,10 +3,11 @@ created: 2026-11-17T11:13:42.532Z
 title: Daily update check with a desktop notification (Bazzite and macOS)
 area: schedules
 severity: minor
+resolves_phase: 34
 files:
   - installer/schedules.py
   - installer/compose.py:411
-  - installer/version_cache.py:45
+  - installer/version_cache.py:44
   - installer/version_status.py:143
   - installer/daemon.py:34-45
 ---
@@ -19,7 +20,7 @@ Nothing tells the user that installed tools have updates unless they open the TU
 
 A daily `check-updates` row in the Schedules engine (24.2 D-10..D-14). It runs `VersionRefreshService.refresh` headless through `--run-schedule`, and logs one `ok: N updates available` line. The stdlib runner notifies only when the outdated set changed: `notify-send` on Linux, `osascript` on macOS.
 
-- The version cache TTL is 7 days (`version_cache.py:45`); the scheduled pass needs a forced refresh or a shorter TTL.
+- The version cache TTL is 7 days (`version_cache.py:44`); the scheduled pass needs a forced refresh or a shorter TTL.
 - The unit has no GitHub token (`daemon.py:34-45`), so it is anonymous (60 requests/h), and a refresh fetches at most 20 per run (`version_status.py:143`).
 - Linux: this Kinoite host has `notify-send` (libnotify 0.8.9) and the user manager exports `DBUS_SESSION_BUS_ADDRESS`; the runner's clean child env must pass the bus address through.
 - macOS: `osascript display notification` needs a one-time Script Editor permission; behavior from a launchd agent is unverified.

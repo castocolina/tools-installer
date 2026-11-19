@@ -6,7 +6,7 @@ status: ready_to_plan
 last_updated: "2026-11-16T23:59:00.000Z"
 last_activity: 2026-11-16
 progress:
-  total_phases: 6
+  total_phases: 9
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-11-16)
 
 ## Current Position
 
-Phase: 27 of 32 (Tool-onboarding skill: terminal defaults as rules) — first of 6 phases in v0.51.0 (27–32)
+Phase: 27 of 35 (Tool-onboarding skill: terminal defaults as rules) — first of 9 phases in v0.51.0 (27–35)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-11-16 — v0.51.0 roadmap created (Phases 27–32, 23/23 requirements mapped)
+Last activity: 2026-11-19 — ingested the update-automation todos as Phases 33–35 (41/41 requirements mapped)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -148,6 +148,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ### Roadmap Evolution
 
+- 2026-11-19: Phases 33–35 added to v0.51.0 by /gsd-ingest-docs (registry bot, daily update check, opt-in auto-update; 18 requirements BOT/NOTIFY/AUTOUPD; 24.2 notification cut and SCHED-01 amended, owner-approved)
 - 2026-11-16: v0.51.0 roadmap created — Phases 27–32; backlog 999.18 → 27, 999.19 → 29, 999.20 → 30, 999.21 and 999.22 → 31
 - 2026-10-13: v0.50.0 roadmap created — Phases 17–25; backlog 999.1–999.11 kept, each marked with the phase(s) that absorb it
 

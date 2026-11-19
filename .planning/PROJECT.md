@@ -89,6 +89,9 @@ Shipped 2026-11-16 (started 2026-10-13): 17 phases (17-26 with inserted 23.1, 23
 - [ ] Terminal defaults for kitty, WezTerm, Konsole (owner decision) and herdr pass-through — v0.51.0 (999.19)
 - [ ] Onboard Ghostty, Herdr IDE and iTerm2 through the skill — v0.51.0 (999.20-999.22)
 - [ ] Onboard Xcode CLT (owner decision: brew install.sh or softwareupdate), Bruno, AWS CLI, gh-stack and Playwright MCP through the skill — v0.51.0
+- [ ] Registry update bot in GitHub Actions: catalog pin bumps proposed as a bot branch, landed by the owner — v0.51.0 (Phase 33)
+- [ ] Daily update check with a desktop notification on Bazzite and macOS (amends the 24.2 notification cut) — v0.51.0 (Phase 34)
+- [ ] Opt-in `update-all` schedule, package managers first (amends 24.2 SCHED-01 with a per-row default) — v0.51.0 (Phase 35)
 
 Carried, not in v0.51.0:
 - [ ] Declare the removal footprint (`config_paths`, script `paths`) for about 26 catalog entries and bring install-method and update-route currency up to date (Backlog 999.14, 999.15)

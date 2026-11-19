@@ -46,6 +46,35 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 - [ ] **ONB-14**: gh-stack installs with `gh extension install https://github.com/github/gh-stack`, is detected through `gh extension list`, updates with `gh extension upgrade stack`, is removed with `gh extension remove stack`, and an unauthenticated `gh` never blocks or prompts.
 - [ ] **ONB-15**: Playwright MCP is registered in each agent host present with the pinned `bunx @playwright/mcp@0.0.85`, never overwriting an existing `playwright` server entry; on Bazzite the Flatpak Chrome path is exported when the wrapper exists; a write into `~/.claude/settings.json` asks for consent first.
 
+### Registry update bot (BOT)
+
+Ingested 2026-11-19 from the update-automation todos and `.planning/research/2026-11-17-update-automation.md`; open owner questions in `.planning/intel/context.md`.
+
+- [ ] **BOT-01**: A scheduled or dispatched GitHub Actions workflow runs `verify-registry --write` and pushes a `bot/registry-<date>` branch only when `installer/registry.toml` changed, with `version`, `sha256` and `verified` bumped together.
+- [ ] **BOT-02**: The checks that branch protection requires run on the bot branch head (by `workflow_dispatch` of `ci.yml` or a PAT/App token, owner's choice), verified once on a throwaway branch.
+- [ ] **BOT-03**: The bot never pushes to `main`; its change reaches `main` only by branch push, green CI and fast-forward, and the weekly read-only drift workflow keeps `contents: read`.
+- [ ] **BOT-04**: A `verify-registry` flag makes a `--write` run skip changes that only touch the `verified` date, so a bot branch never carries a date-only diff.
+
+### Daily update check (NOTIFY)
+
+- [ ] **NOTIFY-01**: The Schedules engine has a daily `check-updates` row that runs the version refresh headless through `--run-schedule`, logs one `ok: N updates available` line and changes no tool.
+- [ ] **NOTIFY-02**: The scheduled check refreshes versions despite the 7-day cache staleness window (`installer/version_cache.py:44`).
+- [ ] **NOTIFY-03**: The runner sends a desktop notification only when the outdated set changed since the last run (unless the owner chooses every run).
+- [ ] **NOTIFY-04**: On Linux the notification goes through `notify-send` with the session bus address passed to the child; without `notify-send` the run logs `notify skipped` and still exits ok.
+- [ ] **NOTIFY-05**: On macOS the notification goes through `osascript display notification`; a failure logs `notify skipped` without failing the run, the row detail names the one-time permission, and the real-Mac check is a UAT line deferred to the owner's Mac.
+- [ ] **NOTIFY-06**: When in scope (owner decision), the check compares `git ls-remote origin main` with the checkout HEAD and logs one self-update line, with no API call and no pull.
+
+### Opt-in auto-update (AUTOUPD)
+
+- [ ] **AUTOUPD-01**: Schedules has an `update-all` row that is off by default and never a Policies row; once the user sets it, the installer never changes it on its own (amends 24.2 SCHED-01 with a per-row default).
+- [ ] **AUTOUPD-02**: `update-all` updates package managers first (ranked by `resolve._RANK`), then their dependents grouped by owner and ordered by `deps.resolve_dependencies`.
+- [ ] **AUTOUPD-03**: When a manager's update fails, each of its dependents is skipped and logged as skipped.
+- [ ] **AUTOUPD-04**: `update-all` reuses `UpdateService`, `update_refusal`, `stdin=DEVNULL` children, `HOMEBREW_NO_SUDO` and the run lock; refused tools are skipped with their reason, a held lock makes the run refuse, and no path runs sudo, pkexec or doas.
+- [ ] **AUTOUPD-05**: Brew casks are excluded from `update-all` on macOS by default.
+- [ ] **AUTOUPD-06**: An `update-all` run writes one run-log line per tool while the shared schedule log keeps one summary line per schedule id.
+- [ ] **AUTOUPD-07**: A tool also covered by a per-tool agent-CLI schedule row is updated at most once per day.
+- [ ] **AUTOUPD-08**: `update-all` is exercised end to end in a disposable container (never on the developer host), and whether `uv self update` is safe under `uv run` is verified there.
+
 ## Future Requirements
 
 - **MACAPP-01**: Every existing macOS app entry (VS Code, Sublime Text, draw.io and the rest) is reviewed against SKILL-04 through the skill.
@@ -105,12 +134,30 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 | ONB-13 | Phase 32 | Pending |
 | ONB-14 | Phase 32 | Pending |
 | ONB-15 | Phase 32 | Pending |
+| BOT-01 | Phase 33 | Pending |
+| BOT-02 | Phase 33 | Pending |
+| BOT-03 | Phase 33 | Pending |
+| BOT-04 | Phase 33 | Pending |
+| NOTIFY-01 | Phase 34 | Pending |
+| NOTIFY-02 | Phase 34 | Pending |
+| NOTIFY-03 | Phase 34 | Pending |
+| NOTIFY-04 | Phase 34 | Pending |
+| NOTIFY-05 | Phase 34 | Pending |
+| NOTIFY-06 | Phase 34 | Pending |
+| AUTOUPD-01 | Phase 35 | Pending |
+| AUTOUPD-02 | Phase 35 | Pending |
+| AUTOUPD-03 | Phase 35 | Pending |
+| AUTOUPD-04 | Phase 35 | Pending |
+| AUTOUPD-05 | Phase 35 | Pending |
+| AUTOUPD-06 | Phase 35 | Pending |
+| AUTOUPD-07 | Phase 35 | Pending |
+| AUTOUPD-08 | Phase 35 | Pending |
 
 **Coverage:**
-- v0.51.0 requirements: 23 total
-- Mapped to phases: 23
+- v0.51.0 requirements: 41 total
+- Mapped to phases: 41
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-11-16*
-*Last updated: 2026-11-16 after roadmap creation (traceability filled)*
+*Last updated: 2026-11-19 after ingesting the update-automation todos (BOT, NOTIFY, AUTOUPD; Phases 33-35)*

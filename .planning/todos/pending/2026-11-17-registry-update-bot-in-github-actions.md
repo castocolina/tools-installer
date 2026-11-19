@@ -3,6 +3,7 @@ created: 2026-11-17T11:13:42.532Z
 title: Registry update bot in GitHub Actions (catalog pins, Dependabot-like)
 area: ci
 severity: minor
+resolves_phase: 33
 files:
   - installer/verify_registry.py
   - .github/workflows/ci.yml

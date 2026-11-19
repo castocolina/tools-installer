@@ -1,0 +1,13 @@
+{
+  "source_path": "/var/home/bazzite/git/personal/tools-installer/.planning/research/2026-11-17-update-automation.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Update automation: daily check + notification, auto-update policy, registry bot",
+  "summary": "Research on three update features: daily update check with desktop notification, opt-in managers-first auto-update, and a registry update bot in GitHub Actions.",
+  "scope": ["daily update check", "desktop notification", "notify-send", "osascript", "auto-update policy", "Schedules view", "UpdateService", "registry update bot", "verify-registry", "GitHub Actions", "registry.toml"],
+  "cross_refs": [".planning/milestones/24.2-CONTEXT.md", "24.2-SPEC.md", "PROJECT.md", "docs/PUBLISHING.md", ".claude/git-workflow.md", ".github/workflows/verify-registry.yml", ".github/workflows/ci.yml", "2026-11-04-hand-off-casks-whose-uninstall-needs-root.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

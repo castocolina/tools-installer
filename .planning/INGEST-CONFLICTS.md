@@ -1,158 +1,36 @@
 ## Conflict Detection Report
 
+Batch 5 (update automation), merge mode. Checked against PROJECT.md, REQUIREMENTS.md, ROADMAP.md and the 24.2 SPEC and CONTEXT.
+
 ### BLOCKERS (0)
 
-None.
+None. No ADRs in the batch, no UNKNOWN classifications, and the cross-ref graph has no cycles.
 
-### WARNINGS (1)
+### WARNINGS (2)
 
-[WARNING] Illustrative dependency-chain example may go stale pending an open mmdc decision
-  Found: `.planning/ROADMAP.md` Phase 1 Success Criteria #3 and
-    `.planning/intel/requirements.md` REQ-dependency-chain-requires (batch 1,
-    `docs/prds/2026-09-04-catalog-tiers-and-dependency-chain-v1.0-prd.md`) both
-    cite "`mmdc` needing `pnpm`" as the illustrative cross-tier `requires` proof
-    case for the tier/dependency-resolver work.
-  Found: `docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md` (batch 2)
-    leaves `mmdc`'s install method as an explicit open decision (Open
-    Question 3) — still unresolved as of batch 4 (see REQ-mmdc-install-decision).
-    If `mmdc` moves to brew, it would gain a `requires: ["puppeteer"]`
-    edge (an ai/user-tier dependency, not a system-tier one), not `["pnpm"]`.
-  Impact: The underlying requirement (`resolve_dependencies` already handles
-    cross-tier `requires` with zero new resolver code) is unaffected — `java`→
-    `sdkman` remains a valid, unaffected proof case. Only the specific
-    `mmdc`→`pnpm` illustrative example in Phase 1's success criteria and in
-    REQ-dependency-chain-requires's acceptance bullets may need updating if the
-    `mmdc` decision resolves to brew.
-  → When routing/planning Phase 1, do not hard-code `mmdc`→`pnpm` as the sole
-    proof case; confirm the `mmdc` install-method decision (REQ-mmdc-install-decision)
-    first, or use `java`→`sdkman` (already shipped, commit `0e05f50`) as an
-    alternative, decision-independent proof case.
-  Status: carried forward from batches 1-3; still open after batch 4 (batch 4's
-    three PRDs — `agent-cli-ergonomics`, `background-maintenance-daemon`,
-    `live-package-management` — do not touch `mmdc`'s install-method decision
-    directly; `live-package-management`'s own Open Question 4 asks a related-but-
-    distinct question, see Notes below).
+[WARNING] Daily check reverses the 24.2 notification cut
+  Found: .planning/todos/pending/2026-11-17-daily-update-check-with-desktop-notification.md adds desktop notifications (notify-send, osascript) and says it "reverses that cut"
+  Impact: .planning/milestones/v0.50.0-phases/24.2-schedules-view/24.2-SPEC.md:179 and 24.2-CONTEXT.md:43 list "A desktop notification for failed runs" as out of scope. The old cut covers failed runs; the new feature covers an updates-available check. The two are close enough that the scope line needs an explicit amendment so the cut is not silently overridden. Owner request (2026-11-17) and the phase 33-35 decision (2026-11-19) authorize the change.
+  → Record the reversal in the phase 34 SPEC/CONTEXT as an amendment to 24.2's out-of-scope list; settle OQ-NOTIFY-1 (this check only, or failed runs too).
 
-### INFO (2)
+[WARNING] update-all conflicts with the 24.2 default-on rule
+  Found: .planning/todos/pending/2026-11-17-opt-in-auto-update-policy-managers-first.md wants an `update-all` row that is off by default (per-schedule `default_on=False`)
+  Impact: 24.2-SPEC.md:61 (SCHED-01) says a schedule is on by default when its target is installed, and PROJECT.md records Schedules as a closed table seeded on. An off-by-default row is an exception to that rule. The todo acknowledges this; it is not a contradiction of a locked ADR, but the engine needs an amendment.
+  → Amend SCHED-01 in the phase 35 SPEC to allow per-row `default_on=False`; keep the "user's decision is never overridden" half of the rule.
 
-[INFO] REQ-pnpm-global-reinstall-mitigation's cross-PRD dependency is now unblocked
-  Note: batch 2's `REQ-pnpm-global-reinstall-mitigation`
-    (`docs/prds/2026-09-04-package-manager-policy-v1.0-prd.md`) was recorded as
-    "depends on the not-yet-ingested `live-package-management` PRD's update
-    mechanism." That PRD (`docs/prds/2026-09-04-live-package-management-v1.0-prd.md`)
-    is ingested this run (batch 4) and defines exactly that mechanism as MVP
-    piece #5, `REQ-update-action-manager-delegation`: an "update" action that
-    delegates to the correct underlying manager (brew, pnpm, uv tool, or this
-    installer's own path) per tool. `REQ-pnpm-global-reinstall-mitigation`'s own
-    text — "triggers when `pnpm` itself is the tool being updated, as a natural
-    extension of the update mechanism" — matches this piece precisely: when the
-    update action's target is `pnpm` itself, the snapshot-and-reinstall-together
-    mitigation is a natural extension of it, exactly as originally described.
-    `REQ-pnpm-global-reinstall-mitigation`'s `status:` field in
-    `.planning/intel/requirements.md` has been updated this run to reflect the
-    unblock. No content conflict between the two PRDs — additive, not
-    competing.
-  → When sequencing/routing (ROADMAP.md Phase 5, currently blocked pending
-    batch 5/7's ingest per its own text), the roadmapper can now sequence
-    `REQ-pnpm-global-reinstall-mitigation` after `REQ-update-action-manager-delegation`
-    is implemented, rather than leaving it flagged as blocked on missing scope.
-    The dependency is resolvable/sequenceable, not resolved-in-place — the
-    update-action requirement itself still needs implementing first.
+### INFO (5)
 
-[INFO] All 7 PRDs from the 2026-09-04 planning batch are now ingested
-  Note: This run (batch 4) ingests the final 3 of 7 PRDs
-    (`agent-cli-ergonomics`, `background-maintenance-daemon`,
-    `live-package-management`), completing the full set named in
-    `.planning/ROADMAP.md`'s Overview ("Three more PRDs from the same
-    2026-09-04 batch... will be ingested in subsequent merge-mode passes").
-    Cumulative: 7 classified docs across 4 ingest runs, all type `PRD`, no
-    ADRs/SPECs/DOCs encountered in any batch.
-  → No remaining PRDs pending ingest for this milestone; the roadmapper can
-    treat this as the final intel-synthesis pass before producing/updating
-    PROJECT.md/REQUIREMENTS.md/ROADMAP.md for the complete 7-PRD scope.
+[INFO] Doctrine check: no new Policies knobs
+  Note: the daily check and update-all are Schedules rows (24.2 D-01), and the bot is CI-only. The auto-update todo says outright that update-all is not a Policies row. PROJECT.md line 111 and REQUIREMENTS.md out-of-scope are respected.
 
----
+[INFO] Doctrine check: zero sudo
+  Note: update-all reuses `update_refusal` and `HOMEBREW_NO_SUDO` (installer/run.py:50) and children run with `stdin=DEVNULL`. Native and os-package owners are refused, not run with sudo. See AUTOUPD-04. No source proposes a sudo path.
 
-Notes:
+[INFO] Doctrine check: protected main and fast-forward flow
+  Note: the bot design pushes only a `bot/registry-<date>` branch and the owner lands it by fast-forward (BOT-03). Auto-land after green CI (OQ-BOT-3) would be an unreviewed push to protected main (enforce_admins) and would conflict with PROJECT.md line 158; the recommended default (owner lands) complies. Option (b), `workflow_dispatch` on `ci.yml`, touches CI outside the docs-only fast pass.
 
-- `CLASSIFICATIONS_DIR` for this run (batch 4/4, the final 3 of 7 PRDs)
-  contained exactly 3 classifications (all type `PRD`, confidence high,
-  manifest_override true): `docs/prds/2026-09-04-agent-cli-ergonomics-v1.0-prd.md`,
-  `docs/prds/2026-09-04-background-maintenance-daemon-v1.0-prd.md`, and
-  `docs/prds/2026-09-04-live-package-management-v1.0-prd.md`.
-- Cycle detection: `agent-cli-ergonomics`' `cross_refs` names only
-  `installer/tweaks.py` (a source file, not a doc node); `background-maintenance-daemon`'s
-  `cross_refs` names only `scripts/prune-user-tmpdir.sh` (a source file);
-  `live-package-management`'s `cross_refs` names only source files
-  (`installer/versions.py`, `installer/catalog_tui.py`, `installer/wizard_app.py`,
-  `installer/status.py`). None of this run's three classified docs reference
-  each other or any other doc node. No cycle found among this run's three
-  classified nodes, and no cycle across the cumulative 7-doc set either (no doc
-  in any prior batch names another doc as a `cross_refs` target that would form
-  a cycle — all cross-doc references found across all 4 batches have been
-  one-directional, forward or backward prose references to sibling PRDs, not
-  graph edges within a single run's node set).
-- No PRD-vs-PRD competing acceptance variants were found on identically-scoped
-  requirements, either within this batch's three PRDs or against the four
-  already-ingested PRDs (batches 1-3). The three batch-4 PRDs are cleanly
-  non-overlapping in scope: `agent-cli-ergonomics` (shell aliases/tweaks for
-  agent-host CLI ergonomics), `background-maintenance-daemon` (a new
-  macOS-only `Policy` type for a scheduled cleanup daemon), and
-  `live-package-management` (version-aware status and an update action in the
-  TUI) touch different subsystems with no shared requirement scope.
-- Cross-batch consistency check (this run's three PRDs against the four
-  already-ingested PRDs): `background-maintenance-daemon`'s "Diagnostics view:
-  yes, but small and reused, not a new top-level view" design decision
-  explicitly cites and respects `.claude/architecture.md`'s "one view registry,
-  one nav path" standard, already recorded in `.planning/PROJECT.md`'s
-  Constraints section — consistent, no conflict. `background-maintenance-daemon`'s
-  `fd`/`rg` dependency-gating requirement explicitly reuses the `requires`/
-  `missing_requires` mechanism already established by batch 1's `docker`/`watch`
-  precedent — additive, not a new mechanism. `agent-cli-ergonomics`' three new
-  tweaks explicitly reuse `TweakBundle`/`tweak_policy` unchanged, matching the
-  existing `claude-skip` precedent already in `installer/tweaks.py` — no new
-  mechanism introduced. `live-package-management`'s manager-aware update
-  requirement (`REQ-update-action-manager-delegation`) explicitly reuses
-  `installer/uninstall.py`'s existing `UninstallState` "managed elsewhere"
-  concept rather than inventing a parallel one — consistent with existing code.
-- `live-package-management`'s Open Question 4 ("should manager-aware update
-  also cover moving a tool from a suboptimal method — e.g. still on `pnpm` per
-  the package-manager-policy PRD's findings — onto its preferred method as part
-  of updating it, or is that migration always a separate, explicit registry
-  change?") is related to, but distinct from, the still-open `mmdc` WARNING
-  above: it is a general policy question about the update action's own scope,
-  not a specific claim about `mmdc`'s install method. Left as an open question
-  in `REQ-update-action-manager-delegation`'s source PRD, not bucketed as a
-  conflict here — no contradiction, just an unresolved scope question for the
-  roadmapper/planner to close.
-- `live-package-management`'s deferred item #7 (manager-drift auto-remediation:
-  auto-updating the registry and filing a GitHub issue) is explicitly scoped
-  out of this PRD's MVP by its own source text ("a real new capability... worth
-  a separate, explicit decision and likely its own PRD") — not captured as a
-  requirement in `.planning/intel/requirements.md`; recorded only in
-  `.planning/intel/SYNTHESIS.md`'s out-of-scope section for roadmapper
-  awareness, consistent with how prior batches (e.g. batch 3's out-of-scope
-  postinstall items) handled explicitly-deferred, not-a-requirement source
-  content.
-- Merge-mode checks against `EXISTING_CONTEXT` (`.planning/PROJECT.md`,
-  `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`) found no LOCKED-decision
-  contradiction (no ADR has been classified in any batch to date, and
-  `PROJECT.md`'s "Key Decisions" table has no entries marked locked — all rows
-  show outcome "— Pending"). `ROADMAP.md`'s Overview already explicitly
-  reserved `live-package-management`, `background-maintenance-daemon`, and
-  `agent-cli-ergonomics` as the three remaining PRDs to be ingested "in
-  subsequent merge-mode passes" — consistent with this batch's content, no
-  contradiction. `REQUIREMENTS.md`'s existing `REQ-pnpm-global-reinstall-mitigation`
-  row ("Blocked (depends on batch 5/7 ingest)") is the item unblocked by this
-  run's INFO entry above — the roadmapper should update that row when it next
-  regenerates `REQUIREMENTS.md`.
-- This PRD batch's own text continues to record that SDKMAN exclusivity (batch
-  2, `REQ-sdkman-exclusivity`) was already implemented and shipped directly to
-  `main` in commit `0e05f50`, outside GSD's research→plan→execute→verify flow.
-  Not a cross-document conflict per the seven defined detection passes, so not
-  bucketed above; carried forward here for downstream visibility only.
-- No remaining PRDs from the 2026-09-04 planning batch are pending ingest —
-  all 7 (`catalog-tiers-and-dependency-chain`, `package-manager-policy`,
-  `catalog-expansion`, `postinstall-hooks`, `agent-cli-ergonomics`,
-  `background-maintenance-daemon`, `live-package-management`) are now
-  synthesized across batches 1-4.
+[INFO] Doctrine check: never mutate the developer host
+  Note: none of the three todos asks to run on the host. Update-all e2e must run in a disposable container, which has no systemd user manager (AUTOUPD-08). The real macOS check for phases 34 and 35 is an owner-assigned checkpoint, not an agent host run.
+
+[INFO] Order agreement and open questions
+  Note: the research's suggested order (bot, daily check, auto-update) matches the owner's phase 33-35 order. Every "Owner decisions" item is recorded as an open question in .planning/intel/context.md (OQ-BOT-*, OQ-NOTIFY-*, OQ-AUTOUPD-*), not as a locked decision and not as a conflict. All four docs are type DOC (manifest-declared), so the proposed BOT/NOTIFY/AUTOUPD requirement IDs are synthesizer proposals, not PRD-sourced requirements.

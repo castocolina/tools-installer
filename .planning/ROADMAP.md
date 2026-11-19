@@ -4,7 +4,7 @@
 
 - ✅ **v0.49.0 Tiered Catalog** — Phases 1–16 incl. 12.1–12.4 and 15.1–15.8 (shipped 2026-10-13, override closeout; see [archive](milestones/v0.49.0-ROADMAP.md) and [audit](research/audit-2026-10-13/SYNTHESIS-AND-PLAN.md))
 - ✅ **v0.50.0 Truthful lifecycle** — Phases 17–26 incl. 23.1–23.2 and 24.1–24.5 (shipped 2026-11-16; see [archive](milestones/v0.50.0-ROADMAP.md) and [audit](milestones/v0.50.0-MILESTONE-AUDIT.md))
-- 🚧 **v0.51.0 Onboard terminal tools** — Phases 27–32 (in progress)
+- 🚧 **v0.51.0 Onboard terminal tools** — Phases 27–35 (in progress)
 
 ## Phases
 
@@ -42,13 +42,13 @@
 
 ## 🚧 v0.51.0 Onboard terminal tools
 
-**Milestone Goal:** Every terminal emulator and IDE in the catalog, and every one added later, ships with the same defaults: zsh as the launched shell on Linux (Bazzite included), Option/Alt+Left/Right word navigation on macOS, a clear-screen shortcut (Cmd+K on macOS, Ctrl+Shift+K on Linux) and new tabs, windows and panes in the current directory, all applied through a tool-onboarding skill that carries them as rules; the pending tool onboardings run through the same skill.
+**Milestone Goal:** Every terminal emulator and IDE in the catalog, and every one added later, ships with the same defaults: zsh as the launched shell on Linux (Bazzite included), Option/Alt+Left/Right word navigation on macOS, a clear-screen shortcut (Cmd+K on macOS, Ctrl+Shift+K on Linux) and new tabs, windows and panes in the current directory, all applied through a tool-onboarding skill that carries them as rules; the pending tool onboardings run through the same skill. The milestone also adds update automation: a bot that refreshes the catalog pins, a daily update check with a desktop notification, and an opt-in schedule that updates package managers before the tools that depend on them (Phases 33–35, ingested 2026-11-19).
 
 **Design source:** `.planning/research/SUMMARY.md` "Implications for Roadmap" (research Phases 1–5 = Phases 27–31 and 32 here) and the owner decisions of 2026-11-16 in `.planning/REQUIREMENTS.md`. Every phase after 27 runs its tool work through `.claude/skills/tool-onboarding/SKILL.md`. Every macOS behavior is a pure generator with a golden-file test on both OSes and a UAT line deferred to the owner's Mac.
 
 **Phase Numbering:**
 
-- Integer phases (27–32): Planned milestone work
+- Integer phases (27–35): Planned milestone work
 - Decimal phases (e.g. 27.1): Urgent insertions (marked with INSERTED)
 
 - [ ] **Phase 27: Tool-onboarding skill: terminal defaults as rules** - The skill applies the four terminal and IDE defaults without asking, carries a closed per-terminal table with a coverage test, the conflict rule and the macOS app and testing rules; skill-judge before and after
@@ -57,6 +57,9 @@
 - [ ] **Phase 30: Onboard Ghostty** - Ghostty in the catalog (cask, labelled community AppImage, pacman) with the zsh sync on Linux and its keys region
 - [ ] **Phase 31: Onboard iTerm2 and the Herdr desktop app** - iTerm2 as a macOS-only cask with a default Dynamic Profile, and the Herdr desktop app as its own entry with its keys files
 - [ ] **Phase 32: Onboard Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP** - Five non-terminal onboardings through the skill; runs in parallel with Phases 28–31
+- [ ] **Phase 33: Registry update bot** - A GitHub Actions workflow refreshes the catalog pins with `verify-registry --write` and pushes a bot branch the owner lands through the protected flow
+- [ ] **Phase 34: Daily update check with a desktop notification** - A daily Schedules row checks for new versions and notifies on Bazzite (`notify-send`) and macOS (`osascript`) when the outdated set changes
+- [ ] **Phase 35: Opt-in auto-update, package managers first** - An off-by-default `update-all` Schedules row updates package managers, then the tools that depend on them
 
 ## Phase Details
 
@@ -152,10 +155,57 @@
 
 **Plans**: TBD
 
+### Phase 33: Registry update bot
+
+**Goal**: Catalog pins in `installer/registry.toml` stop going stale between manual runs: a bot proposes each upstream bump as a branch with its digest already verified, and the owner lands it through the protected flow.
+**Depends on**: Nothing in v0.51.0 (CI-only; may run in parallel with Phases 27–32)
+**Requirements**: BOT-01, BOT-02, BOT-03, BOT-04
+**Note**: Ingested 2026-11-19 from `.planning/todos/pending/2026-11-17-registry-update-bot-in-github-actions.md` and `.planning/research/2026-11-17-update-automation.md` (feature 3). Dependabot cannot parse `registry.toml` and Renovate cannot refresh the paired `sha256`, so the bot wraps `verify-registry --write`. Open owner questions for discuss-phase: OQ-BOT-1..5 in `.planning/intel/context.md` (branch plus issue vs a real PR, PAT/App token vs `workflow_dispatch`, owner lands vs auto-land, date-only changes). Research flag: whether a dispatched CI run satisfies the required checks (test on a throwaway branch).
+**Success Criteria** (what must be TRUE):
+
+  1. A scheduled or dispatched bot run with upstream drift pushes a `bot/registry-<date>` branch whose `registry.toml` change bumps `version`, `sha256` and `verified` together; a run with no drift pushes nothing.
+  2. The checks that branch protection requires run on the bot branch head (verified once on a throwaway branch), and the read-only weekly drift workflow keeps `contents: read`.
+  3. No bot token pushes to `main`; the change reaches `main` only by branch push, green CI and fast-forward.
+  4. With the new date-noise flag, a `--write` run whose only change is a `verified` date leaves `registry.toml` unchanged (unit test).
+
+**Plans**: TBD
+
+### Phase 34: Daily update check with a desktop notification
+
+**Goal**: A user learns that installed tools (and tools-installer itself) have updates without opening the TUI, from one desktop notification a day at most, on Bazzite and macOS.
+**Depends on**: Phase 33 (order only: the bot keeps the pins current first; no code dependency)
+**Requirements**: NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, NOTIFY-05, NOTIFY-06
+**Note**: Ingested 2026-11-19 from `.planning/todos/pending/2026-11-17-daily-update-check-with-desktop-notification.md` and research feature 1. **Amends 24.2** (owner-approved at the ingest conflict gate, 2026-11-19): `24.2-SPEC.md:179` and `24.2-CONTEXT.md:43` put desktop notifications out of scope; this phase's SPEC records the reversal explicitly, and OQ-NOTIFY-1 decides whether failed runs notify too. Open owner questions: OQ-NOTIFY-1..5 in `.planning/intel/context.md` (notify on change vs every run, token vs anonymous, the installer self-check). Facts: cache staleness `STALE_AFTER = 7 days` (`installer/version_cache.py:44`), at most 20 fetches per refresh (`installer/version_status.py:143`), the schedule unit carries no GitHub token (`installer/daemon.py`).
+**Success Criteria** (what must be TRUE):
+
+  1. `--run-schedule check-updates` in a scratch HOME refreshes versions past the 7-day cache, writes exactly one `ok: N updates available` line to the shared schedule log, and changes no tool.
+  2. Two runs with the same outdated set send one notification; a changed set sends another (test with a fake notifier).
+  3. On Linux the runner calls `notify-send` with the session bus address passed to the child; with no `notify-send` it logs `notify skipped` and still exits ok.
+  4. On macOS a failing `osascript display notification` logs `notify skipped` without failing the run, and the row detail names the one-time permission; the real-Mac check is a UAT line deferred to the owner's Mac.
+  5. When the self-check is in scope, a checkout behind `origin/main` logs one self-update line from `git ls-remote` and the checkout is unchanged after the run.
+
+**Plans**: TBD
+
+### Phase 35: Opt-in auto-update, package managers first
+
+**Goal**: A user who opts in gets their tools updated on a schedule in a safe order: package managers first, then the tools that depend on them, with nothing updated twice, nothing run as root and nothing updated after its manager failed.
+**Depends on**: Phase 34 (reuses its notifier and outdated list)
+**Requirements**: AUTOUPD-01, AUTOUPD-02, AUTOUPD-03, AUTOUPD-04, AUTOUPD-05, AUTOUPD-06, AUTOUPD-07, AUTOUPD-08
+**Note**: Ingested 2026-11-19 from `.planning/todos/pending/2026-11-17-opt-in-auto-update-policy-managers-first.md` and research feature 2. A Schedules row, never a Policies row (PROJECT.md doctrine). **Amends 24.2 SCHED-01** (owner-approved at the ingest conflict gate, 2026-11-19): `24.2-SPEC.md:61` seeds every schedule on; this phase adds a per-row `default_on=False` and keeps the rule that the installer never changes a recorded user decision. Open owner questions: OQ-AUTOUPD-1..6 in `.planning/intel/context.md` (managers only first vs both, folding the five per-tool rows, the cask policy). Research flag: whether `uv self update` is safe while the runner runs under `uv run` (container check).
+**Success Criteria** (what must be TRUE):
+
+  1. A fresh install seeds `update-all` off, no Policies row exists for it, and once the user turns it on the installer never turns it off or on by itself.
+  2. A unit test with brew, uv and two dependents asserts the order: managers (ranked by `resolve._RANK`), then dependents grouped by owner and ordered by `deps.resolve_dependencies`; a failing manager produces a skip line for each dependent and no update call for them.
+  3. Refused tools (native owner, SDKMAN, Volta, pins, os-package) are skipped with their refusal reason, a held run lock makes the run refuse instead of overlapping, no code path runs sudo, and brew casks are left alone on macOS by default.
+  4. A run over three tools leaves one line per tool in its run log and one summary line in the shared schedule log, and a tool covered by a per-tool agent-CLI row is updated once per day.
+  5. The e2e runs `--run-schedule update-all` in a disposable container, never on the host, and records the `uv self update` result.
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-27 → 28 → 29 → 30 → 31, with 32 after 27 in parallel with 28–31. Phase 27 fixes the rules every later phase applies; 28 turns three hard-coded dispatch sites into one table before any terminal is added; 29 proves the mechanism on existing files before the new terminals; 31 adds the JSON file mode only when a row needs it.
+27 → 28 → 29 → 30 → 31, with 32 after 27 in parallel with 28–31; 33 → 34 → 35 are independent of the terminal work and may run in parallel with it. Phase 27 fixes the rules every later phase applies; 28 turns three hard-coded dispatch sites into one table before any terminal is added; 29 proves the mechanism on existing files before the new terminals; 31 adds the JSON file mode only when a row needs it.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -165,6 +215,9 @@
 | 30. Onboard Ghostty | 0/TBD | Not started | - |
 | 31. Onboard iTerm2 and the Herdr desktop app | 0/TBD | Not started | - |
 | 32. Onboard Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP | 0/TBD | Not started | - |
+| 33. Registry update bot | 0/TBD | Not started | - |
+| 34. Daily update check with a desktop notification | 0/TBD | Not started | - |
+| 35. Opt-in auto-update, package managers first | 0/TBD | Not started | - |
 
 ## Backlog
 

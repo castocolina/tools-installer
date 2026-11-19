@@ -1,0 +1,13 @@
+{
+  "source_path": "/var/home/bazzite/git/personal/tools-installer/.planning/todos/pending/2026-11-17-opt-in-auto-update-policy-managers-first.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Opt-in auto-update schedule: package managers first, then dependents",
+  "summary": "Owner-requested opt-in update-all Schedules row, off by default, that updates package managers first and then dependent tools; owner decisions still open.",
+  "scope": ["Schedules", "update-all schedule row", "package managers", "dependent tools", "UpdateService", "update_refusal", "brew casks", "run lock", "installer/update.py", "installer/resolve.py", "installer/deps.py", "installer/schedules.py", "installer/run.py"],
+  "cross_refs": [".planning/research/2026-11-17-update-automation.md", "PROJECT.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

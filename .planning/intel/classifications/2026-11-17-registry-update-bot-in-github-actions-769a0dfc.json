@@ -1,0 +1,13 @@
+{
+  "source_path": "/var/home/bazzite/git/personal/tools-installer/.planning/todos/pending/2026-11-17-registry-update-bot-in-github-actions.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Registry update bot in GitHub Actions (catalog pins, Dependabot-like)",
+  "summary": "Owner-requested todo proposing a GitHub Actions bot that runs verify-registry --write to refresh catalog pins through the protected branch flow.",
+  "scope": ["installer/registry.toml", "verify-registry", "catalog pins", "sha256", "GitHub Actions", "registry-drift workflow", "dependabot.yml"],
+  "cross_refs": ["installer/verify_registry.py", ".github/workflows/ci.yml", ".github/workflows/", ".planning/research/2026-11-17-update-automation.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}
