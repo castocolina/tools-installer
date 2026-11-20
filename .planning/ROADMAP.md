@@ -171,15 +171,17 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 30-02-PLAN.md — AppImage menu entry and icon: render drop, smoke TMPDIR, `appimage_menu` module, receipt leaves, uninstall (NTERM-01)
+
+**Wave 3** *(blocked on Wave 2 completion; shares `installer/registry.toml` with 30-02)*
 - [ ] 30-03-PLAN.md — Keys row: the pure config resolver for both OSes, the conflict scan over every default file, goldens, drift, reconfigure and strip, the install-tuning declaration and skill cell together (NTERM-01)
 
-**Wave 3** *(blocked on Wave 2 completion)*
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 30-04-PLAN.md — Linux shell sync `_sync_ghostty`: the top-of-file `command` region, partial on a user `command` or include, revert, status row (NTERM-01)
 
-**Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 30-05-PLAN.md — `ghostty` container target: FUSE pass and extract-and-run pass, regions read back with the real Ghostty, residue diff; proved on the host with a stubbed `ct`; the orchestrator runs it (NTERM-01)
-
 **Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 30-05-PLAN.md — `ghostty` container target: FUSE pass (an observed FUSE mount) and extract-and-run pass, regions read back with the real Ghostty, residue diff; proved on the host with a stubbed `ct`; the orchestrator runs it (NTERM-01)
+
+**Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 30-06-PLAN.md — Container evidence in the registry comment and the skill row behind a hard gate on the recorded `ghostty-container: PASS` line, and the catalog consistency guards (NTERM-01)
 
 ### Phase 31: Onboard iTerm2 and the Herdr desktop app
