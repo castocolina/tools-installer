@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v0.51.0
 milestone_name: Onboard terminal tools
 current_phase: 27
-current_phase_name: first of 9 phases in v0.51.0
-status: ready_to_plan
+current_phase_name: "Tool-onboarding skill: terminal defaults as rules"
+status: executing
 stopped_at: "Phases 27-35 spec and discuss done (assumptions mode, jev screening); next: plan-phase 27"
-last_updated: "2026-11-20T01:41:48.383Z"
+last_updated: "2026-11-20T03:13:15.669Z"
 last_activity: 2026-11-19
 last_activity_desc: ingested the update-automation todos as Phases 33–35 (41/41 requirements mapped)
-state_head: ae589d21165fd6cd3bc97ecf983ec69255c393d7
+state_head: e2934349c438f636239a8f28eebba756b5d1da0b
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 0
+  total_plans: 4
   completed_plans: 0
   percent: 0
 ---
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-11-16)
 
 ## Current Position
 
-Phase: 27 of 35 (Tool-onboarding skill: terminal defaults as rules) — first of 9 phases in v0.51.0 (27–35)
+Phase: 27 (Tool-onboarding skill: terminal defaults as rules) — READY TO EXECUTE
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-11-19 — ingested the update-automation todos as Phases 33–35 (41/41 requirements mapped)
 
 Progress: [░░░░░░░░░░] 0%
