@@ -649,3 +649,14 @@ Plans:
 **Requirements:** TBD
 **Source:** Phase 28 plan review, 2026-11-20 (28 SPEC R3 amended, needs confirmation). Measured on the real functions in `installer/shellrc.py`: apply then strip returns `""` unchanged and `"a\n\n"` unchanged, but turns `"a\n"` and `"a"` into `"a\n\n"`, `"a\nb\n"` into `"a\nb\n\n"`, `"a\n\n\n"` into `"a\n\n"`, and `"\n"` and `"\n\n"` into `""`. The behavior is shared by every shell-init bundle and the PATH block and is pinned by `tests/test_shellrc.py`, so changing it is its own piece of work.
 **Depends on:** none.
+
+### Phase 999.28: Terminal keys mechanism follow-ups (BACKLOG)
+
+**Goal:** The shared terminal-keys mechanism and the zsh Ctrl+L bundle lose the small rough edges the phase 28 code review left open, without changing what is written for any row.
+**Requirements:** TBD
+**Source:** Phase 28 code review `28-REVIEW.md`, deferred info findings:
+- IN-01: in single-shell mode with bash, zsh never sources `~/.myshellrc`, yet the zsh row reads tuned; this predates phase 28 and affects every shell-init bundle, so the status check needs to know whether the shell that owns the bundle sources the file;
+- IN-02: use the shared created-marker constant in `installer/terminal_shell.py` instead of the hardcoded filename, without creating an import cycle with `installer/terminal_keys.py`;
+- IN-03 and IN-04: remove the `alacritty_keys_plan_for_text` wrapper and share the drift check between `apply_terminal_keys` and `terminal_keys_pending`;
+- IN-07: when the first `Writes` row lands (phase 29), the keys summary must not claim keys were written when only the snippet was, and the snippet needs a conflict check.
+**Depends on:** Phase 28.
