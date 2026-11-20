@@ -158,7 +158,7 @@ def _kitty_clear(platform_os: str) -> tuple[str, str]:
 
 
 def _kitty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
-    scan = scan_kitty(text, path)
+    scan = scan_kitty(text, path, platform_os)
     if scan.clears_all:
         return KeysPlan(
             None, refusal="you set clear_all_shortcuts yes, which would clear these keys"
@@ -197,7 +197,7 @@ def _kitty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
 
 
 def _kitty_cwd(platform_os: str, text: str, path: Path) -> KeysPlan:
-    scan = scan_kitty(text, path)
+    scan = scan_kitty(text, path, platform_os)
     prefix = "cmd" if platform_os == "macos" else "kitty_mod"
     rows = (
         (f"{prefix}+t", f"map --allow-fallback=shifted,ascii {prefix}+t new_tab_with_cwd"),
@@ -438,6 +438,15 @@ def strip_terminal_keys(
     """Remove the tool's owned regions and record; the config remains unless created by us."""
     path = row.config_path(platform_os, home, environ)
     warnings: list[str] = []
+    marker = _created_marker(row, home, environ)
+    if row.bind_created_path and marker.exists():
+        sidecar = created_path_record(marker)
+        recorded = sidecar.read_text(errors="replace") if sidecar.exists() else None
+        if recorded != f"{path}\n":
+            shown = recorded.removesuffix("\n") if recorded is not None else "an unrecorded path"
+            return (
+                f"{tool_id}: created config at {shown} is not the file now resolved; left alone",
+            )
     for region in (*row.sibling_regions, row.ownership.region):
         try:
             strip_region(path, region, comment=row.ownership.comment)

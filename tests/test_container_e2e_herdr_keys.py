@@ -149,27 +149,40 @@ def test_herdr_keys_verdict_counts_a_short_list_as_missing() -> None:
 
 
 def test_herdr_keys_verdict_unproven_when_the_pane_never_started() -> None:
-    assert driver.herdr_keys_verdict(False, []) == (
+    assert driver.keys_verdict("", None, 0, []) == (
         "TRACER_HERDR_KEYS_UNPROVEN detail=the herdr pane never started the recorder"
     )
 
 
 def test_herdr_keys_verdict_unproven_on_client_pty_close_before_recorder_start() -> None:
-    assert driver.herdr_keys_verdict(False, [], closed="EOF") == (
+    assert driver.keys_verdict("", "EOF", 0, []) == (
         "TRACER_HERDR_KEYS_UNPROVEN detail=the herdr client closed the pty before "
         "the recorder started (EOF)"
     )
     error = "[Errno 5] Input/output error"
-    assert driver.herdr_keys_verdict(False, [], closed=error).endswith(f"({error})")
-    assert driver.herdr_keys_verdict(True, ["1b62"], closed="EOF").startswith(
-        "TRACER_HERDR_KEYS_FAILED detail="
+    assert driver.keys_verdict("", error, 0, []).endswith(f"({error})")
+
+
+def test_herdr_keys_verdict_ok_when_the_client_exits_after_every_chord() -> None:
+    expected = [expected for _name, _sent, expected in driver.CHORDS]
+    assert driver.keys_verdict("START", "EOF", len(driver.CHORDS), expected) == (
+        "TRACER_HERDR_KEYS_OK received=1b62,1b66,1b5b313b3344,1b5b313b3343,0c"
     )
-    assert (
-        driver.herdr_keys_verdict(
-            True, [expected for _name, _sent, expected in driver.CHORDS], closed="EOF"
-        )
-        == "TRACER_HERDR_KEYS_OK received=1b62,1b66,1b5b313b3344,1b5b313b3343,0c"
+
+
+def test_herdr_keys_verdict_unproven_if_client_exits_before_the_last_chord() -> None:
+    assert driver.keys_verdict("START", "EOF", 1, ["1b62"]) == (
+        "TRACER_HERDR_KEYS_UNPROVEN detail=the herdr client closed the pty before "
+        "the last chord was sent (EOF)"
     )
+
+
+def test_herdr_keys_verdict_failed_when_the_client_exits_after_the_last_send() -> None:
+    received = [expected for _name, _sent, expected in driver.CHORDS[:-1]]
+    line = driver.keys_verdict("START", "EOF", len(driver.CHORDS), received)
+    assert line.startswith("TRACER_HERDR_KEYS_FAILED detail=")
+    name, sent, _expected = driver.CHORDS[-1]
+    assert f"{name} sent {sent.hex()} received nothing" in line
 
 
 def test_received_per_chord_joins_split_reads() -> None:
@@ -224,6 +237,16 @@ def test_the_arrow_chords_are_sent_only_as_csi_1_3() -> None:
         "alt+b csi-u",
         "alt+f csi-u",
         "ctrl+l csi-u",
+    }
+
+
+def test_herdr_child_environment_has_only_driver_values(tmp_path: Path) -> None:
+    assert driver.child_environment(tmp_path, tmp_path / "run") == {
+        "HOME": str(tmp_path),
+        "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+        "PATH": "/usr/bin:/bin",
+        "TERM": "xterm-256color",
+        "LANG": "C.UTF-8",
     }
 
 

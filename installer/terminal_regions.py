@@ -288,7 +288,7 @@ def kitty_chord(chord: str, kitty_mod: str) -> str:
         "shift": "shift",
     }
     parts = chord.lower().split("+")
-    key = parts[-1]
+    key = {"return": "enter"}.get(parts[-1], parts[-1])
     modifiers: set[str] = set()
     for part in parts[:-1]:
         values = kitty_mod.lower().split("+") if part == "kitty_mod" else [part]
@@ -296,15 +296,27 @@ def kitty_chord(chord: str, kitty_mod: str) -> str:
     return "+".join((*sorted(modifiers), key))
 
 
-def scan_kitty(text: str, path: Path) -> KittyScan:
+def scan_kitty(text: str, path: Path, platform_os: str = "linux") -> KittyScan:
     default = "ctrl+shift"
     raw: list[str] = []
     reports: list[str] = []
-    visited = {path.resolve()}
+    try:
+        visited = {path.resolve()}
+    except (OSError, RuntimeError):
+        visited: set[Path] = set()
+        reports.append(f"kitty: partial: {path.name} could not be read; maps there are not checked")
     read_files = 1
     stopped: set[str] = set()
     clears_all = False
-    value_options = {"--when-focus-on", "--mode", "--new-mode", "--on-unknown", "--on-action"}
+    value_options = {
+        "--when-focus-on",
+        "--mode",
+        "--new-mode",
+        "--on-unknown",
+        "--on-action",
+        "--allow-fallback",
+        "--timeout",
+    }
 
     def walk(source: str, base: Path, depth: int) -> None:
         nonlocal default, read_files, clears_all
@@ -317,7 +329,7 @@ def scan_kitty(text: str, path: Path) -> KittyScan:
             if directive == "kitty_mod" and len(tokens) > 1:
                 default = tokens[1]
             elif directive == "clear_all_shortcuts" and len(tokens) > 1:
-                clears_all = tokens[1].lower() in {"yes", "y", "true"}
+                clears_all |= tokens[1].lower() in {"yes", "y", "true"}
             elif directive in {"geninclude", "envinclude"}:
                 reports.append(
                     f"kitty: partial: {directive} is not followed; maps there are not checked"
@@ -330,7 +342,10 @@ def scan_kitty(text: str, path: Path) -> KittyScan:
                 if depth >= 8:
                     stopped.add("depth 8")
                     continue
-                pattern = Path(os.path.expandvars(tokens[1])).expanduser()
+                include = line.strip()[len(directive) :].strip()
+                kitty_os = "macos" if platform_os == "macos" else "linux"
+                include = include.replace("${KITTY_OS}", kitty_os).replace("$KITTY_OS", kitty_os)
+                pattern = Path(os.path.expandvars(include)).expanduser()
                 if not pattern.is_absolute():
                     pattern = base / pattern
                 if directive == "globinclude":
@@ -345,7 +360,14 @@ def scan_kitty(text: str, path: Path) -> KittyScan:
                 else:
                     targets = [str(pattern)]
                 for target_name in targets:
-                    target = Path(target_name).resolve()
+                    try:
+                        target = Path(target_name).resolve()
+                    except (OSError, RuntimeError):
+                        reports.append(
+                            f"kitty: partial: {Path(target_name).name} could not be read; maps "
+                            "there are not checked"
+                        )
+                        continue
                     if target in visited:
                         continue
                     if read_files >= 64:
@@ -359,7 +381,7 @@ def scan_kitty(text: str, path: Path) -> KittyScan:
                         included = data.decode("utf-8")
                     except (FileNotFoundError, NotADirectoryError):
                         continue
-                    except (OSError, UnicodeDecodeError):
+                    except (OSError, RuntimeError, UnicodeDecodeError):
                         reports.append(
                             f"kitty: partial: {target.name} could not be read; maps there are "
                             "not checked"

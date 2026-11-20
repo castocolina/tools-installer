@@ -485,10 +485,43 @@ def test_kitty_include_relative_to_the_config_is_scanned(tmp_path: Path) -> None
     assert "ctrl+shift+k" in scan.taken
 
 
+def test_kitty_indented_include_is_scanned(tmp_path: Path) -> None:
+    path = tmp_path / "kitty.conf"
+    (tmp_path / "theme.conf").write_text("map ctrl+shift+k x\n")
+    scan = scan_kitty("  \tinclude theme.conf\n", path)
+    assert "ctrl+shift+k" in scan.taken
+
+
+def test_kitty_cleanup_after_a_resolver_change_leaves_the_other_file_alone(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    original_dir = home / ".config" / "kitty"
+    original_env = {
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local/share"),
+    }
+    row = TERMINAL_KEYS["kitty"]
+    assert (
+        apply_terminal_keys(row, "kitty", "fedora", home, original_env, skip_recorded=False)[1]
+        is None
+    )
+    original = original_dir / "kitty.conf"
+    fallback_dir = tmp_path / "fallback"
+    fallback_dir.mkdir()
+    fallback = fallback_dir / "kitty.conf"
+    fallback.touch()
+    changed_env = {**original_env, "KITTY_CONFIG_DIRECTORY": str(fallback_dir)}
+    warnings = strip_terminal_keys(row, "kitty", "fedora", home, changed_env)
+    assert fallback.exists() and fallback.read_text() == ""
+    assert original.exists()
+    assert (home / ".local/share/tools-installer/terminal-tuning-kitty").exists()
+    assert (home / ".local/share/tools-installer/terminal-kitty-created").exists()
+    assert len(warnings) == 1
+
+
 def test_kitty_include_report_is_returned_by_install() -> None:
     config = _kitty_config()
     config.parent.mkdir(parents=True)
-    config.write_text("geninclude generated.conf\\n")
+    config.write_text("geninclude generated.conf\n")
     result = run_post_install(_kitty(), _LINUX)
     assert "kitty: partial: geninclude is not followed; maps there are not checked" in result.lines
 
@@ -536,10 +569,42 @@ def test_kitty_unreadable_include_is_reported(tmp_path: Path) -> None:
 
 
 def test_kitty_include_cycle_terminates(tmp_path: Path) -> None:
-    (tmp_path / "a.conf").write_text("include b.conf\n")
-    (tmp_path / "b.conf").write_text("include a.conf\n")
+    (tmp_path / "a.conf").write_text("map ctrl+shift+a x\ninclude b.conf\n")
+    (tmp_path / "b.conf").write_text("map ctrl+shift+b x\ninclude a.conf\n")
     scan = scan_kitty("include a.conf\n", tmp_path / "kitty.conf")
-    assert not scan.taken
+    assert scan.taken == frozenset({"ctrl+shift+a", "ctrl+shift+b"})
+    assert "depth 8" not in " ".join(scan.reports)
+
+
+def test_kitty_symlink_loop_on_the_config_keeps_its_own_maps(tmp_path: Path) -> None:
+    config = tmp_path / "kitty.conf"
+    os.symlink(config, config)
+    scan = scan_kitty("map ctrl+shift+k x\n", config)
+    assert "ctrl+shift+k" in scan.taken
+    assert scan.reports == (
+        "kitty: partial: kitty.conf could not be read; maps there are not checked",
+    )
+
+
+def test_kitty_symlink_loop_is_reported_and_apply_continues(tmp_path: Path) -> None:
+    loop = tmp_path / "loop.conf"
+    os.symlink(loop, loop)
+    config = tmp_path / "kitty.conf"
+    config.write_text("include loop.conf\n")
+    scan = scan_kitty(config.read_text(), config)
+    assert scan.reports == (
+        f"kitty: partial: {loop.name} could not be read; maps there are not checked",
+    )
+    result = apply_terminal_keys(
+        TERMINAL_KEYS["kitty"],
+        "kitty",
+        "fedora",
+        tmp_path,
+        {"KITTY_CONFIG_DIRECTORY": str(tmp_path)},
+        skip_recorded=False,
+    )
+    assert result[1] is None
+    assert "kitty-keys >>>" in config.read_text()
 
 
 def test_kitty_kitty_mod_in_an_include_is_followed(tmp_path: Path) -> None:
@@ -579,6 +644,37 @@ def test_kitty_clear_all_shortcuts_yes_refuses() -> None:
 def test_kitty_clear_all_shortcuts_no_allows_tuning() -> None:
     scan = scan_kitty("clear_all_shortcuts no\n", _kitty_config())
     assert not scan.clears_all
+
+
+def test_kitty_clear_all_shortcuts_yes_in_an_include_refuses(tmp_path: Path) -> None:
+    (tmp_path / "clear.conf").write_text("clear_all_shortcuts yes\n")
+    scan = scan_kitty("include clear.conf\n", tmp_path / "kitty.conf")
+    assert scan.clears_all
+
+
+def test_kitty_clear_all_shortcuts_yes_is_sticky() -> None:
+    scan = scan_kitty("clear_all_shortcuts yes\nclear_all_shortcuts no\n", _kitty_config())
+    assert scan.clears_all
+
+
+def test_kitty_include_with_spaces_is_scanned(tmp_path: Path) -> None:
+    (tmp_path / "themes").mkdir()
+    (tmp_path / "themes" / "my keys.conf").write_text("map ctrl+shift+k x\n")
+    scan = scan_kitty("include themes/my keys.conf\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+k" in scan.taken
+
+
+@pytest.mark.parametrize(("platform", "name"), [("fedora", "linux.conf"), ("macos", "macos.conf")])
+def test_kitty_include_expands_platform(tmp_path: Path, platform: str, name: str) -> None:
+    (tmp_path / name).write_text("map ctrl+shift+k x\n")
+    scan = scan_kitty("include ${KITTY_OS}.conf\n", tmp_path / "kitty.conf", platform)
+    assert "ctrl+shift+k" in scan.taken
+
+
+def test_kitty_map_skips_option_values_and_return_alias(tmp_path: Path) -> None:
+    source = "map --allow-fallback shifted,ascii ctrl+shift+k something\nmap ctrl+return x\n"
+    scan = scan_kitty(source, tmp_path / "kitty.conf")
+    assert {"ctrl+shift+k", "ctrl+enter"} <= scan.taken
 
 
 def test_kitty_include_expands_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -854,6 +950,37 @@ def test_wezterm_readback_skipped_on_refusal(monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
+def test_wezterm_strip_deletes_created_seed_file_and_directories(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    environ = {
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local/share"),
+    }
+    row = TERMINAL_KEYS["wezterm"]
+    assert (
+        apply_terminal_keys(row, "wezterm", "fedora", home, environ, skip_recorded=False)[1] is None
+    )
+    config = row.config_path("fedora", home, environ)
+    assert config.read_text().startswith(WEZTERM_SKELETON.split("return config")[0])
+    assert strip_terminal_keys(row, "wezterm", "fedora", home, environ) == ()
+    assert not config.exists()
+    assert not config.parent.exists()
+
+
+def test_wezterm_strip_keeps_user_edited_created_file(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    environ = {
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local/share"),
+    }
+    row = TERMINAL_KEYS["wezterm"]
+    apply_terminal_keys(row, "wezterm", "fedora", home, environ, skip_recorded=False)
+    config = row.config_path("fedora", home, environ)
+    config.write_text(config.read_text() + "-- user edit\n")
+    assert strip_terminal_keys(row, "wezterm", "fedora", home, environ) == ()
+    assert config.read_text() == WEZTERM_SKELETON + "-- user edit\n"
+
+
 def test_wezterm_golden_linux_created_file() -> None:
     result = run_post_install(_wezterm(), _LINUX)
     assert result.lines == (_WEZTERM_SUMMARY,)
@@ -1005,7 +1132,20 @@ def test_validate_wezterm_refuses_a_config_keys_assignment_after_the_region() ->
 
 
 def test_wezterm_fresh_install_after_a_user_config_keys_assignment_is_written() -> None:
-    test_wezterm_user_keys_are_kept_in_order()
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    user = (
+        'local wezterm = require "wezterm"\nlocal config = wezterm.config_builder()\n'
+        "config.keys = {}\nreturn config\n"
+    )
+    config.write_text(user)
+    result = run_post_install(_wezterm(), _LINUX)
+    assert result.refused is None
+    assert config.read_text().startswith(user.removesuffix("return config\n"))
+    assert config.read_text().endswith("return config\n")
+    assert config.read_text().index("config.keys = {}") < config.read_text().index(
+        "wezterm-keys >>>"
+    )
 
 
 def test_wezterm_in_place_rewrite_refuses_a_later_config_keys_assignment() -> None:

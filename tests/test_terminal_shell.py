@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import threading
+import time
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -1768,14 +1769,17 @@ def test_konsole_unreadable_sessionui_is_unknown_and_reports_nothing(tmp_path: P
             path.unlink()
             path.mkdir()
         before = path.read_bytes() if path.is_file() else None
-        result = sync_terminal_shells(
-            home=home,
-            environ=environ,
-            platform=_platform(),
-            lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
-        )
-        assert not any(w.startswith("konsole: partial:") for w in result.warnings)
-        assert (path.read_bytes() if path.is_file() else None) == before
+        for write in (False, True):
+            result = sync_terminal_shells(
+                home=home,
+                environ=environ,
+                platform=_platform(),
+                lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+                write=write,
+            )
+            assert result.notes == ()
+            assert not any(w.startswith("konsole:") for w in result.warnings)
+            assert (path.read_bytes() if path.is_file() else None) == before
 
 
 def test_konsole_clear_check_needs_konsole(tmp_path: Path) -> None:
@@ -1869,18 +1873,27 @@ def test_konsole_removed_clear_has_no_stock_note(tmp_path: Path) -> None:
     assert KONSOLE_CLEAR_REMOVED in result.warnings
 
 
+def test_konsole_action_regex_is_bounded_on_malformed_input() -> None:
+    started = time.perf_counter()
+    result = konsole_clear_is_stock("<Action " * 50000)
+    assert time.perf_counter() - started < 2
+    assert result is True
+
+
 def test_konsole_unreadable_sessionui_has_no_stock_note(tmp_path: Path) -> None:
-    path, environ = _konsole_fixture(tmp_path, b"\\xff\\n")
+    path, environ = _konsole_fixture(tmp_path, b"\xff\n")
     before = path.read_bytes()
-    result = sync_terminal_shells(
-        home=tmp_path,
-        environ=environ,
-        platform=_platform(),
-        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
-    )
-    assert result.notes == ()
-    assert not any(w.startswith("konsole: partial:") for w in result.warnings)
-    assert path.read_bytes() == before
+    for write in (False, True):
+        result = sync_terminal_shells(
+            home=tmp_path,
+            environ=environ,
+            platform=_platform(),
+            lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+            write=write,
+        )
+        assert result.notes == ()
+        assert not any(w.startswith("konsole:") for w in result.warnings)
+        assert path.read_bytes() == before
 
 
 def test_konsole_sessionui_parent_that_is_a_file_has_no_stock_note(tmp_path: Path) -> None:
@@ -1890,12 +1903,14 @@ def test_konsole_sessionui_parent_that_is_a_file_has_no_stock_note(tmp_path: Pat
     parent.write_bytes(b"x\\n")
     environ = {"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(tmp_path / "config")}
     before = parent.read_bytes()
-    result = sync_terminal_shells(
-        home=tmp_path,
-        environ=environ,
-        platform=_platform(),
-        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
-    )
-    assert result.notes == ()
-    assert not any(w.startswith("konsole: partial:") for w in result.warnings)
-    assert parent.read_bytes() == before
+    for write in (False, True):
+        result = sync_terminal_shells(
+            home=tmp_path,
+            environ=environ,
+            platform=_platform(),
+            lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+            write=write,
+        )
+        assert result.notes == ()
+        assert not any(w.startswith("konsole:") for w in result.warnings)
+        assert parent.read_bytes() == before

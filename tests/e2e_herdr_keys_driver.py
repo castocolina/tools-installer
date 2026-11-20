@@ -74,6 +74,7 @@ RECORD_SECONDS = 60
 
 def received_per_chord(log_lines: Sequence[str], start: int, expected: Sequence[str]) -> list[str]:
     """Delayed or split writes stay with their chord; lost/re-encoded bytes shift later slices."""
+    # shortcut: a lost chord shifts later slices; use mark-delimited slices if diagnostics need it.
     stream = "".join(line for line in log_lines[start:] if line != "START")
     result: list[str] = []
     position = 0
@@ -105,6 +106,26 @@ def herdr_keys_verdict(started: bool, received: Sequence[str], closed: str | Non
     )
 
 
+def keys_verdict(log_text: str, closed: str | None, sent: int, received: Sequence[str]) -> str:
+    """Pure verdict: `sent` chords were written before the client's pty closed, if it did."""
+    if "START" not in log_text.splitlines():
+        return herdr_keys_verdict(False, received, closed)
+    if closed is not None and sent < len(CHORDS):
+        detail = f"the herdr client closed the pty before the last chord was sent ({closed})"
+        return verdict("TRACER_HERDR_KEYS_UNPROVEN", detail)
+    return herdr_keys_verdict(True, received)
+
+
+def child_environment(home: Path, runtime: Path) -> dict[str, str]:
+    return {
+        "HOME": str(home),
+        "XDG_RUNTIME_DIR": str(runtime),
+        "PATH": "/usr/bin:/bin",
+        "TERM": "xterm-256color",
+        "LANG": "C.UTF-8",
+    }
+
+
 def _install_herdr() -> list[str]:
     install_one(tool_by_id("herdr"), "TRACER_HERDR_INSTALL_FAILED")
     return ["TRACER_HERDR_INSTALL_OK"]
@@ -115,7 +136,14 @@ def _keys() -> list[str]:
     herdr = shutil.which("herdr")
     if herdr is None:
         raise Failed("TRACER_HERDR_KEYS_FAILED", "herdr is not on PATH")
-    home = Path(tempfile.mkdtemp(prefix="hk", dir="/tmp"))
+    home = Path(tempfile.mkdtemp(prefix="hk", dir=os.environ.get("TMPDIR", "/tmp")))
+    try:
+        return _run_keys_in_home(herdr, home)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def _run_keys_in_home(herdr: str, home: Path) -> list[str]:
     runtime = home / "run"
     runtime.mkdir(mode=0o700)
     recorder = home / "recorder.py"
@@ -132,16 +160,14 @@ def _keys() -> list[str]:
     log_path = home / "rec.log"
     pid, fd = pty.fork()
     if pid == 0:
-        env = {
-            "HOME": str(home),
-            "XDG_RUNTIME_DIR": str(runtime),
-            "PATH": "/usr/bin:/bin",
-            "TERM": "xterm-256color",
-            "LANG": "C.UTF-8",
-        }
-        os.execve(herdr, [herdr], env)
+        env = child_environment(home, runtime)
+        try:
+            os.execve(herdr, [herdr], env)
+        except OSError:
+            os._exit(127)
     closed: str | None = None
     start = 0
+    sent = 0
     try:
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
 
@@ -157,12 +183,18 @@ def _keys() -> list[str]:
                         return False
             return True
 
-        if pump(STARTUP_SECONDS):
-            start = (
-                len(log_path.read_text(encoding="utf-8").splitlines()) if log_path.exists() else 0
-            )
-            for index, (_name, sent, _expected) in enumerate(CHORDS):
-                os.write(fd, sent)
+        startup_deadline = time.monotonic() + 20
+        while time.monotonic() < startup_deadline:
+            if log_path.exists() and "START" in log_path.read_text(encoding="utf-8").splitlines():
+                break
+            if not pump(0.1):
+                break
+        started = log_path.exists() and "START" in log_path.read_text(encoding="utf-8").splitlines()
+        if started and closed is None:
+            start = len(log_path.read_text(encoding="utf-8").splitlines())
+            for index, (_name, chord, _expected) in enumerate(CHORDS):
+                os.write(fd, chord)
+                sent = index + 1
                 target = sum(len(expected) for _n, _s, expected in CHORDS[: index + 1])
                 deadline = time.monotonic() + CHORD_SECONDS
                 while time.monotonic() < deadline:
@@ -202,10 +234,11 @@ def _keys() -> list[str]:
         os.close(fd)
     lines = log_path.read_text(encoding="utf-8").splitlines() if log_path.exists() else []
     return [
-        herdr_keys_verdict(
-            "START" in lines,
-            received_per_chord(lines, start, [expected for _n, _s, expected in CHORDS]),
+        keys_verdict(
+            "\n".join(lines),
             closed,
+            sent,
+            received_per_chord(lines, start, [expected for _n, _s, expected in CHORDS]),
         )
     ]
 
@@ -233,7 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         print(f"ERROR {first_line(error) or type(error).__name__}")
         return 1
-    print("\\n".join(lines))
+    print("\n".join(lines))
     return 1 if any("_FAILED" in line or "_UNPROVEN" in line for line in lines) else 0
 
 

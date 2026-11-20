@@ -65,7 +65,7 @@ KONSOLE_CLEAR_STOCK: Final = (
     "(screen and scrollback); left as it is"
 )
 
-_KONSOLE_ACTION = re.compile(r"<Action[^>]*name=[\"\']clear-history-and-reset[\"\'][^>]*>")
+_KONSOLE_ACTION = re.compile(r"<Action[^<>]*name=[\"\']clear-history-and-reset[\"\'][^<>]*>")
 _KONSOLE_SHORTCUT = re.compile(r"shortcut=([\"\'])(.*?)[\"\']")
 
 
