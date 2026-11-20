@@ -37,8 +37,8 @@ kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults of 
 
 4. **Konsole is verified, not rewritten (TERM-04)**: On a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear; it never writes a binding: a user-removed stock key is kept and reported `konsole: partial: you removed Ctrl+Shift+K; kept yours`; its zsh sync is unchanged *(amended 2026-11-19, 29 D-09, needs confirmation: the conditional write is dropped; SKILL-03 and the owner decision "verify and leave alone")*.
    - Current: Konsole has only the zsh sync.
-   - Target: a read-only check of the stock key plus a conditional write.
-   - Acceptance: a fixture with the stock key leaves the file byte-identical and the report says stock; a fixture with the key removed gets one binding; existing Konsole sync tests pass with no assertion edits; the stock key is confirmed on the current Konsole version in a disposable container.
+   - Target: a read-only check of the stock key; it never writes *(amended 2026-11-20, 29 D-09, needs confirmation: the conditional write was dropped; the report is the whole behavior)*.
+   - Acceptance: a fixture with the stock key leaves the file byte-identical and the report says stock; a fixture with the key removed is left byte-identical and the report says `konsole: partial: you removed Ctrl+Shift+K; kept yours`; existing Konsole sync tests pass with no assertion edits; the stock key is confirmed on the current Konsole version in a disposable container.
 
 5. **herdr passes the keys through (TERM-05)**: Inside a herdr pane, Option/Alt+Left/Right and the clear chord reach the shell as the expected bytes; a herdr pass-through setting is written only if herdr intercepts them *(amended 2026-11-19, 29 D-10: verified live that herdr 0.9.5 does not intercept them, so no setting and no keys row)*.
    - Current: unknown; herdr's own key handling is not verified.
