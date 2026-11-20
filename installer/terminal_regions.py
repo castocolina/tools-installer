@@ -4,16 +4,19 @@
 
 from __future__ import annotations
 
+import glob
+import itertools
+import os
 import re
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Final, cast
 
 from installer.agent_settings import missing_dirs, read_settings, write_if_unchanged
-from installer.atomic import FileSnapshot, atomic_write_text
+from installer.atomic import FileSnapshot, atomic_write_text, read_capped
 
 
 class TerminalShellError(OSError):
@@ -95,6 +98,186 @@ def xdg_config_home(home: Path, environ: Mapping[str, str]) -> Path:
 def xdg_data_home(home: Path, environ: Mapping[str, str]) -> Path:
     configured = environ.get("XDG_DATA_HOME")
     return Path(configured) if configured else home / ".local" / "share"
+
+
+KITTY = "kitty"
+KITTY_KEYS = "kitty-keys"
+KITTY_CREATED = "terminal-kitty-created"
+
+
+def kitty_config_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
+    """Resolve kitty v0.49.2 tools/utils/paths.go ConfigDirForName order."""
+    direct = environ.get("KITTY_CONFIG_DIRECTORY")
+    if direct:
+        return Path(direct).expanduser() / "kitty.conf"
+    roots = (
+        [Path(value).expanduser() for value in (environ.get("XDG_CONFIG_HOME", ""),)]
+        if environ.get("XDG_CONFIG_HOME")
+        else []
+    )
+    roots.extend(
+        Path(value).expanduser() for value in environ.get("XDG_CONFIG_DIRS", "").split(":") if value
+    )
+    roots.extend((home / ".config",))
+    if platform_os == "macos":
+        roots.append(home / "Library" / "Preferences")
+    unique = dict.fromkeys(roots)
+    for root in unique:
+        config = root / "kitty" / "kitty.conf"
+        if config.exists() and os.access(config.parent, os.W_OK):
+            return config
+    return xdg_config_home(home, environ) / "kitty" / "kitty.conf"
+
+
+@dataclass(frozen=True)
+class KittyScan:
+    taken: frozenset[str]
+    kitty_mod: str
+    reports: tuple[str, ...] = ()
+    clears_all: bool = False
+
+
+def kitty_chord(chord: str, kitty_mod: str) -> str:
+    """Normalize kitty modifier aliases and expand kitty_mod."""
+    aliases = {
+        "control": "ctrl",
+        "ctrl": "ctrl",
+        "opt": "alt",
+        "option": "alt",
+        "alt": "alt",
+        "cmd": "super",
+        "command": "super",
+        "super": "super",
+        "shift": "shift",
+    }
+    parts = chord.lower().split("+")
+    key = parts[-1]
+    modifiers: set[str] = set()
+    for part in parts[:-1]:
+        values = kitty_mod.lower().split("+") if part == "kitty_mod" else [part]
+        modifiers.update(aliases.get(value, value) for value in values)
+    return "+".join((*sorted(modifiers), key))
+
+
+def scan_kitty(text: str, path: Path) -> KittyScan:
+    default = "ctrl+shift"
+    raw: list[str] = []
+    reports: list[str] = []
+    visited = {path.resolve()}
+    read_files = 1
+    stopped: set[str] = set()
+    clears_all = False
+    value_options = {"--when-focus-on", "--mode", "--new-mode", "--on-unknown", "--on-action"}
+
+    def walk(source: str, base: Path, depth: int) -> None:
+        nonlocal default, read_files, clears_all
+        outside = replace_owned_region(replace_owned_region(source, KITTY, None), KITTY_KEYS, None)
+        for line in outside.splitlines():
+            tokens = line.split()
+            if not tokens or tokens[0].startswith("#"):
+                continue
+            directive = tokens[0]
+            if directive == "kitty_mod" and len(tokens) > 1:
+                default = tokens[1]
+            elif directive == "clear_all_shortcuts" and len(tokens) > 1:
+                clears_all = tokens[1].lower() in {"yes", "y", "true"}
+            elif directive in {"geninclude", "envinclude"}:
+                reports.append(
+                    f"kitty: partial: {directive} is not followed; maps there are not checked"
+                )
+                # shortcut: the kitty region position after a user edit is not checked; moved below
+                # a map the scan cannot read (geninclude, envinclude), the installer's map wins by
+                # last-wins, as with phase 28's Alacritty region; upgrade in validate_kitty if a
+                # user hits it.
+            elif directive in {"include", "globinclude"} and len(tokens) > 1:
+                if depth >= 8:
+                    stopped.add("depth 8")
+                    continue
+                pattern = Path(os.path.expandvars(tokens[1])).expanduser()
+                if not pattern.is_absolute():
+                    pattern = base / pattern
+                if directive == "globinclude":
+                    remaining = max(0, 64 - read_files)
+                    # shortcut: glob lists each matched directory once in full before islice caps
+                    # it; kitty globs are small, upgrade to an os.scandir walk if a real config
+                    # needs it.
+                    matches = list(itertools.islice(glob.iglob(str(pattern)), remaining + 1))
+                    if len(matches) > remaining:
+                        stopped.add("64 files")
+                    targets = sorted(matches)[:remaining]
+                else:
+                    targets = [str(pattern)]
+                for target_name in targets:
+                    target = Path(target_name).resolve()
+                    if target in visited:
+                        continue
+                    if read_files >= 64:
+                        stopped.add("64 files")
+                        break
+                    visited.add(target)
+                    try:
+                        data = read_capped(target, 1 << 20, follow_symlinks=True)
+                        if data is None:
+                            raise OSError("not readable")
+                        included = data.decode("utf-8")
+                    except (FileNotFoundError, NotADirectoryError):
+                        continue
+                    except (OSError, UnicodeDecodeError):
+                        reports.append(
+                            f"kitty: partial: {target.name} could not be read; maps there are "
+                            "not checked"
+                        )
+                        continue
+                    read_files += 1
+                    walk(included, target.parent, depth + 1)
+            elif directive == "map":
+                index = 1
+                while index < len(tokens):
+                    token = tokens[index]
+                    if token.startswith("--"):
+                        index += 2 if token in value_options else 1
+                        continue
+                    raw.append(token.split(">", 1)[0])
+                    break
+
+    walk(text, path.parent, 0)
+    normalized_mod = kitty_chord(default, "ctrl+shift")
+    for cap in sorted(stopped):
+        reports.append(
+            f"kitty: partial: include scan stopped at {cap}; maps beyond it are not checked"
+        )
+    return KittyScan(
+        frozenset(kitty_chord(chord, normalized_mod) for chord in raw),
+        normalized_mod,
+        tuple(dict.fromkeys(reports)),
+        clears_all,
+    )
+
+
+def kitty_maps(
+    rows: Sequence[tuple[str, str]], scan: KittyScan
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    added: list[str] = []
+    conflicts: list[str] = []
+    for chord, line in rows:
+        if kitty_chord(chord, scan.kitty_mod) in scan.taken:
+            conflicts.append(f"kitty: partial: you already map {chord}")
+        else:
+            added.append(line)
+    return tuple(added), tuple(conflicts)
+
+
+def validate_kitty(text: str) -> None:
+    lines = text.splitlines()
+    begin = marker(KITTY_KEYS, ">>>")
+    end = marker(KITTY_KEYS, "<<<")
+    if begin not in lines or end not in lines:
+        return
+    for line in lines[lines.index(begin) + 1 : lines.index(end)]:
+        if line.strip() and not line.strip().startswith("map "):
+            raise TerminalShellError(
+                "the kitty keys region would hold a line that is not a map; nothing written"
+            )
 
 
 ALACRITTY = "alacritty"

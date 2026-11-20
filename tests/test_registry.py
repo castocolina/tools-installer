@@ -1358,13 +1358,15 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     reviewed the two new declarers (CONF-11 theme, CONF-12 lean tips) and the
     six shell-init tools (D-11: the keyed, default-no source_shell_init).
     Phase 24 reviewed Alacritty's `apply_terminal_tuning` (24 D-23: its keybindings
-    region, written at install with no question). Phase 24.1 reviewed Neovim's
+    region, written at install with no question). Phase 29 reviewed kitty's
+    apply_terminal_tuning (29 D-01: its kitty-keys region, written at install with no question).
+    Phase 24.1 reviewed Neovim's
     `clone_nvim_starter` and `show_nvim_hints` (24.1 D-15, D-19); neovim was already a
     shell-init tool, so the declarer set did not change.
     """
     declarers = {tool.id for tool in load_tools(REGISTRY) if tool.post_install}
     tuned = {"claude", "codex", "opencode", "cursor-agent", "copilot"}
-    assert declarers == {"oh-my-zsh", "vscode", "alacritty", *tuned, *SHELL_INIT_TOOLS}
+    assert declarers == {"oh-my-zsh", "vscode", "alacritty", "kitty", *tuned, *SHELL_INIT_TOOLS}
     oh_my_zsh = _tools_by_id()["oh-my-zsh"]
     assert oh_my_zsh.post_install == ("set_login_shell", "set_omz_theme", "set_omz_plugins")
     assert oh_my_zsh.requires == ("zsh", "git")
@@ -1539,7 +1541,7 @@ def test_kitty_has_no_linux_download_fallback() -> None:
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0")
     assert [m.kind for m in resolve_methods(kitty, fedora)] == ["script", "dnf"]
     assert [m.kind for m in resolve_methods(kitty, bazzite)] == ["script"]
-    assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask", "script"]
+    assert [m.kind for m in resolve_methods(kitty, macos)] == ["cask"]
     assert all(method.kind != "github_release" for method in kitty.methods)
 
 
@@ -1615,8 +1617,8 @@ def test_kitty_cask_blocks_a_too_old_macos_version() -> None:
     new_enough = Platform(
         os="macos", arch="arm64", immutable=False, has_brew=True, os_version="12.0"
     )
-    assert [m.kind for m in resolve_methods(kitty, too_old)] == ["script"]
-    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["cask", "script"]
+    assert [m.kind for m in resolve_methods(kitty, too_old)] == []
+    assert [m.kind for m in resolve_methods(kitty, new_enough)] == ["cask"]
 
 
 def test_wezterm_appimage_covers_bazzite_where_kitty_cannot() -> None:
@@ -2577,22 +2579,25 @@ def test_audit_fix_e10_glab_has_native_fallbacks() -> None:
     ]
 
 
-def test_audit_fix_e8_kitty_script_covers_macos() -> None:
+def test_kitty_macos_writes_nothing_into_applications() -> None:
     kitty = _tools_by_id()["kitty"]
-    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    macos_without_brew = Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    assert resolve_methods(kitty, macos_without_brew) == []
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
     methods = resolve_methods(kitty, macos)
-    assert methods[0].kind == "script"
-    assert methods[0].params["url"] == "https://sw.kovidgoyal.net/kitty/installer.sh"
-    assert methods[0].params.get("args") == ["launch=n"]
-    assert methods[0].params["bin_dir"] == "/Applications/kitty.app/Contents/MacOS"
-    macos_brew = Platform(
-        os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0"
+    assert [method.kind for method in methods] == ["cask"]
+    assert methods[0].params["cask"] == "kitty"
+    assert methods[0].params["app"] == "kitty.app"
+    assert methods[0].params["min_os_version"] == "12"
+    assert all(
+        "/Applications" not in str(value)
+        for method in kitty.methods
+        for value in method.params.values()
     )
-    kinds = [m.kind for m in resolve_methods(kitty, macos_brew)]
-    assert kinds[0] == "cask"
-    assert "script" in kinds
     linux = next(
-        m for m in kitty.methods if m.kind == "script" and m.os == ("debian", "arch", "fedora")
+        method
+        for method in kitty.methods
+        if method.kind == "script" and method.os == ("debian", "arch", "fedora")
     )
     assert linux.params["bin_dir"] == "~/.local/kitty.app/bin"
     assert linux.os == ("debian", "arch", "fedora")
@@ -2763,11 +2768,6 @@ SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[s
     },
     ("kitty", ("debian", "arch", "fedora"), ()): {
         "paths": ["~/.local/kitty.app/"],
-        "remove": None,
-        "update": None,
-    },
-    ("kitty", ("macos",), ()): {
-        "paths": None,
         "remove": None,
         "update": None,
     },

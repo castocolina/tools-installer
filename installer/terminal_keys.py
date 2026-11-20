@@ -14,6 +14,9 @@ from installer.terminal_regions import (
     ALACRITTY,
     ALACRITTY_CREATED,
     ALACRITTY_KEYS,
+    KITTY,
+    KITTY_CREATED,
+    KITTY_KEYS,
     KeysPlan,
     Placement,
     TerminalShellError,
@@ -22,10 +25,14 @@ from installer.terminal_regions import (
     commit_region,
     created_path_record,
     first_line,
+    kitty_config_path,
+    kitty_maps,
     replace_owned_region,
+    scan_kitty,
     snapshot_text,
     strip_region,
     user_document,
+    validate_kitty,
     validate_toml,
     xdg_data_home,
 )
@@ -132,6 +139,72 @@ def _render(row: KeysRow, platform_os: str, text: str, path: Path) -> KeysPlan:
     return plan
 
 
+def _kitty_clear(platform_os: str) -> tuple[str, str]:
+    chord, send = clear_binding(TERMINAL_KEYS["kitty"], platform_os)
+    escaped = "".join(f"\\x{ord(character):02x}" for character in send)
+    prefix = "" if platform_os == "macos" else "--allow-fallback=shifted,ascii "
+    return chord, f"map {prefix}{chord} send_text all {escaped}"
+
+
+def _kitty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    scan = scan_kitty(text, path)
+    if scan.clears_all:
+        return KeysPlan(
+            None, refusal="you set clear_all_shortcuts yes, which would clear these keys"
+        )
+    rows: list[tuple[str, str]] = []
+    if platform_os == "macos":
+        rows.extend(
+            (
+                ("opt+left", "map opt+left send_text all \\x1bb"),
+                ("opt+right", "map opt+right send_text all \\x1bf"),
+            )
+        )
+    chord, clear_line = _kitty_clear(platform_os)
+    rows.append((chord, clear_line))
+    added, conflicts = kitty_maps(rows, scan)
+    notes: list[str] = []
+    if clear_line in added:
+        if platform_os == "macos":
+            notes.append(
+                "kitty: cmd+k now clears the screen and scrollback; it was "
+                "clear_terminal to_cursor."
+            )
+        elif scan.kitty_mod == "ctrl+shift":
+            notes.append(
+                "kitty: ctrl+shift+k now clears the screen and scrollback; it was "
+                "scroll_line_up, and ctrl+shift+up still scrolls."
+            )
+    if added and not path.exists():
+        notes.append(
+            "kitty: restart kitty or press ctrl+cmd+, if it was running before kitty.conf existed."
+            if platform_os == "macos"
+            else "kitty: restart kitty or press ctrl+shift+f5 if it was running before "
+            "kitty.conf existed."
+        )
+    return KeysPlan("\n".join(added) or None, (*scan.reports, *conflicts), notes=tuple(notes))
+
+
+def _kitty_cwd(platform_os: str, text: str, path: Path) -> KeysPlan:
+    scan = scan_kitty(text, path)
+    prefix = "cmd" if platform_os == "macos" else "kitty_mod"
+    rows = (
+        (f"{prefix}+t", f"map --allow-fallback=shifted,ascii {prefix}+t new_tab_with_cwd"),
+        (f"{prefix}+enter", f"map {prefix}+enter new_window_with_cwd"),
+        (f"{prefix}+n", f"map --allow-fallback=shifted,ascii {prefix}+n new_os_window_with_cwd"),
+    )
+    added, conflicts = kitty_maps(rows, scan)
+    notes = (
+        (
+            "kitty: new_tab_with_cwd, new_window_with_cwd and new_os_window_with_cwd "
+            "replace new_tab, new_window and new_os_window on those chords.",
+        )
+        if added
+        else ()
+    )
+    return KeysPlan("\n".join(added) or None, conflicts, notes=notes)
+
+
 TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
     "alacritty": KeysRow(
         ownership=OwnedRegion(ALACRITTY_KEYS),
@@ -149,7 +222,22 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
             "writes nothing."
         ),
         sibling_regions=(ALACRITTY,),
-    )
+    ),
+    "kitty": KeysRow(
+        ownership=OwnedRegion(KITTY_KEYS, "#", Placement.TOP),
+        config_path=kitty_config_path,
+        plan=_kitty_plan,
+        validate=validate_kitty,
+        summary=(
+            "kitty keys: the clear chord sends Ctrl+L (screen and scrollback), Option+Left and "
+            "Option+Right move by word on macOS, and new tabs and windows open in the current "
+            "directory."
+        ),
+        created_record=KITTY_CREATED,
+        same_directory=Writes(_kitty_cwd),
+        sibling_regions=(KITTY,),
+        bind_created_path=True,
+    ),
 }
 
 

@@ -3026,6 +3026,9 @@ desc = "GPU-accelerated terminal emulator"
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
 # Config dir per the kitty docs (sw.kovidgoyal.net/kitty/conf): ~/.config/kitty/kitty.conf.
 config_paths = ["~/.config/kitty"]
+# Install tuning (29 D-01, D-02): the kitty-keys region at the top of the kitty.conf kitty reads; user maps after it win.
+# Verified 2026-11-20 against kitty 0.49.2 (load_config of the exact lines, last-wins duplicates).
+post_install = ["apply_terminal_tuning"]
 [[tool.method]]
 kind = "script"
 os = ["debian", "arch", "fedora"]
@@ -3037,16 +3040,6 @@ bin_dir = "~/.local/kitty.app/bin"
 # it creates no bin links and no desktop entries (no ln, symlink or desktop lines in the script), so `paths` is that
 # tree. No update and no remove: the installer names no uninstall command.
 paths = ["~/.local/kitty.app/"]
-# installer.sh installs to /Applications/kitty.app on macOS without sudo; non-admin
-# users fall through to the cask when the script cannot write /Applications.
-[[tool.method]]
-kind = "script"
-os = ["macos"]
-url = "https://sw.kovidgoyal.net/kitty/installer.sh"
-shell = "sh"
-args = ["launch=n"]
-bin_dir = "/Applications/kitty.app/Contents/MacOS"
-# No `paths`: /Applications is an absolute system path, which the registry does not accept (only ~/ or a named root).
 [[tool.method]]
 kind = "dnf"
 package = "kitty"
@@ -3056,6 +3049,10 @@ package = "kitty"
 [[tool.method]]
 kind = "pacman"
 package = "kitty"
+# Verified 2026-11-20: kitty uses only this cask on macOS (29 D-05).
+# The vendor installer.sh wrote into a system location, declared no paths and had no removal route, so it was dropped.
+# The cask installs kitty.app into ~/Applications through --appdir; command_wrapper links kitty and kitten into the Homebrew prefix bin, not ~/.local/bin (27 D-10).
+# macOS older than 12 or without Homebrew has no kitty method.
 [[tool.method]]
 kind = "cask"
 os = ["macos"]

@@ -37,6 +37,7 @@ from installer.terminal_regions import (
     TerminalShellError,
     alacritty_config_path,
     commit_region,
+    kitty_config_path,
     validate_toml,
 )
 from installer.terminal_regions import IMPORTS as _IMPORTS
@@ -113,10 +114,6 @@ def _safe_executable(path: str | None) -> str | None:
     if any(ord(character) < 32 or ord(character) == 127 for character in path):
         raise TerminalShellError("discovered executable path contains a control character")
     return path
-
-
-def _kitty_config_path(home: Path, environ: Mapping[str, str]) -> Path:
-    return _xdg_config_home(home, environ) / "kitty" / "kitty.conf"
 
 
 def _wezterm_config_path(home: Path, environ: Mapping[str, str]) -> Path:
@@ -577,7 +574,7 @@ def _revert_terminal_shells(
         )
     if zshenv_changed:
         reverted.append("zshenv")
-    kitty = _kitty_config_path(home, environ)
+    kitty = kitty_config_path(platform.os, home, environ)
     if _remove_if_owned(kitty, "kitty"):
         reverted.append("kitty")
     wezterm = _wezterm_config_path(home, environ)
@@ -665,7 +662,7 @@ def sync_terminal_shells(
     if _safe_executable(lookup("kitty")) is None:
         skipped.append("kitty unavailable")
     else:
-        config_path = _kitty_config_path(home, environ)
+        config_path = kitty_config_path(platform.os, home, environ)
         # kitty's `env` line takes the rest of the line as the value, so the path is not quoted.
         updated = _replace_owned_region(
             _read_text(config_path),

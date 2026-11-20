@@ -8,6 +8,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from installer.model import Tool, load_tools
 from installer.platform import Platform
 from installer.post_install import apply_install_tuning, run_post_install
@@ -30,7 +32,11 @@ from installer.terminal_regions import (
     KeysPlan,
     Placement,
     TerminalShellError,
+    kitty_chord,
+    kitty_config_path,
     replace_owned_region,
+    scan_kitty,
+    validate_kitty,
     validate_toml,
 )
 from installer.terminal_shell import sync_terminal_shells
@@ -95,6 +101,38 @@ def _alacritty() -> Tool:
     return next(tool for tool in load_tools(REGISTRY) if tool.id == "alacritty")
 
 
+def _kitty() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "kitty")
+
+
+def _kitty_config() -> Path:
+    return Path.home() / ".config" / "kitty" / "kitty.conf"
+
+
+_KITTY_LINUX = (
+    "# >>> tools-installer terminal-shell kitty-keys >>>\n"
+    "map --allow-fallback=shifted,ascii ctrl+shift+k send_text all \\x0c\n\n"
+    "map --allow-fallback=shifted,ascii kitty_mod+t new_tab_with_cwd\n"
+    "map kitty_mod+enter new_window_with_cwd\n"
+    "map --allow-fallback=shifted,ascii kitty_mod+n new_os_window_with_cwd\n"
+    "# <<< tools-installer terminal-shell kitty-keys <<<\n"
+)
+_KITTY_MACOS = (
+    "# >>> tools-installer terminal-shell kitty-keys >>>\n"
+    "map opt+left send_text all \\x1bb\n"
+    "map opt+right send_text all \\x1bf\n"
+    "map cmd+k send_text all \\x0c\n\n"
+    "map --allow-fallback=shifted,ascii cmd+t new_tab_with_cwd\n"
+    "map cmd+enter new_window_with_cwd\n"
+    "map --allow-fallback=shifted,ascii cmd+n new_os_window_with_cwd\n"
+    "# <<< tools-installer terminal-shell kitty-keys <<<\n"
+)
+_KITTY_SUMMARY = (
+    "kitty keys: the clear chord sends Ctrl+L (screen and scrollback), Option+Left and "
+    "Option+Right move by word on macOS, and new tabs and windows open in the current directory."
+)
+
+
 def _config() -> Path:
     return Path.home() / ".config" / "alacritty" / "alacritty.toml"
 
@@ -145,7 +183,7 @@ def apply_alacritty_keys(
 
 def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
     row = TERMINAL_KEYS["alacritty"]
-    assert set(TERMINAL_KEYS) == {"alacritty"}
+    assert set(TERMINAL_KEYS) == {"alacritty", "kitty"}
     assert row.ownership == OwnedRegion("alacritty-keys")
     assert row.created_record == "terminal-alacritty-created"
     assert row.sibling_regions == ("alacritty",)
@@ -182,7 +220,7 @@ def test_completeness_fails_for_a_declarer_without_a_row(tmp_path: Path) -> None
 
 
 def test_completeness_fails_on_an_empty_table() -> None:
-    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty"}
+    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty", "kitty"}
 
 
 def test_completeness_ignores_table_order(tmp_path: Path) -> None:
@@ -291,6 +329,240 @@ def test_golden_created_file_goes_with_the_tool(tmp_path: Path) -> None:
     assert not _config().exists()
     assert not _config().parent.exists()
     assert not (_state_dir() / "terminal-alacritty-created").exists()
+
+
+def test_kitty_golden_linux_created_file() -> None:
+    result = run_post_install(_kitty(), _LINUX)
+    assert result.lines == (
+        _KITTY_SUMMARY,
+        "kitty: ctrl+shift+k now clears the screen and scrollback; it was scroll_line_up, "
+        "and ctrl+shift+up still scrolls.",
+        "kitty: restart kitty or press ctrl+shift+f5 if it was running before kitty.conf existed.",
+        "kitty: new_tab_with_cwd, new_window_with_cwd and new_os_window_with_cwd "
+        "replace new_tab, new_window and new_os_window on those chords.",
+    )
+    assert _kitty_config().read_bytes() == _KITTY_LINUX.encode()
+    marker = _state_dir() / "terminal-kitty-created-path"
+    assert marker.read_text() == f"{_kitty_config()}\n"
+
+
+def test_kitty_golden_macos_created_file() -> None:
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
+    result = run_post_install(_kitty(), macos)
+    assert result.lines == (
+        _KITTY_SUMMARY,
+        "kitty: cmd+k now clears the screen and scrollback; it was clear_terminal to_cursor.",
+        "kitty: restart kitty or press ctrl+cmd+, if it was running before kitty.conf existed.",
+        "kitty: new_tab_with_cwd, new_window_with_cwd and new_os_window_with_cwd "
+        "replace new_tab, new_window and new_os_window on those chords.",
+    )
+    assert _kitty_config().read_bytes() == _KITTY_MACOS.encode()
+    assert "macos_option_as_alt" not in _KITTY_MACOS
+
+
+def test_kitty_never_writes_option_as_alt() -> None:
+    assert "macos_option_as_alt" not in _KITTY_LINUX + _KITTY_MACOS
+    assert "option_as_alt" not in _KITTY_LINUX + _KITTY_MACOS
+
+
+def test_kitty_user_map_is_kept_and_reported() -> None:
+    config = _kitty_config()
+    config.parent.mkdir(parents=True)
+    config.write_text("map ctrl+shift+k scroll_line_up\n")
+    result = run_post_install(_kitty(), _LINUX)
+    assert "ctrl+shift+k send_text" not in config.read_text()
+    assert config.read_text().endswith("map ctrl+shift+k scroll_line_up\n")
+    assert "kitty: partial: you already map ctrl+shift+k" in result.lines
+
+
+def test_kitty_config_path_follows_kittys_order(tmp_path: Path) -> None:
+    xdg = tmp_path / "xdg"
+    fallback = tmp_path / ".config"
+    (fallback / "kitty").mkdir(parents=True)
+    (fallback / "kitty" / "kitty.conf").touch()
+    assert kitty_config_path("fedora", tmp_path, {"XDG_CONFIG_HOME": str(xdg)}) == (
+        fallback / "kitty" / "kitty.conf"
+    )
+    direct = tmp_path / "direct"
+    assert kitty_config_path("fedora", tmp_path, {"KITTY_CONFIG_DIRECTORY": str(direct)}) == (
+        direct / "kitty.conf"
+    )
+
+
+def test_kitty_chord_normalizes_aliases_kitty_mod_and_order() -> None:
+    assert kitty_chord("shift+control+K", "ctrl+shift") == "ctrl+shift+k"
+    assert kitty_chord("kitty_mod+t", "alt+ctrl") == "alt+ctrl+t"
+    assert kitty_chord("opt+left", "ctrl+shift") == "alt+left"
+    assert kitty_chord("cmd+k", "ctrl+shift") == "super+k"
+    assert kitty_chord("command+option+x", "ctrl+shift") == "alt+super+x"
+
+
+def test_kitty_region_goes_above_user_content() -> None:
+    config = _kitty_config()
+    config.parent.mkdir(parents=True)
+    config.write_text("font_size 12\n")
+    run_post_install(_kitty(), _LINUX)
+    assert config.read_bytes() == (_KITTY_LINUX + "font_size 12\n").encode()
+
+
+def test_validate_kitty_refuses_a_non_map_line() -> None:
+    with pytest.raises(TerminalShellError):
+        validate_kitty(
+            "# >>> tools-installer terminal-shell kitty-keys >>>\n"
+            "shell /bin/sh\n"
+            "# <<< tools-installer terminal-shell kitty-keys <<<\n"
+        )
+
+
+def test_kitty_include_relative_to_the_config_is_scanned(tmp_path: Path) -> None:
+    path = tmp_path / "kitty.conf"
+    (tmp_path / "theme.conf").write_text("map ctrl+shift+k x\n")
+    scan = scan_kitty("include theme.conf\n", path)
+    assert "ctrl+shift+k" in scan.taken
+
+
+def test_kitty_include_report_is_returned_by_install() -> None:
+    config = _kitty_config()
+    config.parent.mkdir(parents=True)
+    config.write_text("geninclude generated.conf\\n")
+    result = run_post_install(_kitty(), _LINUX)
+    assert "kitty: partial: geninclude is not followed; maps there are not checked" in result.lines
+
+
+def test_kitty_globinclude_is_scanned(tmp_path: Path) -> None:
+    (tmp_path / "themes").mkdir()
+    (tmp_path / "themes" / "a.conf").write_text("map kitty_mod+t new_tab\n")
+    scan = scan_kitty("globinclude themes/*.conf\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+t" in scan.taken
+
+
+def test_kitty_nested_include_is_relative_to_its_own_file(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "one.conf").write_text("include two.conf\n")
+    (tmp_path / "sub" / "two.conf").write_text("map kitty_mod+n x\n")
+    scan = scan_kitty("include sub/one.conf\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+n" in scan.taken
+
+
+def test_kitty_include_expands_environment_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KITTY_EXTRA", str(tmp_path / "extra.conf"))
+    (tmp_path / "extra.conf").write_text("map ctrl+shift+k x\n")
+    scan = scan_kitty("include $KITTY_EXTRA\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+k" in scan.taken
+
+
+def test_kitty_unreadable_include_is_reported(tmp_path: Path) -> None:
+    invalid = tmp_path / "invalid.conf"
+    invalid.write_bytes(b"\xff\n")
+    fifo = tmp_path / "fifo.conf"
+    os.mkfifo(fifo)
+    scan = scan_kitty(
+        "include invalid.conf\ninclude fifo.conf\ninclude missing.conf\n", tmp_path / "kitty.conf"
+    )
+    assert (
+        f"kitty: partial: {invalid.name} could not be read; maps there are not checked"
+        in scan.reports
+    )
+    assert (
+        f"kitty: partial: {fifo.name} could not be read; maps there are not checked" in scan.reports
+    )
+    assert not any("missing.conf" in report for report in scan.reports)
+
+
+def test_kitty_include_cycle_terminates(tmp_path: Path) -> None:
+    (tmp_path / "a.conf").write_text("include b.conf\n")
+    (tmp_path / "b.conf").write_text("include a.conf\n")
+    scan = scan_kitty("include a.conf\n", tmp_path / "kitty.conf")
+    assert not scan.taken
+
+
+def test_kitty_kitty_mod_in_an_include_is_followed(tmp_path: Path) -> None:
+    (tmp_path / "theme.conf").write_text("kitty_mod ctrl+alt\nmap ctrl+alt+enter x\n")
+    scan = scan_kitty("include theme.conf\n", tmp_path / "kitty.conf")
+    assert "alt+ctrl+enter" in scan.taken
+
+
+def test_kitty_geninclude_and_envinclude_are_reported_not_followed(tmp_path: Path) -> None:
+    scan = scan_kitty("geninclude foo\nenvinclude BAR\n", tmp_path / "kitty.conf")
+    assert "kitty: partial: geninclude is not followed; maps there are not checked" in scan.reports
+    assert "kitty: partial: envinclude is not followed; maps there are not checked" in scan.reports
+
+
+def test_kitty_options_and_sequences_take_the_chord(tmp_path: Path) -> None:
+    scan = scan_kitty("map --when-focus-on var:x ctrl+shift+k y\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+k" in scan.taken
+    sequenced = scan_kitty("map ctrl+shift+k>x y\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+k" in sequenced.taken
+
+
+def test_kitty_clear_all_shortcuts_yes_refuses() -> None:
+    config = _kitty_config()
+    config.parent.mkdir(parents=True)
+    config.write_text("clear_all_shortcuts yes\n")
+    before = config.read_bytes()
+    result = run_post_install(_kitty(), _LINUX)
+    reason = "you set clear_all_shortcuts yes, which would clear these keys"
+    assert result.lines == (f"kitty keys not changed: {reason}",)
+    assert config.read_bytes() == before
+    assert (
+        terminal_keys_pending(TERMINAL_KEYS["kitty"], "kitty", "fedora", Path.home(), os.environ)
+        == reason
+    )
+
+
+def test_kitty_clear_all_shortcuts_no_allows_tuning() -> None:
+    scan = scan_kitty("clear_all_shortcuts no\n", _kitty_config())
+    assert not scan.clears_all
+
+
+def test_kitty_include_expands_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    extra = Path.home() / "extra.conf"
+    extra.write_text("map ctrl+shift+k x\n")
+    scan = scan_kitty("include ~/extra.conf\n", tmp_path / "kitty.conf")
+    assert "ctrl+shift+k" in scan.taken
+
+
+def test_kitty_deep_include_chain_stops_at_the_cap(tmp_path: Path) -> None:
+    for index in range(12):
+        following = f"include {index + 1}.conf\n" if index < 11 else "map ctrl+shift+k x\n"
+        (tmp_path / f"{index}.conf").write_text(following)
+    scan = scan_kitty("include 0.conf\n", tmp_path / "kitty.conf")
+    assert (
+        "kitty: partial: include scan stopped at depth 8; maps beyond it are not checked"
+        in scan.reports
+    )
+
+
+def test_kitty_include_file_cap_is_reported(tmp_path: Path) -> None:
+    many = tmp_path / "many"
+    many.mkdir()
+    for index in range(70):
+        (many / f"f{index:02}.conf").write_text("# empty\n")
+    scan = scan_kitty("globinclude many/*.conf\n", tmp_path / "kitty.conf")
+    assert (
+        scan.reports.count(
+            "kitty: partial: include scan stopped at 64 files; maps beyond it are not checked"
+        )
+        == 1
+    )
+
+
+def test_kitty_clear_all_shortcuts_added_after_a_recorded_install_stays_quiet() -> None:
+    run_post_install(_kitty(), _LINUX)
+    config = _kitty_config()
+    config.write_text(config.read_text() + "clear_all_shortcuts yes\n")
+    before = config.read_bytes()
+    assert apply_terminal_keys(
+        TERMINAL_KEYS["kitty"], "kitty", "fedora", Path.home(), os.environ, skip_recorded=True
+    ) == ((), None)
+    assert config.read_bytes() == before
+    assert (
+        terminal_keys_pending(TERMINAL_KEYS["kitty"], "kitty", "fedora", Path.home(), os.environ)
+        is None
+    )
 
 
 def _pending() -> str | None:
