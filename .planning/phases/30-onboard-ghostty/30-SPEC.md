@@ -36,7 +36,7 @@ Ghostty is a catalog entry that a user can install, use and remove on macOS, Lin
 4. **Drift and reconfigure (NTERM-01, tuning)**: A drifted or missing Ghostty keys region shows `≈ apply install tuning` and a reconfigure re-applies it.
    - Current: n/a.
    - Target: the phase 28 behavior holds for the Ghostty row.
-   - Acceptance: in a scratch HOME, deleting the region shows `≈ apply install tuning`; reconfigure restores the bytes; a second reconfigure changes nothing.
+   - Acceptance: in a scratch HOME, a host with no tuning record or a changed region shows `≈ apply install tuning`; reconfigure restores the bytes; a second reconfigure changes nothing *(amended 2026-11-20, needs confirmation: a region deleted after a recorded install stays deleted and quiet, as the phase 28 drift rule 28 D-06 and the phase 29 rows do; phase 30 follows the shared rule)*.
 
 5. **Clean uninstall (NTERM-01, removal)**: In a container, uninstalling Ghostty removes the AppImage, its keys and shell regions and every receipt-recorded path, leaving only documented config.
    - Current: n/a.

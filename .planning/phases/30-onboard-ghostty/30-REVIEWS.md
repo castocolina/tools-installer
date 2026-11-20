@@ -240,3 +240,177 @@ Mutate a loader-valid download method on another tool for the note-scope test. R
 ### Status: Issues Found — fix and re-invoke
 
 No files were changed or scratch artifacts created. Remaining risk: this review is targeted, not an exhaustive execution or live upstream audit.
+
+
+## Lane Log (convergence cycle 2, plans at f5e3dd48)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 19:06 | opencode-referee-one | one-shot probe | OK |
+| 19:06 to 19:09 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, 14 KB, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 2 concerns
+
+| Id | Claim | Verified against | Judgment |
+|---|---|---|---|
+| H1 (30-03) | The plan still contradicts SPEC R4's deleted-region acceptance | `installer/terminal_keys.py:350-361,383-397` (a recorded install whose region is absent returns quietly) and 30-SPEC R4 | Real contradiction in text. DECISION: amend 30-SPEC R4's acceptance (done in this commit, dated 2026-11-20, flagged "needs confirmation"): the contract holds for a host with no record or a changed region; a region deleted after a recorded install stays deleted and quiet, as 28 D-06 and the phase 29 rows do. The plan keeps the shared rule. |
+| H2 (30-03) | The truth says a deleted recorded region stays quiet AND a reconfigure restores it, but reconfigure returns without writing | `installer/terminal_keys.py:350-361` | Real wording defect: the truth must say a reconfigure does NOT restore a deleted recorded region (28 D-06); the restore test uses an edited present region and an unrecorded host. |
+| H3 (30-05) | `FUSE_OK` is still inferred (version output + /dev/fuse + no fallback text), not a mount observation | the plan's `fuse_verdict` | Real: positive evidence is a FUSE mount observed while the AppImage runs: the driver starts `<appimage> --appimage-mount`, reads the mount point it prints, finds that mount point with a `fuse` filesystem type in `/proc/self/mountinfo`, then terminates the process; the verdict takes that observation, the return code and the version line. Without the observation the verdict is `_UNPROVEN`. |
+| H4 (30-05) | A host without `/dev/fuse` cannot reach the extract-only alternative because the script always passes `--device /dev/fuse` and container start failure is infeasible | the plan's container start, `scripts/container-e2e-verify.sh:2771-2793` | Real: add `--device /dev/fuse` only when `/dev/fuse` exists on the host; otherwise start without it, and the FUSE pass prints `_UNPROVEN` naming the missing device while the extract-and-run pass still runs. |
+| H5 (30-06) | The acceptance `grep -c 'disposable container, 30 D-18'` expects 2 but both clauses are cells of one table row, so `grep -c` returns 1 | `tests/test_tool_onboarding_skill.py:141-147` (one row is one line), `grep -c` counts lines | Real: count occurrences (`grep -o ... | wc -l`) or assert the cells separately in the test. |
+| M1 (30-02) | The "every failure is a note" boundary excludes the work before the try; a failed restore contradicts the "never lost" truth; parent directories created by the failed call stay | the plan's helper steps | Real: state a failed restore as a reported partial rollback (not a guarantee), move the path and lexists work inside the boundary, remove only empty parent directories this call created; test a failure after parent creation. |
+| M2 (30-04) | On a resolver move the conflict path removes the old shell region only from the currently resolved file | the plan's conflict branch | Real: the conflict and blocked paths use the same every-default-file strip as the zsh-gone revert; test a resolver move followed by a user command and by a blocked scan. |
+| M3 (30-05) | The scratch-home receipt-path test passes an arbitrary `home` but 30-02's artifacts use `Path.home()` | `tests/conftest.py:285-295` | Real: the test binds `Path.home()` to its home explicitly (monkeypatch HOME) or derives from `Path.home()`. |
+| M4 (30-05) | Extract mode ignores the version command's exit status | the plan's `_run_ghostty` use | Real: require exit 0 in both modes. |
+| M5 (30-06) | The gate accepts impossible dates such as 2026-99-99 | the plan's awk pattern | Real: after the awk match, validate with `date -d <date> +%F` equal to the date; a negative test for an impossible date. |
+| L1 (30-01) | The staged registry comment describes the menu placement before 30-02 implements it | 30-01 line 153 | Accepted: 30-01's comment uses planned wording; 30-02 makes the placement claim. |
+| X1 | Test-run hygiene: no owned TMPDIR for the prescribed pytest and full-suite commands | AGENTS.md scratch rule | Accepted as one objective line: run the targeted pytest and the final gates with `TMPDIR` set to a unique directory created by the executor and removed at the end (its own scratch only). |
+
+## OpenCode Review (opencode-referee-one), cycle 2
+
+Using the plan-review checklist to verify the revised plans against the repository and the prior findings.
+One prior concern remains unresolved: the proposed deleted-region behavior still contradicts the locked acceptance criterion; marking it provisional does not make both behaviors achievable.
+# Phase 30 plan review — convergence cycle 2
+
+**Verdict: Issues found — revise before execution.** The revisions address several cycle 1 findings, notably receipt-specific menu ownership, rollback coverage, multi-file region stripping, and the zsh-only residue baseline. Blocking issues remain in the locked drift contract, container proof, and several prescribed tests and gates.
+
+**Review basis:** GSD · plan archetype. I reread all six plans from disk and checked the material claims below against repository source. This was a targeted source review, not an execution of the plans.
+
+## 30-01
+
+1. **Summary**  
+   Adds the Ghostty registry entry, method keys, community-build note, engine tracer, and digest-mismatch checks.
+
+2. **Findings status**  
+   Cycle 1’s first-method golden and runner-tuple findings are addressed in `.planning/phases/30-onboard-ghostty/30-01-PLAN.md:141-145,155`. The final gate ordering is also clarified at `:203-204`.
+
+3. **Strengths**  
+   The tracer follows the existing digest-before-placement route: `installer/download.py:415-434` fetches and verifies before the raw swap, and `:486-496` raises on mismatch.
+
+4. **Concerns**
+   - **LOW — The staged registry comment describes menu behavior before it exists.** Task 1 requires the comment to say the installer places a menu entry and drops `X-KDE-Shortcuts` (`.planning/phases/30-onboard-ghostty/30-01-PLAN.md:153`), but the implementation does not land until 30-02 (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:223-246`). The intermediate commit is testable but its catalog description is temporarily ahead of behavior.
+
+5. **Suggestions**  
+   Use planned wording in 30-01, then make the placement claim in the commit that implements it.
+
+6. **Risk assessment**  
+   Low in isolation; downstream findings prevent phase approval.
+
+## 30-02
+
+1. **Summary**  
+   Adds AppImage desktop/icon extraction, receipt leaves, uninstall filtering, and temporary-directory handling.
+
+2. **Findings status**  
+   Cycle 1’s other-tool receipt authorization, destructive rollback, and `mkdtemp` error-boundary findings are addressed by the specified own-receipt check and rollback tests (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:187-196,203-204`).
+
+3. **Strengths**  
+   The design uses `artifact_paths` for the shared placement/removal formula; the current function is explicitly the common evidence source (`installer/download.py:284-300`). The receipt writer already limits pre-existing leaves to those previously proven (`installer/receipts.py:500-519`).
+
+4. **Concerns**
+   - **MEDIUM — The “every failure is a note” boundary excludes work performed before the `try`.** The planned helper calculates artifact paths and checks `os.path.lexists` before the stated error boundary (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:204`). More importantly, the two-file rollback can itself fail, which the plan correctly reports, but its truth still promises that a previously existing file is *never* lost or changed (`:33`). A failed restore can leave the newly written icon in place. The test at `:195` acknowledges this case but does not require the resulting state to be described accurately.
+   - **MEDIUM — Temporary directories created for failed menu writes can leave new host directories.** The planned rollback unlinks newly created leaves but does not remove parent directories created by `host.parent.mkdir(...)` (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:204`). This is not equivalent to restoring the pre-call filesystem state and is absent from the failure tests.
+
+5. **Suggestions**  
+   Describe failed restoration as a reported partial rollback rather than a guaranteed restoration. Cover failure after parent creation and remove only directories this invocation created if they are empty.
+
+6. **Risk assessment**  
+   Medium: ordinary ownership handling is much safer, but disk-error recovery still has a documented partial-state case.
+
+## 30-03
+
+1. **Summary**  
+   Adds Ghostty’s resolver, conflict scan, keys region, tuning declaration, drift handling, and multi-file strip.
+
+2. **Findings status**  
+   The cycle 1 earlier-file scan finding is addressed by `blocked` and refusal (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:146,160-161,200`). The resolver-movement strip finding is addressed by `strip_files` and explicit tests (`:210,251`). The deleted-region finding is **not resolved**; it is now recorded as provisional.
+
+3. **Strengths**  
+   The plan explicitly scans both Linux and all four macOS default files and tests user chords in each (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:141-147,198`). Its multi-file strip preserves the existing bound-path check in `_drop_created_config` (`installer/terminal_keys.py:470-495`).
+
+4. **Concerns**
+   - **HIGH — The plan still contradicts the locked deleted-region acceptance.** The SPEC requires deleting the region to show `≈ apply install tuning` and reconfigure to restore it (`.planning/phases/30-onboard-ghostty/30-SPEC.md:36-39`). The plan instead requires a recorded deletion to stay quiet (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:33,245`), matching the current early returns in `installer/terminal_keys.py:350-361,383-397`. An unrecorded host is a different scenario; its new test cannot satisfy the deleted-after-install acceptance. Calling the conflict provisional does not settle which contract execution must meet.
+   - **HIGH — The stated reconfigure outcome is internally inconsistent.** The plan’s truth says a deleted recorded region remains quiet **and a reconfigure restores it** (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:33`), but the existing reconfigure path returns without writing when `recorded and not region_present` (`installer/terminal_keys.py:350-361`). The planned tests only reconfigure an *edited*, present region (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:245-246`).
+
+5. **Suggestions**  
+   Before execution, obtain an explicit amendment reconciling SPEC R4 and 28 D-06, then align the status behavior, reconfigure behavior, and a test that deletes a previously installed region. Do not substitute the unrecorded-host test for that case.
+
+6. **Risk assessment**  
+   High: the current plan cannot meet its own stated behavior and the locked acceptance simultaneously.
+
+## 30-04
+
+1. **Summary**  
+   Adds Linux zsh sync, user-command and include reporting, shell-region reversion, and status tests.
+
+2. **Findings status**  
+   Cycle 1’s unchecked-earlier-file and resolver-movement revert findings are addressed in the planned scan and revert walk (`.planning/phases/30-onboard-ghostty/30-04-PLAN.md:123-124,138-140`).
+
+3. **Strengths**  
+   The planned `shlex.join` is appropriate for Ghostty’s shell-command boundary, while the existing `_safe_executable` rejects relative paths and control characters (`installer/terminal_shell.py:160-167`).
+
+4. **Concerns**
+   - **MEDIUM — A resolver move can leave an active old shell region during an ordinary sync.** The plan removes a previous region only from the *currently resolved* path when it encounters a user command or blocked scan (`.planning/phases/30-onboard-ghostty/30-04-PLAN.md:122-123,138`). It walks all default files only when zsh disappears (`:140`). If an earlier sync wrote to legacy `config`, then `config.ghostty` becomes preferred and a user command is added, the old installer region remains in the legacy file despite the plan’s promise that an existing installer region is removed. Depending on loaded settings, this can also leave stale configuration after the conflict is reported.
+
+5. **Suggestions**  
+   Define safe removal of old owned shell regions from all applicable files during the conflict path, and test a resolver move followed by a user command and by a blocked scan.
+
+6. **Risk assessment**  
+   Medium: zsh removal is covered, but the normal conflict transition remains incomplete.
+
+## 30-05
+
+1. **Summary**  
+   Builds the disposable-container driver and harness verb; the orchestrator runs FUSE and extract-and-run lifecycle checks.
+
+2. **Findings status**  
+   The baseline adjustment and `finally` cleanup address the main cycle 1 concerns (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:31-32,153-158`). FUSE checking is improved, but the proposed conditions still do not prove a mount.
+
+3. **Strengths**  
+   The target reuses the existing landing teardown, which removes the named container and verifies it is gone (`scripts/container-e2e-verify.sh:2745-2764`). It also distinguishes an unproven FUSE result in its recorded output (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:24,30`).
+
+4. **Concerns**
+   - **HIGH — `FUSE_OK` is still an inference, not evidence of a FUSE mount.** The proposed predicate requires successful version output, `/dev/fuse` existence, and absence of one fallback diagnostic (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:127,155`). Those observations do not establish that the process actually mounted the AppImage; an alternate fallback path or diagnostic could produce the same result. Yet 30-06 publishes “once with FUSE” from this verdict (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:119`).
+   - **HIGH — A host without `/dev/fuse` cannot reach the accepted extract-only alternative.** The script always starts its sole container with `--device /dev/fuse` (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:203-207`). Container startup occurs inside `landing_stage`, which exits as infeasible on failure (`scripts/container-e2e-verify.sh:2771-2782,2791-2793`). If the host has no device to pass, neither lifecycle pass runs, so the defined `fuse: UNPROVEN, extract-and-run proven` path cannot be reached.
+   - **MEDIUM — The scratch-home receipt-path test does not match the planned path formula.** The test passes an arbitrary `home` and expects all artifacts relative to it (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:141,152`), but 30-02’s planned menu artifacts use `Path.home()` rather than that argument (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:203`). The suite supplies a separate per-test HOME (`tests/conftest.py:285-295`), so unless the test explicitly makes `Path.home()` equal its supplied `home`, `relative_to(home)` fails.
+   - **MEDIUM — Extract-mode version success ignores the command exit status.** `_run_ghostty` returns the code, but the install verdict takes only the output line; only FUSE mode passes the code to `fuse_verdict` (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:125-127,157-158`). A process that prints the expected version and exits nonzero can satisfy the extract-mode version check.
+
+5. **Suggestions**  
+   Require observable mount evidence before `FUSE_OK`; otherwise retain `UNPROVEN`. Provide a no-device container route for extract-only proof. Bind the path test’s HOME explicitly, and require zero exit status for the version command in both modes.
+
+6. **Risk assessment**  
+   High: the mandatory evidence gate can either overstate FUSE proof or be unreachable on a relevant host configuration.
+
+## 30-06
+
+1. **Summary**  
+   Gates catalog evidence wording on the orchestrator result and adds Ghostty consistency guards.
+
+2. **Findings status**  
+   Cycle 1’s invalid note mutation is corrected to use a loader-valid `github_release` method (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:152-154`; `installer/registry.toml:91-117`). The PASS gate now checks a fixed date-shaped line, though it does not validate whether the date is a real calendar date.
+
+3. **Strengths**  
+   The plan distinguishes the two evidence wordings and stops before edits when its gate fails (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:63-64,117-120`).
+
+4. **Concerns**
+   - **HIGH — A mandatory acceptance count cannot pass as written.** Both evidence clauses are appended to cells of the same Ghostty table row (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:120`), but the acceptance command expects `grep -c 'disposable container, 30 D-18'` to return **2** (`:133`). `grep -c` counts matching *lines*, not occurrences; a single table row yields 1. The skill’s table parser also treats each row as one line (`tests/test_tool_onboarding_skill.py:141-147`).
+   - **MEDIUM — The gate accepts impossible dates.** Its `[0-9]` pattern accepts, for example, `2026-99-99`, although the plan says a malformed ISO date is blocked (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:24,117`). The date is subsequently published in the registry comment (`:119`).
+
+5. **Suggestions**  
+   Count occurrences or assert the two parsed cells separately. Validate the date as an actual ISO calendar date and add a negative gate test for an impossible date.
+
+6. **Risk assessment**  
+   High for execution: the stated acceptance check is guaranteed to disagree with the required one-line table row.
+
+## Cross-plan assessment
+
+- **Execution sequencing:** The plans now state that 30-02 and 30-03 run serially in the shared checkout (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:78`; `.planning/phases/30-onboard-ghostty/30-03-PLAN.md:89`). Ensure the actual orchestrator honors that instruction rather than dispatching both wave-2 plans concurrently.
+- **Evidence dependency:** 30-06’s wording is only as strong as 30-05’s proof. Fix the FUSE verdict and no-device route before allowing the evidence gate to publish a FUSE claim.
+- **Test-run hygiene:** The prescribed pytest and full-suite commands do not specify an owned `TMPDIR` or cleanup procedure, despite the mandatory host scratch rule in the supplied `AGENTS.md`. Add an execution wrapper that creates a unique run directory, exports `TMPDIR`, and removes it on every exit path.
+- **Previous findings:** H1–H6 and M1–M2/M4–M6 have concrete revisions. M3 remains a contract conflict; H7 is only partially addressed. The PASS parser’s date *shape* is fixed, but calendar validity remains unchecked.
+
+### Status: Issues Found — fix and re-invoke
+
+No files were changed or scratch artifacts created. Tests, upstream assets, real Ghostty, and containers were not run; hardware and live FUSE behavior remain unverified.
