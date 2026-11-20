@@ -45,8 +45,8 @@
     "ui_review": true,
     "use_worktrees": true,
     "plan_review_convergence": true,
-    "cross_ai_execution": false,
-    "cross_ai_command": "pi -p --model router-env/my-coding --no-session",
+    "cross_ai_execution": true,
+    "cross_ai_command": "pi -p --model router-env/my-coding-lite --no-session",
     "cross_ai_timeout": 3600,
     "_auto_chain_active": false
   },
