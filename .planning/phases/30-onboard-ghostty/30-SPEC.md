@@ -20,7 +20,7 @@ Ghostty is a catalog entry that a user can install, use and remove on macOS, Lin
 
 1. **Install routes (NTERM-01, install)**: The entry installs from the official cask on macOS into a user-writable app location with its CLI linked into `~/.local/bin` (or says why not, SKILL-04); from a digest-verified community AppImage on Linux and Bazzite, without a reboot, with "community build" in its row and install note; and with pacman on Arch.
    - Current: no entry.
-   - Target: one `[[tool]]` with a cask method (macos), an asset method per architecture (debian, fedora incl. Bazzite) carrying `version` and `sha256`, and a pacman method, plus the dated `# Verified` comment.
+   - Target: one `[[tool]]` with a cask method (macos), a `tarball` method per architecture with `raw = true` (debian, fedora incl. Bazzite) carrying `version` and `sha256` *(amended 2026-11-19, 30 D-02: `github_release` takes no pin fields; `raw` becomes an allowed key on `tarball`)*, and a pacman method, plus the dated `# Verified` comment.
    - Acceptance: registry tests load the entry and its methods; the sha256 of each asset equals the GitHub digest above (`make verify-registry` read-only passes); the row text and install note contain "community build" for the AppImage methods; an install in a disposable Bazzite-like container leaves a runnable `ghostty` path and no reboot request.
 
 2. **zsh on Linux (NTERM-01, shell)**: On Linux, Ghostty launches zsh through the terminal shell sync.
@@ -31,7 +31,7 @@ Ghostty is a catalog entry that a user can install, use and remove on macOS, Lin
 3. **Keys through the shared mechanism (NTERM-01, keys)**: Ghostty has a row in the shared keys mechanism that meets the terminal rules: Ctrl+Shift+K clears screen and scrollback on Linux, Cmd+K on macOS, Option+Left/Right word navigation on macOS without `macos-option-as-alt`, and new tabs, windows and splits in the current directory; on macOS the file written is the one Ghostty actually reads, and nothing is written where Ghostty's own default already meets a rule.
    - Current: no row.
    - Target: a row with golden files for both OSes and a declared same-directory field.
-   - Acceptance: golden-file tests on both OSes pass; a regression test asserts `macos-option-as-alt` is absent; a test shows the macOS write goes to the config path chosen in discuss and that a rule already met by the vendor default writes no line.
+   - Acceptance: golden-file tests on both OSes pass; a regression test asserts `macos-option-as-alt` is absent; a test shows the macOS write goes to the config path chosen in discuss and that a rule already met by the vendor default writes no line *(amended 2026-11-19, 30 D-11: the macOS clear writes one keybind sending Ctrl+L, because Ghostty's default Cmd+K action does not send it; word navigation and same-directory write nothing)*.
 
 4. **Drift and reconfigure (NTERM-01, tuning)**: A drifted or missing Ghostty keys region shows `≈ apply install tuning` and a reconfigure re-applies it.
    - Current: n/a.
@@ -48,6 +48,7 @@ Ghostty is a catalog entry that a user can install, use and remove on macOS, Lin
 **In scope:**
 - The Ghostty registry entry (cask, AppImage per architecture, pacman), its postinstall row, shell-sync branch and keys row, removal, tests and container checks.
 - The macOS app location and CLI link per SKILL-04.
+- *Amended 2026-11-19 (30 D-02, D-05, D-07, D-08, D-13):* `raw` as an allowed key on `tarball`, an optional per-method install `note`, the AppImage's menu entry and icon (receipt leaves, removed on uninstall), a top-of-file placement option for the owned-region helper, and `platform_os` in the row's `config_path`.
 
 **Out of scope:**
 - iTerm2 and the Herdr desktop app — phase 31.
