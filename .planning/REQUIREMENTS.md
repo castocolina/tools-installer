@@ -35,7 +35,7 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 ### New terminals (NTERM)
 
 - [ ] **NTERM-01**: Ghostty is in the catalog: the official cask on macOS (user-writable app location), a digest-verified community AppImage on Linux and Bazzite with a visible "community build" note, and pacman on Arch; its shell syncs to zsh on Linux and it meets SKILL-01 through its owned keys region.
-- [ ] **NTERM-02**: iTerm2 is in the catalog as a macOS-only cask with an installer-owned Dynamic Profile that sets Option as Esc+, the KEYS-03 clear, new tabs, windows and panes in the current directory, and the requested color scheme; the profile is made the default profile, and an uninstall restores the previous default.
+- [ ] **NTERM-02**: iTerm2 is in the catalog as a macOS-only cask with an installer-owned Dynamic Profile that gives Option+Left/Right word navigation through key-map rows *(amended 2026-11-19, 31 D-08, needs confirmation: Option itself stays Normal; Esc+ on Option is the forbidden global switch)*, the KEYS-03 clear, new tabs, windows and panes in the current directory, and the requested color scheme; the profile is made the default profile, and an uninstall restores the previous default.
 - [ ] **NTERM-03**: The Herdr desktop app (`herdrdev/herdr-app`) is in the catalog as an entry distinct from the `herdr` multiplexer: a user-scope `install.sh` on Linux and the cask on Apple Silicon macOS; it meets SKILL-01 through its own keys files, displacing its Linux Ctrl+Shift+K picker binding with an install note.
 
 ### Other onboardings (ONB)

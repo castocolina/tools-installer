@@ -14,14 +14,15 @@ A macOS user gets iTerm2 with an installer-owned default profile that meets the 
 - Live facts (2026-11-19, read-only): Homebrew cask `iterm2` is at 3.7.8 and needs macOS ≥ 13; cask `herdr-app` is at 0.1.16, arm64 only, and declares an `app` and a `binary` artifact; `https://releases.herdr.dev/app/install.sh` answers HTTP 200 as a shell script; `herdrdev/herdr-app` publishes no GitHub release (the releases endpoint returns 404), so its Linux route is the vendor script, not `github_release`.
 - Owner decisions 2026-11-16: "Herdr IDE" is the Herdr desktop app (`herdrdev/herdr-app`), never the `herdr` multiplexer; the iTerm2 profile becomes the default profile and an uninstall restores the previous default; new tabs, windows and panes open in the current directory on every terminal; iTerm2 items 4 and 5 ("Show Focus Cursor", the agent-collaboration extension) stay future until the owner names the products.
 - Both need a whole-file JSON mode the shared keys mechanism (phase 28) does not have: an iTerm2 Dynamic Profile and the herdr app's `keys.json` / `keys.macos.json`. Phase 30 (Ghostty) lands first and both extend the same table, so the phases run in sequence.
+- *Amended 2026-11-19 (31 D-01, D-14):* the herdr app reads one user keys file, `~/.config/herdr-app/keys.json` on every OS (`keys.macos.json` is only the default compiled into macOS builds) and it creates and owns that file, so the app needs a per-key ownership variant, not a whole-file mode; only the iTerm2 profile is a whole file.
 - Research flags for discuss: iTerm2's Keyboard Map encoding and default-profile behavior (capture on a Mac or defer to UAT), and the herdr app's keys path and `install.sh` footprint.
 
 ## Requirements
 
-1. **iTerm2 install and Dynamic Profile (NTERM-02, profile)**: iTerm2 installs from the cask on macOS only (its Linux and other rows read unavailable), and the installer writes one owned Dynamic Profile that sets Option as Esc+, clears screen and scrollback on Cmd+K (sending Ctrl+L), opens new tabs, windows and panes in the current directory, and uses the requested color scheme.
+1. **iTerm2 install and Dynamic Profile (NTERM-02, profile)**: iTerm2 installs from the cask on macOS only (its Linux and other rows read unavailable), and the installer writes one owned Dynamic Profile that gives Option+Left/Right word navigation through two key-map rows with Option itself left Normal *(amended 2026-11-19, 31 D-08, needs confirmation: Esc+ on both Option keys is iTerm2's form of the global Option-as-Alt switch forbidden by the owner's Spanish-layout rule)*, clears screen and scrollback on Cmd+K (sending Ctrl+L), opens new tabs, windows and panes in the current directory, and uses the requested color scheme.
    - Current: no iTerm2 entry or profile writer.
    - Target: a `cask` entry with `os = ["macos"]`, a postinstall row, and a pure generator for the profile JSON.
-   - Acceptance: golden-file test of the profile JSON passes on both OSes; the entry has no Linux method and reads unavailable there; the profile contains Option-as-Esc+ for the left and right Option keys and no other key-mapping change.
+   - Acceptance: golden-file test of the profile JSON passes on both OSes; the entry has no Linux method and reads unavailable there; the profile's key map holds exactly the Cmd+K row, the two Option+arrow rows and the previous default's merged rows, and Option itself stays Normal.
 
 2. **iTerm2 default profile and restore (NTERM-02, default)**: After an iTerm2 install the installer's profile is the default profile; an uninstall deletes the profile and restores the previous default.
    - Current: n/a.
@@ -33,12 +34,12 @@ A macOS user gets iTerm2 with an installer-owned default profile that meets the 
    - Target: a new entry (id chosen in discuss) with a `script` method (linux) whose `paths` name only the app's own files, and a `cask` method with `arch = ["arm64"]`.
    - Acceptance: registry tests load both entries with distinct ids; an Intel-macOS fixture reads unavailable; in a container, installing the app then removing it leaves the multiplexer's binary and `~/.config/herdr` byte-identical, and the reverse.
 
-4. **Herdr app keys meet the defaults (NTERM-03, keys)**: The Herdr desktop app's keys files meet the terminal defaults on both OSes; on Linux Ctrl+Shift+K clears and the displaced picker binding is named in the install note; a binding the user defined is kept and reported `partial: kept yours`.
+4. **Herdr app keys meet the defaults (NTERM-03, keys)**: The Herdr desktop app's keys file (`~/.config/herdr-app/keys.json`, the same file on every OS) meets the terminal defaults on both OSes; on Linux Ctrl+Shift+K clears and the displaced picker binding is named in the install note; a binding the user defined is kept and reported `partial: kept yours`.
    - Current: n/a.
    - Target: a JSON-mode row in the keys mechanism writing the app's keys files only where a rule is not already met.
    - Acceptance: golden files for both OSes pass; a fixture with a user binding on the same chord keeps it and reports `partial: kept yours`; the install note names the displaced picker binding.
 
-5. **Pending and strip for the JSON-mode rows (KEYS-02 for both new rows)**: A drifted iTerm2 profile or herdr app keys file shows `≈ apply install tuning`, a reconfigure re-applies it, and an uninstall strips exactly what the installer wrote.
+5. **Pending and strip for the JSON-mode rows (KEYS-02 for both new rows)**: A drifted iTerm2 profile or herdr app keys file shows `≈ apply install tuning`, a reconfigure re-applies it, and an uninstall strips exactly what the installer wrote *(amended 2026-11-19, 31 D-03: a deleted iTerm2 profile whose default setting still names it reads `≈`; a herdr-app owned key the user removed after a recorded install is the user's choice)*.
    - Current: the mechanism has owned-region rows only.
    - Target: the JSON-mode rows implement check, apply and strip.
    - Acceptance: in a scratch HOME, editing or deleting each file shows `≈ apply install tuning`; reconfigure restores the bytes; uninstall removes the profile (iTerm2) or only the owned keys (herdr app) and leaves user keys in place.
@@ -84,9 +85,6 @@ A macOS user gets iTerm2 with an installer-owned default profile that meets the 
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
-| adjacency | R1 | ✅ covered | Acceptance 1: the profile holds Option-as-Esc+ for the left and right Option keys only; no neighbouring key mapping changes (golden file) |
-| empty | R1 | ✅ covered | Acceptance 1: with no DynamicProfiles directory the installer creates it; an existing empty one gets the one file |
-| ordering | R1 | ✅ covered | Acceptance 1: the generated JSON uses sorted keys, so the golden bytes are order-stable |
 | concurrency | R1 | 🧪 backstop | held-out test: interleaved applies or installs in a scratch HOME or container leave one profile or keys file, via the shared atomic write |
 | adjacency | R2 | ✅ covered | Acceptance 2: a previous default that is itself a Dynamic Profile is restored by its identity, not by position |
 | empty | R2 | ✅ covered | Acceptance 2: the before state 'no default set' restores to 'no default set' (golden) |
@@ -94,11 +92,14 @@ A macOS user gets iTerm2 with an installer-owned default profile that meets the 
 | empty | R3 | ✅ covered | Acceptance 3: Intel macOS and an unsupported arch read unavailable instead of an empty install |
 | encoding | R3 | ✅ covered | Acceptance 3: entry ids compared as exact lowercase strings; `herdr` and the app id never collide (registry uniqueness test) |
 | concurrency | R3 | 🧪 backstop | held-out test: interleaved applies or installs in a scratch HOME or container leave one profile or keys file, via the shared atomic write |
-| empty | R4 | ✅ covered | Acceptance 5: a missing keys file is created with only owned keys; an existing empty file is extended |
+| adjacency | R4 | ✅ covered | Acceptance: golden or container check named in the requirement's acceptance (31 D-17, D-18) |
+| empty | R4 | ✅ covered | Acceptance 5 (amended 31 D-15): a missing keys file is seeded with the app's vendor default for that OS and version plus the owned key; an existing empty file is extended |
 | encoding | R4 | ✅ covered | Acceptance 5: golden JSON bytes pin escapes and key spelling; a user binding is matched by its normalized chord |
+| ordering | R4 | ✅ covered | Acceptance: golden or container check named in the requirement's acceptance (31 D-17, D-18) |
 | concurrency | R4 | 🧪 backstop | held-out test: interleaved applies or installs in a scratch HOME or container leave one profile or keys file, via the shared atomic write |
 | adjacency | R5 | ✅ covered | Acceptance 6: user keys beside the owned keys survive apply and strip |
 | empty | R5 | ✅ covered | Acceptance 6: a deleted file shows `≈ apply install tuning` and reconfigure recreates it |
+| encoding | R5 | ✅ covered | Acceptance: golden or container check named in the requirement's acceptance (31 D-17, D-18) |
 | ordering | R5 | ✅ covered | Acceptance 6: owned keys are located by id, so user key order never matters (shuffled fixture) |
 | idempotency | R5 | ✅ covered | Acceptance 6: a second reconfigure leaves the bytes unchanged |
 | concurrency | R5 | 🧪 backstop | held-out test: interleaved applies or installs in a scratch HOME or container leave one profile or keys file, via the shared atomic write |
