@@ -611,14 +611,23 @@ Plans:
 **Revisit when:** the full suite passes about 3 minutes, or test time passes about 20% of an autonomous run. A commit-stage test hook would contradict `tests/test_hook_wiring.py` (tests are push-stage only), so any design is an advisory `make test-affected` first.
 **Depends on:** none.
 
-### Phase 999.25: Phase 27 follow-ups: onboarding skill evals and structure, verdict test tidy (BACKLOG)
+### Phase 999.25: Phase 27 follow-ups: onboarding skill evals and structure (BACKLOG)
 
-**Goal:** The tool-onboarding skill gains the pieces the skill-judge scored lowest, and the verdict tests lose their duplication, without changing a rule or a table row.
+**Goal:** The tool-onboarding skill (the document under `.claude/skills/`, not the project's pytest suite) gains the pieces the skill-judge scored lowest, without changing a rule or a table row.
 **Requirements:** TBD
-**Source:** Phase 27 skill-judge verdicts (final 73.6%, grade C, D7 = 2 of 15) and code review `27-REVIEW.md` (deferred IN-04, IN-05, IN-06):
+**Source:** Phase 27 skill-judge verdicts (final 73.6%, grade C, D7 = 2 of 15):
 - add `evals/evals.json` and `evals/trigger-queries.json` to the skill with shape tests, as the catalog-audit skill has (the largest single loss; new files under the gitignored `.claude/` need `git add -f`);
 - resolve the contradiction in step 2 between "the catalog installs no skills" and the advice to symlink into a host's skills directory;
 - move the terminal-only block (defaults, closed table, Conflicts, macOS testing) to a gated `references/` file and repoint `tests/test_tool_onboarding_skill.py`, which cuts the always-loaded length (331 lines);
-- cut step 1 to one line and state the never-asked rule once;
-- have `parse_verdict` check `max` against `RUBRIC_MAX` for every verdict, share one verdict fixture builder in `tests/skill_verdicts.py`, and make `rule_items` reuse `_items`.
+- cut step 1 to one line and state the never-asked rule once.
+**Depends on:** Phase 27.
+
+### Phase 999.26: Skill-verdict test tidy (BACKLOG)
+
+**Goal:** The pytest helpers that compare skill-judge verdicts lose their duplication and check the rubric maxima in one place. This is project test code only; it does not change the skill or any verdict.
+**Requirements:** TBD
+**Source:** Phase 27 code review `27-REVIEW.md`, deferred findings IN-04, IN-05 and IN-06:
+- have `parse_verdict` in `tests/skill_verdicts.py` check `max` against `RUBRIC_MAX` for every verdict, so the catalog-audit tests get the check too (`verdict_regressions` does it for tool-onboarding only today);
+- share one verdict fixture builder in `tests/skill_verdicts.py` instead of the two near-identical ones in the two test modules, which also removes the four aliased import lines;
+- make `rule_items` in `tests/test_tool_onboarding_skill.py` reuse `_items`.
 **Depends on:** Phase 27.

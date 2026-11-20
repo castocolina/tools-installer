@@ -37,8 +37,8 @@ status: all_fixed
 
 - **IN-02** (detector phrasings): accepted. The checks are heuristics by design ("test plus judgment", plan 27-02 ledger); widening them would flag legitimate text.
 - **IN-03** (`_phase_dir` globs directories): rejected. It would reopen D-07, decided in the discuss step; the case needs an unrelated `27-*` entry.
-- **IN-04** (shared parser does not check `max`): deferred to a backlog item. A stricter shared parser changes the catalog-audit tests' behaviour; `verdict_regressions` already compares the maxima for this skill.
-- **IN-05, IN-06** (duplicated fixture builder, repeated item loop): deferred to the same backlog item; code tidiness only.
+- **IN-04** (shared parser does not check `max`): deferred to backlog 999.26. A stricter shared parser changes the catalog-audit tests' behaviour; `verdict_regressions` already compares the maxima for this skill.
+- **IN-05, IN-06** (duplicated fixture builder, repeated item loop): deferred to backlog 999.26; code tidiness only.
 - **IN-07** (`make validate` after a plan repeats the last commit hook): rejected. The owner asked for `make validate` after a plan (2026-11-20).
 
 ## Verification

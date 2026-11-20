@@ -84,9 +84,9 @@ findings:
 | IN-01 | info | fixed | fixed in 54cf2674 |
 | IN-02 | info | skipped | accepted: heuristic detectors by design (test plus judgment); widening them would flag legitimate extras text (27-02 ledger) |
 | IN-03 | info | skipped | rejected: reopens D-07, decided in the discuss step; needs an unrelated `27-*` entry to bite |
-| IN-04 | info | deferred | backlog 999.25: the shared parser would also check `max` for catalog-audit verdicts; `verdict_regressions` already does it for this skill |
-| IN-05 | info | deferred | backlog 999.25: share the verdict fixture builder; tidiness only |
-| IN-06 | info | deferred | backlog 999.25: dedupe `rule_items`; tidiness only |
+| IN-04 | info | deferred | backlog 999.26: the shared parser would also check `max` for catalog-audit verdicts; `verdict_regressions` already does it for this skill |
+| IN-05 | info | deferred | backlog 999.26: share the verdict fixture builder; tidiness only |
+| IN-06 | info | deferred | backlog 999.26: dedupe `rule_items`; tidiness only |
 | IN-07 | info | skipped | rejected: the owner asked for `make validate` after a plan (2026-11-20) |
 | IN-08 | info | fixed | fixed in 6b4de439 |
 
