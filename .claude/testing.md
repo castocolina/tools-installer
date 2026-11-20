@@ -46,6 +46,14 @@ Tests run with `pytest` and coverage via `make test`. Configuration lives in
   targeted tests for what you edited; after a plan, run `make validate` and `make test`
   once each (see AGENTS.md).
 
+### Test-first inside one green commit
+- Write the failing test first and run it to see it fail, then make it pass, but commit
+  the test and the code together: this repo never commits a red tree. Keep the failing run's
+  output in the plan SUMMARY as the RED evidence.
+- GSD plans are therefore `type: execute`, not `type: tdd`. The `type: tdd` end-of-phase
+  review (`tdd.review-checkpoint`, blocking while `workflow.tdd_mode` is true) wants a
+  `test(<plan>):` commit followed by a `feat(<plan>):` commit, which means a red commit.
+
 ## Examples
 
 ### Avoid
