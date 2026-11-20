@@ -414,3 +414,178 @@ One prior concern remains unresolved: the proposed deleted-region behavior still
 ### Status: Issues Found — fix and re-invoke
 
 No files were changed or scratch artifacts created. Tests, upstream assets, real Ghostty, and containers were not run; hardware and live FUSE behavior remain unverified.
+
+
+## Lane Log (convergence cycle 3, plans at abeae181)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 19:56 | opencode-referee-one | one-shot probe | OK |
+| 19:56 to 19:59 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used. The referee's own first finding (30-01/30-02 tracer one-artifact assertion) was withdrawn by the reviewer in the same message and is not counted.
+
+## Orchestrator verification of the cycle 3 concerns
+
+Cycle 3 is the convergence cap: after it the run fixes and executes when fewer than four critical and HIGH findings remain (owner rule). Real HIGH: 3 (H1, H4, H5). Rejected: 2 (H2, H3).
+
+| Id | Claim | Verified against | Judgment |
+|---|---|---|---|
+| H1 (30-01) | The method-order test applies `pinned_url` to every platform's method, but `pinned_url` needs a `url` parameter that pacman and cask methods lack | `installer/download.py:167-175` (`pinned_url(method)` renders a tarball URL) and 30-01 plan line 143 | Real: compare `pinned_url` only for tarball methods and `(kind, package or cask)` for the others. |
+| H2 (30-03) | SPEC R4 still requires missing-region repair while the plan forbids it for a recorded deletion | 30-SPEC R4 as amended 2026-11-20 at edf24ed8 | REJECTED as a repeat: the contradiction was resolved by an explicit, dated SPEC amendment flagged "needs confirmation", exactly as phase 28 (R3) and phase 29 (Konsole) did. The reviewer reads the pre-amendment sentence; the amendment is on the same line. The owner confirmation list carries it. No plan change. |
+| H3 (30-03) | The keys scan does not follow `config-file` includes in an earlier default file, so our later binding could override an included one | 30-CONTEXT D-10 (locked: a `config-file` include is not followed, write anyway and add a `partial:` line saying included files were not checked); research line 267 (`config-file` entries load after the file that names them, Config.zig v1.4.0:2578-2605) | REJECTED: D-10 is a locked decision that applies to includes in general, and the plan already reports the partial line; the research shows included files are replayed after the file naming them, so an included binding does not lose silently to ours without the partial note. Reopening D-10 is the owner's call (it is on the confirmation list). No plan change. |
+| H4 (30-05) | `install_one` runs before `run_lifecycle`, so a failed install that already placed artifacts bypasses the cleanup and residue diagnosis | `tests/e2e_landing_driver.py:412-431` (`install_one` raises for any non-INSTALLED outcome) | Real: install and every later step run under the cleanup boundary; a failed install still triggers uninstall and the residue diagnosis. |
+| H5 (30-05) | The removal verdict compares only before and after uninstall; SPEC R5 requires the after-install listing and the difference to equal the receipt paths plus the regions | 30-SPEC R5 acceptance, the plan's verdict | Real: capture before-install, after-install and after-uninstall listings; the verdict requires (after-install minus before-install) minus receipt paths and the two regions to be empty, the after-uninstall state to equal the baseline plus the allowlist, and seeded user content in `~/.config/ghostty` to survive. |
+| M1 (30-01) | The desktop-id pattern allows `a..b` but the threat register claims `..` is rejected | 30-01 plan lines 205 and 246 | Real wording defect: reject consecutive dots in the pattern (smallest) and keep the claim. |
+| M2 (30-02) | A destination swapped for a symlink between the ownership check and the write is followed by `atomic_write_bytes` | `installer/atomic.py:36-52` | Real, narrow: refuse a symlink destination immediately before each write (a note, never a write through it) and test a destination swapped for a symlink after the check. |
+| M3 (30-04) | A target-read failure returns before the multi-file sweep | the plan's `_sync_ghostty` order, `installer/atomic.py:94-102` | Real: run the non-target sweep before reading the target, or independent of its failure; test an unreadable target with a readable old region. |
+| M4 (30-05) | The region readback verdict ignores the command exit codes | the plan's `_run_ghostty` use | Real: require exit 0 for both readback commands; test a nonzero exit with matching output. |
+| M5 (30-06) | 30-01 pins the comment block at 40 lines, 30-06 allows 55 and may not edit the old test | 30-01 line 145, 30-06 lines 28, 76, 91-92 | Real: carry the 40-line limit as the effective limit in 30-06 (its paragraph must keep the block at 40 lines or fewer). |
+| X1 | Scratch cleanup is only "at the end" | AGENTS.md scratch rule | Accepted: each plan's scratch rule becomes an exit-safe wrapper (`trap 'rm -rf "$RUNDIR"' EXIT`) and a space check before the heavy run. |
+
+## OpenCode Review (opencode-referee-one), cycle 3
+
+Using the plan-review checklist to check the current six plans against the source and the previous findings.
+- **HIGH — The menu-integration commit leaves the earlier engine tracer’s one-artifact assertion unchanged.** Location: `.planning/phases/30-onboard-ghostty/30-01-PLAN.md:146`, `.planning/phases/30-onboard-ghostty/30-02-PLAN.md:95,243-255`. Required: update the tracer and its runner for the menu step in the same commit, while retaining a meaningful receipt assertion. Why: the new behavior changes the receipt and invokes extraction, but 30-02 prohibits editing existing tests.
+Correction: the earlier tracer uses a runner that does not extract the menu files, so the planned helper should report a menu warning and leave its one-artifact assertion intact. I am withdrawing that finding.
+# Phase 30 plan review — convergence cycle 3
+
+**Verdict: Issues found — revise before execution.** The revisions address several cycle 2 findings, including the shell-region conflict sweep, the conditional FUSE-device argument, the version exit-code check, and the skill-row occurrence count. Blocking issues remain in the locked drift contract, conflict scanning, the install tracer, and the container proof.
+
+### Document Type
+
+GSD · implementation plan
+
+## 30-01
+
+1. **Summary**  
+   Adds the Ghostty catalog entry, loader keys and validation, community-build note, engine tracer, and digest-mismatch tests.
+
+2. **Findings status**  
+   The cycle 2 staged-comment concern is addressed with planned wording at `.planning/phases/30-onboard-ghostty/30-01-PLAN.md:84,155`.
+
+3. **Strengths**  
+   The proposed raw-tarball route uses the existing digest-before-placement path: `installer/download.py:415-434` verifies the downloaded asset before replacing the raw binary. The new keys are added to the correct method sets, currently defined at `installer/model.py:69-95`.
+
+4. **Concerns**
+   - **HIGH — The method-order test calls a tarball-only URL helper on non-download methods.** `.planning/phases/30-onboard-ghostty/30-01-PLAN.md:143` requires the same `pinned_url` comparison for *every* platform, including Arch’s pacman method and macOS’s cask method. `installer/download.py:167-175` requires a `url` parameter, which those methods do not have. The prescribed test therefore raises rather than proving ordering.
+   - **MEDIUM — The desktop-ID rule and its threat claim disagree.** The pattern specified at `.planning/phases/30-onboard-ghostty/30-01-PLAN.md:205` permits an ID such as `a..b`, while the threat register at `:246` says it rejects `..`. The fixed suffixes prevent that example from being a path traversal, but the documented validation claim is inaccurate.
+
+5. **Suggestions**  
+   Compare rendered URLs only for tarball methods; compare the relevant package or cask parameters for the other routes. Either reject consecutive dots or narrow the threat claim to the traversal forms actually refused.
+
+6. **Risk Assessment**  
+   High for execution: the prescribed ordering test cannot pass as written.
+
+## 30-02
+
+1. **Summary**  
+   Adds AppImage menu extraction, receipt leaves, ownership checks, rollback, and uninstall handling.
+
+2. **Findings status**  
+   Cycle 2’s boundary and rollback concerns are substantially addressed: the revised plan includes path calculation and temporary-directory creation in the error boundary and describes rollback as best effort (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:34,199-202,210`).
+
+3. **Strengths**  
+   The tool’s own previous receipt is the replacement authority (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:35,191-192`), consistent with the receipt writer’s pre-existing-leaf safeguards in `installer/receipts.py:500-519`.
+
+4. **Concerns**
+   - **MEDIUM — The plan can replace a file that changes after its ownership and backup checks.** The helper checks existence and reads backups before calling `atomic_write_bytes` (`.planning/phases/30-onboard-ghostty/30-02-PLAN.md:210`). That function resolves a symlink at write time and replaces its target (`installer/atomic.py:36-52`). A file or symlink substituted between the check and write can therefore be overwritten despite not being the file checked. The planned symlink test covers extraction input, not this destination race.
+
+5. **Suggestions**  
+   Bind authorization to the destination identity at commit time, or use a safe no-follow/compare-before-commit approach appropriate to these leaves. Add a test that swaps the destination after the check and verifies that the user’s replacement remains untouched.
+
+6. **Risk Assessment**  
+   Medium: normal ownership and rollback paths are much better specified, but the promised user-file protection has a time-of-check/time-of-use gap.
+
+## 30-03
+
+1. **Summary**  
+   Adds Ghostty config resolution, conflict scanning, the keys row, drift behavior, and multi-file stripping.
+
+2. **Findings status**  
+   The cycle 2 internal claim that a deleted region is both quiet and restored has been corrected in the plan (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:33,246-248`). The underlying locked-requirement conflict remains: the amendment is explicitly marked as needing confirmation.
+
+3. **Strengths**  
+   The plan scans both Linux files and all four macOS defaults, and refuses an unscannable earlier file (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:140-148,160-162`). Its recorded-deletion behavior matches the existing early returns in `installer/terminal_keys.py:350-361,386-397`.
+
+4. **Concerns**
+   - **HIGH — The SPEC still requires missing-region repair, while the plan forbids it.** The normative R4 statement says a “drifted or missing” region shows tuning and is reapplied (`.planning/phases/30-onboard-ghostty/30-SPEC.md:36-39`); its conflicting amendment is marked **needs confirmation**. The plan mandates the opposite for a recorded deletion (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:33,248`). This is a product-contract decision, not resolved merely by testing the shared mechanism’s current behavior.
+   - **HIGH — The keys scan does not protect bindings in included files.** The parser records `config-file` but scans only the default files (`.planning/phases/30-onboard-ghostty/30-03-PLAN.md:119-120,159-162,211`). If an earlier default file includes a user binding and a later preferred default file receives the installer’s binding, the latter can override the included binding without a conflict report. The plan’s no-overwrite prohibition at `:71-73` is broader than the implemented scan. The accepted D-10 decision not to follow includes concerns the shell sync; it does not establish an exception to the keys prohibition.
+
+5. **Suggestions**  
+   Obtain confirmation of the R4 amendment before execution, then align the normative requirement and phase success criterion. For keys, explicitly handle includes that may load before the target—by scanning safely or declining the write with a named partial result—and test the earlier-include/later-target case.
+
+6. **Risk Assessment**  
+   High: one behavior remains unresolved at the contract level; another can override a user binding.
+
+## 30-04
+
+1. **Summary**  
+   Adds Linux zsh shell sync, conflict and include reporting, dry-run behavior, and multi-file shell-region removal.
+
+2. **Findings status**  
+   The cycle 2 resolver-move concern is addressed for normal conflict and blocked-scan paths by the shared multi-file sweep (`.planning/phases/30-onboard-ghostty/30-04-PLAN.md:27,134-146`).
+
+3. **Strengths**  
+   The plan uses the existing absolute-path/control-character guard (`installer/terminal_shell.py:160-167`) and shell-quotes the command. It also preserves the generic uninstall dispatch in `installer/app.py:630-635`.
+
+4. **Concerns**
+   - **MEDIUM — A target-read failure skips the new multi-file cleanup.** The planned `_sync_ghostty` reads the currently resolved target before calling the scan and sweep, and its enclosing `except` returns immediately on `OSError` (`.planning/phases/30-onboard-ghostty/30-04-PLAN.md:143-144`). If the target becomes unreadable while an older owned shell region remains in another default file, the old region is not swept, even though the plan says a file that cannot be read is warned about and the walk continues. The shared settings reader can raise on unreadable or non-regular files (`installer/atomic.py:94-102`).
+
+5. **Suggestions**  
+   Make the non-target sweep independent of a target read or commit failure when the sync has determined that removal is needed; add a resolver-move test with an unreadable target and a readable old region.
+
+6. **Risk Assessment**  
+   Medium: the cycle 2 ordinary conflict case is covered, but an error path can still retain stale installer configuration.
+
+## 30-05
+
+1. **Summary**  
+   Builds the container driver and harness verb; the orchestrator runs the real FUSE and extract-and-run checks.
+
+2. **Findings status**  
+   Cycle 2’s no-device startup route, positive mount observation, receipt-path HOME binding, and version exit-code checks now have explicit designs and tests (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:23-25,129-135,149`).
+
+3. **Strengths**  
+   The FUSE verdict now requires an observed mount rather than inferring one solely from successful output (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:24,164`). The target reuses exact-name teardown, whose existing implementation verifies container disappearance (`scripts/container-e2e-verify.sh:2745-2764`).
+
+4. **Concerns**
+   - **HIGH — Failed installs bypass the lifecycle cleanup.** The plan calls `install_one` *before* entering `run_lifecycle` and assumes that a failure means “nothing exists yet to clean” (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:162,167`). But `install_one` raises for any non-`INSTALLED` outcome (`tests/e2e_landing_driver.py:412-431`), and installation can have already placed artifacts before a later failure. Thus the promised always-run uninstall and residue diagnosis do not cover the installation failure path.
+   - **HIGH — The removal verdict does not prove the stated set difference.** The planned verdict compares only the before- and after-uninstall listings and checks for newly remaining paths (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:143-146,165-167`). It does not capture the required *after-install* listing or verify that the removed set equals the receipt paths plus regions. A receipt path missing before uninstall, or unrelated pre-existing data removed during uninstall, can escape that comparison. SPEC R5 explicitly requires the after-install/after-uninstall difference (`.planning/phases/30-onboard-ghostty/30-SPEC.md:41-44`).
+   - **MEDIUM — Region readback can pass despite failed Ghostty commands.** `_run_ghostty` returns an exit code, but the region verdict accepts only the two output strings (`.planning/phases/30-onboard-ghostty/30-05-PLAN.md:142,163,166-167`). A command that prints the expected line and exits nonzero can still produce `REGIONS_OK`.
+
+5. **Suggestions**  
+   Put install and all subsequent work under a cleanup boundary that diagnoses partial installs. Capture and compare before-install, after-install, and after-uninstall state, including preservation of seeded user content. Require zero exit status for both config-readback commands and test nonzero exits with matching output.
+
+6. **Risk Assessment**  
+   High: the phase’s evidence gate can miss a partial-install residue or report an incomplete removal proof as successful.
+
+## 30-06
+
+1. **Summary**  
+   Gates evidence wording on the orchestrator’s recorded container result and adds catalog consistency tests.
+
+2. **Findings status**  
+   Cycle 2’s one-row occurrence-count problem is addressed with occurrence counts and per-cell checks (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:112-113,135-136`). The calendar-date validation is also specified at `:119-120`.
+
+3. **Strengths**  
+   The hard gate distinguishes a proven FUSE mount from an extract-only result before editing the evidence text (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:24-25,119-123`).
+
+4. **Concerns**
+   - **MEDIUM — The comment-size contracts remain inconsistent across plans.** Plan 30-01 requires its existing facts test to assert that the contiguous comment block is at most **40** lines (`.planning/phases/30-onboard-ghostty/30-01-PLAN.md:145`). Plan 30-06 allows that same block to grow to **55** lines and prohibits editing the existing test (`.planning/phases/30-onboard-ghostty/30-06-PLAN.md:28,76,91-92`). A paragraph that satisfies 30-06’s own limit can therefore fail the earlier test. This is avoidable by writing a sufficiently short block, but the plan does not require that outcome.
+
+5. **Suggestions**  
+   Carry the existing 40-line limit forward as the effective limit, or explicitly revise the earlier test and explain the changed contract.
+
+6. **Risk Assessment**  
+   Medium for execution; the evidence wording is additionally dependent on correcting 30-05’s proof.
+
+## Cross-plan assessment
+
+- **Ordering:** The current wave chain serializes 30-02 and 30-03, which both modify `installer/registry.toml` (`30-02-PLAN.md:6-15`; `30-03-PLAN.md:6-16`). The earlier overlap concern is addressed.
+- **Scratch hygiene remains incomplete:** Each plan now requests an owned `TMPDIR`, but the rules only say to remove it when the plan finishes—for example, `.planning/phases/30-onboard-ghostty/30-01-PLAN.md:95`. They do not require the supplied mandatory cleanup on failure, timeout, or interruption, nor the pre-heavy-run space check. Add an exit/signal-safe wrapper and post-run cleanup verification.
+- **Evidence dependency:** 30-06’s gate verifies the *recorded line’s shape*, not the underlying lifecycle itself. Its wording must not be published until the 30-05 issues are fixed and the real run supplies the required evidence.
+
+### Status: Issues Found — fix and re-invoke
+
+No files were changed and no scratch artifacts were created. I did not run tests, containers, upstream verification, or real Ghostty; live FUSE and hardware behavior remain unverified.
