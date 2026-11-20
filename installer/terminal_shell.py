@@ -34,12 +34,18 @@ from installer.shellrc import apply_block, strip_block
 from installer.terminal_keys import alacritty_keys_plan_for_document as _keys_plan
 from installer.terminal_regions import (
     ALACRITTY,
+    GHOSTTY,
+    GHOSTTY_CREATED,
     WEZTERM_SKELETON,
     Placement,
     TerminalShellError,
     alacritty_config_path,
     commit_region,
+    ghostty_config_path,
+    ghostty_default_files,
     kitty_config_path,
+    scan_ghostty,
+    validate_ghostty,
     validate_toml,
     wezterm_config_path,
 )
@@ -48,7 +54,7 @@ from installer.terminal_regions import first_line as _first_line
 from installer.terminal_regions import imports_files as _imports_files
 from installer.terminal_regions import replace_owned_region as _replace_owned_region
 from installer.terminal_regions import snapshot_text as _snapshot_text
-from installer.terminal_regions import strip_region as _strip_alacritty_region
+from installer.terminal_regions import strip_region as _strip_region
 from installer.terminal_regions import toml_table as _table
 from installer.terminal_regions import user_document as _user_document
 from installer.terminal_regions import xdg_config_home as _xdg_config_home
@@ -142,9 +148,9 @@ class TerminalShellResult:
     `drifted` names the terminals whose owned region differed from what
     synchronization writes (a write run then fixes it); the refresh pass reads
     it from a dry run for `≈` (D-16). `zsh` is the resolved zsh path and `paths`
-    maps each synchronized target (`zshenv`, `kitty`, `wezterm`, `konsole`, `alacritty`) to
-    the file it wrote or checked. Notes are write-run lines shown after Shell lines, including
-    Konsole's stock clear once when its profile is written.
+    maps each synchronized target (`zshenv`, `kitty`, `wezterm`, `konsole`,
+    `alacritty`, `ghostty`) to the file it wrote or checked. Notes are write-run lines
+    shown after Shell lines, including Konsole's stock clear once when its profile is written.
     """
 
     configured: tuple[str, ...] = ()
@@ -507,6 +513,75 @@ def _sync_alacritty(
     return body is not None, drifted, tuple(warnings)
 
 
+def _strip_ghostty_regions(
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+    *,
+    write: bool,
+    skip: Path | None = None,
+) -> tuple[bool, tuple[str, ...]]:
+    changed = False
+    warnings: list[str] = []
+    for path in ghostty_default_files(platform_os, home, environ):
+        if path == skip:
+            continue
+        try:
+            if write:
+                stripped = _strip_region(path, GHOSTTY)
+            else:
+                before = read_settings(path)
+                text = _snapshot_text(before)
+                stripped = before is not None and _replace_owned_region(text, GHOSTTY, None) != text
+            changed = changed or stripped
+        except OSError as exc:
+            warnings.append(f"ghostty: {_first_line(exc)}")
+    return changed, tuple(warnings)
+
+
+def _sync_ghostty(
+    home: Path, environ: Mapping[str, str], platform_os: str, zsh_path: str, *, write: bool
+) -> tuple[bool, bool, tuple[str, ...]]:
+    path = ghostty_config_path(platform_os, home, environ)
+    scan = scan_ghostty(platform_os, home, environ)
+    warnings = list(scan.reports)
+    # shortcut: any user command blocks all regions; narrow if users hit this limit.
+    body = (
+        None if scan.user_command or scan.blocked else f"command = {shlex.join((zsh_path, '-l'))}"
+    )
+    if scan.user_command:
+        warnings.append("ghostty: partial: you already set command")
+    if scan.config_file:
+        warnings.append(
+            "ghostty: partial: you include other files (config-file); they are not followed"
+        )
+    swept = False
+    if body is None:
+        swept, sweep_warnings = _strip_ghostty_regions(
+            platform_os, home, environ, write=write, skip=path
+        )
+        warnings.extend(sweep_warnings)
+    try:
+        before = read_settings(path)
+        text = _snapshot_text(before)
+        updated = _replace_owned_region(text, GHOSTTY, body, placement=Placement.TOP)
+        drifted = commit_region(
+            path,
+            before,
+            text,
+            updated,
+            validate=validate_ghostty,
+            write=write,
+            created_marker=_xdg_data_home(home, environ) / "tools-installer" / GHOSTTY_CREATED,
+            home=home,
+            bind_path=True,
+        )
+    except OSError as exc:
+        warnings.append(f"ghostty: {_first_line(exc)}")
+        return False, swept, tuple(warnings)
+    return body is not None, drifted or swept, tuple(warnings)
+
+
 # ---------------------------------------------------------------------------
 # herdr (24 D-08b, D-22): `terminal.default_shell` follows zsh. Written absent-only through the
 # ledgered settings writer, so a user's own value is never overwritten and the key is reverted
@@ -604,7 +679,7 @@ def _revert_herdr(home: Path, environ: Mapping[str, str], platform: Platform) ->
 def _revert_terminal_shells(
     *, home: Path, environ: Mapping[str, str], platform: Platform
 ) -> TerminalShellResult:
-    """Remove only complete terminal regions created by this synchronizer."""
+    """Remove only complete terminal regions, including Ghostty, created by this synchronizer."""
     reverted: list[str] = []
     zshenv_changed, zshenv_warning = _edit_zshenv(home, environ, None, write=True)
     if zshenv_warning is not None:
@@ -626,10 +701,14 @@ def _revert_terminal_shells(
         reverted.append("konsole")
     warnings: list[str] = []
     try:
-        if _strip_alacritty_region(alacritty_config_path(home, environ), ALACRITTY):
+        if _strip_region(alacritty_config_path(home, environ), ALACRITTY):
             reverted.append("alacritty")
     except OSError as exc:
         warnings.append(f"alacritty: {_first_line(exc)}")
+    changed, strip_warnings = _strip_ghostty_regions(platform.os, home, environ, write=True)
+    if changed:
+        reverted.append("ghostty")
+    warnings.extend(strip_warnings)
     herdr_removed, herdr_warning = _revert_herdr(home, environ, platform)
     if herdr_removed:
         reverted.append("herdr")
@@ -762,6 +841,16 @@ def sync_terminal_shells(
             paths.append(("alacritty", alacritty_config_path(home, environ)))
         if shell_drifted:
             drifted.append("alacritty")
+        warnings.extend(shell_warnings)
+    if _safe_executable(lookup("ghostty")) is not None:
+        has_shell, shell_drifted, shell_warnings = _sync_ghostty(
+            home, environ, platform.os, zsh_path, write=write
+        )
+        if has_shell:
+            configured.append("ghostty")
+            paths.append(("ghostty", ghostty_config_path(platform.os, home, environ)))
+        if shell_drifted:
+            drifted.append("ghostty")
         warnings.extend(shell_warnings)
     herdr_path = _safe_executable(lookup(HERDR))
     if herdr_path is not None:

@@ -1914,3 +1914,320 @@ def test_konsole_sessionui_parent_that_is_a_file_has_no_stock_note(tmp_path: Pat
         assert result.notes == ()
         assert not any(w.startswith("konsole:") for w in result.warnings)
         assert parent.read_bytes() == before
+
+
+# Ghostty (30 D-08, D-10): the ghostty shell region and the ghostty-keys region.
+_GHOSTTY_LOOKUP = _lookup(zsh=_ZSH, ghostty="/usr/bin/ghostty")
+_GHOSTTY_SHELL = (
+    "# >>> tools-installer terminal-shell ghostty >>>\n"
+    "command = /usr/bin/zsh -l\n"
+    "# <<< tools-installer terminal-shell ghostty <<<\n"
+)
+_GHOSTTY_KEYS = (
+    "# >>> tools-installer terminal-shell ghostty-keys >>>\n"
+    "keybind = ctrl+shift+k=text:\\x0c\n"
+    "# <<< tools-installer terminal-shell ghostty-keys <<<\n"
+)
+
+
+def _ghostty_tool() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "ghostty")
+
+
+def _ghostty_config() -> Path:
+    return Path.home() / ".config" / "ghostty" / "config.ghostty"
+
+
+def _sync_ghostty_terminal(
+    *,
+    write: bool = True,
+    lookup: Callable[[str], str | None] | None = None,
+    platform: Platform | None = None,
+) -> TerminalShellResult:
+    return sync_terminal_shells(
+        home=Path.home(),
+        environ=dict(os.environ),
+        platform=platform or _platform(),
+        lookup=lookup or _GHOSTTY_LOOKUP,
+        write=write,
+    )
+
+
+def test_ghostty_sync_writes_the_shell_region_on_top() -> None:
+    path = _ghostty_config()
+    path.parent.mkdir(parents=True)
+    path.write_text("font-size = 12\n")
+    result = _sync_ghostty_terminal()
+    assert path.read_text() == _GHOSTTY_SHELL + "font-size = 12\n"
+    assert "ghostty" in result.configured and "ghostty" in result.drifted
+    assert ("ghostty", path) in result.paths
+    assert "ghostty" not in _sync_ghostty_terminal().drifted
+
+
+def test_ghostty_install_route_order_is_pinned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer.post_install import run_post_install
+
+    for index, keys_first in enumerate((True, False)):
+        home = tmp_path / str(index)
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        if keys_first:
+            run_post_install(_ghostty_tool(), _platform())
+            _sync_ghostty_terminal()
+        else:
+            _sync_ghostty_terminal()
+            run_post_install(_ghostty_tool(), _platform())
+        path = _ghostty_config()
+        expected = _GHOSTTY_SHELL + _GHOSTTY_KEYS if keys_first else _GHOSTTY_KEYS + _GHOSTTY_SHELL
+        assert path.read_text() == expected
+        _sync_ghostty_terminal()
+        run_post_install(_ghostty_tool(), _platform())
+        assert path.read_text() == expected
+
+
+def test_ghostty_zsh_path_is_shell_quoted() -> None:
+    _sync_ghostty_terminal(lookup=_lookup(zsh="/opt/my zsh/bin/zsh", ghostty="/usr/bin/ghostty"))
+    assert "command = '/opt/my zsh/bin/zsh' -l\n" in _ghostty_config().read_text()
+    with pytest.raises(TerminalShellError):
+        _sync_ghostty_terminal(lookup=_lookup(zsh="relative", ghostty="/usr/bin/ghostty"))
+
+
+@pytest.mark.parametrize("case", ("target", "legacy", "empty"))
+def test_a_user_command_blocks_the_shell_region(case: str) -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    target.write_text("font-size = 12\n")
+    _sync_ghostty_terminal()
+    user = target.parent / "config" if case == "legacy" else target
+    line = "command =\n" if case == "empty" else "command = /bin/bash\n"
+    with user.open("a") as stream:
+        stream.write(line)
+    result = _sync_ghostty_terminal()
+    assert target.read_text() == "font-size = 12\n" + (line if user == target else "")
+    if user != target:
+        assert user.read_text() == line
+    assert "ghostty: partial: you already set command" in result.warnings
+    assert "ghostty" not in result.configured
+
+
+@pytest.mark.parametrize("directory", (False, True))
+def test_an_unscannable_earlier_file_blocks_the_shell_region(directory: bool) -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    legacy = target.parent / "config"
+    if directory:
+        legacy.mkdir()
+    else:
+        target.write_text(_GHOSTTY_SHELL + "font-size = 12\n")
+        legacy.write_bytes(b"\xff\xfe\x00")
+    result = _sync_ghostty_terminal()
+    assert (
+        "ghostty: partial: config could not be read and loads before "
+        "config.ghostty; nothing written" in result.warnings
+    )
+    assert "ghostty" not in result.configured
+    assert not target.exists() if directory else target.read_text() == "font-size = 12\n"
+
+
+def test_an_unscannable_later_file_does_not_block_the_shell_region() -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    target.mkdir()
+    legacy = target.parent / "config"
+    legacy.write_text("font-size = 12\n")
+    result = _sync_ghostty_terminal()
+    assert legacy.read_text() == _GHOSTTY_SHELL + "font-size = 12\n"
+    assert (
+        "ghostty: partial: config.ghostty could not be read; settings there are not checked"
+        in result.warnings
+    )
+    assert "ghostty" in result.configured
+
+
+def test_a_config_file_include_writes_the_region_and_notes_partial() -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    target.write_text("config-file = extra.conf\n")
+    result = _sync_ghostty_terminal()
+    assert target.read_text() == _GHOSTTY_SHELL + "config-file = extra.conf\n"
+    assert (
+        "ghostty: partial: you include other files (config-file); they are not followed"
+        in result.warnings
+    )
+
+
+def test_dry_run_writes_nothing_and_reports_drift() -> None:
+    assert "ghostty" in _sync_ghostty_terminal(write=False).drifted
+    assert not _ghostty_config().parent.exists()
+
+
+def test_ghostty_sync_needs_the_ghostty_executable() -> None:
+    result = _sync_ghostty_terminal(lookup=_lookup(zsh=_ZSH))
+    assert "ghostty" not in result.configured
+    assert not _ghostty_config().exists()
+
+
+def test_ghostty_sync_records_the_created_file_bound_to_its_path() -> None:
+    _sync_ghostty_terminal()
+    marker = Path.home() / ".local/share/tools-installer/terminal-ghostty-created"
+    assert marker.exists()
+    assert marker.with_name(marker.name + "-path").read_text() == f"{_ghostty_config()}\n"
+
+
+def test_zsh_gone_reverts_only_the_ghostty_shell_region() -> None:
+    from installer.post_install import run_post_install
+
+    run_post_install(_ghostty_tool(), _platform())
+    _sync_ghostty_terminal()
+    result = _sync_ghostty_terminal(lookup=_lookup(ghostty="/usr/bin/ghostty"))
+    assert "ghostty" in result.reverted
+    assert _ghostty_config().read_text() == _GHOSTTY_KEYS
+
+
+def test_zsh_gone_strips_a_shell_region_left_in_another_default_file() -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    legacy = target.parent / "config"
+    legacy.write_text("font-size = 12\n")
+    _sync_ghostty_terminal()
+    target.write_text("theme = x\n")
+    result = _sync_ghostty_terminal(lookup=_lookup(ghostty="/usr/bin/ghostty"))
+    assert "ghostty" in result.reverted
+    assert legacy.read_text() == "font-size = 12\n"
+    assert target.read_text() == "theme = x\n"
+
+
+def test_a_resolver_move_then_a_user_command_removes_the_old_shell_region() -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    legacy = target.parent / "config"
+    legacy.write_text("font-size = 12\n")
+    _sync_ghostty_terminal()
+    target.write_text("command = /bin/bash\n")
+    before = legacy.read_bytes()
+    assert "ghostty" in _sync_ghostty_terminal(write=False).drifted
+    assert legacy.read_bytes() == before
+    result = _sync_ghostty_terminal()
+    assert legacy.read_text() == "font-size = 12\n"
+    assert target.read_text() == "command = /bin/bash\n"
+    assert "ghostty: partial: you already set command" in result.warnings
+    assert "ghostty" not in result.configured
+    assert "ghostty" not in _sync_ghostty_terminal().drifted
+
+
+def test_a_resolver_move_then_a_blocked_scan_removes_the_old_shell_region() -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    legacy = target.parent / "config"
+    legacy.write_text("font-size = 12\n")
+    _sync_ghostty_terminal()
+    padding = "#" + "x" * (1 << 20) + "\n"
+    with legacy.open("a") as stream:
+        stream.write(padding)
+    target.write_text("theme = x\n")
+    result = _sync_ghostty_terminal()
+    assert legacy.read_text() == "font-size = 12\n" + padding
+    assert target.read_text() == "theme = x\n"
+    assert (
+        "ghostty: partial: config could not be read and loads before "
+        "config.ghostty; nothing written" in result.warnings
+    )
+    assert "ghostty" not in result.configured
+
+
+def test_an_unreadable_target_still_sweeps_the_old_shell_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _ghostty_config()
+    target.parent.mkdir(parents=True)
+    legacy = target.parent / "config"
+    legacy.write_text("font-size = 12\n")
+    _sync_ghostty_terminal()
+    target.write_text("command = /bin/bash\n")
+    real_read = terminal_shell.read_settings
+
+    def denied(path: Path):
+        if path == target:
+            raise OSError("denied")
+        return real_read(path)
+
+    monkeypatch.setattr(terminal_shell, "read_settings", denied)
+    before = legacy.read_bytes()
+    dry = _sync_ghostty_terminal(write=False)
+    assert legacy.read_bytes() == before
+    assert "ghostty" in dry.drifted and "ghostty: denied" in dry.warnings
+    result = _sync_ghostty_terminal()
+    assert legacy.read_text() == "font-size = 12\n"
+    assert target.read_text() == "command = /bin/bash\n"
+    assert "ghostty: partial: you already set command" in result.warnings
+    assert "ghostty: denied" in result.warnings
+    assert "ghostty" not in result.configured and "ghostty" in result.drifted
+
+
+def test_macos_sync_never_touches_ghostty() -> None:
+    assert _sync_ghostty_terminal(platform=_platform("macos")).skipped == ("macos",)
+    assert not _ghostty_config().exists()
+
+
+def test_ghostty_removal_strips_both_regions_and_keeps_user_text() -> None:
+    from installer.post_install import run_post_install
+    from installer.terminal_keys import TERMINAL_KEYS, strip_terminal_keys
+
+    path = _ghostty_config()
+    path.parent.mkdir(parents=True)
+    path.write_text("font-size = 12\n")
+    run_post_install(_ghostty_tool(), _platform())
+    _sync_ghostty_terminal()
+    assert (
+        strip_terminal_keys(
+            TERMINAL_KEYS["ghostty"], "ghostty", "fedora", Path.home(), dict(os.environ)
+        )
+        == ()
+    )
+    assert path.read_text() == "font-size = 12\n"
+    state = Path.home() / ".local/share/tools-installer"
+    assert not (state / "terminal-tuning-ghostty").exists()
+    assert not (state / "terminal-ghostty-created").exists()
+
+
+def test_ghostty_removal_deletes_a_file_the_installer_created() -> None:
+    from installer.post_install import run_post_install
+    from installer.terminal_keys import TERMINAL_KEYS, strip_terminal_keys
+
+    run_post_install(_ghostty_tool(), _platform())
+    _sync_ghostty_terminal()
+    path = _ghostty_config()
+    assert (
+        strip_terminal_keys(
+            TERMINAL_KEYS["ghostty"], "ghostty", "fedora", Path.home(), dict(os.environ)
+        )
+        == ()
+    )
+    assert not path.exists() and not path.parent.exists()
+    state = Path.home() / ".local/share/tools-installer"
+    for name in (
+        "terminal-tuning-ghostty",
+        "terminal-ghostty-created",
+        "terminal-ghostty-created-path",
+    ):
+        assert not (state / name).exists()
+
+
+def test_ghostty_removal_keeps_a_user_command_it_never_replaced() -> None:
+    from installer.post_install import run_post_install
+    from installer.terminal_keys import TERMINAL_KEYS, strip_terminal_keys
+
+    path = _ghostty_config()
+    path.parent.mkdir(parents=True)
+    path.write_text("command = /bin/bash\n")
+    run_post_install(_ghostty_tool(), _platform())
+    _sync_ghostty_terminal()
+    assert (
+        strip_terminal_keys(
+            TERMINAL_KEYS["ghostty"], "ghostty", "fedora", Path.home(), dict(os.environ)
+        )
+        == ()
+    )
+    assert path.read_text() == "command = /bin/bash\n"

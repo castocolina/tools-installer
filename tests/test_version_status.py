@@ -7473,3 +7473,24 @@ def test_bun_fetches_count_toward_the_refresh_budget(
     statuses = _versions(service, tools)
     assert len(calls) == MAX_FETCHES_PER_REFRESH
     assert all(statuses[tool.id].stale is True for tool in tools[-4:])
+
+
+def test_ghostty_drift_lands_on_its_own_row(tmp_path: Path) -> None:
+    tools = [_terminal_tool("ghostty")]
+    service = _drift_service(tmp_path, _drifted("ghostty"), present=frozenset({"ghostty"}))
+    state = _settled_states(service, tools)["ghostty"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == "Ghostty does not start zsh"
+    assert state.unconfigured == (
+        ConfigStep(
+            text="point Ghostty at zsh", kind="terminal_sync", report="Ghostty now starts zsh"
+        ),
+    )
+
+
+def test_ghostty_partial_is_a_reason_not_a_step(tmp_path: Path) -> None:
+    warning = "ghostty: partial: you already set command"
+    service = _drift_service(tmp_path, _warned(warning), present=frozenset({"ghostty"}))
+    state = _settled_states(service, [_terminal_tool("ghostty")])["ghostty"]
+    assert warning in state.reasons
+    assert state.unconfigured == ()
