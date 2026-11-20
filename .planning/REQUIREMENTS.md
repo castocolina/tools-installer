@@ -67,7 +67,7 @@ Ingested 2026-11-19 from the update-automation todos and `.planning/research/202
 ### Opt-in auto-update (AUTOUPD)
 
 - [ ] **AUTOUPD-01**: Schedules has an `update-all` row that is off by default and never a Policies row; once the user sets it, the installer never changes it on its own (amends 24.2 SCHED-01 with a per-row default).
-- [ ] **AUTOUPD-02**: `update-all` updates package managers first (ranked by `resolve._RANK`), then their dependents grouped by owner and ordered by `deps.resolve_dependencies`.
+- [ ] **AUTOUPD-02**: `update-all` updates package managers first (ranked by `resolve._RANK`) *(amended 2026-11-19, 35 D-05, needs confirmation: ordered by ownership edges, because `_RANK` ranks install-method kinds)*, then their dependents grouped by owner and ordered by `deps.resolve_dependencies`.
 - [ ] **AUTOUPD-03**: When a manager's update fails, each of its dependents is skipped and logged as skipped.
 - [ ] **AUTOUPD-04**: `update-all` reuses `UpdateService`, `update_refusal`, `stdin=DEVNULL` children, `HOMEBREW_NO_SUDO` and the run lock; refused tools are skipped with their reason, a held lock makes the run refuse, and no path runs sudo, pkexec or doas.
 - [ ] **AUTOUPD-05**: Brew casks are excluded from `update-all` on macOS by default.

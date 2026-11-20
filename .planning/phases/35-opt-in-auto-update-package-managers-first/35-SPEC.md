@@ -24,7 +24,7 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
    - Target: a per-row default (`default_on=False` for `update-all`) honored by seeding, with recorded decisions untouched.
    - Acceptance: a fresh scratch HOME seeds `update-all` off and every other row as before (existing seeding tests unedited); no Policies row exists for it; after the user turns it on, a re-seed or reconfigure leaves it on, and after the user turns it off, leaves it off.
 
-2. **Managers first (AUTOUPD-02)**: `update-all` updates package managers first, then their dependents grouped by owner and ordered by `deps.resolve_dependencies`; the ordering source for managers is chosen in discuss and covers brew, bun, uv, sdkman and Volta where installed.
+2. **Managers first (AUTOUPD-02)**: `update-all` updates package managers first, then their dependents grouped by owner and ordered by `deps.resolve_dependencies`; managers are ordered by ownership edges (a manager installed by another follows it, ties by tool id) and cover brew, bun, uv, pnpm, sdkman and Volta where installed; Volta is ordered but a script tool with no declared `update` is skipped as `skipped: no unattended update path` *(amended 2026-11-19, 35 D-05, D-09, needs confirmation: `_RANK` ranks install-method kinds, and Volta's only update path rewrites shell rc files)*.
    - Current: no such runner; `_RANK` ranks method kinds, not manager update order.
    - Target: a pure planner that turns the installed tools into an ordered list of managers and dependent groups.
    - Acceptance: a unit test with brew, uv and two dependents asserts the order (managers first, dependents grouped by owner, ordered by dependency); a second test with bun and sdkman asserts the same rule; the planner is a pure function over fixtures.
@@ -49,7 +49,7 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
    - Target: a per-run log of tool lines plus the summary line.
    - Acceptance: a run over three tools leaves three tool lines in the run log and exactly one `update-all` line in the shared schedule log.
 
-7. **Updated at most once a day (AUTOUPD-07)**: A tool also covered by a per-tool agent-CLI schedule row is updated at most once per day across both rows.
+7. **Updated at most once a day (AUTOUPD-07)**: A tool also covered by a per-tool agent-CLI schedule row is updated at most once per day across the two rows: a per-tool row skips only a tool `update-all` updated today, and `update-all` skips a tool either runner updated today *(amended 2026-11-19, 35 D-14: the per-tool rows keep their 6 h cadence)*.
    - Current: the per-tool rows run every 6 h independently.
    - Target: a per-tool last-updated record both runners consult.
    - Acceptance: with `update-claude` having updated a tool today, `update-all` skips it as `skipped: updated today`; the reverse holds; the next calendar day both may run.
@@ -74,6 +74,7 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
 **In scope:**
 - The `update-all` row with a per-row default, the planner, the runner with skip rules, the plan-only mode, the run log, the once-a-day rule, the post-run notification, unit templates for both OSes, and a container end-to-end run.
 - Recording the 24.2 SCHED-01 amendment (below).
+- *Amended 2026-11-19 (35 D-02, D-11, D-12, D-13, D-16):* a new `JobKind.UPDATE_ALL`, widened `--run-schedule` choices, a per-job runner timeout, `update-all.log` and `updated-today.json` (both swept on uninstall), and `stdin=DEVNULL` in the runner's child.
 
 **Out of scope:**
 - Updating macOS casks by default — excluded; allowing them is a future requirement.
@@ -112,7 +113,7 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
-| adjacency | R1 | ✅ covered | Acceptance 1: the per-row default affects only update-all; the seven existing rows seed exactly as before (existing seeding tests unedited) |
+| adjacency | R1 | ✅ covered | Acceptance 1: the per-row default affects only update-all; the eight existing rows (seven plus phase 34's check-updates) seed exactly as before (existing seeding tests unedited; off rows never enter turned_on) |
 | empty | R1 | ✅ covered | Acceptance 1: a host with no tools installed still seeds update-all off and runs nothing |
 | ordering | R1 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
 | idempotency | R1 | ✅ covered | Acceptance 1: re-seeding twice leaves a user's on or off decision unchanged |

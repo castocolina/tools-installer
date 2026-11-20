@@ -195,7 +195,7 @@
 **Success Criteria** (what must be TRUE):
 
   1. A fresh install seeds `update-all` off, no Policies row exists for it, and once the user turns it on the installer never turns it off or on by itself.
-  2. A unit test with brew, uv and two dependents asserts the order: managers (ranked by `resolve._RANK`), then dependents grouped by owner and ordered by `deps.resolve_dependencies`; a failing manager produces a skip line for each dependent and no update call for them.
+  2. A unit test with brew, uv and two dependents asserts the order: managers (ranked by `resolve._RANK` *(amended 2026-11-19, 35 D-05, needs confirmation: ordered by ownership edges)*), then dependents grouped by owner and ordered by `deps.resolve_dependencies`; a failing manager produces a skip line for each dependent and no update call for them.
   3. Refused tools (native owner, SDKMAN, Volta, pins, os-package) are skipped with their refusal reason, a held run lock makes the run refuse instead of overlapping, no code path runs sudo, and brew casks are left alone on macOS by default.
   4. A run over three tools leaves one line per tool in its run log and one summary line in the shared schedule log, and a tool covered by a per-tool agent-CLI row is updated once per day.
   5. The e2e runs `--run-schedule update-all` in a disposable container, never on the host, and records the `uv self update` result.
