@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v0.51.0
 milestone_name: Onboard terminal tools
-current_phase: 27
-current_phase_name: "Tool-onboarding skill: terminal defaults as rules"
-status: verifying
+current_phase: 28
+current_phase_name: Shared terminal-keys mechanism
+status: executing
 stopped_at: Completed 27-04-PLAN.md
-last_updated: "2026-11-20T05:33:32.670Z"
+last_updated: "2026-11-20T12:47:38.660Z"
 last_activity: 2026-11-20
-last_activity_desc: Phase 27 execution started
-state_head: 7c24e88c5d4e73f4c75e5e5d1bf51c88a23e77cf
+last_activity_desc: Phase 28 execution started
+state_head: 233de672f9962745d2100aa42b6385c599e83a16
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 4
+  total_plans: 8
   completed_plans: 4
   percent: 0
 ---
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-16)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required, and every screen tells the truth about what is on the host.
-**Current focus:** Phase 27 — Tool-onboarding skill: terminal defaults as rules
+**Current focus:** Phase 28 — Shared terminal-keys mechanism
 
 ## Current Position
 
-Phase: 27 (Tool-onboarding skill: terminal defaults as rules) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-11-20 — Phase 27 execution started
+Phase: 28 (Shared terminal-keys mechanism) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 28
+Last activity: 2026-11-20 — Phase 28 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
