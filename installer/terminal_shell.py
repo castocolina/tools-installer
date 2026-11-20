@@ -7,10 +7,12 @@ It never invokes a shell or changes an account login shell.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final, Literal
 
 from installer.agent_settings import (
     ABSENT,
@@ -57,6 +59,52 @@ Lookup = Callable[[str], str | None]
 
 _SYNC_FAILURE_PREFIX = "Terminal shell synchronization failed"
 
+KONSOLE_CLEAR_REMOVED: Final = "konsole: partial: you removed Ctrl+Shift+K; kept yours"
+KONSOLE_CLEAR_STOCK: Final = (
+    "Konsole: Ctrl+Shift+K is Konsole's stock Clear Scrollback and Reset "
+    "(screen and scrollback); left as it is"
+)
+
+_KONSOLE_ACTION = re.compile(r"<Action[^>]*name=[\"\']clear-history-and-reset[\"\'][^>]*>")
+_KONSOLE_SHORTCUT = re.compile(r"shortcut=([\"\'])(.*?)[\"\']")
+
+
+def konsole_clear_is_stock(rc_text: str) -> bool:
+    """Check the D-09 Ctrl+Shift+K override in KXMLGUI's Action XML format."""
+    match = _KONSOLE_ACTION.search(rc_text)
+    if match is None:
+        return True
+    shortcut = _KONSOLE_SHORTCUT.search(match.group())
+    if shortcut is None:
+        return True
+    stock = sorted(("ctrl", "shift", "k"))
+    return any(
+        sorted(token.strip() for token in part.strip().lower().split("+")) == stock
+        for part in shortcut.group(2).split(";")
+    )
+
+
+def _konsole_clear_state(
+    home: Path, environ: Mapping[str, str]
+) -> Literal["stock", "removed", "unknown"]:
+    path = _xdg_data_home(home, environ) / "kxmlgui5" / "konsole" / "sessionui.rc"
+    try:
+        data = read_capped(path, _CONFIG_MAX_BYTES, follow_symlinks=True)
+    except FileNotFoundError:
+        return "stock"
+    except OSError:
+        return "unknown"
+    if data is None:
+        return "unknown"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "unknown"
+    # shortcut: proxy on both gui tags; KDE-written files always have them.
+    if "<gui" not in text or "</gui>" not in text:
+        return "unknown"
+    return "stock" if konsole_clear_is_stock(text) else "removed"
+
 
 def terminal_sync_warning(sync: Callable[[], str | None] | None) -> str | None:
     """Run a terminal-synchronizer closure and reduce it to one optional warning.
@@ -95,7 +143,8 @@ class TerminalShellResult:
     synchronization writes (a write run then fixes it); the refresh pass reads
     it from a dry run for `≈` (D-16). `zsh` is the resolved zsh path and `paths`
     maps each synchronized target (`zshenv`, `kitty`, `wezterm`, `konsole`, `alacritty`) to
-    the file it wrote or checked.
+    the file it wrote or checked. Notes are write-run lines shown after Shell lines, including
+    Konsole's stock clear once when its profile is written.
     """
 
     configured: tuple[str, ...] = ()
@@ -105,6 +154,7 @@ class TerminalShellResult:
     drifted: tuple[str, ...] = ()
     zsh: str | None = None
     paths: tuple[tuple[str, Path], ...] = ()
+    notes: tuple[str, ...] = ()
 
 
 def _safe_executable(path: str | None) -> str | None:
@@ -626,6 +676,7 @@ def sync_terminal_shells(
     skipped: list[str] = []
     warnings: list[str] = []
     drifted: list[str] = []
+    notes: list[str] = []
     paths: list[tuple[str, Path]] = []
     zshenv = zshenv_path(home, environ)
     zshenv_changed, zshenv_warning = _edit_zshenv(
@@ -696,6 +747,12 @@ def sync_terminal_shells(
         drifted.append("konsole")
     if konsole_warning is not None:
         warnings.append(konsole_warning)
+    if _safe_executable(lookup("konsole")) is not None:
+        clear_state = _konsole_clear_state(home, environ)
+        if clear_state == "removed":
+            warnings.append(KONSOLE_CLEAR_REMOVED)
+        elif clear_state == "stock" and write and konsole_drifted:
+            notes.append(KONSOLE_CLEAR_STOCK)
     if _safe_executable(lookup("alacritty")) is not None:
         has_shell, shell_drifted, shell_warnings = _sync_alacritty(
             home, environ, zsh_path, write=write
@@ -726,6 +783,7 @@ def sync_terminal_shells(
         drifted=tuple(drifted),
         zsh=zsh_path,
         paths=tuple(paths),
+        notes=tuple(notes),
     )
 
 
@@ -745,6 +803,7 @@ def sync_message(result: TerminalShellResult, *, report_changes: bool = False) -
         if terminals:
             verb = "starts" if len(terminals) == 1 else "start"
             parts.append(f"Shell: {', '.join(terminals)} now {verb} zsh")
+        parts.extend(result.notes)
     messages = list(result.warnings)
     if result.reverted:
         messages.append("zsh is no longer present; reverted " + ", ".join(result.reverted))

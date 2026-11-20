@@ -21,7 +21,11 @@ from installer.receipts import read_ledger
 from installer.run import CommandError
 from installer.terminal_regions import WEZTERM_SKELETON
 from installer.terminal_shell import (
+    KONSOLE_CLEAR_REMOVED,
+    KONSOLE_CLEAR_STOCK,
     TerminalShellError,
+    TerminalShellResult,
+    konsole_clear_is_stock,
     sync_message,
     sync_terminal_shells,
     terminal_sync_warning,
@@ -1705,3 +1709,193 @@ def test_alacritty_config_that_imports_files_is_refused_with_a_reason(user_text:
     assert "alacritty" not in result.configured
     assert config.read_text() == user_text
     assert not _alacritty_record().exists()
+
+
+_KONSOLE_CONTEXT = (
+    '<!DOCTYPE gui>\n<gui name="konsole" version="1">\n'
+    ' <ActionProperties scheme="Default">\n'
+    '  <Action name="clear-history-and-reset" shortcut=""/>\n'
+    " </ActionProperties>\n</gui>\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("rc_text", "expected"),
+    [
+        ("", True),
+        (_KONSOLE_CONTEXT.replace(' shortcut=""', ""), True),
+        (_KONSOLE_CONTEXT.replace('shortcut=""', 'shortcut="Ctrl+Shift+K"'), True),
+        (_KONSOLE_CONTEXT.replace('shortcut=""', 'shortcut="Ctrl+Shift+K; Ctrl+L"'), True),
+        (_KONSOLE_CONTEXT.replace('shortcut=""', "shortcut='Shift+Ctrl+K'"), True),
+        (_KONSOLE_CONTEXT, False),
+        (_KONSOLE_CONTEXT.replace('shortcut=""', 'shortcut="Ctrl+Alt+K"'), False),
+        ('<gui><Action shortcut="" name="clear-history-and-reset" /></gui>', False),
+        ('<gui><Action name="clear-history" shortcut=""/></gui>', True),
+    ],
+)
+def test_konsole_clear_is_stock_reads_the_override_entry(rc_text: str, expected: bool) -> None:
+    assert konsole_clear_is_stock(rc_text) is expected
+
+
+def _konsole_fixture(tmp_path: Path, rc: bytes | str) -> tuple[Path, dict[str, str]]:
+    data_home = tmp_path / "data"
+    config_home = tmp_path / "config"
+    path = data_home / "kxmlgui5" / "konsole" / "sessionui.rc"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(rc.encode("utf-8") if isinstance(rc, str) else rc)
+    return path, {"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)}
+
+
+def test_konsole_removed_clear_is_kept_and_reported(tmp_path: Path) -> None:
+    path, environ = _konsole_fixture(tmp_path, _KONSOLE_CONTEXT)
+    before = path.read_bytes()
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": environ,
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    }
+    assert KONSOLE_CLEAR_REMOVED in sync_terminal_shells(**args).warnings
+    assert path.read_bytes() == before
+    assert KONSOLE_CLEAR_REMOVED in sync_terminal_shells(**args, write=False).warnings
+
+
+def test_konsole_unreadable_sessionui_is_unknown_and_reports_nothing(tmp_path: Path) -> None:
+    for index, rc in enumerate((b"\xff\n", b"directory", _KONSOLE_CONTEXT.rsplit("\n", 2)[0])):
+        home = tmp_path / str(index)
+        path, environ = _konsole_fixture(home, rc)
+        if index == 1:
+            path.unlink()
+            path.mkdir()
+        before = path.read_bytes() if path.is_file() else None
+        result = sync_terminal_shells(
+            home=home,
+            environ=environ,
+            platform=_platform(),
+            lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+        )
+        assert not any(w.startswith("konsole: partial:") for w in result.warnings)
+        assert (path.read_bytes() if path.is_file() else None) == before
+
+
+def test_konsole_clear_check_needs_konsole(tmp_path: Path) -> None:
+    _, environ = _konsole_fixture(tmp_path, _KONSOLE_CONTEXT)
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=environ,
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh"),
+    )
+    assert not any(w.startswith("konsole: partial:") for w in result.warnings)
+
+
+def test_konsole_clear_check_never_writes(tmp_path: Path) -> None:
+    """Sequential backstop only; this does not exercise a write race."""
+    path, environ = _konsole_fixture(tmp_path, _KONSOLE_CONTEXT)
+    before = path.read_bytes()
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": environ,
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    }
+    sync_terminal_shells(**args)
+    sync_terminal_shells(**args)
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in path.parent.iterdir()) == ["sessionui.rc"]
+
+
+def test_terminal_shell_result_has_no_notes_by_default() -> None:
+    assert TerminalShellResult().notes == ()
+
+
+def test_konsole_stock_clear_is_noted_when_the_profile_is_written(tmp_path: Path) -> None:
+    environ = {"XDG_DATA_HOME": str(tmp_path / "data"), "XDG_CONFIG_HOME": str(tmp_path / "config")}
+    args: _SyncArgs = {
+        "home": tmp_path,
+        "environ": environ,
+        "platform": _platform(),
+        "lookup": _lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    }
+    first = sync_terminal_shells(**args)
+    message = sync_message(first, report_changes=True)
+    assert first.notes == (KONSOLE_CLEAR_STOCK,)
+    assert message is not None
+    assert message.index("Shell: konsole now starts zsh") < message.index(KONSOLE_CLEAR_STOCK)
+    assert sync_message(first) is None
+    second = sync_terminal_shells(**args)
+    assert second.notes == ()
+    assert sync_message(second, report_changes=True) is None
+
+    dry_home = tmp_path / "dry"
+    dry_environ = {
+        "XDG_DATA_HOME": str(dry_home / "data"),
+        "XDG_CONFIG_HOME": str(dry_home / "config"),
+    }
+    dry = sync_terminal_shells(
+        home=dry_home,
+        environ=dry_environ,
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+        write=False,
+    )
+    assert dry.notes == ()
+
+
+def test_konsole_stock_fixture_is_byte_identical_and_noted(tmp_path: Path) -> None:
+    stock_rc = _KONSOLE_CONTEXT.replace('shortcut=""', 'shortcut="Ctrl+Shift+K"')
+    path, environ = _konsole_fixture(tmp_path, stock_rc)
+    before = path.read_bytes()
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=environ,
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    )
+    assert result.notes == (KONSOLE_CLEAR_STOCK,)
+    assert not any(w.startswith("konsole: partial:") for w in result.warnings)
+    assert path.read_bytes() == before
+
+
+def test_konsole_removed_clear_has_no_stock_note(tmp_path: Path) -> None:
+    _, environ = _konsole_fixture(tmp_path, _KONSOLE_CONTEXT)
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=environ,
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    )
+    assert result.notes == ()
+    assert KONSOLE_CLEAR_REMOVED in result.warnings
+
+
+def test_konsole_unreadable_sessionui_has_no_stock_note(tmp_path: Path) -> None:
+    path, environ = _konsole_fixture(tmp_path, b"\\xff\\n")
+    before = path.read_bytes()
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=environ,
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    )
+    assert result.notes == ()
+    assert not any(w.startswith("konsole: partial:") for w in result.warnings)
+    assert path.read_bytes() == before
+
+
+def test_konsole_sessionui_parent_that_is_a_file_has_no_stock_note(tmp_path: Path) -> None:
+    data_home = tmp_path / "data"
+    parent = data_home / "kxmlgui5" / "konsole"
+    parent.parent.mkdir(parents=True)
+    parent.write_bytes(b"x\\n")
+    environ = {"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(tmp_path / "config")}
+    before = parent.read_bytes()
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ=environ,
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", konsole="/usr/bin/konsole"),
+    )
+    assert result.notes == ()
+    assert not any(w.startswith("konsole: partial:") for w in result.warnings)
+    assert parent.read_bytes() == before
