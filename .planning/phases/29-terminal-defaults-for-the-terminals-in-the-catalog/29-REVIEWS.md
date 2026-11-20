@@ -168,3 +168,147 @@ The plans are well grounded in the existing terminal-key mechanism, but several 
 - **Reconcile remaining SPEC text.** The supplied SPEC still contains “removed key gets one binding” acceptance text despite the provisional report-only amendment. This review accepts the requested D-09 decision, but the contradictory acceptance text should be amended so execution and verification do not use opposite outcomes.
 
 **Not checked:** I did not run the implementation tests, terminal programs, or container target; this is a source-grounded plan review, not live verification.
+
+
+---
+
+## Lane Log (convergence cycle 2, plans at 3ebb9d18)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 12:40 | opencode-referee-one | one-shot probe | OK |
+| 12:40 to 12:42 | opencode-referee-one | real review through `review-lane invoke --slug opencode --model router-env/my-referee-one --as opencode-referee-one`, background, stdin `/dev/null` | exit 0, 13 KB, stderr empty |
+
+Failures this cycle: none. The review below is referee-one's, unedited.
+
+## Orchestrator verification of the cycle 2 HIGH concerns
+
+| Id | Claim | Judgment |
+|---|---|---|
+| C2-H1 (29-02) | A user who moves the kitty region below a mapping the scan cannot inspect lets the installer's map win | Rejected as a stated limit: it needs a user to move an owned block and an unscannable `geninclude` mapping (already reported as not followed); the installer owns the region's contents, not its position after a user edit; phase 28's Alacritty region has the same limit. Recorded as a `shortcut:` comment in 29-02. |
+| C2-H2 (29-03) | A user's `config.keys =` after an unchanged region leaves status quiet | Real (`terminal_keys_pending` never validates an unchanged region; `commit_region` returns before validation). Fix: an opt-in `validate_on_status` row field (WezTerm True; Alacritty and kitty False, so their existing behavior is untouched); a present region whose current text fails `row.validate` reads as a pending reason with no step. |
+| C2-H3 (29-05) | A failed herdr byte proof only changes the skill wording, but TERM-05 needs the bytes or a pass-through setting | Real. Fix: 29-06 requires `herdr-keys: PASS` and otherwise stops BLOCKED; a product FAIL stops the run for a replan toward the pass-through setting; an environmental UNPROVEN is retried by the orchestrator. |
+| C2-H4 (29-06) | A missing or `not run` D-07 check passes through the gate | Real. Fix: 29-06 requires `D-07 cwd check: PASS` and otherwise stops BLOCKED; a FAIL replans the row to `Writes`. The two-wording alternatives are removed; the cells say `verified`. |
+
+Actionable MEDIUMs adopted: 29-03 live Lua check asserts and exits non-zero on mismatch; 29-04 `NotADirectoryError` is unknown, not stock (do not touch `_read_text`; read the file directly in the new check); 29-05 attribute recorder bytes by cumulative expected length with split-write tests, not by timing alone; SPEC boundary text amended by the orchestrator. Rejected with reasons: 29-01 moved shell region (pre-existing sync behavior, out of this phase's scope); 29-02 `glob` directory listing (a stated limit with a `shortcut:` comment, kitty globs are small); 29-06 `/Applications` token (reviewer: no change required).
+
+`CYCLE_SUMMARY: current_high=3 current_actionable=4`
+
+## OpenCode Review (opencode-referee-one), cycle 2
+
+Using the plan-review checklist to check the six current plans against the lifecycle code, tests, and phase decisions.
+### Document Type
+
+GSD · implementation plans
+
+### Status: Issues Found — revise and re-review
+
+The review is grounded in the current checkout. I treated the provisional phase 28 D-06 and 29 D-09 decisions as instructed, rather than reopening them.
+
+## 29-01
+
+**Summary.** Changes Alacritty’s clear binding, extends the shared row interface, and fixes WezTerm shell-marker detection.
+
+**Findings status.** Cycle 1’s A1 is addressed for **changed** writes: the plan adds a validator test, and `commit_region` validates changed content (`installer/terminal_regions.py:181-196`). It does not validate an unchanged file; the resulting WezTerm risk is discussed under 29-03.
+
+**Strengths.** The Alacritty change targets the existing single tuple and leaves the two Alt tuples intact (`installer/terminal_regions.py:139-143`). The interface changes cover the existing render, apply, and pending paths (`installer/terminal_keys.py:106-113,145-224`).
+
+**Concerns.**
+
+- **MEDIUM — The WezTerm shell region can remain unreachable after an existing region is moved.** The planned `_wezterm_content` accepts an owned region whenever at least one `return config` exists and replaces that region in place (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-01-PLAN.md:197,207`). An existing shell region *after* the return therefore remains after it, although the terminal never executes it. The existing replacement primitive preserves that position (`installer/terminal_regions.py:57-62`). The new tests cover insertion, not this existing-region case.
+
+**Suggestions.** Add a moved-shell-region fixture and refuse or safely repair an unreachable region without changing user lines.
+
+**Risk Assessment.** Moderate: the shared changes are well scoped, but the shell sync can report a configuration that WezTerm does not execute.
+
+## 29-02
+
+**Summary.** Adds kitty’s per-OS keys region, conflict scan and resolver, and replaces its macOS script route with the cask.
+
+**Findings status.** A3’s golden-file probe is now self-verifying. H1 is explicitly implemented as the instructed provisional quiet-on-recorded-refusal decision. A2 is only partially addressed: stopped walks are reported, but the proposed glob operation is not actually bounded as claimed.
+
+**Strengths.** The cask change removes the current `/Applications` script method (`installer/registry.toml:3040-3049`) and retains the existing cask (`:3059-3064`). The scan reports unreadable and unsupported includes rather than claiming they were checked (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-02-PLAN.md:319-323`).
+
+**Concerns.**
+
+- **HIGH — A moved kitty region can override a user binding.** The plan promises top placement but retains existing regions in place and makes `validate_kitty` check only that their lines start with `map` (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-02-PLAN.md:275,280`; `.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-01-PLAN.md:197`). If a user moves the region below a mapping that the bounded scan cannot inspect—for example, one from `geninclude`—kitty’s last-wins behavior lets the installer’s later mapping win. A partial note does not preserve the binding. The underlying replacement behavior is at `installer/terminal_regions.py:57-62`.
+- **MEDIUM — `islice(glob.iglob(...))` does not bound directory enumeration.** The plan asserts a real bound at `.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-02-PLAN.md:30,331`. Python’s `glob` implementation on this host materializes a directory’s entries in `_listdir` before yielding matches. Thus the file-read cap and partial report work, but a huge directory can still consume substantial memory and time before the cap is applied.
+
+**Suggestions.** Validate that an existing kitty region is still at the safe placement before any rewrite, with a moved-region fixture involving an unscanned include. Either implement genuinely bounded enumeration or state and test the remaining directory-size limitation.
+
+**Risk Assessment.** High: the moved-region case can violate the phase’s user-binding preservation rule.
+
+## 29-03
+
+**Summary.** Adds WezTerm’s guarded Lua region, read-back, and created-file cleanup.
+
+**Findings status.** H2 now has a proposed pre-29-06 container check; A4 and A5 have concrete suite-wide mocking and unverified-output handling. H3 is mitigated only when a write changes the file, not for the original post-install edit scenario.
+
+**Strengths.** The Lua design explicitly imports WezTerm and normalizes modifiers and uppercase letters before guarding additions (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-03-PLAN.md:125-153`). The read-back seam accounts for the sandbox’s refusal of host executables (`tests/sandbox.py:515-570`).
+
+**Concerns.**
+
+- **HIGH — The original ineffective-region status gap remains after an ordinary user edit.** The plan explicitly defers detection when the region’s own bytes remain unchanged (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-03-PLAN.md:93,248`). `terminal_keys_pending` compares the rendered region to the file but does not invoke the validator (`installer/terminal_keys.py:200-224`), and `commit_region` returns before validation when content is unchanged (`installer/terminal_regions.py:192-196`). Adding `config.keys = {}` after a correctly installed region can therefore erase its effective bindings while status remains quiet. The new stale-region tests do not exercise this case.
+- **MEDIUM — The live Lua check can exit successfully without proving its assertions.** The check merely prints three results (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-03-PLAN.md:171-199`); the executor must interpret them manually (`:322`). A refusal, unexpected result, or missing conflict can still produce exit zero. This weakens the only planned live execution of the generated guard.
+
+**Suggestions.** Check effective placement and later assignments during status/read-back even when no rewrite is needed, with an installed-region-then-user-edit test. Make the live check assert all three results and exit nonzero on mismatch.
+
+**Risk Assessment.** High: a valid-looking, unchanged owned region can be ineffective without a user-visible indication.
+
+## 29-04
+
+**Summary.** Implements the instructed report-only Konsole check and a stock note when the profile is written.
+
+**Findings status.** A6 is substantially addressed with stock, removed, and unknown states. The explicit SPEC acceptance now says report-only (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-SPEC.md:38-41,76`); older boundary text remains inconsistent.
+
+**Strengths.** The design keeps shortcut detection separate from the existing Konsole profile mutation and routes `partial:` through the existing status mechanism (`installer/terminal_shell.py:712-721`; `installer/version_status.py:1601-1606`).
+
+**Concerns.**
+
+- **MEDIUM — A non-directory path component can still become an affirmative stock result.** The plan relies on `_read_text` to distinguish unreadable paths from missing files (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-04-PLAN.md:121-133`). But `_read_text` converts both `FileNotFoundError` **and `NotADirectoryError`** to an empty string (`installer/terminal_shell.py:252-255`). If, for example, `kxmlgui5/konsole` is a regular file, the detector treats that failed read as stock rather than unknown. The proposed directory-at-the-final-path fixture does not cover this case.
+
+**Suggestions.** Distinguish an absent override from `NotADirectoryError`, and add a fixture with a non-directory parent component. Reconcile the stale conditional-write boundary wording in `29-SPEC.md:50-59` when the provisional decision is confirmed.
+
+**Risk Assessment.** Moderate: the check remains read-only, but can make a false stock claim.
+
+## 29-05
+
+**Summary.** Adds a disposable-container herdr byte probe and host-side verdict and harness tests.
+
+**Findings status.** H4’s claim is narrowed to the actual arrow encoding, A7 removes the standalone static gate, and A8 moves the target before the documentation wording decision.
+
+**Strengths.** The specified verdict checks each sent chord separately and distinguishes an unstarted recorder (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-05-PLAN.md:117-125,140-143`). The existing harness removes its named container and checks that it is gone (`scripts/container-e2e-verify.sh:2734-2754`).
+
+**Concerns.**
+
+- **HIGH — A failed byte proof does not require the behavior required by TERM-05.** The plan says a mismatch is reported, then lets 29-06 use unverified wording (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-05-PLAN.md:234`; `29-06-PLAN.md:103-108,220-224`). But the locked acceptance requires either the bytes to arrive **or** an applied and removable pass-through setting (`29-SPEC.md:43-46,77`). A product failure can therefore leave the phase without either outcome while the final plan still completes.
+- **MEDIUM — The host tests do not exercise the actual PTY/log attribution loop.** They test the pure slicing function and verdict, but the loop that records marks, sends bytes, pumps, and shuts down is specified only for the container run (`29-05-PLAN.md:123,140-143`). Delayed or split recorder writes around a mark can be attributed to the wrong chord, producing a misleading product failure.
+
+**Suggestions.** Make a product mismatch stop phase completion and trigger investigation or a replan for the pass-through setting; keep an environmental UNPROVEN result distinct. Add a deterministic test of the driver loop or an explicit per-chord synchronization protocol.
+
+**Risk Assessment.** High if the live probe fails: documentation qualification alone does not satisfy TERM-05.
+
+## 29-06
+
+**Summary.** Updates the onboarding skill and adds cross-row consistency and prohibition tests.
+
+**Findings status.** A8’s premature **verified** claim is addressed by selecting wording from a recorded PASS. H2 is improved, but the gate permits an unrun check and the herdr failure path remains non-blocking.
+
+**Strengths.** The table guard uses the existing seven-cell parser (`tests/test_tool_onboarding_skill.py:140-146,180-193`), and the plan separates the two evidence-dependent wordings (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-06-PLAN.md:99-108`).
+
+**Concerns.**
+
+- **HIGH — A missing D-07 check can pass through the supposed prerequisite gate.** The plan calls the check a gate before 29-06, but explicitly allows `not run` or a missing section to select unverified wording and proceeds (`29-06-PLAN.md:57-59,136-139,220-224`). That leaves the production row as `Vendor` even though D-07 requires the live check before locking that declaration and a `Writes` replan on failure (`29-CONTEXT.md:34-36`). A later checklist does not prevent the phase’s last plan from finishing with the decision unresolved.
+- **MEDIUM — The exact target text breaks an existing skill test.** The replacement sentence at `29-06-PLAN.md:113` removes the only standalone backticked `` `/Applications` `` in the macOS-apps section: the existing sentence contains `` `/Applications/kitty.app` ``, while the required standalone token occurs in the section’s first paragraph (`.claude/skills/tool-onboarding/SKILL.md:102-110`). The plan’s target leaves that first paragraph intact, so this particular existing test remains satisfied; however, the plan should not rely on the replacement sentence itself to provide that token. **No change required if the first paragraph remains unchanged.**
+
+**Suggestions.** Require a recorded D-07 PASS before completing the phase, or explicitly stop as blocked when the check cannot run; retain the fail-to-replan path. Keep the herdr product-failure gate consistent with 29-05.
+
+**Risk Assessment.** High: an unverified cwd behavior can remain the shipped declaration despite the locked precondition.
+
+## Cross-plan consistency
+
+- **Wave overlap is appropriately bounded by declared modified files:** 29-01 and 29-05 are disjoint, while subsequent terminal-module changes are serialized (`29-01-PLAN.md:6-13`; `29-05-PLAN.md:6-11`; `29-06-PLAN.md:6-12`).
+- **Cycle 1 dispositions are not all complete:** A1 and H3 cover changed rewrites, but not unchanged effective-order drift; A2 reports caps but does not bound Python glob’s directory enumeration. The instructed H1 quiet behavior is recorded rather than challenged.
+- **Phase completion needs outcome gates, not only truthful documentation.** In particular, an unrun WezTerm cwd probe and a failed herdr byte probe must not be treated as equivalent to completed TERM-02 and TERM-05.
+
+**Not checked:** I did not run the test suite, terminal programs, or containers. The glob observation was checked against the host Python implementation; no repository files were changed.

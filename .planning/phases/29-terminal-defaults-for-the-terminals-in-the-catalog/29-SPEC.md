@@ -48,7 +48,7 @@ kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults of 
 ## Boundaries
 
 **In scope:**
-- kitty and WezTerm rows in the shared mechanism (herdr has none, 29 D-10); Alacritty's clear change; the Konsole verify-and-conditionally-write check.
+- kitty and WezTerm rows in the shared mechanism (herdr has none, 29 D-10); Alacritty's clear change; the Konsole verify-and-report check *(amended 2026-11-20, 29 D-09, needs confirmation: report-only, no conditional write)*.
 - kitty's macOS install location and CLI link.
 - Golden-file tests on both OSes and the container checks named above.
 - *Amended 2026-11-19 (29 D-10, D-11):* a herdr byte-level container target in `scripts/container-e2e-verify.sh`, and the `placement` and `validate` fields of the phase 28 row type.
@@ -56,7 +56,7 @@ kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults of 
 **Out of scope:**
 - Alt word navigation on Linux terminals other than Alacritty — owner decision 2026-11-16 (Ctrl+Left/Right is the Linux convention).
 - Ghostty, iTerm2 and the Herdr desktop app — phases 30-31.
-- Rewriting Konsole's profile beyond the conditional binding — owner: verify, do not rewrite.
+- Rewriting Konsole's profile or writing any Konsole binding *(amended 2026-11-20, 29 D-09, needs confirmation)* — owner: verify, do not rewrite.
 - Real-Mac checks — UAT lines deferred to the owner's Mac (SKILL-05).
 - The global Option-as-Alt switch on any terminal.
 
