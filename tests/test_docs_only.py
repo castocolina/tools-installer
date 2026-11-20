@@ -226,6 +226,7 @@ LEDGER: dict[tuple[str, str], str | None] = {
     ("tests/test_docs.py", "AGENTS.md"): "AGENTS.md",
     ("tests/test_docs.py", "README.md"): "README.md",
     ("tests/test_docs.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
+    ("tests/test_tool_onboarding_skill.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
     ("tests/test_docs.py", "TROUBLESHOOTING.md"): "docs/TROUBLESHOOTING.md",
     ("tests/test_docs.py", "architecture.md"): ".claude/architecture.md",
     ("tests/test_docs.py", "dev-environment.md"): ".claude/dev-environment.md",

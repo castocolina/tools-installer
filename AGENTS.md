@@ -43,11 +43,13 @@ When a gate fails, fix it and re-run its own target.
 - **Coherent commits.** Do not pile up "fix review comment" commits. Amend or squash
   so each commit is one self-contained, valid change. See [Git Workflow](.claude/git-workflow.md).
 - **Changes reach `main` by branch push, green CI, fast-forward** ([Git Workflow](.claude/git-workflow.md)).
-- **The hooks are the gate.** The commit hook runs the six static gates and the push gate
-  runs them again, then `make test`. Do not run `make validate && make test` by hand before
-  a commit, after editing plans or Markdown, or after a `.py` edit: the hooks do it, and
-  every worktree shares them. Run a gate by hand only to diagnose a failure, or in a
-  checkout that has no hooks yet. Never bypass a hook.
+- **The hooks are the gate.** The commit hook runs the six static gates (the set
+  `make validate` runs), and every worktree shares it, so never run `make validate` by hand
+  before a commit and run nothing after editing plans or Markdown. Tests run only at the
+  push gate (`make test`): when a run changes `.py` code and will not push soon (an
+  autonomous run), run `make test` after each task, so a red suite is found while the
+  change is small and never left for the push. Also run a gate by hand to diagnose a
+  failure, or in a checkout that has no hooks yet. Never bypass a hook.
 - **Never mutate the developer's host.** Do not run `make run`, `make fix`,
   `make uninstall`, `make doctor`, or mutating `systemctl --user` commands, on the
   real machine (every launch route, doctor included, may rewrite the real

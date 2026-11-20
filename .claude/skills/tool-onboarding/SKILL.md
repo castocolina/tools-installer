@@ -214,6 +214,25 @@ A Policies row is only for something outside any install (an installer-wide
 guard, a background job, a host environment redirect), and a new requirement
 never becomes a Policies knob by default.
 
+#### Closed per-terminal table
+
+One row per `terminal` or `editor` entry in `installer/registry.toml`; `tests/test_tool_onboarding_skill.py` fails when an entry has no row or a row has no entry, so a new terminal adds its row with its entry.
+
+Each rule cell starts with one status word: `vendor` (the vendor default already meets the rule), `written` (the installer writes it today), `planned (phase N)` (that phase will write it), `n/a` (the rule does not apply to this entry, or the part it needs is out of scope here, such as IDE keybindings (SKILL-07); the reason follows), `unverified` (not checked live yet; phases 29-31 settle the terminal cells).
+
+| tool | config file | (a) shell | (b) word navigation | (c) clear | (d) same directory | reload |
+| --- | --- | --- | --- | --- | --- | --- |
+| `kitty` | `$XDG_CONFIG_HOME/kitty/kitty.conf`, else `~/.config/kitty/kitty.conf` | written: the zsh terminal sync sets its shell on Linux | planned (phase 29): bind opt+left and opt+right only, macos_option_as_alt stays no (never yes) | planned (phase 29): Linux ctrl+shift+k is scroll_line_up today, displaced with an install note; macOS cmd+k unverified | planned (phase 29): new_tab, new_window and new_os_window do not keep the cwd today | unverified |
+| `wezterm` | `$XDG_CONFIG_HOME/wezterm/wezterm.lua`, else `~/.wezterm.lua` | written: default_prog, set by the zsh terminal sync on Linux | planned (phase 29): the two chords in its Lua keys region | planned (phase 29): SUPER k and CTRL+SHIFT k are ClearScrollback(ScrollbackOnly) today, scrollback only, no Ctrl+L | unverified: splits use CurrentPaneDomain, cwd inheritance not checked | unverified |
+| `alacritty` | `~/.config/alacritty/alacritty.toml` (first match of alacritty(5)) | written: the shell region of the zsh terminal sync | n/a: Linux-only entry; its Linux Alt+Left/Right rows stay (owner decision) | planned (phase 29): ClearHistory today, moves to the shared clear (TERM-03) | unverified | unverified |
+| `herdr` | `~/.config/herdr/config.toml` | written: terminal.default_shell, only when absent | n/a: no key rules of its own, keys pass through to the host terminal (TERM-05) | n/a: the clear chord passes through to the host terminal (TERM-05) | unverified | `herdr server reload-config` |
+| `vscode` | `settings.json` (Code/User) | written: apply_agent_tuning sets terminal.integrated.defaultProfile.linux and .osx to zsh | n/a: out of scope, IDE keybindings are SKILL-07 (future) | n/a: out of scope, IDE keybindings are SKILL-07 (future) | unverified: applies to its integrated terminal (a terminal setting, not a keybinding); vendor docs say a split terminal inherits the cwd on macOS and Linux (terminal.integrated.splitCwd) and a new terminal opens at the workspace folder; not checked live | unverified |
+| `jetbrains-toolbox` | none (a launcher) | n/a: a launcher; the IDEs it installs are not catalog entries | n/a: a launcher; the IDEs it installs are not catalog entries | n/a: a launcher; the IDEs it installs are not catalog entries | n/a: a launcher; the IDEs it installs are not catalog entries | n/a |
+| `sublime` | none for these rules | n/a: no integrated terminal | n/a: no integrated terminal | n/a: no integrated terminal | n/a: no integrated terminal | n/a |
+| `neovim` | `~/.config/nvim` | n/a: an editor, no terminal key rules | n/a: an editor, no terminal key rules | n/a: an editor, no terminal key rules | n/a: an editor, no terminal key rules | read on restart |
+
+Konsole has no row: it is detected by code but is not a catalog entry. The owner decision is to verify it and leave it alone: `_sync_konsole` (`installer/terminal_shell.py`) keeps its zsh profile, and phase 29 (TERM-04) checks its stock Ctrl+Shift+K clear.
+
 ### 8. Check the registry's existing classifiers (deep research)
 
 Before writing the block, read how the classifiers disagree in this codebase —

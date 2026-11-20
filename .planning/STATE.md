@@ -5,16 +5,16 @@ milestone_name: Onboard terminal tools
 current_phase: 27
 current_phase_name: "Tool-onboarding skill: terminal defaults as rules"
 status: executing
-stopped_at: "Phases 27-35 spec and discuss done (assumptions mode, jev screening); next: plan-phase 27"
-last_updated: "2026-11-20T03:13:15.669Z"
-last_activity: 2026-11-19
-last_activity_desc: ingested the update-automation todos as Phases 33–35 (41/41 requirements mapped)
-state_head: e2934349c438f636239a8f28eebba756b5d1da0b
+stopped_at: Completed 27-01-PLAN.md
+last_updated: "2026-11-20T04:39:16.216Z"
+last_activity: 2026-11-20
+last_activity_desc: Phase 27 execution started
+state_head: d7ce3adf393ab883517f8c43ed06b6ec871211c6
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-16)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required, and every screen tells the truth about what is on the host.
-**Current focus:** v0.51.0 Onboard terminal tools — Phase 27: Tool-onboarding skill: terminal defaults as rules
+**Current focus:** Phase 27 — Tool-onboarding skill: terminal defaults as rules
 
 ## Current Position
 
-Phase: 27 (Tool-onboarding skill: terminal defaults as rules) — READY TO EXECUTE
-Plan: Not started
+Phase: 27 (Tool-onboarding skill: terminal defaults as rules) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-11-19 — ingested the update-automation todos as Phases 33–35 (41/41 requirements mapped)
+Last activity: 2026-11-20 — Phase 27 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -68,6 +68,11 @@ Progress: [░░░░░░░░░░] 0%
 | 26 | 9 | - | - |
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 27 P01 | 8min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -159,9 +164,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-20T01:41:48.300Z
-Stopped at: Phases 27-35 spec and discuss done (assumptions mode, jev screening); next: plan-phase 27
-Resume file: .planning/phases/35-opt-in-auto-update-package-managers-first/35-CONTEXT.md
+Last session: 2026-11-20T04:39:16.193Z
+Stopped at: Completed 27-01-PLAN.md
+Resume file: None
 
 ## Deferred Verification
 
