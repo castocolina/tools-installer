@@ -354,6 +354,58 @@ def test_drift_without_a_record_a_stale_region_reads_pending() -> None:
     assert _config().read_text() == _USER_FONT + _KEYS_REGION
 
 
+def test_all_conflicts_keep_empty_region_and_restore_freed_chord() -> None:
+    run_post_install(_alacritty(), _LINUX)
+    config = _config()
+    user_bindings = (
+        '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "x"\n'
+        '[[keyboard.bindings]]\nkey = "Right"\nmods = "Alt"\nchars = "y"\n'
+        '[[keyboard.bindings]]\nkey = "K"\nmods = "Control|Shift"\naction = "Quit"\n'
+    )
+    config.write_text(_KEYS_REGION + user_bindings)
+
+    assert _pending() == KEYS_PENDING
+    assert _reapply()[1] is None
+    empty_region = (
+        "# >>> tools-installer terminal-shell alacritty-keys >>>\n\n"
+        "# <<< tools-installer terminal-shell alacritty-keys <<<\n"
+    )
+    assert config.read_text() == empty_region + user_bindings
+    assert _pending() is None
+    before = config.read_bytes()
+    assert _reapply() == ((), None)
+    assert config.read_bytes() == before
+
+    config.write_text(
+        config.read_text().replace('key = "Left"\nmods = "Alt"\nchars = "x"\n', "", 1)
+    )
+    assert _pending() == KEYS_PENDING
+    assert _reapply()[1] is None
+    assert 'key = "Left"\nmods = "Alt"\nchars = "\\u001bb"' in config.read_text()
+    assert 'key = "Right"\nmods = "Alt"\nchars = "y"' in config.read_text()
+    assert 'action = "Quit"' in config.read_text()
+
+
+def test_all_conflicts_empty_region_uninstalls_without_touching_user_bindings() -> None:
+    run_post_install(_alacritty(), _LINUX)
+    config = _config()
+    user_bindings = (
+        '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "x"\n'
+        '[[keyboard.bindings]]\nkey = "Right"\nmods = "Alt"\nchars = "y"\n'
+        '[[keyboard.bindings]]\nkey = "K"\nmods = "Control|Shift"\naction = "Quit"\n'
+    )
+    config.write_text(_KEYS_REGION + user_bindings)
+    assert _reapply()[1] is None
+
+    assert (
+        strip_terminal_keys(
+            TERMINAL_KEYS["alacritty"], "alacritty", "fedora", Path.home(), os.environ
+        )
+        == ()
+    )
+    assert config.read_text() == user_bindings
+
+
 def test_drift_user_binding_added_after_install_wins_on_reconfigure() -> None:
     run_post_install(_alacritty(), _LINUX)
     _config().write_text(_config().read_text() + _USER_ALT_LEFT)

@@ -162,8 +162,9 @@ def apply_terminal_keys(
         before = read_settings(path)
         text = snapshot_text(before)
         plan = _render(row, platform_os, text)
+        body = "" if recorded and plan.body is None and plan.conflicts else plan.body
         updated = replace_owned_region(
-            text, row.ownership.region, plan.body, comment=row.ownership.comment
+            text, row.ownership.region, body, comment=row.ownership.comment
         )
         region_present = (
             replace_owned_region(text, row.ownership.region, None, comment=row.ownership.comment)
@@ -213,8 +214,9 @@ def terminal_keys_pending(
             return None
         plan = _render(row, platform_os, text)
         if present:
+            body = "" if plan.body is None and plan.conflicts else plan.body
             updated = replace_owned_region(
-                text, row.ownership.region, plan.body, comment=row.ownership.comment
+                text, row.ownership.region, body, comment=row.ownership.comment
             )
             return KEYS_PENDING if plan.refusal is None and updated != text else None
     except OSError as exc:
