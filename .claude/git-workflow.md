@@ -8,8 +8,8 @@ review conversation. These rules apply to every commit and to the review cycle.
 ## Rules
 
 ### Commits are coherent
-- One commit = one self-contained logical change that builds and passes
-  `make validate && make test`. Never commit a knowingly broken tree.
+- One commit = one self-contained logical change that the commit hook accepts and whose
+  tree the push gate's `make test` passes. Never commit a knowingly broken tree.
 - Write a clear message: a concise imperative subject (Conventional Commits style —
   `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`), and a body explaining
   *why* when it isn't obvious.
@@ -24,8 +24,8 @@ review conversation. These rules apply to every commit and to the review cycle.
   - Single original commit → `git commit --amend`.
   - Multi-commit branch → `git commit --fixup=<sha>` then `git rebase -i --autosquash`,
     so each fix folds into the commit it belongs to.
-- Only after amending/squashing do you re-run `make validate && make test` and (if the
-  branch was pushed) force-push with lease: `git push --force-with-lease`. That flag is for
+- After amending/squashing, the push gate re-tests the tree you push; if the branch was
+  already pushed, force-push with lease: `git push --force-with-lease`. That flag is for
   branches only; `main` is never force-pushed.
 
 ### When to commit

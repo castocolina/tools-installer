@@ -40,8 +40,9 @@ Tests run with `pytest` and coverage via `make test`. Configuration lives in
   lookups) and filesystem/HOME via `tmp_path` and monkeypatched `Path.home()`.
 
 ### Definition of done
-- A change is done when `make validate && make test` both pass on the committed tree —
-  not when the feature "works on my machine".
+- A change is done when the commit hook's six gates and the push gate's `make test` pass
+  on the committed tree — not when the feature "works on my machine". Do not run them by
+  hand first; the hooks run them.
 
 ## Examples
 
