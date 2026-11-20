@@ -88,7 +88,7 @@
 **Success Criteria** (what must be TRUE):
 
   1. Alacritty's keys region is applied, checked and stripped through the shared mechanism keyed by its registry tool id; the region it writes is byte-identical to before the move and its existing tests pass with no assertion edits; no dispatch site branches on the Alacritty id any more.
-  2. In a scratch HOME, deleting or editing a terminal's keys region makes its row read `≈ apply install tuning`, a reconfigure restores the region, and an uninstall strips it with the tool; a test fails when a registry tool with `apply_terminal_tuning` has no mechanism row.
+  2. In a scratch HOME, deleting or editing a terminal's keys region makes its row read `≈ apply install tuning` *(amended 2026-11-19, 28 D-06, needs confirmation: deleting counts only before the installer recorded an apply; editing a present region is drift)*, a reconfigure restores the region, and an uninstall strips it with the tool; a test fails when a registry tool with `apply_terminal_tuning` has no mechanism row.
   3. In the installer's managed zsh configuration, Ctrl+L at the prompt clears the visible screen and the scrollback (byte-level test of the emitted sequences), and the mechanism maps the clear chord to Ctrl+L for every row: Cmd+K on macOS, Ctrl+Shift+K on Linux.
   4. Every mechanism row declares whether the vendor already opens a new tab, window or pane in the current directory; the setting is written only for rows where it does not, and a test fails when a row leaves it undeclared.
 
