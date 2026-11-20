@@ -48,8 +48,7 @@ When a gate fails, fix it and re-run its own target.
   never run `make validate` or a single static gate by hand per commit, and never chain
   `make validate && make test` at a commit. While working, run only the tests that cover
   your edit: find the edited files, then the test file named for each module, the tests
-  that import it and the tests that read an edited non-Python file (`devtools/docs_only.py`
-  lists those), and run `uv run pytest <those files> --no-cov -q`. After a plan, run
+  that import it and the tests that read an edited non-Python file (find them with `rg -l '<file name>' tests/`), and run `uv run pytest <those files> --no-cov -q`. After a plan, run
   `make validate` and `make test` once each: tests otherwise run only at the push gate,
   and a run that will not push soon (an autonomous run) must not leave a red suite for it.
   Editing only plans or Markdown that no test reads needs none of this. Run a gate by hand

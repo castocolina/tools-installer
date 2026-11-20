@@ -66,6 +66,7 @@ GATE_READ_PATHSPECS: tuple[str, ...] = (
     "typings/**",
     ".claude/*.md",
     ".claude/skills/**",
+    ".planning/**/*-SKILLJUDGE-*",
 )
 
 
@@ -127,7 +128,7 @@ def _part(header: str, items: Sequence[str], fix: str) -> str:
 
 
 def _untracked_message(git: GitRunner) -> str | None:
-    # Root configs, conftest and data files change what the gates see; only .planning/ is exempt.
+    # Root configs, conftest and data files change what the gates see; .planning/ verdicts do too.
     untracked = {
         name
         for name in _names(_query(git, ["ls-files", "--others", "--exclude-standard", "-z"]))

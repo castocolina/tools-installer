@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,6 +14,7 @@ import yaml
 
 from installer.enums import Category
 from installer.model import load_tools
+from tests.skill_verdicts import DIMENSIONS, RUBRIC_MAX, grade, parse_verdict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
@@ -64,11 +66,8 @@ def ci_workflow_problems(workflow: dict[str, Any]) -> list[str]:
         problems.append("Classify the change id is not scope")
     if "make test" not in test.get("run", ""):
         problems.append("Test step does not run make test")
-    test_if = test.get("if", "")
-    if "steps.scope.outputs.full" not in test_if:
-        problems.append("Test step if does not read steps.scope.outputs.full")
-    if "!= 'false'" not in test_if:
-        problems.append("Test step if is not gated by != 'false'")
+    if test.get("if") != "steps.scope.outputs.full != 'false'":
+        problems.append("Test step if is not exactly steps.scope.outputs.full != 'false'")
     return problems
 
 
@@ -216,7 +215,7 @@ def test_rules_name_their_os_and_behavior() -> None:
             "`@`",
             "`|`",
             "`#`",
-            "`\\\\`",
+            "`\\`",
         ),
         "c": (
             "Cmd+K on macOS",
@@ -420,18 +419,28 @@ def test_macos_testing_matches_the_ci_workflow() -> None:
     ("case", "expected"),
     [
         ("fixed-runner", ["runs-on does not use matrix.os"]),
-        ("inverted-gate", ["Test step if is not gated by != 'false'"]),
+        (
+            "inverted-gate",
+            ["Test step if is not exactly steps.scope.outputs.full != 'false'"],
+        ),
+        (
+            "macos-excluded",
+            ["Test step if is not exactly steps.scope.outputs.full != 'false'"],
+        ),
     ],
-    ids=["fixed-runner", "inverted-gate"],
+    ids=["fixed-runner", "inverted-gate", "macos-excluded"],
 )
 def test_macos_testing_ci_check_refuses_mutations(case: str, expected: list[str]) -> None:
     workflow = copy.deepcopy(_ci_workflow())
     job = workflow["jobs"]["validate-and-test"]
     if case == "fixed-runner":
         job["runs-on"] = "ubuntu-latest"
-    else:
+    elif case == "inverted-gate":
         test_step = next(step for step in job["steps"] if step.get("name") == "Test")
         test_step["if"] = "steps.scope.outputs.full == 'false'"
+    else:
+        test_step = next(step for step in job["steps"] if step.get("name") == "Test")
+        test_step["if"] = "steps.scope.outputs.full != 'false' && runner.os != 'macOS'"
     assert ci_workflow_problems(workflow) == expected
 
 
@@ -496,6 +505,98 @@ def test_macos_apps_step_9_verified_example() -> None:
         "brew's",
     ):
         assert phrase in flat
+
+
+def _verdict_doc(
+    points: tuple[int, ...] = (16, 12, 12, 12, 12, 12, 12, 13), **overrides: Any
+) -> str:
+    total, max_total = sum(points), sum(RUBRIC_MAX)
+    percent = round(total / max_total * 100, 1)
+    verdict: dict[str, Any] = {
+        "skill": "tool-onboarding",
+        "judge": "fixture",
+        "rubric_version": 4,
+        "spec_sha": "0" * 40,
+        "scores": dict(zip(DIMENSIONS, points, strict=True)),
+        "max": dict(zip(DIMENSIONS, RUBRIC_MAX, strict=True)),
+        "total": total,
+        "max_total": max_total,
+        "percent": percent,
+        "grade": grade(percent),
+        "findings": [],
+    }
+    return "Summary\n\n" + json.dumps(verdict | overrides)
+
+
+def verdict_regressions(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
+    problems: list[str] = []
+    rubric_max = dict(zip(DIMENSIONS, RUBRIC_MAX, strict=True))
+    for label, verdict in (("before", before), ("after", after)):
+        if verdict["skill"] != "tool-onboarding":
+            problems.append(f"{label} verdict is for {verdict['skill']}")
+        if dict(verdict["max"]) != rubric_max:
+            problems.append(f"{label} max differs from the rubric: {verdict['max']}")
+    if before["rubric_version"] != after["rubric_version"]:
+        problems.append(
+            f"rubric_version differs: {before['rubric_version']} vs {after['rubric_version']}"
+        )
+    if before["spec_sha"] != after["spec_sha"]:
+        problems.append(f"spec_sha differs: {before['spec_sha']} vs {after['spec_sha']}")
+    if float(after["percent"]) < float(before["percent"]):
+        problems.append(
+            f"after percent {after['percent']} is below before percent {before['percent']}"
+        )
+    return problems
+
+
+def _phase_dir() -> Path:
+    planning = REPO_ROOT / ".planning"
+    matches = sorted((*planning.glob("phases/27-*"), *planning.glob("milestones/*-phases/27-*")))
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
+def test_verdict_regressions_boundary() -> None:
+    before = parse_verdict(_verdict_doc(), final=False)
+    assert verdict_regressions(before, before) == []
+    lower = parse_verdict(_verdict_doc((16, 12, 12, 12, 12, 12, 12, 12)), final=False)
+    assert verdict_regressions(before, lower) == ["after percent 80.0 is below before percent 80.8"]
+    higher = parse_verdict(_verdict_doc((16, 12, 12, 12, 12, 12, 12, 14)), final=False)
+    assert verdict_regressions(before, higher) == []
+
+
+def test_verdict_regressions_refuses_mixed_rubrics() -> None:
+    base = parse_verdict(_verdict_doc(), final=False)
+    version = parse_verdict(_verdict_doc(rubric_version=5), final=False)
+    assert "rubric_version differs: 4 vs 5" in verdict_regressions(base, version)
+    spec = parse_verdict(_verdict_doc(spec_sha="1" * 40), final=False)
+    assert any(
+        problem.startswith("spec_sha differs") for problem in verdict_regressions(base, spec)
+    )
+    other_skill = parse_verdict(_verdict_doc(skill="catalog-audit"), final=False)
+    assert "before verdict is for catalog-audit" in verdict_regressions(other_skill, base)
+    bad_max = {**base, "max": {**base["max"], "D1": 25}}
+    assert any(
+        problem.startswith("after max differs from the rubric")
+        for problem in verdict_regressions(base, bad_max)
+    )
+    assert verdict_regressions(base, base) == []
+
+
+def test_verdict_unparseable_percent_raises() -> None:
+    with pytest.raises(ValueError, match="rounding gives"):
+        parse_verdict(_verdict_doc(percent="eighty"), final=False)
+
+
+def test_verdict_files_before_and_after() -> None:
+    folder = _phase_dir()
+    verdicts = sorted(
+        path.name for path in folder.glob("27-SKILLJUDGE-*.md") if "ROUND" not in path.name
+    )
+    assert verdicts == ["27-SKILLJUDGE-after.md", "27-SKILLJUDGE-before.md"]
+    before = parse_verdict(_text(folder / "27-SKILLJUDGE-before.md"), final=False)
+    after = parse_verdict(_text(folder / "27-SKILLJUDGE-after.md"), final=False)
+    assert verdict_regressions(before, after) == []
 
 
 def test_table_matches_the_registry() -> None:

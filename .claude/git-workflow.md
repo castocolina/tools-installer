@@ -8,8 +8,7 @@ review conversation. These rules apply to every commit and to the review cycle.
 ## Rules
 
 ### Commits are coherent
-- One commit = one self-contained logical change that the commit hook accepts and whose
-  tree the push gate's `make test` passes. Never commit a knowingly broken tree.
+- One commit = one self-contained logical change that the commit hook accepts. The push gate and CI test only the pushed tip, so run the targeted tests for what you changed before you commit it (AGENTS.md); never commit a knowingly broken tree.
 - Write a clear message: a concise imperative subject (Conventional Commits style —
   `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`), and a body explaining
   *why* when it isn't obvious.
@@ -45,7 +44,7 @@ review conversation. These rules apply to every commit and to the review cycle.
    wait for green again — strict mode accepts only a commit that is up to date with `main`
    and whose checks passed.
 
-A docs-only change (only paths under `.planning/`, or Markdown no test reads) gets both
+A docs-only change (only `.planning/` files and Markdown that no test reads; `devtools/docs_only.py` holds the exceptions, such as the skill-judge verdict files) gets both
 required check names quickly through CI's fast pass; `devtools/docs_only.py` holds the list
 of files tests read. CI does not run on pull requests, so an outside contributor's branch
 gets CI once the maintainer pushes that branch to this repository.

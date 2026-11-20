@@ -78,6 +78,22 @@ def _fake_runner(
             [".planning/milestones/v0.50.0-phases/24.3-catalog-audit-skill/24.3-SKILLJUDGE-1.md"],
             False,
         ),
+        (
+            [
+                ".planning/phases/27-tool-onboarding-skill-terminal-defaults-as-rules/27-SKILLJUDGE-before.md"
+            ],
+            False,
+        ),
+        (
+            [
+                ".planning/milestones/v0.51.0-phases/27-tool-onboarding-skill-terminal-defaults-as-rules/27-SKILLJUDGE-after.md"
+            ],
+            False,
+        ),
+        (
+            [".planning/phases/27-tool-onboarding-skill-terminal-defaults-as-rules/27-01-PLAN.md"],
+            True,
+        ),
         ([".planning/x.md", "installer/a.py"], False),
         ([], False),
     ],
@@ -227,6 +243,22 @@ LEDGER: dict[tuple[str, str], str | None] = {
     ("tests/test_docs.py", "README.md"): "README.md",
     ("tests/test_docs.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
     ("tests/test_tool_onboarding_skill.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
+    (
+        "tests/test_tool_onboarding_skill.py",
+        ".planning",
+    ): ".planning/**/27-tool-onboarding-skill-terminal-defaults-as-rules/27-SKILLJUDGE-*.md",
+    (
+        "tests/test_tool_onboarding_skill.py",
+        "27-SKILLJUDGE-*.md",
+    ): ".planning/**/27-tool-onboarding-skill-terminal-defaults-as-rules/27-SKILLJUDGE-*.md",
+    (
+        "tests/test_tool_onboarding_skill.py",
+        "27-SKILLJUDGE-after.md",
+    ): ".planning/**/27-tool-onboarding-skill-terminal-defaults-as-rules/27-SKILLJUDGE-*.md",
+    (
+        "tests/test_tool_onboarding_skill.py",
+        "27-SKILLJUDGE-before.md",
+    ): ".planning/**/27-tool-onboarding-skill-terminal-defaults-as-rules/27-SKILLJUDGE-*.md",
     ("tests/test_docs.py", "TROUBLESHOOTING.md"): "docs/TROUBLESHOOTING.md",
     ("tests/test_docs.py", "architecture.md"): ".claude/architecture.md",
     ("tests/test_docs.py", "dev-environment.md"): ".claude/dev-environment.md",

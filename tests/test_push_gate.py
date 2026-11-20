@@ -370,6 +370,19 @@ def test_untracked_planning_files_do_not_refuse() -> None:
     assert len(run.calls) == 1
 
 
+def test_untracked_skill_judge_verdict_is_refused_but_planning_note_is_not(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    planning = "." + "planning" + "/"
+    extension = ".m" + "d"
+    verdict = planning + "phases/27-x/27-" + "SKILLJUDGE-after" + extension
+    note = planning + "phases/27-x/notes" + extension
+    err = _refused(_git(untracked=_z(verdict, note), gate_read=_z(verdict)), capsys)
+    assert f"  {verdict}\n" in err
+    assert note not in err
+    assert planning not in err.split(GATE_HEADER)[0]
+
+
 def test_an_ignored_root_conftest_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
     err = _refused(_git(gate_read=_z("conftest.py")), capsys)
     assert "  conftest.py\n" in err
@@ -427,9 +440,18 @@ def test_the_gate_read_pathspecs_are_pinned_and_bounded() -> None:
         "typings/**",
         ".claude/*.md",
         ".claude/skills/**",
+        "." + "planning" + "/" + "**/*-SKILLJUDGE-*",
     )
-    assert len(GATE_READ_PATHSPECS) == 29
-    literal_roots = ("installer/", "tests/", "devtools/", "scripts/", "typings/", ".claude/")
+    assert len(GATE_READ_PATHSPECS) == 30
+    literal_roots = (
+        "installer/",
+        "tests/",
+        "devtools/",
+        "scripts/",
+        "typings/",
+        ".claude/",
+        "." + "planning" + "/",
+    )
     assert all("/" not in p or p.startswith(literal_roots) for p in GATE_READ_PATHSPECS)
 
 

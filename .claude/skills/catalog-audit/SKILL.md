@@ -159,7 +159,7 @@ approval of that change. For each approved change, in this order:
 
 1. a container check of the change;
 2. `make verify-registry ARGS="--state <scratch>/verify-registry.json"`;
-3. `make validate`, then `make test`;
+3. the targeted tests for the edited entry (`uv run pytest <those files> --no-cov -q`); after the last approved change, `make validate` and `make test` once each;
 4. a row in the run's `dispositions.toml`:
 
 ```toml

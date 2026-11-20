@@ -1,6 +1,6 @@
 ---
 name: tool-onboarding
-description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), how it is uninstalled per platform (vendor uninstaller, files it wrote, keep-config vs delete-all policy), its tier, dependencies, whether it needs a postinstall hook, how a terminal or IDE meets the four defaults applied as rules (zsh shell on Linux, word navigation, clear screen and scrollback, new tabs in the current directory), and which extras to offer (shell integration, companion plugins).
+description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), how it is uninstalled per platform (vendor uninstaller, files it wrote, keep-config vs delete-all policy), its tier, dependencies, whether it needs a postinstall hook, how a terminal or IDE meets the four defaults applied as rules (zsh shell on Linux, word navigation, clear screen and scrollback, new tabs in the current directory), and which extras to offer (shell integration, companion plugins). Not for auditing every entry against upstream, checking only release pins (`make verify-registry`), or installing a tool on this machine.
 ---
 
 # Tool onboarding
@@ -25,7 +25,7 @@ below must land on a mechanism that exists in code today (a method kind, a
 param, a hook name, a classifier). Name the file that implements it. If the
 right answer needs a capability the registry, model or installer lacks — per-
 OS/arch artifacts a method kind cannot express, a customization with no hook — do not approximate it in the entry.
-Record it as a platform gap in the GSD backlog and say so in `# Verified`. A
+Record it as a platform gap in the GSD backlog (a `### Phase 999.x` item under `## Backlog` in `.planning/ROADMAP.md`) and say so in `# Verified`. A
 checklist that "covers" a case the platform silently mishandles is worse than
 no checklist.
 
@@ -36,6 +36,7 @@ comment above the `[[tool]]` block. It is the only audit trail.
 
 - Adding any `[[tool]]` block; reviewing one against these conventions.
 - Noticing an existing tool lacks a postinstall, a platform, or a removal path.
+- Reviewing an existing entry: run steps 3, 4b and 8 against its block, then update its `# Verified` comment (and its table row if it is a terminal or editor).
 - To audit every registry entry in one loop, use `catalog-audit` (`.claude/skills/catalog-audit/SKILL.md`).
 
 ## Steps
@@ -119,7 +120,7 @@ one tool-wide recipe or separate per-OS knobs. For each method from step 4:
 | `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `bun`, `node`, `sdkman` | nothing: removal derives from the manager (L1) | the package/candidate name the manager removes is the one installed |
 | `github_release`, `tarball`, `app` | nothing: removal is the receipt of the paths the install computed (L2) | install and removal use the same path; nothing else shares that path |
 | `cargo_distrobox` | `repo` (owner/name slug), `image` (fully qualified), `packages` (in-box build deps), `artifacts` (`{box, host}` tables) | the first artifact is the binary under ~/.local/bin; every `host` sits under ~/.local, ~/.config or ~/.terminfo; the box and the image it pulled are deleted on every outcome |
-| `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME` | run the vendor installer in a disposable container and list what it wrote |
+| `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME` | run the vendor installer in a disposable container (`scripts/detect-container-runtime.sh` picks the runtime; never on the host) and list what it wrote |
 
 ```toml
 [[tool]]
@@ -140,8 +141,7 @@ artifacts = [
 Removal has three levels, tried in order by `uninstall.removal_plan`: **L1** the
 manager's own remove, **L2** the receipt-proven artifacts (download, app,
 `cargo_distrobox`, script `paths`), **L3** the script's `remove` recipe. One
-example per script param (from the registry, except `remove`, which no entry
-ships yet; `{omz_root}` is the only placeholder a script argv may use):
+example per script param (from the registry; the `remove` line is illustrative, and the real one is the `opencode` entry's script `remove` argv; `{omz_root}` is the only placeholder a script argv may use):
 
 ```toml
 paths = ["~/.local/bin/uv", "~/.local/bin/uvx"]   # L2: what the script created
@@ -179,9 +179,7 @@ Apply `.claude/architecture.md`'s "Tier is a browsing label":
 dependencies, and postinstall classification" — the canonical decision tree;
 read it rather than reconstructing it. A manager-installed tool names that
 manager in `requires`; a runtime-only expectation the catalog cannot
-guarantee also needs an edge, or a `# Verified` note when unsure. Walk the tree:
-`postinstall` hook / none. If
-it straddles two branches, name the ambiguity.
+guarantee also needs an edge, or a `# Verified` note when unsure. Walk the tree to one of two outcomes, a `postinstall` hook or none; if it straddles two branches, name the ambiguity.
 
 A hook is selected by NAME from the closed `POSTINSTALL_HOOKS` table, never a
 command string, and must detect and merge, never blind-overwrite existing
@@ -193,10 +191,10 @@ Every terminal and IDE entry gets each of the four defaults below that it has th
 
 #### Terminal and IDE defaults
 
-These four rules apply, without asking, to every terminal and IDE entry that has the capability: none of them is a question to the developer or to the end user, and each is the entry's install tuning (a `post_install` action), never a Policies row. The table below marks a rule an entry lacks, or a part that is out of scope here such as IDE keybindings, `n/a` with the reason.
+These four rules apply, without asking, to every terminal and IDE entry that has the capability: none of them is a question to the developer or to the end user, and each is install tuning, never a Policies row. Rule (a) is the lifecycle-wide zsh terminal sync (`installer/terminal_shell.py`, called by `installer/compose.py` `_sync_terminals`); the others are written by the entry's `post_install` actions. The table below marks a rule an entry lacks, or a part that is out of scope here such as IDE keybindings, `n/a` with the reason.
 
 - (a) Linux, Bazzite included: zsh is the launched shell. That is the zsh terminal sync (`installer/terminal_shell.py`).
-- (b) macOS: Option+Left and Option+Right move by word by binding only those two chords, never the global Option-as-Alt switch: on the owner's Spanish layout that switch breaks `@`, `|`, `#` and `\\`.
+- (b) macOS: Option+Left and Option+Right move by word by binding only those two chords, never the global Option-as-Alt switch: on the owner's Spanish layout that switch breaks `@`, `|`, `#` and `\`.
 - (c) macOS and Linux: Cmd+K on macOS and Ctrl+Shift+K on Linux clear the screen and the scrollback. The chord sends Ctrl+L, and the managed zsh configuration makes Ctrl+L clear both; that zsh part is planned for phase 28 (KEYS-03) and nothing in `installer/` does it today.
 - (d) Every OS: a new tab, window or pane opens in the current directory; the installer writes it only where the vendor default does not already do it.
 
@@ -211,8 +209,8 @@ Each rule cell starts with one status word: `vendor` (the vendor default already
 | tool | config file | (a) shell | (b) word navigation | (c) clear | (d) same directory | reload |
 | --- | --- | --- | --- | --- | --- | --- |
 | `kitty` | `$XDG_CONFIG_HOME/kitty/kitty.conf`, else `~/.config/kitty/kitty.conf` | written: the zsh terminal sync sets its shell on Linux | planned (phase 29): bind opt+left and opt+right only, macos_option_as_alt stays no (never yes) | planned (phase 29): Linux ctrl+shift+k is scroll_line_up today, displaced with an install note; macOS cmd+k unverified | planned (phase 29): new_tab, new_window and new_os_window do not keep the cwd today | unverified |
-| `wezterm` | `$XDG_CONFIG_HOME/wezterm/wezterm.lua`, else `~/.wezterm.lua` | written: default_prog, set by the zsh terminal sync on Linux | planned (phase 29): the two chords in its Lua keys region | planned (phase 29): SUPER k and CTRL+SHIFT k are ClearScrollback(ScrollbackOnly) today, scrollback only, no Ctrl+L | unverified: splits use CurrentPaneDomain, cwd inheritance not checked | unverified |
-| `alacritty` | `~/.config/alacritty/alacritty.toml` (first match of alacritty(5)) | written: the shell region of the zsh terminal sync | n/a: Linux-only entry; its Linux Alt+Left/Right rows stay (owner decision) | planned (phase 29): ClearHistory today, moves to the shared clear (TERM-03) | unverified | unverified |
+| `wezterm` | `$XDG_CONFIG_HOME/wezterm/wezterm.lua` (else `~/.config/wezterm/wezterm.lua`); `~/.wezterm.lua` only when it alone exists (`_wezterm_config_path`) | written: default_prog, set by the zsh terminal sync on Linux | planned (phase 29): the two chords in its Lua keys region | planned (phase 29): SUPER k and CTRL+SHIFT k are ClearScrollback(ScrollbackOnly) today, scrollback only, no Ctrl+L | unverified: splits use CurrentPaneDomain, cwd inheritance not checked | unverified |
+| `alacritty` | the first existing of alacritty(5)'s four user paths (`$XDG_CONFIG_HOME/alacritty/alacritty.toml`, `$XDG_CONFIG_HOME/alacritty.toml`, `~/.config/alacritty/alacritty.toml`, `~/.alacritty.toml`), else the first (`alacritty_config_path`) | written: the shell region of the zsh terminal sync | n/a: Linux-only entry; its Linux Alt+Left/Right rows stay (owner decision) | planned (phase 29): ClearHistory today, moves to the shared clear (TERM-03) | unverified | unverified |
 | `herdr` | `~/.config/herdr/config.toml` | written: terminal.default_shell, only when absent | n/a: no key rules of its own, keys pass through to the host terminal (TERM-05) | n/a: the clear chord passes through to the host terminal (TERM-05) | unverified | `herdr server reload-config` |
 | `vscode` | `settings.json` (Code/User) | written: apply_agent_tuning sets terminal.integrated.defaultProfile.linux and .osx to zsh | n/a: out of scope, IDE keybindings are SKILL-07 (future) | n/a: out of scope, IDE keybindings are SKILL-07 (future) | unverified: applies to its integrated terminal (a terminal setting, not a keybinding); vendor docs say a split terminal inherits the cwd on macOS and Linux (terminal.integrated.splitCwd) and a new terminal opens at the workspace folder; not checked live | unverified |
 | `jetbrains-toolbox` | none (a launcher) | n/a: a launcher; the IDEs it installs are not catalog entries | n/a: a launcher; the IDEs it installs are not catalog entries | n/a: a launcher; the IDEs it installs are not catalog entries | n/a: a launcher; the IDEs it installs are not catalog entries | n/a |
@@ -279,14 +277,13 @@ copy (`rg` the registry, do not rely on memory).
 ### 9. Write the entry
 
 `id`, `name`, `category`, `cmd`, `priority`, `audience`, `tier`, `verified =
-YYYY-MM-DD`, `desc`, `requires`, optional `postinstall`, optional method
+YYYY-MM-DD`, `desc`, `requires`, optional `postinstall` (LLM host wiring, `POSTINSTALL_HOOKS`), optional `post_install` (install-tuning actions, `POST_INSTALL_HOOKS`: a different list), optional method
 `smoke_argv` (argument tail only for the post-install smoke run; argv[0] is
 always the installed path), one `[[tool.method]]` per real platform/arch path
 from steps 3-4, and the dated `# Verified` comment
 (what was checked, what was knowingly left out, which extras were offered and the developer's answers; the terminal defaults are rules and are never offered). Use only keys allowed for each method kind
 (`METHOD_PARAMS` in `installer/model.py`); for `app`/`tarball` urls with
-`{ver}`, set `version` and `sha256` together. Then validate with the repo's
-gates and add tests for any new hook; sandbox every real install.
+`{ver}`, set `version` and `sha256` together. Then validate: `make verify-registry` for the pins, the targeted tests for the entry (`uv run pytest tests/test_tool_onboarding_skill.py` for a terminal or editor, which also keeps the table above in step), and `make validate` and `make test` once the entry is done (the commit hook already runs the static gates on every commit). Add tests for any new hook, and sandbox every real install in a disposable container: `scripts/detect-container-runtime.sh` picks the runtime, run the installer in a throwaway container, list what it wrote, then remove the container; never run it on the host. A macOS-only method (a cask, the `app` kind, a macOS vendor script) cannot run in a Linux container: record its install and removal facts from the vendor docs in `# Verified`, and add a UAT line deferred to the owner's Mac; no agent marks it passed.
 
 Example `# Verified` lines for a macOS cask (Example is a placeholder):
 
@@ -310,24 +307,25 @@ For an app whose only macOS build is a `.dmg`:
 
 ## Common Mistakes
 
-- **Authoring from one OS.** Check every OS and arch the vendor ships for.
-- **One install shape for all platforms.** Artifacts legitimately differ per
-  OS/arch; model each, or file the schema gap.
-- **Treating a vendor script as package-manager-owned.** It is not; record
-  what it creates and its removal story.
-- **Writing from memory when in doubt.** Research online first and cite it.
-- **Skipping the marketplace question for LLM tooling.**
+- **Treating a vendor script as package-manager-owned.** It is not: without `paths`
+  and `remove` the Uninstall screen cannot plan its removal (step 4b).
+- **Skipping the marketplace question for LLM tooling.** Step 2 prefers the
+  marketplace route when the host supports it; an unasked question silently picks
+  a symlinked copy instead.
 - **Shipping a non-terminal extra nobody asked for (a multiplexer companion, a shell theme, an editor plugin, an LLM host), or skipping that question.** Offer, ask, record.
 - **Asking the developer about one of the four terminal defaults.** They are rules (step 7); only extras are offered.
-- **Never use the global Option-as-Alt switch for word navigation;** bind only the two chords: on a Spanish layout the switch breaks `@`, `|`, `#` and `\\`.
+- **Never use the global Option-as-Alt switch for word navigation;** bind only the two chords: on a Spanish layout the switch breaks `@`, `|`, `#` and `\`.
 - **Turning an accepted customization into a Policies row or an install-time
   question.** It is install tuning: a Policies row is only for what lies
   outside any install, and an install-time question is a TUNE-04 miss.
-- **Classifying an agent harness CLI as `ai` tier because it is AI-branded.**
-- **Skipping a dependency edge because "the user probably has it".**
+- **Classifying an agent harness CLI as `ai` tier because it is AI-branded.** Tier
+  is who drives the tool (step 5), and the human types into a harness CLI.
+- **Skipping a dependency edge because "the user probably has it".** `requires` is
+  the only install-order and drag-in mechanism; without the edge the tool installs
+  in the wrong order or fails on a clean machine.
 - **A postinstall hook that writes to every host unconditionally or passes an
-  "auto"-style flag.**
-- **Re-deriving the postinstall tree instead of reading architecture.md.**
+  "auto"-style flag.** It creates config for hosts the developer does not have;
+  gate on `postinstall.present_hosts()` (step 6).
 - **Declaring a `smoke_argv` that answers before the binary itself runs (for
   example an AppImage runtime flag); confirm the binary answers `--version` or
   declare the smallest argument list that runs it.**
