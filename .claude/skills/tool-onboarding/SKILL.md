@@ -1,6 +1,6 @@
 ---
 name: tool-onboarding
-description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), how it is uninstalled per platform (vendor uninstaller, files it wrote, keep-config vs delete-all policy), its tier, dependencies, and whether it needs a postinstall hook or user-chosen customizations (terminal keybindings, shell integration, companion plugins).
+description: Use when adding a new tool to installer/registry.toml, or reviewing an existing entry — researching what the tool is (OS tool, user app, LLM plugin/skill/agent pack), how and for which OS/arch it ships, which install method fits (brew, vendor script, package manager, per-platform artifact, marketplace vs symlink), how it is uninstalled per platform (vendor uninstaller, files it wrote, keep-config vs delete-all policy), its tier, dependencies, whether it needs a postinstall hook, how a terminal or IDE meets the four defaults applied as rules (zsh shell on Linux, word navigation, clear screen and scrollback, new tabs in the current directory), and which extras to offer (shell integration, companion plugins).
 ---
 
 # Tool onboarding
@@ -17,6 +17,8 @@ that motivate each step: a tool authored from macOS only and Linux-blind for
 phases; a postinstall gap nobody noticed; a vendor installer script treated as
 "the package manager did it". Decide from evidence about THIS tool, not from
 the examples.
+
+The one exception is the closed per-terminal table under step 7: its rows are the registry's terminal and editor entries, not examples, and `tests/test_tool_onboarding_skill.py` keeps them in step with `installer/registry.toml`.
 
 **The skill cannot promise what the platform does not do.** Every decision
 below must land on a mechanism that exists in code today (a method kind, a
@@ -175,44 +177,20 @@ A hook is selected by NAME from the closed `POSTINSTALL_HOOKS` table, never a
 command string, and must detect and merge, never blind-overwrite existing
 host config (gate on `postinstall.present_hosts()`, live presence through `present_harnesses`).
 
-### 7. Postinstall and customizations — ask the user, do not assume
+### 7. Postinstall and customizations: terminal defaults are rules, extras are asked
 
-Ask whether the tool has well-known friction or nice-to-haves that a
-postinstall or companion config should cover, then **ask the user which of
-those they want** before building any. Do not enable them silently. Prompts to
-walk through (examples of the shape, not an exhaustive list):
+Every terminal and IDE entry gets each of the four defaults below that it has the capability for, as a rule applied at install without a question. Only extras beyond them are offered to the developer (the last subsection of this step).
 
-- Terminal emulators: word navigation with alt/option+arrows is often broken
-  per OS (macOS vs Linux, per terminal); a "clear screen + scrollback" binding
-  differs per OS (Cmd+K on macOS, Ctrl+Shift+K on Linux). Also which shell the
-  terminal should launch: that is the zsh terminal sync
-  (`installer/terminal_shell.py`). Word navigation, clear-scrollback and other
-  terminal customizations are the terminal's install tuning (a `post_install`
-  action), never a Policies row.
-- Multiplexers/agent workspaces: companion scripts or a plugin from another
-  repo (status icons, separators between agents).
-- Shells/prompts/editors: plugin managers, themes, shell-integration lines.
-- LLM tools: which hosts to wire (only the ones actually present).
+#### Terminal and IDE defaults
 
-Each accepted customization is its own idempotent, reversible step with a
-sandboxed test; each declined one is recorded in `# Verified`.
+These four rules apply, without asking, to every terminal and IDE entry that has the capability: none of them is a question to the developer or to the end user, and each is the entry's install tuning (a `post_install` action), never a Policies row. The table below marks a rule an entry lacks, or a part that is out of scope here such as IDE keybindings, `n/a` with the reason.
 
-**Where an accepted customization lives.** It is install-time tuning: a named
-action in the tool's `post_install` list, dispatched from the closed
-`POST_INSTALL_HOOKS` table in `installer/post_install.py` (names in
-`POST_INSTALL_ACTIONS`, `installer/model.py`). It runs at install with
-no runtime question on every route, shows as `≈ apply install tuning` with
-a RECONFIGURE step on a tool already present, and is reverted with the tool:
-settings keys through the config-write ledger, shell blocks and plugin names
-through their ownership records. A key the user already holds with another
-value is kept and shown as `set by you`, so there is no opt-out knob. The
-onboarding author still asks the developer which customizations to build
-(above); the end user is never asked at install. Worked examples:
-`apply_agent_tuning`, `set_omz_plugins`, `source_shell_init`.
+- (a) Linux, Bazzite included: zsh is the launched shell. That is the zsh terminal sync (`installer/terminal_shell.py`).
+- (b) macOS: Option+Left and Option+Right move by word by binding only those two chords, never the global Option-as-Alt switch: on the owner's Spanish layout that switch breaks `@`, `|`, `#` and `\\`.
+- (c) macOS and Linux: Cmd+K on macOS and Ctrl+Shift+K on Linux clear the screen and the scrollback. The chord sends Ctrl+L, and the managed zsh configuration makes Ctrl+L clear both; that zsh part is planned for phase 28 (KEYS-03) and nothing in `installer/` does it today.
+- (d) Every OS: a new tab, window or pane opens in the current directory; the installer writes it only where the vendor default does not already do it.
 
-A Policies row is only for something outside any install (an installer-wide
-guard, a background job, a host environment redirect), and a new requirement
-never becomes a Policies knob by default.
+The table below says how each entry meets each rule.
 
 #### Closed per-terminal table
 
@@ -232,6 +210,33 @@ Each rule cell starts with one status word: `vendor` (the vendor default already
 | `neovim` | `~/.config/nvim` | n/a: an editor, no terminal key rules | n/a: an editor, no terminal key rules | n/a: an editor, no terminal key rules | n/a: an editor, no terminal key rules | read on restart |
 
 Konsole has no row: it is detected by code but is not a catalog entry. The owner decision is to verify it and leave it alone: `_sync_konsole` (`installer/terminal_shell.py`) keeps its zsh profile, and phase 29 (TERM-04) checks its stock Ctrl+Shift+K clear.
+
+#### Extras are asked
+
+Beyond the four defaults, look for well-known friction or nice-to-haves that a postinstall or companion config should cover, then offer them to the developer and build only the ones they accept. Prompts to walk through (examples of the shape, not an exhaustive list):
+
+- Multiplexers/agent workspaces: companion scripts or a plugin from another
+  repo (status icons, separators between agents).
+- Shells/prompts/editors: plugin managers, themes, shell-integration lines.
+- LLM tools: which hosts to wire (only the ones actually present).
+
+Each accepted extra is its own idempotent, reversible step with a sandboxed test; each declined one is recorded in `# Verified`.
+
+**Where an accepted customization lives.** It is install-time tuning: a named
+action in the tool's `post_install` list, dispatched from the closed
+`POST_INSTALL_HOOKS` table in `installer/post_install.py` (names in
+`POST_INSTALL_ACTIONS`, `installer/model.py`). It runs at install with
+no runtime question on every route, shows as `≈ apply install tuning` with
+a RECONFIGURE step on a tool already present, and is reverted with the tool:
+settings keys through the config-write ledger, shell blocks and plugin names
+through their ownership records. A key the user already holds with another
+value is kept and shown as `set by you`, so there is no opt-out knob. The
+onboarding author offers the developer only the extras (this subsection); the four terminal defaults are never offered, and the end user is never asked at install. Worked examples:
+`apply_agent_tuning`, `set_omz_plugins`, `source_shell_init`.
+
+A Policies row is only for something outside any install (an installer-wide
+guard, a background job, a host environment redirect), and a new requirement
+never becomes a Policies knob by default.
 
 ### 8. Check the registry's existing classifiers (deep research)
 
@@ -257,8 +262,7 @@ YYYY-MM-DD`, `desc`, `requires`, optional `postinstall`, optional method
 `smoke_argv` (argument tail only for the post-install smoke run; argv[0] is
 always the installed path), one `[[tool.method]]` per real platform/arch path
 from steps 3-4, and the dated `# Verified` comment
-(what was checked, what was knowingly left out, which customizations were
-offered and the user's answers). Use only keys allowed for each method kind
+(what was checked, what was knowingly left out, which extras were offered and the developer's answers; the terminal defaults are rules and are never offered). Use only keys allowed for each method kind
 (`METHOD_PARAMS` in `installer/model.py`); for `app`/`tarball` urls with
 `{ver}`, set `version` and `sha256` together. Then validate with the repo's
 gates and add tests for any new hook; sandbox every real install.
@@ -272,8 +276,9 @@ gates and add tests for any new hook; sandbox every real install.
   what it creates and its removal story.
 - **Writing from memory when in doubt.** Research online first and cite it.
 - **Skipping the marketplace question for LLM tooling.**
-- **Shipping customizations nobody asked for, or skipping the question
-  entirely.** Offer, ask, record.
+- **Shipping a non-terminal extra nobody asked for (a multiplexer companion, a shell theme, an editor plugin, an LLM host), or skipping that question.** Offer, ask, record.
+- **Asking the developer about one of the four terminal defaults.** They are rules (step 7); only extras are offered.
+- **Never use the global Option-as-Alt switch for word navigation;** bind only the two chords: on a Spanish layout the switch breaks `@`, `|`, `#` and `\\`.
 - **Turning an accepted customization into a Policies row or an install-time
   question.** It is install tuning: a Policies row is only for what lies
   outside any install, and an install-time question is a TUNE-04 miss.

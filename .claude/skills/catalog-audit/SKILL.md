@@ -77,8 +77,8 @@ never rewritten.
    - update argv and removal recipe and paths:
      `### 4b. Decide how it is removed, per platform — before writing the entry`. Does the
      vendor's own upgrade and uninstall still work the way the entry declares?
-   - tuning keys: `### 7. Postinstall and customizations — ask the user, do not assume`. Its
-     TUNE-04 rule applies as written there: tuning is install-time, never a runtime question.
+   - tuning keys: `### 7. Postinstall and customizations: terminal defaults are rules, extras are asked`.
+     Its TUNE-04 rule applies as written there: tuning is install-time, never a runtime question.
      A key the vendor deprecated or renamed is drift.
    - postinstall hook: `### 6. Dependencies and postinstall mechanism`.
    - classifiers and the dated `# Verified` comment: `### 8. Check the registry's existing classifiers (deep research)`

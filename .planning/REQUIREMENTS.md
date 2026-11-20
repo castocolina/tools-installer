@@ -10,7 +10,7 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 
 ### Tool-onboarding skill (SKILL)
 
-- [ ] **SKILL-01**: The tool-onboarding skill states the terminal and IDE defaults as rules applied without asking the user: (a) zsh is the launched shell on Linux, Bazzite included; (b) Option/Alt+Left/Right moves by word on macOS, by binding only those two chords, never the global Option-as-Alt switch; (c) Cmd+K on macOS and Ctrl+Shift+K on Linux clear the screen and the scrollback; (d) a new tab, window or pane opens in the current directory. Only extras are asked.
+- [x] **SKILL-01**: The tool-onboarding skill states the terminal and IDE defaults as rules applied without asking the user: (a) zsh is the launched shell on Linux, Bazzite included; (b) Option/Alt+Left/Right moves by word on macOS, by binding only those two chords, never the global Option-as-Alt switch; (c) Cmd+K on macOS and Ctrl+Shift+K on Linux clear the screen and the scrollback; (d) a new tab, window or pane opens in the current directory. Only extras are asked.
 - [x] **SKILL-02**: The skill carries a closed per-terminal table (each terminal's config file, how each default is met or already met by the vendor, and the reload behavior), and a test fails when a terminal or IDE entry in `installer/registry.toml` has no row.
 - [ ] **SKILL-03**: The skill's conflict rule: a binding the user already defines is never overridden (the result is reported as `partial: kept yours`); a vendor default that conflicts is overridden only with an install note that names the displaced default.
 - [ ] **SKILL-04**: The skill's research step records, per macOS app, how it installs, uninstalls and is configured, and whether its method can place the bundle in `~/Applications` (a vendor installer that takes a destination, as kitty's does; a `.zip` or `.dmg` the installer extracts; a cask through `--appdir`) instead of `/Applications`, which restricted machines deny; where the method allows it the bundle goes to `~/Applications`, and every app that ships a CLI gets that CLI linked into `~/.local/bin` so it runs from the command line. Where no method allows a user location, the entry says why. *(amended 2026-11-19, 27 D-10: the `app` kind extracts `.zip` only, so `.dmg` is a recorded platform gap; a cask's CLI link is brew's, not `~/.local/bin`, also a recorded gap)*
@@ -111,7 +111,7 @@ Ingested 2026-11-19 from the update-automation todos and `.planning/research/202
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SKILL-01 | Phase 27 | Pending |
+| SKILL-01 | Phase 27 | Complete |
 | SKILL-02 | Phase 27 | Complete |
 | SKILL-03 | Phase 27 | Pending |
 | SKILL-04 | Phase 27 | Pending |

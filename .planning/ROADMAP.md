@@ -77,14 +77,14 @@
   4. The skill states the macOS testing rule: each macOS behavior is a pure config generator with a golden-file test that runs on both OSes, macOS CI covers the file paths, and the real-Mac check is a UAT line marked deferred to the owner's Mac.
   5. skill-judge scores for the skill before and after the rewrite are recorded in the phase directory, and the after score is not lower.
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 **Wave 1**
 - [x] 27-01-PLAN.md — Before verdict (pre-dispatch orchestrator prerequisite, executor verify gate), then the closed per-terminal table with its registry coverage test and edge fixtures (SKILL-02, SKILL-06)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 27-02-PLAN.md — Step 7 renamed; the four defaults as rules; only non-terminal extras stay questions (SKILL-01, SPEC R6)
+- [x] 27-02-PLAN.md — Step 7 renamed; the four defaults as rules; only non-terminal extras stay questions (SKILL-01, SPEC R6)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 27-03-PLAN.md — Conflict rule, macOS testing rule naming the CI job, macOS app rule with a `# Verified` example (SKILL-03, SKILL-05, SKILL-04)
@@ -222,7 +222,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. Tool-onboarding skill: terminal defaults as rules | 1/4 | In Progress | - |
+| 27. Tool-onboarding skill: terminal defaults as rules | 2/4 | In Progress | - |
 | 28. Shared terminal-keys mechanism | 0/TBD | Not started | - |
 | 29. Terminal defaults for the terminals in the catalog | 0/TBD | Not started | - |
 | 30. Onboard Ghostty | 0/TBD | Not started | - |

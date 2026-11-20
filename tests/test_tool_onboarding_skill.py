@@ -15,6 +15,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
 REGISTRY = REPO_ROOT / "installer" / "registry.toml"
 TABLE_HEADING = "#### Closed per-terminal table"
+RULES_HEADING = "#### Terminal and IDE defaults"
+EXTRAS_HEADING = "#### Extras are asked"
+ASK_RE = re.compile(
+    r"\bask(?:s|ed)?\b[^.]{0,80}\b(?:word navigation|clear|scrollback|"
+    r"zsh terminal sync|current directory|same directory)\b",
+    re.IGNORECASE,
+)
 _SEPARATOR_ROW_RE = re.compile(r"\|[-|: ]+\|")
 ID_CELL_RE = re.compile(r"`([a-z0-9][a-z0-9._-]*)`")
 STATUS_RE = re.compile(r"(?:vendor|written|unverified|n/a|planned \(phase \d+\))(?::|$)")
@@ -37,6 +44,38 @@ def _subsection(text: str, heading: str) -> str:
     start = matches[0]
     nxt = re.search(r"^#### |^### ", text[start.end() :], re.MULTILINE)
     return text[start.start() : start.end() + nxt.start()] if nxt else text[start.start() :]
+
+
+def rule_items(section: str) -> dict[str, str]:
+    lines = section.splitlines()
+    starts = [index for index, line in enumerate(lines) if re.match(r"^- \(([a-d])\) ", line)]
+    items: dict[str, str] = {}
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        item_lines: list[str] = []
+        for line in lines[start:end]:
+            if not line.strip():
+                break
+            item_lines.append(line)
+        match = re.match(r"^- \(([a-d])\) ", lines[start])
+        assert match
+        items[match.group(1)] = " ".join(" ".join(item_lines).split())
+    return items
+
+
+def ask_sentences(text: str) -> list[str]:
+    return ASK_RE.findall(" ".join(text.split()))
+
+
+def option_as_alt_unnegated(text: str) -> list[str]:
+    units = re.split(r"[.;|]", " ".join(text.split()))
+    hits: list[str] = []
+    for unit in units:
+        if re.search(r"option-as-alt|macos_option_as_alt", unit, re.IGNORECASE) and not re.search(
+            r"\b(?:never|not|no|without)\b", unit, re.IGNORECASE
+        ):
+            hits.append(unit.strip())
+    return hits
 
 
 def table_rows(section: str) -> list[list[str]]:
@@ -93,6 +132,151 @@ def bad_status_cells(rows: Sequence[Sequence[str]]) -> list[str]:
             if STATUS_RE.match(cell) is None
         )
     return problems
+
+
+def test_rules_are_four_separate_items() -> None:
+    text = _text(SKILL)
+    section = _subsection(text, RULES_HEADING)
+    starts = re.findall(r"^- \(([a-d])\) ", section, re.MULTILINE)
+    assert len(starts) == 4
+    assert sorted(starts) == ["a", "b", "c", "d"]
+
+
+def test_rules_name_their_os_and_behavior() -> None:
+    items = rule_items(_subsection(_text(SKILL), RULES_HEADING))
+    needles = {
+        "a": ("Linux", "Bazzite", "zsh is the launched shell", "zsh terminal sync"),
+        "b": (
+            "macOS",
+            "Option+Left",
+            "Option+Right",
+            "only those two chords",
+            "never the global Option-as-Alt switch",
+            "Spanish",
+            "`@`",
+            "`|`",
+            "`#`",
+            "`\\\\`",
+        ),
+        "c": (
+            "Cmd+K on macOS",
+            "Ctrl+Shift+K on Linux",
+            "clear the screen and the scrollback",
+            "sends Ctrl+L",
+            "planned for phase 28",
+        ),
+        "d": ("current directory", "tab", "window", "pane", "vendor default"),
+    }
+    assert set(items) == set(needles)
+    for letter, anchors in needles.items():
+        assert all(anchor in items[letter] for anchor in anchors), letter
+
+
+def test_rules_are_not_questions() -> None:
+    section = " ".join(_subsection(_text(SKILL), RULES_HEADING).split())
+    phrases = (
+        "that has the capability",
+        "`n/a` with the reason",
+        "none of them is a question",
+        "never a Policies row",
+    )
+    for phrase in phrases:
+        assert phrase in section
+
+
+def test_rules_and_table_sections_are_ascii() -> None:
+    text = _text(SKILL)
+    assert _subsection(text, RULES_HEADING).isascii()
+    assert _subsection(text, TABLE_HEADING).isascii()
+
+
+def test_rules_sit_under_step_7_before_the_table() -> None:
+    text = _text(SKILL)
+    step = _step(text, "7")
+    assert RULES_HEADING in step
+    assert TABLE_HEADING in step
+    assert step.index(RULES_HEADING) < step.index(TABLE_HEADING)
+
+
+def test_rules_no_sentence_asks_about_a_default() -> None:
+    assert ask_sentences(_text(SKILL)) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Ask the developer whether to enable word navigation.",
+            ["Ask the developer whether to enable word navigation"],
+        ),
+        (
+            "Ask the user if Ctrl+Shift+K should clear the scrollback.",
+            ["Ask the user if Ctrl+Shift+K should clear the scrollback"],
+        ),
+        ("Offer, ask, record.", []),
+        ("These four rules apply without asking: none of them is a question.", []),
+    ],
+)
+def test_rules_ask_detector_flags_a_question(text: str, expected: list[str]) -> None:
+    assert ask_sentences(text) == expected
+
+
+def test_rules_option_as_alt_is_only_named_to_forbid_it() -> None:
+    assert option_as_alt_unnegated(_text(SKILL)) == []
+    assert option_as_alt_unnegated("Turn on the global Option-as-Alt switch for word navigation.")
+    assert option_as_alt_unnegated("Set macos_option_as_alt yes in kitty.conf.")
+    assert option_as_alt_unnegated("never the global Option-as-Alt switch") == []
+
+
+def test_rules_extras_stay_questions() -> None:
+    text = _text(SKILL)
+    section = " ".join(_subsection(text, EXTRAS_HEADING).split())
+    for phrase in (
+        "Multiplexers/agent workspaces",
+        "Shells/prompts/editors",
+        "LLM tools",
+        "offer them to the developer",
+        "Each accepted extra",
+    ):
+        assert phrase in section
+    for phrase in (
+        "word navigation",
+        "Cmd+K",
+        "Ctrl+Shift+K",
+        "scrollback",
+        "Option+Left",
+        "current directory",
+    ):
+        assert phrase not in section
+    headings = re.findall(r"^#### .+$", _step(text, "7"), re.MULTILINE)
+    assert headings[-1] == EXTRAS_HEADING
+
+
+def test_rules_common_mistakes_narrowed() -> None:
+    text = _text(SKILL)
+    mistakes = text[text.index("## Common Mistakes") :]
+    flat = " ".join(mistakes.split())
+    for phrase in (
+        "Shipping a non-terminal extra nobody asked for",
+        "Asking the developer about one of the four terminal defaults",
+        "Never use the global Option-as-Alt switch for word navigation",
+    ):
+        assert phrase in flat
+
+
+def test_rules_frontmatter_overview_and_step_9() -> None:
+    text = _text(SKILL)
+    description = next(
+        line.removeprefix("description: ")
+        for line in text.splitlines()
+        if line.startswith("description: ")
+    )
+    assert "the four defaults applied as rules" in description
+    assert "which extras to offer" in description
+    assert len(description) <= 1024
+    overview = text[text.index("## Overview") : text.index("## When to Use")]
+    assert "The one exception is the closed per-terminal table under step 7" in overview
+    assert "which extras were offered" in " ".join(_step(text, "9").split())
 
 
 def test_table_matches_the_registry() -> None:

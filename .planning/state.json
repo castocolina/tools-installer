@@ -6,7 +6,7 @@
     {
       "number": "27",
       "name": "Tool-onboarding skill: terminal defaults as rules",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "28",
@@ -54,5 +54,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 1 of 9 · 0% · executing"
   },
-  "updated_at": "2026-11-20T04:39:15.404Z"
+  "updated_at": "2026-11-20T04:56:05.911Z"
 }
