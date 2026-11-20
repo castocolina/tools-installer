@@ -183,6 +183,7 @@ Resume file: None
 | 18 | verification_deferred_human (only the real-Mac draw.io pinned-app install + smoke; UAT 18/19 pass, 1 skipped; SECURITY 99/99 closed; CI run 38839041957 green on both OSes; first verify-registry run 38839643252 exit 0, cache saved) | /gsd-verify-work 18 |
 | 19 | verification_deferred_human (only host adoption on the real machine; UAT 11/12 pass, 1 skipped; make e2e on d49e7b2 rc 0 (PASS1 74/0/8, receipt tracers OK, REINSTALL 47); tmux 80x20 NO_COLOR check pass; SECURITY 139/139 closed; CI run 39019413698 green on both OSes) | /gsd-verify-work 19 |
 | 27 | verification_deferred_human (only the real-Mac check of the macOS rules, SKILL-05; verifier 7/7 must-haves, Nyquist 0 gaps, SECURITY 15/15 closed, deep code review fixed 10 of 16 and ledgered the rest, skill-judge 69.6% before and 73.6% after, full suite 7,872 passed on the final tree; macOS deferred by the owner's standing rule) | /gsd-verify-work 27 |
+| 28 | verification_deferred_human (only the real-Mac redraw of the zsh Ctrl+L clear and the owner's confirmation of three provisional decisions: 28 D-06 with OQ1, the amended SPEC R3 round-trip wording, the D-12 import-line deviation; verifier 4/4 must-haves, Nyquist 0 gaps, SECURITY 16/16 closed, deep code review fixed both warnings and ledgered the rest, full suite 7,924 passed on the final tree) | /gsd-verify-work 28 |
 
 ## Operator Next Steps
 
