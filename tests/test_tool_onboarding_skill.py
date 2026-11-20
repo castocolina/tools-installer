@@ -222,7 +222,7 @@ def test_rules_name_their_os_and_behavior() -> None:
             "Ctrl+Shift+K on Linux",
             "clear the screen and the scrollback",
             "sends Ctrl+L",
-            "planned for phase 28",
+            "written in phase 28",
         ),
         "d": ("current directory", "tab", "window", "pane", "vendor default"),
     }

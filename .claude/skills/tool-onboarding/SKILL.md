@@ -195,7 +195,7 @@ These four rules apply, without asking, to every terminal and IDE entry that has
 
 - (a) Linux, Bazzite included: zsh is the launched shell. That is the zsh terminal sync (`installer/terminal_shell.py`).
 - (b) macOS: Option+Left and Option+Right move by word by binding only those two chords, never the global Option-as-Alt switch: on the owner's Spanish layout that switch breaks `@`, `|`, `#` and `\`.
-- (c) macOS and Linux: Cmd+K on macOS and Ctrl+Shift+K on Linux clear the screen and the scrollback. The chord sends Ctrl+L, and the managed zsh configuration makes Ctrl+L clear both; that zsh part is planned for phase 28 (KEYS-03) and nothing in `installer/` does it today.
+- (c) macOS and Linux: Cmd+K on macOS and Ctrl+Shift+K on Linux clear the screen and the scrollback. The chord sends Ctrl+L, and the managed zsh configuration makes Ctrl+L clear both; that zsh part is written in phase 28 (KEYS-03) by zsh's shell-init block in `installer/tweaks.py`, install tuning of the `zsh` entry.
 - (d) Every OS: a new tab, window or pane opens in the current directory; the installer writes it only where the vendor default does not already do it.
 
 The table below says how each entry meets each rule.
@@ -221,7 +221,7 @@ Konsole has no row: it is detected by code but is not a catalog entry. The owner
 
 #### Conflicts
 
-- A binding the user already defines is never overridden: the installer keeps it and reports the row as `partial: kept yours`. Today that result is the `{terminal}: partial: you already ...` line written by `installer/terminal_shell.py`, which `installer/version_status.py` reads by its `partial:` prefix; phase 28 settles the exact wording. Example (today): when the user's `alacritty.toml` already binds a chord the alacritty sync would add, the sync skips that binding and reports `alacritty: partial: you already bind ...`, the line that becomes `partial: kept yours`.
+- A binding the user already defines is never overridden: the installer keeps it and reports the row as `partial: kept yours`. That result is the `{terminal}: partial: you already ...` line; phase 28 moved it out of `installer/terminal_shell.py` into `installer/terminal_regions.py` and kept its wording as it was, and `installer/version_status.py` still reads it by its `partial:` prefix. Example (today): when the user's `alacritty.toml` already binds a chord the alacritty sync would add, the sync skips that binding and reports `alacritty: partial: you already bind ...`, the line that becomes `partial: kept yours`.
 - A vendor default that conflicts with a rule is overridden only with an install note that names the displaced default. Example (planned for phase 29, TERM-01): kitty on Linux binds `ctrl+shift+k` to `scroll_line_up`; rule (c) takes that chord, and the install note names `scroll_line_up` as the displaced default.
 
 #### Testing macOS behavior
