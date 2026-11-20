@@ -24,6 +24,7 @@ from installer.tweaks import (
     remove_tweak,
     remove_tweak_executables,
     shell_init_bundle,
+    shell_init_record,
     strip_legacy_aliases,
     tweak_block,
     tweak_executables_present,
@@ -49,6 +50,7 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "docker",
         "countdown",
         "apt-upgrade",
+        "zsh",
         "starship",
         "direnv",
         "zoxide",
@@ -57,6 +59,114 @@ def test_bundles_have_stable_ids_and_order() -> None:
         "volta",
         "neovim",
     ]
+
+
+def test_zsh_clear_widget_text() -> None:
+    bundle = shell_init_bundle("zsh")
+    assert bundle is not None
+    assert bundle.platforms == ()
+    data = tweak_block(bundle).encode()
+    assert data.index(rb"\033[H\033[2J") < data.index(b"zle .reset-prompt")
+    assert data.index(b"zle .reset-prompt") < data.index(b"zle -R")
+    assert data.index(b"zle -R") < data.index(rb"\033[3J")
+    assert b"\x1b" not in data
+    assert b'if [ -n "${ZSH_VERSION-}" ]; then' in bundle.body.encode()
+    assert b"zle -N tools_installer_clear_all" in bundle.body.encode()
+    for keymap in ("emacs", "viins", "vicmd"):
+        assert f"bindkey -M {keymap} '^L' tools_installer_clear_all" in bundle.body
+    assert not any(term in bundle.body for term in ("LINES", "COLUMNS", "tput"))
+
+
+@pytest.mark.skipif(
+    shutil.which("zsh") is None, reason="zsh is not on PATH; emitted bytes not checked"
+)
+def test_clear_widget_emits_the_exact_bytes_in_zsh() -> None:
+    bundle = shell_init_bundle("zsh")
+    assert bundle is not None
+    lines = [
+        line.strip() for line in bundle.body.split("\n") if line.strip().startswith("print -n '")
+    ]
+    assert len(lines) == 2
+    results = [
+        subprocess.run(["zsh", "-f", "-c", line], capture_output=True, check=False)
+        for line in lines
+    ]
+    assert [result.returncode for result in results] == [0, 0], [
+        result.stderr for result in results
+    ]
+    assert [result.stdout for result in results] == [b"\x1b[H\x1b[2J", b"\x1b[3J"]
+
+
+@pytest.mark.parametrize(
+    ("original", "expected"),
+    [
+        ("", ""),
+        ("\n", ""),
+        ("\n\n", ""),
+        ("a", "a\n\n"),
+        ("a\n", "a\n\n"),
+        ("a\n\n", "a\n\n"),
+        ("a\n\n\n", "a\n\n"),
+        ("a\nb\n", "a\nb\n\n"),
+    ],
+    ids=[
+        "empty",
+        "one-newline",
+        "two-newlines",
+        "no-trailing-newline",
+        "one-trailing-newline",
+        "one-blank-line-end",
+        "two-blank-lines-end",
+        "two-lines",
+    ],
+)
+def test_zsh_clear_widget_apply_then_strip_keeps_the_user_lines(
+    tmp_path: Path, original: str, expected: str
+) -> None:
+    """Shared shellrc apply/strip removes trailing newlines and keeps one separator blank line.
+
+    Only an empty rc or one ending in exactly one blank line after content comes back
+    byte-identical.
+    This amended SPEC R3 wording needs owner confirmation; the underlying shared behavior is
+    unchanged here (backlog 999.27).
+    """
+    bundle = shell_init_bundle("zsh")
+    assert bundle is not None
+    rc = tmp_path / ".myshellrc"
+    rc.write_text(original)
+    assert "tweak:zsh" not in rc.read_text()
+    write_tweak(bundle, rc)
+    assert rc.read_text().count("# >>> tools-installer tweak:zsh >>>") == 1
+    remove_tweak(bundle, rc)
+    result = rc.read_text()
+    assert result == expected
+    assert "tools_installer_clear_all" not in result
+    assert "tweak:zsh" not in result
+
+
+def test_zsh_removal_strips_the_clear_widget(tmp_path: Path) -> None:
+    from installer import app as app_module
+    from installer.post_install import run_post_install
+
+    zsh = next(t for t in load_tools(REGISTRY) if t.id == "zsh")
+    assert zsh.post_install == ("source_shell_init",)
+    output = run_post_install(
+        zsh, Platform(os="macos", arch="arm64", immutable=False, has_brew=False)
+    )
+    assert "Shell init on: open a new terminal to use it." in output.lines
+    rc = Path.home() / ".myshellrc"
+    assert "tools_installer_clear_all" in rc.read_text()
+    assert shell_init_record(rc) == ("zsh",)
+    app_module._after_removal(  # pyright: ignore[reportPrivateUsage]
+        zsh,
+        bundles=BUNDLES,
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=rc,
+        extra_policies=(),
+        platform_os="macos",
+    )
+    assert "tools_installer_clear_all" not in rc.read_text()
+    assert "zsh" not in (shell_init_record(rc) or ())
 
 
 def test_block_is_marker_delimited_around_body() -> None:

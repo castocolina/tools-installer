@@ -87,7 +87,7 @@ _LINUX = ("debian", "arch", "fedora")
 # Shell init (D-11): one bundle per tool, id = tool id, offered at install and
 # default off. The `if command -v` guard picks the zsh or the bash line, which a
 # bare one-line eval cannot do. No registry string reaches these bodies.
-SHELL_INIT_TOOLS = ("starship", "direnv", "zoxide", "fzf", "fnm", "volta", "neovim")
+SHELL_INIT_TOOLS = ("zsh", "starship", "direnv", "zoxide", "fzf", "fnm", "volta", "neovim")
 
 
 def _guarded_init(tool: str, zsh_line: str, bash_line: str) -> str:
@@ -111,6 +111,26 @@ _VOLTA_BODY = (
 # The `if` form, not `command -v nvim && export ...`, whose non-zero status would be the last
 # command of the sourced block when nvim is absent.
 _NVIM_EDITOR_BODY = "if command -v nvim >/dev/null; then\n  export EDITOR=nvim VISUAL=nvim\nfi"
+
+# Ctrl+L clears the screen, redraws the prompt and buffer, then clears scrollback. Bind all three
+# keymaps because Oh-My-Zsh runs bindkey -e and the Neovim bundle exports EDITOR=nvim. Bash also
+# sources ~/.myshellrc, so the nounset-safe guard keeps it out when ZSH_VERSION is unset.
+_ZSH_CLEAR_BODY = (
+    "if command -v zsh >/dev/null; then\n"
+    r'  if [ -n "${ZSH_VERSION-}" ]; then' + "\n"
+    "    tools_installer_clear_all() {\n"
+    r"      print -n '\033[H\033[2J'" + "\n"
+    "      zle .reset-prompt\n"
+    "      zle -R\n"
+    r"      print -n '\033[3J'" + "\n"
+    "    }\n"
+    "    zle -N tools_installer_clear_all\n"
+    "    bindkey -M emacs '^L' tools_installer_clear_all\n"
+    "    bindkey -M viins '^L' tools_installer_clear_all\n"
+    "    bindkey -M vicmd '^L' tools_installer_clear_all\n"
+    "  fi\n"
+    "fi"
+)
 
 
 def _shell_init(
@@ -152,6 +172,11 @@ BUNDLES: tuple[TweakBundle, ...] = (
         "alias apt-upgrade — upgrade only packages that have updates (Linux)",
         _LINUX,
         _APT_BODY,
+    ),
+    _shell_init(
+        "zsh",
+        "makes Ctrl+L clear the screen and the scrollback at the zsh prompt",
+        _ZSH_CLEAR_BODY,
     ),
     _shell_init(
         "starship",

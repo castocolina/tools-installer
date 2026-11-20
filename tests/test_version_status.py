@@ -6768,6 +6768,24 @@ def test_pending_tuning_shell_init(tmp_path: Path) -> None:
     assert again.unconfigured == ()
 
 
+def test_zsh_reads_pending_tuning_until_the_clear_widget_is_written(tmp_path: Path) -> None:
+    tool = _shell_tool("zsh")
+    service = _hook_service(tmp_path, frozenset())
+    state = _settled_states(service, [tool])["zsh"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+
+    outcome = _reconfigure(service, tool)
+
+    assert outcome.result == "done"
+    assert "# >>> tools-installer tweak:zsh >>>" in _myshellrc().read_text()
+    assert shell_init_record(_myshellrc()) == ("zsh",)
+    again = _settled_states(service, [tool])["zsh"]
+    assert again.health is Health.OK
+    assert again.unconfigured == ()
+
+
 def test_neovim_with_your_editor_reads_no_pending_tuning(tmp_path: Path) -> None:
     (Path.home() / ".bashrc").write_text("export EDITOR=vim\n")
     state = _tuning_state(tmp_path, _shell_tool("neovim"))

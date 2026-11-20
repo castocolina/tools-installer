@@ -569,6 +569,7 @@ tier = "system"
 verified = 2026-09-06
 desc = "Feature-rich shell; prerequisite for Oh-My-Zsh."
 owner_probes = ["rpm-ostree", "dnf", "apt", "pacman"]
+post_install = ["source_shell_init"]
 [[tool.method]]
 kind = "dnf"
 package = "zsh"
