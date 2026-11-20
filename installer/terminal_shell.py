@@ -39,6 +39,7 @@ from installer.terminal_regions import (
     commit_region,
     kitty_config_path,
     validate_toml,
+    wezterm_config_path,
 )
 from installer.terminal_regions import IMPORTS as _IMPORTS
 from installer.terminal_regions import first_line as _first_line
@@ -114,15 +115,6 @@ def _safe_executable(path: str | None) -> str | None:
     if any(ord(character) < 32 or ord(character) == 127 for character in path):
         raise TerminalShellError("discovered executable path contains a control character")
     return path
-
-
-def _wezterm_config_path(home: Path, environ: Mapping[str, str]) -> Path:
-    config_home = _xdg_config_home(home, environ)
-    configured = config_home / "wezterm" / "wezterm.lua"
-    fallback = home / ".wezterm.lua"
-    if configured.exists() or not fallback.exists():
-        return configured
-    return fallback
 
 
 def _lua_string(value: str) -> str:
@@ -577,7 +569,7 @@ def _revert_terminal_shells(
     kitty = kitty_config_path(platform.os, home, environ)
     if _remove_if_owned(kitty, "kitty"):
         reverted.append("kitty")
-    wezterm = _wezterm_config_path(home, environ)
+    wezterm = wezterm_config_path(home, environ)
     if _remove_if_owned(wezterm, "wezterm", comment="--"):
         reverted.append("wezterm")
     if _revert_konsole(home=home, environ=environ):
@@ -681,7 +673,7 @@ def sync_terminal_shells(
         # parent directory -- for an app that may not even be installed.
         skipped.append("wezterm unavailable")
     else:
-        wezterm_path = _wezterm_config_path(home, environ)
+        wezterm_path = wezterm_config_path(home, environ)
         wezterm_existing = _read_text(wezterm_path)
         if not wezterm_existing:
             wezterm_existing = WEZTERM_SKELETON

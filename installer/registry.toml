@@ -3109,6 +3109,8 @@ tier = "user"
 verified = 2026-11-03
 desc = "GPU-accelerated, cross-platform terminal emulator with multiplexing"
 owner_probes = ["pacman"]
+# Install tuning (29 D-06, D-07): the wezterm-keys Lua region before return config; it adds a key only when your config.keys does not bind that chord.
+post_install = ["apply_terminal_tuning"]
 [[tool.method]]
 kind = "pacman"
 package = "wezterm"

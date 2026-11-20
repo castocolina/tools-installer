@@ -10,9 +10,11 @@ from typing import Any
 
 import pytest
 
+from installer import terminal_keys
 from installer.model import Tool, load_tools
 from installer.platform import Platform
 from installer.post_install import apply_install_tuning, run_post_install
+from installer.run import CommandError
 from installer.terminal_keys import (
     CTRL_L,
     KEYS_PENDING,
@@ -26,9 +28,13 @@ from installer.terminal_keys import (
     clear_binding,
     strip_terminal_keys,
     terminal_keys_pending,
+    wezterm_show_keys,
 )
 from installer.terminal_regions import (
+    WEZTERM_CREATED,
+    WEZTERM_KEYS,
     WEZTERM_SKELETON,
+    WEZTERM_UNVERIFIED,
     KeysPlan,
     Placement,
     TerminalShellError,
@@ -38,6 +44,10 @@ from installer.terminal_regions import (
     scan_kitty,
     validate_kitty,
     validate_toml,
+    validate_wezterm,
+    wezterm_chord,
+    wezterm_config_path,
+    wezterm_keys_body,
 )
 from installer.terminal_shell import sync_terminal_shells
 
@@ -131,6 +141,60 @@ _KITTY_SUMMARY = (
     "kitty keys: the clear chord sends Ctrl+L (screen and scrollback), Option+Left and "
     "Option+Right move by word on macOS, and new tabs and windows open in the current directory."
 )
+_WEZTERM_SUMMARY = (
+    "WezTerm keys: the clear chord sends Ctrl+L (screen and scrollback), and Option+Left "
+    "and Option+Right move by word on macOS, unless your config.keys already binds them."
+)
+_WEZTERM_PREFIX = (
+    'local wezterm = require "wezterm"\nlocal config = {}\n'
+    "-- >>> tools-installer terminal-shell wezterm-keys >>>\n"
+)
+_WEZTERM_GUARD = (
+    "do\n"
+    '  local wezterm = require "wezterm"\n'
+    "  local act = wezterm.action\n"
+    '  local alias = { CMD = "SUPER", WIN = "SUPER", OPT = "ALT", '
+    'META = "ALT", CONTROL = "CTRL" }\n'
+    "  local function chord(key, mods)\n"
+    "    local set = {}\n"
+    '    for name in string.gmatch(string.upper(mods or ""), "[^|%s]+") do\n'
+    "      local m = alias[name] or name\n"
+    '      if m ~= "NONE" then set[m] = true end\n'
+    "    end\n"
+    '    local k = key or ""\n'
+    '    if string.match(k, "^%u$") then set.SHIFT = true end\n'
+    "    local names = {}\n"
+    "    for m in pairs(set) do names[#names + 1] = m end\n"
+    "    table.sort(names)\n"
+    '    return string.lower(k) .. "/" .. table.concat(names, "|")\n'
+    "  end\n"
+    "  config.keys = config.keys or {}\n"
+    "  local taken = {}\n"
+    "  for _, entry in ipairs(config.keys) do taken[chord(entry.key, entry.mods)] = true end\n"
+    "  for _, entry in ipairs({\n"
+)
+_WEZTERM_SUFFIX = (
+    "  }) do\n"
+    "    if not taken[chord(entry.key, entry.mods)] then table.insert(config.keys, entry) end\n"
+    "  end\n"
+    "end\n"
+    "-- <<< tools-installer terminal-shell wezterm-keys <<<\n"
+    "return config\n"
+)
+_WEZTERM_LINUX = (
+    _WEZTERM_PREFIX
+    + _WEZTERM_GUARD
+    + '    { key = "k", mods = "CTRL|SHIFT", action = act.SendString "\\x0c" },\n'
+    + _WEZTERM_SUFFIX
+)
+_WEZTERM_MACOS = (
+    _WEZTERM_PREFIX
+    + _WEZTERM_GUARD
+    + '    { key = "LeftArrow", mods = "OPT", action = act.SendString "\\x1bb" },\n'
+    + '    { key = "RightArrow", mods = "OPT", action = act.SendString "\\x1bf" },\n'
+    + '    { key = "k", mods = "SUPER", action = act.SendString "\\x0c" },\n'
+    + _WEZTERM_SUFFIX
+)
 
 
 def _config() -> Path:
@@ -183,7 +247,7 @@ def apply_alacritty_keys(
 
 def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
     row = TERMINAL_KEYS["alacritty"]
-    assert set(TERMINAL_KEYS) == {"alacritty", "kitty"}
+    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm"}
     assert row.ownership == OwnedRegion("alacritty-keys")
     assert row.created_record == "terminal-alacritty-created"
     assert row.sibling_regions == ("alacritty",)
@@ -220,7 +284,7 @@ def test_completeness_fails_for_a_declarer_without_a_row(tmp_path: Path) -> None
 
 
 def test_completeness_fails_on_an_empty_table() -> None:
-    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty", "kitty"}
+    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty", "kitty", "wezterm"}
 
 
 def test_completeness_ignores_table_order(tmp_path: Path) -> None:
@@ -612,6 +676,405 @@ def test_drift_recorded_current_region_is_quiet() -> None:
     assert _pending() is None
     assert _reapply() == ((), None)
     assert _config().read_bytes() == before
+
+
+def _wezterm() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "wezterm")
+
+
+def _wezterm_config() -> Path:
+    return Path.home() / ".config" / "wezterm" / "wezterm.lua"
+
+
+def test_wezterm_helpers_generate_regions_and_resolve_paths(tmp_path: Path) -> None:
+    assert wezterm_config_path(tmp_path, {}) == tmp_path / ".config" / "wezterm" / "wezterm.lua"
+    assert wezterm_keys_body((("k", "CTRL|SHIFT", "\x0c"),)).startswith("do\n")
+    assert WEZTERM_KEYS == "wezterm-keys"
+
+
+def test_no_test_runs_wezterm_even_when_it_is_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "bin" / "wezterm"
+    binary.parent.mkdir()
+    marker = tmp_path / "ran"
+    binary.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ['PATH']}")
+    result = run_post_install(_wezterm(), _LINUX)
+    assert result.lines == (_WEZTERM_SUMMARY,)
+    assert not marker.exists()
+    assert terminal_keys.wezterm_show_keys is not wezterm_show_keys
+
+
+def test_wezterm_show_keys_runs_the_exact_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "wezterm.lua"
+    calls: list[tuple[list[str], float | None]] = []
+
+    def found(name: str) -> str:
+        del name
+        return "/usr/bin/wezterm"
+
+    def capture(argv: list[str], *, timeout: float | None = None) -> str:
+        calls.append((argv, timeout))
+        return "OUT"
+
+    def missing(name: str) -> None:
+        del name
+
+    monkeypatch.setattr(terminal_keys, "which", found)
+    monkeypatch.setattr(terminal_keys, "run_output", capture)
+    assert wezterm_show_keys(path) == "OUT"
+    assert calls == [(["/usr/bin/wezterm", "--config-file", str(path), "show-keys", "--lua"], 20)]
+    calls.clear()
+    monkeypatch.setattr(terminal_keys, "which", missing)
+    assert wezterm_show_keys(path) is None
+    assert calls == []
+
+
+def test_wezterm_chord_mirrors_the_lua_guard() -> None:
+    assert wezterm_chord("K", "CTRL") == wezterm_chord("k", "CTRL|SHIFT")
+    assert wezterm_chord("k", "CTRL|SHIFT") == wezterm_chord("k", "SHIFT|CTRL")
+    assert wezterm_chord("K", "CTRL") == wezterm_chord("K", "CTRL|SHIFT")
+    assert wezterm_chord("k", "CMD") == wezterm_chord("k", "SUPER")
+    assert wezterm_chord("LeftArrow", "OPT") == wezterm_chord("LeftArrow", "ALT")
+    assert wezterm_chord("k", "NONE") == "k/"
+
+
+def _show_keys(keys: str) -> str:
+    return f"  keys = {{\n{keys}  }}\n  key_tables = {{\n"
+
+
+def _patch_show_keys(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    def show_keys(path: Path) -> str:
+        del path
+        return output
+
+    monkeypatch.setattr(terminal_keys, "wezterm_show_keys", show_keys)
+
+
+def test_wezterm_readback_reports_a_kept_user_chord_on_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_show_keys(
+        monkeypatch,
+        _show_keys("    { key = 'K', mods = 'CTRL', action = act.SendString 'USER' },\n"),
+    )
+    assert run_post_install(_wezterm(), _LINUX).lines == (
+        _WEZTERM_SUMMARY,
+        "wezterm: partial: you already bind CTRL+SHIFT+k; kept yours",
+    )
+
+
+def test_wezterm_readback_is_quiet_when_the_installer_rows_are_effective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_show_keys(
+        monkeypatch,
+        _show_keys(
+            "    { key = 'k', mods = 'SUPER', action = act.SendString '\\f' },\n"
+            "    { key = 'LeftArrow', mods = 'ALT', action = act.SendString '\\u{1b}b' },\n"
+            "    { key = 'RightArrow', mods = 'ALT', action = act.SendString '\\u{1b}f' },\n"
+        ),
+    )
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
+    assert run_post_install(_wezterm(), macos).lines == (_WEZTERM_SUMMARY,)
+
+
+def test_wezterm_readback_reports_a_kept_cmd_k_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_show_keys(
+        monkeypatch,
+        _show_keys(
+            "    { key = 'k', mods = 'SUPER', action = act.ActivateTabRelative(1) },\n"
+            "    { key = 'LeftArrow', mods = 'ALT', action = act.SendString '\\u{1b}b' },\n"
+            "    { key = 'RightArrow', mods = 'ALT', action = act.SendString '\\u{1b}f' },\n"
+        ),
+    )
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
+    assert (
+        run_post_install(_wezterm(), macos).lines[-1]
+        == "wezterm: partial: you already bind SUPER+k; kept yours"
+    )
+
+
+def test_wezterm_readback_ignores_key_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_show_keys(
+        monkeypatch,
+        "  keys = {\n    { key = 'k', mods = 'CTRL|SHIFT', action = act.SendString '\\f' },\n"
+        "  }\n  key_tables = {\n    { key = 'K', mods = 'CTRL', action = act.CopyMode 'MoveUp' },\n"
+        "  }\n",
+    )
+    assert run_post_install(_wezterm(), _LINUX).lines == (_WEZTERM_SUMMARY,)
+
+
+def test_wezterm_readback_notes_a_failed_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    def failed(path: Path) -> str:
+        del path
+        raise CommandError(["wezterm"], 1, detail="config error")
+
+    monkeypatch.setattr(terminal_keys, "wezterm_show_keys", failed)
+    result = run_post_install(_wezterm(), _LINUX)
+    assert result.lines == (_WEZTERM_SUMMARY, WEZTERM_UNVERIFIED)
+    assert result.refused is None
+    assert _wezterm_config().read_text() == _WEZTERM_LINUX
+    assert (_state_dir() / "terminal-tuning-wezterm").exists()
+
+
+def test_wezterm_readback_notes_unparseable_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_show_keys(monkeypatch, "wezterm 20240203\nno key table here\n")
+    assert run_post_install(_wezterm(), _LINUX).lines == (_WEZTERM_SUMMARY, WEZTERM_UNVERIFIED)
+
+
+def test_wezterm_readback_notes_a_missing_chord(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_show_keys(
+        monkeypatch,
+        _show_keys("    { key = 'k', mods = 'SUPER', action = act.SendString '\\f' },\n"),
+    )
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
+    assert run_post_install(_wezterm(), macos).lines == (_WEZTERM_SUMMARY, WEZTERM_UNVERIFIED)
+
+
+def test_wezterm_readback_runs_nothing_without_wezterm() -> None:
+    assert run_post_install(_wezterm(), _LINUX).lines == (_WEZTERM_SUMMARY,)
+
+
+def test_wezterm_readback_skipped_on_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected(path: Path) -> str:
+        del path
+        pytest.fail("readback ran on refusal")
+
+    monkeypatch.setattr(terminal_keys, "wezterm_show_keys", unexpected)
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    config.write_text("return {}\n")
+    assert run_post_install(_wezterm(), _LINUX).lines == (
+        "WezTerm keys not changed: unsupported return shape",
+    )
+
+
+def test_wezterm_golden_linux_created_file() -> None:
+    result = run_post_install(_wezterm(), _LINUX)
+    assert result.lines == (_WEZTERM_SUMMARY,)
+    assert _wezterm_config().read_text() == _WEZTERM_LINUX
+    marker = _state_dir() / WEZTERM_CREATED
+    assert marker.exists()
+    assert marker.with_name(f"{marker.name}-path").read_text() == f"{_wezterm_config()}\n"
+    assert (_state_dir() / "terminal-tuning-wezterm").exists()
+    body = _wezterm_config().read_text()
+    assert "config.keys = config.keys or {}" in body
+    assert "table.insert(config.keys, entry)" in body
+    assert "config.keys = {" not in body
+
+
+def test_wezterm_golden_macos_created_file() -> None:
+    macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
+    assert run_post_install(_wezterm(), macos).lines == (_WEZTERM_SUMMARY,)
+    assert _wezterm_config().read_text() == _WEZTERM_MACOS
+
+
+def test_wezterm_never_writes_a_global_alt_switch() -> None:
+    assert "send_composed_key_when" not in _WEZTERM_LINUX + _WEZTERM_MACOS
+    assert "option_as_alt" not in _WEZTERM_LINUX + _WEZTERM_MACOS
+
+
+def test_wezterm_user_keys_are_kept_in_order() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    user = (
+        'local wezterm = require "wezterm"\nlocal config = wezterm.config_builder()\n'
+        "config.keys = {\n"
+        '  { key = "K", mods = "CTRL", action = wezterm.action.SendString "USER" },\n'
+        "}\nreturn config\n"
+    )
+    config.write_text(user)
+    assert run_post_install(_wezterm(), _LINUX).refused is None
+    result = config.read_text()
+    assert result.startswith(user.removesuffix("return config\n"))
+    assert result.endswith("return config\n")
+    assert result.index("config.keys = {") < result.index("wezterm-keys >>>")
+    assert result.index("wezterm-keys <<<") < result.index("return config")
+
+
+def test_wezterm_keys_marker_lookalike_comment_is_not_owned() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    config.write_text("-- tools-installer terminal-shell wezterm-keys notes\n" + WEZTERM_SKELETON)
+    assert run_post_install(_wezterm(), _LINUX).refused is None
+    assert config.read_text().startswith("-- tools-installer terminal-shell wezterm-keys notes\n")
+    assert config.read_text().count("wezterm-keys notes") == 1
+
+
+def test_two_wezterm_applies_in_a_row_leave_one_region() -> None:
+    """Sequential proxy of the SPEC R2 concurrency backstop; this is not a race test."""
+    run_post_install(_wezterm(), _LINUX)
+    run_post_install(_wezterm(), _LINUX)
+    assert _wezterm_config().read_text().count("wezterm-keys >>>") == 1
+
+
+def test_wezterm_unsupported_return_shape_refuses() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    for invalid in ("return {}\n", "return config\nreturn config\n"):
+        config.write_text(invalid)
+        assert apply_terminal_keys(
+            TERMINAL_KEYS["wezterm"],
+            "wezterm",
+            "fedora",
+            Path.home(),
+            os.environ,
+            skip_recorded=False,
+        ) == ((), "unsupported return shape")
+        assert config.read_text() == invalid
+        assert not (_state_dir() / "terminal-tuning-wezterm").exists()
+        assert (
+            terminal_keys_pending(
+                TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ
+            )
+            == "unsupported return shape"
+        )
+
+
+def test_validate_wezterm_requires_the_region_before_return_config() -> None:
+    validate_wezterm(_WEZTERM_LINUX)
+    validate_wezterm(_WEZTERM_MACOS)
+    with pytest.raises(TerminalShellError):
+        validate_wezterm(
+            _WEZTERM_LINUX.replace(
+                "-- <<< tools-installer terminal-shell wezterm-keys <<<\nreturn config\n",
+                "return config\n-- <<< tools-installer terminal-shell wezterm-keys <<<\n",
+            )
+        )
+    with pytest.raises(TerminalShellError):
+        validate_wezterm("return config\n")
+
+
+def test_validate_wezterm_refuses_a_config_keys_assignment_after_the_region() -> None:
+    for assignment in (
+        "config.keys = {}",
+        '  config.keys={ { key = "x", mods = "CTRL", action = wezterm.action.Nop } }',
+    ):
+        with pytest.raises(
+            TerminalShellError, match="config.keys assignment after the WezTerm keys region"
+        ):
+            validate_wezterm(
+                _WEZTERM_LINUX.replace("return config\n", assignment + "\nreturn config\n")
+            )
+    for allowed in (
+        "config.keys[1] = nil",
+        'table.insert(config.keys, { key = "x" })',
+        "config.keys = config.keys or {}",
+        "-- config.keys = {}",
+        "if config.keys == nil then end",
+    ):
+        validate_wezterm(_WEZTERM_LINUX.replace("return config\n", allowed + "\nreturn config\n"))
+
+
+def test_wezterm_fresh_install_after_a_user_config_keys_assignment_is_written() -> None:
+    test_wezterm_user_keys_are_kept_in_order()
+
+
+def test_wezterm_in_place_rewrite_refuses_a_later_config_keys_assignment() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    stale = _WEZTERM_LINUX.replace(
+        'action = act.SendString "\\x0c"', 'action = act.SendString "old"'
+    )
+    stale = stale.replace("return config\n", "config.keys = {}\nreturn config\n")
+    config.write_text(stale)
+    assert apply_terminal_keys(
+        TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ, skip_recorded=False
+    ) == (
+        (),
+        "your config.keys assignment after the WezTerm keys region would replace its "
+        "keys; nothing written",
+    )
+    assert config.read_text() == stale
+    assert not (_state_dir() / "terminal-tuning-wezterm").exists()
+
+
+def test_wezterm_moved_region_above_a_config_keys_assignment_refuses() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    moved = (
+        _WEZTERM_LINUX.replace(
+            'action = act.SendString "\\x0c"', 'action = act.SendString "old"'
+        ).replace("return config\n", "")
+        + 'local wezterm = require "wezterm"\nlocal config = wezterm.config_builder()\n'
+        "config.keys = {}\nreturn config\n"
+    )
+    config.write_text(moved)
+    assert apply_terminal_keys(
+        TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ, skip_recorded=False
+    ) == (
+        (),
+        "your config.keys assignment after the WezTerm keys region would replace its "
+        "keys; nothing written",
+    )
+    assert config.read_text() == moved
+
+
+def test_wezterm_drift_never_applied_reads_pending() -> None:
+    assert (
+        terminal_keys_pending(
+            TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ
+        )
+        == KEYS_PENDING
+    )
+    run_post_install(_wezterm(), _LINUX)
+    assert (
+        terminal_keys_pending(
+            TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ
+        )
+        is None
+    )
+
+
+def test_wezterm_status_reports_a_config_keys_assignment_added_after_install() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'local wezterm = require "wezterm"\nlocal config = wezterm.config_builder()\n'
+        "config.keys = {}\nreturn config\n"
+    )
+    run_post_install(_wezterm(), _LINUX)
+    before = config.read_text()
+    assert (
+        terminal_keys_pending(
+            TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ
+        )
+        is None
+    )
+    changed = before.replace("return config\n", "config.keys = {}\nreturn config\n")
+    config.write_text(changed)
+    assert terminal_keys_pending(
+        TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ
+    ) == (
+        "your config.keys assignment after the WezTerm keys region would replace its "
+        "keys; nothing written"
+    )
+    assert config.read_text() == changed
+    config.write_text(before)
+    assert (
+        terminal_keys_pending(
+            TERMINAL_KEYS["wezterm"], "wezterm", "fedora", Path.home(), os.environ
+        )
+        is None
+    )
+
+
+def test_only_wezterm_validates_on_status() -> None:
+    assert [tool_id for tool_id, row in TERMINAL_KEYS.items() if row.validate_on_status] == [
+        "wezterm"
+    ]
+
+
+def test_only_kitty_and_wezterm_bind_the_created_path() -> None:
+    assert {tool_id for tool_id, row in TERMINAL_KEYS.items() if row.bind_created_path} == {
+        "kitty",
+        "wezterm",
+    }
 
 
 def test_drift_edited_region_reads_pending_and_reconfigure_restores() -> None:

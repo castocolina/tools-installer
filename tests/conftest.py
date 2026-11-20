@@ -25,7 +25,16 @@ from typing import Any, cast
 
 import pytest
 
-from installer import app, executors, locations, post_install, postinstall, receipts, status
+from installer import (
+    app,
+    executors,
+    locations,
+    post_install,
+    postinstall,
+    receipts,
+    status,
+    terminal_keys,
+)
 from tests.home_fingerprint import fingerprint, fingerprint_diff
 from tests.launch_doubles import stub_launch
 from tests.sandbox import (
@@ -108,6 +117,17 @@ def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
     os.environ["PYTHONPATH"] = os.pathsep.join(
         entry for entry in (str(_CHILD_GUARD_DIR), os.environ.get("PYTHONPATH")) if entry
     )
+
+
+@pytest.fixture(autouse=True)
+def no_wezterm_show_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test launches wezterm; read-back sees it as absent."""
+
+    def unavailable(path: Path) -> str | None:
+        del path
+        return None
+
+    monkeypatch.setattr(terminal_keys, "wezterm_show_keys", unavailable)
 
 
 @pytest.fixture(autouse=True)

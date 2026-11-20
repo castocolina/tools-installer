@@ -6,10 +6,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import which
 from typing import Final
 
 from installer.agent_settings import read_settings, remove_created_dirs
 from installer.atomic import atomic_write_text
+from installer.run import CommandError, run_output
 from installer.terminal_regions import (
     ALACRITTY,
     ALACRITTY_CREATED,
@@ -17,6 +19,11 @@ from installer.terminal_regions import (
     KITTY,
     KITTY_CREATED,
     KITTY_KEYS,
+    WEZTERM,
+    WEZTERM_CREATED,
+    WEZTERM_KEYS,
+    WEZTERM_SKELETON,
+    WEZTERM_UNVERIFIED,
     KeysPlan,
     Placement,
     TerminalShellError,
@@ -34,6 +41,10 @@ from installer.terminal_regions import (
     user_document,
     validate_kitty,
     validate_toml,
+    validate_wezterm,
+    wezterm_config_path,
+    wezterm_keys_body,
+    wezterm_readback,
     xdg_data_home,
 )
 
@@ -205,6 +216,44 @@ def _kitty_cwd(platform_os: str, text: str, path: Path) -> KeysPlan:
     return KeysPlan("\n".join(added) or None, conflicts, notes=notes)
 
 
+def _wezterm_rows(platform_os: str) -> tuple[tuple[str, str, str], ...]:
+    chord, send = clear_binding(TERMINAL_KEYS[WEZTERM], platform_os)
+    clear = ("k", "SUPER", send) if chord == "cmd+k" else ("k", "CTRL|SHIFT", send)
+    return (
+        (("LeftArrow", "OPT", "\x1bb"), ("RightArrow", "OPT", "\x1bf"), clear)
+        if platform_os == "macos"
+        else (clear,)
+    )
+
+
+def _wezterm_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
+    del platform_os
+    return wezterm_config_path(home, environ)
+
+
+def _wezterm_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    del text, path
+    return KeysPlan(wezterm_keys_body(_wezterm_rows(platform_os)))
+
+
+def wezterm_show_keys(path: Path) -> str | None:
+    """The read-back seam that tests replace in tests/conftest.py."""
+    binary = which("wezterm")
+    return (
+        run_output([binary, "--config-file", str(path), "show-keys", "--lua"], timeout=20)
+        if binary
+        else None
+    )
+
+
+def _wezterm_readback(platform_os: str, path: Path) -> tuple[str, ...]:
+    try:
+        output = wezterm_show_keys(path)
+    except CommandError:
+        return (WEZTERM_UNVERIFIED,)
+    return () if output is None else wezterm_readback(output, _wezterm_rows(platform_os))
+
+
 TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
     "alacritty": KeysRow(
         ownership=OwnedRegion(ALACRITTY_KEYS),
@@ -237,6 +286,26 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         same_directory=Writes(_kitty_cwd),
         sibling_regions=(KITTY,),
         bind_created_path=True,
+    ),
+    "wezterm": KeysRow(
+        ownership=OwnedRegion(WEZTERM_KEYS, "--", Placement.BEFORE_RETURN),
+        config_path=_wezterm_path,
+        plan=_wezterm_plan,
+        validate=validate_wezterm,
+        summary=(
+            "WezTerm keys: the clear chord sends Ctrl+L (screen and scrollback), and Option+Left "
+            "and Option+Right move by word on macOS, unless your config.keys already binds them."
+        ),
+        created_record=WEZTERM_CREATED,
+        same_directory=Vendor(
+            "2026-11-20, wezterm source at tag 20240203-110809-5046fc22 (spawn.rs, localpane.rs): "
+            "SpawnTab and SpawnWindow open in the active pane's working directory (OSC 7, else "
+            "the process cwd); the live GUI check is unverified. The installer writes nothing."
+        ),
+        sibling_regions=(WEZTERM,),
+        validate_on_status=True,
+        bind_created_path=True,
+        readback=_wezterm_readback,
     ),
 }
 
@@ -326,6 +395,20 @@ def terminal_keys_pending(
         if recorded and not present:
             return None
         plan = _render(row, platform_os, text, path)
+        if plan.refusal is not None and not recorded:
+            return plan.refusal
+        if (
+            not present
+            and row.ownership.placement is Placement.BEFORE_RETURN
+            and plan.body is not None
+        ):
+            replace_owned_region(
+                text,
+                row.ownership.region,
+                plan.body,
+                comment=row.ownership.comment,
+                placement=row.ownership.placement,
+            )
         if present:
             body = "" if plan.body is None and plan.conflicts else plan.body
             updated = replace_owned_region(
@@ -368,13 +451,14 @@ def strip_terminal_keys(
                 home,
                 tool_id,
                 bound=row.bind_created_path,
+                seed=WEZTERM_SKELETON if row.ownership.placement is Placement.BEFORE_RETURN else "",
             )
         )
     return tuple(warnings)
 
 
 def _drop_created_config(
-    path: Path, marker: Path, home: Path, tool_id: str, *, bound: bool
+    path: Path, marker: Path, home: Path, tool_id: str, *, bound: bool, seed: str = ""
 ) -> list[str]:
     """Delete whitespace-only created configs; bound rows delete only their recorded path."""
     if not marker.exists():
@@ -391,7 +475,7 @@ def _drop_created_config(
                     f"{tool_id}: created config at {shown} is not the file now resolved; left alone"
                 ]
         before = read_settings(path)
-        if before is None or snapshot_text(before).strip():
+        if before is None or (snapshot_text(before).strip() and snapshot_text(before) != seed):
             marker.unlink()
             sidecar.unlink(missing_ok=True)
             return []

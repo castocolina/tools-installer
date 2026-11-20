@@ -29,7 +29,144 @@ class Placement(Enum):
     BEFORE_RETURN = "before_return"  # Place before WezTerm's single return config line.
 
 
+WEZTERM = "wezterm"
+WEZTERM_KEYS = "wezterm-keys"
+WEZTERM_CREATED = "terminal-wezterm-created"
 WEZTERM_SKELETON: Final = 'local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n'
+WEZTERM_UNVERIFIED: Final = "wezterm: could not verify the keys against wezterm show-keys"
+_WEZTERM_KEYS_ASSIGNMENT = re.compile(
+    r"^\s*config\.keys\s*=(?!=)(?!\s*config\.keys\s+or\b)(?!\s*config\.keys\s+or\s*\{)"
+)
+_WEZTERM_ENTRY = re.compile(
+    r"^\s*\{\s*key\s*=\s*'([^']+)'\s*,\s*mods\s*=\s*'([^']*)'\s*,\s*action\s*=\s*(.*?)\s*\},?\s*$"
+)
+
+
+def wezterm_config_path(home: Path, environ: Mapping[str, str]) -> Path:
+    config_home = xdg_config_home(home, environ)
+    configured = config_home / "wezterm" / "wezterm.lua"
+    fallback = home / ".wezterm.lua"
+    return configured if configured.exists() or not fallback.exists() else fallback
+
+
+def wezterm_keys_body(rows: Sequence[tuple[str, str, str]]) -> str:
+    lines = (
+        "do",
+        '  local wezterm = require "wezterm"',
+        "  local act = wezterm.action",
+        '  local alias = { CMD = "SUPER", WIN = "SUPER", OPT = "ALT", '
+        'META = "ALT", CONTROL = "CTRL" }',
+        "  local function chord(key, mods)",
+        "    local set = {}",
+        '    for name in string.gmatch(string.upper(mods or ""), "[^|%s]+") do',
+        "      local m = alias[name] or name",
+        '      if m ~= "NONE" then set[m] = true end',
+        "    end",
+        '    local k = key or ""',
+        '    if string.match(k, "^%u$") then set.SHIFT = true end',
+        "    local names = {}",
+        "    for m in pairs(set) do names[#names + 1] = m end",
+        "    table.sort(names)",
+        '    return string.lower(k) .. "/" .. table.concat(names, "|")',
+        "  end",
+        "  config.keys = config.keys or {}",
+        "  local taken = {}",
+        "  for _, entry in ipairs(config.keys) do taken[chord(entry.key, entry.mods)] = true end",
+        "  for _, entry in ipairs({",
+    )
+    rendered = tuple(
+        f'    {{ key = "{key}", mods = "{mods}", action = act.SendString "'
+        + "".join(f"\\x{ord(char):02x}" if ord(char) < 32 else char for char in send)
+        + '" },'
+        for key, mods, send in rows
+    )
+    return "\n".join(
+        (
+            *lines,
+            *rendered,
+            "  }) do",
+            "    if not taken[chord(entry.key, entry.mods)] then "
+            "table.insert(config.keys, entry) end",
+            "  end",
+            "end",
+        )
+    )
+
+
+def validate_wezterm(text: str) -> None:
+    lines = text.splitlines()
+    begin = marker(WEZTERM_KEYS, ">>>", comment="--")
+    end = marker(WEZTERM_KEYS, "<<<", comment="--")
+    if begin not in lines or end not in lines or lines.index(begin) >= lines.index(end):
+        raise TerminalShellError(
+            "the WezTerm keys region would not sit before return config; nothing written"
+        )
+    end_index = lines.index(end)
+    returns = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "return config" and index > end_index
+    ]
+    if not returns or any(line.strip() == "return config" for line in lines[: end_index + 1]):
+        raise TerminalShellError(
+            "the WezTerm keys region would not sit before return config; nothing written"
+        )
+    for line in lines[end_index + 1 : returns[0]]:
+        if _WEZTERM_KEYS_ASSIGNMENT.match(line) and not re.match(
+            r"^\s*config\.keys\s*=\s*config\.keys\s+or\b", line
+        ):
+            raise TerminalShellError(
+                "your config.keys assignment after the WezTerm keys region would replace its "
+                "keys; nothing written"
+            )
+    # shortcut: other edits are not detected; extend this guard if users report replacement.
+
+
+def wezterm_chord(key: str, mods: str) -> str:
+    aliases = {"CMD": "SUPER", "WIN": "SUPER", "OPT": "ALT", "META": "ALT", "CONTROL": "CTRL"}
+    names = {
+        aliases.get(name.upper(), name.upper())
+        for name in re.split(r"[|\s]+", mods)
+        if name and name.upper() != "NONE"
+    }
+    if re.fullmatch(r"[A-Z]", key):
+        names.add("SHIFT")
+    return f"{key.lower()}/{'|'.join(sorted(names))}"
+
+
+def wezterm_readback(output: str, rows: Sequence[tuple[str, str, str]]) -> tuple[str, ...]:
+    actions: dict[str, str] = {}
+    expected_chords = {wezterm_chord(key, mods.replace("OPT", "ALT")) for key, mods, _ in rows}
+    in_keys = False
+    for line in output.splitlines():
+        if line.strip().startswith("key_tables"):
+            break
+        if line.strip().startswith("keys = {"):
+            in_keys = True
+        elif in_keys:
+            match = _WEZTERM_ENTRY.match(line)
+            if match:
+                key, mods, action = match.groups()
+                chord = wezterm_chord(key, mods)
+                if chord in expected_chords:
+                    actions[chord] = action
+    conflicts: list[str] = []
+    missing = any(wezterm_chord(key, mods) not in actions for key, mods, _ in rows)
+    for key, mods, send in rows:
+        chord = wezterm_chord(key, mods)
+        expected_chord = wezterm_chord(key, mods.replace("OPT", "ALT"))
+        expected = {
+            "\x0c": "act.SendString '\\f'",
+            "\x1bb": "act.SendString '\\u{1b}b'",
+            "\x1bf": "act.SendString '\\u{1b}f'",
+        }.get(send)
+        action = actions.get(chord) or actions.get(expected_chord)
+        if action is None:
+            missing = True
+        elif action != expected and expected is not None:
+            display_mods = mods.replace("OPT", "ALT").replace("|", "+")
+            conflicts.append(f"wezterm: partial: you already bind {display_mods}+{key}; kept yours")
+    return (*conflicts, *((WEZTERM_UNVERIFIED,) if missing else ()))
 
 
 def marker(terminal: str, edge: str, *, comment: str = "#") -> str:
