@@ -874,6 +874,39 @@ def test_wezterm_golden_macos_created_file() -> None:
     assert _wezterm_config().read_text() == _WEZTERM_MACOS
 
 
+def test_no_row_writes_a_global_option_as_alt_switch(tmp_path: Path) -> None:
+    forbidden = ("option_as_alt", "send_composed_key_when")
+    for tool_id, row in TERMINAL_KEYS.items():
+        for platform_os in ("macos", "fedora"):
+            home = tmp_path / f"{tool_id}-{platform_os}"
+            environ = {"HOME": str(home)}
+            assert (
+                apply_terminal_keys(row, tool_id, platform_os, home, environ, skip_recorded=False)[
+                    1
+                ]
+                is None
+            )
+            text = row.config_path(platform_os, home, environ).read_text().lower()
+            assert not any(switch in text for switch in forbidden), (tool_id, platform_os, text)
+
+
+def test_only_alacritty_writes_linux_alt_rows(tmp_path: Path) -> None:
+    forbidden = ("opt+left", "alt+left", "opt+right", "alt+right", "leftarrow", "rightarrow")
+    for tool_id, row in TERMINAL_KEYS.items():
+        home = tmp_path / f"{tool_id}-fedora"
+        environ = {"HOME": str(home)}
+        assert (
+            apply_terminal_keys(row, tool_id, "fedora", home, environ, skip_recorded=False)[1]
+            is None
+        )
+        text = row.config_path("fedora", home, environ).read_text().lower()
+        if tool_id == "alacritty":
+            assert 'key = "left"' in text
+            assert 'mods = "alt"' in text
+        else:
+            assert not any(binding in text for binding in forbidden), (tool_id, text)
+
+
 def test_wezterm_never_writes_a_global_alt_switch() -> None:
     assert "send_composed_key_when" not in _WEZTERM_LINUX + _WEZTERM_MACOS
     assert "option_as_alt" not in _WEZTERM_LINUX + _WEZTERM_MACOS

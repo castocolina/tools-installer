@@ -14,6 +14,7 @@ import yaml
 
 from installer.enums import Category
 from installer.model import load_tools
+from installer.terminal_keys import TERMINAL_KEYS
 from tests.skill_verdicts import DIMENSIONS, RUBRIC_MAX, grade, parse_verdict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -358,7 +359,7 @@ def test_conflicts_two_clauses_with_examples() -> None:
             "install note",
             "displaced default",
             "scroll_line_up",
-            "planned for phase 29",
+            "written since phase 29",
             "Example",
         )
     )
@@ -597,6 +598,45 @@ def test_verdict_files_before_and_after() -> None:
     before = parse_verdict(_text(folder / "27-SKILLJUDGE-before.md"), final=False)
     after = parse_verdict(_text(folder / "27-SKILLJUDGE-after.md"), final=False)
     assert verdict_regressions(before, after) == []
+
+
+def terminal_keys_table_problems(section: str) -> list[str]:
+    rows = table_rows(section)
+    by_id = dict(zip(table_ids(rows), rows, strict=True))
+    problems: list[str] = []
+    for tool_id in TERMINAL_KEYS:
+        row = by_id.get(tool_id)
+        if row is None:
+            problems.append(f"no table row for {tool_id}")
+        elif not row[4].startswith("written"):
+            problems.append(f"{tool_id} clear cell is not written")
+    herdr = by_id.get("herdr")
+    if herdr is not None:
+        problems.extend(
+            f"herdr cell {index} is not vendor"
+            for index in (3, 4, 5)
+            if not herdr[index].startswith("vendor")
+        )
+    problems.extend(
+        f"row {row[0]} contains planned (phase 29)"
+        for row in rows
+        if any("planned (phase 29)" in cell for cell in row)
+    )
+    return problems
+
+
+def test_table_cells_follow_the_terminal_keys_table() -> None:
+    section = _subsection(_text(SKILL), TABLE_HEADING)
+    assert terminal_keys_table_problems(section) == []
+    changed = section.replace(
+        "written: cmd+k (macOS) and ctrl+shift+k (Linux) send Ctrl+L;",
+        "planned (phase 29): x",
+        1,
+    )
+    assert terminal_keys_table_problems(changed) == [
+        "kitty clear cell is not written",
+        "row `kitty` contains planned (phase 29)",
+    ]
 
 
 def test_table_matches_the_registry() -> None:

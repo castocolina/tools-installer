@@ -300,7 +300,8 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         same_directory=Vendor(
             "2026-11-20, wezterm source at tag 20240203-110809-5046fc22 (spawn.rs, localpane.rs): "
             "SpawnTab and SpawnWindow open in the active pane's working directory (OSC 7, else "
-            "the process cwd); the live GUI check is unverified. The installer writes nothing."
+            "the process cwd); verified live in a disposable container (29 D-07). "
+            "The installer writes nothing."
         ),
         sibling_regions=(WEZTERM,),
         validate_on_status=True,
