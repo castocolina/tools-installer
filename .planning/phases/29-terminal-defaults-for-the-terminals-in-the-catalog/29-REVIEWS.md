@@ -312,3 +312,139 @@ The review is grounded in the current checkout. I treated the provisional phase 
 - **Phase completion needs outcome gates, not only truthful documentation.** In particular, an unrun WezTerm cwd probe and a failed herdr byte probe must not be treated as equivalent to completed TERM-02 and TERM-05.
 
 **Not checked:** I did not run the test suite, terminal programs, or containers. The glob observation was checked against the host Python implementation; no repository files were changed.
+
+
+---
+
+## Lane Log (convergence cycle 3, plans at c017dd67)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 13:12 | opencode-referee-one | one-shot probe | OK |
+| 13:12 to 13:15 | opencode-referee-one | real review through `review-lane invoke --slug opencode --model router-env/my-referee-one --as opencode-referee-one`, background, stdin `/dev/null` | exit 0, 10 KB, stderr empty |
+
+Failures this cycle: none. (The user quota on /tmp was exhausted at 13:04 by an unrelated pytest run of another session; it cleared before this run, which wrote its output normally.) The review below is referee-one's, unedited; its first lines carry two of its own HIGH bullets that restate the one 29-02 finding.
+
+## Orchestrator verification of the cycle 3 HIGH concerns
+
+| Id | Claim | Judgment |
+|---|---|---|
+| C3-H1 (29-02, also 29-03) | Cleanup resolves the config path again, but the created marker is tool-wide, so a resolver change between install and removal can delete a different, user-owned empty file | Real. `_drop_created_config` (installer/terminal_keys.py:227-255) trusts a marker that names no path; the marker bytes are pinned for Alacritty by the phase 28 golden test, so the fix is opt-in. Decision: kitty and WezTerm rows bind the created-file proof to the created path through a sidecar record; cleanup deletes only when the resolved path equals the recorded path; Alacritty's marker and tests stay byte-identical. |
+| C3-H2 (29-03) | The D-07 live check uses `wezterm cli spawn`, not the `SpawnTab` and `SpawnWindow` key actions the decision concerns | Real. Decision: the orchestrator's check performs the actual actions from a Lua `window:perform_action` callback inside a disposable Xvfb session (a pane started in a known directory, no OSC 7), then asserts each new pane's cwd. A PASS means the actions, not the CLI. |
+
+Actionable MEDIUM adopted: 29-05, a client that exits before the recorder started is UNPROVEN (nonzero exit, container removed), never a generic ERROR; FAILED stays for a recorder that started and received wrong bytes.
+
+Cap rule (owner, convergence at cycle 3): fewer than 4 critical plus HIGH remain (2), so the orchestrator fixes and executes without a further review cycle.
+
+`CYCLE_SUMMARY: current_high=2 current_actionable=1`
+
+## OpenCode Review (opencode-referee-one), cycle 3
+
+Using the plan-review checklist to assess all six plans against the current source and the previous review findings.
+**HIGH — 29-02 can silently forget where it wrote kitty’s configuration.** The resolver selects an existing path only while its directory is writable, but uninstall resolves the path again; a later permissions change can redirect cleanup to another file and leave the owned region behind. I’m checking the surrounding cleanup and evidence before finalizing the finding.
+**HIGH — 29-02’s path drift can also delete the wrong config.** `strip_terminal_keys` resolves the current path but uses a tool-wide created marker; if the resolver switches to a different empty file, the existing cleanup treats that file as installer-created.
+### Document Type
+
+GSD · implementation plans
+
+### Status: Issues Found — revise and re-review
+
+The review is grounded in the current checkout. I treated the provisional 28 D-06 and 29 D-09 decisions as instructed rather than reopening them.
+
+## 29-01
+
+**Summary.** Changes Alacritty’s clear binding, extends the shared row interface, and fixes exact-marker detection for the WezTerm shell region.
+
+**Findings status.** Cycle 2’s unchanged-region status gap is addressed for opt-in rows by the proposed validator branch and fixture (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-01-PLAN.md:182,209`). The previously noted moved WezTerm shell-region case remains explicitly deferred by the orchestrator.
+
+**Strengths.** The interface changes cover both application and status rendering. The current `commit_region` validates changed content before writing (`installer/terminal_regions.py:181-205`), and the plan adds a separate status validation path for unchanged content.
+
+**Concerns.** No new finding identified within the instructed scope.
+
+**Suggestions.** Keep the moved-shell-region limitation in the execution summary; exact marker detection alone does not repair an already unreachable region.
+
+**Risk Assessment.** Moderate: the shared interface has broad reach, but the planned fixture coverage exercises its material additions.
+
+## 29-02
+
+**Summary.** Adds kitty’s per-OS keys region, config resolver and include scan, then replaces the macOS script method with the cask.
+
+**Findings status.** The cycle 2 moved-region and glob-enumeration concerns are explicitly accepted as limitations (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-02-PLAN.md:468-472`). The live kitty probe is self-verifying.
+
+**Strengths.** The existing macOS script does name `/Applications/kitty.app/Contents/MacOS`, while the cask is already present (`installer/registry.toml:3040-3064`); the plan removes the former and updates the relevant registry assertions.
+
+**Concerns.**
+
+- **HIGH — A changed resolver result can cause cleanup to delete a different user file.** The proposed resolver chooses the first *currently writable* existing kitty config (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-02-PLAN.md:270`). Cleanup resolves that path again, but the created-file marker is tool-wide, not bound to the path (`installer/terminal_keys.py:141-142,227-255`; `installer/terminal_regions.py:198-204`). For example, after the installer creates an XDG kitty config, a permissions or environment change can make the resolver select a pre-existing empty fallback file. Cleanup can then delete that fallback under the old marker and leave the installer-created file behind. The planned removal tests cover only a stable path (`29-02-PLAN.md:255-256`).
+
+**Suggestions.** Bind created-file proof to the actual created path, or otherwise ensure cleanup never applies a marker to a different resolved path. Add a test that changes resolver precedence between install and removal, with an empty user-owned fallback file.
+
+**Risk Assessment.** High: the path-change case can delete user-owned data, not merely leave stale configuration.
+
+## 29-03
+
+**Summary.** Adds WezTerm’s guarded Lua region, status validation, effective-key read-back and created-file cleanup.
+
+**Findings status.** Cycle 2’s plain `config.keys =` status gap is addressed by `validate_on_status` and a post-install edit test (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-03-PLAN.md:247-253,267-272`). The live Lua check now asserts its results.
+
+**Strengths.** The Lua guard normalizes aliases, modifier order and uppercase-letter SHIFT before appending (`29-03-PLAN.md:130-155`). The suite-wide read-back seam accounts for the existing subprocess sandbox (`tests/sandbox.py:515-570`).
+
+**Concerns.**
+
+- **HIGH — The D-07 gate does not test the actions whose behavior it claims to verify.** The prescribed live check uses `wezterm cli spawn` and `wezterm cli spawn --new-window` (`29-03-PLAN.md:93`), whereas the decision concerns the terminal’s `SpawnTab` and `SpawnWindow` actions invoked through its bindings. A CLI spawn can have a different cwd-selection path from a GUI key action. A PASS therefore does not establish the behavior that the plan later declares verified.
+
+**Suggestions.** Exercise the actual tab and window actions in the disposable GUI session, with a pane in a known directory and no OSC 7; assert the cwd of each resulting pane. If that cannot be done, keep the claim provisional rather than treating the CLI result as the required proof.
+
+**Risk Assessment.** High until the gate measures the intended actions. The Lua conflict-guard coverage itself is substantially improved.
+
+## 29-04
+
+**Summary.** Implements the instructed report-only Konsole check, with a warning for a removed shortcut and a stock note on profile setup.
+
+**Findings status.** Cycle 2’s non-directory-parent concern is addressed: the proposed reader distinguishes `NotADirectoryError` from an absent file (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-04-PLAN.md:137,176`).
+
+**Strengths.** `read_capped` propagates open errors and rejects non-regular or oversized files (`installer/atomic.py:186-215`), supporting the planned three-state detector. Existing status routing recognizes terminal `partial:` warnings (`installer/version_status.py:1601-1606`).
+
+**Concerns.** No new finding identified while applying the provisional report-only decision as written.
+
+**Suggestions.** Preserve the open Konsole 26.x capture and owner-confirmation items in the phase handoff.
+
+**Risk Assessment.** Moderate: the detector remains read-only, but its live file-format and stock-chord confirmation remain outstanding.
+
+## 29-05
+
+**Summary.** Adds a guarded disposable-container herdr byte probe, a pure verdict and host-side harness tests.
+
+**Findings status.** Cycle 2’s phase-completion gap is addressed by the required recorded PASS and stop/replan behavior (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-05-PLAN.md:25,241`). Cumulative-length slicing is now specified and unit-tested; the PTY loop remains a live-container check.
+
+**Strengths.** The existing landing harness records failed steps and removes the specifically named container (`scripts/container-e2e-verify.sh:2734-2754,2802-2818`). The plan distinguishes expected bytes from an unstarted recorder.
+
+**Concerns.**
+
+- **MEDIUM — Some probe startup failures have no specified UNPROVEN verdict.** The driver sends to and pumps the PTY before checking whether the recorder started (`29-05-PLAN.md:150`). If the client exits and PTY I/O raises `OSError`, `main` emits a generic `ERROR` (`29-05-PLAN.md:151`), rather than `TRACER_HERDR_KEYS_UNPROVEN`. The existing harness only classifies recognized environment messages as infeasible (`scripts/container-e2e-verify.sh:2705-2725,2805-2818`), leaving the orchestrator without the plan’s stated product-versus-environment verdict.
+
+**Suggestions.** Specify and test the client-exited-before-recorder path as UNPROVEN, including cleanup and nonzero exit; retain FAILED for a recorder that started but received wrong bytes.
+
+**Risk Assessment.** Moderate: the hard gate prevents a false pass, but an ambiguous startup failure can stall convergence.
+
+## 29-06
+
+**Summary.** Requires the two recorded live-check passes, updates the onboarding skill and adds consistency guards.
+
+**Findings status.** Cycle 2’s missing-PASS paths are addressed: both `awk` checks block edits and commits when their respective recorded results are absent or unsuccessful (`.planning/phases/29-terminal-defaults-for-the-terminals-in-the-catalog/29-06-PLAN.md:63-64,133-143`).
+
+**Strengths.** The target table wording respects the existing seven-cell parser and status-word checks (`tests/test_tool_onboarding_skill.py:140-146,180-193`).
+
+**Concerns.** No separate new finding in the gate mechanics. The meaning of the WezTerm PASS remains dependent on the 29-03 finding.
+
+**Suggestions.** Update the verified cwd wording only after the revised action-level D-07 check passes.
+
+**Risk Assessment.** Moderate: the gate now blocks missing evidence, but cannot compensate for a probe that tests a different operation.
+
+## Cross-plan consistency
+
+- The declared wave-1 file sets for 29-01 and 29-05 are disjoint (`29-01-PLAN.md:6-13`; `29-05-PLAN.md:6-11`); subsequent shared terminal changes are serialized.
+- The created-marker/path issue in 29-02 should also be considered for WezTerm: its resolver can switch between XDG and `~/.wezterm.lua`, while 29-03 permits deleting a created file when its remainder is the skeleton (`installer/terminal_shell.py:121-127`; `29-03-PLAN.md:265,273`). A marker must prove ownership of the **selected path**, not just the tool.
+- **Required before approval:** protect created-file cleanup against resolver drift and make the D-07 proof exercise the actual WezTerm actions.
+
+**Not checked:** I did not run the test suite, terminal applications, or containers, and made no repository changes. Live macOS behavior remains deferred to the owner’s UAT.
