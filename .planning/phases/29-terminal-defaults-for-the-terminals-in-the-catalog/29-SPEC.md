@@ -73,7 +73,7 @@ kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults of 
 - [ ] kitty's macOS method has no `/Applications` path, or its `# Verified` comment says why.
 - [ ] WezTerm fixtures: user `config.keys` preserved; both regions coexist; a marker-lookalike comment is not an owned region.
 - [ ] Alacritty's golden file differs from phase 28's only in the clear row(s).
-- [ ] Konsole: stock profile unchanged and reported; removed key gets one binding; sync tests unedited; stock key confirmed in a container.
+- [ ] Konsole: stock profile unchanged and reported; removed key left byte-identical and reported (amended 2026-11-20, 29 D-09, needs confirmation: report-only); sync tests unedited; stock key confirmed in a container.
 - [ ] A byte-level herdr-pane test shows the three chords arriving, or the pass-through setting is written and stripped.
 - [ ] No terminal in this phase gets Alt+Left/Right word navigation on Linux except Alacritty's existing rows.
 
