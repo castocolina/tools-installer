@@ -42,8 +42,9 @@ Tests run with `pytest` and coverage via `make test`. Configuration lives in
 ### Definition of done
 - A change is done when the commit hook's six gates and the push gate's `make test` pass
   on the committed tree — not when the feature "works on my machine". The commit hook runs
-  the static gates, so do not run them by hand first; tests run at push (see AGENTS.md for
-  code changes in a run that will not push soon).
+  the static gates, so do not run them by hand per commit. While working, run the
+  targeted tests for what you edited; after a plan, run `make validate` and `make test`
+  once each (see AGENTS.md).
 
 ## Examples
 

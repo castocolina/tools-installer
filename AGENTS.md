@@ -43,13 +43,17 @@ When a gate fails, fix it and re-run its own target.
 - **Coherent commits.** Do not pile up "fix review comment" commits. Amend or squash
   so each commit is one self-contained, valid change. See [Git Workflow](.claude/git-workflow.md).
 - **Changes reach `main` by branch push, green CI, fast-forward** ([Git Workflow](.claude/git-workflow.md)).
-- **The hooks are the gate.** The commit hook runs the six static gates (the set
-  `make validate` runs), and every worktree shares it, so never run `make validate` by hand
-  before a commit and run nothing after editing plans or Markdown. Tests run only at the
-  push gate (`make test`): when a run changes `.py` code and will not push soon (an
-  autonomous run), run `make test` after each task, so a red suite is found while the
-  change is small and never left for the push. Also run a gate by hand to diagnose a
-  failure, or in a checkout that has no hooks yet. Never bypass a hook.
+- **The hooks are the gate; test what you changed.** The commit hook runs the six static
+  gates on every commit (the set `make validate` runs) and every worktree shares it, so
+  never run `make validate` or a single static gate by hand per commit, and never chain
+  `make validate && make test` at a commit. While working, run only the tests that cover
+  your edit: find the edited files, then the test file named for each module, the tests
+  that import it and the tests that read an edited non-Python file (`devtools/docs_only.py`
+  lists those), and run `uv run pytest <those files> --no-cov -q`. After a plan, run
+  `make validate` and `make test` once each: tests otherwise run only at the push gate,
+  and a run that will not push soon (an autonomous run) must not leave a red suite for it.
+  Editing only plans or Markdown that no test reads needs none of this. Run a gate by hand
+  also to diagnose a failure, or in a checkout that has no hooks yet. Never bypass a hook.
 - **Never mutate the developer's host.** Do not run `make run`, `make fix`,
   `make uninstall`, `make doctor`, or mutating `systemctl --user` commands, on the
   real machine (every launch route, doctor included, may rewrite the real
