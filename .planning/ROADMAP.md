@@ -582,3 +582,10 @@ Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
 **Absorbed by:** Phase 31 (v0.51.0)
+
+### Phase 999.23: Workflow lint gate for GitHub Actions files (BACKLOG)
+
+**Goal:** Every commit that touches `.github/workflows/*.yml` is linted by one gate with its own pre-commit entry and make target (actionlint-class), so an expression or shell error inside a `run:` block fails before CI.
+**Requirements:** TBD
+**Source:** Phase 33 discuss, 2026-11-19 (33 D-16): no gate lints workflow YAML today; phase 33 records one ad-hoc containerized run instead. The gate needs a dev-setup install of the linter (the developer runs `make dev-setup`; agents do not).
+**Depends on:** Phase 33.

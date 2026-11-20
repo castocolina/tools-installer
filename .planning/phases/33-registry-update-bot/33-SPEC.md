@@ -17,13 +17,14 @@ Catalog pins in `installer/registry.toml` stop going stale between manual runs: 
 - `--write` re-dates every passing tool, so without a flag every bot branch would carry date-only diffs.
 - `tests/test_verify_registry_workflow.py` and `tests/test_verify_registry.py` exist and are the pattern for workflow and bump tests. Dependabot cannot parse `registry.toml`; Renovate cannot refresh the paired `sha256` (research: `.planning/research/2026-11-17-update-automation.md`, feature 3).
 - Phases 30 and 32 add more pinned methods (Ghostty, Bruno AppImages); the bot covers them once they land.
+- Live facts (2026-11-19): the bot can auto-bump only drawio-desktop (2 of the 5 pinned methods); Sublime publishes no latest URL and is bumped by hand with `--candidate`. Branch protection requires the two named checks, `strict` and `enforce_admins`, with no push restrictions and no required reviews.
 
 ## Requirements
 
 1. **Bot workflow and branch (BOT-01)**: A scheduled or manually dispatched GitHub Actions workflow runs `verify-registry --write`; when `installer/registry.toml` changed it pushes a `bot/registry-<date>` branch carrying the change and opens or updates one tracking issue naming that branch; when nothing changed it pushes nothing and opens nothing. A bumped pin changes `version`, `sha256` and `verified` together.
    - Current: only the drift-report workflow exists.
    - Target: a new `.github/workflows/registry-bot.yml` (name chosen in discuss).
-   - Acceptance: a workflow test asserts the trigger set, that the push step is guarded by a changed-file check, and that no step runs when the diff is empty; a bump fixture shows the three keys change in one commit; a dispatched run on a throwaway fork or branch with drift pushes exactly one `bot/registry-<date>` branch and a rerun the same day updates it instead of creating a second.
+   - Acceptance: a workflow test asserts the trigger set, that the push step is guarded by a changed-file check, and that no publishing step (push, issue, dispatch) runs when the diff is empty *(amended 2026-11-19, 33 D-03: a cache-save step may still run)*; a bump fixture shows the three keys change in one commit; a dispatched run on a throwaway fork or branch with drift pushes exactly one `bot/registry-<date>` branch and a rerun the same day updates it instead of creating a second.
 
 2. **Required checks run on the bot branch (BOT-02)**: The required checks (`validate & test on ubuntu-latest` and `macos-latest`) run on the bot branch head by a `workflow_dispatch` of `ci.yml` issued by the bot, with no stored token; the dispatch is proved once on a throwaway branch before the phase is done, and if it does not satisfy the required checks the phase stops and the owner chooses a token route.
    - Current: `ci.yml` has no manual-dispatch trigger (verify in discuss) and the satisfaction of required checks by a dispatched run is unverified.
@@ -50,6 +51,7 @@ Catalog pins in `installer/registry.toml` stop going stale between manual runs: 
 **In scope:**
 - The bot workflow, the `ci.yml` dispatch trigger, the date-only flag with its tests, the tracking issue step, and `.github/dependabot.yml`.
 - One throwaway-branch proof that a dispatched CI run satisfies the required checks.
+- *Amended 2026-11-19 (33 D-10):* the two assertions of `tests/test_ci_workflow.py` that conflict (the trigger set at line 41, the exact `actions/checkout@v4` match at line 52).
 
 **Out of scope:**
 - Auto-landing the bot branch — the owner lands (BOT-03).
@@ -78,7 +80,7 @@ Catalog pins in `installer/registry.toml` stop going stale between manual runs: 
 
 ## Edge Coverage
 
-**Coverage:** 18/18 applicable edges resolved · 0 unresolved
+**Coverage:** 19/19 applicable edges resolved · 0 unresolved
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
@@ -86,6 +88,7 @@ Catalog pins in `installer/registry.toml` stop going stale between manual runs: 
 | empty | R1 | ✅ covered | Acceptance 1: an empty diff pushes nothing and opens no issue (guarded step, workflow test) |
 | encoding | R1 | ✅ covered | Acceptance 2: the bump fixture compares sha256 as lowercase hex and version as the exact string verify-registry wrote |
 | ordering | R1 | ✅ covered | Acceptance 2: the three keys are asserted as a set per method, independent of edit order |
+| idempotency | R1 | ✅ covered | Acceptance 3: a same-day rerun with identical content updates the same branch and adds no second branch, issue or commit |
 | concurrency | R1 | 🧪 backstop | held-out test: the workflow declares a concurrency group so a scheduled and a dispatched run cannot push the same branch at once |
 | empty | R2 | ✅ covered | Acceptance 4 and 5: no bot branch means no dispatch; a dispatch without the branch name fails the workflow test |
 | encoding | R2 | ✅ covered | Acceptance 5: the check names recorded are compared exactly as GitHub reports them (`validate & test on ubuntu-latest`, `validate & test on macos-latest`) |
@@ -93,7 +96,7 @@ Catalog pins in `installer/registry.toml` stop going stale between manual runs: 
 | empty | R3 | ✅ covered | Acceptance 1: a workflow with no push step passes the no-main assertion vacuously only if it has no push at all, otherwise the target is asserted |
 | encoding | R3 | ✅ covered | Acceptance 1: the ref comparison is exact (`refs/heads/main`, `main`, `HEAD:main` all rejected) |
 | ordering | R3 | ✅ covered | Acceptance 1: assertions run over every step regardless of order |
-| concurrency | R3 | 🧪 backstop | held-out test: branch protection (not the bot) is the guard against a racing push to main; the workflow has no main target to race |
+| concurrency | R3 | 🧪 backstop | held-out test: protection has no push restrictions (checked live 2026-11-19), so the guard is the workflow content: no step targets main, asserted by the workflow test |
 | adjacency | R4 | ✅ covered | Acceptance 6: a change touching `verified` and `version` together counts as a real bump; only a lone `verified` change is skipped |
 | empty | R4 | ✅ covered | Acceptance 6: a registry with no drift is unchanged with or without the flag |
 | encoding | R4 | ✅ covered | Acceptance 6: dates compare as exact ISO strings (YYYY-MM-DD) |
