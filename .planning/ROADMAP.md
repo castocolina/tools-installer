@@ -81,7 +81,7 @@
 
 Plans:
 **Wave 1**
-- [ ] 27-01-PLAN.md — Before verdict (orchestrator-step), then the closed per-terminal table with its registry coverage test and edge fixtures (SKILL-02)
+- [ ] 27-01-PLAN.md — Before verdict (pre-dispatch orchestrator prerequisite, executor verify gate), then the closed per-terminal table with its registry coverage test and edge fixtures (SKILL-02, SKILL-06)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 27-02-PLAN.md — Step 7 renamed; the four defaults as rules; only non-terminal extras stay questions (SKILL-01, SPEC R6)
@@ -90,7 +90,7 @@ Plans:
 - [ ] 27-03-PLAN.md — Conflict rule, macOS testing rule naming the CI job, macOS app rule with a `# Verified` example (SKILL-03, SKILL-05, SKILL-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 27-04-PLAN.md — After verdict (orchestrator-step), shared verdict parser, the after-not-lower test and docs-only entries (SKILL-06)
+- [ ] 27-04-PLAN.md — After verdict (pre-dispatch orchestrator prerequisite, executor verify gate), shared verdict parser, the after-not-lower test with the rubric-maxima check, and docs-only entries (SKILL-06)
 
 ### Phase 28: Shared terminal-keys mechanism
 
