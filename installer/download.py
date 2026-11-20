@@ -309,7 +309,17 @@ def artifact_paths(method: Method, default_bin_dir: Path) -> tuple[Artifact, ...
         declared = _opt_str(method, "bin_dir")
         bin_base = Path(declared).expanduser() if declared else default_bin_dir
         if method.params.get("raw") is True:
-            return (Artifact(bin_base / name, "file"),)
+            binary = Artifact(bin_base / name, "file")
+            desktop = _opt_str(method, "desktop")
+            if desktop is not None and _is_single_name(desktop):
+                # shortcut: literal ~/.local/share ignores XDG_DATA_HOME; upgrade Alacritty too.
+                share = Path.home() / ".local" / "share"
+                return (
+                    binary,
+                    Artifact(share / "applications" / f"{desktop}.desktop", "leaf"),
+                    Artifact(share / "icons/hicolor/256x256/apps" / f"{desktop}.png", "leaf"),
+                )
+            return (binary,)
         return (Artifact(opt_dir(name), "dir"), Artifact(bin_base / name, "link"))
     if method.kind == "app":
         app = method.params.get("app")
@@ -416,7 +426,7 @@ def install_download(method: Method, ctx: ExecContext) -> str | None:
     try:
         asset_path = _fetch_verified(method, ctx, target, workdir)
         if method.params.get("raw") is True:
-            _replace_raw(link, asset_path, smoke_argv=method_smoke_argv(method))
+            _replace_raw(link, asset_path, smoke_argv=method_smoke_argv(method), tmpdir=workdir)
         else:
             _replace_archive(
                 method,
@@ -497,13 +507,19 @@ def _fetch_verified(
     return asset_path
 
 
-def _replace_raw(link: Path, asset_path: Path, *, smoke_argv: Sequence[str] | None = None) -> None:
+def _replace_raw(
+    link: Path,
+    asset_path: Path,
+    *,
+    smoke_argv: Sequence[str] | None = None,
+    tmpdir: Path | None = None,
+) -> None:
     new = staged_sibling(link, NEW_SUFFIX)
     try:
         shutil.copy2(asset_path, new)
         new.chmod(0o755)
         if smoke_argv is not None:
-            smoke_binary(new, smoke_argv)
+            smoke_binary(new, smoke_argv, tmpdir=tmpdir)
         os.replace(new, link)
     except Exception:
         new.unlink(missing_ok=True)

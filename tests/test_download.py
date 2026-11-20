@@ -2032,6 +2032,21 @@ def test_fresh_install_failure_after_relink_leaves_no_link(
     assert not staged_sibling(opt, atomic.OLD_SUFFIX).exists()
 
 
+def test_raw_install_smokes_with_the_workdir_as_tmpdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    marker = tmp_path / "marker"
+    payload = f'#!/bin/sh\nprintf "%s" "$TMPDIR" > {marker}\n'.encode()
+    _, runner = _script_member_runner(
+        tmp_path / ".local/bin/yq", payload, workdir=workdir, files={"yq_linux_amd64": payload}
+    )
+    install_download(_raw_method(tmp_path / "bin"), _ctx(runner, tmp_version="v14.1.0"))
+    assert marker.read_text() == str(workdir)
+    assert not workdir.exists()
+
+
 def test_raw_asset_is_smoked_before_it_replaces_the_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

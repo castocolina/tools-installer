@@ -1187,6 +1187,23 @@ def test_smoke_binary_names_the_os_launch_error(
     assert reason in message
 
 
+def test_smoke_binary_sets_tmpdir_when_given(tmp_path: Path) -> None:
+    marker = tmp_path / "marker"
+    script = _script(tmp_path / "bin", f'#!/bin/sh\nprintf "%s" "$TMPDIR" > {marker}\n')
+    executors.smoke_binary(script, tmpdir=tmp_path / "t")
+    assert marker.read_text() == str(tmp_path / "t")
+
+
+def test_smoke_binary_keeps_the_inherited_tmpdir_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "marker"
+    script = _script(tmp_path / "bin", f'#!/bin/sh\nprintf "%s" "$TMPDIR" > {marker}\n')
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "inherited"))
+    executors.smoke_binary(script)
+    assert marker.read_text() == str(tmp_path / "inherited")
+
+
 def test_smoke_binary_hides_the_display(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marker = tmp_path / "display.txt"
     script = _script(

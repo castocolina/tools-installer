@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from installer import apps, cargo_distrobox, download, executors, receipts
+from installer import appimage_menu, apps, cargo_distrobox, download, executors, receipts
 from installer.agent_settings import FileResult
 from installer.bun_globals import bun_dirs, method_bin_dir
 from installer.checksums import ChecksumMismatch
@@ -283,6 +283,8 @@ def install_tool(
         resolved_tags.clear()
         try:
             verified, unverified_reason, notes = _perform(method, ctx)
+            if method.kind in download.DOWNLOAD_KINDS:
+                notes = (*notes, *appimage_menu.install(method, ctx, previous))
             method_dir = method_bin_dir(method)
             if method_dir is not None:
                 prepend_path(method_dir)

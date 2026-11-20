@@ -88,6 +88,7 @@ def smoke_binary(
     argv: Sequence[str] = ("--version",),
     *,
     timeout: float = PROBE_VERSION_TIMEOUT,
+    tmpdir: Path | None = None,
 ) -> None:
     """Run a freshly verified binary once to catch loader/arch failures before linking.
 
@@ -99,10 +100,13 @@ def smoke_binary(
     draw.io app methods) may still open a window — that behavior is not verified
     on macOS. The failure reason prefers the first loader-error line in stderr or
     detail, otherwise the last five non-empty detail lines joined with `` | ``.
+    `tmpdir` directs the child's temporary files to a directory the caller deletes.
     """
     env = {
         key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")
     }
+    if tmpdir is not None:
+        env["TMPDIR"] = str(tmpdir)
     cmd = [str(path), *argv]
     try:
         _stdout, stderr = run_output_with_stderr(cmd, timeout=timeout, env=env)

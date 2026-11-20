@@ -56,9 +56,8 @@ def plan_uninstall(tools: list[Tool], default_bin_dir: Path) -> list[Path]:
     for tool in tools:
         for method in tool.methods:
             artifacts = artifact_paths(method, default_bin_dir)
-            if method.kind == "cargo_distrobox":
-                # A user's own desktop entry or terminfo file is no evidence that this
-                # installer built the tool: only the binary is.
+            if method.kind == "cargo_distrobox" or method.params.get("desktop") is not None:
+                # A user's desktop entry, icon or terminfo is not evidence; only the binary is.
                 artifacts = artifacts[:1]
             for artifact in artifacts:
                 add(artifact.path)

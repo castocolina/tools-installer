@@ -5,6 +5,7 @@ control character is refused, the `terminal_shell._safe_executable` posture, so
 no value can end a line and inject a key.
 """
 
+from collections.abc import Collection
 from pathlib import Path
 
 # Desktop Entry spec, `Exec`: an argument holding one of these must be double-quoted.
@@ -33,13 +34,15 @@ def _exec_program(text: str) -> str:
     return '"' + "".join(_QUOTED_ESCAPES.get(char, char) for char in text) + '"'
 
 
-def render(source: str, *, binary: Path, icon: Path | None) -> str:
-    """`source` with TryExec, each Exec program and (when given) Icon set to absolute paths."""
+def render(source: str, *, binary: Path, icon: Path | None, drop: Collection[str] = ()) -> str:
+    """Set paths; drop names keys omitted when `<key>=` starts a line."""
     plain_binary = _checked(binary, "binary")
     program = _exec_program(plain_binary)
     plain_icon = None if icon is None else _checked(icon, "icon")
     out: list[str] = []
     for line in source.splitlines():
+        if any(line.startswith(f"{key}=") for key in drop):
+            continue
         if line.startswith("TryExec="):
             out.append(f"TryExec={plain_binary}")
         elif line.startswith("Exec="):

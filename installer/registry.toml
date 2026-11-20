@@ -3196,8 +3196,8 @@ package = "alacritty"
 # kind has no cli key, so no CLI link is promised (SKILL-04 platform gap). The CLI remains at
 # ~/Applications/Ghostty.app/Contents/MacOS/ghostty. Arch extra/ghostty 1.4.0-1 is a hand-off.
 # The desktop id names the AppImage's own desktop file and icon;
-# the installer will place the AppImage menu entry and icon
-# and the rendered entry will drop X-KDE-Shortcuts=Ctrl+Alt+T to keep Konsole's Bazzite shortcut.
+# the installer places the AppImage menu entry and icon
+# and the rendered entry drops X-KDE-Shortcuts=Ctrl+Alt+T to keep Konsole's Bazzite shortcut.
 [[tool]]
 id = "ghostty"
 name = "Ghostty"

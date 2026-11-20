@@ -27,8 +27,53 @@ X-Desktop-File-Install-Version=0.26
 Name=New Terminal
 Exec=alacritty
 """
+APPIMAGE_DESKTOP = """[Desktop Entry]
+Version=1.0
+Name=Ghostty
+Type=Application
+Comment=A terminal emulator
+TryExec=ghostty
+Exec=ghostty --gtk-single-instance=true
+Icon=com.mitchellh.ghostty
+Categories=System;TerminalEmulator;
+StartupNotify=true
+StartupWMClass=com.mitchellh.ghostty
+Terminal=false
+Actions=new-window;
+X-KDE-Shortcuts=Ctrl+Alt+T
+
+[Desktop Action new-window]
+Name=New Window
+Exec=ghostty --gtk-single-instance=true
+"""
 BINARY = Path("/home/u/.local/bin/alacritty")
 ICON = Path("/home/u/.local/share/icons/hicolor/scalable/apps/Alacritty.svg")
+
+
+def test_render_drops_the_listed_keys() -> None:
+    result = render(
+        APPIMAGE_DESKTOP,
+        binary=Path("/h/.local/bin/ghostty"),
+        icon=Path("/h/icon.png"),
+        drop=("X-KDE-Shortcuts",),
+    )
+    assert "X-KDE-Shortcuts=" not in result
+    assert "TryExec=/h/.local/bin/ghostty" in result.splitlines()
+    assert result.splitlines().count("Exec=/h/.local/bin/ghostty --gtk-single-instance=true") == 2
+    assert "Icon=/h/icon.png" in result.splitlines()
+    assert "Name=Ghostty" in result.splitlines()
+    assert "StartupWMClass=com.mitchellh.ghostty" in result.splitlines()
+    assert result.endswith("\n")
+
+
+def test_render_keeps_every_key_by_default() -> None:
+    assert "X-KDE-Shortcuts=Ctrl+Alt+T" in render(APPIMAGE_DESKTOP, binary=BINARY, icon=ICON)
+
+
+def test_render_drop_matches_the_whole_key() -> None:
+    assert "X-KDE-Shortcuts=Ctrl+Alt+T" in render(
+        APPIMAGE_DESKTOP, binary=BINARY, icon=ICON, drop=("X-KDE",)
+    )
 
 
 def test_render_rewrites_exec_tryexec_and_icon() -> None:
