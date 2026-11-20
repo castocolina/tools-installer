@@ -17,7 +17,6 @@ from installer.agent_settings import (
     apply_value,
     parse_settings,
     read_settings,
-    remove_created_dirs,
     revert_group,
     same_value,
     settings_file,
@@ -30,17 +29,15 @@ from installer.platform import Platform
 from installer.receipts import read_ledger
 from installer.run import CommandError, Runner, run_bounded
 from installer.shellrc import apply_block, strip_block
+from installer.terminal_keys import alacritty_keys_plan_for_document as _keys_plan
 from installer.terminal_regions import (
     ALACRITTY,
-    ALACRITTY_KEYS,
     TerminalShellError,
     alacritty_config_path,
     commit_region,
     validate_toml,
 )
-from installer.terminal_regions import ALACRITTY_CREATED as _CREATED_RECORD
 from installer.terminal_regions import IMPORTS as _IMPORTS
-from installer.terminal_regions import alacritty_keys_plan as _keys_plan
 from installer.terminal_regions import first_line as _first_line
 from installer.terminal_regions import imports_files as _imports_files
 from installer.terminal_regions import marker as _marker
@@ -421,25 +418,14 @@ def _revert_konsole(*, home: Path, environ: Mapping[str, str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Alacritty (24 D-08, D-23): two owned regions in one TOML file. `alacritty` is the shell
-# region (a branch of the synchronizer, follows zsh); `alacritty-keys` is install tuning
-# (keybindings, written once at install, stripped with the tool). Each is guarded per part.
+# Alacritty (24 D-08, D-23): the `alacritty` shell region follows zsh; the `alacritty-keys`
+# region is install tuning owned by the `alacritty` row of `installer/terminal_keys.py`.
 # ---------------------------------------------------------------------------
-
-_KEYS_RECORD = "terminal-tuning-alacritty"
-# The reason `alacritty_keys_pending` returns when only the install tuning has not run;
-# version_status turns it into its `≈ apply install tuning` fact.
-KEYS_PENDING = "install tuning not applied"
-# TOML 1.0 escapes: `\u001b` is ESC. The Alt+arrow byte strings are the readline word keys.
-
-
-def _keys_record(home: Path, environ: Mapping[str, str]) -> Path:
-    return _xdg_data_home(home, environ) / "tools-installer" / _KEYS_RECORD
 
 
 def _created_marker(home: Path, environ: Mapping[str, str]) -> Path:
     """Present while the installer itself created the Alacritty config file."""
-    return _xdg_data_home(home, environ) / "tools-installer" / _CREATED_RECORD
+    return _xdg_data_home(home, environ) / "tools-installer" / "terminal-alacritty-created"
 
 
 def _toml_string(value: str) -> str:
@@ -490,96 +476,6 @@ def _sync_alacritty(
     except OSError as exc:
         return False, False, (f"alacritty: {_first_line(exc)}",)
     return body is not None, drifted, tuple(warnings)
-
-
-def apply_alacritty_keys(
-    home: Path, environ: Mapping[str, str], *, skip_recorded: bool
-) -> tuple[tuple[str, ...], str | None]:
-    """Write the `alacritty-keys` region, then its written-once record. Returns (lines, refusal).
-
-    `skip_recorded` (RECONFIGURE) leaves a recorded install alone: a region the user deleted
-    stays deleted. Nothing is written when the file cannot take the region."""
-    record = _keys_record(home, environ)
-    if skip_recorded and record.exists():
-        return (), None
-    path = alacritty_config_path(home, environ)
-    try:
-        before = read_settings(path)
-        text = _snapshot_text(before)
-        plan = _keys_plan(*_user_document(text))
-        if plan.refusal is not None:
-            return (), plan.refusal
-        updated = _replace_owned_region(text, ALACRITTY_KEYS, plan.body)
-        commit_region(
-            path,
-            before,
-            text,
-            updated,
-            validate=validate_toml,
-            write=True,
-            created_marker=_created_marker(home, environ),
-            home=home,
-        )
-        record.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(record, "written\n")
-    except OSError as exc:
-        return (), _first_line(exc)
-    added = (
-        ("Alacritty keys: Alt+Left and Alt+Right move by word, Control+Shift+K clears history.",)
-        if plan.body is not None
-        else ()
-    )
-    return (*added, *plan.conflicts), None
-
-
-def alacritty_keys_pending(home: Path, environ: Mapping[str, str]) -> str | None:
-    """None when the keys region or its record exists (a hand-removed region is the user's
-    choice); `KEYS_PENDING` when the install tuning has not run; else why the file cannot
-    take the region."""
-    if _keys_record(home, environ).exists():
-        return None
-    try:
-        text = _snapshot_text(read_settings(alacritty_config_path(home, environ)))
-        if _replace_owned_region(text, ALACRITTY_KEYS, None) != text:
-            return None
-        plan = _keys_plan(*_user_document(text))
-    except OSError as exc:
-        return _first_line(exc)
-    return plan.refusal or KEYS_PENDING
-
-
-def strip_alacritty(home: Path, environ: Mapping[str, str]) -> tuple[str, ...]:
-    """Remove both owned regions and the record (the tool is gone); the file stays.
-    Returns warnings. A region that could not be stripped keeps the record."""
-    path = alacritty_config_path(home, environ)
-    warnings: list[str] = []
-    for region in (ALACRITTY, ALACRITTY_KEYS):
-        try:
-            _strip_alacritty_region(path, region)
-        except OSError as exc:
-            warnings.append(f"alacritty: {_first_line(exc)}")
-    if not warnings:
-        _keys_record(home, environ).unlink(missing_ok=True)
-        warnings.extend(_drop_created_config(path, _created_marker(home, environ), home))
-    return tuple(warnings)
-
-
-def _drop_created_config(path: Path, marker: Path, home: Path) -> list[str]:
-    """Delete the config file the installer created once nothing but whitespace is left, then
-    the directories it created for it that are empty now (never one that held anything else)."""
-    if not marker.exists():
-        return []
-    try:
-        before = read_settings(path)
-        if before is None or _snapshot_text(before).strip():
-            marker.unlink()  # gone, or the user's now: never ours to delete
-            return []
-        path.unlink(missing_ok=True)
-        remove_created_dirs(tuple(marker.read_text(errors="replace").splitlines()[1:]), home)
-        marker.unlink()
-    except OSError as exc:
-        return [f"alacritty: {_first_line(exc)}"]
-    return []
 
 
 # ---------------------------------------------------------------------------

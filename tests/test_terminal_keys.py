@@ -1,11 +1,15 @@
 """Terminal keys mechanism tests: golden bytes first, then the table."""
 
+import dataclasses
 import os
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from installer.model import Tool, load_tools
 from installer.platform import Platform
-from installer.post_install import run_post_install
+from installer.post_install import apply_install_tuning, run_post_install
+from installer.terminal_keys import TERMINAL_KEYS, OwnedRegion, apply_terminal_keys
+from installer.terminal_regions import replace_owned_region
 from installer.terminal_shell import sync_terminal_shells
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
@@ -32,6 +36,26 @@ _SHELL_REGION = (
 )
 _USER_FONT = "[font]\nsize = 12\n"
 _USER_ALT_LEFT = '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "x"\n'
+_FIXTURE_REGISTRY = """[[tool]]
+id = "alacritty"
+category = "terminal"
+tier = "user"
+verified = 2026-11-20
+post_install = ["apply_terminal_tuning"]
+[[tool.method]]
+kind = "brew"
+formula = "alacritty"
+
+[[tool]]
+id = "fixture-term"
+category = "terminal"
+tier = "user"
+verified = 2026-11-20
+post_install = ["apply_terminal_tuning"]
+[[tool.method]]
+kind = "brew"
+formula = "fixture-term"
+"""
 
 
 def _alacritty() -> Tool:
@@ -70,6 +94,95 @@ def _remove(tmp_path: Path) -> None:
         extra_policies=(),
         platform_os="fedora",
     )
+
+
+def apply_alacritty_keys(
+    home: Path, environ: Mapping[str, str], *, skip_recorded: bool
+) -> tuple[tuple[str, ...], str | None]:
+    """Bind the Alacritty row for tests/test_terminal_shell.py (28 D-12)."""
+    return apply_terminal_keys(
+        TERMINAL_KEYS["alacritty"],
+        "alacritty",
+        "fedora",
+        home,
+        environ,
+        skip_recorded=skip_recorded,
+    )
+
+
+def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
+    row = TERMINAL_KEYS["alacritty"]
+    assert set(TERMINAL_KEYS) == {"alacritty"}
+    assert row.ownership == OwnedRegion("alacritty-keys")
+    assert row.created_record == "terminal-alacritty-created"
+    assert row.sibling_regions == ("alacritty",)
+    assert row.summary == _SUMMARY
+    assert row.config_path("fedora", Path.home(), {}) == (
+        Path.home() / ".config" / "alacritty" / "alacritty.toml"
+    )
+    assert replace_owned_region("", "alacritty-keys", row.plan("fedora", "").body) == (_KEYS_REGION)
+
+
+def missing_rows(tools: Iterable[Tool], table: Mapping[str, object]) -> set[str]:
+    """Ids declaring terminal tuning but absent from the keys table."""
+    return {tool.id for tool in tools if "apply_terminal_tuning" in tool.post_install} - set(table)
+
+
+def extra_rows(tools: Iterable[Tool], table: Mapping[str, object]) -> set[str]:
+    """Keys table ids with no registry terminal-tuning declaration."""
+    return set(table) - {tool.id for tool in tools if "apply_terminal_tuning" in tool.post_install}
+
+
+def test_completeness_every_declarer_has_a_row_and_every_row_a_declarer() -> None:
+    tools = load_tools(REGISTRY)
+    assert missing_rows(tools, TERMINAL_KEYS) == set()
+    assert extra_rows(tools, TERMINAL_KEYS) == set()
+    assert "konsole" not in TERMINAL_KEYS
+
+
+def test_completeness_fails_for_a_declarer_without_a_row(tmp_path: Path) -> None:
+    path = tmp_path / "registry.toml"
+    path.write_text(_FIXTURE_REGISTRY)
+    assert missing_rows(load_tools(path), TERMINAL_KEYS) == {"fixture-term"}
+
+
+def test_completeness_fails_on_an_empty_table() -> None:
+    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty"}
+
+
+def test_completeness_ignores_table_order(tmp_path: Path) -> None:
+    path = tmp_path / "registry.toml"
+    path.write_text(_FIXTURE_REGISTRY)
+    tools = load_tools(path)
+    forward = {
+        "alacritty": TERMINAL_KEYS["alacritty"],
+        "fixture-term": TERMINAL_KEYS["alacritty"],
+    }
+    reverse = {
+        "fixture-term": TERMINAL_KEYS["alacritty"],
+        "alacritty": TERMINAL_KEYS["alacritty"],
+    }
+    for table in (forward, reverse):
+        assert missing_rows(tools, table) == set()
+        assert extra_rows(tools, table) == set()
+
+
+def test_completeness_fails_for_a_row_without_a_declarer() -> None:
+    table = {**TERMINAL_KEYS, "ghost": TERMINAL_KEYS["alacritty"]}
+    tools = load_tools(REGISTRY)
+    assert extra_rows(tools, table) == {"ghost"}
+    assert missing_rows(tools, table) == set()
+
+
+def test_a_declarer_without_a_row_is_refused_not_crashed() -> None:
+    tool = dataclasses.replace(_alacritty(), id="fixture-term", name="Fixture")
+    output = apply_install_tuning(tool, _LINUX, skip_recorded=True)
+    assert output.refused == "no keys row for fixture-term"
+    assert output.lines == ("Fixture keys not changed: no keys row for fixture-term",)
+    post_install = run_post_install(tool, _LINUX)
+    assert post_install.lines == output.lines
+    assert post_install.warning is None
+    assert not (Path.home() / ".config").exists()
 
 
 def test_golden_created_file_holds_only_the_keys_region() -> None:

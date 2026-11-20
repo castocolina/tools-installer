@@ -69,7 +69,7 @@ from installer.policy import tweak_policy
 from installer.run import CommandError, OutputRunner, command_error_line
 from installer.sanitize import sanitize_log_line
 from installer.status import command_stub_reason
-from installer.terminal_shell import apply_alacritty_keys
+from installer.terminal_keys import TERMINAL_KEYS, apply_terminal_keys
 from installer.tweaks import (
     forget_shell_init,
     record_shell_init,
@@ -382,17 +382,24 @@ def _apply_agent_tuning(tool: Tool, platform: Platform) -> PostInstallOutput:
     return _tune_agent(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
-def _tune_terminal(*, skip_recorded: bool) -> PostInstallOutput:
-    """Alacritty's keybindings region (24 D-23). A refusal is one line and `refused`."""
-    lines, refused = apply_alacritty_keys(Path.home(), os.environ, skip_recorded=skip_recorded)
+def _tune_terminal(tool: Tool, platform: Platform, *, skip_recorded: bool) -> PostInstallOutput:
+    """The tool's keys region through its TERMINAL_KEYS row (24 D-23, 28 D-04).
+
+    A refusal is one line and `refused`."""
+    row = TERMINAL_KEYS.get(tool.id)
+    if row is None:
+        refused = f"no keys row for {tool.id}"
+        return PostInstallOutput((f"{tool.name} keys not changed: {refused}",), refused=refused)
+    lines, refused = apply_terminal_keys(
+        row, tool.id, platform.os, Path.home(), os.environ, skip_recorded=skip_recorded
+    )
     if refused is not None:
-        return PostInstallOutput((f"Alacritty keys not changed: {refused}",), refused=refused)
+        return PostInstallOutput((f"{tool.name} keys not changed: {refused}",), refused=refused)
     return PostInstallOutput(lines)
 
 
 def _apply_terminal_tuning(tool: Tool, platform: Platform) -> PostInstallOutput:
-    del tool, platform
-    return _tune_terminal(skip_recorded=False)  # install and reinstall rewrite
+    return _tune_terminal(tool, platform, skip_recorded=False)  # install and reinstall rewrite
 
 
 def _show_lean_tips(tool: Tool, platform: Platform) -> tuple[str, ...]:
@@ -443,7 +450,7 @@ def apply_install_tuning(
         elif name == "source_shell_init":
             lines.extend(_tune_shell_init(tool, platform, skip_recorded=skip_recorded))
         elif name == "apply_terminal_tuning":
-            produced = _tune_terminal(skip_recorded=skip_recorded)
+            produced = _tune_terminal(tool, platform, skip_recorded=skip_recorded)
             lines.extend(produced.lines)
             refused = refused or produced.refused
     return PostInstallOutput(tuple(lines), tuple(settings), refused=refused)

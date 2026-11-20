@@ -11,7 +11,7 @@
     {
       "number": "28",
       "name": "Shared terminal-keys mechanism",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "29",
@@ -54,5 +54,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 2 of 9 · 0% · executing"
   },
-  "updated_at": "2026-11-20T12:59:24.440Z"
+  "updated_at": "2026-11-20T13:14:28.942Z"
 }

@@ -1217,7 +1217,7 @@ _USER_ALT_LEFT = '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "x"
     ids=["terminal-shell", "env", "binding", "inline-bindings"],
 )
 def test_alacritty_partial_conflicts(user_text: str, warning: str | None, refusal: str | None):
-    from installer.terminal_shell import apply_alacritty_keys
+    from tests.test_terminal_keys import apply_alacritty_keys
 
     config = _alacritty_toml()
     config.parent.mkdir(parents=True)
@@ -1251,7 +1251,7 @@ def test_alacritty_partial_conflicts(user_text: str, warning: str | None, refusa
 
 
 def test_alacritty_invalid_toml_writes_nothing() -> None:
-    from installer.terminal_shell import apply_alacritty_keys
+    from tests.test_terminal_keys import apply_alacritty_keys
 
     config = _alacritty_toml()
     config.parent.mkdir(parents=True)
@@ -1320,7 +1320,7 @@ def test_alacritty_keys_without_zsh() -> None:
 
 
 def test_alacritty_regions_are_replaced_in_place_and_stay_apart() -> None:
-    from installer.terminal_shell import apply_alacritty_keys
+    from tests.test_terminal_keys import apply_alacritty_keys
 
     config = _alacritty_toml()
     config.parent.mkdir(parents=True)
@@ -1645,7 +1645,7 @@ def test_herdr_reload_is_bounded_for_a_runner_that_takes_a_timeout() -> None:
     ids=["general-import", "legacy-top-level-import"],
 )
 def test_alacritty_config_that_imports_files_is_refused_with_a_reason(user_text: str) -> None:
-    from installer.terminal_shell import apply_alacritty_keys
+    from tests.test_terminal_keys import apply_alacritty_keys
 
     config = _alacritty_toml()
     config.parent.mkdir(parents=True)
