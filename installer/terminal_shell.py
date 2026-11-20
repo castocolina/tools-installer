@@ -32,6 +32,8 @@ from installer.shellrc import apply_block, strip_block
 from installer.terminal_keys import alacritty_keys_plan_for_document as _keys_plan
 from installer.terminal_regions import (
     ALACRITTY,
+    WEZTERM_SKELETON,
+    Placement,
     TerminalShellError,
     alacritty_config_path,
     commit_region,
@@ -40,7 +42,6 @@ from installer.terminal_regions import (
 from installer.terminal_regions import IMPORTS as _IMPORTS
 from installer.terminal_regions import first_line as _first_line
 from installer.terminal_regions import imports_files as _imports_files
-from installer.terminal_regions import marker as _marker
 from installer.terminal_regions import replace_owned_region as _replace_owned_region
 from installer.terminal_regions import snapshot_text as _snapshot_text
 from installer.terminal_regions import strip_region as _strip_alacritty_region
@@ -144,24 +145,13 @@ def _wezterm_content(existing: str, zsh_path: str) -> str | None:
             f"config.set_environment_variables.SHELL = {shell}",
         )
     )
-    updated = _replace_owned_region(existing, "wezterm", body, comment="--")
-    if "tools-installer terminal-shell wezterm" in existing:
-        return (
-            updated
-            if any(line.strip() == "return config" for line in existing.splitlines())
-            else None
-        )
-
-    lines = existing.splitlines(keepends=True)
-    return_indices = [index for index, line in enumerate(lines) if line.strip() == "return config"]
-    if len(return_indices) != 1:
+    return_count = sum(line.strip() == "return config" for line in existing.splitlines())
+    owned = _replace_owned_region(existing, "wezterm", None, comment="--") != existing
+    if return_count == 0 or (return_count > 1 and not owned):
         return None
-    region = (
-        f"{_marker('wezterm', '>>>', comment='--')}\n{body}\n"
-        f"{_marker('wezterm', '<<<', comment='--')}\n"
+    return _replace_owned_region(
+        existing, "wezterm", body, comment="--", placement=Placement.BEFORE_RETURN
     )
-    index = return_indices[0]
-    return "".join((*lines[:index], region, *lines[index:]))
 
 
 def _kconfig_command(zsh_path: str) -> str:
@@ -697,9 +687,7 @@ def sync_terminal_shells(
         wezterm_path = _wezterm_config_path(home, environ)
         wezterm_existing = _read_text(wezterm_path)
         if not wezterm_existing:
-            wezterm_existing = (
-                'local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n'
-            )
+            wezterm_existing = WEZTERM_SKELETON
         wezterm_content = _wezterm_content(wezterm_existing, zsh_path)
         if wezterm_content is None:
             warnings.append("wezterm: unsupported return shape")

@@ -19,6 +19,7 @@ from installer.model import Tool, load_tools
 from installer.platform import Platform
 from installer.receipts import read_ledger
 from installer.run import CommandError
+from installer.terminal_regions import WEZTERM_SKELETON
 from installer.terminal_shell import (
     TerminalShellError,
     sync_message,
@@ -288,6 +289,50 @@ def test_wezterm_generates_an_owned_login_program_before_return_config(tmp_path:
     assert result.configured == ("zshenv", "kitty", "wezterm")
     assert 'config.default_prog = { "/usr/bin/zsh", "-l" }' in content
     assert content.index("tools-installer terminal-shell wezterm") < content.index("return config")
+
+
+def test_wezterm_shell_region_lands_before_return_when_only_the_keys_region_exists(
+    tmp_path: Path,
+) -> None:
+    wezterm = tmp_path / ".config" / "wezterm" / "wezterm.lua"
+    wezterm.parent.mkdir(parents=True)
+    keys_region = (
+        "-- >>> tools-installer terminal-shell wezterm-keys >>>\nlocal x = 1\n"
+        "-- <<< tools-installer terminal-shell wezterm-keys <<<\n"
+    )
+    wezterm.write_text(WEZTERM_SKELETON.replace("return config\n", keys_region + "return config\n"))
+
+    result = sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", wezterm="/usr/bin/wezterm"),
+    )
+
+    content = wezterm.read_text()
+    assert content.index("wezterm-keys >>>") < content.index("terminal-shell wezterm >>>")
+    assert content.index("terminal-shell wezterm <<<") < content.index("return config")
+    assert keys_region in content
+    assert result.warnings == ()
+
+
+def test_wezterm_marker_lookalike_comment_is_not_an_owned_region(tmp_path: Path) -> None:
+    wezterm = tmp_path / ".config" / "wezterm" / "wezterm.lua"
+    wezterm.parent.mkdir(parents=True)
+    comment = "-- see tools-installer terminal-shell wezterm docs\n"
+    wezterm.write_text(comment + WEZTERM_SKELETON)
+
+    sync_terminal_shells(
+        home=tmp_path,
+        environ={},
+        platform=_platform(),
+        lookup=_lookup(zsh="/usr/bin/zsh", wezterm="/usr/bin/wezterm"),
+    )
+
+    content = wezterm.read_text()
+    assert content.startswith(comment)
+    assert content.count(comment) == 1
+    assert content.index("terminal-shell wezterm >>>") < content.index("return config")
 
 
 def test_wezterm_uses_the_existing_home_fallback_before_creating_a_new_file(tmp_path: Path) -> None:
@@ -1166,7 +1211,7 @@ def test_alacritty_install_writes_both_regions_and_removal_strips_them(tmp_path:
     ]
     assert keys_only["keyboard"]["bindings"][0]["chars"] == "\x1bb"
     assert keys_only["keyboard"]["bindings"][1]["chars"] == "\x1bf"
-    assert keys_only["keyboard"]["bindings"][2]["action"] == "ClearHistory"
+    assert keys_only["keyboard"]["bindings"][2]["chars"] == "\x0c"
     assert _alacritty_record().is_file()
 
     result = _sync_alacritty()

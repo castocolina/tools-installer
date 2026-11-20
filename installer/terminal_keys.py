@@ -15,9 +15,12 @@ from installer.terminal_regions import (
     ALACRITTY_CREATED,
     ALACRITTY_KEYS,
     KeysPlan,
+    Placement,
+    TerminalShellError,
     alacritty_config_path,
     alacritty_keys_plan,
     commit_region,
+    created_path_record,
     first_line,
     replace_owned_region,
     snapshot_text,
@@ -40,9 +43,9 @@ class Vendor:
 
 @dataclass(frozen=True)
 class Writes:
-    """The installer writes this setting inside the row's owned region."""
+    """A fixed setting or a function returning lines, conflicts and notes."""
 
-    snippet: str
+    snippet: str | Callable[[str, str, Path], KeysPlan]
 
 
 @dataclass(frozen=True)
@@ -61,20 +64,25 @@ class OwnedRegion:
 
     region: str  # Marker name.
     comment: str = "#"  # Marker comment prefix.
+    placement: Placement = Placement.END  # Where a new region goes.
 
 
 @dataclass(frozen=True)
 class KeysRow:
     ownership: OwnedRegion  # The region this row owns.
     config_path: Callable[[str, Path, Mapping[str, str]], Path]  # Platform, home, environment.
-    plan: Callable[[str, str], KeysPlan]  # Platform and whole file text to the planned region.
+    plan: Callable[[str, str, Path], KeysPlan]  # Platform, whole file and resolved config path.
     validate: Callable[[str], None]  # Validate the edited whole file.
     summary: str  # Success line when this row adds keys.
     created_record: str  # Created-file marker name.
     same_directory: SameDirectory
     sibling_regions: tuple[str, ...] = ()  # Other installer regions stripped with this tool.
     clear: str = CTRL_L  # Ctrl+L clears; other values name the vendor action.
-    # Alacritty keeps ClearHistory until phase 29.
+    readback: Callable[[str, Path], tuple[str, ...]] | None = None  # Lines read back after a write.
+    validate_on_status: bool = False  # Also validate an unchanged region in the status pass.
+    bind_created_path: bool = (
+        False  # Bind cleanup proof to the created path when resolution can change.
+    )
 
 
 def _alacritty_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
@@ -90,8 +98,8 @@ def alacritty_keys_plan_for_text(text: str) -> KeysPlan:
     return alacritty_keys_plan_for_document(*user_document(text))
 
 
-def _alacritty_plan(platform_os: str, text: str) -> KeysPlan:
-    del platform_os
+def _alacritty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    del platform_os, path
     return alacritty_keys_plan_for_text(text)
 
 
@@ -103,12 +111,23 @@ def clear_binding(row: KeysRow, platform_os: str) -> tuple[str, str]:
     return ("cmd+k" if platform_os == "macos" else "ctrl+shift+k", row.clear)
 
 
-def _render(row: KeysRow, platform_os: str, text: str) -> KeysPlan:
-    plan = row.plan(platform_os, text)
+def _render(row: KeysRow, platform_os: str, text: str, path: Path) -> KeysPlan:
+    plan = row.plan(platform_os, text, path)
     if plan.refusal is None and isinstance(row.same_directory, Writes):
+        snippet = row.same_directory.snippet
+        if isinstance(snippet, str):
+            return KeysPlan(
+                "\n\n".join(part for part in (plan.body, snippet) if part),
+                plan.conflicts,
+                notes=plan.notes,
+            )
+        extra = snippet(platform_os, text, path)
+        bodies = tuple(part for part in (plan.body, extra.body) if part)
         return KeysPlan(
-            "\n\n".join(part for part in (plan.body, row.same_directory.snippet) if part),
-            plan.conflicts,
+            "\n\n".join(bodies) or None,
+            (*plan.conflicts, *extra.conflicts),
+            extra.refusal,
+            (*plan.notes, *extra.notes),
         )
     return plan
 
@@ -120,7 +139,8 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         plan=_alacritty_plan,
         validate=validate_toml,
         summary=(
-            "Alacritty keys: Alt+Left and Alt+Right move by word, Control+Shift+K clears history."
+            "Alacritty keys: Alt+Left and Alt+Right move by word, "
+            "Control+Shift+K clears the screen and scrollback."
         ),
         created_record=ALACRITTY_CREATED,
         same_directory=Vendor(
@@ -129,7 +149,6 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
             "writes nothing."
         ),
         sibling_regions=(ALACRITTY,),
-        clear="ClearHistory",
     )
 }
 
@@ -161,10 +180,14 @@ def apply_terminal_keys(
     try:
         before = read_settings(path)
         text = snapshot_text(before)
-        plan = _render(row, platform_os, text)
+        plan = _render(row, platform_os, text, path)
         body = "" if recorded and plan.body is None and plan.conflicts else plan.body
         updated = replace_owned_region(
-            text, row.ownership.region, body, comment=row.ownership.comment
+            text,
+            row.ownership.region,
+            body,
+            comment=row.ownership.comment,
+            placement=row.ownership.placement,
         )
         region_present = (
             replace_owned_region(text, row.ownership.region, None, comment=row.ownership.comment)
@@ -188,13 +211,15 @@ def apply_terminal_keys(
             write=True,
             created_marker=_created_marker(row, home, environ),
             home=home,
+            bind_path=row.bind_created_path,
         )
         record.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(record, "written\n")
     except OSError as exc:
         return (), first_line(exc)
-    added = (row.summary,) if plan.body is not None else ()
-    return (*added, *plan.conflicts), None
+    readback = row.readback(platform_os, path) if row.readback is not None else ()
+    added = (row.summary, *plan.notes) if plan.body is not None else ()
+    return (*added, *plan.conflicts, *readback), None
 
 
 def terminal_keys_pending(
@@ -212,13 +237,24 @@ def terminal_keys_pending(
         )
         if recorded and not present:
             return None
-        plan = _render(row, platform_os, text)
+        plan = _render(row, platform_os, text, path)
         if present:
             body = "" if plan.body is None and plan.conflicts else plan.body
             updated = replace_owned_region(
-                text, row.ownership.region, body, comment=row.ownership.comment
+                text,
+                row.ownership.region,
+                body,
+                comment=row.ownership.comment,
+                placement=row.ownership.placement,
             )
-            return KEYS_PENDING if plan.refusal is None and updated != text else None
+            if plan.refusal is None and updated != text:
+                return KEYS_PENDING
+            if plan.refusal is None and row.validate_on_status:
+                try:
+                    row.validate(text)
+                except TerminalShellError as exc:
+                    return first_line(exc)
+            return None
     except OSError as exc:
         return None if recorded or present else first_line(exc)
     return plan.refusal or KEYS_PENDING
@@ -238,23 +274,43 @@ def strip_terminal_keys(
     if not warnings:
         _record(tool_id, home, environ).unlink(missing_ok=True)
         warnings.extend(
-            _drop_created_config(path, _created_marker(row, home, environ), home, tool_id)
+            _drop_created_config(
+                path,
+                _created_marker(row, home, environ),
+                home,
+                tool_id,
+                bound=row.bind_created_path,
+            )
         )
     return tuple(warnings)
 
 
-def _drop_created_config(path: Path, marker: Path, home: Path, tool_id: str) -> list[str]:
-    """Delete our created config once only whitespace remains, then its created directories."""
+def _drop_created_config(
+    path: Path, marker: Path, home: Path, tool_id: str, *, bound: bool
+) -> list[str]:
+    """Delete whitespace-only created configs; bound rows delete only their recorded path."""
     if not marker.exists():
         return []
+    sidecar = created_path_record(marker)
     try:
+        if bound:
+            recorded = sidecar.read_text(errors="replace") if sidecar.exists() else None
+            if recorded != f"{path}\n":
+                shown = (
+                    recorded.removesuffix("\n") if recorded is not None else "an unrecorded path"
+                )
+                return [
+                    f"{tool_id}: created config at {shown} is not the file now resolved; left alone"
+                ]
         before = read_settings(path)
         if before is None or snapshot_text(before).strip():
             marker.unlink()
+            sidecar.unlink(missing_ok=True)
             return []
         path.unlink(missing_ok=True)
         remove_created_dirs(tuple(marker.read_text(errors="replace").splitlines()[1:]), home)
         marker.unlink()
+        sidecar.unlink(missing_ok=True)
     except OSError as exc:
         return [f"{tool_id}: {first_line(exc)}"]
     return []

@@ -25,23 +25,40 @@ from installer.terminal_keys import (
     strip_terminal_keys,
     terminal_keys_pending,
 )
-from installer.terminal_regions import KeysPlan, replace_owned_region, validate_toml
+from installer.terminal_regions import (
+    WEZTERM_SKELETON,
+    KeysPlan,
+    Placement,
+    TerminalShellError,
+    replace_owned_region,
+    validate_toml,
+)
 from installer.terminal_shell import sync_terminal_shells
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 _LINUX = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
-_SUMMARY = "Alacritty keys: Alt+Left and Alt+Right move by word, Control+Shift+K clears history."
-_KEYS_REGION = (
+_SUMMARY = (
+    "Alacritty keys: Alt+Left and Alt+Right move by word, "
+    "Control+Shift+K clears the screen and scrollback."
+)
+_PHASE_28_KEYS_REGION = (
     "# >>> tools-installer terminal-shell alacritty-keys >>>\n"
     '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "\\u001bb"\n\n'
     '[[keyboard.bindings]]\nkey = "Right"\nmods = "Alt"\nchars = "\\u001bf"\n\n'
     '[[keyboard.bindings]]\nkey = "K"\nmods = "Control|Shift"\naction = "ClearHistory"\n'
     "# <<< tools-installer terminal-shell alacritty-keys <<<\n"
 )
+_KEYS_REGION = (
+    "# >>> tools-installer terminal-shell alacritty-keys >>>\n"
+    '[[keyboard.bindings]]\nkey = "Left"\nmods = "Alt"\nchars = "\\u001bb"\n\n'
+    '[[keyboard.bindings]]\nkey = "Right"\nmods = "Alt"\nchars = "\\u001bf"\n\n'
+    '[[keyboard.bindings]]\nkey = "K"\nmods = "Control|Shift"\nchars = "\\u000c"\n'
+    "# <<< tools-installer terminal-shell alacritty-keys <<<\n"
+)
 _KEYS_REGION_NO_LEFT = (
     "# >>> tools-installer terminal-shell alacritty-keys >>>\n"
     '[[keyboard.bindings]]\nkey = "Right"\nmods = "Alt"\nchars = "\\u001bf"\n\n'
-    '[[keyboard.bindings]]\nkey = "K"\nmods = "Control|Shift"\naction = "ClearHistory"\n'
+    '[[keyboard.bindings]]\nkey = "K"\nmods = "Control|Shift"\nchars = "\\u000c"\n'
     "# <<< tools-installer terminal-shell alacritty-keys <<<\n"
 )
 _SHELL_REGION = (
@@ -136,7 +153,9 @@ def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
     assert row.config_path("fedora", Path.home(), {}) == (
         Path.home() / ".config" / "alacritty" / "alacritty.toml"
     )
-    assert replace_owned_region("", "alacritty-keys", row.plan("fedora", "").body) == (_KEYS_REGION)
+    assert replace_owned_region("", "alacritty-keys", row.plan("fedora", "", _config()).body) == (
+        _KEYS_REGION
+    )
 
 
 def missing_rows(tools: Iterable[Tool], table: Mapping[str, object]) -> set[str]:
@@ -484,8 +503,8 @@ def _fixture_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> P
     return home / "fixture" / "keys.toml"
 
 
-def _fixture_plan(platform_os: str, text: str) -> KeysPlan:
-    del text
+def _fixture_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    del text, path
     chord, send = clear_binding(_FIXTURE_ROW, platform_os)
     return KeysPlan(f'[[keys]]\nchord = "{chord}"\nsend = {json.dumps(send)}')
 
@@ -501,6 +520,272 @@ _FIXTURE_ROW = KeysRow(
 )
 
 
+def test_placement_top_puts_a_new_region_before_every_user_line() -> None:
+    region = replace_owned_region("a = 1\nb = 2\n", "fixture-keys", "x", placement=Placement.TOP)
+    assert region == (
+        "# >>> tools-installer terminal-shell fixture-keys >>>\nx\n"
+        "# <<< tools-installer terminal-shell fixture-keys <<<\na = 1\nb = 2\n"
+    )
+    assert replace_owned_region("", "fixture-keys", "x", placement=Placement.TOP) == (
+        "# >>> tools-installer terminal-shell fixture-keys >>>\nx\n"
+        "# <<< tools-installer terminal-shell fixture-keys <<<\n"
+    )
+    existing = replace_owned_region("a = 1\n", "fixture-keys", "old")
+    assert replace_owned_region(existing, "fixture-keys", "new", placement=Placement.TOP).endswith(
+        "# >>> tools-installer terminal-shell fixture-keys >>>\nnew\n"
+        "# <<< tools-installer terminal-shell fixture-keys <<<\n"
+    )
+
+
+def test_placement_before_return_inserts_above_the_single_return_config() -> None:
+    comment = "--"
+    expected = (
+        "local config = {}\n-- >>> tools-installer terminal-shell fixture-keys >>>\nx\n"
+        "-- <<< tools-installer terminal-shell fixture-keys <<<\nreturn config\n"
+    )
+    assert (
+        replace_owned_region(
+            "local config = {}\nreturn config\n",
+            "fixture-keys",
+            "x",
+            comment=comment,
+            placement=Placement.BEFORE_RETURN,
+        )
+        == expected
+    )
+    assert replace_owned_region(
+        "", "fixture-keys", "x", comment=comment, placement=Placement.BEFORE_RETURN
+    ) == WEZTERM_SKELETON.replace(
+        "return config\n",
+        "-- >>> tools-installer terminal-shell fixture-keys >>>\nx\n"
+        "-- <<< tools-installer terminal-shell fixture-keys <<<\nreturn config\n",
+    )
+    for invalid in ("return {}\n", "return config\nreturn config\n"):
+        try:
+            replace_owned_region(
+                invalid, "fixture-keys", "x", comment=comment, placement=Placement.BEFORE_RETURN
+            )
+        except TerminalShellError as exc:
+            assert str(exc) == "unsupported return shape"
+        else:
+            raise AssertionError("unsupported return shape was accepted")
+    duplicate = (
+        replace_owned_region("return config\n", "fixture-keys", "old", comment=comment)
+        + "return config\n"
+    )
+    assert "new" in replace_owned_region(
+        duplicate,
+        "fixture-keys",
+        "new",
+        comment=comment,
+        placement=Placement.BEFORE_RETURN,
+    )
+
+
+def test_placement_end_is_phase_28s_append() -> None:
+    for content in ("a = 1", "a = 1\n"):
+        expected = "a = 1\n# >>> tools-installer terminal-shell fixture-keys >>>\nx\n"
+        expected += "# <<< tools-installer terminal-shell fixture-keys <<<\n"
+        assert replace_owned_region(content, "fixture-keys", "x") == expected
+        assert replace_owned_region(content, "fixture-keys", "x") == replace_owned_region(
+            content, "fixture-keys", "x", placement=Placement.END
+        )
+
+
+def test_writes_callable_varies_per_os_and_merges_notes_and_conflicts() -> None:
+    def plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+        del platform_os, text, path
+        return KeysPlan('[[keys]]\nchord = "x"', notes=("plan note",))
+
+    def snippet(platform_os: str, text: str, path: Path) -> KeysPlan:
+        del text, path
+        return KeysPlan(
+            f'[cwd]\nos = "{platform_os}"',
+            ("fixture: partial: you already map y",),
+            notes=("cwd note",),
+        )
+
+    row = dataclasses.replace(_FIXTURE_ROW, plan=plan, same_directory=Writes(snippet))
+    lines, refusal = apply_terminal_keys(
+        row, "fixture-callable", "macos", Path.home(), os.environ, skip_recorded=False
+    )
+    assert refusal is None
+    assert lines == (
+        "Fixture keys.",
+        "plan note",
+        "cwd note",
+        "fixture: partial: you already map y",
+    )
+    text = _fixture_path("macos", Path.home(), os.environ).read_text()
+    assert 'os = "macos"' in text
+    assert text.index('chord = "x"') < text.index("[cwd]")
+    tomllib.loads(text)
+
+    def fedora_path(os_name: str, home: Path, env: Mapping[str, str]) -> Path:
+        del os_name, env
+        return home / "fixture" / "fedora.toml"
+
+    row = dataclasses.replace(row, config_path=fedora_path)
+    assert (
+        apply_terminal_keys(row, "fixture-fedora", "fedora", Path.home(), {}, skip_recorded=False)[
+            1
+        ]
+        is None
+    )
+    tomllib.loads((Path.home() / "fixture" / "fedora.toml").read_text())
+    assert 'os = "fedora"' in (Path.home() / "fixture" / "fedora.toml").read_text()
+
+
+def test_plan_receives_the_resolved_config_path() -> None:
+    received: list[Path] = []
+
+    def plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+        del platform_os, text
+        received.append(path)
+        return KeysPlan(None)
+
+    row = dataclasses.replace(_FIXTURE_ROW, plan=plan)
+    apply_terminal_keys(row, "fixture-path", "fedora", Path.home(), os.environ, skip_recorded=False)
+    assert received == [row.config_path("fedora", Path.home(), os.environ)]
+
+
+def test_readback_lines_follow_a_write_and_are_skipped_on_refusal() -> None:
+    called: list[bool] = []
+
+    def readback(platform_os: str, path: Path) -> tuple[str, ...]:
+        return (f"readback {platform_os} {path.name}",)
+
+    row = dataclasses.replace(_FIXTURE_ROW, readback=readback)
+    assert apply_terminal_keys(
+        row, "fixture-readback", "fedora", Path.home(), {}, skip_recorded=False
+    ) == (("Fixture keys.", "readback fedora keys.toml"), None)
+
+    def refusal_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+        del platform_os, text, path
+        return KeysPlan(None, refusal="nope")
+
+    def unexpected_readback(platform_os: str, path: Path) -> tuple[str, ...]:
+        del platform_os, path
+        called.append(True)
+        return ("unexpected",)
+
+    refusing = dataclasses.replace(row, plan=refusal_plan, readback=unexpected_readback)
+    assert apply_terminal_keys(
+        refusing, "fixture-refusal", "fedora", Path.home(), {}, skip_recorded=False
+    ) == ((), "nope")
+    assert called == []
+
+
+def test_row_validate_refuses_an_in_place_rewrite_of_a_moved_region() -> None:
+    def validate(text: str) -> None:
+        marker_line = "-- <<< tools-installer terminal-shell fixture-keys <<<"
+        lines = text.splitlines()
+        if not any(
+            line.strip() == "return config" for line in lines[lines.index(marker_line) + 1 :]
+        ):
+            raise TerminalShellError("fixture region is not before return config")
+
+    row = dataclasses.replace(
+        _FIXTURE_ROW,
+        ownership=OwnedRegion("fixture-keys", "--", Placement.BEFORE_RETURN),
+        validate=validate,
+    )
+    path = _fixture_path("fedora", Path.home(), os.environ)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    moved = (
+        "local config = {}\nreturn config\n"
+        "-- >>> tools-installer terminal-shell fixture-keys >>>\nold\n"
+        "-- <<< tools-installer terminal-shell fixture-keys <<<\n"
+    )
+    path.write_text(moved)
+    assert apply_terminal_keys(
+        row, "fixture", "fedora", Path.home(), os.environ, skip_recorded=False
+    ) == ((), "fixture region is not before return config")
+    assert path.read_text() == moved
+    assert not (_state_dir() / "terminal-tuning-fixture").exists()
+    valid = moved.replace("return config\n-- >>>", "-- >>>").replace(
+        "-- <<< tools-installer terminal-shell fixture-keys <<<\n",
+        "-- <<< tools-installer terminal-shell fixture-keys <<<\nreturn config\n",
+    )
+    path.write_text(valid)
+    assert (
+        apply_terminal_keys(
+            row, "fixture-control", "fedora", Path.home(), os.environ, skip_recorded=False
+        )[1]
+        is None
+    )
+    assert path.read_text().index("fixture-keys >>>") < path.read_text().index("return config")
+
+
+def test_validate_on_status_reports_an_unchanged_region_the_validator_refuses() -> None:
+    def validate(text: str) -> None:
+        if any(line.strip() == "shadow" for line in text.splitlines()):
+            raise TerminalShellError("fixture keys are shadowed")
+
+    row = dataclasses.replace(_FIXTURE_ROW, validate=validate, validate_on_status=True)
+    assert (
+        apply_terminal_keys(row, "fixture", "fedora", Path.home(), os.environ, skip_recorded=False)[
+            1
+        ]
+        is None
+    )
+    assert terminal_keys_pending(row, "fixture", "fedora", Path.home(), os.environ) is None
+    path = _fixture_path("fedora", Path.home(), os.environ)
+    path.write_text(path.read_text() + "shadow\n")
+    assert terminal_keys_pending(row, "fixture", "fedora", Path.home(), os.environ) == (
+        "fixture keys are shadowed"
+    )
+    assert (
+        terminal_keys_pending(
+            dataclasses.replace(row, validate_on_status=False),
+            "fixture",
+            "fedora",
+            Path.home(),
+            os.environ,
+        )
+        is None
+    )
+    text = path.read_text().replace("shadow\n", "")
+    start = text.index("# >>> tools-installer terminal-shell fixture-keys >>>\n")
+    end = text.index("# <<< tools-installer terminal-shell fixture-keys <<<\n")
+    changed_region = text[start:end].replace('send = "', 'send = "stale', 1)
+    path.write_text(text[:start] + changed_region + text[end:])
+    assert terminal_keys_pending(row, "fixture", "fedora", Path.home(), os.environ) == KEYS_PENDING
+
+
+def test_bound_created_file_is_deleted_only_at_its_recorded_path() -> None:
+    def config_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
+        del platform_os
+        return Path(environ.get("FIXTURE_DIR", str(home / "fixture"))) / "keys.toml"
+
+    row = dataclasses.replace(_FIXTURE_ROW, config_path=config_path, bind_created_path=True)
+    created = Path.home() / "fixture" / "keys.toml"
+    assert (
+        apply_terminal_keys(row, "fixture", "fedora", Path.home(), {}, skip_recorded=False)[1]
+        is None
+    )
+    marker = _state_dir() / "terminal-fixture-created"
+    sidecar = _state_dir() / "terminal-fixture-created-path"
+    assert marker.exists() and sidecar.read_text() == f"{created}\n"
+    other = Path.home() / "other" / "keys.toml"
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_bytes(b"")
+    assert strip_terminal_keys(
+        row, "fixture", "fedora", Path.home(), {"FIXTURE_DIR": str(other.parent)}
+    ) == (f"fixture: created config at {created} is not the file now resolved; left alone",)
+    assert other.exists() and other.read_bytes() == b"" and created.exists()
+    assert marker.exists() and sidecar.exists()
+    sidecar.unlink()
+    assert strip_terminal_keys(row, "fixture", "fedora", Path.home(), {}) == (
+        "fixture: created config at an unrecorded path is not the file now resolved; left alone",
+    )
+    assert created.exists()
+    sidecar.write_text(f"{created}\n")
+    assert strip_terminal_keys(row, "fixture", "fedora", Path.home(), {}) == ()
+    assert not created.exists() and not created.parent.exists()
+    assert not marker.exists() and not sidecar.exists()
+
+
 def test_row_fields_are_exactly_the_declared_set() -> None:
     assert [field.name for field in dataclasses.fields(KeysRow)] == [
         "ownership",
@@ -512,6 +797,9 @@ def test_row_fields_are_exactly_the_declared_set() -> None:
         "same_directory",
         "sibling_regions",
         "clear",
+        "readback",
+        "validate_on_status",
+        "bind_created_path",
     ]
     assert all("option" not in field.name.lower() for field in dataclasses.fields(KeysRow))
     assert "option_as_alt" not in _KEYS_REGION
@@ -596,8 +884,40 @@ def test_clear_chord_sends_ctrl_l_on_every_os_for_a_default_row() -> None:
     assert tomllib.loads(path.read_text())["keys"] == [{"chord": "ctrl+shift+k", "send": "\x0c"}]
 
 
-def test_alacritty_keeps_clear_history_until_phase_29() -> None:
+def test_alacritty_region_differs_from_phase_28_only_in_the_clear_row() -> None:
+    old_lines = _PHASE_28_KEYS_REGION.splitlines()
+    new_lines = _KEYS_REGION.splitlines()
+    differences = [(old, new) for old, new in zip(old_lines, new_lines, strict=True) if old != new]
+
+    assert len(old_lines) == len(new_lines)
+    assert differences == [('action = "ClearHistory"', 'chars = "\\u000c"')]
+    assert old_lines[:8] == new_lines[:8]
+
+
+def test_alacritty_clear_sends_ctrl_l() -> None:
     row = TERMINAL_KEYS["alacritty"]
-    assert row.clear == "ClearHistory"
-    assert clear_binding(row, "fedora") == ("ctrl+shift+k", "ClearHistory")
-    assert 'action = "ClearHistory"' in _KEYS_REGION
+    assert row.clear == CTRL_L
+    assert clear_binding(row, "fedora") == ("ctrl+shift+k", "\x0c")
+    assert 'chars = "\\u000c"' in _KEYS_REGION
+    assert "ClearHistory" not in _KEYS_REGION
+    assert tomllib.loads(_KEYS_REGION)["keyboard"]["bindings"][2] == {
+        "key": "K",
+        "mods": "Control|Shift",
+        "chars": "\x0c",
+    }
+
+
+def test_recorded_phase_28_install_reconfigure_flips_clear_row() -> None:
+    config = _config()
+    config.parent.mkdir(parents=True)
+    config.write_text(_USER_FONT + _PHASE_28_KEYS_REGION)
+    (_state_dir() / "terminal-tuning-alacritty").parent.mkdir(parents=True, exist_ok=True)
+    (_state_dir() / "terminal-tuning-alacritty").write_text("written\n")
+
+    assert _pending() == KEYS_PENDING
+    lines, refusal = _reapply()
+    assert refusal is None
+    assert _SUMMARY in lines
+    assert config.read_bytes() == (_USER_FONT + _KEYS_REGION).encode()
+    assert _reapply() == ((), None)
+    assert _pending() is None

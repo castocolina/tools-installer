@@ -8,8 +8,9 @@ import re
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import cast
+from typing import Final, cast
 
 from installer.agent_settings import missing_dirs, read_settings, write_if_unchanged
 from installer.atomic import FileSnapshot, atomic_write_text
@@ -19,14 +20,28 @@ class TerminalShellError(OSError):
     """Terminal configuration cannot be changed without risking user data."""
 
 
+class Placement(Enum):
+    END = "end"  # Append after the existing user content.
+    TOP = "top"  # Place before every user line so later kitty mappings win.
+    BEFORE_RETURN = "before_return"  # Place before WezTerm's single return config line.
+
+
+WEZTERM_SKELETON: Final = 'local wezterm = require "wezterm"\nlocal config = {}\nreturn config\n'
+
+
 def marker(terminal: str, edge: str, *, comment: str = "#") -> str:
     return f"{comment} {edge} tools-installer terminal-shell {terminal} {edge}"
 
 
 def replace_owned_region(
-    content: str, terminal: str, body: str | None, *, comment: str = "#"
+    content: str,
+    terminal: str,
+    body: str | None,
+    *,
+    comment: str = "#",
+    placement: Placement = Placement.END,
 ) -> str:
-    """Replace exactly one complete owned region, rejecting malformed markers."""
+    """Place new regions only when absent; row validation guards every written text."""
     begin = marker(terminal, ">>>", comment=comment)
     end = marker(terminal, "<<<", comment=comment)
     lines = content.splitlines(keepends=True)
@@ -56,6 +71,16 @@ def replace_owned_region(
 
     region = f"{begin}\n{body}\n{end}\n"
     if complete is None:
+        if placement is Placement.TOP:
+            return f"{region}{content}"
+        if placement is Placement.BEFORE_RETURN:
+            content = content or WEZTERM_SKELETON
+            lines = content.splitlines(keepends=True)
+            indices = [i for i, line in enumerate(lines) if line.strip() == "return config"]
+            if len(indices) != 1:
+                raise TerminalShellError("unsupported return shape")
+            index = indices[0]
+            return "".join((*lines[:index], region, *lines[index:]))
         prefix = content if not content or content.endswith(("\n", "\r")) else f"{content}\n"
         return f"{prefix}{region}"
     start_index, end_index = complete
@@ -134,12 +159,13 @@ class KeysPlan:
     body: str | None
     conflicts: tuple[str, ...] = ()
     refusal: str | None = None
+    notes: tuple[str, ...] = ()
 
 
 _KEY_BINDINGS = (
     ("Left", "Alt", 'chars = "\\u001bb"'),
     ("Right", "Alt", 'chars = "\\u001bf"'),
-    ("K", "Control|Shift", 'action = "ClearHistory"'),
+    ("K", "Control|Shift", 'chars = "\\u000c"'),
 )
 _KEYS_HEADER = re.compile(r"^\s*\[\[\s*keyboard\.bindings\s*\]\]", re.MULTILINE)
 
@@ -178,6 +204,10 @@ def validate_toml(text: str) -> None:
         raise TerminalShellError(f"the edit would not re-parse ({exc}); nothing written") from exc
 
 
+def created_path_record(created_marker: Path) -> Path:
+    return created_marker.with_name(f"{created_marker.name}-path")
+
+
 def commit_region(
     path: Path,
     before: FileSnapshot | None,
@@ -188,6 +218,7 @@ def commit_region(
     write: bool,
     created_marker: Path,
     home: Path,
+    bind_path: bool = False,
 ) -> bool:
     """Report whether `updated` differs; write it only when `write`, and only after it re-parses
     and only if the file still is what was read (compare-before-commit)."""
@@ -202,6 +233,8 @@ def commit_region(
             # directories this write created (listed after the first line) with it.
             created_marker.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(created_marker, "\n".join(("created", *created_dirs)) + "\n")
+            if bind_path:
+                atomic_write_text(created_path_record(created_marker), f"{path}\n")
     return True
 
 
