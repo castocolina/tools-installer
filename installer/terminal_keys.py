@@ -3,6 +3,7 @@ and strip a terminal's owned keys region the same way for every row."""
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,9 @@ from installer.terminal_regions import (
     ALACRITTY,
     ALACRITTY_CREATED,
     ALACRITTY_KEYS,
+    GHOSTTY,
+    GHOSTTY_CREATED,
+    GHOSTTY_KEYS,
     KITTY,
     KITTY_CREATED,
     KITTY_KEYS,
@@ -32,13 +36,18 @@ from installer.terminal_regions import (
     commit_region,
     created_path_record,
     first_line,
+    ghostty_chord,
+    ghostty_config_path,
+    ghostty_default_files,
     kitty_config_path,
     kitty_maps,
     replace_owned_region,
+    scan_ghostty,
     scan_kitty,
     snapshot_text,
     strip_region,
     user_document,
+    validate_ghostty,
     validate_kitty,
     validate_toml,
     validate_wezterm,
@@ -101,6 +110,7 @@ class KeysRow:
     bind_created_path: bool = (
         False  # Bind cleanup proof to the created path when resolution can change.
     )
+    strip_files: Callable[[str, Path, Mapping[str, str]], tuple[Path, ...]] | None = None
 
 
 def _alacritty_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
@@ -194,6 +204,27 @@ def _kitty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
             "kitty.conf existed."
         )
     return KeysPlan("\n".join(added) or None, (*scan.reports, *conflicts), notes=tuple(notes))
+
+
+def _ghostty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    del text, path
+    # shortcut: plan lacks home and environment; thread them through KeysRow.plan to generalize.
+    scan = scan_ghostty(platform_os, Path.home(), os.environ)
+    if scan.blocked:
+        return KeysPlan(None, refusal=scan.blocked[0])
+    if scan.clears:
+        return KeysPlan(
+            None, scan.reports, refusal="you set keybind = clear, which would clear these keys"
+        )
+    chord, send = clear_binding(TERMINAL_KEYS["ghostty"], platform_os)
+    trigger = "super+k" if chord == "cmd+k" else chord
+    if ghostty_chord(f"{trigger}=x") in scan.taken:
+        return KeysPlan(None, (*scan.reports, f"ghostty: partial: you already bind {trigger}"))
+    escaped = "".join(f"\\x{ord(character):02x}" for character in send)
+    notes = (
+        ("ghostty: cmd+k now sends Ctrl+L; it was clear_screen.",) if platform_os == "macos" else ()
+    )
+    return KeysPlan(f"keybind = {trigger}=text:{escaped}", scan.reports, notes=notes)
 
 
 def _kitty_cwd(platform_os: str, text: str, path: Path) -> KeysPlan:
@@ -307,6 +338,27 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         validate_on_status=True,
         bind_created_path=True,
         readback=_wezterm_readback,
+    ),
+    "ghostty": KeysRow(
+        ownership=OwnedRegion(GHOSTTY_KEYS, "#", Placement.TOP),
+        config_path=ghostty_config_path,
+        plan=_ghostty_plan,
+        validate=validate_ghostty,
+        summary=(
+            "Ghostty keys: the clear chord sends Ctrl+L (screen and scrollback); "
+            "new tabs, windows and splits already open in the current directory."
+        ),
+        created_record=GHOSTTY_CREATED,
+        same_directory=Vendor(
+            "2026-11-20, Ghostty Config.zig v1.4.0:2086-2099: window-, tab- and "
+            "split-inherit-working-directory default to true and need shell integration, "
+            "which works with the installer's command; a user's shell-integration = none "
+            "is theirs. "
+            "The installer writes nothing."
+        ),
+        sibling_regions=(GHOSTTY,),
+        bind_created_path=True,
+        strip_files=ghostty_default_files,
     ),
 }
 
@@ -439,7 +491,7 @@ def strip_terminal_keys(
     path = row.config_path(platform_os, home, environ)
     warnings: list[str] = []
     marker = _created_marker(row, home, environ)
-    if row.bind_created_path and marker.exists():
+    if row.strip_files is None and row.bind_created_path and marker.exists():
         sidecar = created_path_record(marker)
         recorded = sidecar.read_text(errors="replace") if sidecar.exists() else None
         if recorded != f"{path}\n":
@@ -447,11 +499,13 @@ def strip_terminal_keys(
             return (
                 f"{tool_id}: created config at {shown} is not the file now resolved; left alone",
             )
-    for region in (*row.sibling_regions, row.ownership.region):
-        try:
-            strip_region(path, region, comment=row.ownership.comment)
-        except OSError as exc:
-            warnings.append(f"{tool_id}: {first_line(exc)}")
+    paths = row.strip_files(platform_os, home, environ) if row.strip_files is not None else (path,)
+    for candidate in paths:
+        for region in (*row.sibling_regions, row.ownership.region):
+            try:
+                strip_region(candidate, region, comment=row.ownership.comment)
+            except OSError as exc:
+                warnings.append(f"{tool_id}: {candidate.name}: {first_line(exc)}")
     if not warnings:
         _record(tool_id, home, environ).unlink(missing_ok=True)
         warnings.extend(

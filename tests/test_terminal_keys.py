@@ -38,10 +38,15 @@ from installer.terminal_regions import (
     KeysPlan,
     Placement,
     TerminalShellError,
+    ghostty_chord,
+    ghostty_config_path,
+    ghostty_default_files,
     kitty_chord,
     kitty_config_path,
     replace_owned_region,
+    scan_ghostty,
     scan_kitty,
+    validate_ghostty,
     validate_kitty,
     validate_toml,
     validate_wezterm,
@@ -247,7 +252,7 @@ def apply_alacritty_keys(
 
 def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
     row = TERMINAL_KEYS["alacritty"]
-    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm"}
+    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm", "ghostty"}
     assert row.ownership == OwnedRegion("alacritty-keys")
     assert row.created_record == "terminal-alacritty-created"
     assert row.sibling_regions == ("alacritty",)
@@ -284,7 +289,7 @@ def test_completeness_fails_for_a_declarer_without_a_row(tmp_path: Path) -> None
 
 
 def test_completeness_fails_on_an_empty_table() -> None:
-    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty", "kitty", "wezterm"}
+    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty", "kitty", "wezterm", "ghostty"}
 
 
 def test_completeness_ignores_table_order(tmp_path: Path) -> None:
@@ -393,6 +398,442 @@ def test_golden_created_file_goes_with_the_tool(tmp_path: Path) -> None:
     assert not _config().exists()
     assert not _config().parent.exists()
     assert not (_state_dir() / "terminal-alacritty-created").exists()
+
+
+# --- Ghostty (30): resolver, scan, validator ---
+
+
+@pytest.mark.parametrize(
+    ("legacy", "preferred", "expected"),
+    [
+        (None, None, "config.ghostty"),
+        ("x", None, "config"),
+        ("x", "x", "config.ghostty"),
+        ("x", "", "config"),
+        ("", "", "config.ghostty"),
+        (None, "x", "config.ghostty"),
+    ],
+)
+def test_ghostty_config_path_linux_cases(
+    tmp_path: Path, legacy: str | None, preferred: str | None, expected: str
+) -> None:
+    root = tmp_path / ".config/ghostty"
+    root.mkdir(parents=True)
+    for name, value in (("config", legacy), ("config.ghostty", preferred)):
+        if value is not None:
+            (root / name).write_text(value)
+    assert ghostty_config_path("fedora", tmp_path, {}) == root / expected
+    assert (
+        ghostty_config_path("fedora", tmp_path, {"XDG_CONFIG_HOME": str(tmp_path / "x")})
+        == tmp_path / "x/ghostty/config.ghostty"
+    )
+
+
+@pytest.mark.parametrize(
+    ("support", "xdg", "expected"),
+    [
+        ("config.ghostty", "config.ghostty", "support/config.ghostty"),
+        ("config", None, "support/config"),
+        (None, "config.ghostty", "xdg/config.ghostty"),
+        (None, "config", "xdg/config"),
+        (None, None, "support/config.ghostty"),
+    ],
+)
+def test_ghostty_config_path_macos_cases(
+    tmp_path: Path, support: str | None, xdg: str | None, expected: str
+) -> None:
+    roots = {
+        "support": tmp_path / "Library/Application Support/com.mitchellh.ghostty",
+        "xdg": tmp_path / ".config/ghostty",
+    }
+    for root, name in ((roots["support"], support), (roots["xdg"], xdg)):
+        if name:
+            root.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text("x")
+    root_name, name = expected.split("/")
+    assert ghostty_config_path("macos", tmp_path, {}) == roots[root_name] / name
+
+
+def test_ghostty_default_files_follow_load_order(tmp_path: Path) -> None:
+    x = tmp_path / "x/ghostty"
+    s = tmp_path / "Library/Application Support/com.mitchellh.ghostty"
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "x")}
+    assert ghostty_default_files("fedora", tmp_path, env) == (x / "config", x / "config.ghostty")
+    assert ghostty_default_files("macos", tmp_path, env) == (
+        x / "config",
+        x / "config.ghostty",
+        s / "config",
+        s / "config.ghostty",
+    )
+
+
+@pytest.mark.parametrize(
+    ("binding", "expected"),
+    [
+        ("ctrl+shift+k=reset", "ctrl+shift+k"),
+        ("Shift+Control+K=reset", "ctrl+shift+k"),
+        ("control+shift+key_k=text:x", "ctrl+shift+k"),
+        ("all:performable:ctrl+shift+k=reset", "ctrl+shift+k"),
+        ("cmd+k=clear_screen", "super+k"),
+        ("command+k=x", "super+k"),
+        ("option+left=esc:b", "alt+left"),
+        ("opt+left=x", "alt+left"),
+        ("ctrl+a>k=x", None),
+        ("mytable/ctrl+k=x", None),
+        ("chain=ctrl+k", None),
+        ("", None),
+    ],
+)
+def test_ghostty_chord_normalizes(binding: str, expected: str | None) -> None:
+    assert ghostty_chord(binding) == expected
+
+
+def test_scan_ghostty_reads_user_lines_outside_the_regions(tmp_path: Path) -> None:
+    path = tmp_path / ".config/ghostty/config.ghostty"
+    path.parent.mkdir(parents=True)
+    owned = replace_owned_region(
+        replace_owned_region("", "ghostty", "command = /usr/bin/zsh -l"),
+        "ghostty-keys",
+        r"keybind = ctrl+shift+k=text:\x0c",
+    )
+    path.write_text(owned)
+    scan = scan_ghostty("fedora", tmp_path, {})
+    assert not scan.user_command and not scan.config_file and not scan.taken and not scan.clears
+    path.write_text(
+        owned + "command = /bin/bash\nkeybind = ctrl+shift+k=reset\nconfig-file = extra.conf\n"
+    )
+    scan = scan_ghostty("fedora", tmp_path, {})
+    assert scan.user_command and scan.config_file and scan.taken == frozenset({"ctrl+shift+k"})
+
+
+def test_scan_ghostty_covers_every_default_file(tmp_path: Path) -> None:
+    files = ghostty_default_files("macos", tmp_path, {})
+    for path in files:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    files[0].write_text("command = /bin/sh\n")
+    files[1].write_text("keybind = ctrl+shift+k=x\n")
+    files[2].write_text("keybind = cmd+k=x\n")
+    assert scan_ghostty("fedora", tmp_path, {}).user_command
+    assert scan_ghostty("fedora", tmp_path, {}).taken == frozenset({"ctrl+shift+k"})
+    assert scan_ghostty("macos", tmp_path, {}).taken == frozenset({"ctrl+shift+k", "super+k"})
+
+
+def test_scan_ghostty_parsing_rules(tmp_path: Path) -> None:
+    path = tmp_path / ".config/ghostty/config"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '# command = x\ninvalid\n command = "x"\n keybind = "ctrl+shift+k=reset"\nkeybind = clear\n'
+    )
+    scan = scan_ghostty("fedora", tmp_path, {})
+    assert scan.user_command and scan.clears and scan.taken == frozenset({"ctrl+shift+k"})
+    path.write_text("command =\nkeybind =\n")
+    scan = scan_ghostty("fedora", tmp_path, {})
+    assert scan.user_command and scan.clears
+
+
+@pytest.mark.parametrize("platform", ["fedora", "macos"])
+def test_scan_ghostty_blocks_on_an_unscannable_file_loaded_before_the_target(
+    tmp_path: Path, platform: str
+) -> None:
+    files = ghostty_default_files(platform, tmp_path, {})
+    files[0].parent.mkdir(parents=True)
+    files[0].write_bytes(b"\xff\xfe\x00")
+    files[-1].parent.mkdir(parents=True, exist_ok=True)
+    files[-1].write_text("font-size = 12\n")
+    scan = scan_ghostty(platform, tmp_path, {})
+    assert scan.blocked == (
+        "ghostty: partial: config could not be read and loads before config.ghostty; "
+        "nothing written",
+    )
+    assert scan.reports == scan.blocked
+
+
+def test_scan_ghostty_only_reports_an_unscannable_file_loaded_after_the_target(
+    tmp_path: Path,
+) -> None:
+    files = ghostty_default_files("fedora", tmp_path, {})
+    files[0].parent.mkdir(parents=True)
+    files[0].write_text("command = /bin/bash\n")
+    files[1].mkdir()
+    scan = scan_ghostty("fedora", tmp_path, {})
+    assert scan.blocked == () and scan.user_command
+    assert scan.reports == (
+        "ghostty: partial: config.ghostty could not be read; settings there are not checked",
+    )
+
+
+def test_validate_ghostty_accepts_both_regions_and_refuses_a_foreign_line() -> None:
+    keys = replace_owned_region("", "ghostty-keys", "keybind = x=y")
+    shell = replace_owned_region("", "ghostty", "command = /bin/sh")
+    validate_ghostty(keys + shell)
+    validate_ghostty("font-size = 1\n")
+    with pytest.raises(
+        TerminalShellError, match="ghostty-keys region would hold a line that is not a keybind"
+    ):
+        validate_ghostty(keys.replace("keybind = x=y", "font-size = 1"))
+    with pytest.raises(
+        TerminalShellError, match="ghostty region would hold a line that is not a command"
+    ):
+        validate_ghostty(shell.replace("command = /bin/sh", "font-size = 1"))
+
+
+# --- Ghostty (30): row, goldens, conflicts ---
+_GHOSTTY_SUMMARY = (
+    "Ghostty keys: the clear chord sends Ctrl+L (screen and scrollback); "
+    "new tabs, windows and splits already open in the current directory."
+)
+_GHOSTTY_LINUX = (
+    "# >>> tools-installer terminal-shell ghostty-keys >>>\n"
+    "keybind = ctrl+shift+k=text:\\x0c\n"
+    "# <<< tools-installer terminal-shell ghostty-keys <<<\n"
+)
+_GHOSTTY_MACOS = _GHOSTTY_LINUX.replace("ctrl+shift+k", "super+k")
+_MACOS = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
+
+
+def _ghostty() -> Tool:
+    return next(tool for tool in load_tools(REGISTRY) if tool.id == "ghostty")
+
+
+def _ghostty_config(platform: str = "fedora") -> Path:
+    return ghostty_config_path(platform, Path.home(), os.environ)
+
+
+def test_ghostty_golden_linux_created_file() -> None:
+    assert run_post_install(_ghostty(), _LINUX).lines == (_GHOSTTY_SUMMARY,)
+    assert _ghostty_config().read_text() == _GHOSTTY_LINUX
+    assert (_state_dir() / "terminal-ghostty-created-path").read_text() == f"{_ghostty_config()}\n"
+
+
+def test_ghostty_golden_macos_created_file() -> None:
+    assert run_post_install(_ghostty(), _MACOS).lines == (
+        _GHOSTTY_SUMMARY,
+        "ghostty: cmd+k now sends Ctrl+L; it was clear_screen.",
+    )
+    assert _ghostty_config("macos").read_text() == _GHOSTTY_MACOS
+
+
+def test_ghostty_never_writes_a_global_alt_switch() -> None:
+    for platform in (_LINUX, _MACOS):
+        run_post_install(_ghostty(), platform)
+        text = _ghostty_config(platform.os).read_text() + _GHOSTTY_LINUX + _GHOSTTY_MACOS
+        assert not any(
+            s in text
+            for s in (
+                "macos-option-as-alt",
+                "option-as-alt",
+                "option_as_alt",
+                "opt+",
+                "alt+left",
+                "alt+right",
+            )
+        )
+
+
+def test_ghostty_region_goes_above_user_content() -> None:
+    path = _ghostty_config()
+    path.parent.mkdir(parents=True)
+    path.write_text("font-size = 12\n")
+    run_post_install(_ghostty(), _LINUX)
+    assert path.read_text() == _GHOSTTY_LINUX + "font-size = 12\n"
+
+
+@pytest.mark.parametrize(
+    ("platform", "index"),
+    [("fedora", 0), ("fedora", 1), ("macos", 0), ("macos", 1), ("macos", 2), ("macos", 3)],
+)
+def test_ghostty_user_chord_is_kept_and_reported(platform: str, index: int) -> None:
+    files = ghostty_default_files(platform, Path.home(), os.environ)
+    target = files[-1]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("font-size = 12\n")
+    path = files[index]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chord = "cmd+k" if platform == "macos" else "ctrl+shift+k"
+    content = f"keybind = {chord}=reset\n"
+    path.write_text(content)
+    result = run_post_install(_ghostty(), _MACOS if platform == "macos" else _LINUX)
+    assert path.read_text() == content
+    assert (
+        f"ghostty: partial: you already bind {'super+k' if platform == 'macos' else chord}"
+        in result.lines
+    )
+    assert (_state_dir() / "terminal-tuning-ghostty").exists()
+
+
+@pytest.mark.parametrize("value", ["clear", ""])
+def test_ghostty_keybind_clear_refuses(value: str) -> None:
+    path = _ghostty_config()
+    path.parent.mkdir(parents=True)
+    text = f"keybind = {value}\n"
+    path.write_text(text)
+    reason = "you set keybind = clear, which would clear these keys"
+    row = TERMINAL_KEYS["ghostty"]
+    assert apply_terminal_keys(
+        row, "ghostty", "fedora", Path.home(), os.environ, skip_recorded=False
+    ) == ((), reason)
+    assert terminal_keys_pending(row, "ghostty", "fedora", Path.home(), os.environ) == reason
+    assert path.read_text() == text
+
+
+@pytest.mark.parametrize("platform", ["fedora", "macos"])
+def test_ghostty_unscannable_earlier_file_refuses_and_writes_nothing(platform: str) -> None:
+    files = ghostty_default_files(platform, Path.home(), os.environ)
+    files[0].parent.mkdir(parents=True, exist_ok=True)
+    files[0].write_bytes(b"\xff\xfe\x00")
+    files[-1].parent.mkdir(parents=True, exist_ok=True)
+    files[-1].write_text("font-size = 12\n")
+    row = TERMINAL_KEYS["ghostty"]
+    reason = (
+        "ghostty: partial: config could not be read and loads before config.ghostty; "
+        "nothing written"
+    )
+    assert apply_terminal_keys(
+        row, "ghostty", platform, Path.home(), os.environ, skip_recorded=False
+    ) == ((), reason)
+    assert terminal_keys_pending(row, "ghostty", platform, Path.home(), os.environ) == reason
+    assert files[-1].read_text() == "font-size = 12\n" and files[0].read_bytes() == b"\xff\xfe\x00"
+    assert not (_state_dir() / "terminal-tuning-ghostty").exists()
+    assert run_post_install(_ghostty(), _MACOS if platform == "macos" else _LINUX).lines == (
+        f"Ghostty keys not changed: {reason}",
+    )
+    files[0].write_text("font-size = 10\n")
+    assert (
+        apply_terminal_keys(row, "ghostty", platform, Path.home(), os.environ, skip_recorded=False)[
+            1
+        ]
+        is None
+    )
+    assert "ghostty-keys >>>" in files[-1].read_text()
+
+
+def test_ghostty_row_declaration() -> None:
+    row = TERMINAL_KEYS["ghostty"]
+    assert row.ownership == OwnedRegion("ghostty-keys", "#", Placement.TOP)
+    assert row.sibling_regions == ("ghostty",) and row.created_record == "terminal-ghostty-created"
+    assert row.bind_created_path and row.strip_files is ghostty_default_files
+    assert not row.validate_on_status and row.readback is None and row.clear == CTRL_L
+    assert row.config_path is ghostty_config_path and isinstance(row.same_directory, Vendor)
+    assert "2026-11-20" in row.same_directory.note and row.same_directory.note.endswith(
+        "The installer writes nothing."
+    )
+    assert _ghostty().post_install == ("apply_terminal_tuning",)
+
+
+def test_ghostty_status_and_apply_agree_on_a_refused_plan() -> None:
+    row = TERMINAL_KEYS["ghostty"]
+    run_post_install(_ghostty(), _LINUX)
+    path = _ghostty_config()
+    path.write_text(path.read_text() + "keybind = clear\n")
+    assert terminal_keys_pending(row, "ghostty", "fedora", Path.home(), os.environ) is None
+    assert apply_terminal_keys(
+        row, "ghostty", "fedora", Path.home(), os.environ, skip_recorded=True
+    ) == ((), None)
+
+
+def test_ghostty_strip_leaves_a_file_it_did_not_create_when_the_resolver_moved() -> None:
+    run_post_install(_ghostty(), _LINUX)
+    _ghostty_config().unlink()
+    legacy = Path.home() / ".config/ghostty/config"
+    legacy.write_text("font-size = 12\n")
+    result = strip_terminal_keys(
+        TERMINAL_KEYS["ghostty"], "ghostty", "fedora", Path.home(), os.environ
+    )
+    assert (
+        "created config at" in result[0] and "is not the file now resolved; left alone" in result[0]
+    )
+    assert legacy.read_text() == "font-size = 12\n"
+
+
+def test_ghostty_drift_is_pending_only_without_a_record() -> None:
+    row = TERMINAL_KEYS["ghostty"]
+    args = (row, "ghostty", "fedora", Path.home(), os.environ)
+    assert terminal_keys_pending(*args) == KEYS_PENDING
+    assert apply_terminal_keys(*args, skip_recorded=False)[1] is None
+    assert terminal_keys_pending(*args) is None
+    path = _ghostty_config()
+    path.write_text(path.read_text().replace("text:\\x0c", "text:old"))
+    assert terminal_keys_pending(*args) == KEYS_PENDING
+    path.write_text("")
+    assert terminal_keys_pending(*args) is None
+
+
+def test_ghostty_reconfigure_restores_the_region_and_a_second_one_changes_nothing() -> None:
+    row = TERMINAL_KEYS["ghostty"]
+    args = (row, "ghostty", "fedora", Path.home(), os.environ)
+    apply_terminal_keys(*args, skip_recorded=False)
+    path = _ghostty_config()
+    path.write_text(path.read_text().replace("text:\\x0c", "text:old"))
+    assert apply_terminal_keys(*args, skip_recorded=True) == ((_GHOSTTY_SUMMARY,), None)
+    assert path.read_text() == _GHOSTTY_LINUX
+    assert apply_terminal_keys(*args, skip_recorded=True) == ((), None)
+    assert apply_terminal_keys(*args, skip_recorded=False)[1] is None
+    assert path.read_text() == _GHOSTTY_LINUX
+
+
+@pytest.mark.parametrize("platform", ["fedora", "macos"])
+def test_ghostty_reconfigure_does_not_restore_a_deleted_recorded_region(platform: str) -> None:
+    args = (TERMINAL_KEYS["ghostty"], "ghostty", platform, Path.home(), os.environ)
+    apply_terminal_keys(*args, skip_recorded=False)
+    path = _ghostty_config(platform)
+    path.write_text("user = kept\n")
+    assert terminal_keys_pending(*args) is None
+    assert apply_terminal_keys(*args, skip_recorded=True) == ((), None)
+    assert path.read_text() == "user = kept\n"
+    assert (_state_dir() / "terminal-tuning-ghostty").exists()
+
+
+@pytest.mark.parametrize("platform", ["fedora", "macos"])
+def test_ghostty_strip_drops_the_regions_the_record_and_a_created_file(platform: str) -> None:
+    args = (TERMINAL_KEYS["ghostty"], "ghostty", platform, Path.home(), os.environ)
+    apply_terminal_keys(*args, skip_recorded=False)
+    path = _ghostty_config(platform)
+    assert strip_terminal_keys(*args) == ()
+    assert not path.exists() and not path.parent.exists()
+    assert not (_state_dir() / "terminal-tuning-ghostty").exists()
+
+
+@pytest.mark.parametrize("platform", ["fedora", "macos"])
+def test_ghostty_strip_keeps_every_user_byte(platform: str) -> None:
+    path = _ghostty_config(platform)
+    path.parent.mkdir(parents=True)
+    path.write_text("font-size = 12\n")
+    args = (TERMINAL_KEYS["ghostty"], "ghostty", platform, Path.home(), os.environ)
+    apply_terminal_keys(*args, skip_recorded=False)
+    path.write_text(replace_owned_region(path.read_text(), "ghostty", "command = /usr/bin/zsh -l"))
+    assert strip_terminal_keys(*args) == ()
+    assert path.read_text() == "font-size = 12\n"
+
+
+def test_ghostty_strip_with_no_config_file_is_quiet() -> None:
+    assert (
+        strip_terminal_keys(TERMINAL_KEYS["ghostty"], "ghostty", "fedora", Path.home(), os.environ)
+        == ()
+    )
+
+
+@pytest.mark.parametrize("platform", ["fedora", "macos"])
+def test_ghostty_strip_removes_regions_left_in_every_default_file(platform: str) -> None:
+    files = ghostty_default_files(platform, Path.home(), os.environ)
+    legacy = files[0]
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("font-size = 12\n")
+    args = (TERMINAL_KEYS["ghostty"], "ghostty", platform, Path.home(), os.environ)
+    apply_terminal_keys(*args, skip_recorded=False)
+    legacy.write_text(
+        replace_owned_region(legacy.read_text(), "ghostty", "command = /usr/bin/zsh -l")
+    )
+    target = files[-1]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("theme = x\n")
+    assert strip_terminal_keys(*args) == ()
+    assert legacy.read_text() == "font-size = 12\n"
+    assert target.read_text() == "theme = x\n"
+    assert not (_state_dir() / "terminal-tuning-ghostty").exists()
+
+
+def test_cross_row_tests_visit_ghostty() -> None:
+    assert "ghostty" in TERMINAL_KEYS
 
 
 def test_kitty_golden_linux_created_file() -> None:
@@ -1246,10 +1687,11 @@ def test_only_wezterm_validates_on_status() -> None:
     ]
 
 
-def test_only_kitty_and_wezterm_bind_the_created_path() -> None:
+def test_only_kitty_wezterm_and_ghostty_bind_the_created_path() -> None:
     assert {tool_id for tool_id, row in TERMINAL_KEYS.items() if row.bind_created_path} == {
         "kitty",
         "wezterm",
+        "ghostty",
     }
 
 
@@ -1711,6 +2153,7 @@ def test_row_fields_are_exactly_the_declared_set() -> None:
         "readback",
         "validate_on_status",
         "bind_created_path",
+        "strip_files",
     ]
     assert all("option" not in field.name.lower() for field in dataclasses.fields(KeysRow))
     assert "option_as_alt" not in _KEYS_REGION

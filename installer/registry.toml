@@ -3210,6 +3210,8 @@ verified = 2026-11-20
 desc = "Fast, native GPU terminal emulator; Linux and Bazzite get a community build AppImage"
 owner_probes = ["pacman"]
 config_paths = ["~/.config/ghostty", "~/Library/Application Support/com.mitchellh.ghostty"]
+# Install tuning (30 D-11, D-12): the ghostty-keys region of config.ghostty; it adds the clear chord only when you bind no other action to it.
+post_install = ["apply_terminal_tuning"]
 [[tool.method]]
 kind = "pacman"
 package = "ghostty"

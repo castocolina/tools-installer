@@ -439,6 +439,149 @@ def validate_kitty(text: str) -> None:
             )
 
 
+GHOSTTY = "ghostty"
+GHOSTTY_KEYS = "ghostty-keys"
+GHOSTTY_CREATED = "terminal-ghostty-created"
+
+
+def _nonempty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def ghostty_config_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
+    """Mirror Ghostty v1.4.0 file_load.zig preferredDefaultFilePath."""
+    xdg = xdg_config_home(home, environ) / "ghostty"
+    preferred = next(
+        (p for p in (xdg / "config.ghostty", xdg / "config") if _nonempty_file(p)),
+        xdg / "config.ghostty",
+    )
+    if platform_os != "macos":
+        return preferred
+    support = home / "Library" / "Application Support" / "com.mitchellh.ghostty"
+    return next(
+        (
+            p
+            for p in (support / "config.ghostty", support / "config", preferred)
+            if _nonempty_file(p)
+        ),
+        support / "config.ghostty",
+    )
+
+
+def ghostty_default_files(
+    platform_os: str, home: Path, environ: Mapping[str, str]
+) -> tuple[Path, ...]:
+    xdg = xdg_config_home(home, environ) / "ghostty"
+    files = (xdg / "config", xdg / "config.ghostty")
+    if platform_os == "macos":
+        support = home / "Library" / "Application Support" / "com.mitchellh.ghostty"
+        files += (support / "config", support / "config.ghostty")
+    return files
+
+
+def ghostty_chord(binding: str) -> str | None:
+    binding = binding.strip().lower()
+    while any(
+        binding.startswith(prefix) for prefix in ("all:", "global:", "unconsumed:", "performable:")
+    ):
+        binding = binding.split(":", 1)[1]
+    trigger = binding.split("=", 1)[0].strip()
+    if not trigger or ">" in trigger or "/" in trigger or trigger == "chain":
+        return None
+    parts = trigger.split("+")
+    aliases = {"cmd": "super", "command": "super", "opt": "alt", "option": "alt", "control": "ctrl"}
+    return "+".join(
+        (*sorted(aliases.get(part, part) for part in parts[:-1]), parts[-1].removeprefix("key_"))
+    )
+
+
+@dataclass(frozen=True)
+class GhosttyScan:
+    user_command: bool
+    config_file: bool
+    taken: frozenset[str]
+    clears: bool
+    reports: tuple[str, ...]
+    blocked: tuple[str, ...]
+
+
+def scan_ghostty(platform_os: str, home: Path, environ: Mapping[str, str]) -> GhosttyScan:
+    files = ghostty_default_files(platform_os, home, environ)
+    target = ghostty_config_path(platform_os, home, environ)
+    user_command = config_file = clears = False
+    taken: set[str] = set()
+    reports: list[str] = []
+    blocked: list[str] = []
+    for index, path in enumerate(files):
+        try:
+            data = read_capped(path, 1 << 20, follow_symlinks=True)
+            if data is None:
+                raise OSError("not a readable regular file")
+            text = replace_owned_region(
+                replace_owned_region(data.decode("utf-8"), GHOSTTY, None), GHOSTTY_KEYS, None
+            )
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except (OSError, UnicodeDecodeError):
+            if index < files.index(target):
+                report = (
+                    f"ghostty: partial: {path.name} could not be read and loads before "
+                    f"{target.name}; nothing written"
+                )
+                blocked.append(report)
+            else:
+                report = (
+                    f"ghostty: partial: {path.name} could not be read; "
+                    "settings there are not checked"
+                )
+            reports.append(report)
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = (part.strip() for part in line.split("=", 1))
+            if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            if key == "command":
+                user_command = True
+            elif key == "config-file":
+                config_file = True
+            elif key == "keybind":
+                # shortcut: clear before the target is refused too; narrow the scan if users hit it.
+                if value in ("", "clear"):
+                    clears = True
+                elif (chord := ghostty_chord(value)) is not None:
+                    taken.add(chord)
+    return GhosttyScan(
+        user_command,
+        config_file,
+        frozenset(taken),
+        clears,
+        tuple(dict.fromkeys(reports)),
+        tuple(dict.fromkeys(blocked)),
+    )
+
+
+def validate_ghostty(text: str) -> None:
+    lines = text.splitlines()
+    for region, prefix, kind in (
+        (GHOSTTY_KEYS, "keybind =", "keybind"),
+        (GHOSTTY, "command =", "command"),
+    ):
+        begin, end = marker(region, ">>>"), marker(region, "<<<")
+        if begin in lines and end in lines:
+            for line in lines[lines.index(begin) + 1 : lines.index(end)]:
+                if line.strip() and not line.strip().startswith(prefix):
+                    raise TerminalShellError(
+                        f"the Ghostty {region} region would hold a line that is not a {kind}; "
+                        "nothing written"
+                    )
+
+
 ALACRITTY = "alacritty"
 ALACRITTY_KEYS = "alacritty-keys"
 ALACRITTY_CREATED = "terminal-alacritty-created"

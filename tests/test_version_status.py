@@ -6786,6 +6786,19 @@ def test_zsh_reads_pending_tuning_until_the_clear_widget_is_written(tmp_path: Pa
     assert again.unconfigured == ()
 
 
+def test_an_unrecorded_ghostty_row_reads_pending_install_tuning(tmp_path: Path) -> None:
+    tool = _shell_tool("ghostty")
+    service = _hook_service(tmp_path, frozenset())
+    state = _settled_states(service, [tool])["ghostty"]
+    assert state.health is Health.MISCONFIGURED
+    assert state.reasons[0] == _TUNING_REASON
+    assert state.unconfigured == (_TUNING_STEP,)
+    assert _reconfigure(service, tool).result == "done"
+    assert "ghostty-keys >>>" in (Path.home() / ".config/ghostty/config.ghostty").read_text()
+    again = _settled_states(service, [tool])["ghostty"]
+    assert again.health is Health.OK and again.unconfigured == ()
+
+
 def test_neovim_with_your_editor_reads_no_pending_tuning(tmp_path: Path) -> None:
     (Path.home() / ".bashrc").write_text("export EDITOR=vim\n")
     state = _tuning_state(tmp_path, _shell_tool("neovim"))

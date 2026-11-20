@@ -1361,6 +1361,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     Phase 24 reviewed Alacritty's `apply_terminal_tuning` (24 D-23: its keybindings
     region, written at install with no question). Phase 29 reviewed kitty's and WezTerm's
     apply_terminal_tuning (29 D-01, D-06: their keys regions, written at install with no question).
+    Phase 30 reviewed Ghostty's apply_terminal_tuning (30 D-11: its keys region).
     Phase 24.1 reviewed Neovim's
     `clone_nvim_starter` and `show_nvim_hints` (24.1 D-15, D-19); neovim was already a
     shell-init tool, so the declarer set did not change.
@@ -1373,6 +1374,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
         "alacritty",
         "kitty",
         "wezterm",
+        "ghostty",
         *tuned,
         *SHELL_INIT_TOOLS,
     }
