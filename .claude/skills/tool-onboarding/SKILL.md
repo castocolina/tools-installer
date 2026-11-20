@@ -98,6 +98,16 @@ removable by this installer:
 Never invent the exact method kind or param name — read the kinds and params
 actually present in `installer/model.py` and existing entries.
 
+#### macOS apps
+
+For every macOS app, record in `# Verified` how it installs, how it uninstalls, how it is configured, and whether its method can place the bundle in `~/Applications` instead of `/Applications`, which restricted machines deny. The methods that can:
+
+- a cask: the `cask` kind runs `brew install --cask` with `--appdir` set to `applications_dir()`, which is `~/Applications` (`installer/executors.py`, `installer/locations.py`);
+- the `app` kind (`installer/apps.py`): it extracts a `.zip` with `ditto -x -k` into `~/Applications` and links its `cli` (renamed by `cli_name`, read in `installer/download.py`) into `~/.local/bin`;
+- a vendor installer that takes a destination.
+
+Where the method allows it, the bundle goes to `~/Applications`, and every app that ships a CLI gets that CLI linked into `~/.local/bin` so it runs from the command line. Where no method allows a user location, the entry's `# Verified` comment says why. Two platform gaps are recorded, never promised: a `.dmg` (the `app` kind extracts `.zip` only, and no dmg kind exists), and a cask's CLI link (brew links it, not into `~/.local/bin`; the `cask` params are `cask`, `app`, `min_os_version` and `smoke_argv`). A method that does not meet the rule: kitty's macOS `script` method writes `/Applications/kitty.app` today (phase 29, TERM-01, moves it).
+
 ### 4b. Decide how it is removed, per platform — before writing the entry
 
 Installing a tool you cannot cleanly remove is half an onboarding. Removal
@@ -211,6 +221,17 @@ Each rule cell starts with one status word: `vendor` (the vendor default already
 
 Konsole has no row: it is detected by code but is not a catalog entry. The owner decision is to verify it and leave it alone: `_sync_konsole` (`installer/terminal_shell.py`) keeps its zsh profile, and phase 29 (TERM-04) checks its stock Ctrl+Shift+K clear.
 
+#### Conflicts
+
+- A binding the user already defines is never overridden: the installer keeps it and reports the row as `partial: kept yours`. Today that result is the `{terminal}: partial: you already ...` line written by `installer/terminal_shell.py`, which `installer/version_status.py` reads by its `partial:` prefix; phase 28 settles the exact wording. Example (today): when the user's `alacritty.toml` already binds a chord the alacritty sync would add, the sync skips that binding and reports `alacritty: partial: you already bind ...`, the line that becomes `partial: kept yours`.
+- A vendor default that conflicts with a rule is overridden only with an install note that names the displaced default. Example (planned for phase 29, TERM-01): kitty on Linux binds `ctrl+shift+k` to `scroll_line_up`; rule (c) takes that chord, and the install note names `scroll_line_up` as the displaced default.
+
+#### Testing macOS behavior
+
+- Each macOS behavior is a pure config generator (existing file text in, new text out) with a golden-file test that runs on both OSes, so Linux CI and a Linux host exercise it too.
+- macOS CI covers the file paths: the `validate-and-test` job in `.github/workflows/ci.yml` runs on the matrix `[ubuntu-latest, macos-latest]` (shown as "validate & test on macos-latest"), and its `Test` step runs `make test` on macOS. A docs-only change skips those steps (the `Classify the change` step), so a change that adds a macOS behavior must change code or tests, not only Markdown.
+- The real-Mac check is a UAT line marked deferred to the owner's Mac; no agent marks it passed.
+
 #### Extras are asked
 
 Beyond the four defaults, look for well-known friction or nice-to-haves that a postinstall or companion config should cover, then offer them to the developer and build only the ones they accept. Prompts to walk through (examples of the shape, not an exhaustive list):
@@ -266,6 +287,26 @@ from steps 3-4, and the dated `# Verified` comment
 (`METHOD_PARAMS` in `installer/model.py`); for `app`/`tarball` urls with
 `{ver}`, set `version` and `sha256` together. Then validate with the repo's
 gates and add tests for any new hook; sandbox every real install.
+
+Example `# Verified` lines for a macOS cask (Example is a placeholder):
+
+```toml
+# Verified 2026-11-19: bundle in ~/Applications/Example.app through the cask's --appdir;
+# its CLI link is brew's, not ~/.local/bin (platform gap).
+```
+
+For an `app`-kind entry:
+
+```toml
+# Verified 2026-11-19: bundle in ~/Applications/Example.app, extracted from the vendor .zip by the app kind;
+# CLI example linked into ~/.local/bin by the app kind's cli param.
+```
+
+For an app whose only macOS build is a `.dmg`:
+
+```toml
+# Verified 2026-11-19: no user location, because the vendor ships only a .dmg and the app kind extracts .zip only (platform gap).
+```
 
 ## Common Mistakes
 

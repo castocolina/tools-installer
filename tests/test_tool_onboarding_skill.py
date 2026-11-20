@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+import yaml
 
 from installer.enums import Category
 from installer.model import load_tools
@@ -17,6 +20,10 @@ REGISTRY = REPO_ROOT / "installer" / "registry.toml"
 TABLE_HEADING = "#### Closed per-terminal table"
 RULES_HEADING = "#### Terminal and IDE defaults"
 EXTRAS_HEADING = "#### Extras are asked"
+CONFLICTS_HEADING = "#### Conflicts"
+MACOS_TESTING_HEADING = "#### Testing macOS behavior"
+MACOS_APPS_HEADING = "#### macOS apps"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 ASK_RE = re.compile(
     r"\bask(?:s|ed)?\b[^.]{0,80}\b(?:word navigation|clear|scrollback|"
     r"zsh terminal sync|current directory|same directory)\b",
@@ -25,6 +32,44 @@ ASK_RE = re.compile(
 _SEPARATOR_ROW_RE = re.compile(r"\|[-|: ]+\|")
 ID_CELL_RE = re.compile(r"`([a-z0-9][a-z0-9._-]*)`")
 STATUS_RE = re.compile(r"(?:vendor|written|unverified|n/a|planned \(phase \d+\))(?::|$)")
+
+
+def _ci_workflow() -> dict[str, Any]:
+    return cast("dict[str, Any]", yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8")))
+
+
+def ci_workflow_problems(workflow: dict[str, Any]) -> list[str]:
+    job = workflow["jobs"]["validate-and-test"]
+    problems: list[str] = []
+    matrix_os = job["strategy"]["matrix"]["os"]
+    for os_name in ("ubuntu-latest", "macos-latest"):
+        if os_name not in matrix_os:
+            problems.append(f"matrix.os lacks {os_name}")
+    if "matrix.os" not in job["runs-on"]:
+        problems.append("runs-on does not use matrix.os")
+
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+    if names.count("Test") != 1:
+        problems.append(f"expected one Test step, found {names.count('Test')}")
+        return problems
+    test_index = names.index("Test")
+    if "Classify the change" not in names[:test_index]:
+        problems.append("Classify the change is not before Test")
+        return problems
+
+    classify = steps[names.index("Classify the change")]
+    test = steps[test_index]
+    if classify.get("id") != "scope":
+        problems.append("Classify the change id is not scope")
+    if "make test" not in test.get("run", ""):
+        problems.append("Test step does not run make test")
+    test_if = test.get("if", "")
+    if "steps.scope.outputs.full" not in test_if:
+        problems.append("Test step if does not read steps.scope.outputs.full")
+    if "!= 'false'" not in test_if:
+        problems.append("Test step if is not gated by != 'false'")
+    return problems
 
 
 def _text(path: Path) -> str:
@@ -44,6 +89,21 @@ def _subsection(text: str, heading: str) -> str:
     start = matches[0]
     nxt = re.search(r"^#### |^### ", text[start.end() :], re.MULTILINE)
     return text[start.start() : start.end() + nxt.start()] if nxt else text[start.start() :]
+
+
+def _items(section: str) -> list[str]:
+    lines = section.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.startswith("- ")]
+    items: list[str] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        item_lines: list[str] = []
+        for line in lines[start:end]:
+            if not line.strip():
+                break
+            item_lines.append(line)
+        items.append(" ".join(" ".join(item_lines).split()))
+    return items
 
 
 def rule_items(section: str) -> dict[str, str]:
@@ -277,6 +337,165 @@ def test_rules_frontmatter_overview_and_step_9() -> None:
     overview = text[text.index("## Overview") : text.index("## When to Use")]
     assert "The one exception is the closed per-terminal table under step 7" in overview
     assert "which extras were offered" in " ".join(_step(text, "9").split())
+
+
+def test_conflicts_two_clauses_with_examples() -> None:
+    items = _items(_subsection(_text(SKILL), CONFLICTS_HEADING))
+    assert len(items) == 2
+    assert all(
+        phrase in items[0]
+        for phrase in (
+            "never overridden",
+            "partial: kept yours",
+            "Example (today)",
+            "alacritty: partial: you already bind",
+        )
+    )
+    assert "kitty" not in items[0]
+    assert all(
+        phrase in items[1]
+        for phrase in (
+            "vendor default",
+            "install note",
+            "displaced default",
+            "scroll_line_up",
+            "planned for phase 29",
+            "Example",
+        )
+    )
+
+
+def test_conflicts_names_the_real_partial_lines() -> None:
+    section = " ".join(_subsection(_text(SKILL), CONFLICTS_HEADING).split())
+    assert all(
+        phrase in section
+        for phrase in (
+            "installer/terminal_shell.py",
+            "installer/version_status.py",
+            "`partial:`",
+            "phase 28",
+        )
+    )
+    shell_source = (REPO_ROOT / "installer" / "terminal_shell.py").read_text(encoding="utf-8")
+    status_source = (REPO_ROOT / "installer" / "version_status.py").read_text(encoding="utf-8")
+    assert "alacritty: partial: you already bind" in shell_source
+    assert 'startswith("partial:")' in status_source
+
+
+def test_conflicts_sits_in_step_7_and_is_ascii() -> None:
+    text = _text(SKILL)
+    step = _step(text, "7")
+    section = _subsection(text, CONFLICTS_HEADING)
+    assert CONFLICTS_HEADING in step
+    assert step.index(TABLE_HEADING) < step.index(CONFLICTS_HEADING) < step.index(EXTRAS_HEADING)
+    assert section.isascii()
+
+
+def test_macos_testing_three_clauses() -> None:
+    items = _items(_subsection(_text(SKILL), MACOS_TESTING_HEADING))
+    assert len(items) == 3
+    assert all(
+        phrase in items[0] for phrase in ("pure config generator", "golden-file test", "both OSes")
+    )
+    assert all(
+        phrase in items[1]
+        for phrase in (
+            "validate-and-test",
+            ".github/workflows/ci.yml",
+            "ubuntu-latest",
+            "macos-latest",
+            "make test",
+            "Classify the change",
+        )
+    )
+    assert "UAT line" in items[2]
+    assert "deferred to the owner's Mac" in items[2]
+
+
+def test_macos_testing_matches_the_ci_workflow() -> None:
+    assert ci_workflow_problems(_ci_workflow()) == []
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("fixed-runner", ["runs-on does not use matrix.os"]),
+        ("inverted-gate", ["Test step if is not gated by != 'false'"]),
+    ],
+    ids=["fixed-runner", "inverted-gate"],
+)
+def test_macos_testing_ci_check_refuses_mutations(case: str, expected: list[str]) -> None:
+    workflow = copy.deepcopy(_ci_workflow())
+    job = workflow["jobs"]["validate-and-test"]
+    if case == "fixed-runner":
+        job["runs-on"] = "ubuntu-latest"
+    else:
+        test_step = next(step for step in job["steps"] if step.get("name") == "Test")
+        test_step["if"] = "steps.scope.outputs.full == 'false'"
+    assert ci_workflow_problems(workflow) == expected
+
+
+def test_macos_testing_sits_in_step_7_and_is_ascii() -> None:
+    text = _text(SKILL)
+    step = _step(text, "7")
+    section = _subsection(text, MACOS_TESTING_HEADING)
+    assert MACOS_TESTING_HEADING in step
+    assert (
+        step.index(CONFLICTS_HEADING)
+        < step.index(MACOS_TESTING_HEADING)
+        < step.index(EXTRAS_HEADING)
+    )
+    assert section.isascii()
+
+
+def test_macos_apps_sits_in_step_4_not_4b() -> None:
+    text = _text(SKILL)
+    assert MACOS_APPS_HEADING in _step(text, "4")
+    assert MACOS_APPS_HEADING not in _step(text, "4b")
+
+
+def test_macos_apps_records_the_four_facts_and_rules() -> None:
+    section = " ".join(_subsection(_text(SKILL), MACOS_APPS_HEADING).split())
+    for phrase in (
+        "how it installs",
+        "how it uninstalls",
+        "how it is configured",
+        "`~/Applications`",
+        "`/Applications`",
+        "restricted machines",
+        "`--appdir`",
+        "`applications_dir()`",
+        "`app` kind",
+        "`cli_name`",
+        "`.zip`",
+        "`~/.local/bin`",
+        "says why",
+        "platform gap",
+        "`.dmg`",
+        "`min_os_version`",
+        "kitty.app",
+    ):
+        assert phrase in section
+
+
+def test_macos_apps_is_ascii() -> None:
+    assert _subsection(_text(SKILL), MACOS_APPS_HEADING).isascii()
+
+
+def test_macos_apps_step_9_verified_example() -> None:
+    step = _step(_text(SKILL), "9")
+    verified_lines = [line for line in step.splitlines() if line.startswith("# Verified")]
+    assert len(verified_lines) == 3
+    flat = " ".join(step.split())
+    for phrase in (
+        "~/Applications",
+        "~/.local/bin",
+        "no user location",
+        "because",
+        "--appdir",
+        "brew's",
+    ):
+        assert phrase in flat
 
 
 def test_table_matches_the_registry() -> None:
