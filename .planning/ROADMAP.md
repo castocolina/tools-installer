@@ -677,3 +677,16 @@ Plans:
 - IN-03 and IN-04: remove the `alacritty_keys_plan_for_text` wrapper and share the drift check between `apply_terminal_keys` and `terminal_keys_pending`;
 - IN-07: when the first `Writes` row lands (phase 29), the keys summary must not claim keys were written when only the snippet was, and the snippet needs a conflict check.
 **Depends on:** Phase 28.
+
+### Phase 999.29: Terminal defaults follow-ups (BACKLOG)
+
+**Goal:** The kitty, WezTerm, Konsole and herdr terminal defaults lose the rough edges the phase 29 reviews accepted, without changing what is written for any row.
+**Requirements:** TBD
+**Source:** Phase 29 review disposition `29-REVIEW-DISPOSITION.md`, accepted items:
+- a changed resolved config path between two applies overwrites the first created-file record (track one record per created path);
+- the Konsole report rides on the zsh row, so a host with Konsole and no zsh gets none;
+- the herdr probe slices received bytes by expected length, so one lost chord shifts the blame onto later chords (mark-delimited slicing);
+- the kitty keys region at the top of the file pushes a `# vim:` modeline out of its first lines;
+- `Placement` couples the generic region helper to the WezTerm skeleton;
+- a region the user moved (kitty keys region below an unscanned include, WezTerm shell region after `return config`) is not repaired.
+**Depends on:** Phase 29.
