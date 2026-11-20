@@ -19,7 +19,7 @@ A user learns that installed tools (and the installer's own checkout) have updat
 
 ## Requirements
 
-1. **Daily headless check row (NOTIFY-01)**: The Schedules engine has a daily `check-updates` row that runs the version refresh headless through `--run-schedule`, writes exactly one `ok: N updates available` line to the shared schedule log, and changes no tool.
+1. **Daily headless check row (NOTIFY-01)**: The Schedules engine has a daily `check-updates` row that runs the version refresh headless through `--run-schedule`, writes exactly one `ok: N updates available` line to the shared schedule log (any notify-skipped or self-update text rides in that one line as `; ` clauses *(amended 2026-11-19, 34 D-21)*), and changes no tool.
    - Current: no such row; `run_schedule` rejects non-update kinds.
    - Target: a new `JobKind` and a `check-updates` row (daily interval, default start chosen in discuss) dispatched by the runner.
    - Acceptance: `--run-schedule check-updates` in a scratch HOME writes one `ok: N updates available` line and no other schedule-log line; a spy on the update executor shows zero calls; the row appears in the Schedules view and the unit templates for both OSes.
@@ -34,7 +34,7 @@ A user learns that installed tools (and the installer's own checkout) have updat
    - Target: the last notified set is persisted in the installer's state directory and compared as a set.
    - Acceptance: two runs with the same outdated set send one notification (fake notifier); a changed set sends another; a set that shrinks to empty sends none and resets the stored set; a corrupt state file is treated as empty and rewritten.
 
-4. **Linux notification (NOTIFY-04)**: On Linux the notification goes through `notify-send` with the session bus address passed to the child; without `notify-send` the run logs `notify skipped` and still exits ok.
+4. **Linux notification (NOTIFY-04)**: On Linux the notification goes through `notify-send` with the session bus address passed to the child; without `notify-send` the run logs `notify skipped` (as a clause of the result line) and still exits ok.
    - Current: n/a.
    - Target: a notifier that finds `notify-send` on PATH and sets `DBUS_SESSION_BUS_ADDRESS` for the child.
    - Acceptance: a fake `notify-send` on a scratch PATH records the argv and the bus variable; with no `notify-send` the log has `notify skipped` and the exit code is 0.
@@ -44,16 +44,17 @@ A user learns that installed tools (and the installer's own checkout) have updat
    - Target: a notifier that builds the AppleScript string safely and runs `osascript`.
    - Acceptance: a golden test of the generated `osascript` argv passes on both OSes (including a tool name with a quote); a failing fake `osascript` logs `notify skipped` and exits 0; the row detail text names the Script Editor permission; the UAT line is marked deferred.
 
-6. **Installer self-check (NOTIFY-06)**: The check compares `git ls-remote origin main` with the checkout's HEAD and, when the checkout is behind, logs one self-update line; it makes no API call, uses no token and does not pull.
+6. **Installer self-check (NOTIFY-06)**: The check compares `git ls-remote origin main` with the checkout's HEAD and, when the checkout is behind, adds one self-update clause to the result line *(amended 2026-11-19, 34 D-21)*; it makes no API call, uses no token and does not pull.
    - Current: n/a.
    - Target: one `git ls-remote` call with the child's stdin closed, only when the installer runs from a git checkout.
-   - Acceptance: a fixture repo whose remote main is ahead logs one self-update line and the checkout is byte-identical afterwards (no fetch, pull or checkout); a non-git install or an unreachable remote logs a reason and exits ok.
+   - Acceptance: a fixture repo whose remote main is ahead adds one self-update clause to the result line and the checkout is byte-identical afterwards (no fetch, pull or checkout); a non-git install or an unreachable remote logs a reason and exits ok.
 
 ## Boundaries
 
 **In scope:**
 - The `check-updates` row, its runner, the forced refresh, the changed-set rule, the two notifiers, the self-check line, unit templates for both OSes, and tests.
 - Recording the 24.2 amendment (below).
+- *Amended 2026-11-19 (34 D-22):* tests that list every schedule row gain one entry (`tests/test_schedules.py`, `tests/test_schedules_view.py`, `tests/test_schedules_lifecycle.py`, `tests/test_schedules_handover.py`); assertions about the other rows stay unedited.
 
 **Out of scope:**
 - Notifications for failed runs of other schedules — decided in the interview (update check only).
@@ -85,18 +86,19 @@ A user learns that installed tools (and the installer's own checkout) have updat
 
 ## Edge Coverage
 
-**Coverage:** 19/19 applicable edges resolved · 0 unresolved
+**Coverage:** 20/20 applicable edges resolved · 0 unresolved
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
 | adjacency | R1 | ✅ covered | Acceptance 1 and 7: the new row sits beside the update rows without changing their ids, order or intervals (existing schedule tests unedited) |
 | empty | R1 | ✅ covered | Acceptance 1: zero outdated tools logs `ok: 0 updates available` |
+| encoding | R1 | ✅ covered | Acceptance 1: the result line is compared byte-exact (`ok: N updates available` plus `; ` clauses), and clause text is sanitized to one line like the update rows' results (schedule_runner _sanitize) |
 | ordering | R1 | ✅ covered | Acceptance 7: rows are looked up by id; the new row's position in SCHEDULES never changes another row's behavior |
 | idempotency | R1 | ✅ covered | Acceptance 1: two runs in a row write one line each and change no state beyond the stored set (R3) |
 | concurrency | R1 | 🧪 backstop | held-out test: a run while the run lock is held logs `skipped: busy` and exits ok, as the update rows do |
 | boundary | R2 | ✅ covered | Acceptance 2: a cache aged one second under, exactly at, and one second over 7 days all refresh; the 20-fetch cap is asserted at 20 and 21 tools |
 | precision | R2 | ✅ covered | Acceptance 2: the cap and the age are integers and timedeltas compared exactly, with no rounding step |
-| concurrency | R2 | 🧪 backstop | held-out test: the run lock serializes the refresh with the TUI's own refresh |
+| concurrency | R2 | 🧪 backstop | held-out test: the TUI's view-entry refresh takes no run lock (only mutations do, 24.2 D-12); two refreshing processes are last-writer-wins with at most one entry lost and the file never corrupted (version_status.py:17-24), healed by the next refresh |
 | adjacency | R3 | ✅ covered | Acceptance 3: a set that differs by one tool counts as changed; the same tools in another order do not |
 | empty | R3 | ✅ covered | Acceptance 3: an emptied set sends none and resets the stored set; a missing or corrupt state file is empty |
 | ordering | R3 | ✅ covered | Acceptance 3: sets compare as sets, so list order never triggers a notification |
