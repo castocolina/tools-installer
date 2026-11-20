@@ -5,11 +5,23 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from installer import catalog_audit
+from tests.skill_verdicts import (
+    DIMENSIONS as _DIMENSIONS,
+)
+from tests.skill_verdicts import (
+    RUBRIC_MAX as _RUBRIC_MAX,
+)
+from tests.skill_verdicts import (
+    grade as _grade,
+)
+from tests.skill_verdicts import (
+    parse_verdict as _parse_verdict,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_DIR = REPO_ROOT / ".claude" / "skills" / "catalog-audit"
@@ -249,70 +261,6 @@ def test_trigger_queries_shape() -> None:
 
 
 PHASE_DIR = REPO_ROOT / ".planning" / "milestones" / "v0.50.0-phases" / "24.3-catalog-audit-skill"
-_VERDICT_KEYS = frozenset(
-    {
-        "skill",
-        "judge",
-        "rubric_version",
-        "spec_sha",
-        "scores",
-        "max",
-        "total",
-        "max_total",
-        "percent",
-        "grade",
-        "findings",
-    }
-)
-_GRADE_FLOORS = ((90, "A"), (80, "B"), (70, "C"), (60, "D"))
-_PASS_PERCENT = 80.0
-_DIMENSIONS = tuple(f"D{i}" for i in range(1, 9))
-_RUBRIC_MAX = (20, 15, 15, 15, 15, 15, 15, 15)
-
-
-def _grade(percent: float) -> str:
-    return next((grade for floor, grade in _GRADE_FLOORS if percent >= floor), "F")
-
-
-def _parse_verdict(document: str, *, final: bool) -> dict[str, object]:
-    """The one verdict line of a skill-judge document; ValueError names the reason."""
-    candidates: list[dict[str, Any]] = []
-    for line in document.splitlines():
-        try:
-            obj = json.loads(line.strip())
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and "scores" in obj:
-            candidates.append(cast("dict[str, Any]", obj))
-    if len(candidates) != 1:
-        raise ValueError(f"expected one verdict line, found {len(candidates)}")
-    verdict = candidates[0]
-    missing = _VERDICT_KEYS - verdict.keys()
-    if missing:
-        raise ValueError(f"missing keys {sorted(missing)}")
-    if not isinstance(verdict["scores"], dict) or not isinstance(verdict["max"], dict):
-        raise ValueError("scores and max must be objects")
-    scores = cast("dict[str, int]", verdict["scores"])
-    maxima = cast("dict[str, int]", verdict["max"])
-    if scores.keys() != maxima.keys():
-        raise ValueError("scores and max name different dimensions")
-    if scores.keys() != set(_DIMENSIONS):
-        raise ValueError("scores must name exactly D1..D8")
-    for dim, score in scores.items():
-        if not 0 <= score <= maxima[dim]:
-            raise ValueError(f"{dim} score {score} outside 0..{maxima[dim]}")
-    if verdict["total"] != sum(scores.values()):
-        raise ValueError("total is not the sum of scores")
-    if verdict["max_total"] != sum(maxima.values()):
-        raise ValueError("max_total is not the sum of max")
-    percent = round(verdict["total"] / verdict["max_total"] * 100, 1)
-    if verdict["percent"] != percent:
-        raise ValueError(f"percent is {verdict['percent']}, rounding gives {percent}")
-    if verdict["grade"] != _grade(percent):
-        raise ValueError(f"grade {verdict['grade']} does not match {percent}")
-    if final and percent < _PASS_PERCENT:
-        raise ValueError(f"final percent {percent} is below {_PASS_PERCENT}")
-    return verdict
 
 
 def _verdict(

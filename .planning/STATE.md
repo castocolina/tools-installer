@@ -4,17 +4,17 @@ milestone: v0.51.0
 milestone_name: Onboard terminal tools
 current_phase: 27
 current_phase_name: "Tool-onboarding skill: terminal defaults as rules"
-status: executing
-stopped_at: Completed 27-03-PLAN.md
-last_updated: "2026-11-20T05:12:09.404Z"
+status: verifying
+stopped_at: Completed 27-04-PLAN.md
+last_updated: "2026-11-20T05:33:32.670Z"
 last_activity: 2026-11-20
 last_activity_desc: Phase 27 execution started
-state_head: 47a4ab94f05a0eefd5118b25f547e1ef2096fccd
+state_head: 7c24e88c5d4e73f4c75e5e5d1bf51c88a23e77cf
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-11-16)
 
 Phase: 27 (Tool-onboarding skill: terminal defaults as rules) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-11-20 — Phase 27 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -75,6 +75,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 27 P01 | 8min | 3 tasks | 3 files |
 | Phase 27 P02 | 14min | 2 tasks | 3 files |
 | Phase 27 P03 | 14min | 3 tasks | 2 files |
+| Phase 27 P04 | 8min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -166,8 +167,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-20T05:12:09.385Z
-Stopped at: Completed 27-03-PLAN.md
+Last session: 2026-11-20T05:33:32.648Z
+Stopped at: Completed 27-04-PLAN.md
 Resume file: None
 
 ## Deferred Verification

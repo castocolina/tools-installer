@@ -15,7 +15,7 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 - [x] **SKILL-03**: The skill's conflict rule: a binding the user already defines is never overridden (the result is reported as `partial: kept yours`); a vendor default that conflicts is overridden only with an install note that names the displaced default.
 - [x] **SKILL-04**: The skill's research step records, per macOS app, how it installs, uninstalls and is configured, and whether its method can place the bundle in `~/Applications` (a vendor installer that takes a destination, as kitty's does; a `.zip` or `.dmg` the installer extracts; a cask through `--appdir`) instead of `/Applications`, which restricted machines deny; where the method allows it the bundle goes to `~/Applications`, and every app that ships a CLI gets that CLI linked into `~/.local/bin` so it runs from the command line. Where no method allows a user location, the entry says why. *(amended 2026-11-19, 27 D-10: the `app` kind extracts `.zip` only, so `.dmg` is a recorded platform gap; a cask's CLI link is brew's, not `~/.local/bin`, also a recorded gap)*
 - [x] **SKILL-05**: The skill's macOS testing rule: each macOS behavior is a pure config generator with a golden-file test that runs on both OSes, macOS CI covers the file paths, and the real-Mac check is a UAT line marked deferred to the owner's Mac.
-- [ ] **SKILL-06**: skill-judge scores the skill before and after the rewrite, and the after score is not lower.
+- [x] **SKILL-06**: skill-judge scores the skill before and after the rewrite, and the after score is not lower.
 
 ### Terminal keys mechanism (KEYS)
 
@@ -116,7 +116,7 @@ Ingested 2026-11-19 from the update-automation todos and `.planning/research/202
 | SKILL-03 | Phase 27 | Complete |
 | SKILL-04 | Phase 27 | Complete |
 | SKILL-05 | Phase 27 | Complete |
-| SKILL-06 | Phase 27 | Pending |
+| SKILL-06 | Phase 27 | Complete |
 | KEYS-01 | Phase 28 | Pending |
 | KEYS-02 | Phase 28 | Pending |
 | KEYS-03 | Phase 28 | Pending |

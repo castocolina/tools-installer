@@ -1,0 +1,50 @@
+# Skill-judge round 1 verdict - tool-onboarding
+
+- Date: 2026-11-20
+- Judge: a fresh subagent (opus, no prior context, never edited the skill) invoking the user-level `skill-judge` skill (rubric v4), read-only, on `.claude/skills/tool-onboarding/` at gsd/phase-27-tool-onboarding-skill-terminal-defaults-as-rules 3ef66af3; SKILL.md blob 76d1b18c2958681476152a30642a27f4cb167c31
+
+## Summary (as printed)
+
+**tool-onboarding: 68.8% (86/125), grade D**
+
+I scored `.claude/skills/tool-onboarding/SKILL.md` (333 lines, the only file in the skill) under rubric v4 (spec_sha 69ef37e9…). Most of the score is lost on D7: the skill has no `evals/` directory. The rest of the loss is spread across the other dimensions.
+
+| id | name | score | max |
+|----|------|-------|-----|
+| D1 | Knowledge Delta | 15 | 20 |
+| D2 | Mindset, Procedures and Patterns | 12 | 15 |
+| D3 | Anti-Pattern Quality | 11 | 15 |
+| D4 | Specification Compliance | 12 | 15 |
+| D5 | Progressive Disclosure | 11 | 15 |
+| D6 | Freedom Calibration | 13 | 15 |
+| D7 | Tests and Evals | 2 | 15 |
+| D8 | Practical Usability | 10 | 15 |
+
+**Top three findings**
+
+1. **D7-1 (high, -13 points): there are no evals.** The skill has no `evals/evals.json` and no `evals/trigger-queries.json`. `tests/test_tool_onboarding_skill.py` only checks that the SKILL.md text stays in step with the registry. It does not check what the skill produces or when it triggers.
+   - **Fix:** add `evals/evals.json` with three prompts:
+     - a casual one, such as "add zellij to the registry";
+     - a precise one about a tool with different artifacts per OS and arch;
+     - an edge case: a macOS app shipped only as a `.dmg`, or a new terminal entry.
+   - Give each prompt checkable assertions: a dated `# Verified` line, one `[[tool.method]]` per OS/arch, a `script` method that declares `paths`, a table row for a new terminal, and no Policies row.
+   - Also add about 20 trigger queries. Include near-misses that belong to `catalog-audit` and `make verify-registry`.
+
+2. **D1-1 (medium, -5): lines repeat other parts of the skill, and some will go stale.** Common Mistakes (lines 313-321) restates earlier steps. For example, "**Authoring from one OS.** Check every OS and arch the vendor ships for." repeats step 3. Lines 109, 200 and 226 describe the status of future phases ("planned for phase 28/29"), which will go out of date.
+   - **Fix:** delete the mistakes that only restate a step. Keep the ones no step covers (`smoke_argv` answering before the binary runs, the Option-as-Alt switch). Move the phase-status notes into the table cells, where the drift test already keeps them current.
+
+3. **D8-1 (medium, -5): `postinstall` and `post_install` are easy to confuse, and step 9 never names the validation commands.** Steps 6 and 7 use two different mechanisms: `postinstall` (`POSTINSTALL_HOOKS`, `installer/postinstall.py`) and `post_install` (`POST_INSTALL_HOOKS`, `installer/post_install.py`). I confirmed both exist. The skill never sets them side by side, and the key list in step 9 (line 285) names only "optional `postinstall`". Line 289 says only "validate with the repo's gates". The "review an existing entry" path has no steps of its own, and "record it in the GSD backlog" never says how.
+   - **Fix:** in step 9, add "`postinstall` = LLM host wiring (POSTINSTALL_HOOKS); `post_install` = install-tuning action list (POST_INSTALL_HOOKS)". Then add "Run `make validate && make test`; a terminal or editor entry must also pass `tests/test_tool_onboarding_skill.py`". Add a short review-mode path: steps 3, 4b and 8 against the existing block, then update `# Verified`.
+
+Smaller findings, all in the JSON:
+- **D4:** the description says nothing about what the skill is not for, so it overlaps `catalog-audit`. That boundary appears only in the body (line 39). The full replacement text is in the JSON.
+- **D5:** about 80 lines that only terminal, editor or macOS-app entries need are loaded on every run.
+- **D3:** many Common Mistakes have no reason attached.
+- **D2:** the classifier check (step 8) comes after the method choices it should constrain.
+- **D6:** "sandbox every real install" gives no exact command, although `scripts/detect-container-runtime.sh` exists.
+
+## Verdict (verbatim)
+
+```json
+{"skill":"tool-onboarding","judge":"direct","rubric_version":4,"spec_sha":"69ef37e9424c0a7ea9dd2293b559e43ec8176379","scores":{"D1":15,"D2":12,"D3":11,"D4":12,"D5":11,"D6":13,"D7":2,"D8":10},"max":{"D1":20,"D2":15,"D3":15,"D4":15,"D5":15,"D6":15,"D7":15,"D8":15},"total":86,"max_total":125,"percent":68.8,"grade":"D","findings":[{"id":"D7-1","dimension":"D7","severity":"high","file":".claude/skills/tool-onboarding/SKILL.md","line":null,"evidence":"No evals/ directory (no evals.json, no trigger-queries.json); tests/test_tool_onboarding_skill.py only lints SKILL.md text and table drift, not output or triggering","fix":"Add evals/evals.json with 3 prompts (casual 'add zellij to the registry', a per-OS/arch split tool, an edge case: dmg-only macOS app or new terminal entry) with verifiable assertions (dated # Verified line, one [[tool.method]] per os/arch, script method declares paths, terminal row added, no Policies row), and evals/trigger-queries.json with ~20 queries including catalog-audit and make verify-registry near-misses"},{"id":"D1-1","dimension":"D1","severity":"medium","file":".claude/skills/tool-onboarding/SKILL.md","line":313,"evidence":"'**Authoring from one OS.** Check every OS and arch the vendor ships for.' restates step 3; lines 313-321 restate steps 1-4; lines 109, 200, 226 narrate future-phase status ('planned for phase 28 (KEYS-03)')","fix":"Delete Common Mistakes items that only restate a step; keep the ones absent from the steps (smoke_argv answering before the binary, Option-as-Alt); move phase-plan status into the drift-tested table cells"},{"id":"D8-1","dimension":"D8","severity":"medium","file":".claude/skills/tool-onboarding/SKILL.md","line":285,"evidence":"Step 9 lists only 'optional `postinstall`' while step 7 (line 247) puts tuning in the `post_install` list (POST_INSTALL_HOOKS, installer/post_install.py) vs POSTINSTALL_HOOKS (installer/postinstall.py); line 289 'validate with the repo's gates' names no command; review mode and 'record it as a platform gap in the GSD backlog' (line 27) have no procedure","fix":"In step 9 add: '`postinstall` = LLM host wiring (POSTINSTALL_HOOKS); `post_install` = install-tuning action list (POST_INSTALL_HOOKS)'; then 'Run make validate && make test; a terminal/editor entry must also pass tests/test_tool_onboarding_skill.py'; add a review-mode path (steps 3, 4b, 8 against the existing block, then update # Verified) and name how a platform gap is filed"},{"id":"D5-1","dimension":"D5","severity":"medium","file":".claude/skills/tool-onboarding/SKILL.md","line":190,"evidence":"Step 7 terminal defaults, closed table, Conflicts and macOS testing (lines 190-234) plus macOS apps (lines 101-109) load on every run though only terminal/editor or macOS-app entries need them","fix":"Move them to references/terminal-defaults.md and references/macos-apps.md with triggers: 'Read references/terminal-defaults.md only when the entry is a terminal or editor; do NOT load it for CLIs, MCP servers or libraries'; point tests/test_tool_onboarding_skill.py at the new path"},{"id":"D3-1","dimension":"D3","severity":"medium","file":".claude/skills/tool-onboarding/SKILL.md","line":319,"evidence":"'**Skipping the marketplace question for LLM tooling.**' and 'Classifying an agent harness CLI as `ai` tier because it is AI-branded.' state no reason; environment facts (cask CLI link not in ~/.local/bin, {omz_root} the only argv placeholder, dmg unsupported) are scattered instead of in a Gotchas section","fix":"Rename Common Mistakes to Gotchas, give every item its non-obvious why (e.g. 'marketplace installs update through the host; a symlink copy silently goes stale'), and collect the scattered platform facts there"},{"id":"D4-1","dimension":"D4","severity":"medium","file":".claude/skills/tool-onboarding/SKILL.md","line":3,"evidence":"Description lists internal mechanics and has no 'Not for' boundary; the catalog-audit boundary exists only in the body (line 39) while catalog-audit also claims reviewing one existing entry","fix":"Onboard one tool into installer/registry.toml, or review one existing [[tool]] entry against the onboarding conventions: research what it is and which OS/arch it ships for, pick the install method per platform (brew, cask, apt/dnf/pacman, github_release, tarball, app, script, cargo_distrobox), plan its removal and config policy, set tier, requires and postinstall or post_install tuning, apply the four terminal and IDE defaults as rules, and write the dated # Verified comment. Use when asked to add, onboard or catalog a new tool, terminal, editor, CLI, MCP server or agent harness, or to fix one entry's missing platform, removal path or postinstall, even without the word registry. Not for auditing every entry against upstream (catalog-audit), checking only release pins (make verify-registry), or installing a tool on this machine."},{"id":"D2-1","dimension":"D2","severity":"low","file":".claude/skills/tool-onboarding/SKILL.md","line":262,"evidence":"Step 8 'Check the registry's existing classifiers' comes after method, removal, tier and tuning decisions (steps 4-7) that its answers (detectable presence, plannable removal) should constrain","fix":"Fold step 8 into step 4b as a gate: before choosing a method, confirm is_installed, resolve_ownership and removal_plan can each answer truthfully for it"},{"id":"D6-1","dimension":"D6","severity":"low","file":".claude/skills/tool-onboarding/SKILL.md","line":289,"evidence":"'sandbox every real install' and line 122 'run the vendor installer in a disposable container' give no command for a host-mutating, fragile operation","fix":"Name the exact route: 'Pick the runtime with scripts/detect-container-runtime.sh, run the installer in a throwaway container, list what it wrote, then remove the container'"}]}
+```
