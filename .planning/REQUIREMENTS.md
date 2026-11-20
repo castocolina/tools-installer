@@ -20,9 +20,9 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 ### Terminal keys mechanism (KEYS)
 
 - [x] **KEYS-01**: One shared terminal-keys mechanism keyed by registry tool id applies, checks and strips each terminal's owned keys region; Alacritty moves into it first with its behavior and tests unchanged.
-- [ ] **KEYS-02**: For every terminal in the mechanism, a missing or drifted keys region shows `≈ apply install tuning` *(amended 2026-11-19, 28 D-06, needs confirmation: missing means never applied; a region the user deleted after a recorded install stays theirs)*, a reconfigure re-applies it, and an uninstall strips it with the tool.
-- [ ] **KEYS-03**: The clear shortcut is the same on every terminal: Cmd+K (macOS) and Ctrl+Shift+K (Linux) send Ctrl+L, and the installer's managed zsh configuration makes Ctrl+L clear the screen and the scrollback at the prompt, so Ctrl+L also works and the keys behave the same inside a herdr pane.
-- [ ] **KEYS-04**: A new tab, window or pane opens in the current directory on every terminal of this milestone; the installer writes it only where the vendor default does not already do it.
+- [x] **KEYS-02**: For every terminal in the mechanism, a missing or drifted keys region shows `≈ apply install tuning` *(amended 2026-11-19, 28 D-06, needs confirmation: missing means never applied; a region the user deleted after a recorded install stays theirs)*, a reconfigure re-applies it, and an uninstall strips it with the tool.
+- [x] **KEYS-03**: The clear shortcut is the same on every terminal: Cmd+K (macOS) and Ctrl+Shift+K (Linux) send Ctrl+L, and the installer's managed zsh configuration makes Ctrl+L clear the screen and the scrollback at the prompt, so Ctrl+L also works and the keys behave the same inside a herdr pane.
+- [x] **KEYS-04**: A new tab, window or pane opens in the current directory on every terminal of this milestone; the installer writes it only where the vendor default does not already do it.
 
 ### Terminals already in the catalog (TERM)
 
@@ -118,9 +118,9 @@ Ingested 2026-11-19 from the update-automation todos and `.planning/research/202
 | SKILL-05 | Phase 27 | Complete |
 | SKILL-06 | Phase 27 | Complete |
 | KEYS-01 | Phase 28 | Complete |
-| KEYS-02 | Phase 28 | Pending |
-| KEYS-03 | Phase 28 | Pending |
-| KEYS-04 | Phase 28 | Pending |
+| KEYS-02 | Phase 28 | Complete |
+| KEYS-03 | Phase 28 | Complete |
+| KEYS-04 | Phase 28 | Complete |
 | TERM-01 | Phase 29 | Pending |
 | TERM-02 | Phase 29 | Pending |
 | TERM-03 | Phase 29 | Pending |

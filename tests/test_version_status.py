@@ -7081,6 +7081,36 @@ def test_alacritty_keys_region_removed_by_hand_is_the_users_choice(tmp_path: Pat
     assert state.unconfigured == ()
 
 
+def test_alacritty_drifted_keys_region_reads_pending_and_reconfigure_restores_it(
+    tmp_path: Path,
+) -> None:
+    tool = _alacritty_shipped()
+    run_post_install(tool, _LINUX)
+    config = _alacritty_file()
+    before = config.read_text()
+    config.write_text(before.replace('chars = "\\u001bf"', 'chars = "x"'))
+
+    drifted = _tuning_state(tmp_path, tool)
+    assert drifted.health is Health.MISCONFIGURED
+    assert drifted.reasons[0] == _TUNING_REASON
+    assert drifted.unconfigured == (_TUNING_STEP,)
+
+    assert apply_install_tuning(tool, _LINUX, skip_recorded=True).refused is None
+    assert config.read_bytes() == before.encode()
+    settled = _tuning_state(tmp_path, tool)
+    assert settled.health is Health.OK
+    assert settled.unconfigured == ()
+
+
+def test_terminal_tool_without_a_keys_row_reads_no_keys_fact(tmp_path: Path) -> None:
+    tool = replace(_alacritty_shipped(), id="fixture-term", name="Fixture")
+
+    state = _tuning_state(tmp_path, tool)
+
+    assert state.unconfigured == ()
+    assert _TUNING_REASON not in state.reasons
+
+
 def test_untuned_alacritty_reads_apply_install_tuning(tmp_path: Path) -> None:
     tool = _alacritty_shipped()
     state = _tuning_state(tmp_path, tool)

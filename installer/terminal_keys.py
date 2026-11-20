@@ -28,6 +28,31 @@ from installer.terminal_regions import (
 )
 
 KEYS_PENDING = "install tuning not applied"
+CTRL_L: Final = "\x0c"  # The shared clear chord sends Ctrl+L (KEYS-03).
+
+
+@dataclass(frozen=True)
+class Vendor:
+    """The vendor opens new tabs, windows or panes in the current directory; nothing is written."""
+
+    note: str
+
+
+@dataclass(frozen=True)
+class Writes:
+    """The installer writes this setting inside the row's owned region."""
+
+    snippet: str
+
+
+@dataclass(frozen=True)
+class NotApplicable:
+    """The terminal has no tabs, windows or panes to open."""
+
+    reason: str
+
+
+SameDirectory = Vendor | Writes | NotApplicable
 
 
 @dataclass(frozen=True)
@@ -46,7 +71,10 @@ class KeysRow:
     validate: Callable[[str], None]  # Validate the edited whole file.
     summary: str  # Success line when this row adds keys.
     created_record: str  # Created-file marker name.
+    same_directory: SameDirectory
     sibling_regions: tuple[str, ...] = ()  # Other installer regions stripped with this tool.
+    clear: str = CTRL_L  # Ctrl+L clears; other values name the vendor action.
+    # Alacritty keeps ClearHistory until phase 29.
 
 
 def _alacritty_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
@@ -67,6 +95,24 @@ def _alacritty_plan(platform_os: str, text: str) -> KeysPlan:
     return alacritty_keys_plan_for_text(text)
 
 
+def clear_binding(row: KeysRow, platform_os: str) -> tuple[str, str]:
+    """Return format-neutral clear chord and send value; non-macOS ids are Linux.
+
+    Phase 29's rows are the first production callers; SPEC R3 proves it on a fixture row.
+    """
+    return ("cmd+k" if platform_os == "macos" else "ctrl+shift+k", row.clear)
+
+
+def _render(row: KeysRow, platform_os: str, text: str) -> KeysPlan:
+    plan = row.plan(platform_os, text)
+    if plan.refusal is None and isinstance(row.same_directory, Writes):
+        return KeysPlan(
+            "\n\n".join(part for part in (plan.body, row.same_directory.snippet) if part),
+            plan.conflicts,
+        )
+    return plan
+
+
 TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
     "alacritty": KeysRow(
         ownership=OwnedRegion(ALACRITTY_KEYS),
@@ -77,7 +123,13 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
             "Alacritty keys: Alt+Left and Alt+Right move by word, Control+Shift+K clears history."
         ),
         created_record=ALACRITTY_CREATED,
+        same_directory=Vendor(
+            "2026-11-19, upstream CHANGELOG: SpawnNewInstance opens in the foreground process's "
+            "working directory on Unix and macOS; CreateNewWindow is unverified. The installer "
+            "writes nothing."
+        ),
         sibling_regions=(ALACRITTY,),
+        clear="ClearHistory",
     )
 }
 
@@ -101,21 +153,31 @@ def apply_terminal_keys(
 ) -> tuple[tuple[str, ...], str | None]:
     """Write the terminal's keys region, then its written-once record. Returns (lines, refusal).
 
-    `skip_recorded` (RECONFIGURE) leaves a recorded install alone: a region the user deleted
-    stays deleted. Nothing is written when the file cannot take the region."""
+    `skip_recorded` (RECONFIGURE) rewrites a present, stale recorded region (28 D-06); a region
+    the user deleted stays deleted. Nothing is written when the file cannot take the region."""
     record = _record(tool_id, home, environ)
-    if skip_recorded and record.exists():
-        return (), None
+    recorded = skip_recorded and record.exists()
     path = row.config_path(platform_os, home, environ)
     try:
         before = read_settings(path)
         text = snapshot_text(before)
-        plan = row.plan(platform_os, text)
-        if plan.refusal is not None:
-            return (), plan.refusal
+        plan = _render(row, platform_os, text)
         updated = replace_owned_region(
             text, row.ownership.region, plan.body, comment=row.ownership.comment
         )
+        region_present = (
+            replace_owned_region(text, row.ownership.region, None, comment=row.ownership.comment)
+            != text
+        )
+    except OSError as exc:
+        return ((), None) if recorded else ((), first_line(exc))
+    if plan.refusal is not None:
+        if recorded:
+            return (), None
+        return (), plan.refusal
+    if recorded and (not region_present or updated == text):
+        return (), None
+    try:
         commit_region(
             path,
             before,
@@ -137,20 +199,26 @@ def apply_terminal_keys(
 def terminal_keys_pending(
     row: KeysRow, tool_id: str, platform_os: str, home: Path, environ: Mapping[str, str]
 ) -> str | None:
-    """None when the keys region or its record exists; otherwise pending or the refusal reason."""
-    if _record(tool_id, home, environ).exists():
-        return None
+    """Pending means never applied; a present region differing from its current render is drift."""
+    recorded = _record(tool_id, home, environ).exists()
+    present = False
     try:
         path = row.config_path(platform_os, home, environ)
         text = snapshot_text(read_settings(path))
-        if (
+        present = (
             replace_owned_region(text, row.ownership.region, None, comment=row.ownership.comment)
             != text
-        ):
+        )
+        if recorded and not present:
             return None
-        plan = row.plan(platform_os, text)
+        plan = _render(row, platform_os, text)
+        if present:
+            updated = replace_owned_region(
+                text, row.ownership.region, plan.body, comment=row.ownership.comment
+            )
+            return KEYS_PENDING if plan.refusal is None and updated != text else None
     except OSError as exc:
-        return first_line(exc)
+        return None if recorded or present else first_line(exc)
     return plan.refusal or KEYS_PENDING
 
 
