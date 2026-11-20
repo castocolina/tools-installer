@@ -33,7 +33,7 @@
    - Target: a "Conflicts" section with both clauses and one worked example for each.
    - Acceptance: `rg` finds `partial: kept yours` and an example that names a displaced vendor default.
 
-4. **macOS app rule (SKILL-04)**: The skill's research step records, per macOS app: how it installs, how it uninstalls, how it is configured, and whether its method can place the bundle in `~/Applications` instead of `/Applications` (a vendor installer that takes a destination, a `.zip` or `.dmg` the installer extracts, a cask through `--appdir`). Where the method allows it the bundle goes to `~/Applications`, and every app that ships a CLI gets that CLI linked into `~/.local/bin`. Where no method allows a user location, the entry's `# Verified` comment says why.
+4. **macOS app rule (SKILL-04)**: The skill's research step records, per macOS app: how it installs, how it uninstalls, how it is configured, and whether its method can place the bundle in `~/Applications` instead of `/Applications` (a vendor installer that takes a destination, a `.zip` or `.dmg` the installer extracts, a cask through `--appdir`) *(amended 2026-11-19, 27 D-10: the `app` kind extracts `.zip` only, so a `.dmg` is recorded as a platform gap; a cask's CLI is linked by brew, not into `~/.local/bin`, also a recorded gap)*. Where the method allows it the bundle goes to `~/Applications`, and every app that ships a CLI gets that CLI linked into `~/.local/bin`. Where no method allows a user location, the entry's `# Verified` comment says why.
    - Current: step 3-4 never mention the app location or CLI linking.
    - Target: a "macOS apps" subsection under the research step with those four recorded facts and the two placement rules.
    - Acceptance: `rg` finds `~/Applications`, `~/.local/bin` and the "says why" clause in the research step; the `# Verified` template names the three facts.
@@ -59,6 +59,7 @@
 - The rewrite of `.claude/skills/tool-onboarding/SKILL.md` (rules, table, conflict rule, macOS app and testing rules, narrowed prompts).
 - The closed-table test and the skill-judge verdict test, plus their fixtures.
 - Two skill-judge verdict files in the phase directory.
+- *Amended 2026-11-19 (27 D-09, D-07):* the one line in `.claude/skills/catalog-audit/SKILL.md` that quotes step 7's heading, and the `devtools/docs_only.py` `TEST_READ` and `tests/test_docs_only.py` `LEDGER` entries for the verdict files.
 
 **Out of scope:**
 - Any change to `installer/*.py` or `registry.toml` entries — the skill states rules; phases 28-32 implement them.
