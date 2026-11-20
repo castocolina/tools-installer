@@ -72,9 +72,55 @@ def test_zsh_clear_widget_text() -> None:
     assert b"\x1b" not in data
     assert b'if [ -n "${ZSH_VERSION-}" ]; then' in bundle.body.encode()
     assert b"zle -N tools_installer_clear_all" in bundle.body.encode()
-    for keymap in ("emacs", "viins", "vicmd"):
-        assert f"bindkey -M {keymap} '^L' tools_installer_clear_all" in bundle.body
+    assert "for _ti_map in emacs viins vicmd; do" in bundle.body
+    assert "bindkey -M \"$_ti_map\" '^L'" in bundle.body
+    assert "clear-screen" in bundle.body
+    assert "undefined-key" in bundle.body
+    assert "unset _ti_map" in bundle.body
     assert not any(term in bundle.body for term in ("LINES", "COLUMNS", "tput"))
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not on PATH")
+def test_zsh_clear_widget_preserves_a_user_binding(tmp_path: Path) -> None:
+    bundle = shell_init_bundle("zsh")
+    assert bundle is not None
+    script_path = tmp_path / "preserve-binding.zsh"
+    script_path.write_text(
+        "bindkey -M emacs '^L' kill-line\n"
+        + bundle.body.replace("if command -v zsh >/dev/null; then\n", "").replace("\nfi", "", 1)
+        + "\nbindkey -M emacs '^L'\nbindkey -M viins '^L'\nbindkey -M vicmd '^L'\n"
+    )
+    result = subprocess.run(
+        ["zsh", "-f", "-c", f"source {script_path}"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        '"^L" kill-line',
+        '"^L" tools_installer_clear_all',
+        '"^L" tools_installer_clear_all',
+    ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not on PATH")
+def test_zsh_clear_widget_replaces_defaults_in_all_keymaps(tmp_path: Path) -> None:
+    bundle = shell_init_bundle("zsh")
+    assert bundle is not None
+    script_path = tmp_path / "default-bindings.zsh"
+    script_path.write_text(
+        bundle.body.replace("if command -v zsh >/dev/null; then\n", "").replace("\nfi", "", 1)
+        + "\nfor map in emacs viins vicmd; do bindkey -M \"$map\" '^L'; done\n"
+    )
+    result = subprocess.run(
+        ["zsh", "-f", "-c", f"source {script_path}"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ['"^L" tools_installer_clear_all'] * 3
 
 
 @pytest.mark.skipif(

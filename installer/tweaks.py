@@ -125,9 +125,13 @@ _ZSH_CLEAR_BODY = (
     r"      print -n '\033[3J'" + "\n"
     "    }\n"
     "    zle -N tools_installer_clear_all\n"
-    "    bindkey -M emacs '^L' tools_installer_clear_all\n"
-    "    bindkey -M viins '^L' tools_installer_clear_all\n"
-    "    bindkey -M vicmd '^L' tools_installer_clear_all\n"
+    "    for _ti_map in emacs viins vicmd; do\n"
+    '      case "$(bindkey -M "$_ti_map" \'^L\')" in\n'
+    "        *' clear-screen'|*' undefined-key'|'') "
+    "          bindkey -M \"$_ti_map\" '^L' tools_installer_clear_all ;;\n"
+    "      esac\n"
+    "    done\n"
+    "    unset _ti_map\n"
     "  fi\n"
     "fi"
 )
