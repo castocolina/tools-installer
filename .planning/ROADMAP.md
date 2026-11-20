@@ -105,7 +105,18 @@ Plans:
   3. In the installer's managed zsh configuration, Ctrl+L at the prompt clears the visible screen and the scrollback (byte-level test of the emitted sequences), and the mechanism maps the clear chord to Ctrl+L for every row: Cmd+K on macOS, Ctrl+Shift+K on Linux.
   4. Every mechanism row declares whether the vendor already opens a new tab, window or pane in the current directory; the setting is written only for rows where it does not, and a test fails when a row leaves it undeclared.
 
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+**Wave 1**
+- [ ] 28-01-PLAN.md — Golden bytes of Alacritty's keys region committed before the move, then the shared primitives moved into `installer/terminal_regions.py` (KEYS-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 28-02-PLAN.md — Tracer: one `TERMINAL_KEYS` table keyed by tool id drives install, reconfigure, the `≈` fact and removal; completeness test and no-row backstop (KEYS-01, KEYS-02)
+- [ ] 28-04-PLAN.md — The zsh Ctrl+L clear widget as zsh's shell-init bundle, and the onboarding skill's rule (c) (KEYS-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 28-03-PLAN.md — Drift rule (D-06, provisional), the shared clear chord and the required same-directory declaration on fixture rows (KEYS-02, KEYS-03, KEYS-04)
 
 ### Phase 29: Terminal defaults for the terminals in the catalog
 
