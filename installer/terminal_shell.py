@@ -7,40 +7,52 @@ It never invokes a shell or changes an account login shell.
 from __future__ import annotations
 
 import json
-import re
 import shlex
-import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from installer.agent_settings import (
     ABSENT,
     apply_value,
-    missing_dirs,
     parse_settings,
     read_settings,
     remove_created_dirs,
     revert_group,
     same_value,
     settings_file,
-    write_if_unchanged,
 )
 from installer.agent_settings import lookup as settings_lookup
-from installer.atomic import FileSnapshot, atomic_write_text, read_capped
+from installer.atomic import atomic_write_text, read_capped
 from installer.locations import display_path, zshenv_path, zshrc_path
 from installer.omz import ensure_zshrc_template, omz_root
 from installer.platform import Platform
 from installer.receipts import read_ledger
 from installer.run import CommandError, Runner, run_bounded
 from installer.shellrc import apply_block, strip_block
+from installer.terminal_regions import (
+    ALACRITTY,
+    ALACRITTY_KEYS,
+    TerminalShellError,
+    alacritty_config_path,
+    commit_region,
+    validate_toml,
+)
+from installer.terminal_regions import ALACRITTY_CREATED as _CREATED_RECORD
+from installer.terminal_regions import IMPORTS as _IMPORTS
+from installer.terminal_regions import alacritty_keys_plan as _keys_plan
+from installer.terminal_regions import first_line as _first_line
+from installer.terminal_regions import imports_files as _imports_files
+from installer.terminal_regions import marker as _marker
+from installer.terminal_regions import replace_owned_region as _replace_owned_region
+from installer.terminal_regions import snapshot_text as _snapshot_text
+from installer.terminal_regions import strip_region as _strip_alacritty_region
+from installer.terminal_regions import toml_table as _table
+from installer.terminal_regions import user_document as _user_document
+from installer.terminal_regions import xdg_config_home as _xdg_config_home
+from installer.terminal_regions import xdg_data_home as _xdg_data_home
 
 Lookup = Callable[[str], str | None]
-
-
-class TerminalShellError(OSError):
-    """Terminal configuration cannot be changed without risking user data."""
 
 
 _SYNC_FAILURE_PREFIX = "Terminal shell synchronization failed"
@@ -95,49 +107,6 @@ class TerminalShellResult:
     paths: tuple[tuple[str, Path], ...] = ()
 
 
-def _marker(terminal: str, edge: str, *, comment: str = "#") -> str:
-    return f"{comment} {edge} tools-installer terminal-shell {terminal} {edge}"
-
-
-def _replace_owned_region(
-    content: str, terminal: str, body: str | None, *, comment: str = "#"
-) -> str:
-    """Replace exactly one complete owned region, rejecting malformed markers."""
-    begin = _marker(terminal, ">>>", comment=comment)
-    end = _marker(terminal, "<<<", comment=comment)
-    lines = content.splitlines(keepends=True)
-    start: int | None = None
-    complete: tuple[int, int] | None = None
-
-    for index, line in enumerate(lines):
-        marker = line.rstrip("\r\n")
-        if marker == begin:
-            if start is not None or complete is not None:
-                raise TerminalShellError(f"malformed {terminal} ownership region")
-            start = index
-        elif marker == end:
-            if start is None:
-                raise TerminalShellError(f"malformed {terminal} ownership region")
-            complete = (start, index)
-            start = None
-
-    if start is not None:
-        raise TerminalShellError(f"malformed {terminal} ownership region")
-
-    if body is None:
-        if complete is None:
-            return content
-        start_index, end_index = complete
-        return "".join((*lines[:start_index], *lines[end_index + 1 :]))
-
-    region = f"{begin}\n{body}\n{end}\n"
-    if complete is None:
-        prefix = content if not content or content.endswith(("\n", "\r")) else f"{content}\n"
-        return f"{prefix}{region}"
-    start_index, end_index = complete
-    return "".join((*lines[:start_index], region, *lines[end_index + 1 :]))
-
-
 def _safe_executable(path: str | None) -> str | None:
     if path is None:
         return None
@@ -148,18 +117,8 @@ def _safe_executable(path: str | None) -> str | None:
     return path
 
 
-def _xdg_config_home(home: Path, environ: Mapping[str, str]) -> Path:
-    configured = environ.get("XDG_CONFIG_HOME")
-    return Path(configured) if configured else home / ".config"
-
-
 def _kitty_config_path(home: Path, environ: Mapping[str, str]) -> Path:
     return _xdg_config_home(home, environ) / "kitty" / "kitty.conf"
-
-
-def _xdg_data_home(home: Path, environ: Mapping[str, str]) -> Path:
-    configured = environ.get("XDG_DATA_HOME")
-    return Path(configured) if configured else home / ".local" / "share"
 
 
 def _wezterm_config_path(home: Path, environ: Mapping[str, str]) -> Path:
@@ -467,34 +426,11 @@ def _revert_konsole(*, home: Path, environ: Mapping[str, str]) -> bool:
 # (keybindings, written once at install, stripped with the tool). Each is guarded per part.
 # ---------------------------------------------------------------------------
 
-ALACRITTY = "alacritty"
-ALACRITTY_KEYS = "alacritty-keys"
+_KEYS_RECORD = "terminal-tuning-alacritty"
 # The reason `alacritty_keys_pending` returns when only the install tuning has not run;
 # version_status turns it into its `≈ apply install tuning` fact.
 KEYS_PENDING = "install tuning not applied"
-_KEYS_RECORD = "terminal-tuning-alacritty"
-_CREATED_RECORD = "terminal-alacritty-created"
 # TOML 1.0 escapes: `\u001b` is ESC. The Alt+arrow byte strings are the readline word keys.
-_KEY_BINDINGS = (
-    ("Left", "Alt", 'chars = "\\u001bb"'),
-    ("Right", "Alt", 'chars = "\\u001bf"'),
-    ("K", "Control|Shift", 'action = "ClearHistory"'),
-)
-_KEYS_HEADER = re.compile(r"^\s*\[\[\s*keyboard\.bindings\s*\]\]", re.MULTILINE)
-
-
-def alacritty_config_path(home: Path, environ: Mapping[str, str]) -> Path:
-    """The first existing of Alacritty's user config locations, in its own precedence order
-    (alacritty(5): XDG alacritty/, XDG file, ~/.config/alacritty/, ~/.alacritty.toml), else the
-    XDG one. The system-wide /etc/alacritty/alacritty.toml is never edited: it is not ours."""
-    config_home = _xdg_config_home(home, environ)
-    candidates = (
-        config_home / "alacritty" / "alacritty.toml",
-        config_home / "alacritty.toml",
-        home / ".config" / "alacritty" / "alacritty.toml",
-        home / ".alacritty.toml",
-    )
-    return next((path for path in candidates if path.exists()), candidates[0])
 
 
 def _keys_record(home: Path, environ: Mapping[str, str]) -> Path:
@@ -506,48 +442,10 @@ def _created_marker(home: Path, environ: Mapping[str, str]) -> Path:
     return _xdg_data_home(home, environ) / "tools-installer" / _CREATED_RECORD
 
 
-def _first_line(exc: BaseException) -> str:
-    return (str(exc).splitlines() or [type(exc).__name__])[0]
-
-
 def _toml_string(value: str) -> str:
     """A TOML basic string; json.dumps escapes what TOML requires, and non-ASCII stays literal
     (the default would write a non-BMP character as a surrogate pair, which TOML rejects)."""
     return json.dumps(value, ensure_ascii=False)
-
-
-def _snapshot_text(snapshot: FileSnapshot | None) -> str:
-    if snapshot is None:
-        return ""
-    try:
-        return snapshot.data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise TerminalShellError("the file is not valid UTF-8; refusing to rewrite it") from exc
-
-
-def _user_document(text: str) -> tuple[dict[str, object], str]:
-    """The parsed text outside both owned regions, and that text. Never raises a ValueError."""
-    outside = _replace_owned_region(
-        _replace_owned_region(text, ALACRITTY, None), ALACRITTY_KEYS, None
-    )
-    try:
-        return tomllib.loads(outside), outside
-    except tomllib.TOMLDecodeError as exc:
-        raise TerminalShellError(f"the file does not parse ({exc}); left as it is") from exc
-
-
-def _table(document: Mapping[str, object], name: str) -> Mapping[str, object]:
-    value = document.get(name)
-    return cast("Mapping[str, object]", value) if isinstance(value, dict) else {}
-
-
-_IMPORTS = "you import other files (general.import); they are not followed"
-
-
-def _imports_files(document: Mapping[str, object]) -> bool:
-    """`[general] import` (or the legacy top-level `import`) names files this module never reads,
-    so a shell or binding the user keeps there cannot be checked for a conflict."""
-    return "import" in _table(document, "general") or "import" in document
 
 
 def _shell_plan(document: Mapping[str, object], zsh_path: str) -> tuple[str | None, list[str]]:
@@ -567,69 +465,6 @@ def _shell_plan(document: Mapping[str, object], zsh_path: str) -> tuple[str | No
     return "\n\n".join(parts) or None, warnings
 
 
-@dataclass(frozen=True)
-class _KeysPlan:
-    body: str | None
-    conflicts: tuple[str, ...] = ()
-    refusal: str | None = None
-
-
-def _binding_id(key: object, mods: object) -> tuple[str, frozenset[str]]:
-    """Alacritty reads key and modifier names case-insensitively, in any order."""
-    names = str(mods or "").split("|")
-    return str(key).lower(), frozenset(name.strip().lower() for name in names if name.strip())
-
-
-def _keys_plan(document: Mapping[str, object], outside: str) -> _KeysPlan:
-    if _imports_files(document):
-        return _KeysPlan(None, refusal=_IMPORTS)
-    bindings = _table(document, "keyboard").get("bindings")
-    if bindings is not None and not _KEYS_HEADER.search(outside):
-        return _KeysPlan(None, refusal="you already define keyboard.bindings inline")
-    entries = cast("list[object]", bindings) if isinstance(bindings, list) else []
-    taken = {
-        _binding_id(entry.get("key"), entry.get("mods"))
-        for entry in (cast("Mapping[str, object]", e) for e in entries if isinstance(e, dict))
-    }
-    blocks: list[str] = []
-    conflicts: list[str] = []
-    for key, mods, action in _KEY_BINDINGS:
-        if _binding_id(key, mods) in taken:
-            conflicts.append(f"alacritty: partial: you already bind {mods.replace('|', '+')}+{key}")
-        else:
-            blocks.append(f'[[keyboard.bindings]]\nkey = "{key}"\nmods = "{mods}"\n{action}')
-    return _KeysPlan("\n\n".join(blocks) or None, tuple(conflicts))
-
-
-def _commit_alacritty(
-    path: Path,
-    before: FileSnapshot | None,
-    text: str,
-    updated: str,
-    *,
-    write: bool,
-    created_marker: Path,
-    home: Path,
-) -> bool:
-    """Report whether `updated` differs; write it only when `write`, and only after it re-parses
-    and only if the file still is what was read (compare-before-commit)."""
-    if updated == text:
-        return False
-    try:
-        tomllib.loads(updated)
-    except tomllib.TOMLDecodeError as exc:
-        raise TerminalShellError(f"the edit would not re-parse ({exc}); nothing written") from exc
-    if write:
-        created_dirs = missing_dirs(path, home) if before is None else ()
-        write_if_unchanged(path, before, updated)
-        if before is None:
-            # The file is ours: strip may delete it once nothing else is in it, and the
-            # directories this write created (listed after the first line) with it.
-            created_marker.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(created_marker, "\n".join(("created", *created_dirs)) + "\n")
-    return True
-
-
 def _sync_alacritty(
     home: Path, environ: Mapping[str, str], zsh_path: str, *, write: bool
 ) -> tuple[bool, bool, tuple[str, ...]]:
@@ -642,11 +477,12 @@ def _sync_alacritty(
         body, warnings = _shell_plan(document, zsh_path)
         warnings.extend(_keys_plan(document, outside).conflicts)
         updated = _replace_owned_region(text, ALACRITTY, body)
-        drifted = _commit_alacritty(
+        drifted = commit_region(
             path,
             before,
             text,
             updated,
+            validate=validate_toml,
             write=write,
             created_marker=_created_marker(home, environ),
             home=home,
@@ -654,18 +490,6 @@ def _sync_alacritty(
     except OSError as exc:
         return False, False, (f"alacritty: {_first_line(exc)}",)
     return body is not None, drifted, tuple(warnings)
-
-
-def _strip_alacritty_region(path: Path, region: str) -> bool:
-    before = read_settings(path)
-    if before is None:
-        return False
-    text = _snapshot_text(before)
-    updated = _replace_owned_region(text, region, None)
-    if updated == text:
-        return False
-    write_if_unchanged(path, before, updated)
-    return True
 
 
 def apply_alacritty_keys(
@@ -686,11 +510,12 @@ def apply_alacritty_keys(
         if plan.refusal is not None:
             return (), plan.refusal
         updated = _replace_owned_region(text, ALACRITTY_KEYS, plan.body)
-        _commit_alacritty(
+        commit_region(
             path,
             before,
             text,
             updated,
+            validate=validate_toml,
             write=True,
             created_marker=_created_marker(home, environ),
             home=home,

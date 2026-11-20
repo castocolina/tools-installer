@@ -105,11 +105,11 @@ Plans:
   3. In the installer's managed zsh configuration, Ctrl+L at the prompt clears the visible screen and the scrollback (byte-level test of the emitted sequences), and the mechanism maps the clear chord to Ctrl+L for every row: Cmd+K on macOS, Ctrl+Shift+K on Linux.
   4. Every mechanism row declares whether the vendor already opens a new tab, window or pane in the current directory; the setting is written only for rows where it does not, and a test fails when a row leaves it undeclared.
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 28-01-PLAN.md — Golden bytes of Alacritty's keys region committed before the move, then the shared primitives moved into `installer/terminal_regions.py` (KEYS-01)
+- [x] 28-01-PLAN.md — Golden bytes of Alacritty's keys region committed before the move, then the shared primitives moved into `installer/terminal_regions.py` (KEYS-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 28-02-PLAN.md — Tracer: one `TERMINAL_KEYS` table keyed by tool id drives install, reconfigure, the `≈` fact and removal; completeness test and no-row backstop (KEYS-01, KEYS-02)
@@ -234,7 +234,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 27. Tool-onboarding skill: terminal defaults as rules | 4/4 | In Progress | - |
-| 28. Shared terminal-keys mechanism | 0/TBD | Not started | - |
+| 28. Shared terminal-keys mechanism | 1/4 | In Progress | - |
 | 29. Terminal defaults for the terminals in the catalog | 0/TBD | Not started | - |
 | 30. Onboard Ghostty | 0/TBD | Not started | - |
 | 31. Onboard iTerm2 and the Herdr desktop app | 0/TBD | Not started | - |

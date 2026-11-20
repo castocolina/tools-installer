@@ -375,7 +375,7 @@ def test_conflicts_names_the_real_partial_lines() -> None:
             "phase 28",
         )
     )
-    shell_source = (REPO_ROOT / "installer" / "terminal_shell.py").read_text(encoding="utf-8")
+    shell_source = (REPO_ROOT / "installer" / "terminal_regions.py").read_text(encoding="utf-8")
     status_source = (REPO_ROOT / "installer" / "version_status.py").read_text(encoding="utf-8")
     assert "alacritty: partial: you already bind" in shell_source
     assert 'startswith("partial:")' in status_source
