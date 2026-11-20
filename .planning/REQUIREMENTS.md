@@ -29,8 +29,8 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 - [ ] **TERM-01**: kitty meets SKILL-01 on both OSes: Option+Left/Right word navigation on macOS without the global switch, the KEYS-03 clear on Cmd+K and on Linux Ctrl+Shift+K (displacing kitty's default `scroll_line_up`, named in the install note), and KEYS-04; its macOS install no longer writes into `/Applications` (SKILL-04).
 - [ ] **TERM-02**: WezTerm meets SKILL-01 on both OSes through its Lua owned region, which extends the user's `config.keys` instead of replacing it; the shell-region marker check matches exact marker lines so the keys region is never taken for it.
 - [ ] **TERM-03**: Alacritty's clear moves to the KEYS-03 behavior (screen and scrollback); its Linux Alt+Left/Right rows stay (owner decision, 2026-11-16: word navigation is required on macOS, optional on Linux, and not extended to other Linux terminals).
-- [ ] **TERM-04**: Konsole is checked, not rewritten: the installer confirms its stock Ctrl+Shift+K clear and writes a binding only when the user has removed it; its zsh sync is unchanged.
-- [ ] **TERM-05**: Inside a herdr pane, Option/Alt+Left/Right and the clear shortcut reach the shell (an observable byte-level test); a pass-through setting is written only if herdr intercepts them.
+- [ ] **TERM-04**: Konsole is checked, not rewritten: the installer confirms its stock Ctrl+Shift+K clear and writes a binding only when the user has removed it; its zsh sync is unchanged. *(amended 2026-11-19, 29 D-09, needs confirmation: report-only; a user-removed key is kept and reported, never rewritten)*
+- [ ] **TERM-05**: Inside a herdr pane, Option/Alt+Left/Right and the clear shortcut reach the shell (an observable byte-level test); a pass-through setting is written only if herdr intercepts them. *(amended 2026-11-19, 29 D-10: verified live that herdr 0.9.5 does not intercept them)*
 
 ### New terminals (NTERM)
 

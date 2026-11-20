@@ -104,7 +104,7 @@
 
   1. kitty's generated config (golden files on both OSes) binds Option+Left/Right to word navigation on macOS with no global `macos_option_as_alt` switch (a regression test asserts the switch is absent), clears screen and scrollback on Cmd+K and on Linux Ctrl+Shift+K with the displaced `scroll_line_up` named in the install note, opens new tabs and windows in the current directory, and kitty's macOS install writes nothing into `/Applications`.
   2. WezTerm's Lua owned region meets the defaults on both OSes and extends the user's existing `config.keys` (a fixture with user keys keeps all of them); a config that holds both the shell region and the keys region is read correctly, because the shell-region check matches exact marker lines.
-  3. Alacritty's Cmd+K and Ctrl+Shift+K now clear the screen and the scrollback, and its Linux Alt+Left/Right rows are unchanged; on a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear, writes the binding only when the user removed it, and the Konsole zsh sync is unchanged.
+  3. Alacritty's Cmd+K and Ctrl+Shift+K now clear the screen and the scrollback, and its Linux Alt+Left/Right rows are unchanged; on a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear, writes the binding only when the user removed it *(amended 2026-11-19, 29 D-09, needs confirmation: report-only, never writes)*, and the Konsole zsh sync is unchanged.
   4. Inside a herdr pane, Option/Alt+Left/Right and the clear chord reach the shell as the expected bytes (an observable byte-level test); a herdr pass-through setting is written only if herdr intercepts them.
 
 **Plans**: TBD

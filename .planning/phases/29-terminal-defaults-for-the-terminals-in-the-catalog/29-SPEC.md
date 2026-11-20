@@ -30,17 +30,17 @@ kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults of 
    - Target: exact-marker matching and a keys region that appends to an existing `config.keys`.
    - Acceptance: a fixture with user keys keeps all of them after apply; a fixture holding both regions applies, checks and strips each independently; a fixture with a user-written comment that contains the marker words is not taken for an owned region.
 
-3. **Alacritty's clear is screen and scrollback (TERM-03)**: Alacritty's Cmd+K (macOS) and Ctrl+Shift+K (Linux) clear the screen and the scrollback through the phase 28 mechanism, and its Linux Alt+Left/Right rows are unchanged.
+3. **Alacritty's clear is screen and scrollback (TERM-03)**: Alacritty's Ctrl+Shift+K (Linux; Cmd+K on macOS where installed) clears the screen and the scrollback through the phase 28 mechanism *(amended 2026-11-19, 29 D-08: Alacritty has no macOS method, so the macOS chord is n/a)*, and its Linux Alt+Left/Right rows are unchanged.
    - Current: Ctrl+Shift+K = `ClearHistory` (scrollback only); no Cmd+K row.
    - Target: the clear chord resolves to the shared Ctrl+L behavior; the Alt rows stay.
    - Acceptance: the Alacritty golden file differs from phase 28's only in the clear row(s); the two Linux Alt rows are byte-identical to phase 28's.
 
-4. **Konsole is verified, not rewritten (TERM-04)**: On a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear; it writes a binding only when the user has removed it; its zsh sync is unchanged.
+4. **Konsole is verified, not rewritten (TERM-04)**: On a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear; it never writes a binding: a user-removed stock key is kept and reported `konsole: partial: you removed Ctrl+Shift+K; kept yours`; its zsh sync is unchanged *(amended 2026-11-19, 29 D-09, needs confirmation: the conditional write is dropped; SKILL-03 and the owner decision "verify and leave alone")*.
    - Current: Konsole has only the zsh sync.
    - Target: a read-only check of the stock key plus a conditional write.
    - Acceptance: a fixture with the stock key leaves the file byte-identical and the report says stock; a fixture with the key removed gets one binding; existing Konsole sync tests pass with no assertion edits; the stock key is confirmed on the current Konsole version in a disposable container.
 
-5. **herdr passes the keys through (TERM-05)**: Inside a herdr pane, Option/Alt+Left/Right and the clear chord reach the shell as the expected bytes; a herdr pass-through setting is written only if herdr intercepts them.
+5. **herdr passes the keys through (TERM-05)**: Inside a herdr pane, Option/Alt+Left/Right and the clear chord reach the shell as the expected bytes; a herdr pass-through setting is written only if herdr intercepts them *(amended 2026-11-19, 29 D-10: verified live that herdr 0.9.5 does not intercept them, so no setting and no keys row)*.
    - Current: unknown; herdr's own key handling is not verified.
    - Target: an observable byte-level test inside a herdr pane, and a setting only on interception.
    - Acceptance: a byte-level test (a pty child in a herdr pane that records its input) shows the expected bytes for the three chords, or the test shows interception and the pass-through setting is written, applied and stripped through the mechanism.
@@ -48,9 +48,10 @@ kitty, WezTerm, Alacritty, Konsole and herdr each meet the terminal defaults of 
 ## Boundaries
 
 **In scope:**
-- kitty, WezTerm and herdr rows in the shared mechanism; Alacritty's clear change; the Konsole verify-and-conditionally-write check.
+- kitty and WezTerm rows in the shared mechanism (herdr has none, 29 D-10); Alacritty's clear change; the Konsole verify-and-conditionally-write check.
 - kitty's macOS install location and CLI link.
 - Golden-file tests on both OSes and the container checks named above.
+- *Amended 2026-11-19 (29 D-10, D-11):* a herdr byte-level container target in `scripts/container-e2e-verify.sh`, and the `placement` and `validate` fields of the phase 28 row type.
 
 **Out of scope:**
 - Alt word navigation on Linux terminals other than Alacritty — owner decision 2026-11-16 (Ctrl+Left/Right is the Linux convention).
