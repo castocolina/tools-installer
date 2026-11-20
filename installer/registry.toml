@@ -3186,6 +3186,62 @@ package = "alacritty"
 kind = "pacman"
 package = "alacritty"
 
+# Verified 2026-11-20: pkgforge-dev/ghostty-appimage supplies the v1.4.0 community build;
+# upstream ghostty-org/ghostty publishes no GitHub release. Each pin matches its GitHub digest.
+# Rebuild tags such as v1.4.0+1 retain the plain asset version; {ver} cannot express them,
+# and bump tooling ignores build metadata, so a rebuild needs a manual edit (accepted limit).
+# Without /dev/fuse or fusermount the runtime prints failed to utilize FUSE then extracts and
+# runs, so --version works either way; Bazzite ships fuse 2.9.9, fuse3 and fusermount, no reboot.
+# macOS cask installs into ~/Applications with --appdir; it has no binary stanza and the cask
+# kind has no cli key, so no CLI link is promised (SKILL-04 platform gap). The CLI remains at
+# ~/Applications/Ghostty.app/Contents/MacOS/ghostty. Arch extra/ghostty 1.4.0-1 is a hand-off.
+# The desktop id names the AppImage's own desktop file and icon;
+# the installer will place the AppImage menu entry and icon
+# and the rendered entry will drop X-KDE-Shortcuts=Ctrl+Alt+T to keep Konsole's Bazzite shortcut.
+[[tool]]
+id = "ghostty"
+name = "Ghostty"
+category = "terminal"
+cmd = "ghostty"
+priority = "P3"
+audience = "human"
+tier = "user"
+verified = 2026-11-20
+desc = "Fast, native GPU terminal emulator; Linux and Bazzite get a community build AppImage"
+owner_probes = ["pacman"]
+config_paths = ["~/.config/ghostty", "~/Library/Application Support/com.mitchellh.ghostty"]
+[[tool.method]]
+kind = "pacman"
+package = "ghostty"
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "fedora"]
+arch = ["amd64"]
+url = "https://github.com/pkgforge-dev/ghostty-appimage/releases/download/v{ver}/Ghostty-{ver}-x86_64.AppImage"
+version = "1.4.0"
+sha256 = "50ad4f8b54a01e7d41426e7d12ffae9c88aa1c516ac140755e2bca596e1d2ae6"
+member = "ghostty"
+raw = true
+desktop = "com.mitchellh.ghostty"
+note = "community build (pkgforge-dev/ghostty-appimage), not an official Ghostty release"
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "fedora"]
+arch = ["arm64"]
+url = "https://github.com/pkgforge-dev/ghostty-appimage/releases/download/v{ver}/Ghostty-{ver}-aarch64.AppImage"
+version = "1.4.0"
+sha256 = "932e21c671c215e6140633027acb4e8705cef3377d335202211c32d88b5bf506"
+member = "ghostty"
+raw = true
+desktop = "com.mitchellh.ghostty"
+note = "community build (pkgforge-dev/ghostty-appimage), not an official Ghostty release"
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "ghostty"
+app = "Ghostty.app"
+min_os_version = "13"
+
 # Verified 2026-11-08, re-checked 2026-11-12 against the v0.9.5 tag source (24 D-09, D-10,
 # D-12): herdr is a single static binary published per OS and arch as a raw release asset
 # (herdr-linux-x86_64, herdr-linux-aarch64, herdr-macos-x86_64, herdr-macos-aarch64; the

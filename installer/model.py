@@ -74,6 +74,7 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
             "member",
             "strip",
             "raw",
+            "note",
             "archive",
             "bin_name",
             "bin_dir",
@@ -85,6 +86,9 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
             "url",
             "member",
             "strip",
+            "raw",
+            "note",
+            "desktop",
             "bin_name",
             "archive",
             "bin_dir",
@@ -184,6 +188,7 @@ _DISTRO_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
 _CARGO_HOST_ROOTS = ("~/.local/", "~/.config/", "~/.terminfo/")
 # A tool id names its receipt file, so it can never hold `/`, `..` or a leading `-`.
 TOOL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_DESKTOP_ID_RE = re.compile(r"(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]*")
 
 EnumValue = TypeVar("EnumValue", Audience, Category, Priority, Tier)
 
@@ -673,6 +678,29 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                     )
                 if isinstance(strip, bool) or not isinstance(strip, int) or strip < 0:
                     raise ValueError(f"tool '{row['id']}': 'strip' must be a non-negative integer")
+            if params.get("raw") is True and "archive" in params:
+                raise ValueError(f"tool '{row['id']}': 'archive' does not apply to a raw asset")
+            if "note" in params:
+                note = params["note"]
+                if (
+                    not isinstance(note, str)
+                    or not note
+                    or "[" in note
+                    or any(ord(char) < 32 or ord(char) == 127 for char in note)
+                ):
+                    raise ValueError(
+                        f"tool '{row['id']}': 'note' must be one line of plain text "
+                        "(no '[' and no control character)"
+                    )
+            if "desktop" in params:
+                desktop = params["desktop"]
+                if not isinstance(desktop, str) or _DESKTOP_ID_RE.fullmatch(desktop) is None:
+                    raise ValueError(
+                        f"tool '{row['id']}': 'desktop' must be a desktop file id "
+                        "such as com.example.App"
+                    )
+                if params.get("raw") is not True:
+                    raise ValueError(f"tool '{row['id']}': 'desktop' needs raw = true")
             if kind in ("node", "bun"):
                 npm_pkg = params.get("npm_pkg")
                 if not isinstance(npm_pkg, str) or not npm_pkg:

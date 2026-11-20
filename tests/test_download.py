@@ -1184,6 +1184,27 @@ def test_verified_missing_asset_file_is_executor_error(
         install_download(_rg_method(tmp_path / "bin"), _ctx(runner, tmp_version="15.1.0"))
 
 
+def test_ghostty_digest_mismatch_places_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    workdir = _workdir(tmp_path, monkeypatch)
+    tool = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "ghostty")
+    method = next(m for m in tool.methods if m.kind == "tarball" and m.arch == ("amd64",))
+    asset = "Ghostty-1.4.0-x86_64.AppImage"
+    _calls, runner = fixture_runner(workdir, {asset: b"tampered bytes"})
+    with pytest.raises(ChecksumMismatch) as excinfo:
+        install_download(method, _ctx(runner))
+    assert excinfo.value.asset == asset
+    assert (
+        excinfo.value.expected == "50ad4f8b54a01e7d41426e7d12ffae9c88aa1c516ac140755e2bca596e1d2ae6"
+    )
+    binary = tmp_path / ".local/bin/ghostty"
+    assert not binary.exists()
+    assert not staged_sibling(binary, NEW_SUFFIX).exists()
+    assert not workdir.exists()
+
+
 def test_verified_raw_copies_from_temp_into_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workdir = _workdir(tmp_path, monkeypatch)

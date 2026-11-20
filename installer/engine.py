@@ -139,7 +139,8 @@ def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[
     """Route download kinds to the download executor; everything else to a command executor.
 
     Returns ``(verified, unverified_reason, notes)``. `notes` are row notes the
-    install carries to `postinstall_warning`; only a source build has any. A source build is
+    install carries to `postinstall_warning`; a source build and a download's note can supply them.
+    A source build is
     never sha256-verified and its failures raise like every executor's. `verified` is True when
     the download was sha256-verified (non-download methods are never marked
     verified — their package managers do their own checks; pinned or declared
@@ -147,7 +148,8 @@ def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[
     """
     if method.kind in download.DOWNLOAD_KINDS:
         reason = download.install_download(method, ctx)
-        return reason is None, reason, ()
+        note = method.params.get("note")
+        return reason is None, reason, (note,) if isinstance(note, str) else ()
     if method.kind in apps.APP_KINDS:
         reason = apps.install_app(method, ctx.runner)
         return reason is None, reason, ()

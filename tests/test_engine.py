@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import urllib.request
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,52 @@ from tests.launch_doubles import stub_launch
 from tests.test_apps import SHELLED_LINKERS
 from tests.test_cargo_distrobox import FakeBox, alacritty_tool, image_is, immutable_with_tools
 from tests.test_download import fixture_runner
+
+
+def test_ghostty_installs_on_linux_x86_64_through_the_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _patch_not_installed(monkeypatch)
+    tool = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "ghostty")
+    method = next(m for m in tool.methods if m.kind == "tarball" and m.arch == ("amd64",))
+    payload = b"#!/bin/sh\necho Ghostty 1.4.0\n"
+    method = replace(
+        method, params={**method.params, "sha256": hashlib.sha256(payload).hexdigest()}
+    )
+    tool = replace(tool, methods=(method,))
+    _calls, runner = fixture_runner(None, {"Ghostty-1.4.0-x86_64.AppImage": payload})
+    outcome = install_tool(
+        tool, Platform(os="fedora", arch="amd64", immutable=True, has_brew=False), runner=runner
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.method_kind == "tarball" and outcome.verified is True
+    binary = tmp_path / ".local/bin/ghostty"
+    assert binary.read_bytes() == payload
+    assert binary.stat().st_mode & 0o777 == 0o755
+    assert (
+        outcome.postinstall_warning is not None and "community build" in outcome.postinstall_warning
+    )
+    receipt = receipts.read("ghostty")
+    assert receipt is not None
+    assert len(receipt.artifacts) == 1
+    assert receipt.artifacts[0].path == binary
+    assert receipt.artifacts[0].type == "file"
+
+
+def test_ghostty_digest_mismatch_is_a_checksum_mismatch_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _patch_not_installed(monkeypatch)
+    tool = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "ghostty")
+    _calls, runner = fixture_runner(None, {"Ghostty-1.4.0-x86_64.AppImage": b"tampered bytes"})
+    outcome = install_tool(
+        tool, Platform(os="fedora", arch="amd64", immutable=True, has_brew=False), runner=runner
+    )
+    assert outcome.status is InstallStatus.CHECKSUM_MISMATCH
+    assert isinstance(outcome.errors[0], ChecksumMismatch)
+    assert not (tmp_path / ".local/bin/ghostty").exists()
 
 
 def _platform() -> Platform:

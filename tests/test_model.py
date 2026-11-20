@@ -1665,6 +1665,101 @@ member = "bin/demo"
     assert "strip" in str(exc_info.value)
 
 
+def _raw_tarball_registry(tmp_path: Path, extra: str, *, raw: bool = True) -> Path:
+    return _write(
+        tmp_path,
+        f'''
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "tarball"
+url = "https://example.test/v{{ver}}/demo"
+version = "1"
+sha256 = "{_VALID_SHA256}"
+member = "demo"
+{"raw = true" if raw else ""}
+{extra}
+''',
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ("strip = 1", "'strip' does not apply"),
+        ('archive = "xz"', "'archive' does not apply to a raw asset"),
+    ],
+)
+def test_raw_refuses_strip_and_archive(tmp_path: Path, extra: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        load_tools(_raw_tarball_registry(tmp_path, extra))
+
+
+@pytest.mark.parametrize("value", ['""', '"two\\nlines"', '"[bold]x[/bold]"', '"\\u0007"', "5"])
+def test_note_must_be_one_plain_line(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ValueError, match="'note' must be one line of plain text"):
+        load_tools(_raw_tarball_registry(tmp_path, f"note = {value}"))
+
+
+def test_note_is_allowed_on_download_kinds_only(tmp_path: Path) -> None:
+    text = """
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "demo"
+member = "demo"
+raw = true
+note = "community build"
+"""
+    assert load_tools(_write(tmp_path, text))[0].methods[0].params["note"] == "community build"
+    with pytest.raises(ValueError, match="has unknown key 'note'"):
+        load_tools(
+            _write(
+                tmp_path,
+                text.replace('kind = "github_release"', 'kind = "cask"').replace(
+                    'repo = "o/r"\nasset = "demo"\nmember = "demo"\nraw = true\n', 'cask = "demo"\n'
+                ),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "value", ['""', '"../evil"', '"a/b"', '"has space"', '".hidden"', '"a..b"', '"a.b..c"', "5"]
+)
+def test_desktop_must_be_a_desktop_id_on_a_raw_tarball(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ValueError, match="'desktop' must be a desktop file id"):
+        load_tools(_raw_tarball_registry(tmp_path, f"desktop = {value}"))
+    with pytest.raises(ValueError, match="'desktop' needs raw = true"):
+        load_tools(_raw_tarball_registry(tmp_path, 'desktop = "org.example.Demo"', raw=False))
+    for valid in ("com.mitchellh.ghostty", "org.example.Demo"):
+        assert (
+            load_tools(_raw_tarball_registry(tmp_path, f'desktop = "{valid}"'))[0]
+            .methods[0]
+            .params["desktop"]
+            == valid
+        )
+
+
+def test_a_raw_tarball_with_note_and_desktop_loads(tmp_path: Path) -> None:
+    params = (
+        load_tools(
+            _raw_tarball_registry(
+                tmp_path, 'note = "community build"\ndesktop = "org.example.Demo"'
+            )
+        )[0]
+        .methods[0]
+        .params
+    )
+    assert params["note"] == "community build"
+    assert params["desktop"] == "org.example.Demo"
+
+
 def test_config_step_is_frozen_with_closed_kinds() -> None:
     step = ConfigStep(text="t", kind="terminal_sync")
     assert step.report == ""

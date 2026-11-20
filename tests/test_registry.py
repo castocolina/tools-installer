@@ -278,6 +278,7 @@ _PRE_15_3_HUMAN_TOOLS = {
 _POST_15_3_HUMAN_TOOLS = {
     "alacritty",
     "copilot",
+    "ghostty",  # Phase 30
     "neovim",  # Phase 24.1
 }
 
@@ -300,7 +301,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 50,  # Phase 24 adds herdr, unzip and zip (audience both)
         "ai": 8,
-        "human": 28,  # Phase 24.1 adds neovim (audience human)
+        "human": 29,  # Phase 30 adds ghostty (audience human)
     }
 
 
@@ -1211,7 +1212,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 86  # Phase 24 adds the herdr, unzip and zip rows; Phase 24.1 adds neovim
+    assert len(tools) == 87  # Phase 24 adds herdr, unzip and zip; 24.1 adds neovim; 30 adds ghostty
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1266,7 +1267,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 28,  # Phase 24 adds unzip and zip (SDKMAN prerequisites)
         "ai": 9,
-        "user": 49,  # Phase 24 adds herdr (tier user); Phase 24.1 adds neovim (tier user)
+        "user": 50,  # Phase 24 adds herdr; 24.1 adds neovim; 30 adds ghostty (tier user)
     }
 
 
@@ -2249,8 +2250,125 @@ def test_tealdeer_declares_its_cache_in_config_paths() -> None:
     assert tealdeer.postinstall == "tealdeer-cache"
 
 
+def test_ghostty_resolves_one_method_per_platform() -> None:
+    tool = _tools_by_id()["ghostty"]
+    platforms = [
+        (Platform(os="arch", arch="amd64", immutable=False, has_brew=True), "pacman", ""),
+        (Platform(os="arch", arch="arm64", immutable=False, has_brew=True), "pacman", ""),
+        (Platform(os="debian", arch="amd64", immutable=False, has_brew=True), "tarball", "amd64"),
+        (Platform(os="fedora", arch="amd64", immutable=True, has_brew=True), "tarball", "amd64"),
+        (Platform(os="fedora", arch="arm64", immutable=False, has_brew=True), "tarball", "arm64"),
+        (Platform(os="debian", arch="arm64", immutable=False, has_brew=True), "tarball", "arm64"),
+        (
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="26.0"),
+            "cask",
+            "",
+        ),
+        (
+            Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="12.0"),
+            "",
+            "",
+        ),
+    ]
+
+    def identity(method: Method) -> object:
+        if method.kind == "tarball":
+            return pinned_url(method)
+        return (method.kind, method.params.get("package") or method.params.get("cask"))
+
+    for platform, kind, arch in platforms:
+        methods = resolve_methods(tool, platform)
+        assert [m.kind for m in methods] == ([kind] if kind else [])
+        if methods:
+            method = methods[0]
+            if kind == "tarball":
+                assert method.arch == (arch,)
+            elif kind == "pacman":
+                assert method.params["package"] == "ghostty"
+            else:
+                assert (
+                    method.params["cask"],
+                    method.params["app"],
+                    method.params["min_os_version"],
+                ) == ("ghostty", "Ghostty.app", "13")
+        reversed_methods = resolve_methods(
+            replace(tool, methods=tuple(reversed(tool.methods))), platform
+        )
+        assert [identity(m) for m in methods] == [identity(m) for m in reversed_methods]
+
+
+def test_ghostty_pins_render_the_live_asset_names() -> None:
+    methods = [m for m in _tools_by_id()["ghostty"].methods if m.kind == "tarball"]
+    assert len(methods) == 2
+    pins = {
+        "amd64": ("x86_64", "50ad4f8b54a01e7d41426e7d12ffae9c88aa1c516ac140755e2bca596e1d2ae6"),
+        "arm64": ("aarch64", "932e21c671c215e6140633027acb4e8705cef3377d335202211c32d88b5bf506"),
+    }
+    for method in methods:
+        arch, digest = pins[method.arch[0]]
+        assert pinned_url(method) == (
+            "https://github.com/pkgforge-dev/ghostty-appimage/releases/download/"
+            f"v1.4.0/Ghostty-1.4.0-{arch}.AppImage"
+        )
+        assert method.params["sha256"] == digest
+        assert re.fullmatch(r"[0-9a-f]{64}", digest)
+        assert method.params["version"] == "1.4.0"
+        assert method.params["raw"] is True
+        assert method.params["member"] == "ghostty"
+        assert method.os == ("debian", "fedora")
+
+
+def test_ghostty_entry_records_its_facts() -> None:
+    tool = _tools_by_id()["ghostty"]
+    assert (
+        tool.id,
+        tool.name,
+        tool.category,
+        tool.cmd,
+        tool.tier,
+        tool.audience,
+        tool.priority,
+    ) == ("ghostty", "Ghostty", "terminal", "ghostty", "user", "human", "P3")
+    assert tool.owner_probes == ("pacman",)
+    assert tool.config_paths == (
+        "~/.config/ghostty",
+        "~/Library/Application Support/com.mitchellh.ghostty",
+    )
+    assert "community build" in tool.desc
+    for method in tool.methods:
+        assert "smoke_argv" not in method.params
+        if method.kind == "tarball":
+            assert "community build" in str(method.params["note"])
+            assert method.params["desktop"] == "com.mitchellh.ghostty"
+        else:
+            assert "note" not in method.params
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    index = lines.index('id = "ghostty"')
+    window = "\n".join(lines[max(0, index - 60) : index])
+    for fragment in (
+        "pkgforge-dev/ghostty-appimage",
+        "community build",
+        "GitHub digest",
+        "v1.4.0+1",
+        "failed to utilize FUSE",
+        "--appdir",
+        "~/Applications",
+        "no binary stanza",
+        "extra/ghostty",
+        "X-KDE-Shortcuts",
+        "2026-11-20",
+    ):
+        assert fragment in window
+    comments = 0
+    for line in reversed(lines[: index - 1]):
+        if not line.startswith("#"):
+            break
+        comments += 1
+    assert comments <= 40
+
+
 def test_native_package_manager_rows_declare_their_owner_probes() -> None:
-    # D-05: exactly the fourteen rows that can be installed through a native
+    # D-05: exactly the fifteen rows that can be installed through a native
     # OS package manager (or, for opencode/wezterm, pacman alone) declare
     # owner_probes so detect_owner can actually answer for them.
     # rpm-ostree is listed FIRST on the twelve dnf/apt/pacman-capable rows: on
@@ -2274,6 +2392,7 @@ def test_native_package_manager_rows_declare_their_owner_probes() -> None:
         "neovim": full,
         "opencode": ("pacman",),
         "wezterm": ("pacman",),
+        "ghostty": ("pacman",),
     }
     for tool_id, owner_probes in expected.items():
         assert tools[tool_id].owner_probes == owner_probes, tool_id
