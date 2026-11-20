@@ -131,7 +131,24 @@ Plans:
   3. Alacritty's Cmd+K and Ctrl+Shift+K now clear the screen and the scrollback, and its Linux Alt+Left/Right rows are unchanged; on a stock Konsole profile the installer writes nothing and reports the stock Ctrl+Shift+K clear, writes the binding only when the user removed it *(amended 2026-11-19, 29 D-09, needs confirmation: report-only, never writes)*, and the Konsole zsh sync is unchanged.
   4. Inside a herdr pane, Option/Alt+Left/Right and the clear chord reach the shell as the expected bytes (an observable byte-level test); a herdr pass-through setting is written only if herdr intercepts them.
 
-**Plans**: TBD
+**Plans:** 6 plans
+
+Plans:
+**Wave 1**
+- [ ] 29-01-PLAN.md — Tracer: Alacritty's clear sends Ctrl+L through the mechanism and existing installs reach it by drift; the row interface (placement, per-OS writes, config path, notes, read-back) and exact WezTerm shell markers (TERM-03, TERM-02)
+- [ ] 29-05-PLAN.md — herdr: no row; an orchestrator-only `herdr-keys` container target with a pure byte verdict, proved on the host with a stubbed `ct` (TERM-05)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 29-02-PLAN.md — kitty: top-of-file keys region on both OSes, include scan, displaced-default notes, kitty's resolver, macOS route through the cask only (TERM-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 29-03-PLAN.md — WezTerm: Lua keys region before `return config` that extends `config.keys`, read-back of kept chords, created-file cleanup (TERM-02)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 29-04-PLAN.md — Konsole: report-only check of the stock Ctrl+Shift+K clear, `partial: kept yours` on removal, one-time stock note (TERM-04)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 29-06-PLAN.md — Onboarding skill table cells (29 D-12) and the phase consistency guards; orchestrator checklist (TERM-01..TERM-05)
 
 ### Phase 30: Onboard Ghostty
 
