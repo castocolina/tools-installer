@@ -1,7 +1,7 @@
 ---
 phase: 27
 reviewers: [opencode-referee-one]
-reviewed_at: 2026-11-20T03:58:00Z
+reviewed_at: 2026-11-20T04:12:56Z
 plans_reviewed: [27-01-PLAN.md, 27-02-PLAN.md, 27-03-PLAN.md, 27-04-PLAN.md]
 models:
   opencode-referee-one: "router-env/my-referee-one"
@@ -16,149 +16,136 @@ model_sources:
 
 <!-- gsd:plan-revision-conflicts:end -->
 
-## Lane Log (convergence cycle 2, plans at c33b8658)
+## Lane Log (convergence cycle 3, final cycle, plans at d93b86d0)
 
-- Default lane `opencode-referee-one` (`router-env/my-referee-one`, opencode CLI, owner-required first lane): probe succeeded (`opencode run -m router-env/my-referee-one "Reply with the single word OK."` returned `OK`, exit 0, stdin closed). The review ran through `gsd-tools query review-lane invoke --slug opencode --model router-env/my-referee-one --as opencode-referee-one` with stdin closed (`< /dev/null`) in the background; it produced a full review (four plan sections, no stub, empty `.err`) in about four minutes. A 214 KB prompt (plans, CONTEXT, RESEARCH, cycle 1 finding list) was sent whole; no split was needed.
+- Default lane `opencode-referee-one` (`router-env/my-referee-one`, opencode CLI, owner-required first lane): probe succeeded (`opencode run -m router-env/my-referee-one "Reply with the single word OK."` returned `OK`, exit 0, stdin closed, under `timeout 120`). The review ran through `gsd-tools query review-lane invoke --slug opencode --model router-env/my-referee-one --as opencode-referee-one --json` with stdin closed (`< /dev/null`), under `timeout 2700`, in the background. It produced a full review (four plan sections, no stub, empty `.err`, result JSON `ok: true`, `stubbed: false`, model source `pinned`) in under two minutes. A 207 KB prompt (PROJECT, roadmap, requirements, CONTEXT, VALIDATION, the four plans with line numbers, and the cycle 2 finding list) was sent whole; no split was needed.
 - No lane failed, so the failover lanes `opencode-referee-two` and `opencode-referee-three` were not used. Failures recorded: none.
-- Exactly one reviewer ran, so the consensus gate does not engage. Per the owner rule each HIGH was verified against repo source before it was counted (table below); a HIGH counts only when the source supports the claim and it is material to executing or achieving the phase.
+- Exactly one reviewer ran, so the consensus gate does not engage. The reviewer's section carries `file:line` evidence and no discount marker. Per the owner rule each claim was checked against repo source before it was counted (tables below).
 
 ## OpenCode Review (opencode-referee-one)
 
-Using the plan-review checklist to reassess each cycle 1 finding and verify the revised execution path against the repository. I’ll keep the review read-only.
-The revised handoff still appears to rely on behavior the GSD orchestrator does not define; I’m checking the remaining guards and test instructions for independent blockers.
-### Status: Issues Found — fix and re-review
+Using the spec-review checklist to assess the current plans against the repository, with particular attention to the cycle 2 fixes and any regressions they introduced. This review is read-only.
+# Phase 27 plan review
 
-**Document type:** GSD implementation plans  
-**Overall assessment:** Not ready for unattended execution. The revision fixes most cycle 1 concerns, but the judge handoff is still not connected to the installed GSD workflow. There are also gaps in the read-only snapshot and CI-structure checks.
+**Disposition:** Cycle 2's N2 is resolved. N1 and N3 are **partially resolved**: their ordinary cases are addressed, but the revised checks retain specific false-negative cases. One additional low-severity validation-map overclaim remains. No new HIGH findings.
+
+For brevity, plan and validation citations below are relative to `.planning/phases/27-tool-onboarding-skill-terminal-defaults-as-rules/`.
 
 ## 27-01
 
 ### Summary
 
-Records the before verdict, adds the registry-backed table, and tests table drift.
+The plan records the before verdict against a clean, pre-rewrite skill and adds the registry-backed table. Its revised snapshot covers the ordinary already-untracked-file edit that N1 identified.
 
-### Strengths and cycle 1 dispositions
+### Cycle 2 finding dispositions
 
-- **Finding 2 — RESOLVED:** The real-table test requires non-empty IDs and zero drift rather than exactly eight rows; a second fixture accepts an added registry ID with an added table ID (`27-01-PLAN.md:166-170`).
-- **Finding 3 — RESOLVED for the destructive-cleanup issue:** The procedure no longer reverts unexpected changes and uses a path-limited commit (`27-01-PLAN.md:75-87`). The new snapshot has a separate limitation below.
-- **Finding 8 — RESOLVED:** The guard requires a commit touching the verdict and checks the file against `HEAD`; a file that has only ever been staged cannot satisfy it (`27-01-PLAN.md:135-139`).
-- **Finding 9 — RESOLVED:** The kitty cell includes the XDG path and fallback (`27-01-PLAN.md:191`), matching `installer/terminal_shell.py:151-157`.
+- **N1 — Partially resolved.** `27-01-PLAN.md:75-78` hashes untracked files before and after the judge, so a normal content change is detected. The filename and failure cases below remain open.
+- **N2, before-verdict symmetry — Resolved.** `27-01-PLAN.md:75,82,139,146` records and checks the baseline blob. I verified that `HEAD`, `d93b86d0`, and `1bb31e00` all resolve this skill to `8fda04a7a1af006f1dcbdda82a8e759245e5f872`; the hard-coded value is limited to the **before** verdict.
+- **H1 — Accepted residual.** The prerequisite is described at `27-01-PLAN.md:74`, and the executor stops at `:131-139` if it was not completed. I found no new evidence warranting promotion of the declared manual handoff to HIGH.
 
 ### Concerns
 
-- **HIGH — Finding 1: STILL OPEN — the pre-dispatch handoff is not implemented by the orchestrator.** The plan puts the judge procedure in its objective and claims `autonomous: false` makes the orchestrator run it before delegation (`27-01-PLAN.md:73-88`). The installed workflow instead constructs an external prompt from the objective and tasks and immediately invokes the configured command (`.claude/gsd-core/workflows/execute-phase.md:437-440`; `.claude/gsd-core/workflows/execute-phase/detail/elaboration.md:82-99`). Its normal checkpoint handling says `autonomous: false` plans require interaction and starts an executor, not an objective-defined pre-dispatch hook (`execute-phase.md:1086-1108`). With the current cross-AI configuration (`.planning/config.json:46-50`), Task 1 therefore encounters a missing verdict and blocks unless someone performs the prerequisite outside the stated workflow. The replacement `auto` task is supported, but it does not cause the prerequisite to run.
-
-- **MEDIUM — NEW: the snapshot misses edits to pre-existing untracked files.** `git status --porcelain` records their paths, while `git diff HEAD --binary` does not include their contents (`27-01-PLAN.md:75-77`). Changing the contents of an already-untracked goals file leaves both snapshot components unchanged. Thus the plan avoids destructive cleanup, but its “any delta” / read-only evidence is too strong (`27-01-PLAN.md:24`, `:286-289`). The current tree already contains an untracked goals file.
-
-- **MEDIUM — NEW: the judge is pinned to the main checkout, not the execution worktree.** The verbatim prompt names `/var/home/bazzite/git/personal/tools-installer` (`27-01-PLAN.md:76`), whereas the execution workflow supports per-plan worktree isolation (`execute-phase.md:608-614`). If the orchestrator is running in another worktree, the judge can score a different tree while the snapshot and commit guard inspect the active one.
+- **LOW — Snapshot hashing can omit a special-named untracked file.** `27-01-PLAN.md:76` passes root-relative filenames directly to `sha256sum`. An untracked file named `-` is interpreted as standard input, not as that file; a leading-option filename such as `--help` can be interpreted as an option. I reproduced both command behaviors. In addition, the plan compares snapshot output without explicitly requiring every pipeline component to succeed, so repeated hash failures could yield matching incomplete snapshots. The same issue applies to `27-04-PLAN.md:79-81`.
 
 ### Suggestions
 
-Provide a supported orchestrator-side gate or an explicit, repeatable external prerequisite before invoking GSD; do not rely on the frontmatter flag alone. Pass the active worktree root to the judge and include content hashes for untracked files in any claim that the snapshot detects tree changes.
+Prefix each filename with `./` or use another filename-safe hashing method, and require successful completion of every snapshot component before comparing snapshots. Preserve NUL-delimited input.
 
-### Risk assessment
+### Risk Assessment
 
-**High:** a standard run blocks before implementation; in a worktree it may score the wrong skill. No destructive cleanup is prescribed.
+Low likelihood, but a false match would weaken the stated read-only check. The empty-list case is handled by `xargs -r`; batching a large list preserves input order, and Git's untracked listing is deterministic for an unchanged tree. Ordinary whitespace, newline, and backslash filenames are carried safely into `xargs` by `-z`/`-0`; option-like names and `-` are the exception identified above.
 
 ## 27-02
 
 ### Summary
 
-Renames step 7, states the four defaults, and retains questions only for extras.
+The plan renames step 7, updates the sibling skill's heading reference, separates the four rules, and retains questions for extras (`27-02-PLAN.md:126-155,186-220`). The current skill still contains the old question-oriented text at `.claude/skills/tool-onboarding/SKILL.md:178-195`, so the planned rewrite addresses the stated starting point.
 
-### Strengths and cycle 1 disposition
+### Cycle 2 finding dispositions
 
-- **Finding 4 — RESOLVED:** The rule is capability-scoped and explains that out-of-scope parts receive `n/a` with a reason (`27-02-PLAN.md:143-152`). The VS Code same-directory cell is explicitly `unverified`, while its keybinding cells are scoped out (`27-01-PLAN.md:189-195`).
-- The plan preserves the existing step-7 phrase checks and updates the catalog-audit heading quote in the same task (`27-02-PLAN.md:121-155`; `tests/test_docs.py:292-315, 358-363`; `.claude/skills/catalog-audit/SKILL.md:73-82`).
-- The specified `-k rules` threshold of 14 matches the described five initial cases, four parametrized ask-detector cases, and five additional checks (`27-02-PLAN.md:126-136, 186-200, 225-226`).
+No cycle 2 finding was assigned directly to this plan.
 
 ### Concerns
 
-No additional blocking defect found in this plan. The plan acknowledges that its ask and Option-as-Alt detectors are heuristics, not semantic proofs (`27-02-PLAN.md:281-285`).
+None newly introduced by the round 2 revision.
 
 ### Suggestions
 
-Keep prose review as a separate judgment rather than treating the regexes as complete enforcement.
+None.
 
-### Risk assessment
+### Risk Assessment
 
-**Low**, assuming 27-01 completes and its table remains available.
+Low for this review's scope. The text-detection heuristics' limitations remain explicitly declared at `27-02-PLAN.md:281-285`.
 
 ## 27-03
 
 ### Summary
 
-Adds conflict and macOS rules, method-specific examples, and a structural CI check.
+The revised CI test checks the actual named job, matrix, runner field, classifier ordering, and Test-step condition. The current workflow has the expected matrix-driven runner and gate at `.github/workflows/ci.yml:15-22,32-50`.
 
-### Strengths and cycle 1 dispositions
+### Cycle 2 finding dispositions
 
-- **Finding 5 — RESOLVED:** The current example is Alacritty, with kitty explicitly described as planned (`27-03-PLAN.md:121-137`). The cited conflict producer exists in `installer/terminal_shell.py:583-601`, and the consumer checks the `partial:` prefix in `installer/version_status.py:1595-1601`.
-- **Finding 6 — RESOLVED:** The cask, `app`-kind, and DMG examples are now separate blocks (`27-03-PLAN.md:232-241`). The cask and ZIP mechanisms correspond to `installer/executors.py:699-704` and `installer/apps.py:98-113, 130-144`.
-- **Finding 10 — PARTIALLY RESOLVED:** Parsing the named job and step is materially stronger than grepping loose tokens (`27-03-PLAN.md:165-175`), and the current workflow does have the stated matrix, classifier and test step (`.github/workflows/ci.yml:15-22, 32-50`). The proposed assertions still do not establish that the test actually runs in the claimed circumstances.
+- **N3 — Partially resolved.** The exact fixed-runner and `== 'false'` mutations now fail under the specified checks (`27-03-PLAN.md:170-182`). However, the checks still match substrings rather than the operative expressions: an inverted condition such as `!(steps.scope.outputs.full != 'false')` contains both required substrings and would pass. A runner expression can similarly mention `matrix.os` while resolving both matrix entries to Ubuntu. Thus the broader claims that the test proves polarity and runner linkage remain stronger than the check.
+- The `-k macos_testing` threshold of **five** is consistent: three ordinary tests and two parameterized mutation cases are specified at `27-03-PLAN.md:166-183,197-198`.
 
 ### Concerns
 
-- **MEDIUM — NEW: the parsed CI check accepts inverted or non-executing logic.** Requiring the Test step’s `if` merely to *contain* `steps.scope.outputs.full` accepts `steps.scope.outputs.full == 'false'`, which reverses the docs-only gate. Requiring `run` to *contain* `make test` also accepts an echo or commented command. The test does not check `runs-on: ${{ matrix.os }}` or that the classifier produces the referenced output (`27-03-PLAN.md:170-175`). These gaps undermine the stronger claim that the structure proves macOS coverage and docs-only gating.
+- **LOW — Expression checks still admit an inverted gate or non-macOS runner.** See N3 above. The real workflow is correct today; this is a regression-test gap, not evidence that current CI is broken.
 
 ### Suggestions
 
-Pin the actual gate expression and matrix-to-runner linkage, and check that `make test` is an executable command rather than merely a substring. Add negative fixtures for an inverted gate and a non-executing `make test`.
+Check the expected expressions as normalized whole values, or add mutations for a negated condition and a matrix-referencing expression that always selects Ubuntu.
 
-### Risk assessment
+### Risk Assessment
 
-**Medium:** the planned prose matches current CI, but future CI drift could leave the guard green while the claim becomes false.
+Low: the revised test catches the two named mutations, but should not be treated as proof of all logically equivalent or adversarial workflow changes.
 
 ## 27-04
 
 ### Summary
 
-Records the after verdict, moves the shared parser, and compares scores with rubric and docs-only guards.
+Each after-judge attempt now requires a clean skill, records that attempt's blob, and checks the final verdict's blob against the skill at the verdict commit (`27-04-PLAN.md:79-85,135-145`). Unlike the before check, the after check correctly derives its hash dynamically, allowing the edits in 27-01 through 27-03 and any fix rounds.
 
-### Strengths and cycle 1 dispositions
+### Cycle 2 finding dispositions
 
-- **Finding 3 — RESOLVED for destructive cleanup:** Each judge attempt uses a snapshot and explicitly reverts nothing; commits use pathspecs (`27-04-PLAN.md:78-84`). The untracked-content blind spot described under 27-01 also applies here.
-- **Finding 7 — RESOLVED:** Both verdicts must match the rubric maxima, and the regression test includes a mismatched-maxima fixture (`27-04-PLAN.md:193-204`). This closes a real gap: the existing parser checks matching dimension keys and arithmetic, not prescribed maxima (`tests/test_catalog_audit_skill.py:293-310`).
-- **Finding 8 — RESOLVED:** The guard requires after-verdict history and checks both files against `HEAD` (`27-04-PLAN.md:133-137`).
-- The proposed helper move accounts for the parser’s dependent constants and the old test’s remaining `_verdict` caller (`27-04-PLAN.md:148-163`; `tests/test_catalog_audit_skill.py:251-274, 318-336`). The described verdict test has four named cases, matching its minimum count (`27-04-PLAN.md:200-210, 227-228`).
+- **N1 — Partially resolved.** The ordinary untracked-content gap is closed at `27-04-PLAN.md:79-81`; the shared special-filename and error-handling gap is counted once under 27-01.
+- **N2 — Resolved.** The clean precondition, per-attempt blob record, and final commit/blob comparison are specified at `27-04-PLAN.md:79,83-84,137`. There is no inappropriate hard-coded baseline hash for the rewritten skill.
+- **H2 — Accepted residual.** The pre-dispatch step and fail-closed executor gate remain at `27-04-PLAN.md:77,129-137`; no new evidence changes the prior assessment.
 
 ### Concerns
 
-- **HIGH — Finding 1: STILL OPEN.** The after-judge loop uses the same unsupported objective-level pre-dispatch mechanism (`27-04-PLAN.md:76-85`). The installed delegation path passes that objective to the external executor; it does not execute the orchestrator-only steps before launching it (`execute-phase.md:437-440`). Task 1 then fails closed because the after verdict is missing.
-
-- **MEDIUM — NEW: the same hard-coded checkout can invalidate the after comparison.** Plan 04 reuses the verbatim prompt from 27-01 (`27-04-PLAN.md:79`), including its absolute repository path (`27-01-PLAN.md:76`). In an isolated worktree, the after score can describe a different copy of the skill from the one being committed.
-
-- **LOW — NEW: the after gate does not establish which skill bytes were judged.** The procedure records a branch and `HEAD` but does not require `SKILL.md` to be clean before the judge or compare it with the judged commit (`27-04-PLAN.md:77-84, 133-137`). A dirty skill can be judged while the after file is committed alone. Historical verdicts need not be invalidated by later phases, but the phase’s own after verdict should identify the actual judged bytes.
+- **LOW — The validation map conflates automated verdict checks with judge-run provenance.** `27-VALIDATION.md:50` associates the `-k verdict` unit command with clean-before-dispatch checks, snapshot comparisons, and judged-blob provenance. The planned verdict tests at `27-04-PLAN.md:195-213` check file contents and score comparison; the snapshot and clean-skill steps are orchestrator procedures at `:79-81`, and the final blob check is a separate Task 1 command at `:137`. The SKILL-05 row at `27-VALIDATION.md:49` otherwise agrees with 27-03, subject to the N3 limitation above.
 
 ### Suggestions
 
-Use the same supported handoff and active-root correction as 27-01. At judgment time, require a clean skill or record and verify its content hash; this need not impose a permanent hash pin on later onboarding phases.
+Split the SKILL-06 validation row into the automated verdict test, the Task 1 commit/blob checks, and the orchestrator-observed clean-tree/snapshot procedure. Do not imply pytest proves the latter.
 
-### Risk assessment
+### Risk Assessment
 
-**High:** the after verdict is required to close SKILL-06, but the standard dispatch path does not produce it. The parser move and maxima comparison are otherwise well specified.
+Low: the final verdict's recorded blob is checked once against its commit, while later skill edits remain possible. Provenance still depends on the declared orchestrator procedure.
 
----
+### Status: Issues Found — 3 LOW concerns, including the two partially resolved cycle 2 findings
 
-**Scope and limitations:** This was a read-only source review at `c33b8658`; I did not execute the plans, run the full test suite, invoke skill-judge, or test the workflows end to end. The deferred limitation that status labels do not prove the truth of `written:` claims remains a judgment risk, as the plans acknowledge.
+**Not checked:** The phase was not executed and the full test suite was not run; this was a read-only plan review. **Residual risk:** the judge handoffs remain manual and fail closed if omitted.
 
 ---
 
 ## Consensus Summary
 
-One grounded reviewer ran (`opencode-referee-one`; its section carries `file:line` evidence and no discount marker), so there are no cross-reviewer "Agreed" items. The summary below is the review agent's synthesis after checking the reviewer's findings against source and re-judging every cycle 1 finding against the current plans.
+One grounded reviewer ran (`opencode-referee-one`; its section carries `file:line` evidence and no discount marker), so there are no cross-reviewer "Agreed" items. The summary below is the review agent's synthesis after checking each reviewer claim against source.
 
 ### Agreed Strengths
 
-Single reviewer; no corroboration is possible. Confirmed independently against source:
+Single reviewer; no corroboration is possible. Confirmed independently against source by the review agent:
 
-- Eight of the ten cycle 1 findings are cleanly resolved in the plan text, and the two plan-level count claims still add up: `-k table` 5 (Task 2) then 14 (Task 3), `-k rules` 5 then 14, `-k conflicts` 3, `-k macos_testing` 3, `-k macos_apps` 4, `-k verdict` 4, and 58 `assert` lines in `tests/test_catalog_audit_skill.py` (`grep -c assert` prints 58 at HEAD).
-- The new CI-structure test passes on HEAD's workflow: a dry run with `yaml.safe_load` of `.github/workflows/ci.yml` gives matrix `['ubuntu-latest', 'macos-latest']`, `runs-on: ${{ matrix.os }}`, one step named `Test` (index after `Classify the change`, whose `id` is `scope`), `if: steps.scope.outputs.full != 'false'` and `make test` in `run`. The house pattern `cast(dict[Any, Any], yaml.safe_load(...))` is at `tests/test_verify_registry_workflow.py:14`, and `pyyaml` / `types-pyyaml` are in `pyproject.toml:29-30`.
-- The no-row / with-row fixture works: the real registry text plus the `demo-term` block loads and returns the eight ids plus `demo-term` (run with `.venv/bin/python -I` against a scratch copy).
-- All four plans pass `gsd-tools verify.plan-structure` (`valid: true`, no errors or warnings); the native `auto` / `tracer` task types are the ones `execute-plan.md:229-234` defines.
+- Cycle 2 N2 is fully resolved. `git rev-parse 1bb31e00:.claude/skills/tool-onboarding/SKILL.md` and `git rev-parse HEAD:.claude/skills/tool-onboarding/SKILL.md` both print `8fda04a7a1af006f1dcbdda82a8e759245e5f872`, `git diff --quiet 1bb31e00 HEAD -- <SKILL.md>` exits 0, `git log -1 --format=%h -- <SKILL.md>` prints `1bb31e00`, and `git status --porcelain -- .claude/skills/tool-onboarding/` prints nothing (HEAD is `d93b86d0`). The 27-04 side carries no hard-coded blob: its acceptance and verify derive it with `git rev-parse "$c:..."` (27-04-PLAN.md:137,144-145).
+- The `ci_workflow_problems` function behaves as the plan states. A dry run with `.venv/bin/python -I` (a scratch re-implementation of the plan's check list against the real `.github/workflows/ci.yml`) printed `[]` for the real workflow, exactly `['runs-on does not use matrix.os']` for the fixed-runner mutation and exactly `["Test step if is not gated by != 'false'"]` for the inverted-gate mutation.
+- The `-k macos_testing` count of 5 is exact: `test_macos_testing_three_clauses` (1), `test_macos_testing_matches_the_ci_workflow` (1), `test_macos_testing_ci_check_refuses_mutations[fixed-runner|inverted-gate]` (2), `test_macos_testing_sits_in_step_7_and_is_ascii` (1) (27-03-PLAN.md:166-183,197-198,300). The 58 `assert` lines in `tests/test_catalog_audit_skill.py` still hold (`grep -c assert` prints 58).
+- The snapshot command works on the current tree: it prints the `M .planning/state.json` and untracked goals-file status lines, one `sha256` of the `git diff HEAD --binary` stream, and one `sha256sum` line for the untracked goals file; the empty-untracked case is covered by `xargs -r`.
 
 ### Agreed Concerns
 
-None (single reviewer). See "HIGH verification" for the reviewer's two HIGH items and how each was counted.
+None (single reviewer). See "HIGH verification" and "Cycle 2 findings: disposition" for how each reviewer finding was counted.
 
 ### Divergent Views
 
@@ -168,93 +155,64 @@ None (single reviewer).
 
 ## HIGH verification (review agent, against repo source)
 
-The reviewer raised 2 HIGH items (both are cycle 1 Finding 1, repeated for 27-01 and 27-04). Result: 0 counted as HIGH.
+The reviewer raised no HIGH this cycle. Result: 0 HIGH counted. The two cycle 2 HIGH items (H1 in 27-01, H2 in 27-04: nothing in GSD runs an objective-level pre-dispatch prerequisite) were counted as 0 in cycle 2 for the reasons recorded there (the orchestrator that builds the cross-AI prompt reads the objective block; the plan's native `auto` Task 1 gate fails closed with a visible `BLOCKED:` stop before any edit; the recovery is one manual step; `checkpoint:human-action` was rejected on the record). The reviewer re-read them this cycle as "Accepted residual" and found no new evidence; the review agent found none either (the plan text at 27-01-PLAN.md:73-88 and 27-04-PLAN.md:76-85 is unchanged in substance, only the snapshot and blob steps were extended). Not counted.
 
-| # | Reviewer HIGH | Source check | Verdict |
-|---|---------------|--------------|---------|
-| H1 | 27-01: the pre-dispatch handoff is not implemented by the orchestrator | The mechanism claim is true: `.claude/gsd-core/workflows/execute-phase/detail/elaboration.md:54-99` (step 2.5) builds the prompt from `<objective>` and `<tasks>` and pipes it to `workflow.cross_ai_command` with no hook for objective-defined orchestrator steps; `execute-phase.md:1089-1108` (`checkpoint_handling`) acts only when an executor returns a checkpoint; `bin/lib/phase.cjs:987-988` only sets `hasCheckpoints` for `autonomous: false`. Nothing in GSD runs the PRE-DISPATCH PREREQUISITE on its own. But it is not a HIGH: (a) the orchestrator that builds the cross-AI prompt (elaboration.md:85 "Extract `<objective>` and `<tasks>`") reads the very objective block that carries the prerequisite, and the goal prompt makes that session the orchestrator (`.planning/goals/2026-11-19-phases-27-...md:17`); (b) the cycle 1 fix this review recommended is exactly what the plan now does (native `type="auto"` verify gate, `autonomous: false`, executor prints `BLOCKED: 27-01 pre-dispatch prerequisite (before verdict) not done`, 27-01-PLAN.md:130-132); (c) the failure mode is a visible stop before any edit and one manual step (run the judge, commit the verdict, re-dispatch), never wrong output or data loss; (d) the plan records why `checkpoint:human-action` was rejected (an unattended run would stop, and the cross-AI path has no checkpoint protocol; 27-01-PLAN.md:318). | not counted; resolved by the cycle 1 mitigation, residual noted below |
-| H2 | 27-04: the after-judge handoff has the same gap | Same evidence and same fail-closed design (27-04-PLAN.md:76-85, `BLOCKED: 27-04 pre-dispatch prerequisite (after verdict) not done` at :130). One extra execution fact the reviewer did not state: step 2.5 delegates only `ready` plans (`execute-phase.md:438`, `phase.cjs:987-1000` #4628), so 27-02..27-04 are not delegated in the first pass; the orchestrator re-dispatches per wave, and 27-04's prerequisite (step 1 requires 27-01..27-03 complete) naturally sits between wave 3 and wave 4. | not counted; same disposition as H1 |
+## Cycle 2 findings: disposition against the CURRENT plans
 
-No single-reviewer discount applies (the reviewer cited `file:line` throughout), so the consensus gate was not needed; the counting above is the review agent's own source-based severity call.
-
-## Cycle 1 findings: disposition against the CURRENT plans
-
-| # | Cycle 1 finding | Status now | Evidence |
+| # | Cycle 2 finding | Status now | Evidence |
 |---|-----------------|------------|----------|
-| 1 | `orchestrator-step` task type unsupported | RESOLVED (residual: nothing in GSD enforces the prerequisite; fail-closed gate only) | 27-01-PLAN.md:15,73-88,122-149; 27-04-PLAN.md:15,76-85,120-146; `verify.plan-structure` valid; see H1/H2 |
-| 2 | exact-eight row count | RESOLVED | 27-01-PLAN.md:166-168 (`ids` non-empty, `table_drift == []`), `with-row` case; dry run of the fixture loads (above) |
-| 3 | "revert anything else in git status" | RESOLVED for the destructive part (snapshot diff, nothing reverted, trailing pathspec); a content blind spot in the new snapshot is NEW finding N1 | 27-01-PLAN.md:75-77,87; 27-04-PLAN.md:78-84 |
-| 4 | "every terminal and IDE entry" vs `n/a` cells; VS Code (d) | RESOLVED | 27-02-PLAN.md:143,147 ("that has the capability", "`n/a` with the reason"); 27-01-PLAN.md:195 (vscode (d) `unverified`, (b)/(c) `n/a` for SKILL-07) |
-| 5 | kitty example claimed as current | RESOLVED | 27-03-PLAN.md:136-137; `installer/terminal_shell.py:598` is the real alacritty line; item 1 must not contain "kitty" (27-03-PLAN.md:124) |
-| 6 | `# Verified` example mixed methods | RESOLVED | 27-03-PLAN.md:232-241 (three separate blocks), test needs exactly three `# Verified` lines in step 9 (:219); SKILL.md step 9 has no `# Verified` line start today (grep) |
-| 7 | rubric maxima not compared | RESOLVED | 27-04-PLAN.md:196,204 (`max` vs `dict(zip(DIMENSIONS, RUBRIC_MAX))`, mismatched-maxima fixture); early guard 27-01-PLAN.md:136 |
-| 8 | `git ls-files --error-unmatch` accepts a staged file | RESOLVED | 27-01-PLAN.md:138; 27-04-PLAN.md:136 (`git log -1 --format=%h -- <file>` non-empty, `git diff --quiet HEAD`) |
-| 9 | kitty config cell ignores XDG | RESOLVED | 27-01-PLAN.md:191 matches `installer/terminal_shell.py:151-157` |
-| 10 | CI check greps loose strings | RESOLVED (structural, dry-run passes); a tightening is NEW finding N3 | 27-03-PLAN.md:170-175 |
-| H3a | `bad_status_cells` proves label, not truth | accepted deferral, stated in T-27-03 | 27-01-PLAN.md:288 |
+| N1 | Snapshot misses content edits to already-untracked files | PARTIALLY RESOLVED (ordinary case closed; a filename edge case remains, see New 1) | 27-01-PLAN.md:25 (must_haves), :76 (step 2, the `xargs -0 -r sha256sum` part), :77 (step 4 reuses it), :289 (T-27-02); 27-04-PLAN.md:27, :79 (step 2), :260 (T-27-13). Dry run: an edit inside an untracked file changes the hash line |
+| N2 | 27-04 clean-skill precondition and SKILL.md blob record | RESOLVED | 27-04-PLAN.md:28 (truth), :79 (clean check before every dispatch, blob per attempt), :83-84 (after and ROUND `- Judge:` name the blob), :137 (verify: blob at the verdict commit), :144-145 (acceptance); 27-01-PLAN.md:75,82,139,146 for the before side (blob `8fda04a7...` verified above) |
+| N3 | 27-03 CI test accepted an inverted gate and did not link `runs-on` to the matrix | RESOLVED for the two cases named; the plan itself says the checks "pin the runner linkage and the gate polarity, not the whole expressions" (27-03-PLAN.md:178), which is an explicit, accepted limit | 27-03-PLAN.md:23,44,170-182,198,284; dry run above (real `[]`, each mutation exactly its own message) |
+| H1/H2 | Pre-dispatch handoff not implemented by the GSD orchestrator | Accepted declared residual (not counted), unchanged | 27-01-PLAN.md:73-88,122-149; 27-04-PLAN.md:76-85,120-146 |
 
-## Review-agent verification of the reviewer's NEW findings
+## Review-agent verification of the reviewer's findings this cycle
 
-- NEW MEDIUM (27-01 and 27-04), snapshot misses edits to already-untracked files: TRUE. `git status --porcelain=v1 --untracked-files=all` lists untracked paths only and `git diff HEAD --binary` covers tracked files only, so a changed byte inside the pre-existing untracked goals file leaves both snapshot parts equal (27-01-PLAN.md:75-77; 27-04-PLAN.md:78). Severity LOW: the judge is already forbidden to write, and the snapshot is a backstop, but the plan text claims "any delta stops the run" (must_haves, T-27-02, T-27-13). Actionable (N1).
-- NEW MEDIUM (27-01/27-04), judge pinned to the main checkout, not a worktree: NOT COUNTED. The cross-AI path runs "from the project root" (elaboration.md:96, step 3), the orchestrator runs the judge before dispatch from that same checkout and commits on the phase branch (`git worktree list` shows one worktree, the phase branch), and the worktree gate applies to the normal-executor fallback only (`execute-phase.md:608-614`), whose worktree is forked from a HEAD that already holds the committed verdict and the clean skill. The judged bytes equal the committed bytes.
-- NEW MEDIUM (27-03), CI check accepts an inverted gate or a non-executing `make test`, and does not link `runs-on` to the matrix: PARTLY TRUE. `if` is checked by `contains steps.scope.outputs.full`, so `== 'false'` would pass; `runs-on` is not checked, so a job with the matrix declared but a fixed runner would pass (HEAD: `runs-on: ${{ matrix.os }}`, `if: steps.scope.outputs.full != 'false'`, ci.yml:20,37,43). An echoed or commented `make test` is implausible after YAML parsing (comments are dropped; the step `run` is the shell text). Severity LOW; the cycle 1 finding (comment or other job keeps the strings green) is closed. Actionable but optional (N3).
-- NEW LOW (27-04), the after gate does not establish which skill bytes were judged: TRUE. 27-04-PLAN.md:77-85 never asserts `git status --porcelain -- .claude/skills/tool-onboarding/` is empty before a dispatch (27-01-PLAN.md:74 does for the before verdict), and the `- Judge:` bullet records only branch and HEAD short sha. Actionable LOW (N2).
+- New 1, LOW, snapshot hashing breaks on option-like or `-` filenames and does not require every pipeline part to succeed (27-01-PLAN.md:76, 27-04-PLAN.md:79): TRUE, reproduced here in a scratch repo. With untracked files named `-` and `--help` at the repository root, `git ls-files --others --exclude-standard -z | xargs -0 -r sha256sum` printed the `sha256sum` usage text (option parsing) instead of hash lines, and `-` alone reads standard input. The plan runs the command in a plain `{ ...; }` group whose exit status nothing checks, so two failed snapshots can be equal and incomplete. Likelihood is very low (an untracked repository-root file named `-` or starting with `--`), and the failure is a missed read-only backstop, never data loss. Actionable LOW, cheap to fix: give the hashing step `./`-prefixed names (for example `git ls-files --others --exclude-standard -z | sed -z 's|^|./|' | xargs -0 -r sha256sum`) and say that any non-empty stderr from the snapshot command stops the run.
+- Reviewer's N3 residual (a negated expression such as `!(steps.scope.outputs.full != 'false')`, or a `runs-on` expression that mentions `matrix.os` but resolves both entries to Ubuntu, would pass): TRUE as a logic statement, but not counted. The plan states the limit in the test's own description ("pin the runner linkage and the gate polarity, not the whole expressions", 27-03-PLAN.md:178), the real file is correct today, and the two realistic regressions (fixed runner, `== 'false'`) are covered by fixtures. This is an explicit, accepted limit rather than an overclaim; the truths text at 27-03-PLAN.md:23 ("with the polarity `!= 'false'`") reads as the substring check the behavior section defines. Not counted.
+- Reviewer's 27-04 LOW, 27-VALIDATION.md:50 conflates the `-k verdict` unit command with orchestrator provenance procedures: TRUE as a wording observation about a validation-map row, but NOT COUNTED. The row's "Secure Behavior" column lists the whole requirement's behavior while its command column lists only the pytest part; the orchestrator steps and the blob check are covered by the plans' own Task 1 verify commands (27-01-PLAN.md:139, 27-04-PLAN.md:137) and objective steps, which the executor and orchestrator read. 27-VALIDATION.md is not an input the executor runs, so nothing is invisible to execution. Optional tidy-up if the planner touches the row again.
 
 ## Actionable Non-HIGH Concerns (PLAN.md change still needed)
 
-1. LOW (N1), 27-01 PRE-DISPATCH steps 2 and 4, 27-04 steps 2 and 4, T-27-02, T-27-13, and the must_haves line that says "any delta": extend the snapshot command with a content hash of untracked files, for example `{ git status --porcelain=v1 --untracked-files=all; git diff HEAD --binary | sha256sum; git ls-files --others --exclude-standard -z | xargs -0 -r sha256sum; }`, or narrow the claim to "tracked changes and the list of untracked paths".
-2. LOW (N2), 27-04 PRE-DISPATCH steps 1-2 and 6: before every judge dispatch require `git status --porcelain -- .claude/skills/tool-onboarding/` to print nothing, and record `git rev-parse HEAD:.claude/skills/tool-onboarding/SKILL.md` (the judged blob) in the `- Judge:` bullet of the after and ROUND files, so the after verdict names the bytes it scored.
-3. LOW (N3), 27-03 Task 2 `test_macos_testing_matches_the_ci_workflow`: also assert `"matrix.os" in job["runs-on"]` and `"!= 'false'" in test_step["if"]` (the gate polarity), with a one-line note that these pin the linkage, not the whole expression.
+1. LOW (N1 residual), 27-01-PLAN.md objective steps 2 and 4 (:76-77) and 27-04-PLAN.md objective steps 2 and 4 (:79-81): replace the untracked-hash part of the snapshot with a filename-safe form (`./`-prefixed names, for example `git ls-files --others --exclude-standard -z | sed -z 's|^|./|' | xargs -0 -r sha256sum`) and state that any stderr output from the snapshot command stops the run, so two failed snapshots cannot compare equal. T-27-02 (27-01-PLAN.md:289), T-27-13 (27-04-PLAN.md:260) and the must_haves line at 27-04-PLAN.md:27 quote the command and need the same wording.
 
-Not counted (accepted, already declared by the plans): `bad_status_cells` checks the label, not the truth (H3a); `ASK_RE` and `option_as_alt_unnegated` are heuristics paired with the 27-04 skill-judge pass; the `a,b,c,d` order is now sorted; the after verdict is historical evidence. Residual risk of H1/H2 (LOW, informational): GSD has no hook that runs an objective-level prerequisite, so an orchestrator that dispatches without reading the objective sees the executor's `BLOCKED:` stop; the recovery is one manual step.
+Not counted (accepted, already declared by the plans): the N3 expression-level limit; the VALIDATION row wording; `bad_status_cells` checks the label, not the truth; `ASK_RE` and `option_as_alt_unnegated` are heuristics paired with the 27-04 skill-judge pass; the after verdict is historical evidence; the judge handoff is a manual, fail-closed orchestrator step (H1/H2, informational).
 
 ---
 
 ## Verification coverage
 
-Source-grounding pass (`plan_review.source_grounding` is on; `plan_review.source_grounding_authority` is `grep`, the seam `gsd-tools drift-guard authority` answered `intel`, and the seam answer was used). The `intel` adapter analyzes JavaScript only, so every Python, TOML, YAML and Markdown symbol is UNCHECKABLE under that adapter (severity INFO, never a block). The review agent resolved them anyway by reading the files directly (grep-adapter semantics) and recorded them as VERIFIED with `file:line`. No symbol was MISSING; no hard block.
+Source-grounding pass (`plan_review.source_grounding` is on; the seam `gsd-tools drift-guard authority --raw` answered `intel`, and the seam answer was used; `drift-guard severity --status UNCHECKABLE --authority intel` returned `INFO`, `hardBlock: false`). The `intel` adapter analyzes JavaScript only, so every Python, TOML, YAML, Markdown and git symbol is UNCHECKABLE under that adapter (INFO, never a block). The review agent resolved them anyway by reading files and running read-only git commands (grep-adapter semantics) and recorded them as VERIFIED with `file:line` or command output. No symbol was MISSING; no hard block.
 
-Symbols the plans declare under "Artifacts this phase produces" (new in this phase, not verified): `27-SKILLJUDGE-before.md`, `27-SKILLJUDGE-after.md`, `27-SKILLJUDGE-ROUND-{n}.md`, `tests/test_tool_onboarding_skill.py` and its symbols (`REPO_ROOT`, `SKILL`, `REGISTRY`, `TABLE_HEADING`, `ID_CELL_RE`, `STATUS_RE`, `_SEPARATOR_ROW_RE`, `_text`, `_step`, `_subsection`, `_fixture`, `table_rows`, `table_ids`, `registry_ids`, `table_drift`, `bad_status_cells`, `RULES_HEADING`, `EXTRAS_HEADING`, `ASK_RE`, `rule_items`, `ask_sentences`, `option_as_alt_unnegated`, `CONFLICTS_HEADING`, `MACOS_TESTING_HEADING`, `MACOS_APPS_HEADING`, `CI_WORKFLOW`, `_items`, `_verdict_doc`, `verdict_regressions`, `_phase_dir`), `tests/skill_verdicts.py` (`VERDICT_KEYS`, `GRADE_FLOORS`, `PASS_PERCENT`, `DIMENSIONS`, `RUBRIC_MAX`, `grade`, `parse_verdict`), the SKILL.md headings (`#### Closed per-terminal table`, `#### Terminal and IDE defaults`, `#### Extras are asked`, `#### Conflicts`, `#### Testing macOS behavior`, `#### macOS apps`, the renamed step 7 heading), the four new LEDGER keys plus the SKILL.md key, and the `TEST_READ` entry `.planning/*27-SKILLJUDGE-*`.
+Symbols the plans declare under "Artifacts this phase produces" (new in this phase, not verified): `27-SKILLJUDGE-before.md`, `27-SKILLJUDGE-after.md`, `27-SKILLJUDGE-ROUND-{n}.md`, `27-01-tree-before.txt` and `27-01-tree-after.txt`, `27-04-tree-before-{k}.txt` and `27-04-tree-after-{k}.txt` (scratchpad files outside the repository), `tests/test_tool_onboarding_skill.py` and its symbols (including `CI_WORKFLOW`, `_ci_workflow`, `ci_workflow_problems`, the cases `fixed-runner` and `inverted-gate`, and the tests `test_macos_testing_three_clauses`, `test_macos_testing_matches_the_ci_workflow`, `test_macos_testing_ci_check_refuses_mutations`, `test_macos_testing_sits_in_step_7_and_is_ascii`), `tests/skill_verdicts.py` (`VERDICT_KEYS`, `GRADE_FLOORS`, `PASS_PERCENT`, `DIMENSIONS`, `RUBRIC_MAX`, `grade`, `parse_verdict`), the new SKILL.md headings, the four new LEDGER keys plus the SKILL.md key, and the `TEST_READ` entry `.planning/*27-SKILLJUDGE-*`.
 
-Pre-existing symbols, VERIFIED (read in this review):
+Pre-existing symbols read or run in this cycle, all VERIFIED:
 
 | Kind | Symbol (plan line quoted) | Evidence |
 |------|---------------------------|----------|
-| file | `.claude/skills/tool-onboarding/SKILL.md` "268 lines ... byte-identical to 1bb31e00" (27-01-PLAN.md:115) | `wc -l` 268; `git diff --quiet 1bb31e00 HEAD -- <file>` exits 0 |
-| file | `.claude/skills/catalog-audit/SKILL.md:80-81` heading quote (27-02-PLAN.md:142) | `:80` ends "... do not assume`. Its", `:81` starts "TUNE-04 rule"; `tests/test_catalog_audit_skill.py:83` `_STEP_RE` and the full-line check at :104-108 |
-| function | `load_tools`, `Category.TERMINAL`/`EDITOR` (27-01-PLAN.md:161,183) | `installer/model.py:584`; returns exactly alacritty, herdr, jetbrains-toolbox, kitty, neovim, sublime, vscode, wezterm (re-run at HEAD) |
-| function | `_kitty_config_path`, `_xdg_config_home` (27-01-PLAN.md:191) | `installer/terminal_shell.py:151-157` |
-| function | vscode `terminal.integrated.defaultProfile.{linux,osx}` = zsh (27-01-PLAN.md:164,195) | `installer/agent_settings.py:742-749` |
-| function | `_skill_section` (27-01-PLAN.md:159,179) | `tests/test_docs.py:318-324` |
-| function/consts | `_parse_verdict`, `_grade`, `_verdict`, `_DIMENSIONS`, `_RUBRIC_MAX`, `_VERDICT_KEYS`, `_GRADE_FLOORS`, `_PASS_PERCENT`, `PHASE_DIR` (27-04-PLAN.md:152,160-162) | `tests/test_catalog_audit_skill.py:251-336`; `_parse_verdict(document, *, final)` signature matches the plan's `final=False` calls (:270-274); `_RUBRIC_MAX` unused by the parser (:293-310) |
-| function | `_STEP_RE`, `_table_rows`, `_assert_all_in` (27-02/03) | `tests/test_catalog_audit_skill.py:82-101` |
-| consts | `TEST_READ`, `is_docs_path` (27-04-PLAN.md:188,220) | `devtools/docs_only.py:20-35` (`fnmatchcase`, `.claude/*` and `tests/*` are test-read) |
-| consts | `LEDGER`, `markdown_literals`, `test_the_rule_matrix` (27-01/04) | `tests/test_docs_only.py:25-45,85-88,191-260` |
-| string | `alacritty: partial: you already bind` (27-03-PLAN.md:107,136) | `installer/terminal_shell.py:598` (f-string; also :560, :564, :768) |
-| function | `startswith("partial:")` consumer (27-03-PLAN.md:104,129) | `installer/version_status.py:1598` |
-| function | `_cask` with `--appdir={applications_dir()}`, `applications_dir()` (27-03-PLAN.md:100,228) | `installer/executors.py:699-704`, `installer/locations.py:89-91` |
-| params | `app` and `cask` params (27-03-PLAN.md:101) | `installer/model.py:96,105` (as read in cycle 1; unchanged) |
-| string | kitty macOS `script` `bin_dir = "/Applications/kitty.app/Contents/MacOS"` (27-03-PLAN.md:103,231) | `installer/registry.toml:3047` |
-| CI | job `validate-and-test`, matrix, `Classify the change` (`id: scope`), gated `Test` step (27-03-PLAN.md:105,170-175) | `.github/workflows/ci.yml:15-50`; parsed dry run agrees |
-| pattern | `cast(dict[Any, Any], yaml.safe_load(...))` (27-03-PLAN.md:106,163) | `tests/test_verify_registry_workflow.py:4-14` |
-| dependency | `pyyaml`, `types-pyyaml` (27-03-PLAN.md:106) | `pyproject.toml:29-30` |
-| alacritty Linux-only (27-01-PLAN.md:193) | methods are cargo_distrobox/dnf/apt/pacman only | `installer/registry.toml` alacritty block |
-| GSD | `orchestrator-step` absent; `type="auto"`/`tracer`/`checkpoint:*` handling; cross-AI step 2.5; `ready` gate | `.claude/gsd-core/workflows/execute-plan.md:229-234`, `execute-phase/detail/elaboration.md:54-99`, `bin/lib/phase.cjs:987-1000` |
-| id | commits `1bb31e00`, `c33b8658`, `b7c2c37e` | resolve (`git log`, `git diff`) |
-| lint scope | vulture covers `installer` and `devtools` only; ruff selects E,F,I,B,UP,SIM; pyright strict covers tests (27-04-PLAN.md:93) | `pyproject.toml:35-45,62-64` |
+| git blob | "today `8fda04a7a1af006f1dcbdda82a8e759245e5f872`, the 1bb31e00 blob" (27-01-PLAN.md:75; :146) | `git rev-parse 1bb31e00:.claude/skills/tool-onboarding/SKILL.md` and `HEAD:...` both print that hash |
+| git | `git diff --quiet 1bb31e00 HEAD -- .claude/skills/tool-onboarding/SKILL.md` exits 0 (27-01-PLAN.md:75) | exit 0; `git log -1 --format=%h -- <file>` prints `1bb31e00`; `git status --porcelain -- .claude/skills/tool-onboarding/` prints nothing |
+| command | snapshot `{ git status --porcelain=v1 --untracked-files=all; git diff HEAD --binary \| sha256sum; git ls-files --others --exclude-standard -z \| xargs -0 -r sha256sum; }` (27-01-PLAN.md:76; 27-04-PLAN.md:79) | run at the repository root: two status lines, one diff hash, one untracked-file hash; the `-`/`--help` filename edge case reproduced in a scratch repo (New 1) |
+| CI | job `validate-and-test`, `runs-on: ${{ matrix.os }}`, `matrix.os: [ubuntu-latest, macos-latest]`, step `Classify the change` (`id: scope`), step `Test` with `if: steps.scope.outputs.full != 'false'` and `run` containing `make test` (27-03-PLAN.md:105,170-175) | `.github/workflows/ci.yml:15-22,32-50`; scratch dry run of the plan's `ci_workflow_problems` logic gives `[]`, and each mutation exactly its own message |
+| count | `tests/test_catalog_audit_skill.py` has 58 `assert` lines (27-04-PLAN.md:~104) | `grep -c assert` prints 58 |
+| count | `-k macos_testing` yields 5 cases (27-03-PLAN.md:198) | enumerated from the plan's test list (:166-183,300): 1 + 1 + 2 + 1 |
+| function/consts | `_parse_verdict`, `_DIMENSIONS`, `_RUBRIC_MAX`, `_grade` (27-01-PLAN.md:153; 27-04-PLAN.md:148-163) | `tests/test_catalog_audit_skill.py:251-336` (read in cycle 2; file unchanged since) |
+| GSD | `orchestrator-step` absent; cross-AI step 2.5; `ready` gate | `.claude/gsd-core/workflows/execute-phase/detail/elaboration.md:54-99`, `bin/lib/phase.cjs:987-1000` (read in cycle 2; GSD tree unchanged) |
+| id | commits `d93b86d0` (HEAD), `c33b8658`, `893ba95b`, `1bb31e00` | resolve in `git log` / `git diff c33b8658 d93b86d0 --stat` (five planning files changed: plans 01, 03, 04, REVIEWS, VALIDATION) |
+| dependency | `pyyaml`, `types-pyyaml`; cast pattern in `tests/test_verify_registry_workflow.py:14` | `pyproject.toml:29-30` and the test file (cycle 2); `.venv/bin/python -I` imports `yaml` |
 
 Not checked and why (UNCHECKABLE, INFO only):
 
-- Signatures and behaviour of the not-yet-written test helpers (`ASK_RE` on the rewritten skill, `option_as_alt_unnegated` over the new table cells, `ID_CELL_RE`, the pyright strict result of the aliased private imports in `tests/test_catalog_audit_skill.py`) cannot be run before execution; they were only reasoned about from plan text.
-- `~/.claude/skills/skill-judge/SKILL.md` and the judge subagent's behaviour live in the real user home that this run must not touch; the rubric version 4 and maxima `(20,15,15,15,15,15,15,15)` were confirmed only from `tests/test_catalog_audit_skill.py:270-274` and the cycle 1 note on `24.3-SKILLJUDGE-FINAL.md`.
-- The vendor-doc claim for VS Code `terminal.integrated.splitCwd` (27-01-PLAN.md:195) is an external fact, not checked here; the plan stores it as `unverified`.
+- Signatures and behaviour of the not-yet-written test helpers (`ci_workflow_problems` as real pytest code under pyright strict, `ASK_RE`, `option_as_alt_unnegated`, `ID_CELL_RE`) cannot be run before execution; the dry run above used a scratch re-implementation of the plan's check list, not the future test module.
+- `~/.claude/skills/skill-judge/SKILL.md` and the judge subagent's behaviour live in the real user home that this run must not touch; the rubric version 4 and maxima `(20,15,15,15,15,15,15,15)` were confirmed only from `tests/test_catalog_audit_skill.py:270-274`.
+- macOS `xargs`/`sha256sum` availability for the snapshot command (the orchestrator runs on this Linux host; macOS runs are deferred to the owner).
 - Neither the full test suite nor any macOS behaviour was run; no code or plan file was edited.
 
 Cross-artifact fact-drift pass (advisory; contributes to neither count):
 
 - Phase status: `gsd-tools drift-guard phase-status --phase 27` returned `lag` (STATE.md "Ready to execute", ROADMAP.md "Not started", authority STATE.md): two non-terminal statuses one lifecycle step apart. Not a finding.
-- ROADMAP Success Criteria vs PLAN `must_haves.truths`: criteria 1-5 map onto 27-02 (rules), 27-01 (closed table, coverage test, before verdict), 27-03 (conflict, macOS apps, macOS testing) and 27-04 (after verdict, comparison). ROADMAP.md:84,93 now says "pre-dispatch orchestrator prerequisite" and matches the plans; no contradiction. The plans add truths beyond the roadmap, which is sanctioned.
-- Requirement IDs: ROADMAP `**Requirements:** SKILL-01..06` vs PLAN `requirements:` (27-01 SKILL-02 and SKILL-06, 27-02 SKILL-01, 27-03 SKILL-03/04/05, 27-04 SKILL-06) vs REQUIREMENTS.md traceability rows 114-119: consistent. The roadmap plan line for 27-01 now also names SKILL-06; consistent with the plan.
-- CONTEXT.md `Decisions` vs PLAN usage: D-06 (fresh read-only judge, before never re-run), D-08 (ROUND files), D-10 (`.dmg` and cask CLI-link gaps, matches REQUIREMENTS.md:16 amendment), D-12, D-13, D-15, D-16 all agree with the plans. REQUIREMENTS KEYS-03 (clear is Phase 28) agrees with rule (c) "planned for phase 28"; REQUIREMENTS.md:123 puts KEYS-04 (new tab in the current directory) in Phase 28 too, while rule (d) is stated as a rule without a phase tag; wording difference only, not drift.
-- 27-VALIDATION.md rows (changed in c33b8658) agree with the plans' test commands and thresholds; no contradiction.
+- ROADMAP Success Criteria vs PLAN `must_haves.truths`: unchanged from cycle 2; the round 2 edit only added snapshot, blob and CI-check detail inside truths already tied to criteria 1-5 (27-02 rules, 27-01 closed table and before verdict, 27-03 conflict, macOS apps and macOS testing, 27-04 after verdict and comparison). Plans add truths beyond the roadmap, which is sanctioned. No contradiction.
+- Requirement IDs: ROADMAP `**Requirements:** SKILL-01..06` vs PLAN `requirements:` frontmatter vs REQUIREMENTS.md traceability: unchanged and consistent.
+- CONTEXT.md `Decisions` vs PLAN usage: D-06 (fresh read-only judge, before never re-run), D-08 (ROUND files), D-15 (macOS testing rule: golden-file test on both OSes, CI covers file paths, real-Mac UAT deferred) agree with the plans. No contradiction.
+- 27-VALIDATION.md rows (changed in d93b86d0): the SKILL-05 row (:49) now names `runs-on` using `matrix.os`, the `!= 'false'` gate and the two mutations, and the `-k macos_testing` command, which agrees with 27-03-PLAN.md:23,198; the SKILL-06 row (:50) agrees with the plans' snapshot and blob wording (its wording-level overclaim is noted above, not counted). No contradiction.
 - Skipped axes: none (STATE.md, ROADMAP.md, CONTEXT.md, SPEC.md and REQUIREMENTS.md all present).
