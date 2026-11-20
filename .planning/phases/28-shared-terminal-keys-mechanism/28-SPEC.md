@@ -93,7 +93,7 @@ Alacritty's owned keys region moves out of `installer/terminal_shell.py` into on
 | idempotency | R2 | ✅ covered | Acceptance 4: a second reconfigure leaves the bytes unchanged (apply twice equals apply once) |
 | concurrency | R2 | 🧪 backstop | held-out test: reconfigure racing an uninstall in a scratch HOME ends with no region and no error |
 | boundary | R3 | ✅ covered | Acceptance 6 and 7: both OSes covered by the fixture row (Cmd+K macOS, Ctrl+Shift+K Linux), plus a scrollback-erase boundary in the widget bytes |
-| adjacency | R3 | ✅ covered | Prohibitions row 2: the widget sits inside its own marker block next to user lines; apply then strip leaves the file byte-identical |
+| adjacency | R3 | ✅ covered | Prohibitions row 2: the widget sits inside its own marker block next to user lines; apply then strip removes the whole block and leaves every user line untouched *(amended 2026-11-20, needs confirmation: `shellrc.strip_block` keeps one blank separator line by design, so the file is byte-identical only when it was empty or ended in a blank line; the test pins the exact result for each input; real fix tracked in backlog 999.27)* |
 | empty | R3 | ✅ covered | Acceptance 6: a managed config with no widget (before apply) differs from one with it; an empty rc file gets the block |
 | encoding | R3 | ✅ covered | Acceptance 6: the byte-level test asserts the exact escape bytes (ESC [ H, ESC [ 2 J, ESC [ 3 J) as bytes, not rendered text |
 | ordering | R3 | ✅ covered | Acceptance 6: the widget emits the scrollback erase and the screen clear in one fixed order asserted by bytes |
@@ -110,7 +110,7 @@ Alacritty's owned keys region moves out of `installer/terminal_shell.py` into on
 | Prohibition (must-NOT statement) | Requirement | Status | Verification / Reason |
 |----------------------------------|-------------|--------|------------------------|
 | The mechanism MUST NOT overwrite or remove a keys binding outside its owned region (user bindings are never touched) | 1 | resolved | test: existing Alacritty tests plus a fixture with user bindings beside the region |
-| The zsh widget MUST NOT run or write outside the managed configuration block, and MUST NOT remain after the block is removed | 3 | resolved | test: scratch-HOME apply then strip leaves the file byte-identical to the original |
+| The zsh widget MUST NOT run or write outside the managed configuration block, and MUST NOT remain after the block is removed | 3 | resolved | test: scratch-HOME apply then strip removes the block and leaves every user line untouched, with the separator blank line `shellrc.strip_block` keeps by design pinned exactly *(amended 2026-11-20, needs confirmation; see backlog 999.27)* |
 | The mechanism MUST NOT enable the global Option-as-Alt switch on any row | 3 | resolved | judgment (the row type has no such field; reviewed at verify) |
 
 ## Ambiguity Report

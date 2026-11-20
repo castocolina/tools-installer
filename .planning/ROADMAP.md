@@ -642,3 +642,10 @@ Plans:
 - share one verdict fixture builder in `tests/skill_verdicts.py` instead of the two near-identical ones in the two test modules, which also removes the four aliased import lines;
 - make `rule_items` in `tests/test_tool_onboarding_skill.py` reuse `_items`.
 **Depends on:** Phase 27.
+
+### Phase 999.27: Make shellrc apply_block and strip_block exact inverses (BACKLOG)
+
+**Goal:** Applying a managed block to a shell rc file and then stripping it returns the file byte for byte, for every input, so uninstalling a tool never leaves a stray blank line in a user rc file.
+**Requirements:** TBD
+**Source:** Phase 28 plan review, 2026-11-20 (28 SPEC R3 amended, needs confirmation). Measured on the real functions in `installer/shellrc.py`: apply then strip returns `""` unchanged and `"a\n\n"` unchanged, but turns `"a\n"` and `"a"` into `"a\n\n"`, `"a\nb\n"` into `"a\nb\n\n"`, `"a\n\n\n"` into `"a\n\n"`, and `"\n"` and `"\n\n"` into `""`. The behavior is shared by every shell-init bundle and the PATH block and is pinned by `tests/test_shellrc.py`, so changing it is its own piece of work.
+**Depends on:** none.
