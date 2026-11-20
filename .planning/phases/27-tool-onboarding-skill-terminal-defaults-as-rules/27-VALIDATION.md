@@ -42,14 +42,15 @@ Task IDs are assigned by the plans; each requirement row below must be covered b
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 27-XX-XX | TBD | TBD | SKILL-01 | — | The skill never recommends the global Option-as-Alt switch | unit (text) | `uv run pytest tests/test_tool_onboarding_skill.py -k rules -q` | ❌ W0 | ⬜ pending |
-| 27-XX-XX | TBD | TBD | SKILL-02 | — | A missing, extra, duplicate or lookalike table row fails the test | unit | `uv run pytest tests/test_tool_onboarding_skill.py -k table -q` | ❌ W0 | ⬜ pending |
-| 27-XX-XX | TBD | TBD | SKILL-03 | — | `partial: kept yours` and the displaced-default example are stated | unit (text) | `uv run pytest tests/test_tool_onboarding_skill.py -k conflicts -q` | ❌ W0 | ⬜ pending |
-| 27-XX-XX | TBD | TBD | SKILL-04 | — | `~/Applications`, `~/.local/bin` and the say-why clause are stated | unit (text) | `uv run pytest tests/test_tool_onboarding_skill.py -k macos_apps -q` | ❌ W0 | ⬜ pending |
-| 27-XX-XX | TBD | TBD | SKILL-05 | — | The CI job named in the skill exists in `.github/workflows/ci.yml` | unit | `uv run pytest tests/test_tool_onboarding_skill.py -k macos_testing -q` | ❌ W0 | ⬜ pending |
-| 27-XX-XX | TBD | TBD | SKILL-06 | — | Exactly two verdict files; after score is not lower; same rubric | unit | `uv run pytest tests/test_tool_onboarding_skill.py -k verdict -q` | ❌ W0 | ⬜ pending |
-| 27-XX-XX | TBD | TBD | SPEC R6 | — | Step 7 pinned phrases hold; the audit skill's heading quote resolves | existing | `uv run pytest tests/test_docs.py tests/test_catalog_audit_skill.py -q` | ✅ | ⬜ pending |
-| 27-XX-XX | TBD | TBD | docs-only | — | New markdown literals are classified; ledger globs resolve | existing | `uv run pytest tests/test_docs_only.py -q` | ✅ | ⬜ pending |
+| 27-02-01, 27-02-02 | 02 | 2 | SKILL-01 | T-27-04, T-27-05 | The skill never recommends the global Option-as-Alt switch | unit (text) | `uv run pytest tests/test_tool_onboarding_skill.py -k rules -q` | ❌ W0 | ⬜ pending |
+| 27-01-02, 27-01-03 | 01 | 1 | SKILL-02 | T-27-03 | A missing, extra, duplicate or lookalike table row fails the test | unit | `uv run pytest tests/test_tool_onboarding_skill.py -k table -q` | ❌ W0 | ⬜ pending |
+| 27-03-01 | 03 | 3 | SKILL-03 | T-27-06 | `partial: kept yours` and the displaced-default example are stated | unit (text) | `uv run pytest tests/test_tool_onboarding_skill.py -k conflicts -q` | ❌ W0 | ⬜ pending |
+| 27-03-03 | 03 | 3 | SKILL-04 | T-27-07 | `~/Applications`, `~/.local/bin` and the say-why clause are stated | unit (text) | `uv run pytest tests/test_tool_onboarding_skill.py -k macos_apps -q` | ❌ W0 | ⬜ pending |
+| 27-03-02 | 03 | 3 | SKILL-05 | T-27-08 | The CI job named in the skill exists in `.github/workflows/ci.yml` | unit | `uv run pytest tests/test_tool_onboarding_skill.py -k macos_testing -q` | ❌ W0 | ⬜ pending |
+| 27-01-01, 27-04-01, 27-04-03 | 01, 04 | 1, 4 | SKILL-06 | T-27-01, T-27-02, T-27-09, T-27-11 | Exactly two verdict files; after score is not lower; same rubric; verdicts come from orchestrator-step judge runs, never the executor | unit | `uv run pytest tests/test_tool_onboarding_skill.py -k verdict -q` | ❌ W0 | ⬜ pending |
+| 27-04-02 | 04 | 4 | SKILL-06 (D-04) | — | The shared parser refuses every malformed verdict the old private one did | existing | `uv run pytest tests/test_catalog_audit_skill.py -q` | ✅ | ⬜ pending |
+| 27-02-01, 27-02-02 | 02 | 2 | SPEC R6 | T-27-05 | Step 7 pinned phrases hold; the audit skill's heading quote resolves | existing | `uv run pytest tests/test_docs.py tests/test_catalog_audit_skill.py -q` | ✅ | ⬜ pending |
+| 27-01-02, 27-04-03 | 01, 04 | 1, 4 | docs-only | T-27-10 | New markdown literals are classified; ledger globs resolve; verdict files are test-read | existing | `uv run pytest tests/test_docs_only.py -q` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

@@ -77,7 +77,13 @@
   4. The skill states the macOS testing rule: each macOS behavior is a pure config generator with a golden-file test that runs on both OSes, macOS CI covers the file paths, and the real-Mac check is a UAT line marked deferred to the owner's Mac.
   5. skill-judge scores for the skill before and after the rewrite are recorded in the phase directory, and the after score is not lower.
 
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 27-01-PLAN.md — Before verdict (orchestrator-step), then the closed per-terminal table with its registry coverage test and edge fixtures (SKILL-02)
+- [ ] 27-02-PLAN.md — Step 7 renamed; the four defaults as rules; only non-terminal extras stay questions (SKILL-01, SPEC R6)
+- [ ] 27-03-PLAN.md — Conflict rule, macOS testing rule naming the CI job, macOS app rule with a `# Verified` example (SKILL-03, SKILL-05, SKILL-04)
+- [ ] 27-04-PLAN.md — After verdict (orchestrator-step), shared verdict parser, the after-not-lower test and docs-only entries (SKILL-06)
 
 ### Phase 28: Shared terminal-keys mechanism
 
