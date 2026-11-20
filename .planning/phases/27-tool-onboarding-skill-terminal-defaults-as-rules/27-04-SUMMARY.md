@@ -91,3 +91,12 @@ Skipped: no additional review or checks beyond the plan's verification. Risk: no
   - D8-1: step 2 says the catalog installs no skills, then advises symlinking into a host's skills directory; an agent gets two answers.
   - D5: the skill is 331 lines (about 6,400 tokens); the terminal and macOS-app blocks could move to `references/` behind a condition, which would also repoint `tests/test_tool_onboarding_skill.py`.
   - Judge noise: D7 scored 2 then 0 on an unchanged evals gap, so single scores move by a few points either way.
+
+## Update after the code review (orchestrator, 2026-11-20)
+
+The deep code review (`27-REVIEW.md`, fixes in `27-REVIEW-FIX.md`) corrected four things in `SKILL.md` (mechanism names, two config paths, the macOS install rule, the layout-character spelling). Because the skill text changed, the after verdict above is superseded:
+
+- the skill was re-judged on the final blob `5e3411f8` by a fresh read-only judge (snapshot diff empty): **73.6% C (92/125)**, same rubric v4 and spec_sha, above the before 69.6%; it is now `27-SKILLJUDGE-after.md` (commit `ed84a32c`);
+- the earlier judgment (72.0%, blob `6a6f4f8e`) is kept as `27-SKILLJUDGE-ROUND-2.md` with a status line, outside the counted names;
+- the four verdict files' JSON lines were compared byte for byte with the judges' output (scratchpad script): all identical;
+- the verdict tests still pass (`-k verdict`, 4 tests) and Task 1's first verify prints `OK 69.6 73.6`.

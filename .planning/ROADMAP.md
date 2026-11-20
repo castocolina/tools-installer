@@ -602,3 +602,23 @@ Plans:
 **Requirements:** TBD
 **Source:** Phase 33 discuss, 2026-11-19 (33 D-16): no gate lints workflow YAML today; phase 33 records one ad-hoc containerized run instead. The gate needs a dev-setup install of the linter (the developer runs `make dev-setup`; agents do not).
 **Depends on:** Phase 33.
+
+### Phase 999.24: Measure smart test selection per commit (BACKLOG)
+
+**Goal:** A one-day measurement spike decides whether commit-time test selection is worth building: run the suite once with `--cov-context=test`, map changed lines to tests, and replay the last ~100 commits to see how many tests each would select against the full run.
+**Requirements:** TBD
+**Source:** Owner question during the v0.51.0 autonomous run, 2026-11-20, and the research report `smart-test-selection.md` (a read-only sonnet agent): a static AST import graph saves little because `tests/conftest.py` imports 7 installer modules (57 of 78 installer modules sit in that closure), so any change to them selects all 105 test files; replayed over 300 code commits, 65 to 78% would still run at least 90% of the suite and the modelled saving is 16 to 27% of a 78 s suite. 57 of 105 test files also read non-Python files that a graph cannot see. The timings are modelled, not measured, because the agent could not run pytest.
+**Revisit when:** the full suite passes about 3 minutes, or test time passes about 20% of an autonomous run. A commit-stage test hook would contradict `tests/test_hook_wiring.py` (tests are push-stage only), so any design is an advisory `make test-affected` first.
+**Depends on:** none.
+
+### Phase 999.25: Phase 27 follow-ups: onboarding skill evals and structure, verdict test tidy (BACKLOG)
+
+**Goal:** The tool-onboarding skill gains the pieces the skill-judge scored lowest, and the verdict tests lose their duplication, without changing a rule or a table row.
+**Requirements:** TBD
+**Source:** Phase 27 skill-judge verdicts (final 73.6%, grade C, D7 = 2 of 15) and code review `27-REVIEW.md` (deferred IN-04, IN-05, IN-06):
+- add `evals/evals.json` and `evals/trigger-queries.json` to the skill with shape tests, as the catalog-audit skill has (the largest single loss; new files under the gitignored `.claude/` need `git add -f`);
+- resolve the contradiction in step 2 between "the catalog installs no skills" and the advice to symlink into a host's skills directory;
+- move the terminal-only block (defaults, closed table, Conflicts, macOS testing) to a gated `references/` file and repoint `tests/test_tool_onboarding_skill.py`, which cuts the always-loaded length (331 lines);
+- cut step 1 to one line and state the never-asked rule once;
+- have `parse_verdict` check `max` against `RUBRIC_MAX` for every verdict, share one verdict fixture builder in `tests/skill_verdicts.py`, and make `rule_items` reuse `_items`.
+**Depends on:** Phase 27.
