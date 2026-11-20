@@ -128,6 +128,17 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           Ends the transcript .e2e-artifacts/container-bun/bun-transcript.log with
                           TRACER_LANDING_TEARDOWN_OK once the container is removed on every exit
                           (and its image only when this run pulled it).
+  herdr-keys [--keep-image]
+                          Orchestrator only: a disposable Fedora container named
+                          tools-installer-e2e-herdr-keys-<pid>, bootstrapped like audit-landing,
+                          where the installer's own code installs herdr and a pty child in a herdr
+                          pane records each chord (tests/e2e_herdr_keys_driver.py). Prints
+                          TRACER_HERDR_INSTALL_OK, then TRACER_HERDR_KEYS_OK received=... or a
+                          named _FAILED or _UNPROVEN line; TRACER_LANDING_INFEASIBLE step=...
+                          says the environment failed (exit 2). Ends the transcript
+                          .e2e-artifacts/container-herdr-keys/herdr-keys-transcript.log with
+                          TRACER_LANDING_TEARDOWN_OK once the container is removed (and its image
+                          only when this run pulled it).
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -2895,6 +2906,36 @@ cmd_bun_lifecycle() {
   return "$failed"
 }
 
+
+# --- herdr-keys target (29-05, TERM-05): orchestrator only --------------------------------------
+# A landing box with the herdr driver and its own container, named by this run's PID.
+# It proves the bytes a herdr pane reads; nothing is written to any host config.
+cmd_herdr_keys() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown herdr-keys option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-herdr-keys-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_herdr_keys_driver
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-herdr-keys"
+  LANDING_TRANSCRIPT="$PHASE_DIR/herdr-keys-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  landing_step install-herdr install-herdr || failed=1
+  landing_step keys keys || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -2927,6 +2968,7 @@ main() {
     schedules) cmd_schedules "$@" ;;
     audit-landing) cmd_audit_landing "$@" ;;
     bun-lifecycle) cmd_bun_lifecycle "$@" ;;
+    herdr-keys) cmd_herdr_keys "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
