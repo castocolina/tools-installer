@@ -24,22 +24,22 @@ Five pending tools are onboarded through the tool-onboarding skill, each with an
    - Target: a detect-only entry gated to macOS.
    - Acceptance: a fixture host without the tools shows the row missing with the exact command text; a grep test finds no executor path that spawns `xcode-select --install`; the removal plan for the entry is empty and the Uninstall screen lists no action for it.
 
-2. **AWS CLI v2 (ONB-12)**: AWS CLI v2 installs through the official user-scope `install.sh` with gpg verification kept and no `--system`, falls back to brew `awscli` when that route is unavailable, updates with `aws update`, and an uninstall never touches `~/.aws`.
+2. **AWS CLI v2 (ONB-12)**: AWS CLI v2 installs through the official user-scope `install.sh` with gpg verification kept and no `--system`, falls back to brew `awscli` when that route is unavailable (a narrow validated preference ranks the script before brew on every host) *(amended 2026-11-19, 32 D-04)*, updates with `aws update`, and an uninstall never touches `~/.aws`.
    - Current: no entry.
    - Target: a `script` method (Linux and macOS user scope) plus a `brew` fallback, an `update` argv and `paths` that exclude `~/.aws`.
    - Acceptance: a container install through the script leaves a runnable `aws` with gpg verification run (the install fails closed when gpg is missing and the fallback is offered); the entry's argv contains no `--system`; after an uninstall in a container a seeded `~/.aws` file is byte-identical.
 
 3. **Bruno (ONB-13)**: Bruno installs through the cask on macOS and through a digest-verified AppImage for the host architecture on Linux; the `bru` CLI is not installed.
    - Current: no entry.
-   - Target: a `cask` method (macos) following the SKILL-04 app rule and a per-architecture `github_release` raw asset method carrying `version` and `sha256`.
+   - Target: a `cask` method (macos) following the SKILL-04 app rule and a per-architecture `tarball` raw asset method carrying `version` and `sha256` *(amended 2026-11-19, 32 D-07: `github_release` takes no pin fields; `raw` becomes an allowed key on `tarball`)*.
    - Acceptance: registry tests load the entry; the sha256 of each AppImage equals the release's GitHub digest (`make verify-registry` read-only passes); no `bru` binary or package appears in any method; the macOS method places the bundle in a user location or the entry's `# Verified` comment says why not.
 
-4. **gh-stack (ONB-14)**: gh-stack installs with `gh extension install https://github.com/github/gh-stack`, is detected as present through `gh extension list`, updates with `gh extension upgrade stack`, is removed with `gh extension remove stack`, and an unauthenticated `gh` never blocks or prompts.
+4. **gh-stack (ONB-14)**: gh-stack installs with `gh extension install https://github.com/github/gh-stack`, is detected as present through its installed manifest file, updates with `gh extension upgrade stack`, is removed by deleting its receipt-proven install folder, and an unauthenticated `gh` never blocks or prompts *(amended 2026-11-19, 32 D-10, D-11, needs confirmation: `gh extension list`, `upgrade` and `remove` need a login (live test); only `install` works without one)*.
    - Current: no entry.
    - Target: an entry whose install, detect, update and remove argv are exactly those commands, with `gh` in `requires`.
    - Acceptance: in a scratch `GH_CONFIG_DIR` with no login, the install, detect, update and remove steps complete or report cleanly with no prompt (the children run with stdin closed); the argv strings match the four commands exactly.
 
-5. **Playwright MCP registration (ONB-15)**: Playwright MCP is registered in each agent host present as a server pinned to an exact `@playwright/mcp` version run through `bunx`, never overwriting an existing `playwright` server entry; on Bazzite the Flatpak Chrome path is exported when the wrapper exists; a write into `~/.claude/settings.json` asks for consent first.
+5. **Playwright MCP registration (ONB-15)**: Playwright MCP is registered in each agent host present as a server pinned to an exact `@playwright/mcp` version (`0.0.85`, 32 D-13) run through `bunx`, never overwriting an existing `playwright` server entry; on Bazzite the Flatpak Chrome path is exported when the wrapper exists; a write into `~/.claude/settings.json` asks for consent first.
    - Current: no entry; the research pinned `0.0.85`, and npm's latest is `0.0.86` as of 2026-11-19 (discuss picks the pin and records why).
    - Target: an `ai`-tier entry using the existing agent-host registration route, plus the Bazzite path export.
    - Acceptance: a scratch-HOME test with an existing `playwright` entry leaves it byte-identical and reports it kept; with none, the pinned entry is written to each present host only; the Flatpak path export appears only when the wrapper file exists; the `~/.claude/settings.json` write path asks for consent (a test with consent denied writes nothing).
@@ -49,6 +49,7 @@ Five pending tools are onboarded through the tool-onboarding skill, each with an
 **In scope:**
 - Five registry entries with their dated `# Verified` comments, detection, update and removal routes, and tests.
 - Container checks for the AWS CLI script route and the Playwright MCP launch smoke.
+- *Amended 2026-11-19 (32 D-01, D-04, D-07, D-09, D-14):* small parameter extensions to existing method kinds (a closed hand-off name and a fixed-argv install option on `script`; `raw` as an allowed key on `tarball`), the narrow AWS-script-over-brew preference, and per-host MCP config writers.
 
 **Out of scope:**
 - Running `xcode-select --install`, `softwareupdate` or `installer -target /` in any executor — zero-sudo rule.
@@ -71,25 +72,28 @@ Five pending tools are onboarded through the tool-onboarding skill, each with an
 - [ ] Bruno: AppImage and cask methods load; digests match the release; no `bru`.
 - [ ] gh-stack: the four argv strings match exactly; unauthenticated `gh` never prompts.
 - [ ] Playwright MCP: existing entry kept; present hosts only; Flatpak path only when the wrapper exists; consent denied writes nothing.
-- [ ] `make verify-registry` (read-only) passes for every new pinned artifact.
+- [ ] `make verify-registry` (read-only) passes for every new pinned download artifact (Bruno's AppImages); the npm pin is not covered by it and is bumped by hand or by catalog-audit (32 D-13).
 
 ## Edge Coverage
 
-**Coverage:** 18/18 applicable edges resolved · 0 unresolved
+**Coverage:** 21/21 applicable edges resolved · 0 unresolved
 
 | Category | Requirement | Status | Resolution / Reason |
 |----------|-------------|--------|---------------------|
-| adjacency | R1 | ✅ covered | Acceptance 1: only the macOS row is gated; Linux hosts never show the entry (os gate fixture) |
+| adjacency | R1 | ✅ covered | Acceptance 1: the row is OS-gated; Linux hosts show it as a dimmed `unavailable` row, never as a prompt (catalog_tui.py:208-216) |
 | empty | R1 | ✅ covered | Acceptance 1: no tools installed gives missing plus the command; tools present gives present and no command |
 | encoding | R1 | ✅ covered | Acceptance 1: the command string is compared byte-exact as `xcode-select --install` |
 | ordering | R1 | ✅ covered | Acceptance 1: the row has a single detect result, independent of other rows |
+| adjacency | R2 | ✅ covered | Acceptance: fixture or container check named in the requirement's acceptance (32 D-16) |
+| empty | R2 | ✅ covered | Acceptance: fixture or container check named in the requirement's acceptance (32 D-16) |
+| ordering | R2 | ✅ covered | Acceptance: fixture or container check named in the requirement's acceptance (32 D-16) |
 | idempotency | R2 | ✅ covered | Acceptance 2: a second script install over an existing aws updates in place and leaves ~/.aws untouched |
 | concurrency | R2 | 🧪 backstop | held-out test: interleaved runs in a scratch HOME or container leave one registration and one install, via the run lock and the atomic write |
 | adjacency | R3 | ✅ covered | Acceptance 3: the AppImage name carries version and architecture, so two architectures never share a path |
 | empty | R3 | ✅ covered | Acceptance 3: a host architecture with no asset reads unavailable |
 | ordering | R3 | ✅ covered | Acceptance 3: asset selection is by os and arch params, never by list order |
 | adjacency | R4 | ✅ covered | Acceptance 4: `gh extension list` matching is exact on the `stack` name, so a similarly named extension never reads present |
-| empty | R4 | ✅ covered | Acceptance 4: no extensions installed reads absent; an unauthenticated gh still lists local extensions |
+| empty | R4 | ✅ covered | Acceptance 4 (amended): no extensions installed reads absent because the manifest file is absent; an unauthenticated gh is never consulted for detection (list needs a login, live test) |
 | ordering | R4 | ✅ covered | Acceptance 4: detection reads the whole list, independent of extension order |
 | idempotency | R4 | ✅ covered | Acceptance 4: a second `gh extension install` of an installed extension reports already installed, never errors the row |
 | concurrency | R4 | 🧪 backstop | held-out test: interleaved runs in a scratch HOME or container leave one registration and one install, via the run lock and the atomic write |

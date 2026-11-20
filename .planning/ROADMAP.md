@@ -150,7 +150,7 @@
   1. On macOS without the Command Line Tools, the Xcode CLT row shows them missing with the exact `xcode-select --install` command to run; no executor runs it (grep test) and Uninstall offers no removal.
   2. In a container, AWS CLI v2 installs through the official user-scope `install.sh` with gpg verification and no `--system`, falls back to brew `awscli` when that route is unavailable, updates with `aws update`, and an uninstall leaves `~/.aws` untouched.
   3. Bruno installs through the cask on macOS and a digest-verified AppImage for the host's architecture on Linux; no `bru` CLI is installed.
-  4. gh-stack installs with `gh extension install https://github.com/github/gh-stack`, reads present from `gh extension list`, updates with `gh extension upgrade stack` and is removed with `gh extension remove stack`; with an unauthenticated `gh` nothing blocks or prompts.
+  4. gh-stack installs with `gh extension install https://github.com/github/gh-stack`, reads present from `gh extension list`, updates with `gh extension upgrade stack` and is removed with `gh extension remove stack` *(amended 2026-11-19, 32 D-10, D-11, needs confirmation: present from its manifest file, removed by its proven install folder; list and remove need a login)*; with an unauthenticated `gh` nothing blocks or prompts.
   5. Playwright MCP is registered as the pinned `bunx @playwright/mcp@0.0.85` in each agent host present, an existing `playwright` server entry is left as it was, the Flatpak Chrome path is exported on Bazzite only when the wrapper exists, and a write into `~/.claude/settings.json` asks for consent first.
 
 **Plans**: TBD

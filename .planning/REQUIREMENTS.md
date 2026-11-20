@@ -43,7 +43,7 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 - [ ] **ONB-11**: Xcode CLT is detected on macOS and, when missing, the installer shows the exact `xcode-select --install` command for the user to run; it never runs it and offers no uninstall.
 - [ ] **ONB-12**: AWS CLI v2 installs through the official user-scope `install.sh` first (no `--system`, gpg verification kept) with brew `awscli` as the fallback, updates with `aws update`, and an uninstall never touches `~/.aws`.
 - [ ] **ONB-13**: Bruno installs through the cask on macOS and a digest-verified AppImage per architecture on Linux; the `bru` CLI is out of scope.
-- [ ] **ONB-14**: gh-stack installs with `gh extension install https://github.com/github/gh-stack`, is detected through `gh extension list`, updates with `gh extension upgrade stack`, is removed with `gh extension remove stack`, and an unauthenticated `gh` never blocks or prompts.
+- [ ] **ONB-14**: gh-stack installs with `gh extension install https://github.com/github/gh-stack`, is detected through `gh extension list`, updates with `gh extension upgrade stack`, is removed with `gh extension remove stack` *(amended 2026-11-19, 32 D-10, D-11, needs confirmation: detected by its manifest file and removed by its proven install folder, because list, upgrade and remove need a login)*, and an unauthenticated `gh` never blocks or prompts.
 - [ ] **ONB-15**: Playwright MCP is registered in each agent host present with the pinned `bunx @playwright/mcp@0.0.85`, never overwriting an existing `playwright` server entry; on Bazzite the Flatpak Chrome path is exported when the wrapper exists; a write into `~/.claude/settings.json` asks for consent first.
 
 ### Registry update bot (BOT)
