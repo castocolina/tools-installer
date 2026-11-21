@@ -631,3 +631,204 @@ The plan citations below are relative to `.planning/phases/31-onboard-iterm2-and
 - **Coverage limit:** This was a read-only review of the current plan files and relevant source paths, not an execution of every proposed command or a complete audit of every referenced test and registry pin. No tests, vendor downloads, containers, or Mac UAT were run; no scratch files were created.
 
 ### Status: Issues Found — fix and re-invoke
+
+
+## Lane Log (convergence cycle 4, plans at 5a65cfdd)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 02:26 | opencode-referee-one | one-shot probe | OK |
+| 02:26 to 02:30 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 4 concerns
+
+Cycle 4 is the extra cycle the orchestrator granted itself after cycle 3 (logged in the run ledger). The cap rule now applies without exception: this is the LAST revision; the run executes right after it, and anything that remains is documented. Real HIGH by cycle: 14, 12, 6, and now 7 distinct new ones with 3 repeats of accepted limits (the reviewer finds new second-order issues in the new recovery code each round; the first-order defects are fixed). DECISIONS apply exactly.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| R1 (31-01, 31-05) | A path change destroys the actionable ownership proof (single-path ledger) | REPEAT of the accepted limit (cycle 3 H2): no plan change; keep the `shortcut:` and the ledger rows. 31-05's expectation that the record moves to B stays. |
+| R2 (31-01) | The symlink check is separate from the operations | REPEAT of the accepted limit (cycle 3 H3): no plan change; soften the threat register wording from "never follow" to what the check does (refuses a symlink present at the check; a swap inside the window is the accepted limit). |
+| R3 (31-01) | File, marker, sidecar and ledger writes are not recoverable at each failure boundary | ACCEPTED LIMIT: `commit_region` already writes the file before its marker for every region row (phases 28 and 29); the new variants inherit that order and a `shortcut:` comment says so; no plan change beyond the comment and one ledger row. |
+| M1 (31-01, 31-05) | 31-01 says reuse the region strip's sidecar comparison (returns before editing on a mismatch); 31-05 expects B's owned key removed before reporting the mismatch | Real plan-internal conflict (31-01:207 vs 31-05:191). Choose the safe order: on a mismatch strip warns and leaves B untouched (the existing early return); align 31-05's test to preserve B and assert the warning. |
+| R4 (31-02) | A successful preference restore with a failed `switched=False` record update returns `confirmed=True`; if the cask removal then fails, the stale `switched=True` suppresses the retry | Real. `confirmed` is True for a non-final restore only when the record update also succeeded; otherwise `confirmed=False` (the removal is refused, the preference is already restored, and the retry is idempotent: a preference that no longer names our GUID counts as confirmed). Test through status, reconfigure and the failed-removal path. |
+| R5 (31-02) | After a failed new capture (`write_state` error) a previous valid record is reused and the switch proceeds | Real. A failed capture inhibits the subsequent switch even when an old record exists (the after-write hook switches only when a capture succeeded in this run); test reinstall with an old record and an injected state-write failure. |
+| R6 (31-03) | The failed-cask test assumes the record update succeeded | Add the production-route test: pre-removal restore succeeds, the record update fails, the cask command fails; status and reconfigure stay truthful and recoverable. |
+| M2 (31-04) | The seed probes bare `herdr-app --version` from PATH, which can identify a different executable than the one just installed | Real (planner verifies `installer/engine.py` `method_bin_dir`). Probe the installed method's actual executable (the method's bin dir), with tests for a shadowing executable and a missing PATH entry. |
+| R7 (31-06) | The target allowlist is not exact: `leftovers` accepts descendants and ancestors of an allowed path, so a path below `herdr-core` could be hidden | Real (`tests/e2e_ghostty_driver.py:241-251`). Exact matching for the two target-local files, applied separately from the shared prefix allowances; tests for descendants and lookalike names. |
+| R8 (31-06) | Receipt tree paths (trailing `/` in the declared paths) and receipt artifact `Path` objects have incompatible representations | Real (`installer/download.py:341-350`, `installer/receipts.py:64-69`). Normalize path identities at the real `Ops` boundary; test a tree receipt against a trailing-slash home listing. |
+| R9 (31-06) | Failed-install cleanup purges the tool's known paths for any attempted tool without a receipt, including paths that predated the attempt | Real. Purge only paths that are new relative to the baseline taken immediately before that attempt; prove preexisting files and directories survive first-, second- and reinstall-failure cases. |
+| M3 (31-07) | The target's proof depends on the 31-06 defects | Follows R7 to R9: update the target's expected contract and host tests after the 31-06 corrections. |
+| R10 (31-08) | The gate accepts more than 12 hex characters (the awk accepts one or more, the extraction takes 12) | Real. Validate exactly 12 hex characters; negative cases for 11 and 13 characters including a 13-character value whose first 12 are correct. |
+| M4 (31-08) | Step 1b says set `f` and `t` to samples and run the step 1 command, which reassigns both | Real. Factor the gate so the same validation takes explicit input paths and run all negative cases against them. |
+| X (cross) | Final gates with the default TMPDIR; plan sizes 61 to 69 KB | REJECTED and accepted as before; no plan change. |
+
+## OpenCode Review (opencode-referee-one), cycle 4
+
+Using the spec-review checklist to check all eight plans against the repository and the previous cycle’s findings. This is a read-only review.
+The revised plans separate Herdr’s creation seed from removal as requested. I’m checking the remaining ownership, container-driver, and evidence-gate transitions for cases the new tests may miss.
+# Phase 31 plan review — convergence cycle 4
+
+### Document Type
+
+GSD · implementation plans
+
+### Overall verdict
+
+**Issues found — revise and re-review.** The revision addresses the prior seed-at-uninstall issue and strengthens default-profile recovery and transcript binding. Several remaining issues affect ownership recovery, the container proof, and execution of the evidence gate.
+
+Plan citations below are relative to `.planning/phases/31-onboard-iterm2-and-the-herdr-desktop-app/`.
+
+## 31-01
+
+**Summary.** Adds the ownership union, generic JSON mechanisms, and default-profile hook contract.
+
+**Findings status.** The version-dependent cleanup issue is addressed by separating `pinned` from `seed` (`31-01-PLAN.md:30-31,181`). The previous path-ledger and symlink-race findings are explicitly deferred, not resolved (`31-01-PLAN.md:73,204`).
+
+**Strengths.** The dispatch leaves the existing region path structurally recognizable; the current three entry points and their region-specific accesses are visible in `installer/terminal_keys.py:378-525`. The proposed recorded-value and tombstone tests cover ordinary user edits (`31-01-PLAN.md:184-190`).
+
+**Concerns.**
+
+- **HIGH — A path change still destroys actionable ownership proof.** `31-01-PLAN.md:186,204-205` requires A’s single ledger to be replaced by B’s while A retains the installer-written key. Returning to A or uninstalling after the B reconfigure can no longer identify A’s key. This remains contrary to the owned-only cleanup contract, even though it is labeled an accepted limit. **Required:** Preserve or safely resolve A’s ownership before recording B; test A → B → uninstall and return to A for existing and created files.
+
+- **HIGH — The no-symlink guarantee remains vulnerable between check and use.** `31-01-PLAN.md:144,205,207` checks a path separately from the operations. The proposed helpers resolve it again in `installer/agent_settings.py:556-577`, and the atomic writer can resolve a symlink again in `installer/atomic.py:44-52`. A swapped path can therefore redirect an operation after the check. The threat register’s claim that the operations “never follow it” is stronger than the implementation. **Required:** Bind no-follow validation to the actual operations and test a swap between validation and read, write, and deletion.
+
+- **HIGH — File creation and ownership-record writes are not recoverable as specified.** `commit_region` writes the file before its created marker and sidecar (`installer/terminal_regions.py:716-724`); the plan writes the tuning ledger afterward (`31-01-PLAN.md:144,205`). If a marker or ledger write fails, the content can already exist without the proof needed to rewrite or strip it. For a WholeFile, a retry then treats the GUID-bearing file without its marker as foreign (`31-01-PLAN.md:125-126`). **Required:** Define and test recovery or rollback at each file/marker/sidecar/ledger failure boundary without deleting foreign content.
+
+- **MEDIUM — The sidecar-mismatch behavior conflicts with its consumer test.** `31-01-PLAN.md:207` says to reuse the region strip’s sidecar comparison, which returns before editing on mismatch (`installer/terminal_keys.py:498-505`). `31-05-PLAN.md:191` instead expects B’s owned key to be removed before reporting the mismatched marker. **Required:** Choose one safe order and align the mechanism and real-row test.
+
+**Suggestions.** Keep the pinned-default cleanup test through the real removal route; it addresses the previous cycle’s ordinary-uninstall failure.
+
+**Risk Assessment.** **High:** interrupted writes and path changes can orphan installer-owned configuration; the symlink race remains an explicit safety limitation.
+
+## 31-02
+
+**Summary.** Defines the iTerm2 profile generator, preferences seam, state record, and restore/retry transitions.
+
+**Findings status.** Missing or corrupt recovery state now causes an unconfirmed restore when the preference still names the installer profile; a pre-removal restore also records a retryable switch (`31-02-PLAN.md:164-165,191`).
+
+**Strengths.** The fake-default tests specify full command sequences, including reads (`31-02-PLAN.md:158-159`). The real command is confined to one seam (`31-02-PLAN.md:182-185`), following the replaceable-command pattern described in `31-RESEARCH.md:94-96`.
+
+**Concerns.**
+
+- **HIGH — A successful preference restore can leave stale “switched” state after a record-write failure.** `31-02-PLAN.md:165,191` permits `confirmed=True` when restoring the preference succeeds but updating the record to `switched=False` fails. If the subsequent cask removal also fails, the old record can still say `switched=True`; `hook_switch_pending` then returns false and reconfigure does nothing (`31-02-PLAN.md:172,189-190`). The installed tool is left on the previous default without the promised pending recovery. **Required:** Define a recoverable state for this two-failure sequence and test it through the status/reconfigure and failed-removal paths.
+
+- **HIGH — A previous valid recovery record can be reused after a failed new capture.** `hook_before_write` says a `write_state` error means “nothing is persisted” and assumes `hook_after_write` finds no state (`31-02-PLAN.md:168,188`). That is not true if a prior record already exists: the existing atomic-write primitive preserves the old target on an unsuccessful replacement (`installer/atomic.py:36-55`). **Required:** Make a failed capture explicitly inhibit the subsequent switch even with an existing record, and test reinstall with an old record and an injected state-write failure.
+
+**Suggestions.** Keep the real-iTerm2 preference behavior as deferred Mac UAT; the fake proves the planned command contract, not iTerm2’s in-memory behavior.
+
+**Risk Assessment.** **High:** the ordinary recovery transitions improved, but compound failures can suppress recovery or reuse stale state.
+
+## 31-03
+
+**Summary.** Adds the iTerm2 entry, row, skill-table entry, and pre-removal hook in one commit.
+
+**Findings status.** The prior wrong `UninstallDecision` field and missing/corrupt-state cases are now addressed in the planned public-route tests (`31-03-PLAN.md:203-206`).
+
+**Strengths.** The existing common removal function re-proves the preview before the intended hook location (`installer/app.py:782-801`), and the plan puts the hook and entry in the same task commit (`31-03-PLAN.md:86,162`).
+
+**Concerns.**
+
+- **HIGH — A stale-record write failure is not covered across the actual removal route.** This plan depends on the `31-02` transition above, but its failed-cask test assumes the record was successfully changed to `switched=False` (`31-03-PLAN.md:33,207`). **Required:** Add a production-route test where pre-removal restore succeeds, recording that transition fails, and the cask command then fails; status and reconfigure must remain truthful and recoverable.
+
+**Suggestions.** Preserve both CLI and TUI refusal/retry tests; they exercise the actual shared removal boundary.
+
+**Risk Assessment.** **High:** removal ordering is materially improved, but recovery still depends on a state-write assumption not guaranteed by the preceding plan.
+
+## 31-04
+
+**Summary.** Pins Herdr’s vendor defaults and supplies the version seam, path resolver, validator, chord parser, and binding detector.
+
+**Findings status.** The previous cleanup dependency is addressed: the version-checked seed is creation-only and `vendor_default` is pure (`31-04-PLAN.md:125-126,136-139`).
+
+**Strengths.** Both vendor files have explicit SHA-256 pins and an acquisition failure stops the plan (`31-04-PLAN.md:25,69`). `pyproject.toml:12-17` configures the `installer` package for the wheel.
+
+**Concerns.**
+
+- **MEDIUM — The version probe can identify a different executable from the one just installed.** The seed invokes bare `herdr-app --version` (`31-04-PLAN.md:139`), while the script declares its binary directory separately (`31-05-PLAN.md:29`). The engine prepends a method directory only when `method_bin_dir` returns one (`installer/engine.py:288-292`); a PATH lookup can otherwise resolve a different installation or none. The pinned-seed guard must establish the version of the artifact being configured, not merely whichever executable PATH finds. **Required:** Resolve and probe the installed method’s actual executable, with tests for a shadowing executable and a missing PATH entry.
+
+**Suggestions.** Exercise the two data files from a built wheel as well as the checkout; the current packaging configuration is a premise, not an executed packaging test.
+
+**Risk Assessment.** **Medium:** a wrong or unavailable version probe can incorrectly authorize or refuse seeding.
+
+## 31-05
+
+**Summary.** Wires the Herdr desktop app entry and keys lifecycle.
+
+**Findings status.** The config-choice test now uses `UninstallDecision.config`, and the seed/cleanup wiring uses separate functions (`31-05-PLAN.md:189,195`).
+
+**Strengths.** The plan distinguishes the app and multiplexer entries and declares the app’s own config folder and method paths (`31-05-PLAN.md:29-31,129-133`); the existing `herdr` entry has separate config paths (`installer/registry.toml:3282-3300`).
+
+**Concerns.**
+
+- **HIGH — The sidecar test and generic strip contract disagree.** The real-row test requires removing B’s key on a sidecar mismatch (`31-05-PLAN.md:191`), whereas the mechanism is instructed to reuse the existing early-return check (`31-01-PLAN.md:207`; `installer/terminal_keys.py:498-505`). The planned mutation cannot establish a single expected behavior until these contracts agree. **Required:** Align both plans and test that the chosen behavior preserves B and retains sufficient proof for A.
+
+- **HIGH — The normal app-row path transition inherits the orphaned-ledger problem.** The real-row test explicitly expects the record to move to B after A was edited (`31-05-PLAN.md:196`), so the installer loses the means to remove its key from A. **Required:** Exercise the corrected multi-path or safe-transition behavior through the real row, including uninstall and return to A.
+
+**Suggestions.** Keep the explicit keep-config and delete-config tests, including the neighboring user key (`31-05-PLAN.md:195`).
+
+**Risk Assessment.** **High:** the production row inherits the ownership-loss defect and contains a conflicting regression test.
+
+## 31-06
+
+**Summary.** Specifies the container driver, its verdicts, fake-driven orchestration, and cleanup.
+
+**Findings status.** A version mismatch is now `_UNPROVEN`, not `KEYS_OK`; expected-line matching and per-install baselines are also revised (`31-06-PLAN.md:114,121,173`).
+
+**Strengths.** The driver inspects `SweepResult` rather than treating a returned call as success (`31-06-PLAN.md:118`); the existing `uninstall_one` returns that result through `tests/e2e_landing_driver.py:468-496`.
+
+**Concerns.**
+
+- **HIGH — The proposed “exact” target allowlist is not exact with the reused helper.** The plan requires `herdr-core-extra` to be reported (`31-06-PLAN.md:124`) but also passes `TARGET_ALLOWED` directly into the existing prefix-aware `leftovers` (`31-06-PLAN.md:135`). In particular, `leftovers` accepts descendants of an allowed path and ancestors of one (`tests/e2e_ghostty_driver.py:241-251`). A path below an allowed file name can be hidden, contrary to the target-local exact-file contract. **Required:** Apply exact matching for these two files separately from shared prefix allowances, and test descendants and lookalike names.
+
+- **HIGH — Receipt tree paths and listing paths have incompatible representations.** `31-06-PLAN.md:184-185` compares declared paths, including trailing `/` for trees, against receipt artifact paths. Script paths become `Path` objects in `installer/download.py:341-350`, and receipt artifacts store `Path` (`installer/receipts.py:64-69`), which does not retain the trailing slash. The proposed receipt-membership check can therefore report the app tree missing from a valid receipt. **Required:** Normalize path identities consistently at the real `Ops` boundary and test a tree receipt against a trailing-slash home listing.
+
+- **HIGH — Failed-install cleanup can remove paths that predated the attempt.** The plan captures a before-install listing (`31-06-PLAN.md:173,184`) but then purges the tool’s known paths for every attempted tool without a receipt, rather than limiting deletion to proven new paths. A preexisting app path can therefore be purged after a failed install. **Required:** Bind purge to the immediate baseline and prove preexisting files and directories survive first-, second-, and reinstall-failure cases.
+
+**Suggestions.** Add a harmless fake-backed test of the real `Ops` adapter, particularly receipt conversion and cleanup; the plan currently defers its first exercise to the container (`31-06-PLAN.md:28,185`).
+
+**Risk Assessment.** **High:** the real target may fail on valid receipts, hide residue, or destroy baseline content during cleanup.
+
+## 31-07
+
+**Summary.** Adds the disposable container target and filters the app from generic container registry copies.
+
+**Findings status.** The filter test no longer rejects the date prefix shared with iTerm2, and the recorded PASS now includes a transcript digest (`31-07-PLAN.md:24,154`).
+
+**Strengths.** The existing landing harness records teardown and treats an unverified container listing as failure (`scripts/container-e2e-verify.sh:2763-2783`). The planned filter retains comments with their associated entries and propagates failure (`31-07-PLAN.md:154,159-160`).
+
+**Concerns.**
+
+- **MEDIUM — The target’s proof depends on unresolved driver defects.** Its required PASS incorporates the exact allowance, receipt check, and cleanup behavior specified in `31-06-PLAN.md:124,184-185`; those need correction before the target can honestly establish the claims in `31-07-PLAN.md:25`. **Required:** Update the target’s expected contract and host tests after correcting 31-06.
+
+**Suggestions.** Retain the staging, awk, move-failure, and teardown tests; they protect meaningful harness failure paths.
+
+**Risk Assessment.** **Medium:** the shell target is well scoped, but its evidence is only as sound as its driver.
+
+## 31-08
+
+**Summary.** Gates published container evidence on a recorded PASS and transcript, then adds catalog guards.
+
+**Findings status.** The gate now checks the transcript and compares its digest, and the seeded-key claim is dependent on `KEYS_OK` (`31-08-PLAN.md:24-25,119`).
+
+**Strengths.** A missing or failing transcript blocks edits (`31-08-PLAN.md:64-66,119`); the existing landing harness appends its teardown verdict to the transcript (`scripts/container-e2e-verify.sh:2772-2782`).
+
+**Concerns.**
+
+- **HIGH — The gate accepts a malformed digest longer than 12 hex characters.** The awk expression in `31-08-PLAN.md:119,127` accepts one or more hex characters, while the extraction takes only the first 12. Thus a PASS line containing the correct 12-character digest followed by extra hex characters passes the digest comparison, despite the required exact shape (`31-08-PLAN.md:24`). **Required:** Validate exactly 12 hex characters and add negative cases for 11 and 13 characters, including a 13-character value whose first 12 are correct.
+
+- **MEDIUM — The prescribed negative gate tests cannot override their inputs as written.** Step 1b says to set `f` and `t` to scratch samples and run the step 1 command (`31-08-PLAN.md:120`), but that command immediately assigns both variables back to the real paths (`31-08-PLAN.md:119`). The samples therefore do not test the intended inputs. **Required:** Factor the gate so the exact same validation accepts explicit input paths, then run all four negative cases against those paths.
+
+**Suggestions.** Keep the Mac and Linux desktop checks explicitly deferred (`31-08-PLAN.md:62`).
+
+**Risk Assessment.** **High:** the evidence gate does not enforce its stated PASS-line format, and its negative proof is not executable as described.
+
+## Cross-plan comparison
+
+- **Ordering:** The declared waves and dependencies are sequential (`31-01-PLAN.md:6-7` through `31-08-PLAN.md:6-7`), so shared registry, keys-table, and skill-table edits are not scheduled concurrently.
+- **MEDIUM — Scratch cleanup remains unresolved.** Every plan directs final gates to the default temporary directory; for example, `31-01-PLAN.md:84`. That conflicts with the governing session rule requiring an owned run directory, exported `TMPDIR`, exit cleanup, and verification that it is gone. A long-path test failure explains a constraint, but does not authorize leaving all final-gate artifacts unmanaged. **Required:** Use a sufficiently short owned run directory or correct the path-sensitive test, and verify cleanup.
+- **Plan size:** Current files `31-01`, `31-02`, `31-03`, `31-05`, and `31-06` are approximately 61–69 KB; each retains two tasks. This is an execution-context risk against the requested approximate 60 KB limit, particularly for the largest plans.
+- **Coverage limit:** The plans were read from disk and material findings were checked against the cited source. This was not a complete audit of every registry pin or proposed test. No tests, vendor downloads, containers, or Mac UAT were run; no scratch files were created.
+
+### Status: Issues Found — fix and re-invoke
