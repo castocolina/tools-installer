@@ -183,6 +183,13 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           TRACER_BRUNO_INSTALL_OK or TRACER_BRUNO_INSTALL_UNPROVEN (engine smoke),
                           TRACER_BRUNO_RUN_OK or TRACER_BRUNO_RUN_UNPROVEN and TRACER_BRUNO_REMOVE_OK.
                           An UNPROVEN run is reported, never a pass.
+  playwright-mcp [--keep-image]
+                          Orchestrator only: PID-named Fedora box with distro Chromium. Prints
+                          TRACER_PLAYWRIGHT_INSTALL_OK, TRACER_PLAYWRIGHT_REGISTER_OK,
+                          TRACER_PLAYWRIGHT_CONSENT_OK, TRACER_PLAYWRIGHT_LAUNCH_OK and
+                          TRACER_PLAYWRIGHT_REMOVE_OK, then TRACER_LANDING_TEARDOWN_OK.
+                          TRACER_PLAYWRIGHT_LAUNCH_UNPROVEN is environmental, retried by the
+                          orchestrator and never a pass.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -338,11 +345,12 @@ resync_workspace() {
 }
 
 # make e2e excludes herdr-app: its dedicated target proves it, while herdr-core and hc
-# remain by design; the shared residue allowlist must not hide them. Landing targets retain it
+# herdr-app is skipped; herdr-core and hc remain by design. Landing targets retain the app
 # (cmd_ghostty, cmd_herdr_keys, cmd_bun_lifecycle); the app also needs network and X libraries.
 # aws-cli fails closed without gnupg on Debian; its dedicated target proves both hosts.
 # bruno: 175 MB AppImage, no CLI, Electron needs a display; its target tests lifecycle and modes.
-GENERIC_SKIP_TOOLS=herdr-app,aws-cli,bruno
+# playwright-mcp writes agent configs and needs Chromium; its target proves registration, launch and removal.
+GENERIC_SKIP_TOOLS=herdr-app,aws-cli,bruno,playwright-mcp
 # shellcheck disable=SC2016 # awk expands its own field references
 GENERIC_SKIP_AWK='
 BEGIN {
@@ -3263,6 +3271,37 @@ cmd_bruno() {
   return "$failed"
 }
 
+# --- playwright-mcp target (32-08, ONB-15): orchestrator only ---
+playwright_mcp_root_setup() {
+  exec_root dnf install -y chromium unzip
+}
+
+cmd_playwright_mcp() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown playwright-mcp option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-playwright-mcp-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_playwright_mcp_driver
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-playwright-mcp"
+  LANDING_TRANSCRIPT="$PHASE_DIR/playwright-mcp-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  landing_stage playwright-mcp-root playwright_mcp_root_setup
+  landing_step lifecycle lifecycle || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -3300,6 +3339,7 @@ main() {
     herdr-app) cmd_herdr_app "$@" ;;
     aws-cli) cmd_aws_cli "$@" ;;
     bruno) cmd_bruno "$@" ;;
+    playwright-mcp) cmd_playwright_mcp "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
