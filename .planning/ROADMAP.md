@@ -287,7 +287,23 @@ Plans:
   3. No bot token pushes to `main`; the change reaches `main` only by branch push, green CI and fast-forward.
   4. With the new date-noise flag, a `--write` run whose only change is a `verified` date leaves `registry.toml` unchanged (unit test).
 
-**Plans**: TBD
+**Plans:** 5 plans
+
+Plans:
+**Wave 1**
+- [ ] 33-01-PLAN.md — The date-only noise flag: `verify-registry --write --bumps-only` writes only real bumps (and the `verified` date of the tools bumped), `--bumps-only` without `--write` is exit 64; the byte-identical date-only, real-bump, file-order and no-drift tests (BOT-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 33-02-PLAN.md — `ci.yml` gains a bare `workflow_dispatch:` with the two listed assertion amendments, and the new bot test module opens with its own loader and the exact required check names (BOT-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 33-03-PLAN.md — The bot workflow `registry-bot.yml` (dispatch-only first, exact permissions, guard output, fetch plus explicit-lease push of `bot/registry-<date>`, `registry-bot` issue with the closing keyword, CI dispatch, old-branch deletion) and its workflow tests (BOT-01, BOT-02, BOT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 33-04-PLAN.md — The owner-run proof runbook `docs/registry-bot-proof.txt` (bot run on a throwaway ref, check names, same-day rerun, the BOT-02 question with Options A and B, cleanup, record, cron-enabling step) and its host tests (BOT-02)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 33-05-PLAN.md — `.github/dependabot.yml` for GitHub Actions with its parse test, the README and git workflow documentation, and a cross-file consistency test with the end-of-phase `make validate` and `make test` (BOT-01, BOT-02, BOT-03, BOT-04)
 
 ### Phase 34: Daily update check with a desktop notification
 
