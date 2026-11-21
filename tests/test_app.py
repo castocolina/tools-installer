@@ -5429,6 +5429,89 @@ def test_the_cli_uninstall_lists_only_keys_still_holding_our_value(
     assert "  ~/.codex/config.toml: approval_policy\n" in buf.getvalue()
 
 
+def test_removal_reverts_the_playwright_entries_and_keeps_the_users(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import agent_settings, app, bun_globals, postinstall, receipts
+
+    home = Path.home()
+    bunx = tmp_path / "bunx"
+    bunx.write_text("", encoding="utf-8")
+    bunx.chmod(0o755)
+    monkeypatch.setattr(bun_globals, "resolve_bun", lambda: str(tmp_path / "bun"))
+    chrome = tmp_path / "chrome"
+    chrome.touch()
+    release = tmp_path / "os-release"
+    release.write_text("ID=bazzite\n", encoding="utf-8")
+    monkeypatch.setattr(postinstall, "FLATPAK_CHROME_PATH", str(chrome))
+    monkeypatch.setattr(postinstall, "OS_RELEASE_PATH", release)
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"enabledPlugins":{"playwright@claude-plugins-official":true}}')
+    tuning = agent_settings.apply_setting("claude", "auto-approve", home=home, platform_os="linux")
+    assert any(key.kind == "wrote" for key in tuning.keys)
+    claude_before = settings.read_bytes()
+    user_file = agent_settings.mcp_file("copilot", home=home, platform_os="linux")
+    user_file.parent.mkdir(parents=True)
+    user_file.write_text('{"mcpServers": {"playwright": {"command": "mine"}}}\n')
+    user_before = user_file.read_bytes()
+    method = Method(
+        kind="bun",
+        params={"npm_pkg": "@playwright/mcp", "versions": {"@playwright/mcp": "0.0.85"}},
+    )
+    tool = Tool(
+        id="playwright-mcp",
+        name="Playwright",
+        category="ai",
+        cmd="playwright-mcp",
+        methods=(method,),
+        postinstall="playwright-mcp-register",
+    )
+    receipts.write(
+        receipts.Receipt(
+            tool=tool.id,
+            at="2026-11-07T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="bun", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={},
+        )
+    )
+    hosts = frozenset({"claude", "codex", "opencode", "cursor", "copilot"})
+    registered, warning = postinstall.register_hooks(
+        tool, method, _runner, hosts, confirmed_hosts=hosts
+    )
+    assert set(registered) == {"claude", "codex", "opencode", "cursor"}
+    assert warning is not None and "left yours" in warning
+    cursor = agent_settings.mcp_file("cursor-agent", home=home, platform_os="linux")
+    cursor_data = json.loads(cursor.read_text())
+    cursor_data["mcpServers"]["other"] = {"command": "user-server"}
+    cursor.write_text(json.dumps(cursor_data))
+    codex = agent_settings.mcp_file("codex", home=home, platform_os="linux")
+    opencode = agent_settings.mcp_file("opencode", home=home, platform_os="linux")
+    assert codex.exists() and opencode.exists()
+    assert str(chrome) in settings.read_text()
+
+    result = app.__dict__["_after_removal"](
+        tool,
+        bundles=(),
+        bin_dir=tmp_path / "bin",
+        myshellrc_path=tmp_path / ".myshellrc",
+        extra_policies=(),
+        platform_os="linux",
+    )
+
+    assert set(result.settings_reverted) == {"claude", "codex", "opencode", "cursor-agent"}
+    assert result.settings_kept == () and result.warnings == ()
+    assert user_file.read_bytes() == user_before
+    assert settings.read_bytes() == claude_before
+    assert json.loads(cursor.read_text())["mcpServers"] == {"other": {"command": "user-server"}}
+    assert not codex.exists() and not opencode.exists()
+    ledger = receipts.read_ledger("claude")
+    assert ledger is not None and any(entry.setting == "auto-approve" for entry in ledger.entries)
+
+
 def test_herdr_is_the_only_config_agent_declaring_config_paths() -> None:
     """R1-16: herdr declares config_paths (24-07). Its per-tool removal reverts herdr's keys in
     `_after_removal` before `_config_step` can delete the file, and the TUI route then drops the

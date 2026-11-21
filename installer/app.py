@@ -15,7 +15,7 @@ from typing import cast
 from rich.console import Console
 
 from installer import receipts, shellrc
-from installer.agent_settings import ledger_preview, revert_agent
+from installer.agent_settings import FileResult, ledger_preview, revert_agent, revert_mcp
 from installer.atomic import atomic_write_text
 from installer.bun_globals import bun_keeps, resolve_bun
 from installer.cli import Options
@@ -587,20 +587,30 @@ def _revert_settings(
     Returns (agents with a key reverted, agents with a key the user changed since, warnings for
     a file that could not be reverted). The one revert loop for every removal route (23-REUSE 15-1).
     """
+    return _settings_results(
+        result
+        for agent in agent_ids
+        for result in revert_agent(
+            agent, home=Path.home(), platform_os=platform_os, environ=os.environ
+        )
+    )
+
+
+def _settings_results(
+    results: Iterable[FileResult],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Collect agent ids and warnings from ledger reverts."""
     reverted: list[str] = []
     kept: list[str] = []
     warnings: list[str] = []
-    for agent in agent_ids:
-        for result in revert_agent(
-            agent, home=Path.home(), platform_os=platform_os, environ=os.environ
-        ):
-            if result.refused is not None:
-                warnings.append(f"could not revert {display_path(result.path)} — {result.refused}")
-                continue
-            if any(key.kind == "removed" for key in result.keys):
-                reverted.append(agent)
-            if any(key.kind == "kept_changed" for key in result.keys):
-                kept.append(agent)
+    for result in results:
+        if result.refused is not None:
+            warnings.append(f"could not revert {display_path(result.path)} — {result.refused}")
+            continue
+        if any(key.kind == "removed" for key in result.keys):
+            reverted.append(result.agent)
+        if any(key.kind == "kept_changed" for key in result.keys):
+            kept.append(result.agent)
     return (
         tuple(dict.fromkeys(reverted)),
         tuple(dict.fromkeys(kept)),
@@ -626,6 +636,11 @@ def _after_removal(
         # herdr declares config_paths: its keys revert here, before `_config_step` can delete the
         # file, and the TUI route then drops the ledger that remains (`_drop_deleted_ledgers`).
         reverted, kept, warnings = _revert_settings((tool.id,), platform_os=platform_os)
+        parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
+    if tool.postinstall == "playwright-mcp-register":
+        reverted, kept, warnings = _settings_results(
+            revert_mcp(home=Path.home(), platform_os=platform_os, environ=os.environ)
+        )
         parts.append(SweepResult(warnings=warnings, settings_reverted=reverted, settings_kept=kept))
     row = TERMINAL_KEYS.get(tool.id)
     if row is not None:  # its owned regions and the record go with the tool (24 D-23, 28 D-04)
