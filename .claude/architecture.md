@@ -774,6 +774,8 @@ question at install time: the consent machinery was retired in Phase 25
 because no action used it since 23.2, and a future action that needs consent
 must add a reviewed path of its own.
 
+The `script` kind validates `install`, a fixed argv checked by both elevation checks; `handoff`, a closed name mapped to display text in `installer/executors.py`, whose branch is unconditional and never runs the command; and `prefer`, a per-method sort key honored by `resolve_methods`, never an edit of `_RANK`. An MCP server such as Playwright is written through the settings ledger by `agent_settings.apply_mcp_server` under `mcp-playwright` and reverted from `app._after_removal`, never by a free-form write. Claude's files are written only through the listed, confirmed `hook_register` plan step for the hosts it disclosed: Claude is a `HookPair.consent` host and `register_hooks(..., confirmed_hosts=...)` is the reviewed consent path. The install-time call never writes a consent host.
+
 ## Phase 15.2: forcing child output and the silence indicator
 
 `PYTHONUNBUFFERED` is set on every streamed child unconditionally and

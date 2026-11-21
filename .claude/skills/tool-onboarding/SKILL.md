@@ -120,7 +120,7 @@ one tool-wide recipe or separate per-OS knobs. For each method from step 4:
 | `brew`, `cask`, `apt`, `dnf`, `pacman`, `uv-tool`, `bun`, `node`, `sdkman` | nothing: removal derives from the manager (L1) | the package/candidate name the manager removes is the one installed |
 | `github_release`, `tarball`, `app` | nothing: removal is the receipt of the paths the install computed (L2) | install and removal use the same path; nothing else shares that path |
 | `cargo_distrobox` | `repo` (owner/name slug), `image` (fully qualified), `packages` (in-box build deps), `artifacts` (`{box, host}` tables) | the first artifact is the binary under ~/.local/bin; every `host` sits under ~/.local, ~/.config or ~/.terminfo; the box and the image it pulled are deleted on every outcome |
-| `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME` | run the vendor installer in a disposable container (`scripts/detect-container-runtime.sh` picks the runtime; never on the host) and list what it wrote |
+| `script` | `paths` (what it creates), optionally `remove` and `update`, `writable_prefix` when it writes outside `$HOME`; `install` is a fixed validated argv for an extension such as `gh extension install`, with elevation heads and placeholders refused; `handoff` is a closed name for a detect-only native tool such as `xcode-clt` whose command is shown, never run; `prefer` ranks this script before the same tool's brew method and requires that method | run the vendor installer in a disposable container (`scripts/detect-container-runtime.sh` picks the runtime; never on the host) and list what it wrote |
 
 ```toml
 [[tool]]

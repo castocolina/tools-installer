@@ -3543,6 +3543,11 @@ update = ["gh", "extension", "upgrade", "stack"]
 # checks unzip on Linux and fails closed with its own message when absent (review H3).
 # Console children print errors directly; outcomes carry command and status, while TUI errors also
 # carry the last output lines (round 2 M1).
+# Verified 2026-11-21: scripts/container-e2e-verify.sh aws-cli in Fedora with gnupg2 and unzip:
+# TRACER_AWS_INSTALL_OK: engine script install, aws-cli/2.x at ~/.local/bin/aws, gpg --verify logged.
+# TRACER_AWS_RERUN_OK: vendor script exits 0 again, install tree and ~/.aws unchanged.
+# TRACER_AWS_REMOVE_OK: declared paths and receipt gone, ~/.aws config and credentials byte-identical.
+# TRACER_AWS_NOGPG_OK: debian-slim without gnupg fails closed with gpg not found; paths unchanged.
 [[tool]]
 id = "aws-cli"
 name = "AWS CLI"
@@ -3577,6 +3582,9 @@ formula = "awscli"
 # until plan 32-07's container check; UNPROVEN is not a pass. Plan 32-09 applies a
 # working argv, or retains the default and records the limit if unproven.
 # ~/.config/bruno is assumed from the Electron app name.
+# Container check not verified: scripts/container-e2e-verify.sh bruno has no digest-verified record;
+# FUSE, sandbox and display behavior stay unconfirmed and the entry keeps the default smoke
+# (UAT on the owner's Bazzite host).
 [[tool]]
 id = "bruno"
 name = "Bruno"
@@ -3626,6 +3634,12 @@ app = "Bruno.app"
 # Bazzite (os-release ID or VARIANT_ID), not Silverblue, and only with the wrapper present.
 # Deleted registrations are offered again by the settled read, not the receipt (plan 32-11).
 # Claude's live ~/.claude.json can be rewritten by a running Claude; settled needs the command on PATH.
+# Verified 2026-11-21: scripts/container-e2e-verify.sh playwright-mcp in Fedora with distro Chromium:
+# TRACER_PLAYWRIGHT_INSTALL_OK: engine installed bun and package; manifest records exact range 0.0.85.
+# TRACER_PLAYWRIGHT_REGISTER_OK: seeded hosts registered; Copilot entry and Claude files byte-identical.
+# TRACER_PLAYWRIGHT_CONSENT_OK: confirmed step registered Claude.
+# TRACER_PLAYWRIGHT_LAUNCH_OK: server answered initialize and tools/list and navigated a data: URL.
+# TRACER_PLAYWRIGHT_REMOVE_OK: removal reverted writes and kept user entries byte-identical.
 [[tool]]
 id = "playwright-mcp"
 name = "Playwright MCP"

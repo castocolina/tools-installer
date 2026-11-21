@@ -639,6 +639,16 @@ def test_table_cells_follow_the_terminal_keys_table() -> None:
     ]
 
 
+def test_the_script_row_names_the_validated_keys() -> None:
+    rows = [line for line in _text(SKILL).splitlines() if line.startswith("| `script` |")]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.isascii() and row.count("|") == 4
+    params = row.split("|")[2]
+    for key in ("install", "handoff", "prefer", "paths", "remove", "update", "writable_prefix"):
+        assert params.count(f"`{key}`") == 1
+
+
 def test_ghostty_row_records_what_is_proven() -> None:
     rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
     row = next(row for row in rows if row[0] == "`ghostty`")
