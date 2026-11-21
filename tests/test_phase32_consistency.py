@@ -13,10 +13,6 @@ from installer.model import load_tools
 from tests import e2e_aws_cli_driver, e2e_playwright_mcp_driver
 
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
-VERIFIED_MODE = "none"
-VERIFIED_ARCH = "none"
-EXPECTED_SMOKE_ARGV: list[str] | None = None
-EXPECTED_ARCH = "none"
 
 
 def _comments(tool_id: str) -> list[str]:
@@ -82,8 +78,6 @@ def test_the_playwright_entry_records_the_container_proof() -> None:
 
 
 def test_the_bruno_entry_reports_the_verified_container_result() -> None:
-    assert VERIFIED_MODE == "none"
-    assert VERIFIED_ARCH == "none"
     text = _paragraph(
         "bruno", "# Container check not verified: scripts/container-e2e-verify.sh bruno", 40
     )
@@ -103,8 +97,6 @@ def test_the_bruno_smoke_argv_matches_the_recorded_result() -> None:
     bruno = next(tool for tool in load_tools(REGISTRY) if tool.id == "bruno")
     tarballs = [method for method in bruno.methods if method.kind == "tarball"]
     assert {method.arch for method in tarballs} == {("amd64",), ("arm64",)}
-    assert EXPECTED_SMOKE_ARGV is None
-    assert EXPECTED_ARCH == "none"
     assert all("smoke_argv" not in method.params for method in tarballs)
     casks = [method for method in bruno.methods if method.kind == "cask"]
     assert len(casks) == 1

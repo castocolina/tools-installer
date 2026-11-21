@@ -6,10 +6,12 @@ import inspect
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from collections import deque
 from collections.abc import Callable, Collection, Mapping, MutableMapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
@@ -75,18 +77,36 @@ def command_error_line(exc: CommandError) -> str:
     return next((ln for ln in exc.detail.splitlines() if ln.strip()), str(exc).splitlines()[0])
 
 
+def _stop_process_group(child: subprocess.Popen[bytes]) -> None:
+    """Terminate the child's whole session (it leads its own), then reap it."""
+    with suppress(ProcessLookupError):
+        os.killpg(child.pid, signal.SIGTERM)
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+
+
 def run_command(cmd: list[str]) -> None:
     """Real Runner: run argv, raise CommandError on non-zero exit.
 
-    Close stdin and detach the terminal so prompts fail fast (D-10, SPEC R7).
-    Ctrl+C does not reach the child directly; subprocess.run kills the direct child on interrupt.
+    Close stdin and detach the terminal so prompts fail fast (D-10, SPEC R7). The child leads its
+    own session, so Ctrl+C does not reach it: on any interruption its whole process group is
+    stopped, so a vendor script's descendants cannot keep changing files after the installer exits.
     """
     try:
-        subprocess.run(cmd, check=True, stdin=subprocess.DEVNULL, start_new_session=True)
-    except subprocess.CalledProcessError as exc:
-        raise CommandError(cmd, exc.returncode) from exc
+        child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)
     except OSError as exc:
         raise CommandError(cmd, 127) from exc
+    try:
+        code = child.wait()
+    except BaseException:
+        _stop_process_group(child)
+        raise
+    if code:
+        raise CommandError(cmd, code)
 
 
 TIMEOUT_CODE = 124  # what GNU timeout(1) reports, so the number is readable

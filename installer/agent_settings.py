@@ -290,8 +290,8 @@ class Inserted:
 
 
 def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object) -> Inserted:
-    """Insert one absent key by splice. A two-part key whose parent is absent creates the parent
-    as one member. The fragment is the text a later revert removes."""
+    """Insert one absent key by splice, creating missing parents up to three key parts.
+    The fragment is the text a later revert removes."""
     doc = parse_settings(text, fmt)
     if lookup(doc, key_path) is not ABSENT:
         raise SettingsEditRefused(f"{'.'.join(key_path)} is already set")
@@ -576,7 +576,7 @@ def write_if_unchanged(path: Path, before: FileSnapshot | None, text: str) -> No
     if not unchanged:
         raise SettingsChanged()
     target.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(target, text, mode=None if before is None else before.mode)
+    atomic_write_text(target, text, mode=0o600 if before is None else before.mode)
 
 
 def delete_if_unchanged(path: Path, before: FileSnapshot) -> None:
@@ -1230,8 +1230,14 @@ def held_states(
         group = [states[i] for i in indices]
         if (
             group
-            and not all(state is True for state in group)
             and not all(state is None for state in group)
+            and (
+                not all(state is True for state in group)
+                or not same_value(
+                    lookup(dict(doc), prefix),
+                    {entries[i].key_path[-1]: entries[i].value for i in indices},
+                )
+            )
         ):
             for i in indices:
                 if states[i] is not None:
@@ -1346,6 +1352,7 @@ def _eligible(
         if entry.setting == setting
         and entry.file == file
         and entry.key_path in table
+        and not (entry.replaced_default and table[entry.key_path].cli_default is ABSENT)
         and same_value(entry.value, table[entry.key_path].value)
     )
     return mine, table
@@ -1366,6 +1373,15 @@ def _revert_once(
     except LedgerUntrusted as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
     mine, table = _eligible(agent, setting, ledger.entries, file, table)
+    if any(
+        entry.setting == setting
+        and entry.file == file
+        and entry.key_path in table
+        and entry.replaced_default
+        and table[entry.key_path].cli_default is ABSENT
+        for entry in ledger.entries
+    ):
+        return FileResult(agent, setting, path, fmt, refused="invalid replaced default in ledger")
     if not mine:
         return FileResult(agent, setting, path, fmt)
     dirs = ledger.created_dirs
@@ -1421,6 +1437,8 @@ def _agent_files(
     setting: str = "",
 ) -> tuple[str, ...]:
     """Every file this setting may live in; a ledger naming another is not followed."""
+    if setting == MCP_SETTING and agent not in MCP_AGENTS:
+        return ()
     path = (
         mcp_file(agent, home=home, platform_os=platform_os, environ=environ)
         if setting == MCP_SETTING

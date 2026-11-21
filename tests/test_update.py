@@ -74,6 +74,40 @@ from tests.test_cargo_distrobox import (
 from tests.test_download import fixture_runner
 
 
+def test_update_does_not_restore_a_deleted_playwright_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import bun_globals, postinstall
+
+    method = Method(
+        kind="brew", params={"formula": "playwright", "versions": {"@playwright/mcp": "0.0.85"}}
+    )
+    tool = _tool("playwright-mcp", method, postinstall="playwright-mcp-register")
+    bunx = tmp_path / "bunx"
+    bunx.touch(mode=0o755)
+    monkeypatch.setattr(bun_globals, "resolve_bun", lambda: str(tmp_path / "bun"))
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex"}))
+    receipts.write(
+        receipts.Receipt(
+            tool=tool.id,
+            at="2026-11-21T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="brew", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"playwright-mcp-register": ("codex",)},
+        )
+    )
+    outcome = perform_update(
+        _target(tool, "brew", package="playwright"),
+        platform=_platform(),
+        runner=lambda _argv: None,
+        resolve_tag=lambda _repo: "1.0",
+    )
+    assert outcome.status == "updated"
+    assert not (Path.home() / ".codex" / "config.toml").exists()
+
+
 def _plant_rg_install(tmp_path: Path) -> tuple[Path, Path]:
     opt = tmp_path / ".local" / "opt" / "rg"
     opt.mkdir(parents=True)

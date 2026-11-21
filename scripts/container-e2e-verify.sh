@@ -344,9 +344,9 @@ resync_workspace() {
   stream_worktree
 }
 
-# make e2e excludes herdr-app: its dedicated target proves it, while herdr-core and hc
-# herdr-app is skipped; herdr-core and hc remain by design. Landing targets retain the app
-# (cmd_ghostty, cmd_herdr_keys, cmd_bun_lifecycle); the app also needs network and X libraries.
+# make e2e excludes herdr-app; its target proves it, while herdr-core and hc remain.
+# Landing targets retain herdr-app; herdr-core and hc remain in generic e2e.
+# The app needs network and X libraries (cmd_ghostty, cmd_herdr_keys, cmd_bun_lifecycle).
 # aws-cli fails closed without gnupg on Debian; its dedicated target proves both hosts.
 # bruno: 175 MB AppImage, no CLI, Electron needs a display; its target tests lifecycle and modes.
 # playwright-mcp writes agent configs and needs Chromium; its target proves registration, launch and removal.

@@ -1577,6 +1577,13 @@ member = "codegraph"
         load_tools(manifest)
 
 
+def test_handoff_names_match_the_dispatch_table() -> None:
+    from installer import executors
+    from installer.model import HANDOFF_NAMES
+
+    assert set(vars(executors)["_HANDOFF_COMMANDS"]) == HANDOFF_NAMES
+
+
 def test_postinstall_hook_names_matches_the_real_dispatch_table() -> None:
     """WR-02 (internal dual-lane review): model.py's own comment claims
     POSTINSTALL_HOOK_NAMES is "duplicated (not imported)" from

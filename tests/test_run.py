@@ -54,28 +54,42 @@ class _PopenKwargs(TypedDict):
     start_new_session: bool
 
 
-def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
+class _FakeChild:
+    """A Popen double: `wait` returns the exit code, or raises what the test queued."""
+
+    def __init__(self, code: int = 0, raises: BaseException | None = None) -> None:
+        self.pid = 4242
+        self._code = code
+        self._raises = raises
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        if self._raises is not None:
+            raise self._raises
+        return self._code
+
+
+def _fake_popen(monkeypatch: pytest.MonkeyPatch, child: _FakeChild | OSError) -> dict[str, object]:
     seen: dict[str, object] = {}
 
-    def fake_run(
-        cmd: list[str], check: bool, stdin: object = None, start_new_session: bool = False
-    ):
-        seen["cmd"] = cmd
-        seen["check"] = check
+    def popen(cmd: list[str], *, stdin: object, start_new_session: bool) -> _FakeChild:
+        seen.update(cmd=cmd, stdin=stdin, start_new_session=start_new_session)
+        if isinstance(child, OSError):
+            raise child
+        return child
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return seen
+
+
+def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
+    seen = _fake_popen(monkeypatch, _FakeChild(0))
     run_command(["echo", "hi"])
     assert seen["cmd"] == ["echo", "hi"]
-    assert seen["check"] is True
 
 
 def test_run_command_raises_on_nonzero(monkeypatch: pytest.MonkeyPatch):
-    def fake_run(
-        cmd: list[str], check: bool, stdin: object = None, start_new_session: bool = False
-    ):
-        raise subprocess.CalledProcessError(returncode=2, cmd=cmd)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _fake_popen(monkeypatch, _FakeChild(2))
     with pytest.raises(CommandError) as exc:
         run_command(["false"])
     assert exc.value.cmd == ["false"]
@@ -83,12 +97,7 @@ def test_run_command_raises_on_nonzero(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_run_command_raises_when_binary_missing(monkeypatch: pytest.MonkeyPatch):
-    def fake_run(
-        cmd: list[str], check: bool, stdin: object = None, start_new_session: bool = False
-    ):
-        raise FileNotFoundError(cmd[0])
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _fake_popen(monkeypatch, FileNotFoundError("nope"))
     with pytest.raises(CommandError) as exc:
         run_command(["nope"])
     assert exc.value.returncode == 127
@@ -97,14 +106,47 @@ def test_run_command_raises_when_binary_missing(monkeypatch: pytest.MonkeyPatch)
 def test_run_command_passes_devnull_stdin_and_a_new_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seen: dict[str, object] = {}
-
-    def fake_run(cmd: list[str], *, check: bool, stdin: object, start_new_session: bool) -> None:
-        seen.update(check=check, stdin=stdin, start_new_session=start_new_session)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    seen = _fake_popen(monkeypatch, _FakeChild(0))
     run_command(["x"])
-    assert seen == {"check": True, "stdin": subprocess.DEVNULL, "start_new_session": True}
+    assert seen == {"cmd": ["x"], "stdin": subprocess.DEVNULL, "start_new_session": True}
+
+
+def test_an_interrupted_run_command_stops_the_childs_whole_process_group(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review WR-01: Ctrl+C does not reach a detached child, so its descendants must be stopped."""
+    marker = tmp_path / "grandchild-finished"
+    pidfile = tmp_path / "grandchild.pid"
+    grandchild_code = (
+        f"import os, pathlib, time; pathlib.Path({str(pidfile)!r}).write_text(str(os.getpid())); "
+        f"time.sleep(2); pathlib.Path({str(marker)!r}).touch()"
+    )
+    child_code = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]).wait()"
+    )
+    real_wait = subprocess.Popen[bytes].wait
+    interrupted = {"done": False}
+
+    def wait(self: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+        if not interrupted["done"]:
+            interrupted["done"] = True
+            deadline = time.monotonic() + 10
+            while not pidfile.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            raise KeyboardInterrupt
+        return real_wait(self, timeout)
+
+    monkeypatch.setattr(subprocess.Popen, "wait", wait)
+    with pytest.raises(KeyboardInterrupt):
+        run_command([sys.executable, "-c", child_code])
+    grandchild = int(pidfile.read_text())
+    time.sleep(0.3)
+    # A killed descendant may remain a zombie until init reaps it; it cannot execute.
+    stat = Path(f"/proc/{grandchild}/stat")
+    assert not stat.exists() or stat.read_text().split()[2] == "Z"
+    time.sleep(2.2)
+    assert not marker.exists()
 
 
 def test_the_default_install_runner_is_the_stdin_closed_run_command() -> None:

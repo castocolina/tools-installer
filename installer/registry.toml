@@ -3578,9 +3578,9 @@ formula = "awscli"
 # with no CLI link promised. brew uninstall --cask does not zap ~/Documents/bruno.
 # The bru CLI is out of scope (owner decision 2026-11-16).
 # Tarball desktop exists since phase 30, but D-08 writes no menu entry; follow-up 999.32.
-# smoke_argv stays default: FUSE 2, --no-sandbox and display-less smoke are unconfirmed
-# until plan 32-07's container check; UNPROVEN is not a pass. Plan 32-09 applies a
-# working argv, or retains the default and records the limit if unproven.
+# smoke_argv stays default: the Bruno container result was UNPROVEN (no FUSE in rootless podman).
+# AWS and Playwright container checks PASS; Bruno's FUSE 2, --no-sandbox and display-less smoke
+# remain unconfirmed until host UAT.
 # ~/.config/bruno is assumed from the Electron app name.
 # Container check not verified: scripts/container-e2e-verify.sh bruno has no digest-verified record;
 # FUSE, sandbox and display behavior stay unconfirmed and the entry keeps the default smoke
@@ -3624,7 +3624,7 @@ app = "Bruno.app"
 # published 2026-11-09, and no install or postinstall scripts. 0.0.86 (Node >=20,
 # npm latest, published 2026-11-18) is the alternative; D-13 locks 0.0.85, no checkpoint.
 # Pins move by hand or catalog-audit; verify-registry checks only download kinds.
-# Update refuses an exact bun pin: assumed bun records that range; container confirmation pending.
+# Update refuses an exact bun pin: the passing container check recorded that exact range.
 # The server runs absolute bunx beside bun with @playwright/mcp@0.0.85. Claude's
 # ~/.claude.json mcpServers.playwright requires a confirmed hook_register step;
 # ~/.claude/settings.json env.PLAYWRIGHT_MCP_EXECUTABLE_PATH is for its official plugin only.
@@ -3632,7 +3632,7 @@ app = "Bruno.app"
 # mcp.servers.playwright, and Codex [mcp_servers.playwright]. Pi has no ledger: add manually.
 # Existing playwright entries are kept. Flatpak Chrome goes in each entry's env only on
 # Bazzite (os-release ID or VARIANT_ID), not Silverblue, and only with the wrapper present.
-# Deleted registrations are offered again by the settled read, not the receipt (plan 32-11).
+# Reconfigure offers deleted registrations again via the settled read; unattended hooks honor receipts.
 # Claude's live ~/.claude.json can be rewritten by a running Claude; settled needs the command on PATH.
 # Verified 2026-11-21: scripts/container-e2e-verify.sh playwright-mcp in Fedora with distro Chromium:
 # TRACER_PLAYWRIGHT_INSTALL_OK: engine installed bun and package; manifest records exact range 0.0.85.

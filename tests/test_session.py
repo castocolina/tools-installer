@@ -846,6 +846,28 @@ def _playwright_row(tool: Tool, hosts: frozenset[str]) -> PlanRow:
     )[0]
 
 
+def test_deleted_codex_registration_stays_deleted_until_reconfigure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _playwright_setup(tmp_path, monkeypatch)
+    hosts = frozenset({"codex"})
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: hosts)
+    assert postinstall.register_hooks(tool, tool.methods[0], lambda _argv: None, hosts)[0] == (
+        "codex",
+    )
+    path = Path.home() / ".codex" / "config.toml"
+    path.unlink()
+    row = _playwright_row(tool, hosts)
+    assert row.disposition is Disposition.RECONFIGURE and row.steps[0].hosts == ("codex",)
+    execute_plan(
+        [PlanRow("codex", Disposition.INSTALL, "missing")],
+        _run_context(RunRecorder(), catalog={tool.id: tool, "codex": _tool("codex")}),
+    )
+    assert not path.exists()
+    execute_plan([row], _run_context(RunRecorder(), catalog={tool.id: tool}))
+    assert path.exists()
+
+
 def test_the_hook_register_step_is_the_claude_consent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

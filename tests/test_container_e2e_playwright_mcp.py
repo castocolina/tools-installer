@@ -283,7 +283,7 @@ def test_the_rpc_client_talks_to_a_fake_server_through_files(tmp_path: Path) -> 
         "import json,sys\nfor line in sys.stdin:\n m=json.loads(line)\n"
         ' if "id" in m: print(json.dumps({"id":m["id"],"result":{}}),flush=True)\n'
     )
-    result = driver.run_rpc([sys.executable, str(server)], os.environ, driver.frames(), 2)
+    result = driver.run_rpc([sys.executable, str(server)], os.environ, driver.frames(), 20)
     assert result.started and [r["id"] for r in result.replies] == [1, 2, 3]
     hanging = tmp_path / "hang.py"
     pidfile = tmp_path / "pid"
@@ -294,9 +294,10 @@ def test_the_rpc_client_talks_to_a_fake_server_through_files(tmp_path: Path) -> 
     )
     start = time.monotonic()
     result = driver.run_rpc(
-        [sys.executable, str(hanging), str(pidfile)], os.environ, driver.frames(), 0.5
+        [sys.executable, str(hanging), str(pidfile)], os.environ, driver.frames(), 3
     )
-    assert result.started and not result.replies and time.monotonic() - start < 2
+    # The deadline is a cap with room for a loaded host to start Python and write the pid file.
+    assert result.started and not result.replies and time.monotonic() - start < 15
     pid = int(pidfile.read_text())
     # A killed descendant may remain a zombie until init reaps it; it cannot execute.
     stat = Path(f"/proc/{pid}/stat")

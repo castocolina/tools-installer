@@ -202,6 +202,15 @@ def test_register_writes_every_present_host_except_claude_until_confirmed(
     assert receipt is not None and "claude" in receipt.hooks[_PLAYWRIGHT]
 
 
+def test_pi_note_is_only_emitted_when_pi_is_wanted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    assert _pw_run(tool, frozenset({"codex"}))[1] is None
+    warning = _pw_run(tool, frozenset({"pi"}))[1]
+    assert warning is not None and "pi: not written" in warning
+
+
 def test_the_install_time_warning_names_the_next_step_and_the_exact_claude_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -369,6 +378,38 @@ def test_confirmed_absent_host_is_never_written(
     assert not _pw_path("claude").exists()
 
 
+@pytest.mark.parametrize("plugin", [False, True])
+@pytest.mark.parametrize("wrapper", [False, True])
+@pytest.mark.parametrize("env_set", [False, True])
+def test_claude_plugin_settled_and_handoff_with_existing_server(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    plugin: bool,
+    wrapper: bool,
+    env_set: bool,
+) -> None:
+    _pw_setup(monkeypatch, tmp_path)
+    _pw_path("claude").write_text('{"mcpServers":{"playwright":{}}}', encoding="utf-8")
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    data: dict[str, object] = {"enabledPlugins": {"playwright@claude-plugins-official": plugin}}
+    if env_set:
+        data["env"] = {"PLAYWRIGHT_MCP_EXECUTABLE_PATH": "/chrome"}
+    settings.write_text(json.dumps(data), encoding="utf-8")
+    if wrapper:
+        _wrapper(monkeypatch, tmp_path)
+    else:
+        monkeypatch.setattr(pi, "flatpak_chrome", lambda: None)
+    pending = plugin and wrapper and not env_set
+    pair = pi.POSTINSTALL_HOOKS[_PLAYWRIGHT]
+    assert pair.settled is not None and pair.consent_handoff is not None
+    assert ("claude" not in pair.settled("binary", lambda _argv: None)) is pending
+    handoff = pair.consent_handoff(_PW_METHOD)
+    assert (handoff is not None) is pending
+    if handoff:
+        assert "env.PLAYWRIGHT_MCP_EXECUTABLE_PATH" in handoff
+
+
 def test_existing_claude_server_suppresses_handoff(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -440,11 +481,10 @@ def test_a_recorded_host_whose_server_is_gone_is_registered_again(
     assert _pw_run(tool, hosts, hosts)[0] == (host,)
     assert path.read_bytes() == original
     path.unlink()
+    registered, warning = _pw_run(tool, hosts)
+    assert registered == () and not path.exists()
     if host == "claude":
-        registered, warning = _pw_run(tool, hosts)
-        assert (
-            registered == () and not path.exists() and warning is not None and "or run:" in warning
-        )
+        assert warning is None
     assert _pw_run(tool, hosts, hosts)[0] == (host,)
     assert path.read_bytes() == original
     assert _pw_run(tool, hosts, hosts)[0] == (host,)

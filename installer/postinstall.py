@@ -568,11 +568,13 @@ PLAYWRIGHT_CONSENT_DISCLOSURE = (
 )
 
 
-def _playwright_command(method: Method) -> tuple[str, str] | None:
+def _playwright_pin(method: Method) -> str | None:
     raw = method.params.get("versions")
     pin = cast(dict[str, object], raw).get("@playwright/mcp") if isinstance(raw, dict) else None
-    if not isinstance(pin, str) or not pin:
-        return None
+    return pin if isinstance(pin, str) and pin else None
+
+
+def _playwright_command(pin: str) -> tuple[str, str] | None:
     bun = bun_globals.resolve_bun()
     if bun is None:
         return None
@@ -584,11 +586,10 @@ def _playwright_command(method: Method) -> tuple[str, str] | None:
 
 def _playwright_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) -> HookOutcome:
     del runner
-    raw = method.params.get("versions")
-    pin = cast(dict[str, object], raw).get("@playwright/mcp") if isinstance(raw, dict) else None
-    if not isinstance(pin, str) or not pin:
+    pin = _playwright_pin(method)
+    if pin is None:
         return (), "playwright-mcp: no pinned version in the registry method; not registered"
-    resolved = _playwright_command(method)
+    resolved = _playwright_command(pin)
     if resolved is None:
         return (
             (),
@@ -661,25 +662,24 @@ def _playwright_settled(binary: str, probe: Callable[[list[str]], str | None]) -
             agent, home=home, platform_os="linux", environ=os.environ
         )
     }
-    if agent_settings.claude_plugin_enabled(
-        home=home, platform_os="linux", environ=os.environ
-    ) and (
-        flatpak_chrome() is None
-        or agent_settings.claude_env_set(home=home, platform_os="linux", environ=os.environ)
-    ):
-        settled.add("claude")
+    if agent_settings.claude_plugin_enabled(home=home, platform_os="linux", environ=os.environ):
+        if flatpak_chrome() is None or agent_settings.claude_env_set(
+            home=home, platform_os="linux", environ=os.environ
+        ):
+            settled.add("claude")
+        else:
+            settled.discard("claude")
     return frozenset(settled)
 
 
 def _playwright_consent_handoff(method: Method) -> str | None:
-    resolved = _playwright_command(method)
+    pin = _playwright_pin(method)
+    if pin is None:
+        return None
+    resolved = _playwright_command(pin)
     if resolved is None:
         return None
     home = Path.home()
-    if agent_settings.mcp_server_present(
-        "claude", home=home, platform_os="linux", environ=os.environ
-    ):
-        return None
     chrome = flatpak_chrome()
     if agent_settings.claude_plugin_enabled(home=home, platform_os="linux", environ=os.environ):
         if chrome is None or agent_settings.claude_env_set(
@@ -691,6 +691,10 @@ def _playwright_consent_handoff(method: Method) -> str | None:
             "env.PLAYWRIGHT_MCP_EXECUTABLE_PATH in ~/.claude/settings.json yourself, "
             "or open Reconfigure for playwright-mcp and confirm the register step"
         )
+    if agent_settings.mcp_server_present(
+        "claude", home=home, platform_os="linux", environ=os.environ
+    ):
+        return None
     command, spec = resolved
     argv = ["claude", "mcp", "add", "--scope", "user"]
     if chrome is not None:
@@ -858,7 +862,11 @@ def register_hooks(
     if receipt is None:
         return (), "hook not registered: no install receipt to record it in"
     present = present_hosts() if hosts is None else hosts
-    recorded = frozenset[str]() if pair.rereads else frozenset(receipt.hooks.get(name, ()))
+    recorded = (
+        frozenset[str]()
+        if pair.rereads and confirmed_hosts is not None
+        else frozenset(receipt.hooks.get(name, ()))
+    )
     wanted = (present | frozenset(pair.standalone)) - recorded
     notes: list[str] = []
     if confirmed_hosts is None:

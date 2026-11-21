@@ -1645,7 +1645,7 @@ def test_the_created_levels_field_round_trips() -> None:
     assert old is not None and old.entries[0].created_levels == ()
     receipts.write_ledger(old)
     assert "created_levels" not in json.loads(path.read_text(encoding="utf-8"))["entries"][0]
-    for bad in (None, "mcp", [1], ["mcp", None]):
+    for bad in (None, "mcp", [1], ["mcp", None], ["mcp", "servers", "playwright"]):
         data["entries"][0]["created_levels"] = bad
         path.write_text(json.dumps(data), encoding="utf-8")
         assert receipts.read_ledger("opencode") is None

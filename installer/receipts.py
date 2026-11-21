@@ -347,6 +347,7 @@ def _config_write_from(raw: object) -> ConfigWrite | None:
         or not isinstance(replaced, bool)
         or not isinstance(levels, list)
         or not all(isinstance(part, str) for part in cast(list[object], levels))
+        or len(cast(list[object], levels)) > max(0, len(cast(list[object], key_path)) - 1)
     ):
         return None
     return ConfigWrite(

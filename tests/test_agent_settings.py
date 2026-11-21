@@ -2242,6 +2242,23 @@ def test_default_shell_not_in_the_ledger_stays_the_users_when_zsh_moves() -> Non
     assert _default_shell(config.read_text(encoding="utf-8")) == "/bin/fish"
 
 
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "codex"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_mcp_file_permissions(agent: str, existing: bool, tmp_path: Path) -> None:
+    path = agent_settings.mcp_file(agent, home=tmp_path, platform_os="linux", environ={})
+    if existing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("" if agent == "codex" else "{}", encoding="utf-8")
+        path.chmod(0o644)
+    old_umask = os.umask(0o022)
+    try:
+        result = _mcp_apply(agent, tmp_path)
+    finally:
+        os.umask(old_umask)
+    assert result.refused is None
+    assert path.stat().st_mode & 0o777 == (0o644 if existing else 0o600)
+
+
 @pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
 def test_apply_mcp_server_writes_one_entry_per_host(agent: str, tmp_path: Path) -> None:
     result = agent_settings.apply_mcp_server(
@@ -2461,13 +2478,11 @@ def test_a_codex_server_is_one_ownership_unit_on_revert(
         "codex", "mcp-playwright", home=tmp_path, platform_os="linux", environ={}
     )
     assert results[0].refused is None
-    if edit == "added":
-        assert tomllib.loads(result.path.read_text(encoding="utf-8"))["mcp_servers"][
-            "playwright"
-        ] == {"startup_timeout_sec": 30}
-    else:
-        assert result.path.read_text(encoding="utf-8") == text
-        assert all(k.kind == "kept_changed" for k in results[0].keys)
+    assert result.path.read_text(encoding="utf-8") == text
+    assert tomllib.loads(text)["mcp_servers"]["playwright"]
+    assert all(k.kind == "kept_changed" for k in results[0].keys)
+    assert _mcp_apply("codex", tmp_path, "/chrome").keys[0].kind == "set_by_you"
+    assert result.path.read_text(encoding="utf-8") == text
     assert read_ledger("codex") is None
 
 
@@ -2493,7 +2508,7 @@ def test_ledger_preview_filters_by_setting(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("wrapper", [None, "/chrome"])
-@pytest.mark.parametrize("change", ["intact", "args", "command-gone", "all-gone"])
+@pytest.mark.parametrize("change", ["intact", "args", "command-gone", "all-gone", "added"])
 def test_ledger_preview_uses_the_grouped_codex_decision(
     tmp_path: Path, wrapper: str | None, change: str
 ) -> None:
@@ -2508,12 +2523,18 @@ def test_ledger_preview_uses_the_grouped_codex_decision(
         )
     elif change == "all-gone":
         text = "[mcp_servers.playwright]\n"
+    elif change == "added":
+        text += "startup_timeout_sec = 30\n"
     path.write_text(text, encoding="utf-8")
     names = ("mcp_servers.playwright.command", "mcp_servers.playwright.args") + (
         ("mcp_servers.playwright.env",) if wrapper else ()
     )
     present = (
-        names if change in ("intact", "args") else names[1:] if change == "command-gone" else ()
+        names
+        if change in ("intact", "args", "added")
+        else names[1:]
+        if change == "command-gone"
+        else ()
     )
     removes = present if change == "intact" else ()
     kept = () if change == "intact" else present
@@ -2768,6 +2789,35 @@ def test_mcp_server_present_and_claude_helpers(tmp_path: Path) -> None:
     assert not agent_settings.claude_env_set(home=tmp_path, platform_os="linux")
 
 
+@pytest.mark.parametrize("agent", ["vscode", "herdr"])
+def test_revert_refuses_mcp_entries_for_unsupported_agents(agent: str, tmp_path: Path) -> None:
+    path = agent_settings.settings_file(agent, home=tmp_path, platform_os="linux", environ={})
+    entry = ConfigWrite("mcp-playwright", str(path), ("mcpServers", "playwright"), {}, "")
+    write_ledger(ConfigLedger(agent, entries=(entry,)))
+    result = agent_settings.revert_group(
+        agent, "mcp-playwright", home=tmp_path, platform_os="linux"
+    )
+    assert result[0].refused == agent_settings.NOT_A_SETTINGS_FILE
+    assert agent_settings.ledger_preview(agent, home=tmp_path) == ()
+
+
+def test_forged_dynamic_default_is_refused_and_not_previewed(tmp_path: Path) -> None:
+    result = _mcp_apply("claude", tmp_path)
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    from dataclasses import replace
+
+    entry = replace(ledger.entries[0], replaced_default=True)
+    write_ledger(replace(ledger, entries=(entry,)))
+    before = result.path.read_bytes()
+    assert agent_settings.ledger_preview("claude", home=tmp_path) == ()
+    reverted = agent_settings.revert_group(
+        "claude", "mcp-playwright", home=tmp_path, platform_os="linux"
+    )
+    assert reverted[0].refused
+    assert result.path.read_bytes() == before
+
+
 @pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "codex", "opencode"])
 def test_a_forged_ledger_entry_cannot_cross_between_the_mcp_and_the_ordinary_file(
     agent: str, tmp_path: Path
@@ -2823,10 +2873,9 @@ def test_codex_added_env_survives_revert(env_text: str, tmp_path: Path) -> None:
         "codex", "mcp-playwright", home=tmp_path, platform_os="linux"
     )
     assert reverted[0].refused is None
-    assert tomllib.loads(result.path.read_text(encoding="utf-8"))["mcp_servers"]["playwright"] == {
-        "env": {"X": "1"}
-    }
-    before = result.path.read_bytes()
+    assert result.path.read_bytes() == before
+    assert tomllib.loads(before.decode())["mcp_servers"]["playwright"]["env"] == {"X": "1"}
+    assert all(key.kind == "kept_changed" for key in reverted[0].keys)
     assert _mcp_apply("codex", tmp_path, "/chrome").keys[0].kind == "set_by_you"
     assert result.path.read_bytes() == before
     assert read_ledger("codex") is None
