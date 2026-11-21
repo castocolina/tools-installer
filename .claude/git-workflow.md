@@ -49,6 +49,36 @@ required check names quickly through CI's fast pass; `devtools/docs_only.py` hol
 of files tests read. CI does not run on pull requests, so an outside contributor's branch
 gets CI once the maintainer pushes that branch to this repository.
 
+### Landing a registry bot branch
+
+The `bot/registry-<date>` branch carries one registry commit; the bot dispatches its CI runs.
+The owner fetches its exact remote head, records its SHA, and checks that both required checks
+concluded `success` for that SHA. Replace `<date>` before running these commands:
+
+```sh
+git fetch origin "+refs/heads/bot/registry-<date>:refs/remotes/origin/bot/registry-<date>"
+SHA=$(git rev-parse "refs/remotes/origin/bot/registry-<date>")
+gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --jq '[.check_runs[] | select(.name == "validate & test on ubuntu-latest" or .name == "validate & test on macos-latest") | select(.conclusion == "success") | .name] | unique | length'
+```
+
+The last command must print `2`. Land only that SHA as a fast-forward, from a clean scratch
+worktree detached at it: the push gate refuses a commit that is not the checked-out HEAD.
+
+```sh
+WT=$(mktemp -d)
+git worktree add --detach "$WT" "$SHA"
+(cd "$WT" && git push origin HEAD:refs/heads/main)
+git worktree remove "$WT"
+```
+
+If `main` moved, run the bot again on the new base and wait for green checks again. The commit
+references the `registry-bot` tracking issue with a closing keyword, not yet exercised on a
+fast-forward push; close the issue by hand if it stays open. Land a Dependabot branch
+(`dependabot/github_actions/...`) the same way, fetching its exact remote head, or close its
+pull request. If GitHub refuses the fast-forward because dispatched checks do not count, stop
+and take the question to the owner (the proof runbook's Option A and Option B); never add a
+token or push around protection.
+
 ### Escape hatch: CI is down
 
 If CI cannot produce its checks, a maintainer may land an already-tested commit by turning

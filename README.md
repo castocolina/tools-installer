@@ -325,7 +325,7 @@ workflow has a `make` target so local runs and CI are identical:
 | `make run`       | launch the wizard (`uv run --isolated --no-dev setup.py`, isolated, without dev dependencies, so the installer sees your real tools (dev ruff never shadows yours); flags via `ARGS`) |
 | `make doctor`    | audit `PATH` (a report; runs the launch repairs first)          |
 | `make fix`       | wire `PATH` into your shell (`~/.myshellrc` + rc files)         |
-| `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode |
+| `make verify-registry` | check every release asset, archive member, checksum and pin against upstream; read-only; needs network; uses your gh login for the API rate limit; `ARGS="--write"` is the maintainer bump mode; `--bumps-only` with `--write` skips changes that only touch the `verified` date, as the update bot does |
 | `make audit-catalog` | maintainer tooling for the catalog-audit skill: prints read-only facts about one registry entry and validates and stores its audit report under `.planning/audits/catalog/<date>/`; subcommand via `ARGS="…"` (`status`, `facts`, `write`); never installs anything |
 | `make lint`      | ruff check                                                      |
 | `make format-check` | ruff format --check (no rewrite)                             |
@@ -349,6 +349,12 @@ skipped tests, lowered coverage floors). The full contributor rules live in
 ### Registry drift
 
 A scheduled GitHub Actions workflow (`verify-registry.yml`) runs weekly (Monday cron) and on manual dispatch — never in the PR gate. It calls `make verify-registry ARGS="--issue"`, which opens or updates a single issue labelled `registry-drift` when drift is confirmed (inconclusive findings are listed beside drift). When GitHub is rate-limited or unreachable and no drift was confirmed, it posts nothing (drift confirmed in an otherwise blocked run is still posted, with a note). The job keeps its digest state between runs via Actions cache restore/save (including when a run hits its time limit, so the next run resumes). A mid-week schedule entry only restores and re-saves that state to make GitHub's 7-day cache eviction unlikely; if the state is lost anyway, the next check downloads every asset once and rebuilds it.
+
+### Registry update bot
+
+`registry-bot.yml` runs `verify-registry --write --bumps-only`. Only when `installer/registry.toml` changes, it publishes a dated `bot/registry-<date>` branch, opens or updates one issue labelled `registry-bot`, and dispatches CI on that branch. A push with the default workflow token starts no run; a dispatch does. The bot never pushes to or merges into the default branch: the owner lands its branch through the protected flow in the git workflow guide. It is dispatch-only until the owner's one-time proof in `docs/registry-bot-proof.txt` passes; one follow-up commit then enables the weekly Monday run. A bumped tool's `verified` date certifies its bumped pins only; findings on its other methods still appear in the drift report.
+
+No workflow step targets the default branch, but the repository sets no push restriction on it. Only the owner dispatches the bot; a push restriction is an owner follow-up outside this phase. `.github/dependabot.yml` groups weekly GitHub Actions updates into one branch. Dependabot opens pull requests, which this repository does not merge: the owner fast-forwards the Dependabot branch or closes the pull request.
 
 ## Project layout
 
