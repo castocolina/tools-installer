@@ -716,6 +716,77 @@ def test_strip_uses_pinned_default_never_seed(tmp_path: Path, matches: bool) -> 
     assert not any(p.exists() for p in keys_records(tmp_path))
 
 
+@pytest.mark.parametrize("user_key", [False, True])
+def test_strip_removes_only_an_empty_section_after_its_owned_key(
+    tmp_path: Path, user_key: bool
+) -> None:
+    path = keys_path("", tmp_path, {})
+    path.parent.mkdir()
+    path.write_text('{"global": {}, "terminal": {"mine": "x"}}' if user_key else '{"global": {}}')
+    r = keys_row()
+    assert keys_apply(r, tmp_path)[1] is None
+    assert keys_strip(r, tmp_path) == ()
+    assert json.loads(path.read_text()) == (
+        {"global": {}, "terminal": {"mine": "x"}} if user_key else {"global": {}}
+    )
+
+
+@pytest.mark.parametrize(
+    "garbage", ["not json", "{}", "[]", '{"keys": [], "deleted": [], "path": 3}']
+)
+def test_invalid_ownership_record_blocks_apply_and_strip(tmp_path: Path, garbage: str) -> None:
+    r = keys_row()
+    assert keys_apply(r, tmp_path)[1] is None
+    path = keys_path("", tmp_path, {})
+    record, marker, sidecar = keys_records(tmp_path)
+    record.write_text(garbage)
+    saved = {p: p.read_bytes() for p in (path, record, marker, sidecar)}
+    for recorded in (False, True):
+        assert keys_apply(r, tmp_path, recorded=recorded) == (
+            ("fixture-keys: the ownership record is unreadable; left as it is",),
+            None,
+        )
+    assert keys_strip(r, tmp_path) == (
+        "fixture-keys: the ownership record is unreadable; left as it is",
+    )
+    assert all(p.read_bytes() == content for p, content in saved.items())
+
+
+def test_unreadable_ownership_record_blocks_apply_and_strip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = keys_row()
+    keys_apply(r, tmp_path)
+    record = keys_records(tmp_path)[0]
+    saved = {p: p.read_bytes() for p in (keys_path("", tmp_path, {}), *keys_records(tmp_path))}
+    read = Path.read_text
+
+    def unreadable(path: Path, *args: object, **kwargs: object) -> str:
+        if path == record:
+            raise PermissionError("unreadable")
+        del args, kwargs
+        return read(path)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    message = "fixture-keys: the ownership record is unreadable; left as it is"
+    assert keys_apply(r, tmp_path) == ((message,), None)
+    assert keys_apply(r, tmp_path, recorded=True) == ((message,), None)
+    assert keys_strip(r, tmp_path) == (message,)
+    assert all(p.read_bytes() == content for p, content in saved.items())
+
+
+def test_missing_ownership_record_still_allows_apply_and_strip(tmp_path: Path) -> None:
+    r = keys_row()
+    path = keys_path("", tmp_path, {})
+    path.parent.mkdir()
+    path.write_text(SEED)
+    assert keys_strip(r, tmp_path) == ()
+    assert path.read_text() == SEED
+    assert keys_apply(r, tmp_path, recorded=True)[1] is None
+    assert keys_records(tmp_path)[0].exists()
+    assert keys_strip(r, tmp_path) == () and path.read_text() == SEED
+
+
 def test_user_sections_survive_apply_and_strip_in_shuffled_order(tmp_path: Path) -> None:
     text = (
         '{\n  "other": {"z": "1", "a": "2"},\n'

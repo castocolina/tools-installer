@@ -12,6 +12,8 @@ from installer.iterm2_profile import ProfileState
 from installer.run import CommandError
 from installer.terminal_regions import Restored, TerminalShellError
 
+REAL_DEFAULTS = iterm2_profile.iterm2_defaults
+
 GUID = "AAAAAAAA-0000-4000-8000-000000000001"
 ROWS: dict[str, object] = {
     "0x6b-0x100000": {"Action": 11, "Text": "0x0c"},
@@ -353,9 +355,71 @@ def test_the_default_profile_round_trips_four_starting_states(
             else ("delete", DOMAIN, DEFAULT)
         )
         assert result == Restored((), True)
-        assert fake.calls == [READ, READ_CUSTOM, command]
+        assert fake.calls == [READ, READ_CUSTOM, command, READ]
         assert fake.prefs.get(DEFAULT) == previous
     assert iterm2_profile.read_state(tmp_path, {}) is None
+
+
+@pytest.mark.parametrize("failure", ["unchanged", "read"])
+def test_restore_requires_readback_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    fake = setup_fake(monkeypatch)
+    before(tmp_path)
+    after(tmp_path)
+    saved = iterm2_profile.state_record(tmp_path, {}).read_bytes()
+
+    def defaults(argv: Sequence[str]) -> str:
+        if tuple(argv) == ("write", DOMAIN, DEFAULT, "-string", GUID):
+            if failure == "read":
+                fake.fail_next.add("read")
+            return ""
+        return fake(argv)
+
+    monkeypatch.setattr(iterm2_profile, "iterm2_defaults", defaults)
+    result = restore(tmp_path)
+    assert not result.confirmed
+    assert iterm2_profile.state_record(tmp_path, {}).read_bytes() == saved
+    assert fake.prefs[DEFAULT] == OURS
+
+
+@pytest.mark.parametrize("failed_key", [DEFAULT, CUSTOM])
+def test_reinstall_read_failure_keeps_prior_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_key: str
+) -> None:
+    fake = setup_fake(monkeypatch)
+    before(tmp_path)
+    after(tmp_path)
+    path = iterm2_profile.state_record(tmp_path, {})
+    saved = path.read_bytes()
+
+    def defaults(argv: Sequence[str]) -> str:
+        if tuple(argv) == ("read", DOMAIN, failed_key):
+            raise CommandError(list(argv), 1, detail="injected")
+        return fake(argv)
+
+    monkeypatch.setattr(iterm2_profile, "iterm2_defaults", defaults)
+    assert before(tmp_path)[0].startswith("iterm2: partial: could not read")
+    assert path.read_bytes() == saved
+    assert after(tmp_path) == ()
+
+
+def test_reinstall_with_custom_folder_keeps_record_and_restores_later(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = setup_fake(monkeypatch)
+    before(tmp_path)
+    after(tmp_path)
+    path = iterm2_profile.state_record(tmp_path, {})
+    saved = path.read_bytes()
+    fake.prefs[CUSTOM] = "1"
+    assert "custom folder" in before(tmp_path)[0]
+    assert path.read_bytes() == saved
+    assert state(tmp_path).default_set and state(tmp_path).previous == GUID
+    assert after(tmp_path) == ()
+    fake.prefs.pop(CUSTOM)
+    assert restore(tmp_path).confirmed
+    assert fake.prefs[DEFAULT] == GUID
 
 
 def test_restore_is_idempotent_and_final_controls_the_record(
@@ -732,6 +796,24 @@ def test_read_default_guid_distinguishes_an_absent_key_from_a_failure(
     monkeypatch.setattr(iterm2_profile, "iterm2_defaults", fail)
     with pytest.raises(CommandError):
         iterm2_profile.read_default_guid()
+
+
+def test_real_defaults_wrapper_uses_argv_and_propagates_command_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], int]] = []
+
+    def run(argv: Sequence[str], *, timeout: int) -> str:
+        calls.append((list(argv), timeout))
+        if len(calls) == 2:
+            raise CommandError(list(argv), 1, detail="does not exist")
+        return "value\n"
+
+    monkeypatch.setattr(iterm2_profile, "run_output", run)
+    monkeypatch.setattr(iterm2_profile, "iterm2_defaults", REAL_DEFAULTS)
+    assert iterm2_profile.read_default_guid() == "value"
+    assert iterm2_profile.read_default_guid() is None
+    assert calls == [(["/usr/bin/defaults", "read", DOMAIN, DEFAULT], 20)] * 2
 
 
 def test_without_a_fake_every_defaults_call_fails_closed(tmp_path: Path) -> None:

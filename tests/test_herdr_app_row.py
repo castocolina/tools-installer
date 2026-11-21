@@ -328,6 +328,22 @@ def test_reconfigure_deleted_key_changed_value_and_reinstall() -> None:
     assert strip() == () and json.loads(path.read_text())["terminal"]["ctrl-shift-k"] == "mine"
 
 
+def test_reconfigure_keeps_deleted_or_blank_keys_file_until_reinstall() -> None:
+    run_post_install(tool(), platform())
+    path = key_path()
+    saved = {p: p.read_bytes() for p in records()}
+    path.unlink()
+    assert pending() is None
+    assert apply_install_tuning(tool(), platform(), skip_recorded=True).lines == ()
+    assert not path.exists() and all(p.read_bytes() == data for p, data in saved.items())
+    put(path, "  \n")
+    assert pending() is None
+    assert apply_install_tuning(tool(), platform(), skip_recorded=True).lines == ()
+    assert path.read_text() == "  \n" and all(p.read_bytes() == data for p, data in saved.items())
+    apply_install_tuning(tool(), platform(), skip_recorded=False)
+    assert path.read_text() == golden("fedora")
+
+
 def test_a_drifted_recorded_value_reads_pending_and_reconfigure_rewrites_it() -> None:
     run_post_install(tool(), platform())
     path = key_path()

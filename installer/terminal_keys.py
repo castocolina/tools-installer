@@ -705,30 +705,32 @@ def _string_entry(value: object, size: int) -> bool:
     return len(items) == size and all(isinstance(item, str) for item in items)
 
 
-def _owned_record(path: Path) -> _OwnedRecord:
+def _owned_record(path: Path) -> _OwnedRecord | None:
     try:
         data: object = json.loads(path.read_text())
         if not isinstance(data, dict):
-            return _OwnedRecord()
+            return None
         obj = cast(dict[str, object], data)
         keys = obj.get("keys")
         deleted = obj.get("deleted")
         name = obj.get("path")
         if not isinstance(keys, list) or not isinstance(deleted, list) or not isinstance(name, str):
-            return _OwnedRecord()
+            return None
         key_items = cast(list[object], keys)
         deleted_items = cast(list[object], deleted)
         if not all(_string_entry(x, 3) for x in key_items):
-            return _OwnedRecord()
+            return None
         if not all(_string_entry(x, 2) for x in deleted_items):
-            return _OwnedRecord()
+            return None
         triples = [cast(list[str], x) for x in key_items]
         pairs = [cast(list[str], x) for x in deleted_items]
         return _OwnedRecord(
             tuple((x[0], x[1], x[2]) for x in triples), tuple((x[0], x[1]) for x in pairs), name
         )
+    except FileNotFoundError:
+        return None if path.is_symlink() else _OwnedRecord()
     except (OSError, ValueError):
-        return _OwnedRecord()
+        return None
 
 
 # shortcut: a single-path ledger forgets old paths; use one ledger per path if moves become common.
@@ -775,6 +777,8 @@ def _apply_owned_keys(
     path = row.config_path(platform_os, home, environ)
     record = _record(tool_id, home, environ)
     old = _owned_record(record)
+    if old is None:
+        return (f"{tool_id}: the ownership record is unreadable; left as it is",), None
     if old.path is not None and old.path != str(path):
         old = _OwnedRecord()
         recorded = False
@@ -785,6 +789,8 @@ def _apply_owned_keys(
     try:
         before = read_settings(path)
         original = snapshot_text(before)
+        if recorded and not original.strip():
+            return (), None
         text = original if original.strip() else owned.seed(platform_os)
         if tool_id == "herdr-app":
             try:
@@ -852,7 +858,7 @@ def _pending_owned_keys(
 ) -> str | None:
     path = row.config_path(platform_os, home, environ)
     record = _record(tool_id, home, environ)
-    old = _owned_record(record)
+    old = _owned_record(record) or _OwnedRecord()
     recorded = record.exists() and (old.path is None or old.path == str(path))
     if path.is_symlink():
         return None if recorded else f"{path.name} is a symlink; left as it is"
@@ -890,6 +896,8 @@ def _strip_owned_keys(
     path = row.config_path(platform_os, home, environ)
     record = _record(tool_id, home, environ)
     old = _owned_record(record)
+    if old is None:
+        return (f"{tool_id}: the ownership record is unreadable; left as it is",)
     marker = _created_marker(row, home, environ)
     sidecar = created_path_record(marker)
     if old.path is not None and old.path != str(path):
@@ -918,6 +926,9 @@ def _strip_owned_keys(
                 if key_held(lookup(document, key), value):
                     text = remove_key(text, "json", key)
                     document = _parse_owned(text)
+                    if document.get(section) == {}:
+                        text = remove_key(text, "json", (section,))
+                        document = _parse_owned(text)
             if marker.exists() and text == owned.pinned(platform_os):
                 directories = tuple(marker.read_text(errors="replace").splitlines()[1:])
                 delete_if_unchanged(path, before)

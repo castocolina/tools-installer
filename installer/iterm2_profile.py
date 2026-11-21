@@ -276,6 +276,12 @@ def hook_before_write(
     try:
         current = read_default_guid()
         custom = custom_prefs_folder()
+        if custom and prior is not None:
+            _capture_failed.add(path)
+            return (
+                "iterm2: partial: iTerm2 loads its preferences from a custom "
+                "folder; the default profile was not changed",
+            )
         if current == ITERM2_GUID and prior is not None:
             record = prior
         elif current == ITERM2_GUID:
@@ -312,6 +318,9 @@ def hook_before_write(
             f"iterm2: partial: could not read your default profile "
             f"({first_line(exc)}); the default was not changed"
         )
+        if prior is not None:
+            _capture_failed.add(path)
+            return tuple(lines)
     try:
         write_state(home, environ, record)
     except OSError as exc:
@@ -445,11 +454,20 @@ def hook_restore(platform_os: str, home: Path, environ: Mapping[str, str], final
         try:
             for command in restore_commands(record.previous, current, ITERM2_GUID):
                 iterm2_defaults(command)
+            current = read_default_guid()
         except CommandError as exc:
             return Restored(
                 (
                     f"iterm2: partial: could not restore your default profile "
                     f"({first_line(exc)}); set it in iTerm2 > Settings > Profiles",
+                ),
+                False,
+            )
+        if current == ITERM2_GUID:
+            return Restored(
+                (
+                    "iterm2: partial: your default profile still names tools-installer "
+                    "after restoration; set it in iTerm2 > Settings > Profiles",
                 ),
                 False,
             )
