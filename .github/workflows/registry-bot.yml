@@ -8,6 +8,7 @@
 # still push an already-green commit to the default branch because the repository sets
 # no push restriction on it; closing that gap is an owner follow-up (a repository
 # setting, outside this phase).
+# Only an owner push can move the bot branch between the lease and dispatch; bot runs are serialized by the concurrency group.
 name: registry-bot
 
 on:
@@ -50,9 +51,19 @@ jobs:
         id: bump
         timeout-minutes: 75
         run: |
+          output="$RUNNER_TEMP/verify-registry-output"
           code=0
-          uv run --isolated --no-dev python -m installer.verify_registry --write --bumps-only || code=$?
-          case "$code" in 0|1|2) ;; *) echo "verify-registry exited $code" >&2; exit "$code" ;; esac
+          uv run --isolated --no-dev python -m installer.verify_registry --write --bumps-only > "$output" 2>&1 || code=$?
+          cat "$output"
+          case "$code" in
+            0) ;;
+            1|2) if ! grep -q '^## ' "$output"; then
+              echo "verify-registry exited $code without a report" >&2
+              head -n 10 "$output" >&2
+              exit "$code"
+            fi ;;
+            *) echo "verify-registry exited $code" >&2; exit "$code" ;;
+          esac
       - name: Guard
         id: guard
         run: |
@@ -70,7 +81,9 @@ jobs:
           if [ -n "$remote" ]; then
             git fetch --no-tags origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
             expected=$(git rev-parse "refs/remotes/origin/$BRANCH")
-            if git diff --quiet "refs/remotes/origin/$BRANCH" -- installer/registry.toml && [ "$(git rev-parse "$expected^")" = "$(git rev-parse HEAD)" ]; then
+            parents=$(git rev-list --parents -n 1 "$expected")
+            parent=$(git rev-parse HEAD)
+            if git diff --quiet "refs/remotes/origin/$BRANCH" -- installer/registry.toml && [ "$parents" = "$expected $parent" ] && [ "$(git diff --name-only "$parent" "$expected")" = "installer/registry.toml" ]; then
               same=true
               echo "The bot branch already holds this change on the current base: nothing to publish."
             fi
@@ -112,6 +125,16 @@ jobs:
           git add installer/registry.toml
           git commit -m "chore(registry): bump pinned releases" -m "Closes #$ISSUE_NUMBER"
           git push --force-with-lease="refs/heads/$BRANCH:$EXPECTED" origin "HEAD:refs/heads/$BRANCH"
+      - name: Record the published commit
+        id: record
+        if: steps.guard.outputs.changed == 'true' && steps.compare.outputs.same != 'true'
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          body=$(gh issue view "$ISSUE_NUMBER" --json body --jq .body)
+          sha=$(git rev-parse HEAD)
+          gh issue edit "$ISSUE_NUMBER" --body "$body
+          Published commit: $sha"
       - name: Dispatch CI on the bot branch
         id: dispatch
         if: steps.guard.outputs.changed == 'true' && steps.compare.outputs.same != 'true'
@@ -138,15 +161,17 @@ jobs:
             }
           fi
       - name: Report a failed push or CI dispatch
-        if: failure() && steps.guard.outputs.changed == 'true' && (steps.publish.outcome == 'failure' || steps.dispatch.outcome == 'failure' || steps.redispatch.outcome == 'failure')
+        if: failure() && steps.guard.outputs.changed == 'true' && (steps.publish.outcome == 'failure' || steps.record.outcome == 'failure' || steps.dispatch.outcome == 'failure' || steps.redispatch.outcome == 'failure')
         env:
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          RECORD_OUTCOME: ${{ steps.record.outcome }}
           DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
           REDISPATCH_OUTCOME: ${{ steps.redispatch.outcome }}
         run: |
           stage="CI dispatch"
           command="gh workflow run ci.yml --ref $BRANCH"
           if [ "$PUBLISH_OUTCOME" = "failure" ]; then stage="push"; command="gh workflow run registry-bot.yml --ref $GITHUB_REF_NAME"; fi
+          if [ "$RECORD_OUTCOME" = "failure" ]; then stage="issue update"; command="gh workflow run registry-bot.yml --ref $GITHUB_REF_NAME"; fi
           number=$(gh issue list --label registry-bot --state open --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then gh issue comment "$number" --body "The $stage for $BRANCH failed. Run it again by hand: $command"; else echo "no open registry-bot issue to comment on; run by hand: $command" >&2; fi
       - name: Delete older bot branches

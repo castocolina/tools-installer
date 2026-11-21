@@ -143,12 +143,21 @@ def test_the_bump_step_runs_the_flag_directly() -> None:
         run,
         "code=0",
         "uv run --isolated --no-dev python -m installer.verify_registry "
-        "--write --bumps-only || code=$?",
-        'case "$code" in 0|1|2) ;; *) echo "verify-registry exited $code" >&2; '
-        'exit "$code" ;; esac',
+        '--write --bumps-only > "$output" 2>&1 || code=$?',
+        'cat "$output"',
+        'case "$code" in',
     )
     assert "make " not in run
     assert all("--issue" not in run for run in _runs())
+
+
+def test_bump_rejects_launcher_errors_without_a_report() -> None:
+    run = _step("Bump pins")["run"]
+    assert 'output="$RUNNER_TEMP/verify-registry-output"' in run
+    assert "grep -q '^## '" in run
+    assert 'head -n 10 "$output" >&2' in run
+    assert 'echo "verify-registry exited $code without a report" >&2' in run
+    assert "1|2)" in run and 'exit "$code"' in run
 
 
 def test_the_state_cache_is_shared_with_the_drift_workflow() -> None:
@@ -204,6 +213,7 @@ def test_every_publishing_step_is_guarded_by_the_changed_output() -> None:
     assert names == {
         "Upsert the tracking issue",
         "Publish the bot branch",
+        "Record the published commit",
         "Dispatch CI on the bot branch",
         "Dispatch CI for an unchanged bot branch",
         "Report a failed push or CI dispatch",
@@ -229,8 +239,10 @@ def test_compare_skips_only_an_identical_bot_branch_on_the_current_base() -> Non
         'if [ -n "$remote" ]; then',
         'git fetch --no-tags origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"',
         'expected=$(git rev-parse "refs/remotes/origin/$BRANCH")',
-        'if git diff --quiet "refs/remotes/origin/$BRANCH" -- installer/registry.toml && '
-        '[ "$(git rev-parse "$expected^")" = "$(git rev-parse HEAD)" ]; then',
+        'parents=$(git rev-list --parents -n 1 "$expected")',
+        "parent=$(git rev-parse HEAD)",
+        '[ "$parents" = "$expected $parent" ]',
+        '[ "$(git diff --name-only "$parent" "$expected")" = "installer/registry.toml" ]',
         "same=true",
         'echo "The bot branch already holds this change on the current base: nothing to publish."',
         "  fi",
@@ -243,6 +255,20 @@ def test_compare_skips_only_an_identical_bot_branch_on_the_current_base() -> Non
     assert all("||" not in line for line in lines if "git fetch" in line)
     assert not re.search(r"\|\|\s*true", run)
     assert "git commit" not in run and "git push" not in run
+
+
+def test_record_published_commit_updates_issue_after_push() -> None:
+    step = _step("Record the published commit")
+    assert step["id"] == "record"
+    assert step["if"] == _step("Publish the bot branch")["if"]
+    assert step["env"]["ISSUE_NUMBER"] == "${{ steps.issue.outputs.number }}"
+    assert _steps().index(_step("Publish the bot branch")) < _steps().index(step)
+    assert _steps().index(step) < _steps().index(_step("Dispatch CI on the bot branch"))
+    assert 'gh issue view "$ISSUE_NUMBER" --json body --jq .body' in step["run"]
+    assert "git rev-parse HEAD" in step["run"]
+    assert "Published commit: $sha" in step["run"]
+    assert 'gh issue edit "$ISSUE_NUMBER" --body' in step["run"]
+    assert "steps.record.outcome == 'failure'" in _step("Report a failed push or CI dispatch")["if"]
 
 
 def test_publish_pushes_with_an_explicit_lease() -> None:
@@ -499,17 +525,21 @@ def test_the_runbook_has_the_part_one_and_two_commands() -> None:
         'git fetch origin "+refs/heads/bot/registry-$DATE:refs/remotes/origin/bot/registry-$DATE"',
         'SHA=$(git rev-parse "refs/remotes/origin/bot/registry-$DATE")',
         'git rev-parse "$SHA^"',
-        'gh run list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status',
+        'gh run -R "$REPO" list --workflow ci.yml --commit "$SHA" '
+        "--json event,conclusion,headSha,status",
         "gh api repos/$REPO/commits/$SHA/check-runs",
         "gh api repos/$REPO/branches/main/protection "
         "--jq '.required_status_checks.checks[].context'",
-        "gh issue list --label registry-bot --state open",
+        'gh issue -R "$REPO" list --label registry-bot --state open',
         "nothing to publish",
         "workflow_dispatch",
     ):
         assert part in text
     assert (
-        sum("gh workflow run registry-bot.yml --ref main" in line for line in text.splitlines())
+        sum(
+            'gh workflow -R "$REPO" run registry-bot.yml --ref main' in line
+            for line in text.splitlines()
+        )
         == 2
     )
     assert "--candidate" not in text and "proof/registry-bot" not in text
@@ -548,7 +578,7 @@ def test_the_runbook_preflight_stops_on_existing_bot_work() -> None:
     before = _section(_runbook(), "Before you start")
     for part in (
         'git ls-remote --heads origin "refs/heads/bot/registry-*"',
-        "gh issue list --label registry-bot --state open --json number --jq length",
+        'gh issue -R "$REPO" list --label registry-bot --state open --json number --jq length',
         'git ls-remote --heads origin "refs/heads/proof/*" "refs/heads/landing/*"',
     ):
         assert part in before
@@ -570,14 +600,15 @@ def test_the_runbook_cleanup_removes_the_whole_proof_namespace() -> None:
         "refs/heads/bot/registry-*|refs/heads/proof/*|refs/heads/landing/*)",
         'git push --force-with-lease="$ref:$sha" --delete origin "$ref"',
         'done <<< "$listing"',
-        "open=$(gh issue list --label registry-bot --state open --json number --jq '.[].number')",
-        "for n in $open; do",
-        'gh issue close "$n"',
+        'open=$(gh issue -R "$REPO" list --label registry-bot --state open '
+        "--json number --jq '.[].number')",
+        "while IFS= read -r n; do",
+        'gh issue -R "$REPO" close "$n"',
     )
     assert "the preflight proved" in cleanup and "rollover" in cleanup
-    assert "| while" not in text and text.count("gh issue close") == 1
+    assert "| while" not in cleanup and text.count('gh issue -R "$REPO" close') == 1
     assert not any(
-        "gh issue close" in line and ("NUMBER" in line or "$ISSUE" in line)
+        'gh issue -R "$REPO" close' in line and ("NUMBER" in line or "$ISSUE" in line)
         for line in text.splitlines()
     )
 
@@ -600,22 +631,26 @@ def test_the_runbook_stops_without_drift_identifies_the_bot_commit_and_stops_at_
 def test_the_runbook_binds_its_evidence_to_run_ids() -> None:
     text = _runbook()
     for part in (
-        "BEFORE=$(gh run list --workflow registry-bot.yml --event workflow_dispatch "
+        'BEFORE=$(gh run -R "$REPO" list --workflow registry-bot.yml --event workflow_dispatch '
         "--limit 1 --json databaseId --jq '.[0].databaseId // 0')",
-        "BOT_RUN=$(gh run list --workflow registry-bot.yml --event workflow_dispatch "
+        'BOT_RUN=$(gh run -R "$REPO" list --workflow registry-bot.yml --event workflow_dispatch '
         "--limit 1 --json databaseId --jq '.[0].databaseId')",
-        'gh run watch "$BOT_RUN" --exit-status',
-        'RUN_ID=$(gh run list --workflow ci.yml --commit "$SHA" --event workflow_dispatch '
+        'gh run -R "$REPO" watch "$BOT_RUN" --exit-status',
+        'RUN_ID=$(gh run -R "$REPO" list --workflow ci.yml --commit "$SHA" '
+        "--event workflow_dispatch "
         "--json databaseId --jq '.[0].databaseId // empty')",
-        'gh run watch "$RUN_ID" --exit-status',
-        "gh run view \"$RUN_ID\" --json jobs --jq '.jobs[] | {name, conclusion}'",
-        'gh run watch "$BOT_RUN2" --exit-status',
-        'gh run view "$BOT_RUN2" --log | grep "nothing to publish"',
+        'gh run -R "$REPO" watch "$RUN_ID" --exit-status',
+        'gh run -R "$REPO" view "$RUN_ID" --json jobs --jq \'.jobs[] | {name, conclusion}\'',
+        'gh run -R "$REPO" watch "$BOT_RUN2" --exit-status',
+        'gh run -R "$REPO" view "$BOT_RUN2" --json jobs --jq',
     ):
         assert part in text
+    assert 'select(.name == "Publish the bot branch")' in text
+    assert '.conclusion == "skipped"' in text
+    assert not any("--log" in line and "grep" in line for line in text.splitlines())
     lines = text.splitlines()
     for line in lines:
-        if "gh run watch" in line:
+        if 'gh run -R "$REPO" watch' in line:
             assert "--exit-status" in line and any(
                 name in line
                 for name in ('"$BOT_RUN"', '"$BOT_RUN2"', '"$RUN_ID"', '"$LANDING_RUN"')
@@ -639,7 +674,7 @@ def test_the_runbook_gates_the_protection_write_on_owner_approval_and_names_both
         assert part in text
     puts = [line for line in text.splitlines() if "-X PUT" in line]
     assert len(puts) == 1
-    assert "OWNER APPROVAL REQUIRED" in puts[0] and "proof/target-$DATE" in puts[0]
+    assert "OWNER APPROVAL REQUIRED" in puts[0] and "proof%2Ftarget-$DATE" in puts[0]
     assert not any("-X" in line and "branches/main" in line for line in text.splitlines())
 
 
@@ -647,7 +682,7 @@ def test_the_runbook_removes_the_temporary_protection_and_reads_it_back() -> Non
     cleanup = _section(_runbook(), "Cleanup")
     deletes = [line for line in _runbook().splitlines() if "-X DELETE" in line]
     assert len(deletes) == 1
-    assert "repos/$REPO/branches/proof/target-$DATE/protection" in deletes[0]
+    assert "repos/$REPO/branches/proof%2Ftarget-$DATE/protection" in deletes[0]
     _index(
         cleanup,
         deletes[0],
@@ -683,8 +718,8 @@ def test_the_runbook_pushes_through_a_worktree_at_the_exact_commit() -> None:
         'WRITE   push_exact "$SHA"',
     )
     assert (
-        'gh run list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status'
-        in _section(text, "Part 3: the BOT-02 question")
+        'gh run -R "$REPO" list --workflow ci.yml --commit "$SHA" '
+        "--json event,conclusion,headSha,status" in _section(text, "Part 3: the BOT-02 question")
     )
 
 
@@ -692,10 +727,10 @@ def test_the_runbook_records_the_dispatch_evidence_before_option_a_final_push() 
     text = _runbook()
     final = 'WRITE   push_exact "$SHA" "refs/heads/proof/target-$DATE"'
     for evidence in (
-        'gh run watch "$RUN_ID" --exit-status',
-        'gh run view "$RUN_ID" --json jobs',
+        'gh run -R "$REPO" watch "$RUN_ID" --exit-status',
+        'gh run -R "$REPO" view "$RUN_ID" --json jobs',
         "gh api repos/$REPO/commits/$SHA/check-runs",
-        "gh api repos/$REPO/branches/proof/target-$DATE/protection --jq",
+        "gh api repos/$REPO/branches/proof%2Ftarget-$DATE/protection --jq",
     ):
         _index(text, evidence, final)
     assert any(
@@ -708,9 +743,10 @@ def test_the_runbook_keeps_option_b_unverified() -> None:
     text = _runbook().split("Option B", 1)[1].split("\n== ", 1)[0]
     for part in (
         "UNVERIFIED",
-        'LANDING_RUN=$(gh run list --workflow ci.yml --branch "landing/registry-$DATE" '
+        'LANDING_RUN=$(gh run -R "$REPO" list --workflow ci.yml '
+        '--branch "landing/registry-$DATE" '
         "--commit \"$SHA\" --event push --json databaseId --jq '.[0].databaseId // empty')",
-        'gh run watch "$LANDING_RUN" --exit-status',
+        'gh run -R "$REPO" watch "$LANDING_RUN" --exit-status',
         "gh api repos/$REPO/commits/$SHA/check-runs",
         'push_exact "$SHA" "refs/heads/landing/registry-$DATE"',
     ):
@@ -736,7 +772,8 @@ def _workflow_crons(text: str) -> list[str]:
 
 def _workflow_run_targets(text: str) -> list[str]:
     return re.findall(
-        r"^\s*(?:WRITE\s+(?:\(OWNER APPROVAL REQUIRED\)\s+)?)?gh workflow run (\S+)",
+        r"^\s*(?:WRITE\s+(?:\(OWNER APPROVAL REQUIRED\)\s+)?)?gh workflow "
+        r'(?:-R "\$REPO" )?run (\S+)',
         text,
         re.MULTILINE,
     )
@@ -797,3 +834,32 @@ def test_the_header_names_the_trust_boundary() -> None:
     assert "Only a user with write access can dispatch this workflow" in header
     assert BOUNDARY_PHRASE in header and "no push restriction" in header
     assert "keeps this bot off" not in text and "is the control" not in text
+
+
+def test_proof_safety_checks_and_protection_mapping() -> None:
+    text = _runbook()
+    before = _section(text, "Before you start")
+    for status in ("queued", "in_progress"):
+        assert f"--status {status}" in before
+    assert "git remote get-url --all origin" in before
+    assert "git remote get-url --push --all origin" in before
+    assert "set -o pipefail" in text and "subshell" in text
+    assert "while IFS= read -r n" in text
+    assert "two-OS" in _section(text, "What this writes to the remote")
+    assert "required_conversation_resolution" in text
+    assert "required_signatures" in text
+    assert "required_linear_history" in text
+    assert "allow_force_pushes" in text and "allow_deletions" in text
+    assert "cannot map" in text
+    assert "completed" in _section(text, "Cleanup")
+
+
+def test_landing_guide_preserves_push_status_and_latest_checks() -> None:
+    text = (ROOT / ".claude" / ("git-workflow" + "." + "md")).read_text()
+    section = text.split("### Landing a registry bot branch", 1)[1].split("### Escape hatch", 1)[0]
+    assert "set -e" in section
+    assert "sort_by(.completed_at" in section
+    assert "group_by(.name)" in section
+    assert 'git worktree remove --force "$WT"' in section
+    assert 'exit "$status"' in section
+    assert "Dependabot commit" in section

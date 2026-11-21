@@ -1151,6 +1151,8 @@ def _first_failed_finding(report: Report) -> tuple[str, str]:
 
 
 def _pinned_finding_member(method: Method) -> str | None:
+    if _is_raw(method):
+        return None
     if method.kind == "app":
         version = method.params.get("version")
         if isinstance(version, str) and version:
@@ -1188,15 +1190,20 @@ class _BumpResult:
 
 def _build_bump_edits(
     tool: Tool, candidate: str, candidate_report: Report
-) -> tuple[RegistryEdit, ...]:
+) -> tuple[tuple[RegistryEdit, ...], bool]:
     edits: list[RegistryEdit] = []
+    changed = False
     for index, method in _pinned_method_entries(tool):
         finding = _finding_for_pinned_method(candidate_report, tool.id, method, candidate)
         if finding is None or finding.sha256 is None:
             raise RegistryWriteError(f"missing candidate hash for {tool.id}")
+        changed |= (
+            candidate != method.params.get("version")
+            or finding.sha256.lower() != str(method.params.get("sha256", "")).lower()
+        )
         edits.append(RegistryEdit(tool.id, index, "version", f'"{candidate}"'))
         edits.append(RegistryEdit(tool.id, index, "sha256", f'"{finding.sha256}"'))
-    return tuple(edits)
+    return tuple(edits), changed
 
 
 def _finalize_report_after_bumps(
@@ -1314,7 +1321,7 @@ def _plan_bumps(
                 )
             )
             continue
-        bump_edits = _build_bump_edits(tool, candidate, candidate_report)
+        bump_edits, changes_registry = _build_bump_edits(tool, candidate, candidate_report)
         results.append(
             _BumpResult(
                 tool_id=tool_id,
@@ -1323,20 +1330,7 @@ def _plan_bumps(
                 new_version=candidate,
                 candidate_findings=candidate_report.findings,
                 bump_edits=bump_edits,
-                changes_registry=any(
-                    edit.method_index is None
-                    or (
-                        edit.value.strip('"').lower()
-                        if edit.key == "sha256"
-                        else edit.value.strip('"')
-                    )
-                    != (
-                        str(tool.methods[edit.method_index].params.get(edit.key, "")).lower()
-                        if edit.key == "sha256"
-                        else str(tool.methods[edit.method_index].params.get(edit.key, ""))
-                    )
-                    for edit in bump_edits
-                ),
+                changes_registry=changes_registry,
             )
         )
     return results
@@ -1595,6 +1589,9 @@ def _run_verify_registry(
         help=("Upsert one drift issue labelled registry-drift (used by the weekly workflow)."),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.bumps_only and not args.write:
+        print("--bumps-only requires --write", file=sys.stderr)
+        return EXIT_USAGE
     write_day = today if today is not None else date.today()
     state_path = args.state if args.state is not None else default_state_path()
     registry_text = args.registry.read_text(encoding="utf-8")
@@ -1606,9 +1603,6 @@ def _run_verify_registry(
         return EXIT_USAGE
     if explicit and not args.write:
         print("--candidate requires --write", file=sys.stderr)
-        return EXIT_USAGE
-    if args.bumps_only and not args.write:
-        print("--bumps-only requires --write", file=sys.stderr)
         return EXIT_USAGE
     gh_runner = gh if gh is not None else functools.partial(run_output, timeout=60)
     if probe is None:
@@ -1629,7 +1623,12 @@ def _run_verify_registry(
         try:
             bumps = _plan_bumps(tools, initial_report, active_probe, explicit)
             tools_by_id = {tool.id: tool for tool in tools}
-            report = _finalize_report_after_bumps(initial_report, tools_by_id, bumps)
+            reported_bumps = (
+                [bump for bump in bumps if not bump.applied or bump.changes_registry]
+                if args.bumps_only
+                else bumps
+            )
+            report = _finalize_report_after_bumps(initial_report, tools_by_id, reported_bumps)
             edits = _registry_edits_for_write(report, bumps, write_day, bumps_only=args.bumps_only)
             if edits:
                 current_text = args.registry.read_text(encoding="utf-8")

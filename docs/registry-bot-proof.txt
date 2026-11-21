@@ -13,14 +13,27 @@ an interactive shell. Record the evidence and follow the stated cleanup steps.
 Work from a clean checkout of this repository.
 REPO=castocolina/tools-installer
 DATE=$(date -u +%F)
-gh auth status
+Run these commands in bash. STOP if either URL is not the exact GitHub repository;
+check all configured fetch and push URLs, including multiple push URLs. STOP if either
+lookup fails or yields no URL.
+fetch_urls=$(git remote get-url --all origin)
+push_urls=$(git remote get-url --push --all origin)
+while IFS= read -r url; do
+  case "$url" in
+    "https://github.com/$REPO"|"https://github.com/$REPO.git"|"git@github.com:$REPO"|"git@github.com:$REPO.git") ;;
+    *) echo "STOP: origin URL does not identify $REPO: $url" ;;
+  esac
+done <<< "$(printf '%s\n%s\n' "$fetch_urls" "$push_urls")"
 git fetch origin
-gh workflow list
+gh workflow -R "$REPO" list
 Expect both registry-bot and CI to be listed.
+gh run -R "$REPO" list --workflow registry-bot.yml --status queued --json databaseId --jq length
+gh run -R "$REPO" list --workflow registry-bot.yml --status in_progress --json databaseId --jq length
+STOP unless both counts are 0. Prevent any other bot dispatch during the proof.
 
 git ls-remote --heads origin "refs/heads/bot/registry-*"
 Expect no output.
-gh issue list --label registry-bot --state open --json number --jq length
+gh issue -R "$REPO" list --label registry-bot --state open --json number --jq length
 Expect 0.
 git ls-remote --heads origin "refs/heads/proof/*" "refs/heads/landing/*"
 Expect no output.
@@ -46,6 +59,7 @@ WRITE: proof/target-$DATE and temporary protection | owner push and OWNER APPROV
 WRITE: landing/registry-$DATE | owner push | removed in Cleanup
 WRITE: registry-bot label and tracking issue | created by the bot | removed in Cleanup (issue closed; reusable label may stay)
 WRITE: dispatched ci.yml runs and check runs | created by the bot | removed in nowhere; history stays, run deletion is optional
+WRITE: push-event CI runs on proof/target-* and landing/* | Option A first push starts full two-OS CI; later pushes also start CI | history stays
 WRITE: Actions cache entries | created by the bot run | removed in automatic expiration
 
 == Part 1: run the bot on the default branch
@@ -53,15 +67,15 @@ WRITE: Actions cache entries | created by the bot run | removed in automatic exp
 BASE=$(git rev-parse origin/main)
 BASE is the default branch tip the bot starts from.
 [ "$(date -u +%F)" = "$DATE" ] || echo "STOP: the UTC date changed; run Cleanup, then restart this proof"
-BEFORE=$(gh run list --workflow registry-bot.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')
-Run ids only grow; BEFORE marks what exists before the dispatch.
-WRITE   gh workflow run registry-bot.yml --ref main
+BEFORE=$(gh run -R "$REPO" list --workflow registry-bot.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+Run ids only grow; BEFORE marks what exists before the dispatch. Do not allow concurrent dispatches; confirm the run id, event, branch and creation time in the Actions UI.
+WRITE   gh workflow -R "$REPO" run registry-bot.yml --ref main
 The bot uses real drift (draw.io was behind upstream when this was written);
 no stale-pin fixture or proof ref is used.
 sleep 15
-BOT_RUN=$(gh run list --workflow registry-bot.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
+BOT_RUN=$(gh run -R "$REPO" list --workflow registry-bot.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
 [ "$BOT_RUN" -gt "$BEFORE" ] || echo "STOP: the dispatched bot run did not appear; wait and list again"
-gh run watch "$BOT_RUN" --exit-status
+gh run -R "$REPO" watch "$BOT_RUN" --exit-status
 If the bot run fails, record it and run Cleanup to remove what it left.
 git ls-remote --heads origin "refs/heads/bot/registry-$DATE"
 STOP if this prints nothing: no drift was found on the default branch, or the
@@ -78,23 +92,23 @@ git log -1 --format="%an %s" "$SHA"
 Expect github-actions[bot] chore(registry): bump pinned releases.
 git diff --stat "$BASE" "$SHA"
 Expect only installer/registry.toml.
-ISSUE=$(gh issue list --label registry-bot --state open --json number --jq '.[0].number')
+ISSUE=$(gh issue -R "$REPO" list --label registry-bot --state open --json number --jq '.[0].number')
 The preflight guaranteed no earlier issue.
-gh issue view "$ISSUE" --json body --jq .body
+gh issue -R "$REPO" view "$ISSUE" --json body --jq .body
 Expect the body to name bot/registry-$DATE.
 
 == Part 2: read the check names and rerun the same day
 
-gh run list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status
+gh run -R "$REPO" list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status
 Expect every event to be workflow_dispatch and every headSha to equal SHA.
 STOP if any entry for SHA has event push: evidence is confounded; record it
 and do not go on to Part 3.
-RUN_ID=$(gh run list --workflow ci.yml --commit "$SHA" --event workflow_dispatch --json databaseId --jq '.[0].databaseId // empty')
+RUN_ID=$(gh run -R "$REPO" list --workflow ci.yml --commit "$SHA" --event workflow_dispatch --json databaseId --jq '.[0].databaseId // empty')
 [ -n "$RUN_ID" ] || echo "STOP: no workflow_dispatch CI run for $SHA"
-gh run watch "$RUN_ID" --exit-status
-gh run view "$RUN_ID" --json jobs --jq '.jobs[] | {name, conclusion}'
+gh run -R "$REPO" watch "$RUN_ID" --exit-status
+gh run -R "$REPO" view "$RUN_ID" --json jobs --jq '.jobs[] | {name, conclusion}'
 Expect both matrix jobs success.
-N=$(gh run list --workflow ci.yml --branch "bot/registry-$DATE" --json databaseId --jq length)
+N=$(gh run -R "$REPO" list --workflow ci.yml --branch "bot/registry-$DATE" --json databaseId --jq length)
 [ "$N" -ge 1 ] || echo "STOP: no CI run was dispatched for the bot branch"
 gh api repos/$REPO/commits/$SHA/check-runs --jq '.check_runs[] | {name, conclusion, app: .app.slug}'
 gh api repos/$REPO/branches/main/protection --jq '.required_status_checks.checks[].context'
@@ -105,21 +119,22 @@ validate & test on macos-latest
 Same-day rerun on the unchanged base: it must skip.
 [ "$(date -u +%F)" = "$DATE" ] || echo "STOP: the UTC date changed; run Cleanup, then restart this proof"
 BEFORE=$BOT_RUN
-WRITE   gh workflow run registry-bot.yml --ref main
+WRITE   gh workflow -R "$REPO" run registry-bot.yml --ref main
 sleep 15
-BOT_RUN2=$(gh run list --workflow registry-bot.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
+BOT_RUN2=$(gh run -R "$REPO" list --workflow registry-bot.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
 [ "$BOT_RUN2" -gt "$BEFORE" ] || echo "STOP: the rerun did not appear; wait and list again"
-gh run watch "$BOT_RUN2" --exit-status
-gh run view "$BOT_RUN2" --log | grep "nothing to publish"
+gh run -R "$REPO" watch "$BOT_RUN2" --exit-status
+gh run -R "$REPO" view "$BOT_RUN2" --json jobs --jq '[.jobs[].steps[] | select(.name == "Publish the bot branch") | .conclusion == "skipped"] | . == [true]'
+Expect true; STOP otherwise.
 git fetch origin "+refs/heads/bot/registry-$DATE:refs/remotes/origin/bot/registry-$DATE"
 SHA=$(git rev-parse "refs/remotes/origin/bot/registry-$DATE")
 Expect SHA to equal SHA_FIRST. If it differs, the default branch moved between
 runs and the bot published a new commit: run Cleanup and restart.
-gh run list --workflow ci.yml --branch "bot/registry-$DATE" --json databaseId --jq length
+gh run -R "$REPO" list --workflow ci.yml --branch "bot/registry-$DATE" --json databaseId --jq length
 Expect N again: no second dispatch.
 git ls-remote --heads origin "refs/heads/bot/registry-*"
 Expect exactly one line.
-gh issue list --label registry-bot --state open --json number --jq length
+gh issue -R "$REPO" list --label registry-bot --state open --json number --jq length
 Expect 1.
 
 == Part 3: the BOT-02 question
@@ -131,25 +146,32 @@ Record Part 2's RUN_ID, job results, check runs and protection read BEFORE any O
 Re-read the fetched final head and STOP unless it equals SHA_FIRST.
 SHA=$(git rev-parse "refs/remotes/origin/bot/registry-$DATE")
 [ "$SHA" = "$SHA_FIRST" ] || echo "STOP: head changed; Cleanup and restart"
-gh run list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status
+gh run -R "$REPO" list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status
 Expect every run for SHA to be completed with success and workflow_dispatch; STOP otherwise.
 
 Option A (recommended): create a throwaway target at BASE. Obtain explicit owner
 approval for the protection write; STOP if approval is not given.
+Read the entire classic protection and STOP if any enabled setting cannot map.
+The following jq check accepts only the known settings and refuses reviews,
+restrictions, app-pinned checks, and any unknown enabled protection. Inspect the
+whole response and STOP if GitHub adds a setting whose meaning is unclear.
+MAIN_PROTECTION=$(gh api repos/$REPO/branches/main/protection)
+printf '%s\n' "$MAIN_PROTECTION" | jq .
+printf '%s\n' "$MAIN_PROTECTION" | jq -e '
+  (keys - ["url", "required_status_checks", "enforce_admins", "required_pull_request_reviews", "restrictions", "required_signatures", "required_linear_history", "allow_force_pushes", "allow_deletions", "required_conversation_resolution", "block_creations", "required_bypass_pull_request_allowances", "lock_branch", "allow_fork_syncing"]) as $unknown |
+  ($unknown | length == 0) and
+  (.required_pull_request_reviews == null) and (.restrictions == null) and
+  (all(.required_status_checks.checks[]?; .app_id == null)) and
+  (all([.block_creations, .lock_branch, .allow_fork_syncing, .required_bypass_pull_request_allowances][]; . == null or .enabled == false))
+' || echo "STOP: main enables a setting this proof cannot map"
+Construct the PUT from main, not a handwritten approximation. Required signatures use their separate endpoint.
+PROTECTION=$(printf '%s\n' "$MAIN_PROTECTION" | jq '{required_status_checks: (if .required_status_checks == null then null else {strict: .required_status_checks.strict, contexts: .required_status_checks.contexts} end), enforce_admins: .enforce_admins.enabled, required_pull_request_reviews: null, restrictions: null, required_linear_history: (.required_linear_history.enabled // false), allow_force_pushes: (.allow_force_pushes.enabled // false), allow_deletions: (.allow_deletions.enabled // false), required_conversation_resolution: (.required_conversation_resolution.enabled // false)}')
 WRITE   push_exact "$BASE" "refs/heads/proof/target-$DATE"
-WRITE (OWNER APPROVAL REQUIRED)   gh api -X PUT repos/$REPO/branches/proof/target-$DATE/protection --input - <<'EOF'
-{
-  "required_status_checks": {"strict": true, "checks": [
-    {"context": "validate & test on ubuntu-latest"},
-    {"context": "validate & test on macos-latest"}
-  ]},
-  "enforce_admins": true,
-  "required_pull_request_reviews": null,
-  "restrictions": null
-}
-EOF
-gh api repos/$REPO/branches/proof/target-$DATE/protection --jq '{strict: .required_status_checks.strict, checks: [.required_status_checks.checks[].context], admins: .enforce_admins.enabled}'
-Expect strict and admins true and exactly the two required contexts above; STOP otherwise.
+WRITE (OWNER APPROVAL REQUIRED)   printf '%s\n' "$PROTECTION" | gh api -X PUT repos/$REPO/branches/proof%2Ftarget-$DATE/protection --input -
+If main requires signatures, obtain explicit owner approval for this additional write:
+WRITE (OWNER APPROVAL REQUIRED)   gh api -X POST repos/$REPO/branches/proof%2Ftarget-$DATE/protection/required_signatures
+gh api repos/$REPO/branches/proof%2Ftarget-$DATE/protection --jq '{strict: .required_status_checks.strict, checks: .required_status_checks.contexts, admins: .enforce_admins.enabled, signatures: .required_signatures.enabled, linear: .required_linear_history.enabled, force: .allow_force_pushes.enabled, deletions: .allow_deletions.enabled, conversations: .required_conversation_resolution.enabled}'
+Compare every displayed setting with main and STOP on any mismatch.
 WRITE   push_exact "$SHA" "refs/heads/proof/target-$DATE"
 If accepted, dispatched check runs satisfy the required checks for this fast-forward.
 STOP on rejection: record the exact message, especially an expected required status
@@ -158,9 +180,9 @@ check, and let the owner choose a personal access token, GitHub App, or Option B
 Option B (UNVERIFIED, assumption A3): the zero-token fallback.
 WRITE   push_exact "$SHA" "refs/heads/landing/registry-$DATE"
 Wait for the push-event CI run to appear, then identify and watch it:
-LANDING_RUN=$(gh run list --workflow ci.yml --branch "landing/registry-$DATE" --commit "$SHA" --event push --json databaseId --jq '.[0].databaseId // empty')
+LANDING_RUN=$(gh run -R "$REPO" list --workflow ci.yml --branch "landing/registry-$DATE" --commit "$SHA" --event push --json databaseId --jq '.[0].databaseId // empty')
 [ -n "$LANDING_RUN" ] || echo "STOP: landing CI run not found; wait and list again"
-gh run watch "$LANDING_RUN" --exit-status
+gh run -R "$REPO" watch "$LANDING_RUN" --exit-status
 gh api repos/$REPO/commits/$SHA/check-runs --jq '.check_runs[] | {name, conclusion, app: .app.slug}'
 This runbook ends the proof here for Option B and records no success. Whether
 push-event checks satisfy protection for a fast-forward of the same commit onto
@@ -170,6 +192,14 @@ until then. Run Cleanup.
 
 == Cleanup
 
+Before cleanup, verify each proof dispatch by its recorded run id; STOP until all
+are completed, including a failed or interrupted run. If a dispatch did not appear,
+identify its run id in Actions and wait for it to complete before cleanup.
+gh run -R "$REPO" view "$BOT_RUN" --json status --jq .status
+If BOT_RUN2 was dispatched, check it too:
+gh run -R "$REPO" view "$BOT_RUN2" --json status --jq .status
+STOP unless every dispatched bot run reports completed; do not clean up while
+any other bot run is queued or in progress. Recheck both preflight run lists.
 Here the preflight proved the namespace empty: no bot/registry-*, proof/* or
 landing/* ref and no open registry-bot issue. Everything there now was created
 by this proof, including a branch created under a date rollover and an issue
@@ -177,12 +207,13 @@ left by a failed publish; cleanup therefore needs no recorded names. If anyone
 else legitimately created work there meanwhile, stop and handle it by hand.
 
 If Option A ran and protection was created, remove it before deleting the branch:
-WRITE   gh api -X DELETE repos/$REPO/branches/proof/target-$DATE/protection
-gh api repos/$REPO/branches/proof/target-$DATE/protection
+WRITE   gh api -X DELETE repos/$REPO/branches/proof%2Ftarget-$DATE/protection
+gh api repos/$REPO/branches/proof%2Ftarget-$DATE/protection
 Expect HTTP 404 (Branch not protected). STOP if it is not 404; repeat the delete
 and read-back before deleting the branch. Never touch default branch protection.
 
 WRITE   delete every ref now in that namespace, each with an expected-SHA lease:
+(
 set -o pipefail
 listing=$(git ls-remote --heads origin "refs/heads/bot/registry-*" "refs/heads/proof/*" "refs/heads/landing/*")
 while read -r sha ref; do
@@ -190,20 +221,23 @@ while read -r sha ref; do
     refs/heads/bot/registry-*|refs/heads/proof/*|refs/heads/landing/*) git push --force-with-lease="$ref:$sha" --delete origin "$ref" ;;
   esac
 done <<< "$listing"
+)
+The pipefail setting is confined to this bash subshell.
 The full-ref case is necessary because remote listing patterns match ref tails.
 If GitHub refuses to delete proof/target-$DATE, its protection may still be there:
 repeat the protection delete and 404 read-back first; never touch default branch protection.
 WRITE   close every open proof issue:
-open=$(gh issue list --label registry-bot --state open --json number --jq '.[].number')
-for n in $open; do
-  gh issue close "$n" --comment "Closing: registry bot proof run."
-done
-Optional remote writes: gh run delete RUN_ID; gh cache delete CACHE_KEY.
+open=$(gh issue -R "$REPO" list --label registry-bot --state open --json number --jq '.[].number')
+while IFS= read -r n; do
+  [ -n "$n" ] || continue
+  gh issue -R "$REPO" close "$n" --comment "Closing: registry bot proof run."
+done <<< "$open"
+Optional remote writes: gh run -R "$REPO" delete RUN_ID; gh cache -R "$REPO" delete CACHE_KEY.
 
 == Record the result
 
 Record in phase VERIFICATION: BOT_RUN, RUN_ID, BOT_RUN2; each CI run's event;
-check names and conclusions; Option A or B accepted or rejected; the identical
+check names and conclusions; compared protection settings (contexts, strict, admins, signatures, linear history, force pushes, deletions and conversation resolution); Option A or B accepted or rejected; the identical
 rerun's nothing to publish, unchanged SHA, no second CI run, one branch and one
 issue; the bot commit's parent equals BASE, author, subject and files; and all
 cleanup read-backs including protection HTTP 404.

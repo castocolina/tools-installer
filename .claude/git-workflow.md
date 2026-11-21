@@ -53,25 +53,29 @@ gets CI once the maintainer pushes that branch to this repository.
 
 The `bot/registry-<date>` branch carries one registry commit; the bot dispatches its CI runs.
 The owner fetches its exact remote head, records its SHA, and checks that both required checks
-concluded `success` for that SHA. Replace `<date>` before running these commands:
+concluded `success` for that SHA. The same subshell lands only that SHA from a detached
+scratch worktree. Replace `<date>` before running these commands:
 
-```sh
+```bash
+(
+set -e
 git fetch origin "+refs/heads/bot/registry-<date>:refs/remotes/origin/bot/registry-<date>"
 SHA=$(git rev-parse "refs/remotes/origin/bot/registry-<date>")
-gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --jq '[.check_runs[] | select(.name == "validate & test on ubuntu-latest" or .name == "validate & test on macos-latest") | select(.conclusion == "success") | .name] | unique | length'
-```
-
-The last command must print `2`. Land only that SHA as a fast-forward, from a clean scratch
-worktree detached at it: the push gate refuses a commit that is not the checked-out HEAD.
-
-```sh
+COUNT=$(gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --paginate --slurp --jq '[.[].check_runs[] | select(.name == "validate & test on ubuntu-latest" or .name == "validate & test on macos-latest")] | group_by(.name) | map(sort_by(.completed_at // "9999") | last | select(.status == "completed" and .conclusion == "success")) | length')
+[ "$COUNT" = 2 ] || { echo 'Required checks are not green'; exit 1; }
 WT=$(mktemp -d)
 git worktree add --detach "$WT" "$SHA"
-(cd "$WT" && git push origin HEAD:refs/heads/main)
-git worktree remove "$WT"
+status=0
+(cd "$WT" && git push origin HEAD:refs/heads/main) || status=$?
+git worktree remove --force "$WT" || { [ "$status" -ne 0 ] || status=1; }
+exit "$status"
+)
 ```
 
-If `main` moved, run the bot again on the new base and wait for green checks again. The commit
+If `main` moved, run the bot again on the new base and wait for green checks again.
+This does not apply to a Dependabot branch: request a Dependabot rebase and wait for fresh
+green checks. A Dependabot commit subject looks like `Bump X from 4 to 5`, not a
+Conventional Commit; the owner amends it or rejects it. The commit
 references the `registry-bot` tracking issue with a closing keyword, not yet exercised on a
 fast-forward push; close the issue by hand if it stays open. Land a Dependabot branch
 (`dependabot/github_actions/...`) the same way, fetching its exact remote head, or close its

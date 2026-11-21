@@ -378,7 +378,9 @@ installer/
   shellrc.py, doctor.py    # ~/.myshellrc management + PATH audit/fix
   locations.py, status.py, run.py, links.py   # seams: paths, is-installed, runner, URLs
 tests/                     # pytest suite (offline, deterministic)
-.github/workflows/ci.yml   # CI: on every branch push except main — validate, test, hook e2e on Ubuntu + macOS
+.github/workflows/ci.yml   # CI: branch pushes except main and dispatch — Ubuntu + macOS
+.github/workflows/registry-bot.yml  # registry update bot
+.github/dependabot.yml    # GitHub Actions dependency updates
 Makefile                   # task interface: dev-setup, run, doctor, build, validate, test
 pyproject.toml             # deps + tool config (ruff, pyright, pytest, coverage, …)
 AGENTS.md, .claude/        # contributor rules (tooling, testing, git, dev env)
