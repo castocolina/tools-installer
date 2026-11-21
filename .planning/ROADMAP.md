@@ -826,3 +826,18 @@ Plans:
 - `UNIT_PREFIXES` has a single member (the Codex server) for its whole lifetime: inline it or keep the set for a second multi-key host;
 - Pi gets a manual `pi mcp add` note and no automatic entry (no ledger path, format unverified).
 **Depends on:** Phase 32.
+
+### Phase 999.33: Registry update bot follow-ups (BACKLOG)
+
+**Goal:** The registry bot loses the rough edges the phase 33 reviews accepted or deferred, after the owner has run the proof and enabled the cron.
+**Requirements:** TBD
+**Source:** Phase 33 review disposition `33-REVIEW-DISPOSITION.md`, the plan reviews `33-REVIEWS.md` and the security audit's accepted-risks log `33-SECURITY.md`, accepted or deferred items:
+- the repository sets no push restriction on `main`, so the bot's `contents: write` token could fast-forward an already-green commit; add a push restriction (a repository setting) and optionally an `app_id` on the two required status check contexts (any app that can create a check run with the required name satisfies protection today);
+- the workflows' actions (checkout, setup-uv, cache) are pinned by mutable major tag, not by full commit SHA, and run under write permissions in the bot job; pin them to reviewed SHAs and let Dependabot keep the pins current;
+- bump finalization removes findings by URL, so an unpinned method that shares a URL with a pinned method and has its own finding loses it from the final report (improbable shared-URL case, pre-existing behavior of the verifier);
+- the bot deletes older `bot/registry-*` branches after a successful dispatch, which can remove a proposal the owner is reviewing (D-05, one live branch by design);
+- a CI dispatch resolves the bot branch name at dispatch time, so an owner push between the lease and the dispatch moves the head (the bot runs are serialized by a concurrency group; only the owner can push there);
+- the proof runbook is a plain-text file for the owner; a tested script (with a `CHECKOUT_SCRIPTS` sandbox entry and a stubbed `gh`) would let a host test run its commands;
+- the unit tests inspect parsed YAML and text because the test sandbox forbids launching `git` and `gh`: the live behavior of every bot step is proven only by the owner's proof;
+- Dependabot opens pull requests that this repository's flow never merges (the owner lands its branch by fast-forward or closes the pull request).
+**Depends on:** Phase 33.
