@@ -905,7 +905,7 @@ def _hook_fact(
         return _NO_FACTS
     if presence_error is not None:
         return _ConfigFacts(unchecked=(f"agent hosts not checked: {presence_error}",))
-    recorded = receipt.hooks.get(name, ())
+    recorded = () if pair.rereads and binary is not None else receipt.hooks.get(name, ())
     pending = [
         wanted
         for wanted in (
@@ -923,7 +923,12 @@ def _hook_fact(
     actions: list[str] = []
     if labels := host_labels(pending):
         reasons.append(f"{tool.id} is not registered for {labels}")
-        actions.append(f"register {tool.id} for {labels}")
+        disclosure = (
+            f" ({pair.consent_disclosure})"
+            if pair.consent_disclosure and any(host in pair.consent for host in pending)
+            else ""
+        )
+        actions.append(f"register {tool.id} for {labels}{disclosure}")
     if any(wanted in pair.standalone for wanted in pending):
         reasons.append(f"{tool.id}'s sidebar markers are not set up")
         actions.append(f"set up {tool.id}'s sidebar markers")
@@ -931,7 +936,10 @@ def _hook_fact(
         return _NO_FACTS
     # One step: `register_hooks` handles every pending host and marker in one run, so a second
     # step would find nothing to do and fail a reconfigure that succeeded.
-    return _ConfigFacts(tuple(reasons), (ConfigStep(" and ".join(actions), "hook_register"),))
+    disclosed = tuple(host for host in pending if host in pair.targets) if pair.consent else ()
+    return _ConfigFacts(
+        tuple(reasons), (ConfigStep(" and ".join(actions), "hook_register", hosts=disclosed),)
+    )
 
 
 PNPM_GROUP_UNREADABLE_NOTE = "pnpm group not checked: the pnpm inventory is unreadable"

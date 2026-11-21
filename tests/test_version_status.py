@@ -4831,6 +4831,93 @@ def test_an_unrecorded_present_host_reads_misconfigured(tmp_path: Path) -> None:
     )
 
 
+def _playwright_drift_tool() -> Tool:
+    return Tool(
+        id="playwright-mcp",
+        name="Playwright MCP",
+        category="ai",
+        cmd="playwright-mcp",
+        methods=(Method(kind="bun", params={}),),
+        tier="ai",
+        postinstall="playwright-mcp-register",
+    )
+
+
+def test_the_step_text_names_both_files_and_the_env_key(tmp_path: Path) -> None:
+    _hook_receipt({"playwright-mcp-register": ()}, "playwright-mcp")
+    tool = _playwright_drift_tool()
+    state = _settled_states(
+        _hook_service(tmp_path, frozenset({"claude", "codex", "playwright-mcp"})), [tool]
+    )[tool.id]
+    assert len(state.unconfigured) == 1
+    step = state.unconfigured[0]
+    assert step.kind == "hook_register"
+    for part in (
+        "register",
+        "playwright-mcp",
+        "claude",
+        "~/.claude.json",
+        "~/.claude/settings.json",
+        "PLAYWRIGHT_MCP_EXECUTABLE_PATH",
+    ):
+        assert part in step.text
+    assert step.hosts == ("claude", "codex")
+
+    state = _settled_states(
+        _hook_service(tmp_path, frozenset({"codex", "playwright-mcp"})), [tool]
+    )[tool.id]
+    assert len(state.unconfigured) == 1
+    step = state.unconfigured[0]
+    assert step.text == "register playwright-mcp for codex"
+    assert step.hosts == ("codex",)
+
+    _hook_receipt({"codegraph-mcp-register": ()})
+    state = _settled_states(_hook_service(tmp_path, frozenset({"codex"})), [_hook_tool()])[
+        "codegraph"
+    ]
+    assert state.unconfigured[0].text == "register codegraph for codex"
+    assert state.unconfigured[0].hosts == ()
+
+
+@pytest.mark.parametrize("host", ("claude", "codex", "opencode", "cursor", "copilot"))
+def test_a_recorded_host_whose_server_is_gone_is_pending_again(tmp_path: Path, host: str) -> None:
+    _hook_receipt({"playwright-mcp-register": (host,)}, "playwright-mcp")
+    tool = _playwright_drift_tool()
+    command = "cursor-agent" if host == "cursor" else host
+
+    def probe(_argv: list[str]) -> str:
+        return "GitHub Copilot CLI 1.0.107."
+
+    def state(on_path: bool) -> ToolState:
+        commands = frozenset({command, "playwright-mcp"} if on_path else {command})
+        states = _settled_states(_hook_service(tmp_path, commands, probe_output=probe), [tool])
+        return states[tool.id]
+
+    missing = state(True)
+    assert len(missing.unconfigured) == 1
+    assert missing.unconfigured[0].hosts == (host,)
+    if host == "claude":
+        assert "~/.claude.json" in missing.unconfigured[0].text
+        assert "~/.claude/settings.json" in missing.unconfigured[0].text
+    assert state(False).unconfigured == ()
+
+    agent = "cursor-agent" if host == "cursor" else host
+    path = agent_settings.mcp_file(agent, home=Path.home(), platform_os="linux")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for value in ("installed", "mine"):
+        text = (
+            f'[mcp_servers.playwright]\ncommand = "{value}"\n'
+            if host == "codex"
+            else json.dumps(
+                {"mcp": {"servers": {"playwright": {"command": value}}}}
+                if host == "opencode"
+                else {"mcpServers": {"playwright": {"command": value}}}
+            )
+        )
+        path.write_text(text, encoding="utf-8")
+        assert state(True).unconfigured == ()
+
+
 def _gate_probe(*, supports_pi: bool) -> Callable[[list[str]], str | None]:
     """`--version` answers; the Pi gate's `--print-config pi` answers only when supported."""
 

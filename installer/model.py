@@ -331,6 +331,8 @@ class ConfigStep:
     # The text a successful terminal_sync step reports (its done note); a zshenv_shell
     # step's is "<zsh path>\n<the .zshenv it writes>". Empty for every other kind.
     report: str = ""
+    # Harness ids disclosed by a hook_register step for a consent-bearing hook.
+    hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, init=False)
